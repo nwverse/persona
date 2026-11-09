@@ -35,6 +35,11 @@ struct SyncScenarioTests {
         #expect(Self.cases.count >= 24, "spec/fixtures/sync: \(Self.dir.path)")
     }
 
+    @Test func cardAnswerWaitsForInitialSnapshot() async throws {
+        let c = try #require(Self.cases["card_answered_on_other_device"])
+        try await SyncRun(c, initialInteractionsDelay: .seconds(1)).play()
+    }
+
     @Test(arguments: names)
     func scenario(_ name: String) async throws {
         let c = try #require(Self.cases[name])
@@ -77,8 +82,10 @@ final class SyncRun {
     /// The case's devices' disks, a folder each (`SyncDevice.folder`); removed when the case is over.
     private let disks = FileManager.default.temporaryDirectory.appending(path: "sync-scenario-\(UUID().uuidString)")
     var failures: [String] = []
+    private let initialInteractionsDelay: Duration
 
-    init(_ c: JSONValue) {
+    init(_ c: JSONValue, initialInteractionsDelay: Duration = .zero) {
+        self.initialInteractionsDelay = initialInteractionsDelay
         self.c = c
         name = c["name"]?.string ?? "?"
         let chat = c["chat"] ?? .object([:])
@@ -140,7 +147,11 @@ final class SyncRun {
         await settle()
         d.model.subscribe(key, by: d.owner)
         d.model.show(key, by: d.owner)
-        await settle(ms: 400)
+        let cards = Set(hub.interactions.compactMap { $0["id"]?.string })
+        try await waitUntil("\(name): initial session, transcript and cards were not loaded") {
+            d.model.session(self.key) != nil && d.model.chat(self.key).backlogBuilt
+                && Set(d.model.interactions(for: self.key).map(\.id)) == cards
+        }
         d.answersSubscribe = nil
         d.requests = []
         d.noteCards()
@@ -170,6 +181,15 @@ final class SyncRun {
             try await Task.sleep(for: .milliseconds(50))
         }
         throw SyncUnplayable(description: "\(d.name): the app made no new socket within 20 s")
+    }
+
+    /// Readiness is observable state, not the amount of time the runner happened to get on the main actor.
+    private func waitUntil(_ failure: String, ready: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !ready() {
+            guard ContinuousClock.now < deadline else { throw SyncUnplayable(description: failure) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private func settle(ms: Int = 150) async {
@@ -214,7 +234,7 @@ final class SyncRun {
                 lastSend = .now
                 d.send(id: send["id"]?.string ?? "", text: send["text"]?.string ?? "")
             }
-            if let answer = user["answer"] { d.answer(answer["id"]?.string ?? "", answer["resolution"] ?? .object([:])) }
+            if let answer = user["answer"] { try d.answer(answer["id"]?.string ?? "", answer["resolution"] ?? .object([:])) }
             if let id = user["retry"]?.string { d.retry(id) }
             if let id = user["discard"]?.string { d.discard(id) }
             if user["relaunch"] != nil { await relaunch(d) }
@@ -224,7 +244,7 @@ final class SyncRun {
         }
         if let reply = step["reply"] {
             let d = try device(reply["device"])
-            answer(d, reply)
+            try await answer(d, reply)
         }
         if let ms = step["wait"]?.int {
             // The app's timed waits (`AppModel.clock`) see the whole of it, a second at a time, so a wait that ends and
@@ -262,8 +282,11 @@ final class SyncRun {
     }
 
     /// The hub answers every request in flight for the write.
-    private func answer(_ d: SyncDevice, _ step: JSONValue) {
+    private func answer(_ d: SyncDevice, _ step: JSONValue) async throws {
         let write = step["write"]?.string ?? ""
+        try await waitUntil("\(d.name): reply for \(write) has no pending request; requests: \(d.requests)") {
+            self.held.contains { $0.device == d.name && $0.write == write }
+        }
         let r = SyncReply(step)
         let done = step["done"]?.bool ?? r.ok
         let mine = held.filter { $0.device == d.name && $0.write == write }
@@ -304,6 +327,9 @@ final class SyncRun {
             guard let raw = hub.read(req) else { throw APIError(status: 404, message: "not in the scenario") }
             let data = (try? JSONDecoder().decode(JSONValue.self, from: raw)).flatMap { try? JSONEncoder().encode(d.translated($0)) } ?? raw
             let path = SyncHub.readName(req.path)
+            if path == "/interactions", initialInteractionsDelay > .zero, d.answersSubscribe != nil {
+                try await Task.sleep(for: initialInteractionsDelay)
+            }
             if let i = holds[d.name]?.firstIndex(of: path) {
                 holds[d.name]?.remove(at: i)
                 return try await withCheckedThrowingContinuation { heldReads.append((d.name, path, data, $0)) }

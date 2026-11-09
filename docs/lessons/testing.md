@@ -1,5 +1,17 @@
 # Lessons: testing and validation
 
+- Bound cold simulator compilation separately from test execution (#2671). A combined `xcodebuild test` can spend
+  most of its deadline compiling before the first test starts. Build for testing, then test without building against
+  the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle
+  inspection rather than increasing the execution timeout or dropping suites.
+
+- Sync replay must wait for its initial session, built transcript and pending-card snapshot before issuing user actions
+  (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held
+  request then falsely labels the later card snapshot as a resurrection. Require an actual request before delivering
+  its reply and test a delayed initial snapshot. Streaming projection must pass the active turn and whether live text
+  is drawn, as the real page does. A wake's nonempty work tail does not exempt the previous answer from replacement;
+  cover manual inspection, serialized reload, idle turns and other turn IDs separately.
+
 - UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
   notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
   language's permission button, assert that the summary and reply are hittable, check for system alerts before

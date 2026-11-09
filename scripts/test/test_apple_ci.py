@@ -87,6 +87,41 @@ class AppleCIPreparationTests(unittest.TestCase):
         })
         self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()', script)
 
+    def test_cold_ios_build_does_not_consume_test_execution_deadline(self):
+        script = SCRIPT.read_text()
+        start = script.index("  # Compile separately:")
+        block = script[start:script.index("  result ios-unit", start)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = root / 'xcodebuild'
+            fake.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALL_LOG"\n'
+                            'if [[ "$*" == *build-for-testing ]]; then exit "$BUILD_STATUS"; fi\n')
+            fake.chmod(0o755)
+            log = root / 'calls.log'
+            shell = ('set -euo pipefail\n'
+                     'ci_run() { local name="$1" limit="$2"; shift 2; "$@"; }\n'
+                     'IOS_TESTS=("$FAKE_XCODE" -derivedDataPath "$OUTPUT/ios-tests")\n'
+                     'IOS_EXCLUSIONS=(-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests)\n' + block)
+            for status in ('0', '7'):
+                with self.subTest(build_status=status):
+                    log.write_text('')
+                    env = dict(os.environ, FAKE_XCODE=str(fake), OUTPUT=str(root),
+                               CALL_LOG=str(log), BUILD_STATUS=status)
+                    result = subprocess.run(['bash', '-c', shell], cwd=ROOT, env=env,
+                                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, int(status), result.stderr)
+                    calls = log.read_text().splitlines()
+                    self.assertEqual(len(calls), 2 if status == '0' else 1)
+                    self.assertTrue(calls[0].endswith(' build-for-testing'))
+                    if status == '0':
+                        self.assertTrue(calls[1].endswith(' test-without-building'))
+                    for call in calls:
+                        self.assertIn('-only-testing:PersonaTests', call)
+                        self.assertIn('-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests', call)
+                        self.assertIn('-skip-testing:PersonaTests/AssistantHTMLCardTests', call)
+                        self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests', call)
+                        self.assertIn('-derivedDataPath ' + str(root / 'ios-tests'), call)
+
     def test_mac_lane_excludes_the_same_old_hub_lab_suite_as_ios(self):
         # The suite is compiled into PersonaMacTests too; selected without its lab hub it is reported as a skip,
         # which result inspection rightly refuses.

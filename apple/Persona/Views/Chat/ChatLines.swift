@@ -151,7 +151,9 @@ struct ChatLines {
                     let photos = Self.photos(seg.rows)
                     if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
                     if let u = seg.user { out.append(.row(u)) }
-                    let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
+                    // A wake can keep its work in the drawer while its new words replace the previous answer.
+                    let replacing = t.id == liveID && k == segments.count - 1 && streaming
+                    let last = replacing ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
                     // Only an idle compaction with no later work belongs after the answer. A running turn's
                     // latest narration is not its final answer, and tools can follow it before compaction.
                     let idleCompaction = !live && last.map { index in

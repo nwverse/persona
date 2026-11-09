@@ -174,10 +174,13 @@ PY
   printf '%s\n' 'apple-ci: excluded integration cases: old-hub lab; relay/APNs payload lab; native video fixture; real video HTTP fixture; destructive HTML loop (dedicated external watchdog required). UI tests are a separate mock-hub/screenshot lane.'
   # WebKit suites must run in separate batches, not interleave in Swift Testing
   # despite @MainActor or xcodebuild's parallel-testing switch (#2025).
-  ci_run 'iOS offline unit and design/token tests' 1800 "${IOS_TESTS[@]}" "${IOS_EXCLUSIONS[@]}" \
-    -only-testing:PersonaTests \
-    -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests \
-    -resultBundlePath "$OUTPUT/ios-unit.xcresult" test
+  # Compile separately: a cold simulator build must not consume the test execution deadline.
+  # Both phases keep their bounded deadlines and exactly the same suite selection.
+  IOS_UNIT_SELECTION=("${IOS_EXCLUSIONS[@]}" -only-testing:PersonaTests
+    -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
+  ci_run 'Build iOS offline unit tests' 1800 "${IOS_TESTS[@]}" "${IOS_UNIT_SELECTION[@]}" build-for-testing
+  ci_run 'iOS offline unit and design/token tests' 1800 "${IOS_TESTS[@]}" "${IOS_UNIT_SELECTION[@]}" \
+    -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building
   result ios-unit TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
   ci_run 'iOS HTML card tests (separate batch)' 600 "${IOS_TESTS[@]}" \
     -only-testing:PersonaTests/AssistantHTMLCardTests -resultBundlePath "$OUTPUT/ios-html-card.xcresult" test
