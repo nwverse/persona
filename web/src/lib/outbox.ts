@@ -270,12 +270,19 @@ function keptEntries(key: string): (Omit<Outgoing, "images"> & { lostImages: boo
   return out;
 }
 
+const restored = new Set<string>();
+
 /** After a reload: accepted messages return as sent, without resending; unconfirmed ones as failed with Retry and Delete,
  *  once the transcript is in, so a message that did reach the hub is settled (settle) before it shows.
  *  `inFlight`: ids this page is sending right now, which already have their bubble. */
 export function restoreOutbox(mid: string, sid: string, inFlight: string[] = []) {
   const key = outboxKey(mid, sid);
+  const first = !restored.has(key);
+  restored.add(key);
   const back = keptEntries(key).filter((k) => {
+    // Only the first visit recovers unconfirmed/failed sends. A later transcript update must not turn another tab's
+    // live POST into a failed bubble with Retry. Accepted messages can return whenever this conversation is revisited.
+    if (k.state !== "sent" && !first) return false;
     if (inFlight.includes(k.id) || list(key).some((e) => e.id === k.id)) return false;
     // Preserve the original grace across reloads: a transcript may never echo a command verbatim, and retaining it
     // indefinitely would leave a stale pending bubble and stored text forever. Unconfirmed sends still need Retry.
@@ -288,6 +295,11 @@ export function restoreOutbox(mid: string, sid: string, inFlight: string[] = [])
   if (!back.length) return;
   const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: k.state === "sent" ? "sent" : "failed", restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
   setOutbox(key, [...list(key), ...entries]);
+}
+
+/** A fresh page for the tests: every conversation can restore its unconfirmed messages once again. */
+export function resetRestoredForTests() {
+  restored.clear();
 }
 
 async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: string): Promise<boolean> {

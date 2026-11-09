@@ -83,7 +83,7 @@ const { ChatView } = await import("./ChatView");
 const { t } = await import("../../i18n");
 const { getState, setOutbox } = await import("../../lib/store");
 const { setRoute } = await import("../../lib/feed");
-const { keepOutgoing, outboxKey, resetOutboxClaimsForTests, SENT_GRACE_MS } = await import("../../lib/outbox");
+const { keepOutgoing, outboxKey, resetOutboxClaimsForTests, resetRestoredForTests, SENT_GRACE_MS } = await import("../../lib/outbox");
 const { SESSIONS_LOOKUP_FEATURE } = await import("../../lib/runtime-list");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -97,6 +97,7 @@ const flush = async () => {
 
 beforeEach(() => {
   localStorage.clear();
+  resetRestoredForTests();
   for (const key of Object.keys(getState().outbox)) setOutbox(key, []);
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(String(input).endsWith("/messages") ? reply() : json({}))));
   host = document.createElement("div");
@@ -268,6 +269,7 @@ describe("accepted messages waiting for their transcript copy (#2792)", () => {
     if (reopen === "reload") {
       for (const chat of Object.keys(getState().outbox)) setOutbox(chat, []);
       resetOutboxClaimsForTests();
+      resetRestoredForTests();
     }
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
     await flush();
@@ -315,7 +317,7 @@ describe("accepted messages waiting for their transcript copy (#2792)", () => {
     expect(bodies).toHaveLength(1);
   });
 
-  it("updates a restored bubble when the original POST is accepted after navigation", async () => {
+  it("updates a bubble restored on a fresh page when its original POST is accepted", async () => {
     let accept!: () => void;
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       if (!String(input).endsWith("/messages")) return Promise.resolve(json({}));
@@ -331,6 +333,7 @@ describe("accepted messages waiting for their transcript copy (#2792)", () => {
     const key = `outbox-msg:hub/c1/${id}`;
 
     act(() => root.render(null));
+    resetRestoredForTests(); // a newly opened page has not checked this conversation yet
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
     await flush();
     expect(host.querySelector(`[data-outbox="${id}"] [data-user-bubble]`)?.getAttribute("data-send-state")).toBe("failed");
@@ -350,6 +353,29 @@ describe("accepted messages waiting for their transcript copy (#2792)", () => {
     expect(host.querySelector("[data-user-bubble]")?.hasAttribute("data-send-state")).toBe(false);
     expect(localStorage.getItem(key)).toBeNull();
     expect(bodies).toHaveLength(1);
+  });
+
+  it("does not turn another tab's active send into a failure on transcript updates, but restores it once accepted", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    const key = outboxKey("hub", "c1");
+    const sending = { id: "other-tab", text: "Sent from another tab", images: [], at: Date.now() };
+    keepOutgoing(key, { ...sending, state: "sending" });
+
+    transcript.items = [{ id: "unrelated-update", seq: 1, role: "notice", kind: "notice", text: "The session changed" }];
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(host.querySelector('[data-outbox="other-tab"]')).toBeNull();
+    expect(host.querySelector('[data-user-bubble][data-send-state="failed"]')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(`outbox-msg:${key}/other-tab`)!)).toMatchObject({ state: "sending" });
+
+    keepOutgoing(key, { ...sending, state: "sent", acceptedAt: Date.now() });
+    transcript.items = [...transcript.items, { id: "another-update", seq: 2, role: "notice", kind: "notice", text: "The session changed again" }];
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(host.querySelector('[data-outbox="other-tab"] [data-user-bubble]')?.getAttribute("data-send-state")).toBe("sent");
+    expect(host.querySelector("[data-outbox] [role=alert]")).toBeNull();
+    expect(bodies).toEqual([]);
   });
 
   it("expires a restored accepted bubble even when no further transcript arrives", async () => {
@@ -538,7 +564,7 @@ describe("sending in order, and with no row yet", () => {
   });
 
   it("brings a reload's unconfirmed message back only once the chat is known and the hub's first page is in", async () => {
-    keepOutgoing(outboxKey("hub", "c1"), { id: "kept", text: "unconfirmed", images: [], at: Date.now() });
+    keepOutgoing(outboxKey("hub", "c1"), { id: "kept", text: "unconfirmed", images: [], at: Date.now(), state: "sending" });
     captured.session = undefined;
     transcript.firstRead = false;
     try {
@@ -554,7 +580,9 @@ describe("sending in order, and with no row yet", () => {
       transcript.firstRead = true;
       act(() => root.render(<ChatView mid="hub" sid="c1" />));
       await flush();
-      expect(host.querySelector('[data-outbox="kept"]')).not.toBeNull();
+      expect(host.querySelector('[data-outbox="kept"] [data-user-bubble]')?.getAttribute("data-send-state")).toBe("failed");
+      expect(host.querySelector('[data-outbox="kept"]')?.textContent).toContain(t("chat-outboxbubbles.retry"));
+      expect(bodies).toEqual([]);
     } finally {
       transcript.firstRead = true;
     }

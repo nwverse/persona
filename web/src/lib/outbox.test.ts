@@ -17,7 +17,7 @@ vi.mock("./store", () => {
 });
 vi.mock("./router", () => ({ navigate: vi.fn() }));
 
-import { acceptOutgoing, arrived, forgetOutgoing, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, resetOutboxClaimsForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
+import { acceptOutgoing, arrived, forgetOutgoing, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, resetOutboxClaimsForTests, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
 import type { ChatLine } from "./turns";
 import { ApiError } from "./api";
 import { pickLauncher } from "./assistant-chat";
@@ -214,11 +214,13 @@ describe("messages kept across a reload", () => {
   const reload = () => {
     delete outbox()["m/s"];
     resetOutboxClaimsForTests();
+    resetRestoredForTests();
   };
   beforeEach(() => {
     store.clear();
     delete outbox()["m/s"];
     resetOutboxClaimsForTests();
+    resetRestoredForTests();
     vi.stubGlobal("localStorage", fakeStorage);
   });
 
@@ -255,6 +257,43 @@ describe("messages kept across a reload", () => {
     reload();
     restoreOutbox("m", "s");
     expect(outbox()["m/s"]).toBeUndefined();
+  });
+
+  it.each(["sending", "failed", undefined] as const)("restores another tab's %s entry only on the first visit per page", (state) => {
+    restoreOutbox("m", "s"); // this page opened before the other tab started its send
+    keepOutgoing("m/s", entry({ id: "other-tab", text: "Still in the other tab", state, at: Date.now() }));
+    restoreOutbox("m", "s");
+    settleOutbox("m", "s", [{ id: "unrelated-copy", text: "A different message", images: [] }]);
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toBeUndefined();
+    expect(store.has("outbox-msg:m/s/other-tab")).toBe(true);
+
+    // Another conversation still gets its own first restoration.
+    keepOutgoing("m/other", entry({ id: "first-visit", state, at: Date.now() }));
+    restoreOutbox("m", "other");
+    expect(outbox()["m/other"]).toMatchObject([{ id: "first-visit", state: "failed", restored: true }]);
+
+    reload();
+    restoreOutbox("m", "s");
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "other-tab", state: "failed", restored: true }]);
+  });
+
+  it("restores a newly accepted entry after the first visit and again on navigation without resending", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    restoreOutbox("m", "s");
+    keepOutgoing("m/s", entry({ id: "later-accepted", text: "Accepted in another tab", state: "sending", at: Date.now() }));
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toBeUndefined();
+    acceptOutgoing("m/s", "later-accepted");
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "later-accepted", state: "sent" }]);
+    delete outbox()["m/s"]; // revisit in the same page: the first-visit guard stays set
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "later-accepted", state: "sent" }]);
+    expect(await retryOutbox("m", "s", "later-accepted")).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("matches an untagged copy after a slow acceptance and reload using the original send time", () => {
