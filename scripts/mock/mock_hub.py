@@ -5161,6 +5161,33 @@ def inbox_triage_from(spec):
 INBOX_TRIAGE = inbox_triage_from(os.environ.get("MOCK_INBOX_TRIAGE", ""))
 
 
+# Sources the hub could not read this round (triage.sources[].read_error / read_reason, #1849; the hub's inbox_admit.go).
+# MOCK_INBOX_UNREAD=<name>[:<code>[:<reason>]],… : each name is marked not read (code timeout | rate_limited | failed,
+# default timeout); with no reason the source has no read_reason (the apps' own words). Adds `triage` (ok) if unset.
+def inbox_unread_into(triage, spec):
+    """The triage block with MOCK_INBOX_UNREAD's sources marked not read; triage as it was when spec is empty."""
+    if not spec:
+        return triage
+    out = copy.deepcopy(triage) if triage is not None else {"state": "ok", "waiting": 0}
+    sources = out.setdefault("sources", [])
+    for i, entry in enumerate(x for x in spec.split(",") if x.strip()):
+        parts = entry.split(":", 2)
+        name = parts[0].strip()
+        code = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "timeout"
+        src = next((x for x in sources if x.get("name") == name), None)
+        if src is None:
+            src = {"source": "unread%d" % (i + 1), "name": name, "state": "ok", "waiting": 0}
+            sources.append(src)
+        src["read_error"] = code
+        if len(parts) > 2 and parts[2].strip():
+            src["read_reason"] = parts[2].strip()
+    sources.sort(key=lambda x: x["source"])
+    return out
+
+
+INBOX_TRIAGE = inbox_unread_into(INBOX_TRIAGE, os.environ.get("MOCK_INBOX_UNREAD", ""))
+
+
 def inbox_list(query):
     """GET /api/v1/inbox (and POST …/refresh): the items, with `triage` when MOCK_INBOX_TRIAGE is set."""
     body = {"items": inbox_for(query), "as_of": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
@@ -8718,7 +8745,7 @@ def _zip(files):
 _PNG_DOT = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 
-def _bar_png(w=360, h=150, heights=(0.45, 0.62, 0.78, 0.93)):
+def _bar_png(w=360, h=150, heights=(0.45, 0.62, 0.78, 0.93), dark=False):
     """A small bar chart as a PNG (zlib, no imaging library): pictures inside the mock's Word and PowerPoint files."""
     import zlib
     bars = list(zip((40, 110, 180, 250), heights))
@@ -9600,6 +9627,81 @@ def mock_png(w=48, h=32):
 
 
 MOCK_PNG = mock_png()
+
+# MOCK_FULL_PAGE=1: the main conversation as a long page for Full Page (#1609): long text with Markdown (headings, lists,
+# a table, a code block), a picture the user sent, a picture a call looked at, persona-card charts, an HTML page (Full
+# Page draws its text summary), then turns enough to put most of it off screen.
+if os.environ.get("MOCK_FULL_PAGE") == "1":
+    _fp_card = lambda d: "```persona-card\n" + json.dumps(d, ensure_ascii=False) + "\n```"
+    _fp_days = ["11/3", "11/4", "11/5", "11/6", "11/7", "11/8", "11/9"]
+    _fp_view = {"fallback": "三个方案的得分：A 9 分，B 7 分，C 6 分；A 最高。", "sections": [{"title": "三个方案的得分", "items": [
+        {"type": "html", "title": "三个方案的得分", "height": 220,
+         "html": "<h3>三个方案</h3><p>A：需要你的事优先，9 分；B：运行看板，7 分；C：助手入口，6 分。</p>"}]}]}
+    _fp_chart = base64.b64encode(_bar_png(480, 200)).decode()
+    _fp = [
+        it("user", "text", 60, text="把这周的进展整理成一页给我，配上我拍的白板"),
+        it("user", "image", 60, image={"mime": "image/png", "data": mock_png(480, 320), "width": 480, "height": 320}),
+        it("assistant", "text", 59, text="""## 本周进展
+
+**整体**：三个项目按计划推进，一个延期两天。下面按项目列出，最后是下周要你拍板的事。
+
+### 1. 天气小组件
+- 小、中两种尺寸做完了，深浅色都过了设计走查。
+- 夜间刷新改成每三小时一次，白天每小时一次。
+- 锁屏小组件放到 1.5 版，先把锁屏上的隐私处理好。
+
+### 2. 照片同步脚本
+- 计划写好了，等你批准后开始改。
+- 预计两天：第一天改扫描逻辑，第二天补测试。
+
+### 3. 网络层单元测试
+- 选了 Swift Testing，已补 42 个用例，覆盖率从 61% 到 78%。
+- 还差重试和超时两块，延期两天，周三前补齐。
+
+| 项目 | 状态 | 在哪台电脑 | 预计完成 |
+| --- | --- | --- | --- |
+| 天气小组件 | 进行中 | MacBook | 11/12 |
+| 照片同步脚本 | 等你批准 | Mac Studio | 11/14 |
+| 网络层单元测试 | 延期两天 | MacBook | 11/13 |
+
+小组件的数据结构是这样的：
+
+```swift
+struct FleetEntry: TimelineEntry {
+    let date: Date
+    let needsYou: Int
+    let working: Int
+    let unseen: Int
+}
+```
+
+白板上的三个方案我按得分排了一下，详见下面的图。"""),
+        it("assistant", "tool_use", 58, tool_use_id="toolu_fp_chart", tool_name="Read",
+           tool_input={"file_path": "/Users/me/code/weather/reports/chart.png"}),
+        it("user", "image", 58, tool_use_id="toolu_fp_chart", image={"mime": "image/png", "data": _fp_chart, "width": 480, "height": 200}),
+        it("user", "tool_result", 58, tool_use_id="toolu_fp_chart", text="chart.png"),
+        it("user", "text", 57, text="画几张图看看这周的数据"),
+        it("assistant", "text", 56, text="\n\n".join([
+            "这周一共完成 **23 个任务**，比上周多 5 个；周五最忙。",
+            _fp_card({"type": "bar", "title": "每天完成的任务", "unit": "个",
+                      "points": [{"label": d, "value": v} for d, v in zip(_fp_days, [2, 4, 3, 5, 6, 2, 1])]}),
+            _fp_card({"type": "line", "title": "等你处理的事", "unit": "件", "note": "周五最多，7 件",
+                      "points": [{"label": d, "value": v} for d, v in zip(_fp_days, [3, 2, 4, 5, 7, 2, 1])]}),
+            _fp_card({"type": "stacked_bar", "subtitle": "这周 Agent 的时间", "total": {"value": 62, "unit": "小时"},
+                      "segments": [{"label": "写代码", "value": 31}, {"label": "跑测试", "value": 18}, {"label": "等你", "value": 9}],
+                      "rest": {"label": "空闲", "value": 4}}),
+            _fp_card({"type": "stat", "title": "这周完成", "value": 23, "unit": "个任务", "note": "上周 18 个"})])),
+        it("user", "text", 55, text="三个方案做成一个可以点的页面"),
+        it("assistant", "text", 54, text="做好了，点开可以看每个方案的得分。\n\n```persona-view\n" + json.dumps(_fp_view, ensure_ascii=False) + "\n```"),
+    ]
+    for _n, (_q, _a) in enumerate([
+            ("下周一的会几点？", "下周一上午 10:00 设计评审，会议室 3；下午 4:30 和李雷 1:1。"),
+            ("照片同步脚本先改哪里？", "先改扫描逻辑：现在每次全量扫描相册，改成只看上次同步之后的新照片，能省掉九成时间。"),
+            ("网络层的测试还差哪些？", "还差两块：\n\n1. 重试：断网后第三次重试成功、三次都失败。\n2. 超时：请求超时、读超时分开测。"),
+            ("小组件的刷新会不会太耗电？", "白天每小时一次、夜里三小时一次，一天大约 20 次，在系统给的配额里，耗电可以忽略。"),
+            ("好，周三再看一次", "好的，周三上午我再把进展整理一遍发给你。")]):
+        _fp += [it("user", "text", 50 - 2 * _n, text=_q), it("assistant", "text", 49 - 2 * _n, text=_a)]
+    ITEMS[ASK1] = _fp
 
 # MOCK_CHAT_IMAGES=1: the blog conversation gets a screenshot the agent took (an image item of its tool's result) and
 # one it showed before its answer, for the chat's thumbnails and the image viewer. Made-up page, inline bytes; seqs
@@ -11792,6 +11894,30 @@ PLUGINS["example-gateway"] = {
             "icon": "chart", "badge": {"text": "3", "tone": "danger"}},
            # UI version 3's components and pages (docs/extensions/extensions.md "UI version 3"): -openPlugin example-gateway -openPluginPage notes
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
+# MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and
+# Linux) and launchers (format launcher) from the hub's lists, and steps whole numbers (#2385). Its auto-reply launcher
+# names one the hub no longer has, so its picker keeps it, marked.
+if os.environ.get("MOCK_EXTENSION_PICKERS"):
+    PLUGINS["example-agent-chat"] = {
+        "id": "example-agent-chat", "name": "Example 聊天", "kind": "connectors", "status": "running", "version": "0.4.0", "source": "installed",
+        "enabled": True, "description": "以你的身份接入 Example 聊天：消息进收件箱；在聊天里发 /agent 交给助手，被 @ 时可让 AI 代答。",
+        "contributes": {"connectors": ["exampleagentchat"]}, "publisher": "example", "origin": "market:3f2a9c1d0b/example-agent-chat",
+        "form": {"fields": [
+            {"name": "agent", "type": "boolean", "title": "聊天里的 /agent", "default": False,
+             "description": "在聊天里发「/agent 要求」，交给助手处理并以你的身份回复"},
+            {"name": "agent_machine", "type": "string", "format": "machine", "os": ["darwin", "linux"], "title": "/agent 在哪台电脑上跑",
+             "description": "空着用助手那台"},
+            {"name": "agent_launcher", "type": "string", "format": "launcher", "title": "/agent 用的启动器", "description": "空着用助手的"},
+            {"name": "agent_reply_mode", "type": "string", "title": "/agent 回复方式", "default": "quote",
+             "enum": [{"value": "quote", "title": "引用回复"}, {"value": "thread", "title": "回复到话题"}]},
+            {"name": "agent_continue_hours", "type": "integer", "title": "「同一聊天」接着多久（小时）", "minimum": 1, "maximum": 72, "default": 4,
+             "description": "距上一条 /agent 多少小时内接着那段对话（1–72）"},
+            {"name": "auto_reply", "type": "string", "title": "别人 @我 时 AI 代答", "default": "off",
+             "enum": [{"value": "off", "title": "关"}, {"value": "all", "title": "所有聊天"}, {"value": "allowlist", "title": "只在白名单里的聊天"}]},
+            {"name": "auto_reply_launcher", "type": "string", "format": "launcher", "title": "代答用的启动器", "description": "空着用 /agent 的"}]},
+        "config": {"agent_machine": "server", "auto_reply_launcher": "cc_retired"}, "secrets": [],
+        "permissions": [_RUNS, {"key": "network", "title": "访问网络", "detail": "chat.example.com"}]}
+
 # A plugin whose program runs on computers (docs/extensions/extensions.md "Programs running on computers", #1830): its field picking them asks
 # before one is switched on (the hub's x-confirm), each machine's row says how the program is there (nodes).
 PLUGINS["example-helper"] = {
@@ -16104,6 +16230,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -16161,6 +16288,7 @@ if os.environ.get("MOCK_MOMENTS_FEED"):  # the project's posts say which feed th
 MOCK_HELP.append("MOCK_MOMENTS_FEED=<名字>  知识库的公司圈帖子带 feed（项目的「相关<名字>」和存档帖子页的标题用它；不设时叫「公司圈」）")
 MOCK_HELP.append("MOCK_NO_LARK=1  没装接飞书的扩展的 hub：features 里没有 lark / lark_moments / lark_attachments，/api/v1/lark/… 404，连接器里没有飞书")
 MOCK_HELP.append("MOCK_INBOX_TRIAGE=<状态>[:<条数>[:<来源名，逗号隔开>[:<原因>]]]  收件箱列表带 triage（新条目在等分拣，#1773）：unconfigured / paused / error / timeout / behind / ok；不设时没有 triage（老 hub）")
+MOCK_HELP.append("MOCK_INBOX_UNREAD=<来源名>[:<代码>[:<原因>]],…  收件箱 triage 的这些来源这一轮没读到（read_error / read_reason，#1849）：代码 timeout / rate_limited / failed；不写原因就没有 read_reason")
 
 # ---------- area: commenting in the Feishu document reader (#1290) ----------
 # MOCK_DOC_COMMENTS=1: the plugin says `lark_doc_comments`; GET /api/v1/lark/raw/documents/comments has three made-up

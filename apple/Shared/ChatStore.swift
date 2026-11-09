@@ -769,7 +769,7 @@ final class ChatStore {
     /// `item` is the transcript line of the streamed `live` text: the reply (a text item), or the words written before a
     /// tool call, which Claude Code streams as text and records as a thinking block (#1966: their live copy never landed,
     /// and stayed at the end of the chat with its cursor). Written after line `since` (the newest when the text began):
-    /// an earlier line that starts the same way ("我…") is not it.
+    /// an earlier line that starts the same way (the same first word) is not it.
     nonisolated static func isLiveCopy(_ item: Item, of live: String, after since: Int = 0) -> Bool {
         !live.isEmpty && item.seq > since && item.role == "assistant" && (item.kind == .text || item.kind == .thinking)
             && (item.text ?? "").hasPrefix(live)
@@ -1501,6 +1501,11 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// The hub refused it with nothing typed (delivered: none: a draft in the computer's input box, a dialog…) and
     /// answers its id with that refusal from then on: Resend and Clear and Send go with a new id (#6425).
     var refused: Bool?
+    /// When its sends started coming back waiting while its group's link was up (AppModel.settleSend, `OutboxWait`);
+    /// in memory only: a relaunch starts the run again.
+    var stalledSince: Date?
+
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, createdAt, mayHaveArrived, refused }
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
     /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either
