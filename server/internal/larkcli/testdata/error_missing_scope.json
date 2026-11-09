@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "identity": "user",
+  "error": {
+    "type": "authorization",
+    "subtype": "missing_scope",
+    "message": "missing required scope(s)",
+    "missing_scopes": ["im:message:readonly"]
+  }
+}

@@ -236,10 +236,10 @@ The current mechanisms are generic; specific commands, routes, and variables are
     For example, stop confirming sends: `{"connector":"lark","action":"POST /conversations/*/messages","decision":"allow"}`.
     Legacy `lark_gate` (`{method, path, body?, action}`) still works after `connector_gate` Lark rules; hub combines both for node (`connector.LarkRules`, 2026-11-03 migration M5).
 
-## Lark: lark-cli (2026-11-03, L1 of #273)
+## Lark: lark-cli (L2 of #273)
 
 A hub without a Lark gateway can still let the assistant read / write Lark through official developer-platform lark-cli (`@larksuite/cli`); plan and later steps: `docs/plans/plan-lark-cli.md`.
-This step covers only the assistant; Inbox, knowledge base, and `/agent` still require the Lark gateway.
+The assistant and the L2 read-only connector are available; Inbox, knowledge base, and `/agent` still require the Lark gateway.
 
 - **Enable**: `lark.cli` in the manager's manager.json (`docs/operations/config.md` ("manager.json")), lark-cli installed on the assistant machine; the user runs `lark-cli auth login --domain all` once.
   A gateway can coexist; `lark.prefer` sets prompt precedence.
@@ -248,7 +248,7 @@ This step covers only the assistant; Inbox, knowledge base, and `/agent` still r
   and adds its directory to PATH (npm lark-cli uses `env node`, so node must be findable). No wrapper if `lark.cli` absent or lark-cli not found.
   Credentials remain in its own `~/.lark-cli`; hub / node don't touch them.
 - **Instructions**: no skill copied into the assistant directory. CLAUDE.md (`prompts/assistant/claude_md.md`) adds a section directing `lark-cli skills read lark-<domain>` first for bundled,
-  version-matched domain instructions, with parameters from `--help` / `lark-cli schema`. CLI-only explains no unread / Moments and no `lark_*` MCP tools; find actionable messages with
+  version-matched domain instructions, with parameters from `--help` / `lark-cli schema`. CLI-only explains no unread / Moments; when the built-in connector is signed in, its read-only `larkcli_*` tools are also available. Find actionable messages with
   `im +messages-search --is-at-me / --chat-type p2p`. With both sources, divide according to `lark.prefer` (goldens `assistant_claude_md.lark_cli`, `.both`).
   Send / reply through the app bot (`--as bot`): user identity requires app permission `im:message.send_as_user`, absent in the default app (measured 2026-11-04); other reads / writes use user identity.
   In CLI-only setups, a leftover gateway skill (copied by old personad) doesn't count: no gateway is available, so CLAUDE.md must not mention its commands

@@ -115,9 +115,10 @@ so layout is arbitrary (short arrays can be one line) and does not affect transm
 | `mcp/browser/` | `browser_run`, `browser_look` | Assistant, when the ego browser extension is on for some machine (`browserTools` in `extmgr/browser.go`) |
 | `mcp/computer/` | `computer_state`, `computer_run` | Assistant, when the Cua computer-use extension is on for some machine (`computerTools` in `extmgr/computer.go`) |
 | `mcp/imessage/` | `imessage_chats`, `imessage_read`, `imessage_search` (read-only) | Assistant, when the iMessage connector status is `ok` and its AI switch is on (`readTools` in `connector/imessage/persona.go`) |
+| `mcp/larkcli/` | `larkcli_chats`, `larkcli_messages`, `larkcli_search` (read-only) | Assistant, when the built-in lark-cli connector is configured and signed in (`connector/larkcli`) |
 | `mcp/voice/` | `search_knowledge`, `list_agents`, `send_to_agent`, `ask_persona`, `delegate_task` | Upstream of the built-in voice plugin with `tools` enabled (`voice/tools.go`, declared as GPT-Live function tools in `session.start`; full devices declare the first four, calls from other extensions only `ask_persona`, protocol 2 bound chats the two read-only tools plus `delegate_task`; `ask_persona` and `delegate_task` calls remain open until the turn's answer) |
 
-There is no `mcp/lark/` since #1571: `lark_agent_reply`, `lark_chats`, `lark_messages`, and `lark_search` come from the Lark integration plugin (`docs/plans/plan-extensions.md`, "Step 3").
+There is no `mcp/lark/` since #1571: `lark_agent_reply`, `lark_chats`, `lark_messages`, and `lark_search` come from the Lark integration plugin (`docs/plans/plan-extensions.md`, "Step 3"). The built-in lark-cli connector uses the `larkcli_*` names so both sources can coexist.
 When the assistant runs on an Agent runtime, tools for commands such as `ol` are also not here: names and descriptions come from the plugin command gate's `tool` (`proto.CommandGate.Tool`),
 and node's `gateTools` passes them to the runtime through `runtime.sock` (`node/assistant_runtime.go`).
 

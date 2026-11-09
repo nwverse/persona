@@ -1,0 +1,21 @@
+{
+  "appId": "cli_example",
+  "brand": "lark",
+  "credentialSource": "local",
+  "defaultAs": "user",
+  "identities": {
+    "user": {
+      "status": "ready",
+      "available": true,
+      "message": "User identity: ready",
+      "openId": "ou_example_user",
+      "userName": "Example User",
+      "tokenStatus": "valid",
+      "scope": "im:chat:read im:message:readonly",
+      "expiresAt": "2030-01-08T12:00:00Z",
+      "refreshExpiresAt": "2030-01-15T12:00:00Z"
+    }
+  },
+  "identity": "user",
+  "tokenType": "Bearer"
+}
