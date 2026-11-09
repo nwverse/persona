@@ -3,7 +3,7 @@
 // tiles, new fields (date, time, datetime, multichoice, multiline), named colors, and the new charts' geometry
 // (area, candlestick, donut, pie, sparks). What is drawn is in views/extensions; the reading and the arithmetic here.
 import { withToken } from "./inbox";
-import { isHttps, readAction, type ChartSeries, type UIAction, type UITone, type UIView } from "./extension-ui";
+import { isHttps, readAction, type ChartSeries, type UIAction, type UITone } from "./extension-ui";
 
 // ── named colors ────────────────────────────────────────
 
@@ -199,17 +199,6 @@ export function readV6(out: Record<string, unknown>, raw: Record<string, unknown
   }
   if (Array.isArray(raw.stats)) out.stats = raw.stats.map((st) => (isObject(st) && "spark" in st ? { ...st, spark: readSpark(st.spark) } : st));
   if (Array.isArray(raw.tiles)) out.tiles = raw.tiles.flatMap(readTile).slice(0, raw.type === "carousel" ? 20 : 60);
-}
-
-/** Every control of a view, by its name: what to show for it and what the extension last drew. */
-export function controlsOf(view: UIView | null | undefined): Map<string, UIRowControl> {
-  const out = new Map<string, UIRowControl>();
-  for (const s of view?.sections ?? [])
-    for (const it of s.items ?? []) {
-      if (it.control) out.set(it.control.name, it.control);
-      for (const t of it.tiles ?? []) if (t.control) out.set(t.control.name, t.control);
-    }
-  return out;
 }
 
 /** A control's value as the extension drew it, as sent on the wire: a switch "true" / "false", else the number. */
