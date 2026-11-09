@@ -13,7 +13,7 @@ import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
   changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
-  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
+  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
   channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxEgress, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
   type PickerLauncher,
@@ -331,12 +331,17 @@ function usePinnedExtension(id: string, manager: string | undefined) {
 
 // ── unsaved configuration ──────────────────────────────────
 
-type Unsaved = { draft: JsonObject; typed: Typed };
+/** A form's unsaved edits: the draft and the configuration it was made on (`base`), so that only what the user changed is
+ *  put back on a newer read (lib/extensions.ts rebaseDraft). */
+type Unsaved = { base: JsonObject; draft: JsonObject; typed: Typed };
 
 /** Configuration edits not saved yet, by manager and extension (`unsavedKey`). They stay in memory while the page is
- *  closed, so leaving it any way (another extension, another category or page, Back) and coming back finds them; saving
- *  or Revert drops them, and so does a new credential. Never written to storage: a reload asks first instead. */
+ *  closed, so leaving it any way (another extension, another category or page, Back) and coming back finds them on top of
+ *  the configuration read then; saving or Revert drops them, and so does a new credential. Never written to storage: a
+ *  reload asks first instead. */
 const unsaved = new Map<string, Unsaved>();
+/** A detail without a configuration: one object, so reading it again is not a change. */
+const NO_CONFIG: JsonObject = {};
 const unsavedListeners = new Set<() => void>();
 let unsavedVersion = 0;
 
@@ -463,33 +468,39 @@ function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChann
   const fields = detail?.form?.fields ?? [];
   const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
 
-  // Edits outlive the page: kept while the form is dirty, and put back once the page's first read is shown, where the
-  // save bar shows them as unsaved. Saving or Revert leaves the form clean, which drops them.
+  // The draft is the user's edits on top of `base`, the configuration last read (null until the page's first read is
+  // shown). Each newer configuration the hub sends (another device's or app's change, an upgrade, a save) takes the
+  // fields the user did not touch, so the form never shows or saves back an old value of them; the touched ones keep
+  // the edit. Edits outlive the page: kept while the form is dirty, and put back on the first read of the next visit,
+  // where the save bar shows them as unsaved. Saving or Revert leaves the form clean, which drops them.
   const keptKey = unsavedKey(id, manager);
-  const restored = useRef(false);
+  const base = useRef<JsonObject | null>(null);
   useEffect(() => {
-    if (restored.current) keepUnsaved(keptKey, dirty ? { draft, typed } : null);
+    if (base.current) keepUnsaved(keptKey, dirty ? { base: base.current, draft, typed } : null);
   }, [keptKey, dirty, draft, typed]);
+  const config = detail ? (detail.config ?? NO_CONFIG) : null;
   useEffect(() => {
-    if (!detail || restored.current) return;
-    restored.current = true;
-    const kept = unsaved.get(keptKey);
-    if (!kept) return;
-    setDraft(kept.draft);
-    setTyped(kept.typed);
-  }, [detail, keptKey]);
+    if (!config) return;
+    const edits = base.current ? { base: base.current, draft, typed } : unsaved.get(keptKey);
+    base.current = config;
+    if (!edits) return;
+    const next = rebaseDraft(edits, config);
+    setDraft(next.draft);
+    setTyped(next.typed);
+  }, [config, keptKey]);
   /** Back to the list once the extension is gone (uninstalled here or elsewhere): its edits go with it. */
   const onBack = () => {
-    restored.current = false;
+    base.current = null;
     keepUnsaved(keptKey, null);
     back();
   };
 
   // An operation of this extension that succeeds while the page is open (an upgrade, also the hub's auto-upgrade, or
   // an install or uninstall from another device): its version, upgrades and permissions are read again. A dirty form
-  // keeps its draft, as a switch does; an uninstall goes back to the list. Those that ended before the page opened
-  // are not acted on: when this page is the first to start listening, the hub's list (which keeps ended operations a
-  // while) arrives after it opened, and what it brings that was not pushed meanwhile is old.
+  // keeps the user's edits, as a switch does (the fields not touched follow the new read); an uninstall goes back to
+  // the list. Those that ended before the page opened are not acted on: when this page is the first to start listening,
+  // the hub's list (which keeps ended operations a while) arrives after it opened, and what it brings that was not
+  // pushed meanwhile is old.
   const dirtyNow = useRef(dirty);
   dirtyNow.current = dirty;
   const backNow = useRef(onBack);
