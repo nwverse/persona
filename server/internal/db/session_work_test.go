@@ -82,11 +82,17 @@ func TestSessionWorkRestoresOldCI(t *testing.T) {
 	if err := d.PutSessionWork(ctx, cancelled); err != nil {
 		t.Fatal(err)
 	}
+	retired := cancelled
+	retired.SessionID, retired.UpdatedAt = "retired", now
+	retired.Work = proto.WorkState{RetiredAt: &now}
+	if err := d.PutSessionWork(ctx, retired); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.PruneSessionWork(ctx, now.Add(-30*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	got, err = d.SessionWorks(ctx, now.Add(-48*time.Hour))
-	if err != nil || len(got) != 2 {
-		t.Fatalf("active CI watches not retained: %+v, %v", got, err)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("active CI watches and retirement not retained: %+v, %v", got, err)
 	}
 }

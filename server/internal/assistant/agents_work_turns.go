@@ -26,14 +26,15 @@ func (s *Service) retireTodoWork(keys ...[2]string) {
 			s.work.generation[k]++ // a late transcript result must not register another wake
 		}
 		e, ok := s.work.entries[k]
-		if !ok || (e.WakeAt == nil && e.InteractionID == "") {
-			s.work.mu.Unlock()
-			continue
+		if !ok {
+			e = &db.SessionWork{MachineID: k[0], SessionID: k[1], TurnAt: now}
+			s.work.entries[k] = e
 		}
 		if e.InteractionID != "" {
 			delete(s.work.cards, e.InteractionID)
 		}
-		e.WakeAt, e.Work.WakeAt, e.InteractionID, e.Work.InteractionID = nil, nil, "", ""
+		e.WakeAt, e.Work.WakeAt, e.Work.CI, e.InteractionID, e.Work.InteractionID = nil, nil, nil, "", ""
+		e.Work.RetiredAt = &now
 		e.UpdatedAt = now
 		saved := *e
 		s.work.mu.Unlock()
@@ -52,10 +53,11 @@ func (s *Service) workStarted(ctx context.Context, machine, sid string, now time
 		s.work.generation[k]++
 	}
 	e, ok := s.work.entries[k]
-	if !ok || e.Work.Phase == proto.WorkWorking {
+	if !ok || e.Work.Phase == proto.WorkWorking && e.Work.RetiredAt == nil {
 		s.work.mu.Unlock()
 		return
 	}
+	e.Work.RetiredAt = nil // a later turn can work on a reopened task
 	by := "user"
 	if now.Sub(s.work.sent[k]) < 2*time.Minute {
 		by = "hub"
@@ -152,6 +154,10 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	s.work.mu.Lock()
 	s.work.init()
 	prev, had := s.work.entries[k]
+	if had && prev.Work.RetiredAt != nil && !c.UpdatedAt.After(*prev.Work.RetiredAt) {
+		s.work.mu.Unlock()
+		return // the todo ended before this turn settled
+	}
 	if s.work.triaging[k] {
 		s.work.mu.Unlock()
 		return

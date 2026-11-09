@@ -512,7 +512,7 @@ func (s *Service) workReport(ctx context.Context) *WorkReport {
 			continue // unsure: nothing shown
 		}
 		w := e.Work
-		w.CI = nil // internal poll target and outbox stay in the manager's store
+		w.CI, w.RetiredAt = nil, nil // internal state stays in the manager's store
 		w.TurnAt = e.TurnAt
 		r.Sessions = append(r.Sessions, SessionWork{MachineID: e.MachineID, SessionID: e.SessionID, Work: w})
 	}

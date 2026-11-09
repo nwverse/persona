@@ -882,3 +882,58 @@ func TestCIWatchRetiredWhileTranscriptReadIsBlocked(t *testing.T) {
 		})
 	}
 }
+
+func TestCIWatchRetiredDuringSettleSurvivesRestartAndReopen(t *testing.T) {
+	for _, oldEntry := range []bool{false, true} {
+		name := "no entry"
+		if oldEntry {
+			name = "old entry without wake"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFakeHub()
+			st := &workMemStore{}
+			c := stopped("ci", "Waiting for PR #12 CI")
+			c.UpdatedAt = time.Now().UTC().Add(-time.Minute)
+			f.sessions["box"] = []proto.Session{c}
+			f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+			s := newServiceOn(t, f, st)
+			if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+				t.Fatal(err)
+			}
+			if oldEntry {
+				old := time.Now().UTC().Add(-50 * time.Hour)
+				s.putWork(ctx, db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: old, UpdatedAt: old, Work: proto.WorkState{Phase: proto.WorkDone}})
+			}
+			// The todo ends after the turn ended, before post-settle triage.
+			s.retireTodoWork([2]string{"box", "ci"})
+			retired := entryOf(t, s, "ci")
+			if retired.Work.RetiredAt == nil {
+				t.Fatal("retirement not recorded")
+			}
+			s.workTurnSettled(ctx, "box", "ci")
+			if got := entryOf(t, s, "ci"); got.WakeAt != nil || got.Work.CI != nil {
+				t.Fatalf("retired turn gained watch before restart: %+v", got)
+			}
+			restarted := newServiceOn(t, f, st)
+			if !restarted.loadWork(ctx) {
+				t.Fatal("work not restored")
+			}
+			restarted.workTurnSettled(ctx, "box", "ci")
+			got := entryOf(t, restarted, "ci")
+			if got.Work.RetiredAt == nil || got.WakeAt != nil || got.Work.CI != nil {
+				t.Fatalf("retired turn gained watch: %+v", got)
+			}
+			// A genuinely later user-started turn may work on a reopened todo.
+			newTurn := retired.Work.RetiredAt.Add(time.Second)
+			restarted.workStarted(ctx, "box", "ci", newTurn)
+			c.UpdatedAt = newTurn.Add(time.Second)
+			f.setSessions("box", c)
+			restarted.workTurnSettled(ctx, "box", "ci")
+			got = entryOf(t, restarted, "ci")
+			if got.Work.RetiredAt != nil || got.WakeAt == nil || got.Work.CI == nil {
+				t.Fatalf("new turn did not register watch: %+v", got)
+			}
+		})
+	}
+}

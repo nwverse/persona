@@ -36,11 +36,12 @@ func (d *DB) PutSessionWork(ctx context.Context, w SessionWork) error {
 	return err
 }
 
-// SessionWorks are recent states plus older CI watches with a pending wake.
-// The latter can remain pending while the machine is offline or a wake is in flight.
+// SessionWorks are recent states, pending CI watches, and recently retired turns.
+// A recent retirement of an old turn must survive the manager restarting.
 func (d *DB) SessionWorks(ctx context.Context, since time.Time) ([]SessionWork, error) {
 	rows, err := d.pool.Query(ctx, `SELECT machine_id, session_id, turn_at, work, wake_at, retries, wakes, interaction_id,
-			updated_at FROM session_work WHERE turn_at > $1 OR (wake_at IS NOT NULL AND work ? 'ci')`, since)
+			updated_at FROM session_work WHERE turn_at > $1 OR (wake_at IS NOT NULL AND work ? 'ci')
+			OR (updated_at > $1 AND work ? 'retired_at')`, since)
 	if err != nil {
 		return nil, err
 	}
@@ -61,9 +62,10 @@ func (d *DB) SessionWorks(ctx context.Context, since time.Time) ([]SessionWork, 
 	return out, rows.Err()
 }
 
-// PruneSessionWork keeps active CI watches, and drops other old work and events.
+// PruneSessionWork keeps active CI watches and recent retirement markers.
 func (d *DB) PruneSessionWork(ctx context.Context, before time.Time) error {
-	if _, err := d.pool.Exec(ctx, `DELETE FROM session_work WHERE turn_at < $1 AND NOT (wake_at IS NOT NULL AND work ? 'ci')`, before); err != nil {
+	if _, err := d.pool.Exec(ctx, `DELETE FROM session_work WHERE turn_at < $1 AND NOT (wake_at IS NOT NULL AND work ? 'ci')
+		AND NOT (updated_at >= $1 AND work ? 'retired_at')`, before); err != nil {
 		return err
 	}
 	_, err := d.pool.Exec(ctx, `DELETE FROM session_work_events WHERE at < $1`, before)
