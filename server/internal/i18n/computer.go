@@ -1,8 +1,8 @@
 package i18n
 
 import (
-	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -13,8 +13,10 @@ func ComputerText(l Lang, text string) string {
 	if text == "" || l == "" {
 		return text
 	}
-	for _, form := range computerTemplates {
-		match := form.pattern.FindStringSubmatch(text)
+	forms := computerTemplates()
+	for _, n := range forms.candidates(text) {
+		form := &forms.forms[n]
+		match := form.match(text)
 		if match == nil {
 			continue
 		}
@@ -27,7 +29,7 @@ func ComputerText(l Lang, text string) string {
 	return text
 }
 
-var computerTemplates = makeComputerTemplates()
+var computerTemplates = sync.OnceValue(func() *templateIndex { return indexTemplates(makeComputerTemplates()) })
 
 func makeComputerTemplates() []deploymentTemplate {
 	forms := makeCatalogTemplates(func(key string) bool {
@@ -36,7 +38,7 @@ func makeComputerTemplates() []deploymentTemplate {
 	})
 	for n := range forms {
 		// A failed pbcopy/open/installer may emit no diagnostic output. Empty details are still recognized copy.
-		forms[n].pattern = regexp.MustCompile(strings.ReplaceAll(forms[n].pattern.String(), "(.+?)", "(.*?)"))
+		forms[n].pattern.src = strings.ReplaceAll(forms[n].pattern.src, "(.+?)", "(.*?)")
 	}
 	return forms
 }

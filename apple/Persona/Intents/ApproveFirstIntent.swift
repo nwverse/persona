@@ -2,16 +2,18 @@ import AppIntents
 import Foundation
 
 /// "Approve First Pending": settles the oldest interaction 「Persona 状态」 reads out (`IntentPicker.waiting`) when
-/// it is a permission or a plan. Questions and terminal prompts need the screen, so those answer with a hint to open
-/// the app.
+/// it is a permission or a plan. Questions, terminal prompts and MCP forms and links need the screen, so those answer
+/// with a hint to open the app. Saying yes needs the phone unlocked, as on the notification and Live Activity buttons: Siri runs it on a
+/// locked phone too (#1878).
 struct ApproveFirstIntent: AppIntent {
     nonisolated static let title: LocalizedStringResource = "Approve First Pending"
     nonisolated static let description = IntentDescription(
-        "Allows the oldest tool permission request, or approves a plan (it starts right away). Questions and terminal prompts need the app.",
+        "Allows the oldest tool permission request, or approves a plan with edits accepted automatically (commands still ask). Asks you to unlock first when locked. Questions and terminal prompts need the app.",
         categoryName: "Status",
         searchKeywords: ["Approve [Notification Actions 8cbe69]", "Allow [Notification Actions ce7ef2]", "Permission", "plan"]
     )
     nonisolated static var supportedModes: IntentModes { .background }
+    nonisolated static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
 
     nonisolated init() {}
 
@@ -50,13 +52,14 @@ struct ApproveFirstIntent: AppIntent {
         IntentPicker.waiting(interactions, sessions: sessions, mutes: mutes).first
     }
 
-    /// What to send, or nil when this kind cannot be settled from Siri.
+    /// What to send, or nil when this kind cannot be settled from Siri. Plans approve in acceptEdits, like the
+    /// notification button: Siri never shows the plan in full, so commands still ask. "Approve & Auto-Run" stays in the app.
     static func resolution(for ix: Interaction) -> Resolution? {
         guard !ix.requiresInput else { return nil }
         return switch ix.kind {
         case .permission: Resolution(allow: true)
-        case .plan: Resolution(approve: true, mode: "bypassPermissions")
-        case .question, .screen: nil
+        case .plan: Resolution(approve: true, mode: "acceptEdits")
+        case .question, .screen, .elicitation: nil
         }
     }
 
@@ -64,7 +67,7 @@ struct ApproveFirstIntent: AppIntent {
         switch ix.kind {
         case .permission: IntentText.approvedPermission(ix.toolName)
         case .plan: IntentText.approvedPlan
-        case .question, .screen: IntentText.needsApp(ix.kind)
+        case .question, .screen, .elicitation: IntentText.needsApp(ix.kind)
         }
     }
 }

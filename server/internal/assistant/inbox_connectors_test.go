@@ -101,6 +101,69 @@ func TestConnectorThingsBecomeItems(t *testing.T) {
 	}
 }
 
+// A connector that reads its notifications again (after a restart) may hand an earlier move of an open thread: it
+// is neither counted nor allowed to wind the item's time back, and the next real move still joins (#1527).
+func TestConnectorOlderMoveDoesNotRewind(t *testing.T) {
+	h := newInboxHub(t)
+	day := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	now := day.Add(36 * time.Hour)
+	ci := func(at time.Time) connector.InboxThing {
+		th := thing(at.Format(time.RFC3339), at)
+		th.Thread, th.Kind = "ci:example-org/example-app@main", "ci_failed"
+		return th
+	}
+	apply := func(things ...connector.InboxThing) []*InboxItem {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		return h.inbox.applyConnector("example", "Example", things, now)
+	}
+
+	apply(ci(day.Add(15*time.Hour + 11*time.Minute)))
+	newest := day.Add(24*time.Hour + 39*time.Minute)
+	apply(ci(newest))
+	it := openItems(h)[0]
+	if it.Count != 2 || !it.UpdatedAt.Equal(newest) {
+		t.Fatalf("setup: count %d at %v", it.Count, it.UpdatedAt)
+	}
+	for _, earlier := range []time.Duration{22*time.Hour + 56*time.Minute, 21*time.Hour + 14*time.Minute} {
+		if ch := apply(ci(day.Add(earlier))); len(ch) != 0 {
+			t.Fatalf("an earlier move changed the item: %+v", ch[0])
+		}
+	}
+	if it.Count != 2 || !it.UpdatedAt.Equal(newest) || it.Last != newest.Format(time.RFC3339) {
+		t.Fatalf("an earlier move wound the item back: count %d, at %v, last %s", it.Count, it.UpdatedAt, it.Last)
+	}
+	later := newest.Add(time.Second)
+	if ch := apply(ci(later)); len(ch) != 1 || it.Count != 3 || !it.UpdatedAt.Equal(later) {
+		t.Fatalf("a later move did not join: count %d at %v", it.Count, it.UpdatedAt)
+	}
+}
+
+// An item handled after its time was wound back (stored before the fix) is not replaced by a new item when its own
+// move comes again: the new item's id would be the same (#1527).
+func TestConnectorMoveOfAHandledItemDoesNotReplaceIt(t *testing.T) {
+	h := newInboxHub(t)
+	now := time.Now()
+	newer, older := now.Add(-2*time.Hour), now.Add(-3*time.Hour)
+	moveAt := func(at time.Time) connector.InboxThing { return thing(at.Format(time.RFC3339), at) }
+	h.inbox.mu.Lock()
+	defer h.inbox.mu.Unlock()
+	h.inbox.applyConnector("example", "Example", []connector.InboxThing{moveAt(newer)}, now)
+	var it *InboxItem
+	for _, x := range h.inbox.items {
+		it = x
+	}
+	it.Count, it.Last, it.UpdatedAt = 2, older.Format(time.RFC3339), older // wound back by an older build
+	it.done(now, "read")
+
+	if ch := h.inbox.applyConnector("example", "Example", []connector.InboxThing{moveAt(newer)}, now); len(ch) != 0 {
+		t.Fatalf("the handled item's own move changed the inbox: %+v", ch[0])
+	}
+	if len(h.inbox.items) != 1 || h.inbox.items[it.ID] != it || it.open() || it.Count != 2 {
+		t.Fatalf("the handled item was replaced or reopened: %d items, open %v, count %d", len(h.inbox.items), it.open(), it.Count)
+	}
+}
+
 // Read elsewhere: an item that does not need the user is done; one that does stays.
 func TestConnectorThingReadElsewhere(t *testing.T) {
 	h := newInboxHub(t)
@@ -116,6 +179,41 @@ func TestConnectorThingReadElsewhere(t *testing.T) {
 	h.inbox.mu.Unlock()
 	if it.open() || it.DoneBy != "read" {
 		t.Fatalf("an FYI read on GitHub is still open: %+v", it)
+	}
+}
+
+// A thing older than the open item's newest move says nothing of whether that move was read: a GitHub connector that
+// restarted after the CI follow-up folded in a later run (one GitHub sent no notification of) reports the item's
+// older notification read on GitHub. The item at the later run stays unread and open, whatever its tier (#2207
+// review); the same move read elsewhere still counts.
+func TestConnectorOlderThingReadLeavesTheNewerMoveUnread(t *testing.T) {
+	for _, tier := range []connector.Tier{TierAction, TierFYI} {
+		t.Run(string(tier), func(t *testing.T) {
+			h := newInboxHub(t)
+			now := time.Now()
+			notified, later := now.Add(-3*time.Hour), now.Add(-time.Hour)
+			ci := func(at time.Time, read bool) connector.InboxThing {
+				th := thing(at.UTC().Format(time.RFC3339), at)
+				th.Thread, th.Kind, th.Tier, th.Read = "ci:example-org/example-repo@main", "ci_failed", tier, read
+				return th
+			}
+			h.inbox.mu.Lock()
+			defer h.inbox.mu.Unlock()
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(notified, false)}, now)
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(later, false)}, now) // the follow-up folded a later run
+			it := openItems(h)[0]
+			if it.Last != ci(later, false).Last || it.Read {
+				t.Fatalf("setup: %+v", it)
+			}
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(notified, true)}, now) // after a restart
+			if it.Read || !it.open() {
+				t.Fatalf("the item at the later run (Last %s) is read %v, open %v: an older thing read on GitHub marked it", it.Last, it.Read, it.open())
+			}
+			h.inbox.applyConnector("example", "Example", []connector.InboxThing{ci(later, true)}, now)
+			if !it.Read || it.open() != (tier == TierAction) {
+				t.Fatalf("the later run itself read on GitHub: read %v, open %v", it.Read, it.open())
+			}
+		})
 	}
 }
 

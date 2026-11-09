@@ -17,9 +17,15 @@ const (
 	ScopeAssistantAsk  = "assistant.ask"
 	ScopeTodosRead     = "todos.read"
 	ScopeTodosWrite    = "todos.write"
+	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
+	// other (the hub checks who opened it: hub/extension_modes.go).
+	ScopeAgentsPermissionMode = "agents.permission_mode"
 	// ScopeModels: calling a model through the hub (model.complete) on the extension's own purpose in Settings ›
 	// Models; never a key (#6102).
 	ScopeModels = "models"
+	// ScopeAssistantRead: reading the assistant's own-space conversations, the user's and the assistant's words
+	// (assistant.conversations, assistant.messages; #1288). assistant.ask does not include it.
+	ScopeAssistantRead = "assistant.read"
 	// ScopeCallPrefix and an extension's id: calling that extension's own HTTP (/api/v1/extensions/<id>/…).
 	ScopeCallPrefix = "extensions.call:"
 )

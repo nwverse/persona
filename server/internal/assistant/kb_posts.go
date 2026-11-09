@@ -17,7 +17,7 @@ import (
 
 // A connector's program writes a feed's public posts into the knowledge base's post archive (moments/ in the data
 // dir, the name it had when the hub's own crawler was the only writer) and reads which posts' comments to read again:
-// connector.KnowledgeBase, docs/assistant/knowledge.md "External posts". The program calls the hub; the hub checks the connector may
+// connector.KnowledgeBase, docs/assistant/knowledge.md "Pipeline", External posts. The program calls the hub; the hub checks the connector may
 // write now ("Send to knowledge base") and passes the call on with the connector's names (kb.posts_*, kb.archived_chats). The archive
 // is the knowledge base's to keep: the index, pruning past the text retention, and finding each project's posts
 // (kb.LinkMoments) stay here whoever writes the posts.
@@ -38,6 +38,8 @@ func (s *Service) kbPostsEngine(ctx context.Context) (*kb.Engine, error) {
 }
 
 func (s *Service) kbPutPosts(ctx context.Context, p assistantwire.KBPosts) ([]string, error) {
+	s.kb.postWrites.Lock()
+	defer s.kb.postWrites.Unlock()
 	e, err := s.kbPostsEngine(ctx)
 	if err != nil {
 		return nil, err
@@ -100,6 +102,8 @@ func (s *Service) kbPutPosts(ctx context.Context, p assistantwire.KBPosts) ([]st
 }
 
 func (s *Service) kbPutComments(ctx context.Context, p assistantwire.KBPosts) error {
+	s.kb.postWrites.Lock()
+	defer s.kb.postWrites.Unlock()
 	e, err := s.kbPostsEngine(ctx)
 	if err != nil {
 		return err
@@ -175,6 +179,8 @@ func (s *Service) kbArchivedChats(ctx context.Context, p assistantwire.KBPosts) 
 // kbPostsUpkeep rewrites the post archive's index after posts came in, and prunes it past the text retention once
 // a day (kbLoop; the hub's own crawler did both itself).
 func (s *Service) kbPostsUpkeep(e *kb.Engine, daily bool) {
+	s.kb.postWrites.Lock()
+	defer s.kb.postWrites.Unlock()
 	if daily {
 		if n := e.Store.PruneMoments(time.Now().Add(-kbTextRetention(e))); n > 0 {
 			s.logf("kb: pruned %d post(s) past the text retention", n)

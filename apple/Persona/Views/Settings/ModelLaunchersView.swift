@@ -102,7 +102,7 @@ struct ModelLaunchersView: View {
                         } label: {
                             HStack(spacing: Theme.Space.xs) {
                                 header(String(localized: "Hidden"), hidden.count)
-                                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong)
+                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong)
                                     .rotationEffect(.degrees(open ? 90 : 0))
                                 Spacer(minLength: 0)
                             }
@@ -141,7 +141,7 @@ struct ModelLaunchersView: View {
                 Menu {
                     Button { adding = .pick } label: { Label("Add Provider", systemImage: Theme.Icon.add) }
                     Button { adding = .importZshrc } label: { Label("Import from ~/.zshrc", systemImage: Theme.Icon.terminal) }
-                } label: { Image(systemName: Theme.Icon.add) } primaryAction: { adding = .pick }
+                } label: { ThemedIcon(Theme.Icon.add) } primaryAction: { adding = .pick }
                 .accessibilityLabel("Add Provider")
                 .accessibilityIdentifier("launchers.add")
             }
@@ -216,7 +216,7 @@ struct ModelLaunchersView: View {
     /// One machine: whether its list came in now, and from which file.
     private func syncRow(_ s: LauncherSync) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: s.ok ? Theme.Icon.successFilled : s.state == "offline" ? Theme.Icon.offline : Theme.Icon.errorFilled)
+            ThemedIcon(s.ok ? Theme.Icon.successFilled : s.state == "offline" ? Theme.Icon.offline : Theme.Icon.errorFilled)
                 .foregroundStyle(s.ok ? Theme.positive : s.state == "error" ? Theme.danger : Theme.caution)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(s.name ?? name(s.machine)).font(Theme.Font.body).lineLimit(1)
@@ -534,9 +534,8 @@ struct ModelLauncherDetailView: View {
         await withTaskGroup(of: (String, LauncherCheck).self) { group in
             for id in machines {
                 group.addTask {
-                    let c = (try? await api.checkLauncher(name, machine: id.isEmpty ? nil : id))
-                        ?? LauncherCheck(ok: false, millis: 0, error: String(localized: "The request didn't finish"))
-                    return (id, c)
+                    do { return (id, try await api.checkLauncher(name, machine: id.isEmpty ? nil : id)) }
+                    catch { return (id, LauncherCheck.failed(error)) }
                 }
             }
             for await (id, c) in group { checks[id] = .some(c) }
@@ -853,7 +852,7 @@ struct LauncherCheckRow: View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
             Group {
                 if let c = check {
-                    Image(systemName: c.ok ? Theme.Icon.successFilled : Theme.Icon.errorFilled).foregroundStyle(c.ok ? Theme.positive : Theme.danger)
+                    ThemedIcon(c.ok ? Theme.Icon.successFilled : Theme.Icon.errorFilled).foregroundStyle(c.ok ? Theme.positive : Theme.danger)
                 } else {
                     ProgressView().controlSize(.small)
                 }

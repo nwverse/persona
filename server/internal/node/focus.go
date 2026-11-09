@@ -3,13 +3,14 @@ package node
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Focus sync for the web's full herdr view (docs/integrations/terminal.md "Focus sync"). herdr's focus (workspace, tab, pane) is one
@@ -53,8 +54,8 @@ type selfMark struct {
 // mouse report, whose motion with no button down (herdr turns on any-motion reporting) is noise too. Only the rest
 // counts as the user acting.
 var (
-	inputNoise  = regexp.MustCompile(`\x1b\[[IO]|\x1b\[\?[\d;]*(?:\$y|[nuc])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[\d+(?:;\d+)*t`)
-	mouseReport = regexp.MustCompile(`\x1b\[<(\d+);\d+;\d+M`)
+	inputNoise  = lazyre.New(`\x1b\[[IO]|\x1b\[\?[\d;]*(?:\$y|[nuc])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[\d+(?:;\d+)*t`)
+	mouseReport = lazyre.New(`\x1b\[<(\d+);\d+;\d+M`)
 )
 
 // inputIsActivity reports whether bytes typed into a full client are the user doing something (keys, a click, a drag,
@@ -254,6 +255,20 @@ func (n *Node) focusSession(client, id string) {
 	}
 	f, ok := h.(host.Focuser)
 	if !ok {
+		return
+	}
+	if fc := n.fullOf(client); fc != nil && ref.Kind == host.Herdr {
+		// A view's client shows one herdr server (its session's): a pane of another cannot be shown there, and what
+		// the user types would go to a pane they do not see. The view ends; opening it again attaches to the pane's.
+		if session, _ := herdr.SplitID(ref.ID); session != fc.session {
+			go fc.stop("this pane is in another herdr session: open the full view again to show it", true)
+			return
+		}
+	}
+	// Focus comes back from the own herdr server only (herdrHost.WatchFocus): a pane of a named session (#2196) gets
+	// no echo to mark.
+	if session, _ := herdr.SplitID(ref.ID); session != "" && ref.Kind == host.Herdr {
+		_ = f.FocusPane(ctx, ref)
 		return
 	}
 	n.focus.mu.Lock()

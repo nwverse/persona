@@ -1,4 +1,7 @@
 import { extensionEnv, hubEnv } from './compat.js';
+import { ExactJSON } from './exact-json.ts';
+export { ExactJSON, JSONIntegerError } from './exact-json.ts';
+export { ExtensionStorage, storageBytes, storageValue } from './storage.ts';
 // Persona extension SDK for TypeScript (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"): an extension program's side of
 // the process protocol, for Bun. Build the program with `bun build --compile` into one executable per platform:
 // the package holds only that, and the hub needs no runtime.
@@ -39,15 +42,48 @@ export const unsupported = (why: string) => new ExtError(why, "unsupported");
 /** Answers the calls of one namespace: method is without the namespace ("status" for connector.status). */
 export type Handler = (method: string, params: any) => unknown | Promise<unknown>;
 
+/** Original request params, before Number rounding. Missing params and JSON null stay distinct.
+ * This view covers opted-in namespace and initialization RPC requests, not replies, events or serialization. */
+export interface ExactCall {
+  readonly rawParams: string | undefined;
+  readonly params: ExactJSON | undefined;
+}
+
+/** Events still use legacy params and have no call metadata. */
+export type ExactHandler = (method: string, params: any, call: ExactCall | undefined) => unknown | Promise<unknown>;
+const EXACT_PARAMS = Symbol.for("@persona/extension.exactParams");
+type OptInHandler = Handler & { [EXACT_PARAMS]?: true };
+
+/** Explicitly opt one namespace into original JSON request params. The second argument
+ * remains legacy JSON.parse data. Lexical int64 errors become public invalid_params errors. */
+export function withExactParams(handler: ExactHandler): Handler {
+  const wrapped = (method: string, params: any, call?: ExactCall) => handler(method, params, call);
+  Object.defineProperty(wrapped, EXACT_PARAMS, { value: true });
+  return wrapped;
+}
+
+
 /** One ui contribution: what it draws, and what its buttons do. */
 export interface Page {
   render(req: UIRequest): wire.View | Promise<wire.View>;
   /** Nothing (or an empty result) draws the page again, with req.state as the action left it. */
   action?(req: UIRequest): wire.ActionResult | void | Promise<wire.ActionResult | void>;
+  /** Serves a picture the page drew by ref (UI version 6: an image's src, a row's thumbnail or avatar, a tile's
+   * image), fetched by the hub for the apps: image() makes the answer. Absent answers unknown_method. */
+  image?(req: ImageRequest): wire.UIImage | Promise<wire.UIImage>;
 }
 
 /** A ui.render or ui.action, and the hub to call while drawing. */
 export interface UIRequest extends wire.UIParams {
+  hub: Hub;
+  /** Derived by the host page lifecycle, never inferred from ui_version. Absent on ordinary snapshots. */
+  transport?: "snapshot" | "stream";
+  /** Mounted root factory lifetime; disposal or suspension aborts pending preparation. */
+  signal?: AbortSignal;
+}
+
+/** A ui.image: the ref, the contribution that drew it, the pixel width the app wants (0: any), and the hub to call. */
+export interface ImageRequest extends wire.UIImageParams {
   hub: Hub;
 }
 
@@ -81,6 +117,32 @@ export interface Program {
   fetch?(req: Request): Response | Promise<Response>;
 }
 
+/** Initialization RPC metadata; direct initializer calls have no raw frame and receive undefined. */
+export type ExactInitializer = (this: Program, init: Init, hub: Hub, call: ExactCall | undefined) => ReturnType<NonNullable<Program["init"]>>;
+const EXACT_INIT_KEY = "@persona/extension.exactInitParams";
+
+/** Opt initialization into exact params without changing the parsed Init, Hub or receiver.
+ * The symbol is resolved only when used, so importing unrelated SDK APIs has no new side effect. */
+export function withExactInit(handler: ExactInitializer): NonNullable<Program["init"]> {
+  const wrapped = function(this: Program, init: Init, hub: Hub, call?: ExactCall) {
+    return Reflect.apply(handler, this, [init, hub, call]);
+  };
+  Object.defineProperty(wrapped, Symbol.for(EXACT_INIT_KEY), { value: true });
+  return wrapped;
+}
+
+function initializeProgram(prog: Program, init: Init, hub: Hub, rawFrame: string): ReturnType<NonNullable<Program["init"]>> {
+  const handler = prog.init;
+  if (handler == null) return;
+  if (typeof handler !== "function") throw new TypeError("prog.init is not a function");
+  // Only the wrapper's own inert data marker opts in; inherited/getter markers do not.
+  if (Object.getOwnPropertyDescriptor(handler, Symbol.for(EXACT_INIT_KEY))?.value === true) {
+    const exact = ExactJSON.parse(rawFrame).field("params");
+    return Reflect.apply(handler, prog, [init, hub, Object.freeze({ rawParams: exact?.raw, params: exact })]);
+  }
+  return Reflect.apply(handler, prog, [init, hub]);
+}
+
 const kindOf = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
 
 /** Reads a page's state, which the program wrote with encodeState. An object state is merged over an object fallback
@@ -103,6 +165,73 @@ export function decodeState<T>(req: { state?: string }, fallback: T): T {
 
 /** Writes a page's state (at most 16 KB). */
 export const encodeState = (v: unknown) => JSON.stringify(v);
+
+/** What ui.image answers for a picture's bytes: the type (read from the bytes when mime is ""), and how long the hub
+ * may keep it in seconds (a camera 5 to 10, a map 30, a still 86400; 0 not at all). */
+export const image = (mime: string, bytes: Uint8Array, maxAge = 60): wire.UIImage => ({
+  mime: mime || imageType(bytes),
+  data: imageBase64(bytes),
+  max_age: Math.min(Math.max(maxAge, 0), 86400),
+});
+
+function imageBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 8192) binary += String.fromCharCode(...bytes.subarray(at, at + 8192));
+  return btoa(binary);
+}
+
+// imageType reads a picture's type from its bytes, as the hub does (http.DetectContentType on the Go side).
+function imageType(bytes: Uint8Array): string {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "image/gif";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp";
+  return "application/octet-stream";
+}
+
+/** Readers for what an action carries (req.values) as UI version 6 writes it: a switch "true"/"false", a slider's or a
+ * stepper's number, a date YYYY-MM-DD, a time HH:MM, a datetime YYYY-MM-DDTHH:MM (the user's wall clock; req.tz is
+ * their zone), a multichoice a JSON array. The hub turns what an older app sends into the same. */
+export const values = {
+  /** A switch's or a toggle's value: true for "true" only. */
+  bool(req: UIRequest, name: string): boolean { return req.values?.[name] === "true"; },
+  /** A slider's, a stepper's or a number field's value; throws when it is missing or not a number. */
+  number(req: UIRequest, name: string): number {
+    const s = req.values?.[name]?.trim();
+    if (!s) throw new Error(`${name}: no value`);
+    const n = Number(s);
+    if (!Number.isFinite(n)) throw new Error(`${name}: not a number: ${JSON.stringify(s)}`);
+    return n;
+  },
+  /** A date field's calendar day (YYYY-MM-DD). */
+  date(req: UIRequest, name: string): { year: number; month: number; day: number } {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(req.values?.[name] ?? "");
+    if (!m) throw new Error(`${name}: a date YYYY-MM-DD, not ${JSON.stringify(req.values?.[name])}`);
+    return { year: +m[1], month: +m[2], day: +m[3] };
+  },
+  /** A time field's hour and minute (HH:MM, 24 hours). */
+  time(req: UIRequest, name: string): { hour: number; minute: number } {
+    const m = /^(\d{2}):(\d{2})$/.exec(req.values?.[name] ?? "");
+    if (!m) throw new Error(`${name}: a time HH:MM, not ${JSON.stringify(req.values?.[name])}`);
+    return { hour: +m[1], minute: +m[2] };
+  },
+  /** A datetime field's wall clock (YYYY-MM-DDTHH:MM) in the user's zone (req.tz). */
+  datetime(req: UIRequest, name: string): { year: number; month: number; day: number; hour: number; minute: number } {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(req.values?.[name] ?? "");
+    if (!m) throw new Error(`${name}: a datetime YYYY-MM-DDTHH:MM, not ${JSON.stringify(req.values?.[name])}`);
+    return { year: +m[1], month: +m[2], day: +m[3], hour: +m[4], minute: +m[5] };
+  },
+  /** A multichoice's chosen values; [] when it is empty or not a JSON array of strings. */
+  multi(req: UIRequest, name: string): string[] {
+    try {
+      const v = JSON.parse(req.values?.[name] ?? "[]");
+      return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : [];
+    } catch {
+      return [];
+    }
+  },
+};
 
 const PUSH_PREFIX = "ext.push.";
 
@@ -219,18 +348,21 @@ export function connect(prog: Program, write: Write) {
   let initialized = false;
   let contributes: Record<string, unknown> | undefined;
   const inflight = new Set<Promise<unknown>>();
+  // Only negotiated page lifecycle calls are cancelable; services retain legacy semantics.
+  const pageCalls = new Map<string, AbortController>();
+  const cancelablePage = (method: string) => ["ui.page.mount", "ui.page.event", "ui.page.resume"].includes(method);
   let initializing: Promise<void> | undefined;
   let accepting = true;
   let shuttingDown: Promise<unknown[]> | undefined;
 
-  async function request(method: string, params: any): Promise<unknown> {
+  async function request(method: string, params: any, rawFrame: string, signal?: AbortSignal): Promise<unknown> {
     if (method === "initialize") {
       if (params?.protocol !== PROTOCOL) {
         throw new ExtError(`protocol ${params?.protocol}, not ${PROTOCOL}`, "wrong_protocol");
       }
       if (!initialized) {
         const init: Init = { ...params, info: params.extension ?? params.plugin ?? { id: "", version: "" } };
-        initializing ??= Promise.resolve(prog.init?.(init, hub)).then((c) => {
+        initializing ??= Promise.resolve(initializeProgram(prog, init, hub, rawFrame)).then((c) => {
           // An empty map says nothing, as in the Go SDK: the answer leaves contributes out (all of it).
           contributes = c && Object.keys(c).length > 0 ? c : undefined;
           initialized = true;
@@ -242,7 +374,9 @@ export function connect(prog: Program, write: Write) {
           throw e;
         }
       }
-      return { protocol: PROTOCOL, id: prog.id, version: prog.version, ...(contributes ? { contributes } : {}) };
+      return { protocol: PROTOCOL, id: prog.id, version: prog.version,
+        ...(Object.values(prog.ui ?? {}).some(isComponentPage) ? { ui_page_cancellation: 1 } : {}),
+        ...(contributes ? { contributes } : {}) };
     }
     if (method === "manifest") {
       if (prog.manifest === undefined) throw new ExtError("no manifest here: it is in the package", "unknown_method");
@@ -253,13 +387,19 @@ export function connect(prog: Program, write: Write) {
     if (!initialized) throw new ExtError("not initialized", "not_initialized");
     if (method === "ping") return {};
     if (method === "ui.page.supported") return { contributions: Object.entries(prog.ui ?? {}).filter(([, page]) => isComponentPage(page)).map(([id]) => id) };
-    if (method.startsWith("ui.page.")) return pageBridge.call(method.slice(8), params ?? {});
+    if (method.startsWith("ui.page.")) return pageBridge.call(method.slice(8), params ?? {}, signal);
     const dot = method.indexOf(".");
     if (dot < 0) throw unknownMethod(method);
     const ns = method.slice(0, dot);
     const rest = method.slice(dot + 1);
     const h = prog.namespaces?.[ns];
-    if (h) return h(rest, params ?? {});
+    if (h) {
+      if ((h as OptInHandler)[EXACT_PARAMS] === true) {
+        const exact = ExactJSON.parse(rawFrame).field("params");
+        return (h as ExactHandler)(rest, params ?? {}, Object.freeze({ rawParams: exact?.raw, params: exact }));
+      }
+      return h(rest, params ?? {});
+    }
     if (ns === "ui" && prog.ui) return ui(rest, params ?? {});
     if (ns === "shortcut" && prog.shortcuts) {
       if (rest !== "run") throw unknownMethod(method);
@@ -303,7 +443,15 @@ export function connect(prog: Program, write: Write) {
     return v;
   }
 
+  async function serveImage(params: wire.UIImageParams): Promise<unknown> {
+    const page = prog.ui?.[params.contribution];
+    if (!page || isComponentPage(page)) throw noContribution(params.contribution);
+    if (!page.image) throw unknownMethod("ui.image");
+    return page.image({ ...params, hub });
+  }
+
   async function ui(method: string, params: wire.UIParams): Promise<unknown> {
+    if (method === "image") return serveImage(params as unknown as wire.UIImageParams); // ui.image carries UIImageParams
     if (method !== "render" && method !== "action") throw unknownMethod(`ui.${method}`);
     const page = prog.ui![params.contribution];
     if (!page) throw noContribution(params.contribution);
@@ -344,14 +492,21 @@ export function connect(prog: Program, write: Write) {
     }
     if (f.method) {
       const id = f.id;
+      if (id && pageCalls.has(id)) { write(answer(id, { error: { message: "duplicate active page request ID" } })); return; }
+      const controller = id && cancelablePage(f.method) ? new AbortController() : undefined;
+      if (controller && pageCalls.size >= 256) { write(answer(id, { error: { message: "page request quota" } })); return; }
+      if (id && controller) pageCalls.set(id, controller);
       const done = Promise.resolve()
-        .then(() => request(f.method!, f.params))
+        .then(() => request(f.method!, f.params, text, controller?.signal))
         .then(
           (result) => write(answer(id, { result: result ?? {} })),
           (err) => write(answer(id, { error: wireError(err) })),
         );
       inflight.add(done);
-      done.finally(() => inflight.delete(done));
+      done.finally(() => { inflight.delete(done); if (id && pageCalls.get(id) === controller) pageCalls.delete(id); });
+    } else if (f.event === "rpc.cancel") {
+      const id = (f.params as { id?: unknown } | undefined)?.id;
+      if (typeof id === "string") pageCalls.get(id)?.abort();
     } else if (f.event) {
       const dot = f.event.indexOf(".");
       const h = initialized && dot > 0 ? prog.namespaces?.[f.event.slice(0, dot)] : undefined;

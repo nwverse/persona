@@ -1,11 +1,11 @@
-// Package ai calls an Anthropic-compatible Messages API, or an OpenAI-compatible Responses API, for small structured
+// Package ai calls Messages, Responses or Chat Completions APIs for small structured
 // tasks in the app (e.g. turning a pasted blob into a mail account). The key is read from its key file at call time
 // and never stored by Persona.
 package ai
 
 import (
-	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -94,7 +94,7 @@ type Message struct {
 type Request struct {
 	System    string
 	Messages  []Message
-	MaxTokens int // the Messages API's max_tokens; the Responses API is sent none (some relays reject it)
+	MaxTokens int // output limit for Messages and Chat Completions; Responses is sent none (some relays reject it)
 }
 
 // Usage is what one request spent, as the upstream counted it (zero where it did not say).
@@ -152,15 +152,27 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 	}
 	var reply Reply
 	var answered bool
-	if c.cfg.API == "responses" {
+	switch c.cfg.API {
+	case "responses":
 		reply, answered, err = c.respond(ctx, hc, key, r)
-	} else {
+	case "chat":
+		reply, answered, err = c.chatCompletions(ctx, hc, key, r)
+	default:
 		reply, answered, err = c.messages(ctx, hc, key, r)
 	}
 	if reply.Model == "" {
 		reply.Model = c.cfg.Model
 	}
 	return reply, g.done(probe, answered, err)
+}
+
+// apiEndpoint preserves deployment prefixes and accepts bases with or without /v1.
+func apiEndpoint(base, path string) string {
+	base = strings.TrimRight(base, "/")
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base + "/" + path
 }
 
 // messages calls the Messages API; answered is whether the upstream said 200, Truncated whether the reply stopped at
@@ -171,7 +183,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	body, _ := json.Marshal(map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns})
-	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}
@@ -213,14 +225,16 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		}
 	}
 	if out.StopReason == "refusal" { // declined, usually with no text at all: not a reply that lacks its JSON
-		return Reply{Model: out.Model, Usage: out.Usage}, true, ErrRefused
+		return Reply{Model: out.Model, Usage: out.Usage}, true, &RefusalError{StopReason: out.StopReason}
 	}
 	return Reply{Text: b.String(), Truncated: out.StopReason == "max_tokens", Model: out.Model, Usage: out.Usage}, true, nil
 }
 
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
 // stream=false, and the text is just the concatenated output_text deltas. The system prompt goes in as a developer
-// message rather than `instructions`, which those relays replace with their own.
+// message rather than `instructions`, which those relays replace with their own. Events are framed as SSE
+// (SSEEvents), and a stream that ends before its terminal event (completed, incomplete or failed) was cut: an error
+// wrapping io.ErrUnexpectedEOF, not a short reply.
 func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Request) (reply Reply, answered bool, err error) {
 	input := []any{map[string]any{"role": "developer", "content": r.System}}
 	for _, m := range r.Messages {
@@ -231,7 +245,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		req["reasoning"] = map[string]any{"effort": c.cfg.ReasoningEffort}
 	}
 	body, _ := json.Marshal(req)
-	hreq, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/responses", bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}
@@ -248,22 +262,32 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		return reply, false, newHTTPError(resp, raw)
 	}
 	var b strings.Builder
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 64<<10), 4<<20)
-	for sc.Scan() {
-		data, ok := strings.CutPrefix(sc.Text(), "data:")
-		if !ok {
-			continue
-		}
+	refused := false // a refusal content part came: the model declined, whatever else the stream says
+	// event acts on one event's data, and done says it ended the stream, with the reply and error to return. ended
+	// returns them: a limit the stream reported is no answer, so it holds the gate like the HTTP 429 it stands for.
+	ended := func(got Reply, err error) (Reply, bool, error) {
+		var limit *streamLimit
+		return got, !errors.As(err, &limit), err
+	}
+	event := func(data string) (reply Reply, done bool, err error) {
 		var ev struct {
-			Type     string `json:"type"`
-			Delta    string `json:"delta"`
-			Message  string `json:"message"`
+			Type    string `json:"type"`
+			Delta   string `json:"delta"`
+			Message string `json:"message"`
+			Code    string `json:"code"` // an error event's
+			// Part is the content part of response.content_part.added/done: type output_text or refusal.
+			Part struct {
+				Type string `json:"type"`
+			} `json:"part"`
 			Response struct {
 				Model string `json:"model"`
 				Error *struct {
+					Code    string `json:"code"`
 					Message string `json:"message"`
 				} `json:"error"`
+				IncompleteDetails *struct {
+					Reason string `json:"reason"`
+				} `json:"incomplete_details"`
 				Usage *struct {
 					InputTokens        int `json:"input_tokens"`
 					OutputTokens       int `json:"output_tokens"`
@@ -273,34 +297,80 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				} `json:"usage"`
 			} `json:"response"`
 		}
-		if json.Unmarshal([]byte(strings.TrimSpace(data)), &ev) != nil {
-			continue
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			return reply, false, nil
+		}
+		finished := func() Reply {
+			r := Reply{Text: b.String(), Model: ev.Response.Model}
+			if u := ev.Response.Usage; u != nil { // input_tokens counts the cached ones too
+				r.Usage = Usage{InputTokens: u.InputTokens - u.InputTokensDetails.CachedTokens, OutputTokens: u.OutputTokens,
+					CacheReadInputTokens: u.InputTokensDetails.CachedTokens}
+			}
+			return r
 		}
 		switch ev.Type {
 		case "response.output_text.delta":
 			b.WriteString(ev.Delta)
+		case "response.refusal.delta", "response.refusal.done":
+			refused = true
+		case "response.content_part.added", "response.content_part.done":
+			if ev.Part.Type == "refusal" {
+				refused = true
+			}
 		case "response.completed":
-			reply = Reply{Text: b.String(), Model: ev.Response.Model}
-			if u := ev.Response.Usage; u != nil { // input_tokens counts the cached ones too
-				reply.Usage = Usage{InputTokens: u.InputTokens - u.InputTokensDetails.CachedTokens, OutputTokens: u.OutputTokens,
-					CacheReadInputTokens: u.InputTokensDetails.CachedTokens}
+			reply = finished()
+			if refused { // a refusal part, whatever text came with it: the same as the Messages API's stop_reason
+				return Reply{Model: reply.Model, Usage: reply.Usage}, true, &RefusalError{StopReason: "refusal"}
 			}
 			return reply, true, nil
-		case "response.failed", "response.incomplete", "error":
+		case "response.incomplete":
+			reason := ""
+			if d := ev.Response.IncompleteDetails; d != nil {
+				reason = d.Reason
+			}
+			if reason == "content_filter" || refused { // stopped by a filter: declined, not a failure to retry
+				if reason != "content_filter" {
+					reason = "refusal"
+				}
+				reply = finished()
+				return Reply{Model: reply.Model, Usage: reply.Usage}, true, &RefusalError{StopReason: reason}
+			}
 			msg := ev.Message
 			if ev.Response.Error != nil {
 				msg = ev.Response.Error.Message
 			}
 			return reply, true, fmt.Errorf("ai: %s: %s", ev.Type, msg)
+		case "response.failed", "error":
+			msg, code := ev.Message, ev.Code
+			if e := ev.Response.Error; e != nil {
+				msg, code = e.Message, cmp.Or(e.Code, code)
+			}
+			if limit := streamLimitFor(ev.Type, code, msg); limit != nil { // a limit told after the 200 holds the gate too
+				return reply, true, limit
+			}
+			return reply, true, fmt.Errorf("ai: %s: %s", ev.Type, msg)
 		}
+		return reply, false, nil
 	}
-	if err := sc.Err(); err != nil {
+	var (
+		got     Reply
+		gotErr  error
+		stopped bool
+	)
+	if err := SSEEvents(resp.Body, func(data string) bool {
+		got, stopped, gotErr = event(data)
+		return stopped
+	}); err != nil {
 		return reply, true, fmt.Errorf("ai: read stream: %w", err)
 	}
-	if b.Len() == 0 {
-		return reply, true, errors.New("ai: stream ended without a reply")
+	if stopped {
+		return ended(got, gotErr)
 	}
-	return Reply{Text: b.String()}, true, nil
+	// No terminal event: the connection was cut, and whatever text came is only part of the answer.
+	if b.Len() == 0 {
+		return reply, true, fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
+	}
+	return reply, true, fmt.Errorf("ai: stream ended before the response completed: %w", io.ErrUnexpectedEOF)
 }
 
 // JSON asks for a JSON object and decodes the first one in the reply into out.
@@ -337,6 +407,17 @@ var ErrTruncated = errors.New("ai: reply cut off at max_tokens")
 // ErrRefused: the model declined the request (the Messages API's stop_reason "refusal", e.g. a safety classifier).
 // The same input is declined again, so sending it as is once more only spends a call.
 var ErrRefused = errors.New("ai: the model declined to answer")
+
+// RefusalError is ErrRefused with what the upstream said: StopReason is "refusal" (the Messages API's stop_reason, a
+// Responses API refusal part or a Chat Completions refusal delta) or "content_filter" (an incomplete response's reason
+// or a Chat Completions finish_reason). errors.Is(err, ErrRefused) holds for it; the Reply returned with it still has
+// the call's Model and Usage.
+type RefusalError struct {
+	StopReason string
+}
+
+func (e *RefusalError) Error() string { return ErrRefused.Error() }
+func (e *RefusalError) Unwrap() error { return ErrRefused }
 
 // FirstObject extracts the first balanced {...} from model output (tolerating fences and chatter).
 func FirstObject(s string) (string, error) {

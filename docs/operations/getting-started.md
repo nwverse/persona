@@ -42,9 +42,9 @@ If you have an always-on computer, put the hub on it. A laptop works as the hub 
 | --- | --- |
 | iPhone (iOS 26 or later) | [TestFlight public beta](https://testflight.apple.com/join/vsjfy3hE): install TestFlight from the App Store first, then tap this link. The App is called Persona Side |
 | Apple Watch | Installs along with the iPhone version |
-| Web | Nothing to install: once the hub is set up, open the hub's address in a browser (explained below) |
+| Web | Nothing to install: once the hub is set up, open the hub's address in a browser (explained below). On a computer you can also install it as an app ([web.md](../web/web.md), "On computers") |
 | Android | No public package yet; build it yourself ([android.md](../android/android.md)) |
-| Mac App | No package yet; build it yourself ([mac.md](../apple/mac.md)) |
+| Mac App | Frozen: it gets fixes, not new features ([mac.md](../apple/mac.md)). On a Mac, use the web app (it can be installed as an app); a Mac whose Agents Persona should reach also needs Persona Link ("Connect a computer" below) |
 
 ## Install the hub: paste one command
 
@@ -122,10 +122,11 @@ Pick a path based on what you have:
 - **Already using Claude Code and signed in**: nothing to fill in; just send something in the main chat.
 - **Have an API key**: in the web version open **Settings › Model Providers › Add Provider**, choose a vendor from the list and paste the key. It sends one very short message as a test, which costs a tiny amount.
   Once saved, the main chat and newly opened Agents use it automatically; if you previously chose a different model in **Model Settings**, your choice is kept and not replaced.
+  Grok is the exception: it can't run the main chat or Agents, only background work such as sorting and processing.
 - **Have nothing**: pick a vendor from the same list, click **Where do I get a key?** to sign up on their site and copy a key, then come back and paste it.
 
-The list currently has: Anthropic official, DeepSeek, Kimi (Moonshot AI), Zhipu GLM, Alibaba Cloud Model Studio (Qwen), MiniMax; Kimi and MiniMax also have international editions.
-The ones marked as directly available in mainland China can be opened with a Chinese phone number and payment method; Anthropic official and the two international editions need an overseas account and payment method. If none fit, choose **Custom compatible gateway** at the end of the list.
+The list currently has: Anthropic official, DeepSeek, Kimi (Moonshot AI), Zhipu GLM, Alibaba Cloud Model Studio (Qwen), MiniMax, and Grok (xAI); Kimi and MiniMax also have international editions.
+The ones marked as directly available in mainland China can be opened with a Chinese phone number and payment method; Anthropic official, Grok and the two international editions need an overseas account and payment method. If none fit, choose **Custom compatible gateway** at the end of the list.
 
 **Settings › Model Providers** on iPhone and Android can add providers too, but the new "pick a vendor, just paste the key" wizard is still in progress, so the web is easiest for now.
 ## What the cards above the main chat mean
@@ -167,7 +168,7 @@ For people comfortable with the command line. The commands and files behind each
   What it does and doesn't change is in [onboarding.md](../assistant/onboarding.md) ("Installer"); for manual deployment see [server.md](../server/server.md), for a NAS see [docker.md](docker.md).
 - Get another phone pairing code: run `personad hub pair` on the hub machine. Under "Advanced" on the web sign-in page you can sign in with the hub's master key; it's the `token` in hub.json, and whoever has it can do anything.
 - Add a computer without the web: **Admin › Computers › Add computer**, or run `personad hub pair --machine <id> --add --name <name>` on the hub machine. Computers added either way count as confirmed right away. Details in [link.md](link.md).
-- If the machine had no `claude` or `herdr` when the hub was installed, `machines` in `hub.json` is empty. After adding Claude Code, rerunning `personad hub setup` adds this machine (`kind: local`) while `machines` is still empty; or edit hub.json in the admin page (or directly), add an entry `{"id": "<hostname>", "name": "<name>", "kind": "local"}` to `machines`, and restart the hub ([config.md](config.md)).
+- If the machine had no `claude` or `herdr` when the hub was installed, `machines` in `hub.json` is empty. After adding Claude Code, rerunning `personad hub setup` adds this machine (`kind: local`) while the hub still has no computer (`machines` empty and none kept by a manager); or edit hub.json in the admin page (or directly), add an entry `{"id": "<hostname>", "name": "<name>", "kind": "local"}` to `machines`, and restart the hub ([config.md](config.md)).
 - A freshly installed hub only opens its TLS port on LAN IPv4; to connect directly from outside too, rerun `personad hub setup --outside`, see [network.md](network.md).
 - If you already wrote a claude launcher function in `~/.zshrc`, it's still discovered and selectable, and you can also use **Import from ~/.zshrc** in **Settings › Model Providers**; see [launchers.md](../integrations/launchers.md).
 - The APIs for main chat readiness and error codes are in [protocol.md](../protocol/protocol.md) ("Main chat readiness"); design and future plans are in [onboarding.md](../assistant/onboarding.md).

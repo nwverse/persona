@@ -8,8 +8,10 @@ import {
   presetChoices,
   presetDefaultModel,
   presetHost,
+  presetRunsClaude,
   presetSubtitle,
   presetTestBody,
+  presetTestable,
   presetTitle,
   signupHref,
   testableKey,
@@ -65,6 +67,7 @@ describe("launcher presets", () => {
   it("tests a key against the preset: the hub fills in the address and the default model", () => {
     expect(presetTestBody(glm, " sk-x ", "")).toEqual({ preset: "builtin/glm", api_key: "sk-x", auth: "bearer" });
     expect(presetTestBody(team, "sk-x", "example-mini")).toEqual({ preset: "example-gateway/team", api_key: "sk-x", auth: "api_key", model: "example-mini" });
+    expect(presetTestable({ ...api, api: "chat" })).toBe(true);
     expect(testableKey("sk-1")).toBe(false);
     expect(testableKey(" sk-12345 ")).toBe(true);
   });
@@ -99,6 +102,16 @@ describe("launcher presets", () => {
     expect(assignByDefault(false, { ok: false, ms: 120, code: "region_blocked", error: "x" })).toBe(false);
     expect(assignByDefault(true, null)).toBe(false);
     expect(assignByDefault(true, { ok: true, ms: 300 })).toBe(false);
+  });
+
+  // Claude Code needs a Messages endpoint: a direct API on Responses / Chat Completions runs neither the main conversation nor Agents.
+  it("runs the main conversation and Agents only on Messages", () => {
+    expect(presetRunsClaude(glm)).toBe(true);
+    expect(presetRunsClaude(team)).toBe(true);
+    expect(presetRunsClaude(api)).toBe(false);
+    expect(presetRunsClaude({ ...api, api: "chat" })).toBe(false);
+    expect(presetRunsClaude({ ...api, api: "messages" })).toBe(true);
+    expect(presetRunsClaude({ ...api, api: undefined })).toBe(true); // an empty api is Messages
   });
 
   it("an older hub without presets answers none", async () => {

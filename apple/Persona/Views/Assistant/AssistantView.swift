@@ -11,7 +11,7 @@ struct AssistantView: View {
     /// The ChatGPT-style shell (docs/apple/ios.md「新外壳」): it owns the drawer, and pushes its pages here.
     @Environment(\.shell) private var shell
     #if os(iOS)
-    /// The iPad's tabs without Inbox and Settings (`RootTabs.padSidebar`): the sidebar column lists them as the shell's does.
+    /// The iPad's tabs omit Inbox and Settings: the sidebar column lists them as the shell's does.
     @Environment(\.padRouter) private var padRouter
     #endif
     @State private var pending: PendingStart?
@@ -19,7 +19,8 @@ struct AssistantView: View {
     @State private var path = NavigationPath()
     /// The last shell request shown (`ShellState.request`'s serial).
     @State private var handledRequest = 0
-    @State private var startError: String?
+    /// A first message whose start failed (#1368): it stays on the page until it is sent again or deleted.
+    @State private var failedStart = FailedStart.shared
     @State private var starterLauncher: String?
     @State private var showProfile = false
     @State private var showKnowledge = false
@@ -155,13 +156,13 @@ struct AssistantView: View {
                         // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
                         .environment(\.shellChat, shell != nil || ChatComposerKind.padCard)
                 } else if shell != nil {
-                    ShellHome(pending: pending, error: startError, launcher: $starterLauncher, mode: $starterMode,
-                              effort: $starterEffort, openInbox: { path.append($0) }) { text, images in
+                    ShellHome(pending: shownStart, error: failedStart.message?.reason, launcher: $starterLauncher, mode: $starterMode,
+                              effort: $starterEffort, openInbox: { path.append($0) }, resend: resend, delete: deleteFailed) { text, images in
                         Task { await start(text, images) }
                     }
                 } else {
-                    AssistantHome(pending: pending, error: startError, launcher: $starterLauncher, mode: $starterMode,
-                                  effort: $starterEffort) { text, images in
+                    AssistantHome(pending: shownStart, error: failedStart.message?.reason, launcher: $starterLauncher, mode: $starterMode,
+                                  effort: $starterEffort, resend: resend, delete: deleteFailed) { text, images in
                         Task { await start(text, images) }
                     }
                 }
@@ -193,7 +194,7 @@ struct AssistantView: View {
             .navigationDestination(isPresented: $showTodos) { TodosView() }
             .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
             .navigationDestination(isPresented: $showHealth) {
-                HealthView(disabled: pending != nil, launcher: $starterLauncher) { text, images in
+                HealthView(disabled: shownStart != nil, launcher: $starterLauncher) { text, images in
                     Task { await start(text, images, space: Session.healthSpace) }
                 }
             }
@@ -217,7 +218,7 @@ struct AssistantView: View {
             // from the knowledge base, even when its conversation is the one already open.
             // A start error belongs to the home page it failed on: another conversation (from any menu, the Mac's
             // ⇧⌘N, a quick action) leaves it behind.
-            .onChange(of: model.assistantCurrent) { backToRoot(); startError = nil }
+            .onChange(of: model.assistantCurrent) { backToRoot() }
             .onChange(of: model.assistantReveal) { backToRoot(); activeDrawer.close() }
             #if DEBUG
             // `-openAssistantPage profile|avatars|routines|runs|…` (with `-tab assistant`): the profile and its pages;
@@ -309,15 +310,33 @@ struct AssistantView: View {
         withAnimation(Theme.Motion.standard) {
             model.assistantCurrent = nil
             pending = nil
-            // Also on the home page already (no change of conversation): the last failure's line would read as a new one.
-            startError = nil
         }
     }
 
+    /// The first message the page shows: the one spinning up, else one whose start failed (#1368).
+    private var shownStart: PendingStart? {
+        pending ?? failedStart.message.map { PendingStart(text: $0.text, imageCount: $0.images.count, failed: $0) }
+    }
+
+    /// Resend on a failed first message: the op id a chat's Resend would choose (`FailedStart.resendOp`), then the start.
+    private func resend() {
+        guard let m = failedStart.message, let api = model.api else { return }
+        let receipts = model.hubFeatures.contains(AssistantStart.feature)
+        Task {
+            let op = await FailedStart.resendOp(m, api: api, receipts: receipts)
+            await start(m.text, m.images, space: m.space, op: op)
+        }
+    }
+
+    private func deleteFailed() {
+        withAnimation(Theme.Motion.standard) { failedStart.clear() }
+        model.readiness.failure = nil
+    }
+
     /// `space`: the space the conversation opens in (Health passes "health"; it never becomes the main conversation).
-    private func start(_ text: String, _ images: [ImagePayload], space: String? = nil) async {
+    /// `op`: its op id (`AssistantStart`); Resend passes the one it chose.
+    private func start(_ text: String, _ images: [ImagePayload], space: String? = nil, op: UUID = UUID()) async {
         guard let api = model.api else { return }
-        startError = nil
         model.readiness.failure = nil
         // From Health: back to the root, which shows the message coming as for any new conversation.
         if space != nil {
@@ -327,35 +346,30 @@ struct AssistantView: View {
         withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
         do {
             let makesMain = space == nil && model.assistantMain == nil // the first one becomes the main conversation
-            var attempt = 0
-            var started: Session?
-            while started == nil {
-                do {
-                    started = try await api.startConversation(prompt: text, images: images, launcher: starterLauncher,
-                                                              permissionMode: starterMode.isEmpty ? nil : starterMode,
-                                                              effort: starterEffort.isEmpty ? nil : starterEffort,
-                                                              main: makesMain, space: space)
-                } catch where CodedFailure.passesBySelf(error) && attempt < 3 {
-                    // The assistant restarting: a few seconds, tried again without a word (docs/assistant/onboarding.md 4.6).
-                    attempt += 1
-                    try await Task.sleep(for: .seconds(2 * attempt))
-                }
+            let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature), op: op) { op in
+                try await api.startConversation(prompt: text, images: images, launcher: starterLauncher,
+                                                permissionMode: starterMode.isEmpty ? nil : starterMode,
+                                                effort: starterEffort.isEmpty ? nil : starterEffort,
+                                                main: makesMain, space: space, opID: op)
             }
-            guard let s = started else { return }
             if makesMain { await model.refreshAssistant() }
             Haptics.success()
             model.began(s, text: text, images: images) // the message stays on screen until claude has written it
             withAnimation(Theme.Motion.standard) {
                 model.assistantCurrent = s.key
                 pending = nil
+                failedStart.clear()
             }
         } catch {
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
+            // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
             withAnimation(Theme.Motion.standard) {
                 pending = nil
                 model.readiness.failure = coded
-                startError = coded == nil ? error.shown : nil
+                failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
+                                                     mayHaveStarted: FailedStart.mayHaveStarted(error),
+                                                     reason: coded == nil ? error.shown : nil, at: .now))
             }
             if coded != nil { model.readinessChanged() }
             Haptics.error()
@@ -366,6 +380,8 @@ struct AssistantView: View {
 struct PendingStart: Equatable {
     var text: String
     var imageCount: Int
+    /// A start that failed (#1368): drawn as the chat's failed bubble, with Resend and Delete, and no typing line.
+    var failed: FailedStart.Message? = nil
 }
 
 /// The first message of a new conversation while it spins up, laid out as the chat will lay it out the moment it takes
@@ -376,21 +392,31 @@ struct FirstMessagePending: View {
     var pending: PendingStart
     var name: String
     var shell: Bool
+    /// A failed one's Resend and Delete (#1368).
+    var resend: () -> Void = {}
+    var delete: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) { // the chat's rows' spacing
-            DayLine(date: .now)
-            VStack(alignment: .trailing, spacing: Theme.Space.sm) {
-                if pending.imageCount > 0 {
-                    Label("\(pending.imageCount) images", systemImage: Theme.Icon.photo).font(Theme.Font.label).foregroundStyle(.secondary)
+            if let failed = pending.failed {
+                // As the chat keeps a message that did not go: the red mark's menu sends it again or deletes it.
+                DayLine(date: failed.at)
+                PendingBubble(msg: PendingMessage(id: failed.op, text: failed.text, images: failed.images, state: .failed, createdAt: failed.at),
+                              retry: resend, discard: delete)
+            } else {
+                DayLine(date: .now)
+                VStack(alignment: .trailing, spacing: Theme.Space.sm) {
+                    if pending.imageCount > 0 {
+                        Label("\(pending.imageCount) images", systemImage: Theme.Icon.photo).font(Theme.Font.label).foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Spacer(minLength: 48)
+                        UserBubbleBody(quotes: [], text: pending.text)
+                    }
                 }
-                HStack {
-                    Spacer(minLength: 48)
-                    UserBubbleBody(quotes: [], text: pending.text)
-                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                TypingIndicator(text: String(localized: "\(name) is getting ready…"))
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            TypingIndicator(text: String(localized: "\(name) is getting ready…"))
         }
         .padding(.horizontal, Theme.Space.l) // the chat's list margins
         .frame(maxWidth: ChatView.readableWidth)
@@ -398,7 +424,7 @@ struct FirstMessagePending: View {
     }
 }
 
-/// The old layout's new conversation: `AssistantWelcome` (greeting, what Persona can reach, one-tap suggestions); while
+/// A new conversation outside the compact shell: `AssistantWelcome` (greeting, capabilities, one-tap suggestions); while
 /// a conversation spins up it shows the first message and a typing indicator so the send feels instant.
 struct AssistantHome: View {
     @Environment(AppModel.self) private var model
@@ -407,6 +433,8 @@ struct AssistantHome: View {
     @Binding var launcher: String?
     @Binding var mode: String
     @Binding var effort: String
+    var resend: () -> Void = {}
+    var delete: () -> Void = {}
     var send: (String, [ImagePayload]) -> Void
     @State private var route: ReadinessRoute?
 
@@ -416,13 +444,13 @@ struct AssistantHome: View {
     var body: some View {
         ScrollView {
             if let pending {
-                FirstMessagePending(pending: pending, name: model.persona.name, shell: false)
+                FirstMessagePending(pending: pending, name: model.persona.name, shell: false, resend: resend, delete: delete)
                     // The page's height inside its margins, the message at its bottom (a long one runs up out of it, as the
                     // chat shows its newest end).
                     .containerRelativeFrame(.vertical, alignment: .bottom)
             } else {
                 VStack(alignment: .leading, spacing: Theme.Space.xl) {
-                    AssistantWelcome(error: error, send: send, openHelp: { route = .help($0, machine: nil) })
+                    AssistantWelcome(send: send, openHelp: { route = .help($0, machine: nil) })
                 }
                 .padding(.horizontal, Theme.Space.xl)
                 .padding(.bottom, Theme.Space.xl)
@@ -444,7 +472,12 @@ struct AssistantHome: View {
             // The chips' row a step off the field (2026-11-04: with Theme.Space.s it sat right on it, and the
             // suggestion cards were cut off hard just above it).
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                if pending == nil { ReadinessHomeCard(route: $route) }
+                // A failed first message: why, and what to do when it is a refusal (#1368).
+                if pending?.failed != nil, let error {
+                    Label(error, systemImage: Theme.Icon.error).font(Theme.Font.caption).foregroundStyle(Theme.danger)
+                        .padding(.horizontal, Theme.Space.s)
+                }
+                if pending == nil || pending?.failed != nil { ReadinessHomeCard(route: $route) }
                 if ChatComposerKind.padCard {
                     // The iPad: the iPhone's composer, the launcher, mode and effort in its model menu (#2779).
                     StarterComposer(disabled: pending != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
@@ -492,7 +525,6 @@ struct AssistantHome: View {
 /// only the composer): a greeting, what Persona can reach, one-tap things to ask.
 struct AssistantWelcome: View {
     @Environment(AppModel.self) private var model
-    var error: String? = nil
     var send: (String, [ImagePayload]) -> Void
     /// Opens local help for a readiness example question that is `local` (never sent to the model).
     var openHelp: ((String) -> Void)? = nil
@@ -550,20 +582,15 @@ struct AssistantWelcome: View {
     private static let builtIn: [(symbol: String, title: String, prompt: String)] = [
         ("calendar", String(localized: "Today's Schedule"), String(localized: "Check my schedule for today: look at both my iPhone calendar and Lark calendar, merge them, and list everything by time.")),
         (Theme.Icon.mailAccounts, String(localized: "Emails to Handle"), String(localized: "Which recent emails in my inbox need me to act or reply? Just the important ones.")),
-        ("macbook.and.iphone", String(localized: "What My Computers Are Doing"), String(localized: "What are the agents on my computers doing right now? Which are waiting on me, and which finished but I haven't looked at yet?")),
-        ("bubble.left.and.text.bubble.right", String(localized: "Lark Messages"), String(localized: "Summarize the important messages I got on Lark today and which ones need a reply from me.")),
-        ("person.2.wave.2", String(localized: "Meeting Prep"), String(localized: "Look at my remaining meetings today, pick the most important one, and help me prepare: agenda, related docs, last meeting's notes, and open to-dos.")),
+        (Theme.Icon.machines, String(localized: "What My Computers Are Doing"), String(localized: "What are the agents on my computers doing right now? Which are waiting on me, and which finished but I haven't looked at yet?")),
+        (Theme.Icon.feishuChats, String(localized: "Lark Messages"), String(localized: "Summarize the important messages I got on Lark today and which ones need a reply from me.")),
+        (Theme.Icon.meeting, String(localized: "Meeting Prep"), String(localized: "Look at my remaining meetings today, pick the most important one, and help me prepare: agenda, related docs, last meeting's notes, and open to-dos.")),
         ("heart.text.square", String(localized: "This Week's Health"), String(localized: "Using the health data on my iPhone, summarize my steps, sleep, and workouts this week.")),
     ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xl) {
             header
-            if let error {
-                Label(error, systemImage: Theme.Icon.error)
-                    .font(Theme.Font.caption)
-                    .foregroundStyle(Theme.danger)
-            }
             if AppStyle.current.usesBeautifulUI {
                 // BeautifulUI's list card: one row per thing to ask, its mark, what it is and how it is put.
                 BUIListSection(String(localized: "Things to Ask")) {
@@ -572,7 +599,7 @@ struct AssistantWelcome: View {
                             ask(s)
                         } label: {
                             BUIListRow(s.title, detail: s.local == nil ? s.prompt : nil, accessory: .disclosure, detailLines: 1) {
-                                BUIIconTile(s.symbol, tint: Theme.accent)
+                                IconTile(s.symbol, tint: Theme.accent)
                             }
                         }
                         .buttonStyle(.plain)
@@ -586,7 +613,7 @@ struct AssistantWelcome: View {
                             ask(s)
                         } label: {
                             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                                Image(systemName: s.symbol)
+                                ThemedIcon(s.symbol)
                                     .font(Theme.Font.title)
                                     .foregroundStyle(Theme.accent)
                                 Text(s.title).font(Theme.Font.heading).foregroundStyle(Color.primary)
@@ -734,11 +761,13 @@ struct StarterComposer: View {
     @State private var uploads = FileUploads()
     @State private var videos = VideoAttachments()
     @State private var selection: TextSelection?
+    /// Sessions picked in the @ list (#2319), quoted at the top of the shell's composer.
+    @State private var quotes: [ContextRef] = []
     @FocusState private var focused: Bool
 
     private var canSend: Bool {
         !disabled && !videos.busy
-            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !videos.ready.isEmpty)
+            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !videos.ready.isEmpty || !quotes.isEmpty)
     }
 
     private func submit() {
@@ -746,15 +775,38 @@ struct StarterComposer: View {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = videos.ready
         // Nothing to send: a second ⏎ on the Mac before the field redraws (#785) would start an empty conversation.
-        guard !videos.busy, !t.isEmpty || !images.isEmpty || !files.isEmpty else { return }
-        let body = AttachedFile.message(t.isEmpty ? (images.isEmpty ? String(localized: "Please look at the image [Assistant View a3e0a0]") : String(localized: "Please look at the image [Assistant View 5ad878]")) : t, files: files)
+        guard !videos.busy, !t.isEmpty || !images.isEmpty || !files.isEmpty || !quotes.isEmpty else { return }
+        let body = AttachedFile.message(t.isEmpty ? (images.isEmpty ? (files.isEmpty ? String(localized: "See the context above.") : String(localized: "Please look at the image [Assistant View a3e0a0]")) : String(localized: "Please look at the image [Assistant View 5ad878]")) : t, files: files)
         // The keyboard goes down with the send: the conversation that takes over has a field of its own, and the keyboard
         // coming back up and going down again on the way moved the first message up and down with it (#1911).
         focused = false
-        send(body, images.map(\.1))
+        // Quoted sessions ride along as <persona-context> tags before what was typed, as in a chat.
+        send(quotes.isEmpty ? body : quotes.map(\.xml).joined(separator: "\n") + "\n\n" + body, images.map(\.1))
         text = ""
         images = []
         videos.sent()
+        quotes = []
+    }
+
+    /// The `@word` before the caret, for the @ list (#2319): the shell's composer only, while it has the keyboard.
+    private var mentionToken: MentionToken? {
+        guard shell != nil, focused, !disabled else { return nil }
+        #if os(iOS) || os(visionOS)
+        if TypedText.composingFocused { return nil } // Pinyin still marked: the list waits for the confirmed words
+        #endif
+        return MentionToken.at(text, selection: selection)
+    }
+
+    /// A new conversation has no files or folder yet: the other sessions, and what a typed absolute or ~ path lists on the
+    /// assistant's machine (the web's new conversation offers the same).
+    private var mentionSource: MentionSource { MentionSource(machine: machine) }
+
+    private func typeMention() {
+        let caret = focused ? PathInsert.range(selection, in: text)?.lowerBound : nil // an unfocused field's is stale
+        let r = MentionToken.typing(in: text, caret: caret ?? text.utf16.count)
+        text = r.text
+        selection = .cursor(utf16: r.caret)
+        focused = true
     }
 
     /// The assistant's machine (the hub's unless set otherwise): files and videos go to its temp directory.
@@ -764,6 +816,10 @@ struct StarterComposer: View {
     @ViewBuilder private var attachments: some View {
         Button { showPhotos = true } label: { Label("Photos", systemImage: Theme.Icon.photos) }
         Button { showFiles = true } label: { Label("Files", systemImage: Theme.Icon.file) }
+        if shell != nil { // the @ list is the shell composer's (#2319)
+            Button { typeMention() } label: { Label("Mention a File or Session", systemImage: Theme.Icon.mention).lineLimit(1) }
+                .accessibilityIdentifier("composer-menu-mention")
+        }
     }
 
     var body: some View {
@@ -780,11 +836,17 @@ struct StarterComposer: View {
             }
             #endif
             if !images.isEmpty { ComposerImages(images: $images) }
+            if let token = mentionToken {
+                ComposerMentionMenu(token: token, text: $text, selection: $selection, source: mentionSource) { ref in
+                    if !quotes.contains(where: { $0.url == ref.url }) { quotes.append(ref) }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             if let shell {
                 ShellComposerBar(placeholder: String(localized: "Ask \(model.persona.name)"), text: $text, selection: $selection, focused: $focused,
-                                 canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty,
+                                 canSend: canSend, hasAttachments: !images.isEmpty || !videos.items.isEmpty || !quotes.isEmpty,
                                  modesTitle: StarterModesMenu.title(modes: shell, launchers: launchers, model: model),
-                                 history: "assistant.new", gate: gate, send: submit) {
+                                 quotes: $quotes, history: "assistant.new", gate: gate, send: submit) {
                     attachments
                 } modes: {
                     StarterModesMenu(modes: shell, launchers: launchers)
@@ -830,6 +892,17 @@ struct StarterComposer: View {
                 picks = []
             }
         }
+        .animation(Theme.Motion.standard, value: mentionToken == nil)
+        .preference(key: MentionMenuOpen.self, value: mentionToken != nil)
+        #if DEBUG
+        .task { // `-openMentionMenu YES`: "@" with the keyboard up and its list open (#2319, screenshots)
+            guard shell != nil, let draft = UserDefaults.standard.string(forKey: "openMentionMenu") else { return }
+            try? await Task.sleep(for: .seconds(4))
+            text = draft.hasPrefix("@") ? draft : "@"
+            selection = .cursor(utf16: text.utf16.count)
+            focused = true
+        }
+        #endif
     }
 }
 
@@ -1006,12 +1079,12 @@ struct AssistantToolsRow: View {
                                 Text("\(ToolPresentation.verb(last.name)) \(ToolPresentation.subject(last))").lineLimit(1)
                             }
                         } else {
-                            Image(systemName: Theme.Icon.unknownTool)
+                            ThemedIcon(Theme.Icon.unknownTool)
                             Text("Tools \(count)")
                             Text(sources(calls)).foregroundStyle(.tertiary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
-                        Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).rotationEffect(.degrees(open ? 90 : 0))
+                        ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).rotationEffect(.degrees(open ? 90 : 0))
                     }
                     .font(Theme.Font.label)
                     .foregroundStyle(.secondary)
@@ -1094,7 +1167,7 @@ struct StarterLauncherStatus: View {
                 model.retryAssistantLoad()
             } label: {
                 HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: Theme.Icon.error)
+                    ThemedIcon(Theme.Icon.error)
                     Text(String(localized: "Couldn't Load Settings")).lineLimit(1).minimumScaleFactor(0.8)
                     Text(String(localized: "Retry [Components b8784c]")).lineLimit(1).foregroundStyle(Theme.accent)
                 }
@@ -1194,13 +1267,13 @@ struct StarterModesMenu: View {
         Section("Thinking Effort") {
             Picker("Thinking Effort", selection: modes.$effort) {
                 Text("Use Launcher's").tag("")
-                ForEach(SessionModes.startEffortLevels) { o in Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id) }
+                ForEach(SessionModes.startEffortLevels) { o in Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id) }
             }
             .pickerStyle(.inline)
         }
         Picker(selection: modes.$mode) {
             Text("Use Launcher's").tag("")
-            ForEach(SessionModes.assistantModes) { o in Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id) }
+            ForEach(SessionModes.assistantModes) { o in Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id) }
         } label: {
             Label("Permission Mode: \(SessionModes.mode(modes.mode)?.title ?? String(localized: "Use Launcher's"))", systemImage: SessionModes.mode(modes.mode)?.symbol ?? Theme.Icon.askFirst)
         }

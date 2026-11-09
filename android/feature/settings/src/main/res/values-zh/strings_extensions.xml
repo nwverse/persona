@@ -220,6 +220,8 @@
     <string name="settings_ext_preview_note">包已经下载好，也核对过 sha256。扩展在 hub 所在的机器上运行；沙箱到底开没开，装好以后在详情里看。</string>
     <string name="settings_ext_preview_expires">这次预览到 %1$s（UTC）失效。</string>
     <string name="settings_ext_preview_cancel">不装了</string>
+    <string name="settings_ext_preview_expired">这次预览已经过期，不能再确认。重新预览一次，按现在的包和权限再决定。</string>
+    <string name="settings_ext_preview_again">重新预览</string>
     <string name="settings_ext_uninstall_title">卸载 %1$s？</string>
     <string name="settings_ext_uninstall_text">会停掉它，删掉它的设置和密钥；它提供的连接器也一起去掉。</string>
     <string name="settings_ext_dependents_title">一起停用依赖它的扩展？</string>
@@ -245,7 +247,7 @@
     <string name="settings_ext_token_removed">已去掉 token</string>
     <string name="settings_ext_token_changed">已换 token</string>
     <string name="settings_ext_remove_market_title">删除 %1$s？</string>
-    <string name="settings_ext_remove_market_text">hub 不再读这个市场。从它装的扩展留着。</string>
+    <string name="settings_ext_remove_market_text">hub 不再读这个市场。从它装的扩展留着，但不再升级，直到用同样的地址把市场加回来。</string>
     <string name="settings_ext_remove">删除</string>
     <string name="settings_ext_market_removed">已删除市场</string>
     <string name="settings_ext_market_address">地址</string>
@@ -274,6 +276,9 @@
     <!-- Auto-upgrade (docs/extensions/extensions.md "Auto-upgrade") -->
     <string name="settings_ext_upgrade_title">升级</string>
     <string name="settings_ext_upgrade_footer">扩展市场里出了新版本，扩展空闲时自动装上；新版本要的权限变多时先问你。装上后起不来的会退回原来的版本。</string>
+    <string name="settings_ext_upgrade_paused_footer">扩展关闭期间暂停自动升级。重新打开扩展后，恢复你原来的自动升级设置。</string>
+    <string name="settings_ext_upgrade_market_removed_footer">它的市场已经删掉了，不会再升级。用同样的地址把市场加回来，就能恢复升级。</string>
+    <string name="settings_ext_upgrade_paused_other_footer">这个扩展的自动升级暂时停了。</string>
     <string name="settings_ext_auto_upgrade">自动升级</string>
     <string name="settings_ext_new_version">有新版本 %1$s</string>
     <string name="settings_ext_auto_upgrade_on">已打开自动升级</string>
@@ -284,6 +289,7 @@
     <string name="settings_ext_upgrade_available">稍后自动升级</string>
     <string name="settings_ext_upgrade_off">自动升级关着</string>
     <string name="settings_ext_upgrade_skipped">上次升级后起不来，已回到 %1$s，不再自动升级到这个版本</string>
+    <string name="settings_ext_upgrade_skipped_user">你从这个版本回滚到了 %1$s，不会再自动升级到它</string>
     <string name="settings_ext_upgrade_failed">没装上</string>
     <string name="settings_ext_upgrade_failed_detail">没装上：%1$s</string>
     <string name="settings_ext_upgrade_incompatible">这台 hub 装不了</string>
@@ -332,4 +338,9 @@
     <string name="settings_ext_program_outdated">这台电脑上的 personad 太旧，更新后才能运行</string>
     <string name="settings_ext_program_error">程序出错</string>
     <string name="settings_ext_program_error_detail">程序出错：%1$s</string>
+    <string name="settings_ext_more_actions">更多操作</string>
+    <string name="settings_ext_tile_on">已开启</string>
+    <string name="settings_ext_open_image">查看图片</string>
+    <string name="settings_ext_chosen_count">已选 %1$d 项</string>
+    <string name="settings_ext_pick_time">时间</string>
 </resources>

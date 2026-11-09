@@ -1,6 +1,6 @@
 package prompts
 
-import "regexp"
+import "github.com/nwverse/persona/server/internal/lazyre"
 
 // The voice extension's prompts (voice/, docs/assistant/voice.md "Prompts"). Every one comes in the user's language: its Lang is
 // an i18n code, en or ja, anything else is Chinese.
@@ -115,6 +115,18 @@ type VoiceObserved struct {
 }
 
 func RenderVoiceObserved(d VoiceObserved) string { return render("voice/observed", d) }
+
+// VoiceNudge is what the voice model is told, once, when it owes the user an answer and has said nothing for a while
+// (voice/nudge, docs/assistant/voice.md "Context for the fast layer" rule 9): nothing of what was said or handed to it,
+// which it has already.
+type VoiceNudge struct {
+	Lang string
+	// Cause is what it owes an answer to: user (a line the user said or typed) or result (what was just handed to it: a
+	// tool's or a turn's result, a refusal, a status).
+	Cause string
+}
+
+func RenderVoiceNudge(d VoiceNudge) string { return render("voice/nudge", d) }
 
 // VoiceRefused is what the voice model is told when what it handed over was not sent (voice/refused).
 type VoiceRefused struct {
@@ -264,7 +276,7 @@ type VoiceAgent struct{ ID, Title, State, Last string }
 func RenderVoiceToolResult(d VoiceToolResult) string { return render("voice/tool_result", d) }
 
 // agentOutputTag is anything a reader could take for the start or end of an <agent_output> block.
-var agentOutputTag = regexp.MustCompile(`(?i)<\s*/?\s*agent_output\b[^>]*>`)
+var agentOutputTag = lazyre.New(`(?i)<\s*/?\s*agent_output\b[^>]*>`)
 
 // AgentOutput is an agent's words to go inside an <agent_output> block, with nothing left in them that opens or closes
 // one, so none of them can stand outside it (docs/assistant/voice.md "Context for the fast layer" rule 5). Like ContextBody, a tag the removal

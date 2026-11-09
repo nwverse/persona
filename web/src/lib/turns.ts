@@ -7,7 +7,8 @@ import { t } from "../i18n";
 import { errorSignature, isRetryText, parseAPIError, type APIErrorInfo } from "./api-errors";
 import { foldCompactions, isCompaction } from "./compaction";
 import { injectedOf } from "./injected";
-import type { Injected, Item } from "./types";
+import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
+import type { Injected, Item, MessageSource } from "./types";
 
 export type Step =
   | { kind: "tool"; id: string; use: Item; result?: Item; images: Item[] }
@@ -36,6 +37,11 @@ export interface UserMessage {
   photos?: string[];
   /** Persona typed it in for the model (a task's notice, a scheduled run…): one line, not a bubble (lib/injected.ts). */
   injected?: Injected;
+  source?: MessageSource;
+  /** The previous visible message has the same source and no intervening reply or work. */
+  continuedSource?: boolean;
+  /** Original injected input blocks, before display parsing or shortening. */
+  rawInput?: Item[];
 }
 
 /** A <persona-file kind="video" path="…" name="…" size="…" duration="…"/> in a message (docs/protocol/protocol.md "Sending video"). */
@@ -65,6 +71,8 @@ export interface Segment {
   thoughts: number;
   replies: number;
   folds: Item[];
+  /** Part of a supervision round: its visibility tools stay outside the ordinary work fold. */
+  supervision?: boolean;
 }
 
 function blockOrder(a: Item, b: Item) {
@@ -82,11 +90,29 @@ export function sortItems(items: Item[]): Item[] {
 // is here (the fold was expanded, or a later page overlaps it) the fold goes.
 export function mergeItems(have: Item[], batch: Item[]): Item[] {
   const byId = new Map(have.map((i) => [i.id, i]));
-  for (const it of batch) byId.set(it.id, it);
+  for (const it of batch) {
+    const old = byId.get(it.id);
+    let next = old?.supervisionUser ? { ...it, supervisionUser: true } : it;
+    if (old?.fold?.supervision_user && next.fold && old.fold.through_seq === next.fold.through_seq) next = { ...next, fold: { ...next.fold, supervision_user: true } };
+    byId.set(it.id, next);
+  }
   const all = [...byId.values()];
   const work = all.filter((i) => i.kind === "tool_use" || i.kind === "tool_result" || i.kind === "thinking");
+  const promotedFolds = all.filter((i) => i.fold?.supervision_user);
   const kept = all.filter((f) => f.kind !== "fold" || !f.fold || !work.some((i) => i.seq >= f.seq && i.seq <= f.fold!.through_seq));
-  return sortItems(kept);
+  // An overlapping page may replace only part of a fold. Its authoritative promotion must survive that replacement,
+  // even if the real visibility tool is on the part that has not arrived yet, or a later receipt says silent.
+  if (!promotedFolds.length) return sortItems(kept);
+  const realWork = new Set(work);
+  return sortItems(kept.map((i) => realWork.has(i) && promotedFolds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq) ? { ...i, supervisionUser: true } : i));
+}
+
+/** `have` without what a fold of this fresh page now stands for. Left in, a step kept from before the fold existed
+ *  would make mergeItems drop the fold as if it had been expanded, and every other step in it would be lost. */
+export function withoutFolded(have: Item[], page: Item[]): Item[] {
+  const folds = page.filter((f) => f.fold);
+  if (!folds.length) return have;
+  return have.filter((i) => !((i.kind === "thinking" || i.kind === "fold" || i.tool_use_id) && folds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq)));
 }
 
 // Only the canonical persona-context tag is recognized.
@@ -171,7 +197,7 @@ function isUserMessage(i: Item) {
   return i.role === "user" && (i.kind === "text" || (i.kind === "image" && !i.tool_use_id));
 }
 
-export function segments(items: Item[]): Segment[] {
+export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Segment[] {
   const out: Segment[] = [];
   let cur: Segment | null = null;
   let lastUserEntry = "";
@@ -186,19 +212,24 @@ export function segments(items: Item[]): Segment[] {
   for (const it of items) {
     const entry = it.id.split("#")[0];
     if (isUserMessage(it)) {
+      if (cur?.user?.injected && entry === lastUserEntry && !cur.steps.length && !cur.answer && !cur.user.rawInput!.some((i) => i.id === it.id)) {
+        cur.user.rawInput!.push(it);
+        if (it.kind === "image") cur.user.images.push(it);
+        continue;
+      }
       const injected = injectedOf(it);
       if (injected) {
-        // Persona's message for the model: its line stands for it, the words inside are not shown
+        // The line stands for the input; the complete original remains available in the supervision trace.
         cur = open(`seg:${it.id}`);
-        cur.user = { id: it.id, text: injected.line, images: [], ts: it.ts, contexts: [], injected };
+        cur.user = { id: it.id, text: injected.line, images: [], ts: it.ts, contexts: [], injected, source: sourceOf(it, injected), rawInput: [it] };
         cur.start = it.ts;
-        lastUserEntry = "";
+        lastUserEntry = entry;
         continue;
       }
       // blocks of one transcript line (text + its images) are one message
-      if (!cur || !cur.user || entry !== lastUserEntry || cur.steps.length || cur.answer) {
+      if (!cur || !cur.user || cur.user.injected || entry !== lastUserEntry || cur.steps.length || cur.answer) {
         cur = open(`seg:${it.id}`);
-        cur.user = { id: it.id, text: "", images: [], queued: it.queued, ts: it.ts, contexts: [], from: it.from || undefined };
+        cur.user = { id: it.id, text: "", images: [], queued: it.queued, ts: it.ts, contexts: [], from: it.from || undefined, source: sourceOf(it, null), rawInput: [it] };
         cur.start = it.ts;
       }
       lastUserEntry = entry;
@@ -207,7 +238,7 @@ export function segments(items: Item[]): Segment[] {
       else {
         const p = parseUserText(it.text ?? "");
         cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
-        cur.user!.contexts.push(...p.contexts);
+        cur.user!.contexts.push(...p.contexts.filter((c) => c.kind !== "message-source"));
         if (p.files.length) cur.user!.files = [...(cur.user!.files ?? []), ...p.files];
         if (p.photos.length) cur.user!.photos = [...new Set([...(cur.user!.photos ?? []), ...p.photos])];
       }
@@ -220,7 +251,7 @@ export function segments(items: Item[]): Segment[] {
     if (it.ts) cur.end = it.ts;
     switch (it.kind) {
       case "tool_use": {
-        const st: Extract<Step, { kind: "tool" }> = { kind: "tool", id: it.id, use: it, images: [] };
+        const st: Extract<Step, { kind: "tool" }> = { kind: "tool", id: it.id, use: it, result: it.tool_use_id ? results?.get(it.tool_use_id) : undefined, images: [] };
         if (it.tool_use_id) tools.set(it.tool_use_id, st);
         cur.steps.push(st);
         cur.tools++;
@@ -272,7 +303,22 @@ export function segments(items: Item[]): Segment[] {
     }
     s.replies = s.steps.filter((x) => x.kind === "text").length;
   }
-  return out;
+  return groupSourceLabels(out);
+}
+
+/** Keep consecutive provenance labels quiet without hiding any individual message. */
+function groupSourceLabels(segs: Segment[]): Segment[] {
+  let previous: string | undefined;
+  for (const seg of segs) {
+    const source = seg.user?.source;
+    if (source && seg.user) {
+      const key = sourceKey(source);
+      seg.user.continuedSource = previous === key;
+      previous = key;
+    } else previous = undefined;
+    if (seg.steps.length || seg.answer) previous = undefined;
+  }
+  return segs;
 }
 
 /** The agent's words in a pushed batch that the chat did not have yet: they just came in (their words fade in once). */
@@ -288,6 +334,15 @@ export function exchangeSteps(s: Segment): Step[] {
   const at = s.steps.findIndex((st) => blockOrder(st.kind === "tool" ? st.use : st.item, a) > 0);
   const step: Step = { kind: "text", id: a.id, item: a };
   return at < 0 ? [...s.steps, step] : [...s.steps.slice(0, at), step, ...s.steps.slice(at)];
+}
+
+/** Presentation identity for an exchange without input: a fold and its real nonzero block share the source sequence. */
+export function segmentIdentity(s: Segment): string {
+  if (s.user) return s.id;
+  const first = s.steps[0];
+  let seq = first ? (first.kind === "tool" ? first.use.seq : first.item.seq) : undefined;
+  if (s.answer && (seq === undefined || s.answer.seq < seq)) seq = s.answer.seq;
+  return seq !== undefined && Number.isFinite(seq) ? `exchange-${seq}` : s.id;
 }
 
 // The first line worth showing for a tool call: the command, the file, the pattern…
@@ -382,7 +437,7 @@ export function isPersonaTool(name?: string): boolean {
 
 /** Persona's tools with a verb of their own, by their bare name (iOS PersonaToolNames + ToolPresentation.verb). */
 const PERSONA_VERB_KEY: Record<string, string> = {
-  // Agents on the user's computers (docs/assistant/assistant.md "Agents and Lark tools")
+  // Agents on the user's computers (docs/assistant/assistant.md "Current structure", Agents)
   agent_read: "persona_agent_read",
   agent_send: "persona_agent_send",
   send_to_agent: "persona_agent_send",
@@ -425,6 +480,8 @@ const PERSONA_VERB_KEY: Record<string, string> = {
   computer_run: "persona_computer_run",
   browser_run: "persona_browser_run",
   browser_look: "persona_browser_look",
+  // commands run on a computer with a password typed on the iPhone (#1137)
+  secret_run: "persona_secret_run",
 };
 
 /** How one of Persona's own tools reads in a step: a verb ("Read agent chat"), or for the phone and mail families the
@@ -492,6 +549,41 @@ function collectWakeRuns(t: Turn) {
   if (first >= 0) t.afterWake = t.ordered.slice(first).filter((x) => !isUserInput(x));
 }
 
+/** Only Persona's visibility tools, not similarly named tools on unrelated MCP servers. */
+export function supervisionTool(name?: string): "notify_user" | "ask_user" | "supervision_finish" | "task_review" | undefined {
+  const bare = name?.startsWith("mcp__") && isPersonaTool(name) ? name.slice(name.lastIndexOf("__") + 2) : name;
+  return bare === "notify_user" || bare === "ask_user" || bare === "supervision_finish" || bare === "task_review" ? bare : undefined;
+}
+
+/** Visibility is round-wide and derived again after every page merge. Arguments alone never prove success. */
+export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string, Item>, live: boolean): boolean {
+  if (ordered.some((i) => i.supervisionUser || i.fold?.supervision_user || (injectedOf(i)?.state === "supervise" && injectedOf(i)?.level === "user"))) return true;
+  for (const use of ordered) {
+    if (use.kind !== "tool_use") continue;
+    const name = supervisionTool(use.tool_name);
+    if (!name) continue;
+    const result = use.tool_use_id ? results.get(use.tool_use_id) : undefined;
+    // ask_user waits for a person before it has a result; never bury its pending answer card.
+    if (!result) {
+      if (name === "ask_user" && live) return true;
+      continue;
+    }
+    if (result.is_error) continue;
+    if (name === "task_review") {
+      if (use.tool_input?.verdict === "accepted" || use.tool_input?.verdict === "needs_user") return true;
+      continue;
+    }
+    if (name !== "supervision_finish") return true;
+    try {
+      const value: unknown = JSON.parse(result.text ?? "");
+      if (value && typeof value === "object" && !Array.isArray(value) && "visibility" in value && value.visibility === "user") return true;
+    } catch {
+      // A failed or malformed receipt cannot promote the round from its requested visibility.
+    }
+  }
+  return false;
+}
+
 export function buildBlocks(items: Item[]): Block[] {
   const blocks: Block[] = [];
   let cur: Turn | null = null;
@@ -500,6 +592,7 @@ export function buildBlocks(items: Item[]): Block[] {
   // (a holder: the closure assigns these, which the loop's narrowing would not see)
   const last: { raw: Turn | null; index: number; reopenedAt: number | null } = { raw: null, index: 0, reopenedAt: null };
   let lastUserEntry = "";
+  let supervisionRound = false;
 
   const close = () => {
     if (!cur) return;
@@ -526,8 +619,11 @@ export function buildBlocks(items: Item[]): Block[] {
     if (isUserInput(it)) {
       const entry = it.id.split("#")[0];
       const prev: Item | undefined = cur ? cur.ordered[cur.ordered.length - 1] : undefined;
-      // the blocks of one line (a text and its pictures) are one message; input typed mid-turn joins the exchange
-      if (cur && ((prev && isUserInput(prev) && entry === lastUserEntry) || it.queued)) {
+      // Supervision is a separate round even when queued. A later real message must never join its fold.
+      const sameMessage = prev && isUserInput(prev) && entry === lastUserEntry;
+      const supervision = injectedOf(it)?.state === "supervise";
+      const supervising = supervisionRound;
+      if (cur && (sameMessage || (it.queued && !supervision && !supervising))) {
         cur.users.push(it);
         add(cur, it, false);
       } else {
@@ -536,6 +632,7 @@ export function buildBlocks(items: Item[]): Block[] {
         cur.users.push(it);
         add(cur, it, false);
       }
+      if (!sameMessage) supervisionRound = supervision;
       lastUserEntry = entry;
       continue;
     }
@@ -587,6 +684,8 @@ export function buildBlocks(items: Item[]): Block[] {
 }
 
 export type ChatLine =
+  /** A quiet supervision round, including all its segments and notices, never the next real input. */
+  | { kind: "supervision"; id: string; lines: ChatLine[]; live: boolean }
   /** A message (or none), one work row for what the agent did after it, the agent's last words. */
   | { kind: "segment"; id: string; seg: Segment; live: boolean; wakes?: Turn }
   /** A notice of its own line: a wake that opens new work, "Interrupted" after an exchange. */
@@ -620,7 +719,7 @@ export function workSegment(id: string, items: Item[]): Segment {
   return out;
 }
 
-function turnLines(t: Turn, live: boolean): ChatLine[] {
+function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>): ChatLine[] {
   const out: ChatLine[] = [];
   let ordered = t.ordered;
   let wokeAt: string | undefined;
@@ -630,12 +729,12 @@ function turnLines(t: Turn, live: boolean): ChatLine[] {
     wokeAt = ordered[0].ts;
     ordered = ordered.slice(1);
   }
-  const segs = segments(ordered);
+  const segs = segments(ordered, results);
   segs.forEach((seg, k) => {
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
     // woken by background tasks: the chip with the runs since the first wake sits above the newest words (#3783)
-    out.push({ kind: "segment", id: seg.id, seg, live: live && last, ...(last && t.wakes.length ? { wakes: t } : {}) });
+    out.push({ kind: "segment", id: segmentIdentity(seg), seg, live: live && last, ...(last && t.wakes.length ? { wakes: t } : {}) });
   });
   for (const n of t.trailing) out.push({ kind: "notice", id: n.id, item: n });
   return out;
@@ -644,16 +743,56 @@ function turnLines(t: Turn, live: boolean): ChatLine[] {
 /** The chat as lines (iOS ChatLines.lines): exchanges, their wakes and notices, recaps, API errors as cards. */
 export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[] {
   const blocks = buildBlocks(foldCompactions(items));
-  const last = blocks[blocks.length - 1];
-  const liveId = opts.live && last?.kind === "turn" ? last.turn.id : undefined;
+  const source = items.at(-1);
+  // A wake can reopen a turn before a recap. Select the owner of the latest source item, not the last drawn block.
+  const active = opts.live && source ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id))) : undefined;
+  const liveId = active && active.kind === "turn" ? active.turn.id : undefined;
   const out: ChatLine[] = [];
+  // A result can land after another segment or user input; associate it with its original call, not its position.
+  const results = new Map(items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => [i.tool_use_id!, i]));
+  // A recap or compaction can split one round into several blocks. Supervision lasts until the next actual input,
+  // not merely until one Turn closes; orphan continuation segments and live prose still belong to that round.
+  let round: { lines: ChatLine[]; ordered: Item[]; live: boolean } | undefined;
+  const flush = () => {
+    if (!round) return;
+    if (supervisionVisible(round.ordered, results, round.live)) out.push(...round.lines);
+    else out.push({ kind: "supervision", id: round.lines[0].id, lines: round.lines, live: round.live });
+    round = undefined;
+  };
+  const append = (lines: ChatLine[], ordered: Item[], live: boolean) => {
+    if (!round) { out.push(...lines); return; }
+    for (const line of lines) if (line.kind === "segment") line.seg.supervision = true;
+    round.lines.push(...lines);
+    round.ordered.push(...ordered);
+    round.live ||= live;
+  };
   for (const b of blocks) {
-    if (b.kind === "row") out.push(isCompaction(b.item) ? { kind: "compact", id: b.item.id, item: b.item } : { kind: "recaps", id: b.item.id, items: [b.item] });
-    else out.push(...turnLines(b.turn, b.turn.id === liveId));
+    if (b.kind === "turn" && b.turn.users.length) {
+      flush();
+      if (b.turn.users.some((i) => injectedOf(i)?.state === "supervise")) round = { lines: [], ordered: [], live: false };
+    }
+    if (b.kind === "row") {
+      append([isCompaction(b.item) ? { kind: "compact", id: b.item.id, item: b.item } : { kind: "recaps", id: b.item.id, items: [b.item] }], [b.item], false);
+    } else {
+      const live = b.turn.id === liveId;
+      append(turnLines(b.turn, live, results), b.turn.ordered, live);
+    }
   }
-  // working with nothing of this turn yet (the last thing is a recap): the work row still shows
-  if (opts.live && !liveId) out.push({ kind: "segment", id: "live", seg: { id: "live", steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] }, live: true });
-  return foldRecaps(foldAPIErrors(out));
+  // Working with nothing of this run yet (the last thing is a recap): retain the supervision round's visibility.
+  if (opts.live && !liveId) append([{ kind: "segment", id: "live", seg: { id: "live", steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] }, live: true }], [], true);
+  flush();
+  const lines = foldRecaps(foldAPIErrors(out));
+  let previous: string | undefined;
+  for (const line of lines) {
+    if (line.kind === "supervision") {
+      groupSourceLabels(line.lines.filter((child): child is Extract<ChatLine, { kind: "segment" }> => child.kind === "segment").map((child) => child.seg));
+    }
+    if (line.kind !== "segment" || !line.seg.user?.source) { previous = undefined; continue; }
+    const key = sourceKey(line.seg.user.source);
+    line.seg.user.continuedSource = previous === key;
+    previous = line.seg.steps.length || line.seg.answer ? undefined : key;
+  }
+  return lines;
 }
 
 /** The API error a line ends in: an answer, or a notice of its own line. `rest`: the line without it (null: nothing). */
@@ -750,18 +889,16 @@ export function wakeDrawer(t: Turn): { groups: { id: string; notices: Item[]; an
   return { groups: groups.filter((g) => g.notices.length || g.answer).reverse(), process };
 }
 
-/** The title of the context a message another Persona conversation sent carries (prompts/assistant/relay.md). */
-const RELAY_TITLE = "来自对话「"; // i18n-ignore: matches the hub's relay text
-
 /** Sent by another Persona conversation (conversation_new / conversation_send), not typed by you. */
 export function isRelayed(msg: UserMessage): boolean {
-  return msg.contexts.some((c) => c.title?.startsWith(RELAY_TITLE));
+  if (msg.client_msg_id || msg.rawInput?.some((item) => userSourceSentinel(item.text ?? ""))) return false;
+  return msg.source?.kind === "conversation";
 }
 
 /** Typed (or dictated, or a quick command expanded) by you: the pale blue bubble. Persona's own messages, another
  *  session's and another conversation's are not. */
 export function isOwnMessage(msg: UserMessage): boolean {
-  return !msg.injected && !msg.from && !isRelayed(msg);
+  return !msg.source && !msg.injected && !msg.from && !isRelayed(msg);
 }
 
 /** A /loop wakeup (the transcript records each as the "/loop …" prompt again): a quiet line, not a bubble. */

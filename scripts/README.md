@@ -11,7 +11,7 @@ Scripts are grouped by purpose and resolve their own repository root. Build/depl
 | `migrate/` | One-shot, explicitly approved offline maintenance | `migrate/persona-cutover.py` (plan only by default; never starts a service) |
 | `mock/` | Synthetic hub and screenshot/demo fixtures | `mock/mock_hub.py`, `mock/mock_scenarios.py`, `mock/make_demo_data.py` |
 | `assets/` | Icons and avatar packages | `assets/make_icon.py`, `assets/make_alt_icons.py`, `assets/make_persona.py` |
-| `diag/` | Push replay and redacted transcript diagnostics | `diag/agentsync_replay.py`, `diag/pane_probe.py`, `diag/redact_transcript.py` |
+| `diag/` | Push replay, client traffic and redacted transcript diagnostics | `diag/hub_traffic_report.py`, `diag/agentsync_replay.py`, `diag/pane_probe.py`, `diag/redact_transcript.py` |
 | `test/` | Server, protocol, source and script regression checks | `test/check-fast.sh`, `test/test-server.sh`, `test/test_doc_paths.py` |
 | `hooks/` | Privacy hooks and PR merging | `hooks/merge-pr.sh` |
 | `gen/` | Generated extension wire types and SDK bundles | `gen/extension_schema.py`, `gen/sdk_bundle.py`, `gen/sync-sdk.sh` |
@@ -31,6 +31,7 @@ Use synthetic fixtures and an isolated outer HOME for script tests. Server tests
 ```sh
 n=0 failed=""
 for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do
+  grep -q unittest "$f" || continue  # a verification script, not a suite: CI skips it too (scripts/ci/python-tests.py)
   n=$((n + 1))
   (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"
 done

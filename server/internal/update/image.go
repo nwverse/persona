@@ -9,9 +9,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Image is a container image reference (docs/operations/hub-update.md "Docker"): the registry, the repository in it, and the
@@ -146,7 +147,7 @@ func registryGet(ctx context.Context, client *http.Client, u, bearer string) (*h
 	return client.Do(req)
 }
 
-var challengeParam = regexp.MustCompile(`(\w+)="([^"]*)"`)
+var challengeParam = lazyre.New(`(\w+)="([^"]*)"`)
 
 // pullToken answers `Bearer realm="…",service="…",scope="…"`: anonymous, or with token as the password (any user
 // name works for ghcr.io and Docker Hub).
@@ -230,7 +231,7 @@ type version struct {
 	pre string
 }
 
-var versionPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-((?:alpha|beta|rc)[0-9.]*))?$`)
+var versionPattern = lazyre.New(`^v?(\d+)\.(\d+)\.(\d+)(?:-((?:alpha|beta|rc)[0-9.]*))?$`)
 
 // parseVersion reads a release version or tag. A build from a branch (git describe: 0.3.0-12-gabc1234-…) is not
 // one: it is newer than the tag it starts with, so it cannot be compared.

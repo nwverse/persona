@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -212,7 +213,7 @@ func (s *Service) resolveBoardCard(ctx context.Context, op *workspaceboard.Mutat
 	defer cancel()
 	var selected *proto.Workspace
 	if op.WorkspaceID != "" {
-		sessions := s.nodeSessions(m.ID)
+		sessions, _ := s.boardSessions(m.ID)
 		for _, session := range sessions {
 			candidate := workspaceForSession(m.ID, session)
 			if candidate.Cwd != "" && candidate.ID == op.WorkspaceID {
@@ -301,6 +302,22 @@ func sessionBoardDirectory(s proto.Session) string {
 	return workspaceDirectory(s.Cwd)
 }
 
+// boardSessions are, of a machine's sessions, the first to name each directory (WorkspaceCwd, else Cwd), in list order,
+// and how many its node listed. The board reads a directory's first session only: a later one in the same directory
+// is either taken as that first one was or skipped, since sessionBoardDirectory canonicalizes a path to one it leaves
+// as it is. So a machine listing thousands of sessions in a few directories copies a few.
+func (s *Service) boardSessions(machine string) ([]proto.Session, int) {
+	named := map[string]bool{}
+	return s.nodeSessionsWhere(machine, func(sess *proto.Session) bool {
+		dir := cmp.Or(sess.WorkspaceCwd, sess.Cwd)
+		if dir == "" || named[dir] {
+			return false // none (sessionBoardDirectory ""), or one already read
+		}
+		named[dir] = true
+		return true
+	})
+}
+
 func workspaceForSession(machine string, s proto.Session) proto.Workspace {
 	title := s.SpaceName
 	if title == "" {
@@ -329,18 +346,12 @@ func (s *Service) getWorkspaces(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, 503, err)
 		return
 	}
+	// Keep the newest raw snapshot per effective machine. Decode and qualify it only when discovery needs a fallback.
 	byMachine := map[string]db.WorkspaceSnapshotRow{}
 	for _, row := range cached {
 		machine := s.effectiveBoardMachine(row.MachineID)
 		if previous, ok := byMachine[machine]; ok && !row.UpdatedAt.After(previous.UpdatedAt) {
 			continue
-		}
-		var entries []proto.Workspace
-		if json.Unmarshal(row.Data, &entries) == nil {
-			for i := range entries {
-				entries[i] = qualifyWorkspace(machine, entries[i])
-			}
-			row.Data, _ = json.Marshal(entries)
 		}
 		byMachine[machine] = row
 	}
@@ -418,6 +429,10 @@ func (s *Service) getWorkspaces(w http.ResponseWriter, r *http.Request) {
 			if old, ok := byMachine[m.ID]; ok {
 				if err := json.Unmarshal(old.Data, &entries); err != nil {
 					errs = append(errs, workspaceDiscoveryError{m.ID, i18n.T(l, "hub-workspace_board.err_snapshot_read")})
+				} else {
+					for i := range entries {
+						entries[i] = qualifyWorkspace(m.ID, entries[i])
+					}
 				}
 			}
 		}
@@ -435,6 +450,7 @@ func (s *Service) getWorkspaces(w http.ResponseWriter, r *http.Request) {
 				var previous []proto.Workspace
 				if json.Unmarshal(old.Data, &previous) == nil {
 					for _, item := range previous {
+						item = qualifyWorkspace(m.ID, item)
 						if failed[item.Source] && !present[item.ID] {
 							item.Available = false
 							entries = append(entries, item)
@@ -453,7 +469,7 @@ func (s *Service) getWorkspaces(w http.ResponseWriter, r *http.Request) {
 		if result.err != nil {
 			errs = append(errs, workspaceDiscoveryError{m.ID, i18n.Localize(result.err, l)})
 		}
-		sessions := s.nodeSessions(m.ID)
+		sessions, listed := s.boardSessions(m.ID)
 		containsDirectory := func(cwd string) bool {
 			for _, item := range entries {
 				if workspaceDirectory(item.Cwd) == workspaceDirectory(cwd) {
@@ -491,7 +507,7 @@ func (s *Service) getWorkspaces(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Persist the merged directory catalog, not only spaces that still have a host terminal.
-		if online && (result.err == nil || len(sessions) > 0) {
+		if online && (result.err == nil || listed > 0) {
 			raw, _ := json.Marshal(entries)
 			if err := store.SaveWorkspaceSnapshot(r.Context(), m.ID, raw); err != nil {
 				errs = append(errs, workspaceDiscoveryError{m.ID, i18n.T(l, "hub-workspace_board.err_snapshot_save")})

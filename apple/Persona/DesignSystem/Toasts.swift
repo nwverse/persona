@@ -13,28 +13,19 @@ struct ToastCapsule: View {
 
     var body: some View {
         let row = HStack(spacing: Theme.Space.m) {
-            Image(systemName: toast.style == .error ? Theme.Icon.errorFilled : toast.style == .success ? Theme.Icon.successFilled : Theme.Icon.infoFilled)
+            ThemedIcon(toast.style == .error ? Theme.Icon.errorFilled : toast.style == .success ? Theme.Icon.successFilled : Theme.Icon.infoFilled)
                 .foregroundStyle(toast.style == .error ? Theme.danger : toast.style == .success ? Theme.positive : Theme.accent)
             Text(toast.message)
                 .font(Theme.Font.secondaryMedium)
                 .lineLimit(3)
+            if let second = toast.secondary {
+                button(second).accessibilityIdentifier("toast-secondary")
+            }
             if let action = toast.action {
-                Button {
-                    action.run()
-                    dismiss()
-                } label: {
-                    // As large as the words beside it (the owner asked, #138: Undo was too small to read and hit).
-                    Text(action.title)
-                        .font(Theme.Font.secondaryStrong)
-                        .foregroundStyle(Theme.accent)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("toast-action")
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onActionFrame?($0) }
-                .onDisappear { onActionFrame?(.null) }
+                button(action)
+                    .accessibilityIdentifier("toast-action")
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onActionFrame?($0) }
+                    .onDisappear { onActionFrame?(.null) }
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -46,13 +37,29 @@ struct ToastCapsule: View {
         }
     }
 
+    private func button(_ action: Toast.Action) -> some View {
+        Button {
+            action.run()
+            dismiss()
+        } label: {
+            // As large as the words beside it (the owner asked, #138: Undo was too small to read and hit).
+            Text(action.title)
+                .font(Theme.Font.secondaryStrong)
+                .foregroundStyle(Theme.accent)
+                .lineLimit(1)
+                .fixedSize()
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
     /// How long it stays: an error longer, one with a button (Undo) long enough to reach it.
     static func shown(_ toast: Toast) -> Duration { .seconds(toast.action != nil ? 5 : toast.style == .error ? 4 : 2.5) }
 }
 
 /// The app's toast at the top of what it covers, over the content (it moves nothing), gone after `ToastCapsule.shown`.
-/// `tapToDismiss`: a tap on it closes it (the tabs, the Mac); the iPhone's shell shows it in a window of its own that
-/// takes no touches (`ToastWindow`), so nothing under it ever misses a tap.
+/// `tapToDismiss`: a tap on it closes it (the Mac, the welcome page); on the iPhone and iPad it is shown in a window of
+/// its own that takes no touches (`ToastWindow`), so nothing under it ever misses a tap.
 struct ToastOverlay: View {
     @Environment(AppModel.self) private var model
     var tapToDismiss = true

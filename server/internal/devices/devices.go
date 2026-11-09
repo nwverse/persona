@@ -24,6 +24,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -128,6 +129,9 @@ type Devices struct {
 	stopping atomic.Bool
 	workers  sync.WaitGroup
 
+	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
+	attention atomic.Pointer[link.Attention]
+
 	cfgChanged chan struct{} // closed when the hub's handover changes (meshWait)
 
 	// keep: the sessions each machine's node lists however quiet (the assistant's profile, SetKeep); nil before it
@@ -143,8 +147,14 @@ type Devices struct {
 
 	metrics metricsBook // the machines' monitoring (metrics.go)
 	usage   usageBook   // their token usage (metrics.go)
-	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop).
+	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop); usageWait: how long it takes the
+	// ones that come after one to store them together (usageGather as New found it).
 	usageWrites chan usageWrite
+	usageWait   time.Duration
+	// metricWrites: the samples to store (metrics.go's writeMetrics); metricsWait: how long it waits for a tick's other
+	// samples (metricsGather as New found it).
+	metricWrites chan db.MachineSample
+	metricsWait  time.Duration
 
 	usageWin usageWindowsHub // subscription rate-limit windows across machines (usagewindows.go, #2432)
 	usageGW  usageGateways   // the account-pool gateways that add accounts to it (usagegateways.go, #2595)
@@ -160,7 +170,8 @@ func New(o Options) *Devices {
 		o.Logf = func(string, ...any) {}
 	}
 	d := &Devices{opts: o, logf: o.Logf, gotCh: make(chan struct{}), ready: make(chan struct{}), byID: map[string]*Machine{}, ownWait: ownListWait,
-		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
+		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), usageWait: usageGather,
+		metricWrites: make(chan db.MachineSample, metricsQueue), metricsWait: metricsGather, reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	// The account-pool gateways' usage windows (usagegateways.go, #2595): manager.json's usage section as it is now.
 	var usage UsageConfig
 	if o.ConfigFile != "" {
@@ -195,6 +206,13 @@ func (d *Devices) Run(ctx context.Context) error {
 	go d.probeServices(mctx)
 	go d.measureLoop(mctx)
 	go d.metricsLoop(mctx)
+	if st := d.metricsStore(); st != nil {
+		d.workers.Add(1) // waited for below: what came before the machines stopped is stored
+		go func() {
+			defer d.workers.Done()
+			d.writeMetrics(mctx, st)
+		}()
+	}
 	go d.usageLoop(mctx)
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
@@ -261,6 +279,10 @@ func (d *Devices) Configure(cfg devicewire.Config) {
 	if was := linkSays(old); was != linkSays(cfg) {
 		d.links.sendEndpoints(d.linkEndpoints)
 	}
+	// The summary carries the web address, and a computer gets it only once confirmed and not a work computer
+	// (attentionFor: pending, machines[].trust, a member's records), an empty one otherwise. A computer that has
+	// the latest gets nothing.
+	d.spreadAttention()
 	if member := cfg.Mesh != nil && cfg.Mesh.Member; member != wasMember {
 		// The hub joined a group (its computers are the center's to connect now: let them go at once) or became its
 		// center (connect them again, its own and the members').
@@ -397,6 +419,13 @@ func (d *Devices) startMachines(ctx context.Context) {
 			defer d.workers.Done()
 			m.run(m.ctx)
 		}()
+		if m.cfg.Kind == kindService {
+			d.workers.Add(1)
+			go func() {
+				defer d.workers.Done()
+				m.attentionLoop(m.ctx)
+			}()
+		}
 	}
 	d.readyOnce.Do(func() { close(d.ready) })
 	d.changed()
@@ -753,6 +782,17 @@ func (d *Devices) Sessions(id string) ([]proto.Session, bool) {
 		return nil, false
 	}
 	return m.sessionList(), true
+}
+
+// SessionsWhere are those of a machine's sessions keep accepts, copied out without the rest; false when there is no
+// such machine. keep reads each session in place, under the machine's lock: it must not change or keep it, nor call
+// the devices.
+func (d *Devices) SessionsWhere(id string, keep func(*proto.Session) bool) ([]proto.Session, bool) {
+	m := d.machineByID(id)
+	if m == nil {
+		return nil, false
+	}
+	return m.sessionsWhere(keep), true
 }
 
 // Canonical is the id of the machine id names (an entry another one absorbed: that one's); id itself when there is

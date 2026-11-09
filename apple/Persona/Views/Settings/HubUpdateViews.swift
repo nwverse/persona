@@ -241,7 +241,7 @@ struct HubSettingsPage: View {
                     Text(b.title).lineLimit(1)
                     Text(b.machine).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 } icon: {
-                    Image(systemName: Theme.Icon.inProgress).foregroundStyle(Theme.busy)
+                    ThemedIcon(Theme.Icon.inProgress).foregroundStyle(Theme.busy)
                 }
             }
             Button(role: .destructive) { confirmNow = true } label: { Text("Update Now…").lineLimit(1) }
@@ -271,7 +271,7 @@ struct HubSettingsPage: View {
             Text(text).font(Theme.Font.code).lineLimit(1).minimumScaleFactor(0.7).textSelection(.enabled)
             Spacer(minLength: Theme.Space.s)
             Button { UIPasteboard.general.string = text; Haptics.success() } label: {
-                Image(systemName: Theme.Icon.copy)
+                ThemedIcon(Theme.Icon.copy)
             }
             .buttonStyle(.borderless)
             .accessibilityLabel("Copy [Message Menu 63d90d]")
@@ -307,7 +307,7 @@ struct HubSettingsPage: View {
         } header: {
             SettingsHeading(String(localized: "personad on Your Computers"))
         } footer: {
-            Text("After the hub updates, it moves personad on your computers to the same version. For any that didn't update, tap it and choose Redeploy.")
+            Text("After the hub updates, your computers keep their personad version unless auto_update_nodes is on in hub.json. To update one, tap it and choose Redeploy.")
         }
     }
 
@@ -354,7 +354,7 @@ struct HubNoticeRow: View {
         if let notice = model.hubNotice {
             HStack(spacing: Theme.Space.s) {
                 Group {
-                    if case .updating = notice { ProgressView().controlSize(.mini) } else { Image(systemName: symbol(notice)) }
+                    if case .updating = notice { ProgressView().controlSize(.mini) } else { ThemedIcon(symbol(notice)) }
                 }
                 .foregroundStyle(tint(notice))
                 .scaledFrame(width: Theme.Size.iconS)
@@ -373,7 +373,7 @@ struct HubNoticeRow: View {
 
     private var closeButton: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            Button { page = false } label: { Image(systemName: Theme.Icon.close) }.accessibilityLabel("Close")
+            Button { page = false } label: { ThemedIcon(Theme.Icon.close) }.accessibilityLabel("Close")
         }
     }
 
@@ -420,7 +420,7 @@ struct HubNoticeRow: View {
 
     @ViewBuilder private func dismiss(_ n: HubNotice) -> some View {
         if let key = n.dismissKey {
-            Button { model.dismissHubNotice(key) } label: { Image(systemName: Theme.Icon.close) }
+            Button { model.dismissHubNotice(key) } label: { ThemedIcon(Theme.Icon.close) }
                 .accessibilityLabel("Don't Show Again")
                 .accessibilityIdentifier("hubNotice.dismiss")
         }

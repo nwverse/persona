@@ -52,6 +52,8 @@ type lookView struct {
 	Rev           string          `json:"rev,omitempty"`
 	Bytes         int64           `json:"bytes,omitempty"`
 	Manifest      json.RawMessage `json:"manifest,omitempty"`
+	// Uploaded: the hub made it from an image the user uploaded (look_uploads.go); only these can be deleted.
+	Uploaded bool `json:"uploaded,omitempty"`
 }
 
 // lookChoice is the setting: the look the user chose and when.
@@ -219,7 +221,7 @@ func (h *Hub) looks() []lookView {
 		}
 		_ = json.Unmarshal(info.Manifest, &m)
 		v := lookView{ID: p.id, Source: "hub", Name: m.Name, Names: m.Names, Subtitle: m.Subtitle, Subtitles: m.Subtitles,
-			AppIcon: extension.DefaultLook, Rev: info.Rev, Bytes: info.Bytes, Manifest: info.Manifest}
+			AppIcon: extension.DefaultLook, Rev: info.Rev, Bytes: info.Bytes, Manifest: info.Manifest, Uploaded: isUploadedManifest(p.raw)}
 		if s := p.source; s != nil {
 			v.Source, v.Extension, v.ExtensionName, v.AppIcon = "extension", s.extension, s.name, s.appIcon
 		}
@@ -322,8 +324,8 @@ func (h *Hub) lookRoutes(api *http.ServeMux) {
 			ID      string `json:"id"`
 			IfUnset bool   `json:"if_unset"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
+		if err := decodeJSONBody(w, r, &body, 4<<10); err != nil {
+			writeBodyErr(w, err, err)
 			return
 		}
 		if h.store == nil {

@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"strings"
 )
 
@@ -23,9 +23,9 @@ const (
 )
 
 var (
-	ociDigest     = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	ociRepository = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
-	ociTitle      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.tar\.gz$`)
+	ociDigest     = lazyre.New(`^sha256:[a-f0-9]{64}$`)
+	ociRepository = lazyre.New(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$`)
+	ociTitle      = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.tar\.gz$`)
 )
 
 type ociReference struct{ registry, repository, digest string }
@@ -77,6 +77,9 @@ type registrySession struct {
 	base   string
 	mirror bool
 	bearer string
+	// anonymous is set once the registry refused the market credential: the rest
+	// of this package is pulled without it (get).
+	anonymous bool
 }
 
 func (s *registrySession) endpoint(kind, digest string) string {
@@ -85,7 +88,7 @@ func (s *registrySession) endpoint(kind, digest string) string {
 
 func (s *registrySession) credentialAllowed() bool {
 	m := s.market
-	if s.mirror || m.Token == "" {
+	if s.mirror || s.anonymous || m.Token == "" {
 		return false
 	}
 	switch m.Spec.Kind {
@@ -154,7 +157,7 @@ func (s *registrySession) request(ctx context.Context, raw, auth string, realm b
 	return res, nil
 }
 
-var bearerParameter = regexp.MustCompile(`([a-z]+)="([^"\r\n]*)"`)
+var bearerParameter = lazyre.New(`([a-z]+)="([^"\r\n]*)"`)
 
 func parseBearer(header string) (map[string]string, error) {
 	if !strings.HasPrefix(strings.ToLower(header), "bearer ") {
@@ -184,25 +187,27 @@ func parseBearer(header string) (map[string]string, error) {
 	return out, nil
 }
 
-func (s *registrySession) authenticate(ctx context.Context, header string) error {
+// authenticate answers a bearer challenge. The status is the token endpoint's when
+// it refused (not 200), so get can tell a refused credential from other failures.
+func (s *registrySession) authenticate(ctx context.Context, header string) (int, error) {
 	p, err := parseBearer(header)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	realm, err := url.Parse(p["realm"])
 	base, _ := url.Parse(s.base)
 	if err != nil || realm.User != nil || realm.RawQuery != "" || realm.Fragment != "" || !sameOrigin(realm.String(), s.base) || realm.Scheme != base.Scheme {
-		return i18n.Err("extension-market_security.challenge")
+		return 0, i18n.Err("extension-market_security.challenge")
 	}
 	if p["service"] != "" && p["service"] != base.Host {
-		return i18n.Err("extension-market_security.challenge")
+		return 0, i18n.Err("extension-market_security.challenge")
 	}
 	scope := "repository:" + s.ref.repository + ":pull"
 	if p["scope"] != "" && p["scope"] != scope {
-		return i18n.Err("extension-market_security.challenge")
+		return 0, i18n.Err("extension-market_security.challenge")
 	}
 	if base.Host == "ghcr.io" && realm.Path != "/token" {
-		return i18n.Err("extension-market_security.challenge")
+		return 0, i18n.Err("extension-market_security.challenge")
 	}
 	q := url.Values{"scope": {scope}, "service": {base.Host}}
 	realm.RawQuery = q.Encode()
@@ -215,34 +220,56 @@ func (s *registrySession) authenticate(ctx context.Context, header string) error
 	}
 	res, err := s.request(ctx, realm.String(), auth, true)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return i18n.Err("extension-market_security.http_status", i18n.Args{"status": res.StatusCode})
+		return res.StatusCode, i18n.Err("extension-market_security.http_status", i18n.Args{"status": res.StatusCode})
 	}
 	b, err := io.ReadAll(io.LimitReader(res.Body, 64<<10+1))
 	if err != nil || len(b) > 64<<10 || strictJSON(b) != nil {
-		return i18n.Err("extension-market_security.auth")
+		return 0, i18n.Err("extension-market_security.auth")
 	}
 	var token struct {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
 	}
 	if json.Unmarshal(b, &token) != nil {
-		return i18n.Err("extension-market_security.auth")
+		return 0, i18n.Err("extension-market_security.auth")
 	}
 	if token.Token == "" {
 		token.Token = token.AccessToken
 	}
 	if token.Token == "" || len(token.Token) > 16384 || strings.ContainsAny(token.Token, "\r\n") {
-		return i18n.Err("extension-market_security.auth")
+		return 0, i18n.Err("extension-market_security.auth")
 	}
 	s.bearer = token.Token
-	return nil
+	return 0, nil
 }
 
+// get fetches one manifest or blob. When the registry refuses the market credential
+// (401 / 403, at the token endpoint or on the request), it tries once more without it
+// and keeps the session anonymous: a public package needs no credential, and a market
+// token may be able to read the catalog repository but not its packages (a GitHub
+// token without read:packages makes ghcr.io answer 403). A private package still fails,
+// now saying the token may lack that permission.
 func (s *registrySession) get(ctx context.Context, kind, digest string) (*http.Response, error) {
+	credential := s.credentialAllowed()
+	res, status, err := s.fetch(ctx, kind, digest)
+	if err == nil || !credential || status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return res, err
+	}
+	s.anonymous, s.bearer = true, ""
+	res, again, err := s.fetch(ctx, kind, digest)
+	if err != nil && (again == http.StatusUnauthorized || again == http.StatusForbidden) {
+		return nil, i18n.Err("extension-market_security.credential_refused", i18n.Args{"status": status})
+	}
+	return res, err
+}
+
+// fetch is one attempt at a manifest or blob, answering a 401 challenge once. The
+// status is the registry's when it refused the request or the token.
+func (s *registrySession) fetch(ctx context.Context, kind, digest string) (*http.Response, int, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		auth := ""
 		if s.bearer != "" {
@@ -252,22 +279,22 @@ func (s *registrySession) get(ctx context.Context, kind, digest string) (*http.R
 		}
 		res, err := s.request(ctx, s.endpoint(kind, digest), auth, false)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if res.StatusCode == http.StatusOK {
-			return res, nil
+			return res, 0, nil
 		}
 		challenge := res.Header.Get("WWW-Authenticate")
 		status := res.StatusCode
 		res.Body.Close()
 		if status != http.StatusUnauthorized || attempt != 0 {
-			return nil, i18n.Err("extension-market_security.http_status", i18n.Args{"status": status})
+			return nil, status, i18n.Err("extension-market_security.http_status", i18n.Args{"status": status})
 		}
-		if err := s.authenticate(ctx, challenge); err != nil {
-			return nil, err
+		if status, err := s.authenticate(ctx, challenge); err != nil {
+			return nil, status, err
 		}
 	}
-	return nil, i18n.Err("extension-market_security.auth")
+	return nil, 0, i18n.Err("extension-market_security.auth")
 }
 
 func (m *Market) downloadOCI(ctx context.Context, ref ociReference, mirror bool, w io.Writer) (string, error) {

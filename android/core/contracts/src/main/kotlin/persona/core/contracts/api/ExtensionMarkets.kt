@@ -8,6 +8,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
+import persona.core.contracts.parseTime
+import java.time.Instant
 
 /**
  * Extension market (docs/extensions/extensions.md "Extension market"): indexes of extensions the hub has registered; a full device browses them,
@@ -61,7 +63,10 @@ interface ExtensionMarkets {
     /** The selected hub runs installs as operations. */
     val operationsAvailable: Flow<Boolean> get() = flowOf(false)
 
-    /** Each `extension_operation` the hub pushes; null after each hello: what was missed is listed again. */
+    /**
+     * Each `extension_operation` the hub pushes; null after each hello (what was missed is listed again) and each managers
+     * push (a manager that restarted lost its operations).
+     */
     val operationUpdates: Flow<ExtensionOperation?> get() = emptyFlow()
 
     /** `POST …/-/catalog/preview` with `async`: downloads and checks it in the background; the operation, at its first step. */
@@ -191,13 +196,26 @@ data class ExtensionPreview(
     val bundle: List<ExtensionPreview> = emptyList(),
     val unresolved: List<String> = emptyList(),
 ) {
-    val canConfirm: Boolean get() {
+    /** Nothing is unresolved, and every dependency is ok or comes in the same bundle. */
+    val dependenciesReady: Boolean get() {
         val previews = listOf(this) + bundle
         val bundled = bundle.mapNotNull { it.manifest?.id }.toSet()
         return previews.all { p -> p.unresolved.isEmpty() && p.depends.all { d ->
             d.state == "ok" || d.state in setOf("missing", "old") && d.id in bundled
         } }
     }
+
+    /**
+     * The earliest `expires_at` of this preview and the ones in its bundle: the hub refuses the agreement once any of
+     * them is gone. Null from a hub that sends none (it never expires here; the hub still decides).
+     */
+    val expiresBy: Instant? get() = (listOf(this) + bundle).mapNotNull { parseTime(it.expiresAt) }.minOrNull()
+
+    /** Expired at [now], as the hub counts it (`!now.Before(expires_at)`): previewed again, not agreed to. */
+    fun expired(now: Instant): Boolean = expiresBy?.let { !now.isBefore(it) } ?: false
+
+    /** It can be agreed to at [now]: its dependencies are ready and it has not expired. */
+    fun canConfirm(now: Instant): Boolean = dependenciesReady && !expired(now)
 }
 
 /** The few keys of the previewed manifest the app shows. */

@@ -3,7 +3,9 @@ package node
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"slices"
@@ -32,6 +34,8 @@ var bgSyncLimit int64 = 4 << 20
 // bgSlot lets one big first read run at a time.
 var bgSlot = make(chan struct{}, 1)
 
+// bgMarkers name the lines that can start or finish a background task; scanBackground looks for them together with
+// transcript's goal, ultracode and plan markers (bgMatch).
 var bgMarkers = [][]byte{[]byte("ScheduleWakeup"), []byte("Next wakeup scheduled"), []byte("CronCreate"), []byte("CronDelete"),
 	[]byte("run_in_background"), []byte("in background with ID"), []byte("moved to the background"), []byte("Async agent launched"),
 	[]byte("task-notification"), []byte(`"name":"Agent"`), []byte(`"name":"Task"`), []byte(`"TaskStop"`), []byte(`"KillShell"`),
@@ -49,6 +53,9 @@ func (n *Node) backgroundTasks(path string) (tasks []proto.BackgroundTask, loop 
 	defer sc.mu.Unlock()
 	f, err := os.Open(path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) { // deleted: the scan would stay for the node's whole uptime
+			n.forgetBgScan(path, sc)
+		}
 		return nil, nil, nil, false
 	}
 	defer f.Close()
@@ -121,15 +128,34 @@ func (n *Node) bgPlan(path string) *proto.PlanInfo {
 	return &p
 }
 
+// bgReaders are scanBackground's 256 KiB buffers: every session list scans each growing transcript, and a fresh
+// buffer per scan was nearly all the bytes it allocated.
+var bgReaders = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 256<<10) }}
+
 // scanBackground reads the marker lines between *off and size into m, streamed (the first look at a 300 MB
 // transcript once held all of it in memory). A last line not complete yet is read next time.
 func scanBackground(f *os.File, off *int64, m *transcript.Meta, size int64) {
-	r := bufio.NewReaderSize(io.NewSectionReader(f, *off, size-*off), 256<<10)
+	r := bgReaders.Get().(*bufio.Reader)
+	r.Reset(io.NewSectionReader(f, *off, size-*off))
+	defer func() {
+		r.Reset(nil) // drop the file; the lines read are only used before this returns
+		bgReaders.Put(r)
+	}()
 	at, long := *off, false
+	var refusalLine []byte
+	match := bgMatch()
 	for {
 		line, err := r.ReadSlice('\n')
 		at += int64(len(line))
 		if err == bufio.ErrBufferFull {
+			// While a fallback is active, a large reply can switch back and a large prompt can end a turn-scoped
+			// fallback. Keep those rows whole; request blobs only repeat history and are still skipped.
+			if !long && (m.ModelFallback != nil || bytes.Contains(line, []byte("model_refusal_"))) &&
+				!bytes.Contains(line, []byte(`"type":"api-request-blob"`)) {
+				refusalLine = append(refusalLine[:0], line...)
+			} else if refusalLine != nil {
+				refusalLine = append(refusalLine, line...)
+			}
 			long = true
 			continue
 		}
@@ -137,11 +163,17 @@ func scanBackground(f *os.File, off *int64, m *transcript.Meta, size int64) {
 			return
 		}
 		// api-request blobs repeat everything; skip them
+		// The static markers (bgMarkers and transcript's goal, ultracode and plan ones) in one pass over the line (bgmatch.go).
 		// A plan tool's result line does not name the tool: it is the line with the call's id.
-		if !long && len(line) <= 64<<10 && (containsAny(line, bgMarkers) || containsAny(line, transcript.GoalMarkers) || containsAny(line, transcript.UltracodeMarkers) ||
-			containsAny(line, transcript.PlanMarkers) || containsAny(line, m.PlanPending())) {
+		if !long && len(line) <= 64<<10 && (match.match(line) || containsAny(line, m.PlanPending())) {
 			transcript.ParseLine(0, bytes.TrimSuffix(line, []byte("\n")), m)
+		} else if !long {
+			m.ObserveModelFallback(bytes.TrimSuffix(line, []byte("\n")))
+		} else if refusalLine != nil {
+			refusalLine = append(refusalLine, line...)
+			m.ObserveModelFallback(bytes.TrimSuffix(refusalLine, []byte("\n")))
 		}
+		refusalLine = nil
 		long = false
 		*off = at
 	}

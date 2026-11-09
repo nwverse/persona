@@ -13,12 +13,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Kind is what sort of way in a channel is.
@@ -230,8 +230,8 @@ const (
 	LarkAgent = "lark_agent"
 )
 
-var idPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-var uuidHead = regexp.MustCompile(`^[0-9a-f]{8}$`)
+var idPattern = lazyre.New(`^[a-z][a-z0-9_]{0,31}$`)
+var uuidHead = lazyre.New(`^[0-9a-f]{8}$`)
 
 // ValidID says whether id can name a channel: lowercase letters, digits and _, a letter first, at most 32 — and not
 // eight hex digits, which is how the apps' own client_msg_ids (UUIDs) begin.

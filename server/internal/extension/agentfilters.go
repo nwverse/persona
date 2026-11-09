@@ -3,10 +3,11 @@ package extension
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Agent filters (docs/extensions/extensions.md "Agent filters", #2428): an extension says which agent sessions on the computers are
@@ -34,7 +35,7 @@ type AgentFilterItem struct {
 // AgentFilterAgents are the agents a filter can name.
 var AgentFilterAgents = []string{"claude", "codex"}
 
-var configField = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var configField = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // agentFilterMost is how many values each matcher may list.
 const agentFilterMost = 16

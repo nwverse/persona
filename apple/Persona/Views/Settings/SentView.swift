@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Settings › Sent as You (#5278, docs/extensions/connectors.md "Sent as the user"): what Persona wrote in the user's name through the
+// Settings › Connectors › Records sent as you (#5278, docs/extensions/connectors.md "Sent as the user"): what Persona wrote in the user's name through the
 // connectors, newest first. A row has the connector, where it went, how long ago, the first lines of what it said, how the
 // gate let it through (orange where the user did not decide) and the chat that asked, which opens. A row opens a sheet with
 // every field and the whole text. Load Earlier follows `next`; the chips (Lark and the connectors the loaded rows show)
@@ -15,7 +15,7 @@ private struct SentBadge: View {
     }
 }
 
-/// Settings › Sent as You.
+/// Settings › Connectors › Records sent as you.
 struct SentView: View {
     @Environment(AppModel.self) private var app
     @State private var page: SentModel
@@ -36,7 +36,7 @@ struct SentView: View {
             content
         }
         .themedPage()
-        .detailTitle(String(localized: "Sent as You"))
+        .detailTitle(String(localized: "Records sent as you"))
         .task { await page.load() }
         .refreshable { await page.load() }
         #if os(macOS)
@@ -199,7 +199,7 @@ private struct SentRow: View {
                     Button { openChat(chat.machine, chat.session) } label: {
                         HStack(spacing: Theme.Space.xxs) {
                             Text("Open Chat").lineLimit(1)
-                            Image(systemName: Theme.Icon.disclosure).font(Theme.Font.label)
+                            ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label)
                         }
                         .font(Theme.Font.label)
                     }
@@ -293,7 +293,7 @@ private struct SentDetailSheet: View {
                             Button { openChat(chat.machine, chat.session) } label: {
                                 HStack(spacing: Theme.Space.xxs) {
                                     Text("Open Chat").lineLimit(1)
-                                    Image(systemName: Theme.Icon.disclosure).font(Theme.Font.label)
+                                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label)
                                 }
                             }
                             .buttonStyle(.borderless)

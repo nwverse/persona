@@ -123,6 +123,8 @@ export interface WorkState {
   then?: string;
   /** When the hub acts next on its own: "Continue" (transient) or a wake (external, agent). */
   wake_at?: string;
+  /** When a subscription usage limit that stopped the turn resets (docs/assistant/agent-work.md "Usage limits"). */
+  resets_at?: string;
   attempts?: number;
   max?: number;
   agent?: { machine_id: string; session_id: string; label?: string };
@@ -137,11 +139,22 @@ export interface TriageSwitches {
   auto_continue: boolean;
   wake: boolean;
   decide: boolean;
+  /** Detect repeated tool calls during a turn (off when absent). */
+  tool_loop?: boolean;
   /** Remind When Seen, Unanswered (#5096): remind once when an agent asked the user something and it stays unanswered after they saw
    *  it. Rule-based, no tokens, so it is on when absent and does not depend on `enabled`. */
   reply_reminder?: boolean;
   /** How long after the user saw it the reminder goes out, in minutes (the hub's default when absent). */
   reply_reminder_minutes?: number;
+}
+
+/** A port an agent's processes listen on that answers HTTP (docs/operations/ports.md): its dev server. */
+export interface Port {
+  port: number;
+  addr?: string;
+  pid?: number;
+  process?: string;
+  title?: string;
 }
 
 export interface Session {
@@ -150,8 +163,12 @@ export interface Session {
   also_open_in?: string[];
   /** Node-verified physical working directory; the original cwd stays available for existing session flows. */
   workspace_cwd?: string;
-  /** The main checkout of the repository cwd belongs to, when the host knows it (#2840: Paseo's worktrees); "By repo" groups by it. */
+  /** The main checkout of the repository cwd belongs to: the node reads it off git (#1805), Paseo names its own (#2840).
+   *  "By repo" groups by it. */
   repo_root?: string;
+  /** The top of the git working tree cwd is in (repo_root for the main checkout) and its branch, from the node (#1805). */
+  worktree?: string;
+  branch?: string;
   machine_id: string;
   session_id: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
@@ -161,6 +178,9 @@ export interface Session {
   status: string;
   starting?: boolean;
   start_error?: string;
+  /** The failed start's coded refusal (launcher_missing, claude_missing…) and its details; start_error is the hub's sentence for it. */
+  start_error_code?: string;
+  start_error_args?: Record<string, string>;
   state?: AgentState;
   state_since?: string;
   agent?: string;
@@ -230,11 +250,16 @@ export interface Session {
   activity_at?: string;
   /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
   turn_error?: string;
-  /** What the agent's record says of turn_error: "transient" (worth a "Continue") or "user" (the user must act). */
+  /** What the agent's record says of turn_error: "transient" (worth a "Continue"), "user" (the user must act),
+   *  or "usage_limit" (a subscription limit, until it resets). */
   turn_error_kind?: string;
   /** What is wrong, when the hub can tell from turn_error (docs/assistant/onboarding.md 5.2): not_logged_in / auth_failed /
    *  model_route / rate_limited. */
   turn_error_code?: string;
+  /** When turn_error_kind is "usage_limit": when that subscription limit resets. Absent when it is not known. */
+  turn_error_resets_at?: string;
+  /** The CLI continues by itself once the usage limit resets. */
+  turn_error_resumes?: boolean;
   /** Where it stands in its work (docs/assistant/agent-work.md): set by the hub once it triaged a stopped turn. */
   work?: WorkState;
   pending_interactions?: number;
@@ -267,8 +292,9 @@ export interface Session {
   /** An assistant conversation moved out of the list (docs/assistant/assistant.md "Managing its own conversations"), or
    *  an archived agent (docs/protocol/protocol.md "Agent session archives": only the Archived list has those). */
   archived?: boolean;
-  /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers. */
-  ports?: { port: number; addr?: string }[];
+  /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers, and they are
+   *  the dev servers a preview offers (docs/web/preview.md). */
+  ports?: Port[];
   /** Who opened an assistant conversation (docs/protocol/protocol.md "Assistant conversation origins"): user, channel, inbox, task, spawned,
    *  lark_agent, extension, or one this page doesn't know; none is the user's (older hubs never say). */
   origin?: string;
@@ -462,7 +488,7 @@ export interface Item {
   queued?: boolean;
   wake?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
@@ -473,13 +499,26 @@ export interface Item {
   compact?: CompactInfo;
   /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by you (lib/injected.ts). */
   injected?: Injected;
+  /** Display provenance, independent of the model-facing role. Unknown kinds remain non-user sources. */
+  source?: MessageSource;
+  /** Client-only promotion evidence transferred from a removed Fold.supervision_user during an overlapping merge. */
+  supervisionUser?: boolean;
+}
+
+/** Message provenance supplied by the assistant, not a group-chat member or a model role. */
+export interface MessageSource {
+  kind: "conversation" | "patrol" | "followup" | "supervision" | (string & {});
+  conversation_id?: string;
+  title?: string;
 }
 
 /** What a message Persona wrote for the model is (docs/protocol/protocol.md "Messages Persona injects"). */
 export interface Injected {
   kind: "task_notice" | "followup" | "system" | (string & {});
-  /** task_notice: done | needs | interrupted | failed; followup: once | daily | interval | wake; system: lost_tasks */
+  /** task_notice: done | needs | interrupted | failed; followup: once | daily | interval | wake; system: lost_tasks | supervise */
   state?: string;
+  /** Supervision without a level is legacy triage; other injections remain informational. */
+  level?: "info" | "triage" | "user";
   title?: string;
   machine?: string;
   todo_id?: string;
@@ -503,7 +542,8 @@ export interface Question {
   question: string;
   header?: string;
   multi_select?: boolean;
-  options: { label: string; description?: string }[];
+  /** Missing or null for a question asked in free text (Codex request_user_input; a Go nil slice, #1573). */
+  options?: { label: string; description?: string }[] | null;
 }
 
 export interface DialogOption {
@@ -561,6 +601,8 @@ export interface Interaction {
   dialog?: ScreenDialog;
   /** Who asks when it is not Claude Code: "codex", "traex", or an agent runtime's agent ("dsh"; docs/integrations/runtimes.md). */
   agent?: string;
+  /** Display label supplied by the source (for example a script request). */
+  agent_label?: string;
   /** What "always allow" allows here; another agent's card offers it only with this. */
   always_label?: string;
   /** Permission scopes remembered by the hub for this conversation. */
@@ -602,6 +644,20 @@ export interface Launcher {
   /** What it starts when not Claude Code ("codex"); agent_type: what the hub's machine config says it runs. */
   agent?: string;
   agent_type?: string;
+  /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
+   *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
+  health?: LauncherHealth;
+}
+
+/** A launcher's health record on one computer (#1643). */
+export interface LauncherHealth {
+  /** ok | failing | repairing | blocked */
+  state: string;
+  /** The failure's class: not_in_terminal, auth, model_route, cli_outdated, timeout, other. */
+  kind?: string;
+  /** The redacted raw text of the failure. */
+  error?: string;
+  checked_at?: string;
 }
 
 export interface AssistantInfo {

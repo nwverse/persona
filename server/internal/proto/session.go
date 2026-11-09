@@ -35,7 +35,20 @@ const (
 	StateUnknown  = "unknown"
 )
 
+// CodedStartErrorMax is how many runes of a coded refusal's start_error a list row or a task keeps where a summary would
+// be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
+const CodedStartErrorMax = 600
+
+// ToolLoop is a node-detected repetition. It contains no tool input or output.
+// Since identifies the start of this repetition within the current turn.
+type ToolLoop struct {
+	Tool  string    `json:"tool"`
+	Count int       `json:"count"`
+	Since time.Time `json:"since"`
+}
+
 type Session struct {
+	ToolLoop *ToolLoop `json:"tool_loop,omitempty"`
 	// Manager is the manager it belongs to (docs/assistant/managers.md, "Ownership"); the hub stamps it on what it sends the apps.
 	Manager          string               `json:"manager,omitempty"`
 	MachineID        string               `json:"machine_id"`
@@ -61,7 +74,13 @@ type Session struct {
 	// RepoRoot is the main checkout of the repository Cwd belongs to, when the host knows it (#2840: the Paseo bridge,
 	// whose worktrees live under Paseo's own folder): "By repo" groups by it; without it the clients infer the repository
 	// from Cwd's path.
-	RepoRoot    string `json:"repo_root,omitempty"`
+	RepoRoot string `json:"repo_root,omitempty"`
+	// Worktree is the top of the git working tree Cwd is in (RepoRoot itself for the main checkout, a linked worktree's
+	// own folder otherwise) and Branch the branch checked out there ("" when detached or unknown). The node reads both,
+	// and RepoRoot when no host names it, off the filesystem (node/gitplace.go): the apps list machine → project
+	// (RepoRoot) → worktree (Worktree, labelled Branch) → sessions, as Orca does (#1805).
+	Worktree    string `json:"worktree,omitempty"`
+	Branch      string `json:"branch,omitempty"`
 	Status      string `json:"status"`
 	PaneID      string `json:"pane_id,omitempty"`
 	TabID       string `json:"tab_id,omitempty"`
@@ -109,12 +128,12 @@ type Session struct {
 	Efforts          []string `json:"efforts,omitempty"`
 	StartedByPersona bool     `json:"started_by_persona"`
 	Assistant        bool     `json:"assistant"` // runs in the assistant directory (the app's "Chat" tab)
-	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
-	// assistant's own. Set by the hub on the assistant's conversations.
-	Space string `json:"space,omitempty"`
 	// Archived: a retained conversation moved out of the normal list. Assistant
 	// conversations and Claude/Codex Agents are managed by their owning manager.
 	Archived bool `json:"archived,omitempty"`
+	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
+	// assistant's own. Set by the hub on the assistant's conversations.
+	Space string `json:"space,omitempty"`
 	// ArchiveChangedAt is the manager's last explicit archive/restore visibility change.
 	// The hub uses it only to order its legacy delete tombstones against that report.
 	ArchiveChangedAt time.Time `json:"archive_changed_at,omitzero"`
@@ -127,6 +146,9 @@ type Session struct {
 	// the assistant's snapshot (internal/assistant/fleet.go).
 	Origin    string `json:"origin,omitempty"`
 	OriginRef string `json:"origin_ref,omitempty"`
+	// OpenedBy is the extension whose token opened an assistant conversation, by id (docs/protocol/protocol.md "Origin of
+	// assistant chats"): noted when it opens, never backfilled; "" for any other. Set like Origin.
+	OpenedBy string `json:"opened_by,omitempty"`
 	// Compaction is the last compaction the user asked for in an assistant conversation (POST …/compact), kept by the
 	// node until the next one: running, then done or failed (docs/assistant/assistant.md "Manual compaction").
 	Compaction *Compaction `json:"compaction,omitempty"`
@@ -205,12 +227,27 @@ type Session struct {
 	// while it works or when the turn ended normally. The task it works for is interrupted, not done
 	// (docs/assistant/todos.md "How the state is computed", #1516).
 	TurnError string `json:"turn_error,omitempty"`
-	// TurnErrorKind is what the agent's record says of TurnError, when it says (Codex's error kinds):
-	// TurnErrorTransient (worth a "Continue") or TurnErrorUser (the user must act); empty: read off the text.
+	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
+	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
+	// (a subscription's usage limit, until it resets); empty: read off the text.
 	TurnErrorKind string `json:"turn_error_kind,omitempty"`
+	// TurnErrorResetsAt is when the subscription usage limit that ended the turn resets (TurnErrorKind
+	// TurnErrorUsageLimit): what the agent's record says (Claude Code's quotaLimits.resetsAt, the full window of a Codex
+	// rollout's own rate limits), else what the hub reads off Claude Code's words when they name a time zone. Nil: not
+	// known, and nothing waits for it. Only a subscription's limit has one: a gateway's or an API key's 429 never does.
+	TurnErrorResetsAt *time.Time `json:"turn_error_resets_at,omitempty"`
+	// TurnErrorResumes: the CLI said it goes on by itself once the limit resets (Claude Code's "Usage limit reached ·
+	// continuing automatically at …") and nothing cancelled that since. Typing into the session cancels it, so nothing
+	// is sent to it while it waits.
+	TurnErrorResumes bool `json:"turn_error_resumes,omitempty"`
+	// TurnErrorAfterWork: the turn did some work (a reply, a tool call) before the error ended it; false when the error
+	// was all it did (a continuation the limit turned down again).
+	TurnErrorAfterWork bool `json:"turn_error_after_work,omitempty"`
 	// TurnErrorCode says what is wrong when the hub can tell from TurnError (docs/assistant/onboarding.md 5.2): one of the
 	// TurnErrorCode* values, for a card that says what to fix (sign in, the key, the model). Empty: not known.
 	TurnErrorCode string `json:"turn_error_code,omitempty"`
+	// ModelFallback is the refusal fallback still active in this session, as the runtime recorded it.
+	ModelFallback *ModelRefusal `json:"model_fallback,omitempty"`
 	// Work is where the session stands in its work (docs/assistant/agent-work.md): working, blocked on a named precondition, or
 	// done, with a line saying what it waits for or what it concluded. Set by the hub; absent before the hub has
 	// triaged a stopped session's turn.
@@ -225,15 +262,21 @@ type Session struct {
 	Rev int64 `json:"rev,omitempty"`
 	// WokeByTask: the latest turn was started by a background task reporting back, not by the user; finishing
 	// it sends no push (the user did not ask for anything).
-	WokeByTask          bool `json:"woke_by_task,omitempty"`
+	WokeByTask bool `json:"woke_by_task,omitempty"`
+	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
+	// ready.
+	Starting            bool `json:"starting,omitempty"`
 	PendingInteractions int  `json:"pending_interactions"`
 	// Suggestion is the next message Claude Code proposes after a turn (grey in its empty input box), read off the
 	// screen; gone once the agent works again or a message is sent.
 	Suggestion string `json:"suggestion,omitempty"`
-	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
-	// ready. StartError: the start failed (shown in the chat for a while).
-	Starting   bool   `json:"starting,omitempty"`
-	StartError string `json:"start_error,omitempty"`
+	// StartError: the start failed (shown in the chat for a while). StartErrorCode is the start's coded refusal
+	// when it was one (claude_missing, launcher_missing…: the code a synchronous start is answered 409 with), with
+	// StartErrorArgs, the refusal's details (launcher, where, missing, pane_shell…, docs/protocol/protocol.md "Errors"):
+	// the hub writes StartError as the sentence for that code in the user's language, and a client offers its remedy.
+	StartError     string            `json:"start_error,omitempty"`
+	StartErrorCode string            `json:"start_error_code,omitempty"`
+	StartErrorArgs map[string]string `json:"start_error_args,omitempty"`
 	// Todo is the active (uncompleted, unreleased) todo this session is linked to (assistant/todos.go).
 	Todo *TodoRef `json:"todo,omitempty"`
 	// Quiet: the agent works (or worked) for a quiet task, one the main conversation opened while the user wanted
@@ -270,16 +313,18 @@ type Session struct {
 
 // Session.TurnErrorKind values.
 const (
-	TurnErrorTransient = "transient" // the model service failed for a moment: worth a "Continue"
-	TurnErrorUser      = "user"      // sign-in, usage limit, context window, the model…: the user must act
+	TurnErrorTransient  = "transient"   // the model service failed for a moment: worth a "Continue"
+	TurnErrorUser       = "user"        // sign-in, context window, the model…: the user must act
+	TurnErrorUsageLimit = "usage_limit" // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
 )
 
 // Session.TurnErrorCode values (docs/assistant/onboarding.md 4.6).
 const (
-	TurnErrorNotLoggedIn = "not_logged_in" // Claude Code on that machine is not signed in
-	TurnErrorAuthFailed  = "auth_failed"   // the key or token was refused or has expired
-	TurnErrorModelRoute  = "model_route"   // the model name is not one the service or gateway knows
-	TurnErrorRateLimited = "rate_limited"  // too many requests, or a usage limit
+	TurnErrorNotLoggedIn              = "not_logged_in"              // Claude Code on that machine is not signed in
+	TurnErrorAuthFailed               = "auth_failed"                // the key or token was refused or has expired
+	TurnErrorModelRoute               = "model_route"                // the model name is not one the service or gateway knows
+	TurnErrorRateLimited              = "rate_limited"               // too many requests, or a usage limit
+	TurnErrorModelFallbackUnavailable = "model_fallback_unavailable" // a refusal selected a model the service cannot use
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):
@@ -289,6 +334,12 @@ const (
 	CodeMachinePending  = "machine_pending"  // the machine has not been confirmed as the user's yet
 	CodeClaudeMissing   = "claude_missing"   // Claude Code is not installed (or not on the launcher's PATH) there
 	CodeLauncherMissing = "launcher_missing" // the launcher (a ~/.zshrc function or alias) is not there
+	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed); nothing
+	// ran, the tab is closed, a retry may work (node/typedstart.go). 503, retryable.
+	CodeTerminalNotReady = "terminal_not_ready"
+	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
+	// launcher health and must not trigger an automatic retry or a health detour.
+	CodeAgentStartStalled = "agent_start_stalled"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).

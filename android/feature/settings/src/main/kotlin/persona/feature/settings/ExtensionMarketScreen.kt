@@ -31,6 +31,8 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Duration
+import java.time.Instant
 
 // Settings › Extensions › Extension market (docs/extensions/extensions.md "Extension market"): the catalog, one extension of it, and the markets. The models are
 // in ExtensionMarketState.kt.
@@ -187,6 +189,7 @@ private fun MarketError(market: ExtensionMarket, error: String, busy: Boolean, o
 @Composable
 fun ExtensionCatalogPage(
     extensions: ExtensionManagement?, marketId: String, extensionId: String, onBack: () -> Unit, onInstalled: (String) -> Unit,
+    manager: String? = null,
     /** Installed and it signs in (`next: auth`, #4507): its page, with the sign-in started. */
     onSignIn: (String) -> Unit = onInstalled,
 ) {
@@ -195,7 +198,13 @@ fun ExtensionCatalogPage(
         return
     }
     val res = LocalResources.current
-    val model = remember(extensions, marketId, extensionId, res) { CatalogExtensionModel(extensions, marketId, extensionId, res) }
+    val model = remember(extensions, marketId, extensionId, res, manager) {
+        CatalogExtensionModel(extensions, marketId, extensionId, res, manager = manager)
+    }
+    // Both API names share the same owner for preview, consent, installation and operation progress.
+    PinnedExtension(listOf("extensions", "plugins").flatMap { base ->
+        listOf(listOf(base, extensionId), listOf(base, "-", "catalog"), listOf(base, "-", "install"), listOf(base, "-", "operations"))
+    }, model.owner)
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
@@ -240,9 +249,10 @@ fun ExtensionCatalogPage(
     }
     state.preview?.let { preview ->
         PreviewSheet(extension, preview, busy = state.acting, onDismiss = { scope.launch { model.dismissPreview() } },
-            onConfirm = { scope.launch { model.confirm()?.let { feedback?.notice(it) } } })
+            onConfirm = { scope.launch { model.confirm()?.let { feedback?.notice(it) } } },
+            onPreviewAgain = { scope.launch { model.previewAgain() } })
     }
-    if (removing && extension != null) UninstallDialog(extension.label, onDismiss = { removing = false }) { keep ->
+    if (removing && extension != null) UninstallDialog(extension.label, onDismiss = { removing = false }, installedVersion = extension.installed) { keep ->
         removing = false
         scope.launch { if (model.uninstall(keep)) feedback?.notice(res.getString(R.string.settings_ext_uninstalled, extension.label)) }
     }
@@ -339,15 +349,18 @@ private fun Tags(tags: List<String>) {
 
 /**
  * What the package may do, checked by the hub, before it is installed: an upgrade that asks for more says so first
- * and lists the new lines alone, with a caution, not an error. Nothing is installed without the yes.
+ * and lists the new lines alone, with a caution, not an error. Nothing is installed without the yes. Once the preview
+ * (or one in its bundle) expires by [now], also while the sheet is open, it says so and offers [onPreviewAgain]
+ * instead of the yes (#1316).
  */
 @Composable
 internal fun PreviewSheet(
     extension: CatalogExtension?, preview: ExtensionPreview, busy: Boolean, onDismiss: () -> Unit, onConfirm: () -> Unit,
-    modifier: Modifier = Modifier,
+    modifier: Modifier = Modifier, onPreviewAgain: () -> Unit = {}, now: () -> Instant = Instant::now,
 ) {
     val name = preview.manifest?.name?.takeIf { it.isNotBlank() } ?: extension?.label ?: preview.manifest?.id.orEmpty()
     val more = CatalogText.asksForMore(preview)
+    val expired = rememberExpired(preview, now)
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     JSheet(onDismiss, title = stringResource(if (preview.upgrade) R.string.settings_ext_upgrade_name else R.string.settings_ext_install_name, name), dismissible = !busy, scrollable = true) {
@@ -364,11 +377,27 @@ internal fun PreviewSheet(
             preview.warnings.orEmpty().forEach { JInlineStatus(it, tone = InlineTone.Caution) }
             SettingsCaption(stringResource(R.string.settings_ext_preview_note) +
                 (preview.expiresAt?.let(CatalogText::time)?.let { stringResource(R.string.settings_ext_preview_expires, it) } ?: ""))
-            JButton(CatalogText.confirmLabel(LocalResources.current, preview), onConfirm, Modifier.fillMaxWidth(),
-                kind = JButtonKind.Primary, loading = busy, enabled = !busy && preview.canConfirm)
+            if (expired) {
+                JInlineStatus(stringResource(R.string.settings_ext_preview_expired), tone = InlineTone.Caution)
+                JButton(stringResource(R.string.settings_ext_preview_again), onPreviewAgain, Modifier.fillMaxWidth(),
+                    kind = JButtonKind.Primary, loading = busy, enabled = !busy)
+            } else JButton(CatalogText.confirmLabel(LocalResources.current, preview), onConfirm, Modifier.fillMaxWidth(),
+                kind = JButtonKind.Primary, loading = busy, enabled = !busy && preview.dependenciesReady)
             JButton(stringResource(R.string.settings_ext_preview_cancel), onDismiss, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary, enabled = !busy)
         }
     }
+}
+
+/** Whether [preview] has expired by [now]; it turns true when the earliest expiry passes (rechecked at least every minute). */
+@Composable
+private fun rememberExpired(preview: ExtensionPreview, now: () -> Instant): Boolean {
+    var expired by remember(preview) { mutableStateOf(preview.expired(now())) }
+    LaunchedEffect(preview) {
+        val by = preview.expiresBy ?: return@LaunchedEffect
+        while (!preview.expired(now())) delay(Duration.between(now(), by).toMillis().coerceIn(1L, 60_000L))
+        expired = true
+    }
+    return expired
 }
 
 @Composable
@@ -391,9 +420,11 @@ internal fun PermissionList(title: String, permissions: List<ExtensionPermission
  * web: a plain "Remove" loses nothing a reinstall could pick up again). The market's page and the extension's own share it.
  */
 @Composable
-internal fun UninstallDialog(name: String, onDismiss: () -> Unit, onConfirm: (Boolean) -> Unit) {
+internal fun UninstallDialog(name: String, onDismiss: () -> Unit, installedVersion: String? = null, onConfirm: (Boolean) -> Unit) {
     var keep by remember { mutableStateOf(true) }
-    JDialog(onDismiss, title = stringResource(R.string.settings_ext_uninstall_title, name), text = stringResource(R.string.settings_ext_uninstall_text),
+    val version = installedVersion?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_extension_missing)
+    val text = stringResource(R.string.settings_extension_remove_version, version) + "\n\n" + stringResource(R.string.settings_ext_uninstall_text)
+    JDialog(onDismiss, title = stringResource(R.string.settings_ext_uninstall_title, name), text = text,
         confirm = stringResource(R.string.settings_ext_uninstall) to { onConfirm(keep) }, destructive = true) {
         Row(Modifier.fillMaxWidth().padding(top = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             JCheckbox(keep, { keep = it })

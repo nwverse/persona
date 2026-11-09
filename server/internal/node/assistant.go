@@ -82,6 +82,8 @@ type assistantProc struct {
 	partial       strings.Builder // text of the assistant message being generated
 	lastDelta     time.Time
 	tasks         []string // running background tasks and monitors (descriptions), from background_tasks_changed
+	tasksObserved bool     // an explicit background list was received; nil alone is not empty evidence
+	tasksRevision uint64   // changes to background evidence, including invalidation
 	context       int      // tokens in the conversation's context at its last request (claude), or after a compaction
 	compactIdleAt int
 	compacting    bool     // an idle compaction is running (compactIdle)
@@ -97,8 +99,8 @@ type assistantProc struct {
 	// (assistant_usage.go); 0: from the start.
 	usageChecked int64
 
-	turnError     string // the latest turn failed on the model service (#2571)
-	turnErrorKind string // proto.TurnErrorTransient or proto.TurnErrorUser
+	turnError     string // the latest turn failed on the model service, as Codex's app-server said it (#2571)
+	turnErrorKind string // proto.TurnErrorTransient, User or UsageLimit
 
 	// owner: the Node that took it over from an earlier connection of a resident node (assistant_keep.go); nil: the
 	// one that started it.
@@ -129,7 +131,10 @@ func (p *assistantProc) alive() bool {
 }
 
 // isAssistantSession tells assistant conversations (headless) apart from herdr sessions.
-func (n *Node) isAssistantSession(id string) bool {
+func (n *Node) isAssistantSession(id string) bool { return n.isAssistantSessionIn(id, nil) }
+
+// isAssistantSessionIn is isAssistantSession with the assistant's project name taken once per list pass (codexListPass).
+func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	n.mu.Lock()
 	_, ok := n.procs[id]
 	a := n.agents[id]
@@ -146,7 +151,7 @@ func (n *Node) isAssistantSession(id string) bool {
 		return true
 	}
 	if p := n.transcriptPath(id); p != "" && (compat.IsAssistantTranscript(filepath.Base(filepath.Dir(p))) ||
-		isAssistantProject(filepath.Base(filepath.Dir(p)), n.assistantProject())) {
+		isAssistantProject(filepath.Base(filepath.Dir(p)), pass.assistantProject(n))) {
 		return true
 	}
 	// A conversation an agent runtime runs (assistant_runtime.go), listed before this node kept its state.
@@ -467,11 +472,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		}
 		p.started()
 		var ev struct {
-			Type    string `json:"type"`
-			Subtype string `json:"subtype"`
-			Tasks   []struct {
-				Description string `json:"description"`
-			} `json:"tasks"`
+			Type     string                   `json:"type"`
+			Subtype  string                   `json:"subtype"`
+			Tasks    json.RawMessage          `json:"tasks"`
 			Tools    []string                 `json:"tools"`
 			Response assistantControlResponse `json:"response"`
 			Event    struct {
@@ -496,6 +499,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Result          string  `json:"result"`
 		}
 		if json.Unmarshal(line, &ev) != nil {
+			p.invalidateUpdateTasks()
 			continue
 		}
 		switch ev.Type {
@@ -519,14 +523,11 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			if ev.Subtype != "background_tasks_changed" {
 				continue
 			}
-			tasks := make([]string, 0, len(ev.Tasks))
-			for _, t := range ev.Tasks {
-				tasks = append(tasks, t.Description)
+			tasks, err := p.recordBackgroundTasks(ev.Tasks)
+			if err != nil {
+				n.logf("assistant background inventory: %v", err)
+				continue
 			}
-			p.mu.Lock()
-			p.tasks = tasks
-			p.lastActive = time.Now()
-			p.mu.Unlock()
 			n.rememberTasks(p.id, tasks)
 		case "control_response":
 			p.controlResponse(ev.Response)
@@ -716,28 +717,29 @@ func (n *Node) assistantSessions() []proto.Session {
 		p.mu.Unlock()
 		s := proto.Session{SessionID: p.id, Cwd: p.cwd, Status: status, Launcher: p.launcher, UpdatedAt: updated.UTC(),
 			Runtime: p.runtime, RuntimeFallback: p.fallback}
-		if !busy {
-			s.TurnError = turnError
-			s.TurnErrorKind = turnErrorKind
-		}
 		if p.agent == "codex" {
 			s.Agent = "codex"
 		}
+		var record turnFailure // the transcript's word on a failed turn
 		if path := n.transcriptPath(p.id); path != "" {
 			if st, err := os.Stat(path); err == nil {
 				m := n.meta(path, st)
 				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(m.lastText), st.Size()
 				s.PermissionMode, s.Effort = n.currentModes(p.id, m)
 				setContext(&s, m)
+				s.ModelFallback = m.modelFallback
 				untitled(&s, m)
 				if !busy {
 					s.UpdatedAt = lastUsed(m, st)
-					if s.TurnError == "" && m.turnError != "" {
-						s.TurnError = m.turnError
-						s.TurnErrorKind = m.turnErrorKind
-					}
+					record = m.turnErr
 				}
 			}
+		}
+		if !busy { // a finished turn's failure: what Codex's app-server said, else the transcript's (Claude Code's, a rollout's)
+			if turnError != "" {
+				record = reported(turnError, turnErrorKind, record)
+			}
+			record.set(&s)
 		}
 		n.decorate(&s)
 		out = append(out, s)

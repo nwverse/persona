@@ -1,22 +1,28 @@
 import BeautifulUI
 import SwiftUI
 
-/// A new conversation in the shell (docs/apple/ios.md「新外壳」): the same welcome as the old layout's (`AssistantWelcome`:
+/// A new conversation in the shell uses the shared `AssistantWelcome`:
 /// greeting, what Persona can reach, things to ask), and over the composer what needs the user right now — agents
 /// waiting on them and the inbox's Needs You — one quiet line each, as many as fit under the welcome's first two rows of things
 /// to ask (`NeedsRoom`). While the conversation spins up, the first message and a typing line so the send feels instant.
 struct ShellHome: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
+    @Environment(\.shellRailEdge) private var railEdge
     var pending: PendingStart?
     var error: String?
     @Binding var launcher: String?
     @Binding var mode: String
     @Binding var effort: String
     var openInbox: (InboxItem) -> Void
+    var resend: () -> Void = {}
+    var delete: () -> Void = {}
     var send: (String, [ImagePayload]) -> Void
     @State private var room = NeedsRoom()
     @State private var route: ReadinessRoute?
+    /// The composer's @ list is open (#2319): Needs You steps aside for it.
+    @State private var mentionOpen = false
 
     /// How far the welcome fades out over Needs You and the composer, rather than being cut off at their edge.
     fileprivate static let fade = Theme.Space.xl
@@ -32,7 +38,7 @@ struct ShellHome: View {
     var body: some View {
         ScrollView {
             if let pending {
-                FirstMessagePending(pending: pending, name: model.persona.name, shell: true)
+                FirstMessagePending(pending: pending, name: model.persona.name, shell: true, resend: resend, delete: delete)
                     // The page's height inside its margins, the message at its bottom (a long one runs up out of it, as the
                     // chat shows its newest end).
                     .containerRelativeFrame(.vertical, alignment: .bottom)
@@ -48,14 +54,15 @@ struct ShellHome: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .dismissesKeyboardOnTap()
-        .contentMargins(.top, AssistantTopBar.height, for: .scrollContent)
+        .contentMargins(.top, AssistantTopBar.room(railEdge), for: .scrollContent)
         // Room to scroll the last things to ask clear of the fade.
         .contentMargins(.bottom, pending == nil ? Self.fade : ChatView.newestGap, for: .scrollContent)
         .onPreferenceChange(WelcomeFold.self) { room.fold = $0 }
         .background(Theme.pageBackground.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                if pending == nil {
+                // On the welcome, and under a failed first message (#1368): why it failed, what to do about it.
+                if pending == nil || pending?.failed != nil {
                     if let error = shownError {
                         Group {
                             if AppStyle.current.usesBeautifulUI {
@@ -72,11 +79,14 @@ struct ShellHome: View {
                     ReadinessHomeCard(route: $route)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
                         .onDisappear { room.card = 0 }
-                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil), openInbox: openInbox).shellScaled()
+                }
+                if pending == nil, !mentionOpen {
+                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge)), openInbox: openInbox).shellScaled()
                 }
                 StarterComposer(disabled: pending != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
                                 gate: model.readinessGate(route: $route), send: send)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.composerAtRest($0, typeSize: typeSize) }
+                    .onPreferenceChange(MentionMenuOpen.self) { open in withAnimation(Theme.Motion.standard) { mentionOpen = open } }
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.bottom, Theme.Space.s)
@@ -134,11 +144,12 @@ private struct NeedsRoom {
         composerSize = typeSize
     }
 
-    func needs(withError: Bool) -> CGFloat {
+    /// `top`: what the page leaves free at its top for the bar (`AssistantTopBar.room`).
+    func needs(withError: Bool, top: CGFloat = AssistantTopBar.height) -> CGFloat {
         guard page > 0, fold > 0, composer > 0 else { return .infinity }
         // Under it: the composer, the stack's spacing and bottom padding (ShellHome), the error and its spacing.
         let below = composer + Theme.Space.m + Theme.Space.s + (withError ? error + Theme.Space.m : 0) + (card > 0 ? card + Theme.Space.m : 0)
-        return page - AssistantTopBar.height - fold - ShellHome.fade - below
+        return page - top - fold - ShellHome.fade - below
     }
 }
 
@@ -169,7 +180,7 @@ private struct ShellErrorNote: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
-            Image(systemName: Theme.Icon.error)
+            ThemedIcon(Theme.Icon.error)
             Text(text).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
@@ -198,7 +209,7 @@ struct ShellNeedsYou: View {
         var id: String {
             switch self {
             case .agent(let ix): "ix-" + ix.id
-            case .inbox(let it): "in-" + it.id
+            case .inbox(let it): "in-" + it.key
             }
         }
     }
@@ -253,7 +264,7 @@ struct ShellNeedsYou: View {
                 let rest = more(all.dropFirst(shown))
                 Button(action: rest.open) {
                     BUIListRow(rest.text, accessory: .disclosure) {
-                        BUIIconTile(Theme.Icon.inbox, tint: Color.secondary)
+                        IconTile(Theme.Icon.inbox, tint: Color.secondary)
                     }
                 }
                 .buttonStyle(.plain)
@@ -271,7 +282,7 @@ struct ShellNeedsYou: View {
             Button { model.open(ix.sessionKey) } label: {
                 BUIListRow(agentName(ix), detail: oneLine(ix.summary ?? ix.questions?.first?.question ?? ix.title),
                            accessory: .disclosure, detailLines: 1) {
-                    BUIIconTile(ix.kind.symbol, tint: Theme.needsYou)
+                    IconTile(ix.symbol, tint: Theme.needsYou)
                 }
             }
             .buttonStyle(.plain)
@@ -292,7 +303,7 @@ struct ShellNeedsYou: View {
         if let brand = Self.brand(it) {
             BrandTile(brand)
         } else {
-            BUIIconTile(Self.symbol(it), tint: Theme.accent)
+            IconTile(Self.symbol(it), tint: Theme.accent)
         }
     }
 
@@ -305,7 +316,7 @@ struct ShellNeedsYou: View {
                 let rest = more(all.dropFirst(shown))
                 Button(action: rest.open) {
                     HStack(spacing: Theme.Space.m) {
-                        Image(systemName: Theme.Icon.inbox)
+                        ThemedIcon(Theme.Icon.inbox)
                             .font(Theme.Font.heading)
                             .foregroundStyle(.secondary)
                             .scaledFrame(width: Theme.Size.icon)
@@ -328,7 +339,7 @@ struct ShellNeedsYou: View {
         case .agent(let ix):
             Button { model.open(ix.sessionKey) } label: {
                 HStack(spacing: Theme.Space.m) {
-                    Image(systemName: ix.kind.symbol)
+                    ThemedIcon(ix.symbol)
                         .font(Theme.Font.heading)
                         .foregroundStyle(Theme.needsYou)
                         .scaledFrame(width: Theme.Size.icon)
@@ -365,7 +376,7 @@ struct ShellNeedsYou: View {
             BrandMark(brand, side: Theme.Size.iconS)
                 .scaledFrame(width: Theme.Size.icon)
         } else {
-            Image(systemName: Self.symbol(it))
+            ThemedIcon(Self.symbol(it))
                 .font(Theme.Font.heading)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon)

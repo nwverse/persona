@@ -25,6 +25,7 @@
   "done_user": "処理済みにしました",
   "done_dismissed": "無視しました",
   "done_read": "ほかで既読、処理済み",
+  "done_muted": "ミュート済み、対応済み",
   "done_manager": "マネージャー確認済み：対応不要",
   "failed_timeout": "対応がタイムアウトしました",
   "failed_stopped": "対応の会話が提案なしで止まりました",
@@ -34,5 +35,6 @@
   "suggested_agent": "マネージャーが Agent の起動を提案",
   "suggested_handback": "マネージャーが提案、判断をお願いします",
   "confirmed_agent": "確認しました：Agent を起動",
-  "failed_agent": "Agent を起動できませんでした"
+  "failed_agent": "Agent を起動できませんでした",
+  "handed_main": "Persona のメインチャットに渡しました"
 }

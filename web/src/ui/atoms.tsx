@@ -12,10 +12,14 @@ import { composing } from "../lib/send-history";
 import { keyboardFrame } from "../lib/viewport";
 import { prefersReducedMotion } from "./stream/motion";
 import { accelLabel, activation, edge, enabled, keyIntent, renameCommit, rowLabel, type MenuItem } from "./menu-model";
-import { NARROW_QUERY, placeMenu, placeSubmenu, SHEET_QUERY, useEscapeClose, useMedia, useModalFocus, type MenuPlace } from "./overlay";
+import { focusables, NARROW_QUERY, placeMenu, placeSubmenu, SHEET_QUERY, useEscapeClose, useMedia, useModalFocus, type MenuPlace } from "./overlay";
 import { STATE_LABEL, stateName } from "../lib/state-labels";
 
 export const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
+
+/** Spread on a field holding a secret that is not this site's password (a key, a computer's password): no spell check,
+ *  and the 1Password, LastPass and Bitwarden extensions leave it alone. The field sets its own `autoComplete`. */
+export const SECRET_INPUT = { spellCheck: false, "data-1p-ignore": true, "data-lpignore": "true", "data-bwignore": true } as const;
 
 export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
@@ -217,13 +221,14 @@ export function Spinner({ size = 12 }: { size?: number }) {
 /** An on / off switch (role=switch): the knob slides over 200 ms with the design system's ease (reduced motion: at once).
  *  Settings' rows, and the chat's and "New agent"'s ultracode switch (#3428). `className`: added to the track (a place
  *  that needs its grayed state drawn more clearly); without it the switch is as before. */
-export function Switch({ on, onChange, disabled, label, className }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string }) {
+export function Switch({ on, onChange, disabled, label, className, describedBy }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string; describedBy?: string }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       aria-label={label}
+      aria-describedby={describedBy}
       disabled={disabled}
       onClick={() => onChange(!on)}
       className={cx("touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-accent" : "bg-hover-2", className)}
@@ -303,9 +308,10 @@ interface Sub {
 }
 
 /** A menu next to its anchor (a button, or a row's ⋯), or at the pointer (`point`, a right click). ↑ ↓ move, → opens a
- *  submenu and ← goes back, Enter chooses, Esc closes, a row's letter chooses it, ⌫ chooses the close action. A row
- *  can ask again before it runs (`confirm`), turn into an input (`rename`), open a submenu (`children`) or show its
- *  work and failure inside the menu (`inline`). A menu without those keys is the plain one it always was. */
+ *  submenu and ← goes back, Enter chooses, Esc closes, Tab closes it and moves on, a row's letter chooses it, ⌫
+ *  chooses the close action. A row can ask again before it runs (`confirm`), turn into an input (`rename`), open a
+ *  submenu (`children`) or show its work and failure inside the menu (`inline`). A menu without those keys is the
+ *  plain one it always was. */
 export function Menu({
   items,
   anchor,
@@ -337,6 +343,11 @@ export function Menu({
   const asking = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loads = useRef(0);
   const rows = useRef<(HTMLElement | null)[][]>([]);
+  // What had the focus as the menu opened (its button, a row's ⋯), read on the first render, before a row can take it.
+  const [opener] = useState(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return el && el !== document.body ? el : null;
+  });
   // On a narrow screen Back closes the menu first, like the drawer and the sheets, instead of leaving the page (#5132).
   // A row that opens a sheet or a panel takes the menu's entry over (back-close reuses an entry closed a tick before).
   useCloseOnBack(true, onClose, useMedia(NARROW_QUERY));
@@ -388,9 +399,25 @@ export function Menu({
     (it.children as () => Promise<MenuItem[]>)().then((list) => settle({ items: list }), (e) => settle({ error: errMessage(e) }));
   };
 
+  // A click on a row focuses that row, and the row is gone once the menu closes: a Dialog the row opens notes it as
+  // where the focus goes back, and closing it left the focus on body. From the keyboard the focus never left the
+  // menu's button (the highlight is drawn), so give it back there first: to the opener, else the anchor, else the
+  // anchor's first control (a sidebar row whose ⋯ shows only under the pointer). Only when the focus is still ours:
+  // in this menu, or lost to body.
+  const handBack = () => {
+    const active = document.activeElement;
+    const ours = !active || active === document.body || active.closest("[data-menu]")?.getAttribute("data-menu") === id;
+    if (!ours) return;
+    for (const el of [opener, anchor, ...(anchor ? focusables(anchor) : [])]) {
+      if (!el?.isConnected) continue;
+      el.focus({ preventScroll: true });
+      if (document.activeElement === el) return;
+    }
+  };
   const run = async (depth: number, it: MenuItem) => {
     setConfirming(null);
     setFailure(null);
+    handBack();
     if (!it.inline) {
       void it.onSelect();
       if (!it.submenu && !it.keepOpen) onClose();
@@ -430,6 +457,7 @@ export function Menu({
     setFailure(null);
     try {
       await it.rename!.commit(name);
+      handBack(); // the input had it
       onClose();
     } catch (e) {
       setFailure({ depth, text: errMessage(e) });
@@ -470,10 +498,18 @@ export function Menu({
       const depth = open.length;
       const intent = keyIntent(e, ls[depth], act[depth] ?? -1, depth);
       if (intent.type === "none") return;
+      if (intent.type === "leave") {
+        // the focus is on the menu's button (the highlight is drawn), so the browser's Tab goes on from there; not
+        // stopped either, so a Dialog the menu sits in still keeps Tab inside
+        handBack();
+        return onClose();
+      }
       e.preventDefault();
       e.stopPropagation();
-      if (intent.type === "close") onClose();
-      else if (intent.type === "back") closeSubsTo(depth - 1);
+      if (intent.type === "close") {
+        handBack(); // a row the pointer chose to confirm may have it
+        onClose();
+      } else if (intent.type === "back") closeSubsTo(depth - 1);
       else if (intent.type === "move") setActive(depth, intent.index);
       else choose(depth, intent.index, true);
     };
@@ -635,7 +671,18 @@ function MenuPanel({
         {!loading && !loadError && depth > 0 && items.length === 0 && <div className="relative z-10 flex h-8 items-center px-2 text-[12.5px] text-ink-3 pointer-coarse:min-h-11">{t("ui-atoms.menu_empty")}</div>}
         {items.map((it, i) => [
           it.divider && i > 0 && <div key={`${it.key}-sep`} role="separator" className="mx-1 my-1 h-px bg-line" />,
-          it.note ? (
+          it.heading ? (
+            <div
+              key={it.key}
+              ref={(el) => {
+                els.current[i] = el;
+              }}
+              role="presentation"
+              className="relative z-10 px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase"
+            >
+              {it.label}
+            </div>
+          ) : it.note ? (
             <NoteRow
               key={it.key}
               item={it}
@@ -711,7 +758,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
           <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{it.detail}</span>
         </span>
       ) : (
-        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate")}>{label}</span>
+        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}</span>
       )}
       {it.state && <StatePill state={it.state} />}
       {working ? <Spinner size={12} /> : it.hint && <span className="shrink-0 text-[11px] text-ink-3">{it.hint}</span>}
@@ -736,33 +783,64 @@ function NoteRow({ item: it, refCb }: { item: MenuItem; refCb: (el: HTMLElement 
 function RenameRow({ item, busy, onCommit, onCancel, refCb }: { item: MenuItem; busy: boolean; onCommit: (name: string) => void; onCancel: () => void; refCb: (el: HTMLElement | null) => void }) {
   const rename = item.rename!;
   const [text, setText] = useState(rename.value);
+  const hintId = useId();
+  // what is wrong with it as typed (rename.validate), said under the input; Enter waits for a good one
+  const problem = text.trim() ? (rename.validate?.(text) ?? "") : "";
+  const below = problem || (rename.validate ? rename.hint : "");
+  const input = (
+    <input
+      autoFocus
+      value={text}
+      disabled={busy}
+      aria-label={item.label.replace(/…$/, "")}
+      aria-invalid={problem ? true : undefined}
+      aria-describedby={below ? hintId : undefined}
+      placeholder={rename.placeholder}
+      spellCheck={rename.validate ? false : undefined}
+      autoComplete={rename.validate ? "off" : undefined}
+      onChange={(e) => setText(e.target.value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        if (composing(e.nativeEvent)) return;
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (problem) return;
+          const name = renameCommit(rename.value, text);
+          if (name === null) onCancel();
+          else onCommit(name);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          onCancel();
+        } else e.stopPropagation();
+      }}
+      className={cx(
+        "h-7 min-w-0 flex-1 rounded-[6px] bg-inset px-2 text-[12.5px] text-ink outline-none placeholder:text-ink-3 pointer-coarse:h-9",
+        rename.validate && "font-mono placeholder:font-sans",
+        // one ring or the other: both set the same shadow, and the hairline would win
+        problem ? "shadow-[0_0_0_1px_var(--red)]" : "shadow-hairline",
+      )}
+    />
+  );
+  if (!rename.validate)
+    return (
+      <div ref={refCb} className="relative z-10 flex h-8 items-center gap-2 px-1 pointer-coarse:min-h-11">
+        {input}
+        {busy && <Spinner size={12} />}
+      </div>
+    );
   return (
-    <div ref={refCb} className="relative z-10 flex h-8 items-center gap-2 px-1 pointer-coarse:min-h-11">
-      <input
-        autoFocus
-        value={text}
-        disabled={busy}
-        aria-label={item.label.replace(/…$/, "")}
-        placeholder={rename.placeholder}
-        onChange={(e) => setText(e.target.value)}
-        onFocus={(e) => e.currentTarget.select()}
-        onKeyDown={(e) => {
-          if (composing(e.nativeEvent)) return;
-          if (e.key === "Enter") {
-            e.preventDefault();
-            e.stopPropagation();
-            const name = renameCommit(rename.value, text);
-            if (name === null) onCancel();
-            else onCommit(name);
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            e.stopPropagation();
-            onCancel();
-          } else e.stopPropagation();
-        }}
-        className="h-7 min-w-0 flex-1 rounded-[6px] bg-inset px-2 text-[12.5px] text-ink shadow-hairline outline-none placeholder:text-ink-3 pointer-coarse:h-9"
-      />
-      {busy && <Spinner size={12} />}
+    <div ref={refCb} className="relative z-10 flex flex-col gap-1 px-1 py-0.5">
+      <div className="flex h-8 items-center gap-2 pointer-coarse:min-h-11">
+        {input}
+        {busy && <Spinner size={12} />}
+      </div>
+      {below && (
+        <p id={hintId} role={problem ? "alert" : undefined} className={cx("px-0.5 pb-0.5 text-[11.5px] leading-snug break-words", problem ? "text-red" : "text-ink-3")}>
+          {below}
+        </p>
+      )}
     </div>
   );
 }
@@ -1028,7 +1106,7 @@ export function Toasts() {
   useEffect(() => pauseToasts(paused), [paused]);
   useEffect(() => () => pauseToasts(false), []);
   return createPortal(
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-4">
+    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4">
       {toasts.map((item) => (
         <div
           key={item.id}

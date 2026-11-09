@@ -1,19 +1,16 @@
-import { storedValue, storeValue } from "../lib/compatibility";
+import { removeStoredValue, storedValue, storeValue } from "../lib/compatibility";
 // Beautiful UI's Sidebar Nav: workspace row, quick search, sections, one gliding highlight. Persona's main conversation
 // is the first entry (the app opens on the assistant); a new conversation and a new agent are the "+" of their sections (#1239).
-import { BASE } from "../lib/base";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { NARROW, useMedia } from "../lib/viewport";
 import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, BOTMUX_HIDDEN_KEY, botmuxAndFilter, filterCounts, isBotmux, isSpaceMuted, matchingKeys, shownFilters, unreadOf, withoutBotmux, type AgentFilter, type FilterCounts } from "../lib/agent-filter";
 import { AGENT_SORT_KEY, AGENT_SORTS, agentSort, machineTreeByUpdate, projectsByUpdate, repoMachinesByUpdate, todoTreeByUpdate, type AgentSort } from "../lib/agent-sort";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, awaitsReply, buildAgentGroups, buildSpaces, hostsOf, isQuiet, sessionHost, sessionSource, sourceName, splitAgentSessions, type AgentGroup, type AgentMutes, type Space } from "../lib/agent-groups";
-import { buildRepoMachineTree, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos";
+import { buildRepoMachineTree, showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos";
 import { keyedRefs } from "../lib/keyed-refs";
 import { buildMachineTree, paneRoute, resolveTab, tabRowKeys, type ChildStates, type HerdrMachine, type HerdrSpace, type HerdrTab } from "../lib/herdr-tree";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
-import { api, handleUnauthorized, setToken } from "../lib/api";
-import { TOKEN_ID_KEY } from "../lib/auth";
 import { useInboxBadge } from "../lib/inbox";
 import { useLarkHome } from "../lib/lark-chats";
 import { machineWithHub } from "../lib/mesh";
@@ -25,23 +22,26 @@ import { arrangePages, useSidebarPrefs } from "../lib/sidebar-pages";
 import { sidebarConversations, usePinnedConversations } from "../lib/conversation-pins";
 import { autoConversations, autoOrigin, isAutoConversation, originLabel, type AutoOrigin, type OriginTally } from "../lib/conversation-origins";
 import { ConversationRowMenu, pinnedSectionItems } from "./ConversationMenu";
+import { useDisconnect } from "./DisconnectBrowser";
 import { useExtensionSlot } from "../lib/extension-slots";
 import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, navigate, routePath, useRoute, type Route } from "../lib/router";
 import { useAgentSessions, useCounts, useFullAgentSessions } from "../lib/sessions";
 import { terminalTarget } from "../lib/session-view";
-import { refresh, reset, rememberSessionRow, useLarkOn, useStore } from "../lib/store";
+import { refresh, rememberSessionRow, useLarkOn, useStore } from "../lib/store";
 import { draftLine, rowLine } from "../lib/row-line";
+import { usageLimitLabel } from "../lib/usage-limit";
 import { useLeftDraft } from "../lib/drafts";
 import { planInRow, planLabel, planLine } from "../lib/plan";
 import { answeredSession, answerPending, lastAnsweredAt } from "./assistant/answered-lookup";
+import { conversationTitle } from "./assistant/conversations";
 import { BREATHING, connPhase, connStatus, phaseTone, type ConnPhase } from "../lib/connection";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
 import { buildTodoTree, treeStateLabel, type TodoTree, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
 import { findTodoForSpace, openTodoFromTag, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { AgentState, Machine, Session } from "../lib/types";
-import { Collapse, cx, EASE, Kbd, Menu, useMenu, useNow, type MenuItem } from "../ui/atoms";
+import { Collapse, cx, EASE, Kbd, Menu, Spinner, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark, StateTally } from "../ui/StatusMark";
 import { foldedCounts, hasFoldedCounts } from "../lib/folded-counts";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
@@ -383,6 +383,12 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("sidebar.search_sessions")}</span>
           <span className="hidden sm:inline-flex"><Kbd>{searchHint}</Kbd></span>
         </button>
+        {chats && (
+          <a href={href({ name: "persona-new" })} onClick={go({ name: "persona-new" })} aria-current={route.name === "persona-new" ? "page" : undefined} className={cx("touch-hit mb-1 flex h-8 w-full items-center gap-2 rounded-control px-2.5 text-[12.5px] font-medium text-ink-2 transition-colors hover:text-ink", route.name === "persona-new" ? CURRENT_ROW : "hover:bg-hover")}>
+            <Icon name="compose" size={13} stroke={1.8} />
+            <span className="min-w-0 flex-1 truncate">{t("sidebar.new_chat")}</span>
+          </a>
+        )}
       </div>
 
       {/* scroll-pt: a row reached by Tab doesn't stop under the pinned Persona row — about 62px with its 主对话 line
@@ -409,11 +415,10 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
             title={t("sidebar.persona_chats")}
             folded={personaFolded}
             onToggle={togglePersona}
-            right={<SectionAdd label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} />}
           >
             {pinnedConvs.length > 0 && <PinnedHeading onMenu={(at) => setChatsMenu(at)} />}
             {convs.map((c) => (
-              <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={{ name: "persona", sid: c.session_id }} go={go} showState={false} icon={pinnedIds.includes(c.session_id) ? "pin" : undefined} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+              <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={{ name: "persona", sid: c.session_id }} go={go} label={conversationTitle(c)} showState={false} icon={pinnedIds.includes(c.session_id) ? "pin" : undefined} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
             ))}
             {assistant && <AutoConversations conversations={assistant.conversations} main={assistant.main} shown={convs} activeKey={activeKey} holds={autoHolds} reg={reg} hover={hover} go={go} />}
             {assistant && <NavRow k="history" reg={reg} hover={hover} active={activeKey === "history"} to={{ name: "history" }} go={go} icon="list" label={t("sidebar.all_chats")} hint={assistant.conversations.length > convs.length ? String(assistant.conversations.length) : undefined} />}
@@ -537,7 +542,7 @@ function MorePages({ more, reg, hover, activeKey, go }: { more: NavPage[]; reg: 
         onClick={toggle}
         aria-expanded={!folded}
         title={counted.map((p) => `${p.label} ${p.badge}`).join(t("sidebar.list_separator")) || undefined}
-        className="touch-hit relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left transition-[background-color,transform] duration-150 hover:bg-hover active:scale-[0.98] [@media(pointer:coarse)]:min-h-11"
+        className="touch-hit relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row text-left transition-[background-color,transform] duration-150 hover:bg-hover active:scale-[0.98] [@media(pointer:coarse)]:min-h-11"
       >
         <span className="text-ink-3"><Icon name="more" size={14} stroke={1.8} /></span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{t("sidebar.more_pages")}</span>
@@ -556,7 +561,7 @@ function MorePages({ more, reg, hover, activeKey, go }: { more: NavPage[]; reg: 
 
 /** The sidebar's "Agents": grouping, the quick filter, "Pinned", "Starting", the groups (spaces, machines, repositories,
  *  states or todos) and "Recent". The drawer and the phone's Agents page both show it. `add`: the title row's "+". */
-type AgentsBlockProps = { reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onNewAgent: () => void; onNavigate?: () => void; add?: boolean; foldable?: boolean };
+type AgentsBlockProps = { reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onNewAgent: () => void; onNavigate?: () => void; add?: boolean; foldable?: boolean; chooseGrouping?: (g: AgentGrouping) => void };
 
 function AgentsBlock(props: AgentsBlockProps) {
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
@@ -571,10 +576,15 @@ function AgentsBlock(props: AgentsBlockProps) {
     setGrouping(g);
     props.hover(null);
   };
-  return bounded && !full ? <BoundedAgentsBlock {...props} /> : <LegacyAgentsBlock {...props} grouping={agentGrouping(grouping)} chooseGrouping={chooseGrouping} />;
+  // Back to the paged list: forget the saved grouping. Offered only where the paged list exists and nothing is pinned
+  // (pins keep the full list either way).
+  const pagedList = bounded && grouped && pins.sessions.length === 0 && pins.spaces.length === 0
+    ? () => { removeStoredValue("persona.agentGrouping"); setGrouping(null); props.hover(null); }
+    : undefined;
+  return bounded && !full ? <BoundedAgentsBlock {...props} chooseGrouping={chooseGrouping} /> : <LegacyAgentsBlock {...props} grouping={agentGrouping(grouping)} chooseGrouping={chooseGrouping} pagedList={pagedList} />;
 }
 
-function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true }: AgentsBlockProps) {
+function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true, chooseGrouping }: AgentsBlockProps) {
   const machines = useStore((s) => s.machines);
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
   const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
@@ -589,7 +599,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true 
     <div className={SESSION_LIST_STYLE.heading}><span className={SESSION_LIST_STYLE.headingText}>{t("agentspage.title")}</span>{archives && <SectionAdd icon="archive" label={t("agentmenus.archived_agents")} to={{ name: "agent-archives" }} go={go} />}{add && <SectionAdd label={t("sidebar.new_agent")} onClick={onNewAgent} />}</div>
     <HubNoticeLine />
     <HerdrNotices />
-    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} event="sessions_list"
+    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} event="sessions_list" onRepo={chooseGrouping ? () => chooseGrouping("repo") : undefined}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
       renderRow={(s) => {
         const k = `s:${s.machine_id}/${s.session_id}`;
@@ -604,7 +614,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true 
   </>;
 }
 
-function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, foldable = false, grouping, chooseGrouping }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void }) {
+function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, foldable = false, grouping, chooseGrouping, pagedList }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void; pagedList?: () => void }) {
   const machines = useStore((s) => s.machines);
   const { sessions: all, loaded } = useFullAgentSessions();
   const mutes = useStore((s) => s.mutes);
@@ -742,12 +752,12 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     <>
       <div className="group/sec mt-3 flex items-center gap-1 px-2">
         {foldable ? (
-          <button type="button" aria-expanded={!folded} onClick={toggleBlock} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase hover:text-ink-2">
+          <button type="button" aria-expanded={!folded} onClick={toggleBlock} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
             <span className="min-w-0 truncate">Agents</span>
             <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] duration-200 group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
           </button>
         ) : (
-          <span className="min-w-0 flex-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">Agents</span>
+          <span className="min-w-0 flex-1 text-[11px] font-semibold text-ink-3">Agents</span>
         )}
         {folded && <SessionTally sessions={live} folded />}
         <button type="button" title={listLabel} aria-label={listLabel} aria-haspopup="menu" aria-expanded={Boolean(listMenu.anchor)} onClick={listMenu.open} className={cx("touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] hover:bg-hover hover:text-ink-2", byUpdate ? "text-accent" : "text-ink-3", listMenu.anchor && "bg-hover")}>
@@ -766,6 +776,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
           { key: "open-all", label: t("sidebar.open_all"), icon: "chevron", checked: false, onSelect: () => { setAgentsFolded(false); hover(null); } },
           // the agents archived from a row's ⋯ (lib/agent-archives.ts), to find and restore
           ...(archives ? [{ key: "archived", label: t("agentmenus.archived_agents"), icon: "archive" as const, divider: true, onSelect: () => { navigate({ name: "agent-archives" }); onNavigate?.(); hover(null); } }] : []),
+          // a hub with the paged list: return to it from a grouping chosen there (its Browse by offers By repo)
+          ...(pagedList ? [{ key: "paged-list", label: t("sidebar.paged_list"), icon: "clock" as const, divider: true, onSelect: pagedList }] : []),
         ]} />
       )}
       <FoldScope.Provider value={AGENTS_FOLD}>
@@ -779,7 +791,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       {!folded && <HerdrNotices />}
 
       {unreadShown.length > 0 && (
-        <button type="button" onClick={() => setConfirmSeen(unreadShown)} className="relative z-10 mt-1 flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left transition-[background-color,transform] duration-100 hover:bg-hover active:scale-[0.98] [@media(pointer:coarse)]:min-h-11">
+        <button type="button" onClick={() => setConfirmSeen(unreadShown)} className="relative z-10 mt-1 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row text-left transition-[background-color,transform] duration-100 hover:bg-hover active:scale-[0.98] [@media(pointer:coarse)]:min-h-11">
           <span className="flex size-3.5 shrink-0 items-center justify-center text-green"><Icon name="check" size={13} stroke={2.4} /></span>
           <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{markAllSeenLabel()}</span>
           <span className="shrink-0 text-[11px] whitespace-nowrap text-ink-3 tabular-nums">{stateCount("unread", unreadShown.length)}</span>
@@ -971,16 +983,7 @@ function AccountRow({ phase, online, total }: { phase: ConnPhase; online: number
     { k: "light", label: t("sidebar.theme_light"), icon: "sun" },
     { k: "dark", label: t("sidebar.theme_dark"), icon: "moon" },
   ];
-  const logout = async () => {
-    // signing out on purpose: a request that gets a 401 meanwhile must not show "this browser was signed out"
-    handleUnauthorized(() => {});
-    const id = localStorage.getItem(TOKEN_ID_KEY);
-    if (id) await api(`/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
-    localStorage.removeItem(TOKEN_ID_KEY);
-    setToken("");
-    reset();
-    location.href = BASE + "/";
-  };
+  const disconnect = useDisconnect();
   return (
     <>
       <button type="button" onClick={menu.open} className="flex w-full items-center gap-2.5 rounded-control p-1.5 text-left transition-[background-color,transform] duration-100 hover:bg-hover active:scale-[0.98]">
@@ -992,7 +995,8 @@ function AccountRow({ phase, online, total }: { phase: ConnPhase; online: number
             {connStatus(phase, online, total)}
           </span>
         </span>
-        <Icon name="chevron" size={12} stroke={2} className="text-ink-3" />
+        {/* the menu is gone while the hub revokes this browser's token: the row it opened from says it is busy */}
+        {disconnect.busy ? <Spinner size={12} /> : <Icon name="chevron" size={12} stroke={2} className="text-ink-3" />}
       </button>
       {menu.anchor && (
         <Menu
@@ -1005,10 +1009,11 @@ function AccountRow({ phase, online, total }: { phase: ConnPhase; online: number
             // the other hubs in this browser's list (#1014); none, and the menu is as before
             ...otherHubs,
             { key: "settings", label: t("sidebar.nav_settings"), icon: "gear", divider: otherHubs.length > 0, onSelect: () => navigate({ name: "settings" }) },
-            { key: "logout", label: t("sidebar.disconnect"), icon: "logout", danger: true, onSelect: () => void logout() },
+            { key: "logout", label: t("sidebar.disconnect"), icon: "logout", danger: true, onSelect: disconnect.start },
           ]}
         />
       )}
+      {disconnect.dialog}
     </>
   );
 }
@@ -1064,7 +1069,7 @@ function AutoConversations({ conversations, main, shown, activeKey, holds, reg, 
         onMouseEnter={() => hover("auto-chats")}
         onFocus={() => hover("auto-chats")}
         onBlur={() => hover(null)}
-        className="relative z-10 flex w-full items-center gap-2 whitespace-nowrap rounded-[7px] px-2 py-1.5 text-left transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11"
+        className="relative z-10 flex w-full items-center gap-2 whitespace-nowrap rounded-[7px] px-2 sidebar-row text-left transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11"
       >
         <span className="text-ink-3"><Icon name="bolt" size={14} stroke={1.8} /></span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{t("sidebar.auto_chats")}</span>
@@ -1090,7 +1095,7 @@ function Section({ title, children, folded, onToggle, right, onMenu, first, hint
   return (
     <div className={first ? "mt-1" : "mt-3"}>
       <div className="group/sec relative flex items-center gap-1 px-2 pb-1" {...(onMenu ? contextMenuProps(onMenu) : {})}>
-        <button type="button" aria-expanded={!folded} onClick={onToggle} title={hint} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase hover:text-ink-2">
+        <button type="button" aria-expanded={!folded} onClick={onToggle} title={hint} className="touch-hit relative z-10 flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap text-left text-[11px] font-semibold text-ink-3 hover:text-ink-2">
           <span className="min-w-0 truncate">{title}</span>
           <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-0 transition-[opacity,transform] duration-200 group-hover/sec:opacity-100 [@media(hover:none)]:opacity-100" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
@@ -1153,7 +1158,7 @@ function AgentSection({ group, machines, byTodo, showHost, reg, hover, activeKey
 
 type TreeRowProps = { machines: Machine[]; showHost?: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; onNavigate?: () => void };
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** "Needs you" / "Working" / "Done" at the end of a tree node's line. */
 function TreeStateText({ state }: { state: TreeState }) {
@@ -1206,7 +1211,11 @@ function TreeTodoRows({ td, ...p }: { td: TreeTodo } & TreeRowProps) {
           <button type="button" onClick={toggle} className="min-w-0 flex-1 truncate text-left">{td.name}</button>
         )}
         <GroupCount n={td.sessions.length} label={t("sidebar.agent_count", { count: td.sessions.length })} className="shrink-0" />
-        <TreeStateText state={td.state} />
+        {td.status === "usage_limit" ? (
+          <span className="shrink-0 text-[11px] font-semibold whitespace-nowrap text-orange">{t("lib-usage-limit.short")}</span>
+        ) : (
+          <TreeStateText state={td.state} />
+        )}
       </div>
       <Collapse open={!folded}>
         <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
@@ -1283,13 +1292,13 @@ function RepoMachineSection({ m, flat, machines, reg, hover, activeKey, go, onRo
 
 /** One repository on one machine ("By repo"): its working trees under it, the main checkout marked and first. */
 function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: RepoTree; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn }) {
-  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.sessions, activeKey)) });
+  const [folded, toggle] = useFolded(tree.key, false, { holds: tree.worktrees.some((w) => holdsRow(w.tree, activeKey)) });
   const row = (s: Session, hint: string) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
     return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={hint} onMenu={onRowMenu} />;
   };
-  // A repository with only its main checkout needs no working-tree level: its agents sit right under the repository.
-  const flat = tree.worktrees.length === 1 && tree.worktrees[0]!.main;
+  // A lone main checkout, or an Orca worktree whose folder names its project, needs no extra level.
+  const flat = !showsWorktreeLevel(tree);
   return (
     <Section
       title={<span className="flex min-w-0 items-center gap-1.5"><Icon name="folder" size={12} stroke={2} className="shrink-0 text-ink-3" /><span className="truncate">{tree.name}</span></span>}
@@ -1303,9 +1312,11 @@ function RepoSection({ tree, reg, hover, activeKey, go, onRowMenu }: { tree: Rep
 }
 
 /** One working tree's agents under its own folding row: the main checkout wears a home mark, and a tree with nothing
- * running says so. */
+ *  running says so. Orca child worktrees have their own remembered, initially expanded chip after the parent's agents. */
 function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: string; row: (s: Session, hint: string) => React.ReactNode; activeKey: string }) {
-  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.sessions, activeKey) });
+  const [folded, toggle] = useFolded(w.key, w.sessions.length === 0, { holds: holdsRow(w.tree, activeKey) });
+  const descendants = w.tree.slice(w.sessions.length);
+  const [childrenFolded, toggleChildren] = useFolded(`${w.key}/children`, false, { holds: holdsRow(descendants, activeKey) });
   const mutes = useStore((st) => st.mutes);
   const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
   return (
@@ -1317,8 +1328,67 @@ function RepoWorktreeRows({ w, repo, row, activeKey }: { w: RepoWorktree; repo: 
         <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
       </button>
       <Collapse open={!folded}>
-        <div className="flex flex-col gap-px pl-2" inert={folded || undefined}>{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
+        <div inert={folded || undefined}>
+          <div className="flex flex-col gap-px pl-2">{w.sessions.map((s) => row(s, `${repo} › ${w.name}`))}</div>
+          {w.children.length > 0 && (
+            <>
+              <RepoChildToggle count={w.children.length} counts={w.childStates} folded={childrenFolded} onToggle={toggleChildren} />
+              <Collapse open={!childrenFolded}>
+                <div className="ml-3.5 flex w-[calc(100%-0.875rem)] flex-col gap-px" inert={childrenFolded || undefined}>
+                  {w.children.map((c) => <RepoWorktreeRows key={c.key} w={c} repo={repo} row={row} activeKey={activeKey} />)}
+                </div>
+              </Collapse>
+            </>
+          )}
+        </div>
       </Collapse>
+    </div>
+  );
+}
+
+/** Orca's child-workspace chip: one status per direct child, summarized from that child's whole subtree. */
+function RepoChildToggle({ count, counts, folded, onToggle }: { count: number; counts: ChildStates; folded: boolean; onToggle: () => void }) {
+  const descriptionId = useId();
+  const parts = (["needs_you", "working", "done"] as const).filter((k) => counts[k] > 0);
+  const description = parts.map((k) => stateCount(k, counts[k])).join(t("sidebar.list_separator"));
+  const action = t(folded ? "sidebar.show_child_workspaces" : "sidebar.hide_child_workspaces", { count });
+  return (
+    <div className="@container relative mt-1 flex min-w-0 justify-start pl-7">
+      <button
+        type="button"
+        aria-expanded={!folded}
+        aria-label={action}
+        aria-describedby={description ? descriptionId : undefined}
+        title={description ? `${action}\n${description}` : action}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggle();
+        }}
+        className="relative z-10 flex min-h-4 max-w-full items-center whitespace-nowrap rounded-[4px] border border-line bg-surface px-0.5 text-[10px] leading-none text-ink-3 shadow-hairline transition-colors hover:bg-hover hover:text-ink-2 focus-visible:bg-hover focus-visible:ring-2 focus-visible:ring-canvas"
+      >
+        <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1 gap-y-0.5 py-0.5">
+          <span className="inline-flex shrink-0 items-center gap-1">
+            <Icon name="workflow" size={10} stroke={2.2} className="shrink-0" />
+            <span className={cx("tabular-nums", parts.length > 0 && "hidden @min-[13rem]:inline")}>{t("sidebar.child_worktree_count", { count })}</span>
+            {parts.length > 0 && <span className="tabular-nums @min-[13rem]:hidden">{count}</span>}
+          </span>
+          <span className="inline-flex min-w-0 max-w-full items-center gap-0.5">
+            {parts.length > 0 && (
+              <span className="inline-flex min-w-0 flex-wrap items-center gap-0.5 border-l border-line pl-1 text-ink-3 @max-[13rem]:pl-0.5">
+                {parts.map((k) => (
+                  <span key={k} aria-hidden className="inline-flex shrink-0 items-center gap-0.5 tabular-nums @max-[13rem]:gap-0">
+                    <StatusMark state={k === "done" ? "unread" : k} size="sm" label={false} />
+                    {counts[k]}
+                  </span>
+                ))}
+              </span>
+            )}
+            <Icon name="chevron" size={10} stroke={2.4} className="size-2.5 shrink-0 text-ink-3 transition-transform duration-200 motion-reduce:transition-none" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
+          </span>
+        </span>
+      </button>
+      {description && <span id={descriptionId} className="sr-only">{description}</span>}
     </div>
   );
 }
@@ -1804,7 +1874,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
       aria-keyshortcuts={chord ? ariaKeyshortcuts(chord) : undefined}
       title={t("sidebar.persona_main")}
       // pinned over the list (#5581), its own hover fill: the gliding highlight passes under the pinned box
-      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 transition-[background-color,transform] duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active ? CURRENT_ROW : "hover:bg-hover focus-visible:bg-hover", onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11")}
+      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-[background-color,transform] duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active ? CURRENT_ROW : "hover:bg-hover focus-visible:bg-hover", onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11")}
     >
       <AppMark size={18} radius={5} className="shadow-hairline" />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -1843,7 +1913,7 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
 export function PinnedHeading({ onMenu }: { onMenu: (at: MenuAt) => void }) {
   return (
     <div className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...contextMenuProps((at) => onMenu(at))}>
-      <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[10.5px] font-medium tracking-[0.06em] text-ink-3">
+      <span className="flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap text-[11px] font-semibold text-ink-3">
         <Icon name="pin" size={10} stroke={2.2} className="shrink-0" />
         {t("sidebar.pinned_section")}
       </span>
@@ -1890,7 +1960,7 @@ const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, label
       onFocus={() => hover(k)}
       onBlur={() => hover(null)}
       aria-current={active ? "page" : undefined}
-      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW)}
+      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW)}
     >
       <span className={active ? "text-ink" : "text-ink-3"}>
         <Icon name={icon} size={14} stroke={1.8} />
@@ -2009,7 +2079,7 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
   // does it, and only in a row that shows one of them. The ages read the clock when the row renders: `now` is the
   // mount time until the first tick, and a row may only start showing an age long after it mounted
   const showsAge = (!tail && (st === "offline" || !showState)) || (withDetail && !!s.updated_at);
-  const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0);
+  const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0 || s.turn_error_kind === "usage_limit");
   const detail = withDetail ? rowDetail(s, contextUsed) : [];
   const workflow = showState && !s.assistant && st !== "offline" ? workflowShortLine(s) : "";
   const workflowTitle = workflow ? workflowLine(s, now) : "";
@@ -2044,12 +2114,12 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
       title={`${sessionTitle(s)}${source ? `\n${sourceName(source)}` : ""}${sourceSubtitle(s) ? `\n${sourceSubtitle(s)}` : ""}${hint ? `\n${hint}` : ""}${s.todo ? `\n${t("sidebar.todo_tag", { title: s.todo.title })}` : ""}${preview ? `\n${preview}` : ""}`}
       // a touch screen: rows a finger can hit (44), and room at the end for the ⋯ that is always there; the open row
       // keeps its ⋯ too, so it has room for it
-      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 py-[5px] transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW, // room for "N agents" and the ⋯ beside it (instead of the ⋯'s own)
+      className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW, // room for "N agents" and the ⋯ beside it (instead of the ⋯'s own)
         endRoom ? "pr-[108px] [@media(hover:none)]:pr-[120px]" : cx(onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11"))}
     >
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
-      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" ? <StatusMark state={st} awaiting={awaiting} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
+      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" ? <StatusMark state={usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
@@ -2057,13 +2127,13 @@ export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, ac
         <span className={cx("flex flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
-              <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
+              <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
                 {label ?? sessionTitle(s)}
               </span>
               <UltraMark size={10} />
             </span>
           ) : (
-            <span className={cx("truncate text-[13px]", active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
+            <span className={cx("truncate text-[13px]", active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
               {label ?? sessionTitle(s)}
             </span>
           )}
@@ -2344,7 +2414,7 @@ export const AgentRow = memo(function AgentRow({ s, reg, hover, active, go, pinn
         onBlur={() => hover(null)}
         aria-current={active ? "page" : undefined}
         title={`${s.title || t("lib-format.untitled_session")} · ${providerLabel(s.provider)}`}
-        className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 py-[5px] transition-transform duration-150 active:scale-[0.98] [@media(hover:none)]:pr-11 [@media(pointer:coarse)]:min-h-11", active && cx(CURRENT_ROW, "pr-7"))}
+        className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(hover:none)]:pr-11 [@media(pointer:coarse)]:min-h-11", active && cx(CURRENT_ROW, "pr-7"))}
       >
         <AgentAvatar s={s} size={16} />
         <span className={cx("min-w-0 flex-1 truncate text-[13px]", active || unread ? "font-medium text-ink" : "text-ink-2")}>{s.title || t("lib-format.untitled_session")}</span>
@@ -2426,6 +2496,7 @@ const RAIL_ITEM = "touch-hit relative flex size-9 shrink-0 items-center justify-
  */
 export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onSearch: () => void; onNewAgent: () => void }) {
   const { phase, online, total, main, pages, more } = useNavPages();
+  const hasAssistant = useStore((s) => Boolean(s.assistant));
   const [moreMenu, setMoreMenu] = useState<HTMLElement | null>(null);
   const bindings = useBindings();
   const activeKey = useActiveKey(route);
@@ -2458,6 +2529,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
       </button>
       <span aria-hidden className="my-2 h-px w-6 shrink-0 bg-line" />
       <nav aria-label={t("sidebar.pages")} className="flex min-h-0 w-full flex-1 flex-col items-center gap-0.5 overflow-y-auto overscroll-contain">
+        {hasAssistant && link("j:new", { name: "persona-new" }, t("sidebar.new_chat"), <Icon name="compose" size={15} stroke={1.8} />)}
         {link(
           "persona",
           { name: "persona" },

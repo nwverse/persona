@@ -76,6 +76,8 @@ nonisolated struct PairedHub: Codable, Hashable, Sendable, Identifiable {
     var deviceID: String?
     /// The watch's answer-only credential there.
     var watch: ServerConfig?
+    /// The watch's own issued token id, used only to report its complication configurations.
+    var watchDeviceID: String? = nil
     /// The hubs its last hello listed in its group (itself included).
     var mesh: [MeshHub]?
     var addedAt: Date = .now
@@ -335,6 +337,7 @@ nonisolated enum HubRoute {
     static let healthProbe: Probe = { config in
         var req = URLRequest(url: APIClient(config: config).url("/api/v1/health", direct: true), timeoutInterval: 3)
         req.httpMethod = "GET"
+        RequestClientMetadata.current.apply(to: &req)
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }

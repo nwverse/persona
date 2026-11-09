@@ -9,10 +9,18 @@ struct PersonaWatchApp: App {
     var body: some Scene {
         WindowGroup {
             WatchRootView()
+                .onOpenURL { model.openExtensionSurface($0) }
                 .environment(model)
                 .tint(Theme.accent)
         }
-        .onChange(of: phase) { _, p in if p == .active { Task { await model.refresh() } } }
+        .onChange(of: phase) { _, p in
+            if p == .active {
+                Task { await model.refresh() }
+                Task { await model.refreshExtensionSurfaces() }
+            }
+        }
+        // The watch face's frog stays current while the app is not open (docs/apple/persona.md).
+        .backgroundTask(.appRefresh(WatchModel.petRefresh)) { await model.backgroundRefresh() }
     }
 }
 
@@ -23,6 +31,9 @@ struct PersonaWatchApp: App {
 final class WatchModel {
     /// Each group's credential ("" = the default group); one group from a phone before several hubs.
     var configs: [String: ServerConfig] = [:]
+    @ObservationIgnored var extensionDeviceIDs: [String: String] = [:]
+    var extensionCapabilities: [String: [String]] = [:]
+    var extensionSurface: WatchExtensionDestination?
     /// What the groups are called (labels, when there are several).
     var names: [String: String] = [:]
     /// The phone's groups it could not get the watch a credential for yet (#1185); the watch says so and offers to
@@ -45,6 +56,10 @@ final class WatchModel {
     var persona = UserDefaults.standard.string(forKey: WatchModel.personaKey)
     /// The Milk Frog's files on this watch.
     let pet = WatchPetPack()
+    /// The Milk Frog on the watch face.
+    @ObservationIgnored private let complication = WatchPetComplication()
+    static let petRefresh = "pet"
+    private static let petRefreshEvery: TimeInterval = 30 * 60
     private static let personaKey = "persona"
     private var petWanted: Bool { WatchPet.supports(persona) }
 
@@ -78,6 +93,8 @@ final class WatchModel {
         seenInteractionUids = UserDefaults.standard.stringArray(forKey: Self.seenUidsKey) ?? []
         if let data = UserDefaults.standard.data(forKey: "configs"), let all = try? JSONDecoder().decode(WatchConfigs.self, from: data) {
             (configs, names, missing) = (all.configs, all.names, all.missing ?? [])
+            extensionDeviceIDs = all.deviceIDs ?? [:]
+            extensionCapabilities = all.features ?? [:]
         } else if let data = UserDefaults.standard.data(forKey: "config"), let c = try? JSONDecoder().decode(ServerConfig.self, from: data) {
             configs = ["": c]
         }
@@ -93,19 +110,33 @@ final class WatchModel {
         }
         #endif
         WatchSync.shared.onConfig = { [weak self] c in
-            self?.configs = ["": c]
-            self?.names = [:]
-            self?.missing = []
+            guard let self else { return }
+            guard configs != ["": c] || !names.isEmpty || !missing.isEmpty ||
+                  !extensionDeviceIDs.isEmpty || !extensionCapabilities.isEmpty else { return }
+            configs = ["": c]
+            names = [:]
+            missing = []
+            extensionDeviceIDs = [:]
+            extensionCapabilities = [:]
+            syncExtensionSurfaces()
             UserDefaults.standard.set(try? JSONEncoder().encode(c), forKey: "config")
             UserDefaults.standard.removeObject(forKey: "configs")
-            Task { await self?.refresh() }
+            Task { await self.refresh() }
+            Task { await self.refreshExtensionSurfaces() }
         }
         WatchSync.shared.onConfigs = { [weak self] all in
-            self?.configs = all.configs
-            self?.names = all.names
-            self?.missing = all.missing ?? []
+            guard let self else { return }
+            guard configs != all.configs || names != all.names || missing != (all.missing ?? []) ||
+                  extensionDeviceIDs != (all.deviceIDs ?? [:]) || extensionCapabilities != (all.features ?? [:]) else { return }
+            configs = all.configs
+            names = all.names
+            missing = all.missing ?? []
+            extensionDeviceIDs = all.deviceIDs ?? [:]
+            extensionCapabilities = all.features ?? [:]
+            syncExtensionSurfaces()
             UserDefaults.standard.set(try? JSONEncoder().encode(all), forKey: "configs")
-            Task { await self?.refresh() }
+            Task { await self.refresh() }
+            Task { await self.refreshExtensionSurfaces() }
         }
         WatchSync.shared.onPersona = { [weak self] id in
             self?.persona = id
@@ -126,9 +157,12 @@ final class WatchModel {
             self.apply(sessions: s.sessions, interactions: s.interactions, machines: s.machines,
                        at: WatchGroupRefresh.dataDate(ofSummaryAt: s.at))
             if let inbox = s.inbox { self.applyInbox(inbox) }
+            self.publishPet()
         }
+        syncExtensionSurfaces()
         WatchRecordingTransfer.shared.start()
         WatchSync.shared.activate()
+        Task { await refreshExtensionSurfaces() }
         Task { await poll() }
     }
 
@@ -210,6 +244,24 @@ final class WatchModel {
         if let xx = try? await first.inbox(connectors: true) { applyInbox(xx) }
         error = failure.flatMap { allFailed ? $0.watchShown : nil }
         await fetchPet()
+        publishPet()
+    }
+
+    /// The watch face's frog follows what this refresh learned; a face from before the frog was chosen goes away.
+    private func publishPet() {
+        complication.publish(petWanted ? petStatus : nil, at: lastUpdate, pack: pet)
+        if petWanted { schedulePetRefresh() }
+    }
+
+    /// Wakes the app in the background now and then, so the face does not go stale while the app is closed. watchOS
+    /// decides when; past an hour without one the face says it does not know (WatchPetSnapshot.staleAfter).
+    private func schedulePetRefresh() {
+        WKApplication.shared().scheduleBackgroundRefresh(withPreferredDate: .now.addingTimeInterval(Self.petRefreshEvery),
+                                                         userInfo: Self.petRefresh as NSString) { _ in }
+    }
+
+    func backgroundRefresh() async {
+        await refresh()
     }
 
     /// The first group's hub, like the inbox's: every hub has the same built-in package.
@@ -295,9 +347,15 @@ final class WatchModel {
     }
 
     func interrupt(_ key: SessionKey) async {
-        guard sessions.first(where: { $0.key == key })?.canInterrupt == true else { return }
-        try? await api(key.group)?.interrupt(key)
-        WKInterfaceDevice.current().play(.stop)
+        guard sessions.first(where: { $0.key == key })?.canInterrupt == true, let api = api(key.group) else { return }
+        // The stop haptic says the Agent stopped, so it plays only once the hub accepts the interrupt.
+        do {
+            try await api.interrupt(key)
+            WKInterfaceDevice.current().play(.stop)
+        } catch {
+            self.error = error.watchShown
+            WKInterfaceDevice.current().play(.failure)
+        }
     }
 
     func machine(_ ref: MachineRef) -> Machine? { machines.first { $0.ref == ref } }
@@ -310,7 +368,7 @@ struct WatchRootView: View {
     #if DEBUG
     @State private var openedInteraction: Interaction?
     @State private var openedSession: Session?
-    @State private var openedPet = false
+    @State private var openedPetPage: String?
     /// `-openWatchItem running`: the list without Needs You, so the running sessions are on screen (screenshots).
     private static let runningFirst = UserDefaults.standard.string(forKey: "openWatchItem") == "running"
     /// `-openWatchItem inbox`: Needs You without the agents' requests, so the inbox rows are on screen (screenshots).
@@ -413,10 +471,10 @@ struct WatchRootView: View {
                             NavigationLink { WatchSessionView(session: s) } label: {
                                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                                     // On the title's first line (titles wrap to two), not centered on the row.
-                                    Circle().fill(s.state.color).frame(width: 8, height: 8)
+                                    Circle().fill(s.stateTone.dot).frame(width: 8, height: 8)
                                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 2 }
                                     VStack(alignment: .leading, spacing: Theme.Watch.lineSpacing) {
-                                        Text(s.displayTitle).font(.headline).lineLimit(2)
+                                        WatchTitle(session: s)
                                         Text([s.spaceName, s.slotLabel].compactMap { $0 }.joined(separator: " › ").isEmpty
                                              ? (model.machine(s.machineRef)?.title ?? s.machineID)
                                              : [s.spaceName, s.slotLabel].compactMap { $0 }.joined(separator: " › "))
@@ -443,12 +501,17 @@ struct WatchRootView: View {
                     for _ in 0..<20 where model.inbox.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
                     openedItem = model.inbox.first
                 }
-                // `-openWatchItem pet`: the Milk Frog's page (screenshots).
-                .navigationDestination(isPresented: $openedPet) { WatchPetView() }
+                // `-openWatchItem pet|complication`: the Milk Frog's page, or the watch face's frog in every family
+                // (screenshots). One destination: two isPresented ones on this stack left both closed.
+                .navigationDestination(item: $openedPetPage) { page in
+                    if page == "complication" { PetComplicationPreview() } else { WatchPetView() }
+                }
                 .task {
-                    guard UserDefaults.standard.string(forKey: "openWatchItem") == "pet" else { return }
-                    for _ in 0..<120 where model.petStatus == nil { try? await Task.sleep(for: .milliseconds(500)) }
-                    openedPet = model.petStatus != nil
+                    guard let want = UserDefaults.standard.string(forKey: "openWatchItem"), want == "pet" || want == "complication" else { return }
+                    for _ in 0..<120 where model.petStatus == nil || (want == "complication" && WatchPetSnapshot.read() == nil) {
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                    openedPetPage = want
                 }
                 // `-openWatchItem question|plan|permission|screen|session`: open the first request of that kind, or the
                 // first running session (screenshots); `session:<session id>` that one. `running` and `inbox` are handled
@@ -468,6 +531,9 @@ struct WatchRootView: View {
             }
         }
         .sheet(isPresented: $recordingOpen) { NavigationStack { WatchRecordingView() } }
+        .sheet(item: Binding(get: { model.extensionSurface }, set: { model.extensionSurface = $0 })) { destination in
+            NavigationStack { WatchExtensionSurfacePage(destination: destination) }
+        }
         #if DEBUG
         .onAppear { recordingOpen = UserDefaults.standard.bool(forKey: "openRecording") }
         #endif
@@ -496,15 +562,17 @@ extension InteractionKind {
         case .plan: String(localized: "Plan Approval")
         case .permission: String(localized: "Permission")
         case .screen: String(localized: "Terminal")
+        case .elicitation: String(localized: "MCP Request")
         }
     }
 
     var watchSymbol: String {
         switch self {
-        case .question: "questionmark.bubble"
-        case .plan: "list.bullet.clipboard"
-        case .permission: "hand.raised"
-        case .screen: "terminal"
+        case .question: Theme.Icon.question
+        case .plan: Theme.Icon.plan
+        case .permission: Theme.Icon.askFirst
+        case .screen: Theme.Icon.terminal
+        case .elicitation: Theme.Icon.mcpForm
         }
     }
 }
@@ -514,8 +582,12 @@ extension Interaction {
         switch kind {
         case .question: questions?.first?.question ?? ""
         case .plan: (plan ?? "").split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "# ")) } ?? String(localized: "Plan [Interaction Text 2619dd]")
-        case .permission: [toolName, summary].compactMap { $0 }.joined(separator: String(localized: ": ", comment: "Separator between a label and its value"))
+        case .permission:
+            // The password card: its summary names the computer and every command; `secret_run` means nothing here.
+            (isSecretRun ? [summary] : [toolName, summary]).compactMap { $0 }
+                .joined(separator: String(localized: ": ", comment: "Separator between a label and its value"))
         case .screen: String(localized: "A dialog is open in the terminal")
+        case .elicitation: askLine(includeToolName: false) ?? ""
         }
     }
 }
@@ -584,13 +656,15 @@ struct WatchInteractionView: View {
                     }
                 case .plan:
                     Text(WatchText.shown(interaction.plan ?? "")).font(.footnote)
-                    Button("Approve & Run") { act(Resolution(approve: true, mode: "bypassPermissions")) }
+                    // acceptEdits like the phone's lock-screen buttons: commands still ask. Auto-run stays on the phone.
+                    Button("Approve & Run") { act(Resolution(approve: true, mode: "acceptEdits")) }
                         .lineLimit(1).minimumScaleFactor(0.8).buttonStyle(.borderedProminent).tint(Theme.accent)
                     Button("Send Back [Notification Actions a20f13]") { act(Resolution(approve: false, feedback: "请重新考虑这个计划")) }.lineLimit(1) // i18n-ignore: feedback sent to the agent
                 case .permission:
                     Text(interaction.summary ?? "").font(.caption2.monospaced())
                     if interaction.requiresInput {
-                        Text("Fill this in on your iPhone to allow it").font(Theme.Font.caption)
+                        // The hub takes no values from the watch's answer-only credential (#1581).
+                        Text("Fill this in on your iPhone or computer to allow it").font(Theme.Font.caption)
                     } else {
                         Button { act(Resolution(allow: true)) } label: { Text("Allow [Notification Actions ce7ef2]").lineLimit(1) }
                             .buttonStyle(.borderedProminent).tint(Theme.accent)
@@ -640,6 +714,8 @@ struct WatchInteractionView: View {
                         Button("Esc") { act(Resolution(keys: ["esc"])) }
                         Button("⏎") { act(Resolution(keys: ["enter"])) }
                     }
+                case .elicitation: // an MCP form or link is answered on the phone, which keeps it off the watch: its message only
+                    Text(interaction.watchSummary).font(.footnote)
                 }
                 Button("Handle on Computer") { act(.dismissed) }
                     .lineLimit(1).minimumScaleFactor(0.8).font(.caption2).foregroundStyle(.secondary)
@@ -714,14 +790,16 @@ struct WatchSessionView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Watch.blockSpacing) {
                 HStack(spacing: Theme.Space.sm) {
-                    Circle().fill(session.state.color).frame(width: 7, height: 7)
-                    Text(session.stateLabel).font(.caption2.weight(.semibold)).foregroundStyle(session.state.tone.text)
+                    Circle().fill(session.stateTone.dot).frame(width: 7, height: 7)
+                    Text(session.stateLabel).font(.caption2.weight(.semibold)).foregroundStyle(session.stateTone.text)
                 }
                 if let run = session.leadWorkflow { WatchWorkflowChip(run: run) }
                 ForEach(liveCards.lines(messages).suffix(WatchMessage.limit)) { line in
                     switch line {
                     case .message(let it):
-                    if let n = it.injected {
+                    if let source = it.source {
+                        WatchSourceMessage(message: it, source: source)
+                    } else if let n = it.injected {
                         // Persona's message for the model (a task's notice, a scheduled run…): its line, centered, never
                         // its words (docs/protocol/protocol.md「Persona 注入的消息」).
                         Label { Text(n.line) } icon: { Image(systemName: InjectedLook.icon(n)).foregroundStyle(InjectedLook.tint(n)) }
@@ -979,6 +1057,31 @@ struct WatchInboxItemView: View {
 private extension Error {
     /// The watch has no connection title (the phone's Waiting for Network / Connecting…): no network is still worth a line here.
     var watchShown: String? { isOffline ? localizedDescription : shown }
+}
+
+/// A running agent's title in the list, with Claude Code's ultracode mark after its last word while that is on (#1307; no
+/// switch on the watch). The mark is part of the text: beside the text's frame it sat after the first line of a title on
+/// two, between its halves. It comes and goes with a state change, at once with Reduce Motion.
+struct WatchTitle: View {
+    var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let mark = Ultracode.rowMark(session)
+        title(mark)
+            .font(.headline)
+            .lineLimit(2)
+            .animation(reduceMotion ? nil : Theme.Motion.state, value: mark)
+    }
+
+    /// The label is the whole text's: an image's own inside a `Text` is not read.
+    private func title(_ mark: Bool) -> Text {
+        let title = session.displayTitle
+        guard mark else { return Text(title) }
+        let icon = Text(Theme.Icon.image(Theme.Icon.workflow)).font(.footnote.weight(.semibold)).foregroundStyle(Theme.ai)
+        return (Text(title) + Text(verbatim: "\u{00A0}") + icon)
+            .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + Ultracode.onWords)
+    }
 }
 
 /// A workflow its agent runs in the background (#2935), on the watch: a small chip 「workflow 169/185」, not expanded.

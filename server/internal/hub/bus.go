@@ -118,6 +118,8 @@ type busState struct {
 	voidErrLog everyMinute
 	// saidOld: the managers already said to be from before manager.json (no config.own), once each while the hub runs.
 	saidOld map[string]bool
+	// rosterGen numbers the roster changes (busRosterChanged): an older list never goes out after a newer one.
+	rosterGen atomic.Uint64
 }
 
 // busConn is one service connection.
@@ -141,6 +143,14 @@ type busConn struct {
 	presence busPresence
 	replaced bool // a newer connection of the identity took over
 	ended    bool
+
+	// roster is the managers event on its way to it (sendRoster): the newest list, its number and the one sent last.
+	roster struct {
+		mu         sync.Mutex
+		want, sent uint64
+		list       []busManagerBrief
+		sending    bool // a rosterSender runs
+	}
 }
 
 // busPresence is a connected identity as the roster has it: who, and where its handshake says it runs.
@@ -372,7 +382,7 @@ type busHelloReply struct {
 	Role     string            `json:"role"`
 	Managers []busManagerBrief `json:"managers"`
 	assistantwire.Hello
-	// Devices: hub.json's machines and what the manager that carries them needs (devices_link.go); only to it.
+	// Devices: hub.json's machines and what the manager that carries them needs (devices_handover.go); only to it.
 	Devices *devicewire.Config `json:"devices,omitempty"`
 }
 
@@ -462,7 +472,7 @@ func (h *Hub) busAccept(ctx context.Context, c *busConn, p busPresence) error {
 		h.managerReconnected(c.ident.ID) // its tools are asked for again (manager_state.go)
 	}
 	if c.ident.Role == bus.RoleManager {
-		h.devicesConnected(c.ident.ID)    // its first report: the sessions the apps watch, watched again (devices_link.go)
+		h.devicesConnected(c.ident.ID)    // its first report: the sessions the apps watch, watched again (devices_reports.go)
 		if _, ok := h.mutesEvent(); !ok { // not in the hello's answer: handed over once they can be read (fleet_link.go)
 			go h.mutesRetry(c.ident.ID)
 		}
@@ -492,11 +502,13 @@ func (h *Hub) busEnded(c *busConn) {
 		delete(h.bus.current, c.ident.ID)
 	}
 	h.bus.mu.Unlock()
+	// Each of its connections, a replaced one too: a token its manager dropped while this one went could not be told.
+	h.dropLeftManager(c.ident.ID)
 	if current {
 		h.extLost.lost(c.ident.ID, time.Now()) // its extensions may still call for a while (extensions_proof.go)
 		h.logf("bus: [%s] disconnected", c.ident.ID)
 		if c.ident.Role == bus.RoleManager {
-			go h.devicesGone(c.ident.ID) // its machines (devices_link.go)
+			go h.devicesGone(c.ident.ID) // its machines (devices_reports.go)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -548,8 +560,11 @@ func (h *Hub) busManagers(ctx context.Context) []busManagerBrief {
 }
 
 // busRosterChanged tells the connected managers who is online now (event managers), except the one whose
-// handshake answer already says so.
+// handshake answer already says so. It does not wait for the writes: a manager whose connection takes none (a sleeping
+// laptop) would hold up the others, the handshake of one that just connected (busAccept) and the teardown of one that
+// left (busEnded) until its keepalive hangs up.
 func (h *Hub) busRosterChanged(ctx context.Context, except *busConn) {
+	gen := h.bus.rosterGen.Add(1) // before the list: the list of a later change sees every change before it
 	list := h.busManagers(ctx)
 	h.bus.mu.Lock()
 	var to []*busConn
@@ -560,8 +575,39 @@ func (h *Hub) busRosterChanged(ctx context.Context, except *busConn) {
 	}
 	h.bus.mu.Unlock()
 	for _, c := range to {
-		_ = c.peer.Notify("managers", map[string]any{"managers": list})
+		c.sendRoster(gen, list)
 	}
+}
+
+// sendRoster queues list, roster change gen, for c unless a newer one is queued already, and starts c's sender when
+// none runs: one per connection, so one that takes no writes keeps a single goroutine until it hangs up.
+func (c *busConn) sendRoster(gen uint64, list []busManagerBrief) {
+	r := &c.roster
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if gen <= r.want {
+		return
+	}
+	r.want, r.list = gen, list
+	if !r.sending {
+		r.sending = true
+		go c.rosterSender()
+	}
+}
+
+// rosterSender writes c's queued list until the newest one went out (or failed: the connection is ending).
+func (c *busConn) rosterSender() {
+	r := &c.roster
+	r.mu.Lock()
+	for r.sent < r.want {
+		r.sent = r.want
+		list := r.list
+		r.mu.Unlock()
+		_ = c.peer.Notify("managers", map[string]any{"managers": list})
+		r.mu.Lock()
+	}
+	r.sending = false
+	r.mu.Unlock()
 }
 
 // callBus calls method on service id's current connection: errBusOffline while it has none, or when it drops

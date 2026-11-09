@@ -17,7 +17,7 @@ import (
 // The plugin API (docs/extensions/extensions.md "The hub's API"). /api/v1/plugins/<id>/… is relayed to the plugin, so the hub's own
 // routes live under the reserved "-" segment: /api/v1/plugins/-/… and /api/v1/plugins/<id>/-/….
 
-// PluginDetail is one plugin with its form, settings and permissions (GET /api/v1/plugins/{id}/-/).
+// ExtensionDetail is one plugin with its form, settings and permissions (GET /api/v1/plugins/{id}/-/).
 type ExtensionDetail struct {
 	ExtensionView
 	Publisher       string                     `json:"publisher,omitempty"`
@@ -47,7 +47,7 @@ type ExtensionDetail struct {
 	SecretsCleared []string `json:"secrets_cleared,omitempty"`
 }
 
-// PluginSecretView is a declared secret and whether it has a value (never the value).
+// ExtensionSecretView is a declared secret and whether it has a value (never the value).
 type ExtensionSecretView struct {
 	Name        string `json:"name"`
 	Title       string `json:"title"`
@@ -125,12 +125,14 @@ func readExtensionJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 func (h *Manager) extensionRoutes(api *http.ServeMux) {
 	h.extensionUIRoutes(api)
+	h.extensionImageRoutes(api)
 	h.extensionSystemRoutes(api)
 	h.marketRoutes(api)
 	h.operationRoutes(api)
 	h.upgradeRoutes(api)
 	h.auditRoutes(api)
 	h.extensionDevRoutes(api)
+	h.storageRoutes(api)
 	h.sandboxRoutes(api)
 	h.contributionRoutes(api)
 	h.declaredRoutes(api)
@@ -159,6 +161,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 				writeExtensionResponseError(w, r, http.StatusNotFound, "not_found", errNoExtension)
 				return
 			}
+			r.SetPathValue("id", p.Record.ID) // Owner aliases route to the committed public identity.
 			f(w, r, p)
 		}
 	}
@@ -367,13 +370,42 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		if !marketOr(w, r, fromMarket(r)) {
 			return
 		}
+		var left string // the version rolled back from
+		if cur := ps().reg.Get(r.PathValue("id")); cur != nil {
+			left = cur.Record.Version
+		}
 		p, err := ps().reg.Rollback(r.Context(), r.PathValue("id"), actorOr(r, "personad extension"))
 		if err != nil {
 			writeExtensionResponseError(w, r, http.StatusBadRequest, "rollback_failed", err)
 			return
 		}
+		h.extensionUpgrades().rolledBackByUser(r.Context(), p.Record.ID, left)
 		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
 	})
+	// An installed package attached to its program running on its own, and back (extension.Registry.Attach): from this
+	// machine only, as installing from remote: is (it names sockets here).
+	api.HandleFunc("POST /api/v1/extensions/{id}/-/attach", owner(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Source string `json:"source"` // remote:rpc=<socket>,http=<socket>
+		}
+		if !readExtensionJSON(w, r, &in) {
+			return
+		}
+		p, err := ps().reg.Attach(r.Context(), r.PathValue("id"), in.Source, actorOr(r, "personad extension"))
+		if err != nil {
+			writeExtensionResponseError(w, r, http.StatusBadRequest, "attach_failed", err)
+			return
+		}
+		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
+	}))
+	api.HandleFunc("POST /api/v1/extensions/{id}/-/detach", owner(func(w http.ResponseWriter, r *http.Request) {
+		p, err := ps().reg.Detach(r.Context(), r.PathValue("id"), actorOr(r, "personad extension"))
+		if err != nil {
+			writeExtensionResponseError(w, r, http.StatusBadRequest, "detach_failed", err)
+			return
+		}
+		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
+	}))
 	api.HandleFunc("DELETE /api/v1/extensions/{id}/-/{$}", func(w http.ResponseWriter, r *http.Request) {
 		if !marketOr(w, r, fromMarket(r)) {
 			return

@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// An agent's question comes here before the user (fleet_delegate.go, docs/assistant/assistant.md "The assistant answers questions first"): a model
+// An agent's question comes here before the user (fleet_delegate.go, docs/assistant/assistant.md "Assistant answers questions first"): a model
 // (purpose agent.delegate, "Model Settings › Answering questions") reads the question with what is known around it — the agent's
 // recent turns, its task and the calls the user made on it, the project — and answers it for the user when it is the
 // agent's own call, or leaves it to the user with the context filled in. What it may answer is checked here as well:
@@ -137,7 +137,7 @@ func answerLine(ix proto.Interaction, answers map[string]string) string {
 }
 
 // workCardDelegable: one of the manager's own cards may be answered for the user. Not one that asks to open a link
-// (an authorization) or to go ahead with a risky step: those are the user's by design (agents_work.go actOn).
+// (an authorization) or to go ahead with a risky step: those are the user's by design (agents_work_act.go actOn).
 func (s *Service) workCardDelegable(ix proto.Interaction) bool {
 	e, ok := s.workEntry([2]string{ix.MachineID, ix.SessionID})
 	if !ok || e.InteractionID != ix.ID {

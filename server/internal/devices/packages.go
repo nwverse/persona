@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/netproxy"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -111,7 +111,7 @@ func localNodeDirs() []string {
 }
 
 // safeVersion: a version that can name a directory of the release (dl/<version>/) and of the cache.
-var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var safeVersion = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 func (d *Devices) packageKey(goos, arch, program string) packageKey {
 	cfg := d.config()
@@ -249,15 +249,9 @@ func (d *Devices) nodeTarget(info proto.NodeInfo) string {
 	return r.pkg.Version
 }
 
-// resolvedTarget is nodeTarget once the lookup is done (it may fetch manifests).
-func (d *Devices) resolvedTarget(ctx context.Context, info proto.NodeInfo) string {
-	v, _ := d.resolvedTargetKnown(ctx, info)
-	return v
-}
-
-// resolvedTargetKnown is resolvedTarget, and whether it is known: false when the release site did not answer (and
-// nothing found before stands in), so the hub's version is a guess. A lookup that found no build at all leaves the
-// hub's version as the target, which is known.
+// resolvedTargetKnown is nodeTarget once the lookup is done (it may fetch manifests), and whether it is known: false
+// when the release site did not answer (and nothing found before stands in), so the hub's version is a guess. A lookup
+// that found no build at all leaves the hub's version as the target, which is known.
 func (d *Devices) resolvedTargetKnown(ctx context.Context, info proto.NodeInfo) (string, bool) {
 	pkg, known := d.resolvedPackageKnown(ctx, info)
 	return pkg.Version, known

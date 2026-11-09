@@ -11,11 +11,11 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A git repository as a market (docs/extensions/extensions.md "Extension market"): the hub keeps a shallow clone in its data directory and
@@ -25,8 +25,8 @@ import (
 const gitFor = 3 * time.Minute
 
 var (
-	scpLike = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~][A-Za-z0-9._/~-]*$`)
-	gitRef  = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
+	scpLike = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~][A-Za-z0-9._/~-]*$`)
+	gitRef  = lazyre.New(`^[A-Za-z0-9._/-]{1,200}$`)
 )
 
 // parseGit reads git:<url>[#ref], or a bare git@host:path / ssh:// URL.
@@ -79,7 +79,9 @@ func (m *Market) git(ctx context.Context, dir string, args ...string) error {
 	if os.Getenv("GIT_SSH_COMMAND") == "" {
 		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=20")
 	}
+	inOwnGroup(cmd)
 	out, err := cmd.CombinedOutput()
+	err = endGroup(cmd, err)
 	if errors.Is(err, exec.ErrNotFound) { // no output to show: say what is missing (the Docker image has no git)
 		return i18n.Err("extension-market_git.git_missing")
 	}

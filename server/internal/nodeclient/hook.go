@@ -1,37 +1,48 @@
 package nodeclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/procinfo"
 )
 
 // The environment the engines give a pane's processes, naming the pane (node/host*.go set and read the same names).
 const (
-	HerdrPaneEnv      = "HERDR_PANE_ID"   // classic herdr
-	HerdrCorePaneEnv  = "HC_TERMINAL_ID"  // herdr-core (Herdr App)
-	OrcaPaneEnv       = "ORCA_PANE_KEY"   // Orca
-	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE" // older Orca
+	HerdrPaneEnv      = "HERDR_PANE_ID"     // classic herdr
+	HerdrSessionEnv   = "HERDR_SESSION"     // classic herdr: the named session the pane is in (none: the default server)
+	HerdrSocketEnv    = "HERDR_SOCKET_PATH" // classic herdr: its server's socket, in the session's directory
+	HerdrCorePaneEnv  = "HC_TERMINAL_ID"    // herdr-core (Herdr App)
+	OrcaPaneEnv       = "ORCA_PANE_KEY"     // Orca
+	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE"   // older Orca
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
 // (node/globalhooks.go): `<binary> hook --persona-global`.
 const GlobalHookFlag = "--persona-global"
 
+// HomeFlag names the data directory, and so the node, of a hook in exec form (`<binary> hook --persona-home <dir>`,
+// the live replies plugin's: node/doctor.go displayHooks). Claude Code starts that one without a shell, so it cannot
+// have PERSONA_HOME in front as the shell-form hooks do.
+const HomeFlag = "--persona-home"
+
 // HookPane is the pane a hook runs in, from its environment, as a stored PaneRef: herdr's HERDR_PANE_ID as it always
-// was, else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
-// "orca:<tabId>:<leafId>"); "" in none.
+// was in the default server, qualified with its session in a named one ("@<session>:w4:p1", herdr.PaneOf, #2196),
+// else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
+// "orca:<tabId>:<leafId>"); "" in none. A node whose own herdr server is a named session writes its panes the other
+// way round and translates (node ownPane).
 func HookPane(getenv func(string) string) string {
 	if p := getenv(HerdrPaneEnv); p != "" {
-		return p
+		return herdr.PaneOf(p, herdr.EnvSession(getenv), "")
 	}
 	if t := getenv(HerdrCorePaneEnv); t != "" {
 		return host.PaneRef{Kind: host.HerdrCore, ID: t}.String()
@@ -44,16 +55,26 @@ func HookPane(getenv func(string) string) string {
 	return ""
 }
 
-// RunHook is `<binary> hook [--persona-global]`: a Claude Code hook's input on stdin, what the hook prints on stdout
-// (nothing: let the TUI decide). The node writes that command into the settings of the Agents it starts and, with
-// GlobalHookFlag, into the user's own (node/doctor.go, node/globalhooks.go).
+// RunHook is `<binary> hook [--persona-home <dir>] [--persona-global]`: a Claude Code hook's input on stdin, what the
+// hook prints on stdout (nothing: let the TUI decide). The node writes that command into the settings of the Agents it
+// starts and, with GlobalHookFlag, into the user's own (node/doctor.go, node/globalhooks.go).
 func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) {
+	if len(args) >= 2 && args[0] == HomeFlag {
+		if args[1] != "" {
+			_ = os.Setenv("PERSONA_HOME", args[1]) // read by SocketPath, as from a shell-form hook's environment
+		}
+		args = args[2:]
+	}
 	input, err := io.ReadAll(stdin)
 	if err != nil || !json.Valid(input) {
 		return
 	}
 	if len(args) > 0 && args[0] == GlobalHookFlag { // an entry in the user's settings.json: report only
 		ReportHook(ctx, input, HookPane(os.Getenv))
+		return
+	}
+	if isDisplay(input) {
+		Display(ctx, input)
 		return
 	}
 	out := Hook(ctx, input, HookPane(os.Getenv))
@@ -107,6 +128,39 @@ func ReportHook(ctx context.Context, input json.RawMessage, pane string) {
 	_, _ = Dial(ctx, req)
 }
 
+// DisplayEvent is the hook event that carries a reply's lines as Claude Code shows them: only the Agents Persona starts
+// have it, in their live replies plugin while the machine's setting is on (node/hooksplugin.go, node/livereply.go).
+const DisplayEvent = "MessageDisplay"
+
+// displayWait bounds a MessageDisplay hook. Claude Code shows the lines only once its MessageDisplay hooks are done,
+// "async" or not (2.1.319), so the hook hands them to the node and goes: a node that does not take them at once costs
+// the terminal no more than this. A node answers before it does anything with them, within a millisecond; a hook that
+// gave up after writing them still had them taken.
+const displayWait = 150 * time.Millisecond
+
+// isDisplay says whether a hook's input is a MessageDisplay one.
+func isDisplay(input json.RawMessage) bool {
+	if !bytes.Contains(input, []byte(DisplayEvent)) {
+		return false
+	}
+	var in struct {
+		Event string `json:"hook_event_name"`
+	}
+	return json.Unmarshal(input, &in) == nil && in.Event == DisplayEvent
+}
+
+// Display hands a MessageDisplay hook's input to the node, which answers as soon as it has it, and prints nothing: what
+// the hook prints would replace the lines on the terminal. No node, or one that does not answer in displayWait: the
+// lines are not streamed, nothing else changes.
+func Display(ctx context.Context, input json.RawMessage) {
+	if _, err := os.Stat(SocketPath()); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, displayWait)
+	defer cancel()
+	_, _ = Dial(ctx, Request{Kind: "hook.display", Input: input})
+}
+
 // HookAncestors bounds how far up from a hook's parent AgentOf looks for its claude (a launcher, a shell, a wrapper).
 const HookAncestors = 6
 
@@ -150,7 +204,7 @@ func ClaudeDir(home string) string {
 }
 
 // sessionIDRe is what a Claude Code session id looks like (a UUID).
-var sessionIDRe = regexp.MustCompile(`^[0-9a-fA-F-]{8,64}$`)
+var sessionIDRe = lazyre.New(`^[0-9a-fA-F-]{8,64}$`)
 
 // ValidSessionID says whether id looks like a Claude Code session id (the node's validID too).
 func ValidSessionID(id string) bool { return sessionIDRe.MatchString(id) }

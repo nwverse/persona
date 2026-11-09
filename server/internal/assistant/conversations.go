@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"path"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -175,7 +175,7 @@ func (s *Service) archiveRoutes() {
 	}
 }
 
-var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+var sessionIDRe = lazyre.New(`^[A-Za-z0-9._-]{1,128}$`)
 
 func validSessionID(id string) bool { return sessionIDRe.MatchString(id) }
 
@@ -350,11 +350,11 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	out := map[string][]string{}
 	for id, q := range b.st.Queue {
 		for _, msg := range q {
-			if msg.Tool == noticeTool { // a quiet task's notice (quiet.go): its title is enough
+			if msg.Tool == noticeTool || msg.Tool == askAnswerTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
 				out[id] = append(out[id], msg.FromTitle+"的通知")
 				continue
 			}
-			if msg.Tool == superviseTool { // the tasks to follow up (supervise.go)
+			if msg.Tool == superviseTool { // the tasks to follow up (supervise_digest.go)
 				out[id] = append(out[id], "督办消息")
 				continue
 			}
@@ -364,22 +364,39 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	return out, true
 }
 
+func (msg relayMsg) source() *proto.MessageSource {
+	switch msg.Tool {
+	case "conversation_send", "conversation_new":
+		return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: msg.From, Title: msg.FromTitle}
+	case superviseTool:
+		return &proto.MessageSource{Kind: proto.SourceSupervision}
+	default:
+		return nil
+	}
+}
+
 // deliverRelay sends one message into an assistant conversation and notes the hop it is working on. A quiet task's
 // notice (quiet.go) is its own text, and the work it starts is not a hop of any chain.
 func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg relayMsg) error {
 	text := relayText(msg)
-	if msg.Tool == noticeTool || msg.Tool == superviseTool {
+	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool {
 		text = msg.Text
 	}
-	if err := s.call(ctx, machine, DeviceAssistantSend, map[string]any{"session_id": to, "text": text, "resume_only": true}, nil); err != nil {
+	if msg.Tool == superviseTool {
+		// Register before dispatch: a fast MCP call can arrive before assistant.send returns.
+		s.holdPushes(ctx, to)
+	}
+	if err := s.call(ctx, machine, DeviceAssistantSend, map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, "supervision": msg.Tool == superviseTool}, nil); err != nil {
+		if msg.Tool == superviseTool {
+			s.releasePushes(ctx, to)
+		}
 		return err
 	}
 	if msg.Tool == superviseTool {
-		s.holdPushes(ctx, to) // its answer is not pushed unless it pushes (supervise.go)
 		return nil
 	}
-	if msg.Tool == noticeTool {
-		s.noteReportTurn(to) // the answer to a task's notice is pushed however quick it was (#3438)
+	if msg.Tool == noticeTool || msg.Tool == askAnswerTool {
+		s.noteReportTurn(to) // the answer to a task's notice (or to the owner's late call) is pushed however quick it was (#3438)
 		return nil
 	}
 	b := &s.relays
@@ -737,7 +754,7 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	if err != nil {
 		return "", err
 	}
-	c, err := s.startConversation(sctx, startParams{Text: relayText(msg), Space: space, Origin: OriginSpawned, OriginRef: self})
+	c, err := s.startConversation(sctx, startParams{Text: relayText(msg), Source: msg.source(), Space: space, Origin: OriginSpawned, OriginRef: self})
 	if err != nil {
 		return "", err
 	}

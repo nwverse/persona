@@ -1,10 +1,11 @@
 package screen
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Claude Code's /rewind (recorded on 2.1.318, testdata/claude-2.1.318-rewind-*): a full-width panel under a ▔ rule,
@@ -71,10 +72,10 @@ type RewindScreen struct {
 const rewindListQuestion = "Restore the code and/or conversation to the point before…"
 
 var (
-	rewindHeadRE   = regexp.MustCompile(`^\s{2,4}Rewind\s*$`)
-	rewindMoreRE   = regexp.MustCompile(`^([↑↓]) (\d+) more$`)
-	rewindChoiceRE = regexp.MustCompile(`^\s{0,4}(❯|↑|↓)?\s*(\d)\.\s+(\S.*)$`)
-	rewindAgeRE    = regexp.MustCompile(`^\(.+\)$`)
+	rewindHeadRE   = lazyre.New(`^\s{2,4}Rewind\s*$`)
+	rewindMoreRE   = lazyre.New(`^([↑↓]) (\d+) more$`)
+	rewindChoiceRE = lazyre.New(`^\s{0,4}(❯|↑|↓)?\s*(\d)\.\s+(\S.*)$`)
+	rewindAgeRE    = lazyre.New(`^\(.+\)$`)
 )
 
 // Selected returns the row the ❯ is on, nil when there is none.
@@ -105,16 +106,6 @@ func (r *RewindScreen) Choice(label string) *RewindChoice {
 		}
 	}
 	return nil
-}
-
-// HasCode: the screen offers to restore the code, so there are code changes after the prompt.
-func (r *RewindScreen) HasCode() bool {
-	for _, c := range r.Choices {
-		if strings.HasPrefix(c.Label, "Restore code") {
-			return true
-		}
-	}
-	return false
 }
 
 // ParseRewind reads the /rewind panel at the bottom of a plain screen, nil when the screen shows none.

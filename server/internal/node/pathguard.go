@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -46,10 +45,6 @@ var secretFiles = []string{
 // keyNames are private keys by their usual names, wherever they are.
 var keyNames = map[string]bool{"id_rsa": true, "id_dsa": true, "id_ecdsa": true, "id_ed25519": true, "id_ecdsa_sk": true, "id_ed25519_sk": true}
 
-// hubKeyExt matches key files in the hub's folder, including backup suffixes. The list of the data folder's secrets is
-// shared with the agent sandbox (identity/secrets.go).
-var hubKeyExt = regexp.MustCompile(identity.DataKeyPattern)
-
 // procSecrets are what Linux's /proc holds besides the processes' own folders that hands out a secret: the kernel's
 // memory, its log, its symbols' addresses, the keyrings' entries and the page tables (#4172).
 var procSecrets = []string{"kcore", "kmem", "kmsg", "kallsyms", "keys", "key-users", "kpagecount", "kpageflags", "kpagecgroup"}
@@ -76,6 +71,10 @@ func (n *Node) offLimits(path string) error {
 	// The hub's, the node's and the managers' own folders: the credentials in them and the keys beside them (secret.key,
 	// handles.key, hub.key, the APNs .p8), wherever PERSONA_HOME puts the folder.
 	if slices.ContainsFunc(n.inDataDirs(p), dataSecret) {
+		return errOffLimits
+	}
+	// Agent credentials in every Claude Code config directory and Codex home the node knows (agentsecrets.go).
+	if n.agentSecret(path) {
 		return errOffLimits
 	}
 
@@ -119,15 +118,7 @@ func dataSecret(rel string) bool {
 		return false
 	}
 	base := parts[0]
-	if hubKeyExt.MatchString(base) {
-		return true
-	}
-	for _, name := range identity.DataSecrets {
-		if strings.HasPrefix(base, name) {
-			return true
-		}
-	}
-	return false
+	return identity.DataSecretName(base)
 }
 
 // offLimitsResolved is offLimits for a path whose folders are real ones (links already followed up to its last

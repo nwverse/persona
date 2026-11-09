@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,13 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
 		return
 	}
+	if pr := principalOf(r.Context()); pr.Role == roleExtension { // extension_modes.go
+		if why := h.extensionModeRefused(pr, m.cfg.ID, r.PathValue("sid"), p); why != "" {
+			mode, _ := p["permission_mode"].(string)
+			h.refuseExtensionMode(w, r, pr, m.cfg.ID, r.PathValue("sid"), mode, why)
+			return
+		}
+	}
 	ultra := map[string]any{"session_id": r.PathValue("sid")}
 	for _, field := range []struct{ http, rpc string }{{"ultracode", "ultracode"}, {"ultracode_dismiss_lost", "dismiss_lost"}} {
 		if v, exists := p[field.http]; exists {
@@ -49,6 +57,11 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 		if err := m.call(ctx, "session.modes", p, &out); err != nil {
 			callErr(w, err)
 			return
+		}
+		if model, _ := p["model"].(string); strings.TrimSpace(model) != "" { // switched (the node read it back)
+			sid := r.PathValue("sid")
+			s, _ := m.session(sid)
+			h.modelUsed(h.sessionOwner(m.cfg.ID, sid), m.cfg.ID, cmp.Or(s.Launcher, "claude"), model)
 		}
 	}
 	if len(ultra) > 1 {

@@ -11,6 +11,14 @@
 # a terminal, else keeps the default (lan) and says so.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+# All callers, including remote build computers, serialize against the hub's lock.
+if [ "${PERSONA_OPERATION_DEPLOY_LOCKED:-}" != 1 ]; then
+  exec python3 scripts/operations/operation_lock.py deploy -- bash "$PWD/scripts/deploy/deploy.sh" "$@"
+fi
+# Shared default-branch resolution and detached-worktree helper; sourcing it keeps this script and out-of-tree build
+# orchestration from hardcoding master (#1064, #2361).
+# shellcheck source=scripts/deploy/default-branch.sh
+source "$PWD/scripts/deploy/default-branch.sh"
 # Normalize caller overrides before reading deployment options; never print their values.
 eval "$(python3 scripts/persona_identity.py --env)"
 # The question and its explanations live in install.sh (the public installer asks the same).
@@ -36,18 +44,12 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 # Only from a checkout that has everything already on the default branch: a hub or web deploy from an older branch
 # puts back what other people deployed since (docs/lessons/server.md "Deploying from a stale branch").
 # PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway, e.g. to roll back on purpose.
-# The default branch is the one the remote names now; else the clone's origin/HEAD, which is set at clone time and
-# can name a branch the remote no longer has; else master. The remote's answer counts only if it is a valid branch
-# name, and the branch is fetched as refs/heads/<name>: a bare name starting with "-" would be a git fetch option.
+# The default branch is the remote's current one (remote symref, else the clone's possibly-stale origin/HEAD, else
+# master), validated and fetched as refs/heads/<name>; persona_default_branch / persona_fetch_default_branch in
+# default-branch.sh hold that logic and are shared with build orchestration.
 if [ -z "${PERSONA_DEPLOY_ANY_COMMIT:-}" ]; then
-  DEFAULT_BRANCH=$(git ls-remote --symref origin HEAD 2>/dev/null |
-    awk '$1 == "ref:" && $3 == "HEAD" && sub("^refs/heads/", "", $2) { print $2; exit }') || true
-  if [ -z "$DEFAULT_BRANCH" ] || ! git check-ref-format "refs/heads/$DEFAULT_BRANCH"; then
-    DEFAULT_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || true
-    DEFAULT_BRANCH=${DEFAULT_BRANCH#refs/remotes/origin/}
-  fi
-  DEFAULT_BRANCH=${DEFAULT_BRANCH:-master}
-  if ! git fetch -q origin "refs/heads/$DEFAULT_BRANCH" 2>/dev/null; then
+  DEFAULT_BRANCH=$(persona_default_branch)
+  if ! persona_fetch_default_branch "$DEFAULT_BRANCH" 2>/dev/null; then
     echo "deploy: could not fetch origin/$DEFAULT_BRANCH to check this checkout is up to date; PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway" >&2
     exit 2
   fi
@@ -263,20 +265,28 @@ $command")
 # install_program <hub machine id> <os-arch> <program>: a program released with personad (update.ProgramNames) next to
 # the hub's personad, the same build as personad: personad-wechat (the WeChat bot, docs/extensions/wechat.md; the hub
 # starts it only when `version -v` matches; Telegram's connector is an extension now, #1704), and persona-hub and
-# persona-manager, the hub's and the manager's own programs (docs/server/server.md "Programs").
+# persona-manager, the hub's and the manager's own programs (docs/server/server.md "Programs"). Those two keep a .prev
+# of the one replaced (none when there was none, so no older one is left there): a hub run as persona-hub goes back
+# on them with personad when the switch fails (hub-systemd.sh).
 install_program() {
-  local id=$1 plat=$2 name=$3 bin
+  local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
   GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  case $name in persona-hub | persona-manager)
+    keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
+  esac
   if is_here "$id"; then
     local root
     root=$(state_root)
     mkdir -p "$root/bin"
+    if [ -n "$keep" ]; then
+      PERSONA_HOME="$root" sh -c "${keep% && }" || return 1
+    fi
     local target="$root/bin/$name"
     cp "$bin" "$target.new" && { [ ! -L "$target" ] || rm -f "$target"; } && mv "$target.new" "$target" || return 1
     python3 ../scripts/persona_identity.py --alias-binaries "$root/bin"
   else
-    remote_state "$PERSONA_HUB_SSH" "mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && { [ ! -L \"\$PERSONA_HOME/bin/$name\" ] || rm -f \"\$PERSONA_HOME/bin/$name\"; } && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
+    remote_state "$PERSONA_HUB_SSH" "$keep""mkdir -p \"\$PERSONA_HOME/bin\" && cat > \"\$PERSONA_HOME/bin/$name.new\" && chmod 755 \"\$PERSONA_HOME/bin/$name.new\" && { [ ! -L \"\$PERSONA_HOME/bin/$name\" ] || rm -f \"\$PERSONA_HOME/bin/$name\"; } && mv \"\$PERSONA_HOME/bin/$name.new\" \"\$PERSONA_HOME/bin/$name\" && persona_alias_binaries \"\$PERSONA_HOME/bin\"" < "$bin"
   fi
 }
 

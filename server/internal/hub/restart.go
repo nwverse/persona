@@ -42,7 +42,7 @@ func (h *Hub) beginStop() {
 			break
 		}
 	}
-	// The machines as the managers report them, for the next hub process (devices_link.go); each manager hands its
+	// The machines as the managers report them, for the next hub process (devices_warm.go); each manager hands its
 	// own to its next process apart (internal/devices warm.go).
 	h.saveDevicesWarm(context.Background())
 	h.saveMachineEntries(context.Background()) // and what each one has, each machine last seen as of now (machine_entries.go)
@@ -65,12 +65,13 @@ func (h *Hub) rememberLiveText(machineID, sessionID, text string) {
 	h.deltas[key] = text
 }
 
-// sendLiveText follows a subscription's backlog with the session's live text, if a message is being generated.
+// sendLiveText follows a subscription's backlog with the session's live text, if a message is being generated. Queued
+// under h.mu, as the deltas forwarded to subscribers are (toSubscribersWith): a clear forwarded between the read and the
+// queue reached the client before the text it cleared, which then stayed (#1966).
 func (h *Hub) sendLiveText(c *client, machineID, sessionID string) {
 	h.mu.Lock()
-	text := h.deltas[[2]string{machineID, sessionID}]
-	h.mu.Unlock()
-	if text != "" {
+	defer h.mu.Unlock()
+	if text := h.deltas[[2]string{machineID, sessionID}]; text != "" {
 		c.sendJSON(deltaPush{Type: "delta", MachineID: machineID, SessionID: sessionID, Text: text})
 	}
 }
@@ -81,6 +82,7 @@ func (h *Hub) forgetLiveText(machineID string) {
 	for k := range h.deltas {
 		if k[0] == machineID {
 			delete(h.deltas, k)
+			h.toSubscribersLocked(k[0], k[1], "", deltaPush{Type: "delta", MachineID: k[0], SessionID: k[1], Text: ""})
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -139,6 +140,10 @@ func (n *Node) paneOfPID(pid int) string {
 		}
 		if m := re.(*regexp.Regexp).FindSubmatch(env); m != nil {
 			p = host.PaneRef{Kind: h.Kind(), ID: string(m[1])}.String()
+			if h.Kind() == host.Herdr { // which server's pane: a named session's is qualified (#2196)
+				picked := pickedEnv(string(env))
+				p = n.envPane(func(name string) string { return picked[name] })
+			}
 			break
 		}
 	}
@@ -177,7 +182,7 @@ func (n *Node) traexAgents(ctx context.Context, panes []host.Agent, agents []hos
 	return out
 }
 
-var traexChoiceRe = regexp.MustCompile(`(?m)^\s*[›❯>]\s*1\.\s+\S`)
+var traexChoiceRe = lazyre.New(`(?m)^\s*[›❯>]\s*1\.\s+\S`)
 
 // traexStatus: working from the title's spinner at once; otherwise the screen, read at most every 2s.
 func (n *Node) traexStatus(ctx context.Context, p host.Agent) string {

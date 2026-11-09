@@ -28,6 +28,7 @@ func standbyHome(t *testing.T) string {
 	}
 	t.Cleanup(func() { os.RemoveAll(home) })
 	t.Setenv("HOME", home)
+	clearPersonaHome(t)
 	return home
 }
 
@@ -130,6 +131,65 @@ func TestStandbyNeverTakesALiveSocket(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if sb.listening() {
 		t.Fatal("unwanted standby listens again")
+	}
+}
+
+// A node serving by itself can take node.sock (remove, then listen) while standby asks whether anything answers there.
+// Standby then takes nothing: it removed the node's fresh socket file and kept the path for good, the node listening on
+// a file nobody could reach (#1556).
+func TestStandbyDoesNotRemoveASocketTakenWhileItAsked(t *testing.T) {
+	for _, before := range []string{"a file nobody answers on", "nothing"} {
+		t.Run(before, func(t *testing.T) {
+			standbyHome(t)
+			_ = os.MkdirAll(filepath.Dir(nodeclient.SocketPath()), 0o700)
+			if before != "nothing" {
+				defer deadAt(t).Close()
+			}
+			sb := newStandby(openSpool(SpoolPath()), t.Logf)
+			sb.retry = time.Hour // only the take below, no loop
+			var other net.Listener
+			sb.afterAsk = func() {
+				if other == nil {
+					other = listenAt(t)
+				}
+			}
+			sb.want()
+			defer sb.unwant()
+			defer func() { other.Close() }()
+			if sb.listening() {
+				t.Fatal("standby took a path a node took while standby asked")
+			}
+			if got := answeredBy(t); got != "live" {
+				t.Fatalf("answered by %s", got)
+			}
+		})
+	}
+}
+
+// Standby that finds its socket file gone lets the path be for this round: a node serving by itself removes the file
+// before it listens, and standby listening in between made that node's listen fail (#1556).
+func TestStandbyLetsAPathGoForARoundWhenItsFileIsRemoved(t *testing.T) {
+	standbyHome(t)
+	sb := newStandby(openSpool(SpoolPath()), t.Logf)
+	sb.retry = time.Hour
+	sb.want()
+	defer sb.unwant()
+	if !sb.listening() {
+		t.Fatal("standby did not take a free node.sock")
+	}
+	_ = os.Remove(nodeclient.SocketPath()) // a node taking the path, about to listen
+	sb.check()
+	if sb.listening() {
+		t.Fatal("standby listened again on a path a node was taking")
+	}
+	other := listenAt(t)
+	if got := answeredBy(t); got != "live" {
+		t.Fatalf("answered by %s", got)
+	}
+	other.Close()
+	sb.check() // that node is gone (its file stays, nobody answers): standby takes the path back
+	if got := answeredBy(t); got != "standby" {
+		t.Fatalf("answered by %s", got)
 	}
 }
 

@@ -4,7 +4,7 @@ The Mac app (`PersonaMac`) adds a layer of conventions on top of the iOS design 
 with rules only for **layout**, **density**, and **what to leave out** on Mac. The goal is the quiet, compact, keyboard-and-mouse-first feel of Mail, Notes, Things, and the Codex desktop app,
 not an enlarged iPhone screen. The default style (Liquid Glass) and all other styles follow these layouts; each style's surfaces and colors still come from its `ComponentSpec`.
 
-Requested 2026-11-05: define this language first, then produce mockups and implement the changes one by one (#2318). Development mockups are not stored in the repository.
+The native Mac app is frozen ([mac.md](mac.md)): these rules apply to bug fixes in its existing screens, and no new Mac design work is planned (#2214). Development mockups are not stored in the repository.
 
 ## Four principles
 
@@ -22,7 +22,7 @@ Requested 2026-11-05: define this language first, then produce mockups and imple
 
 | Component | Rule |
 | --- | --- |
-| Section column (sidebar) | Row height follows body text (about 30pt; name this size in `MacTokens.swift` when adding it; currently `Theme.Size.avatarL`), 16pt icons, rounded selection block using `Theme.Fill.macSelected` (`Theme.Radius.control`); Needs you counts use a red badge, other counts use secondary gray text |
+| Section column (sidebar) | Row metrics come from `Theme.Sidebar` (`apple/Shared/Design/SidebarMetrics.swift`, rules in `docs/apple/sidebar.md`): the system's Sidebar icon size picks 24 / 28 / 32pt rows with 14 / 16 / 20pt icons, never the text's own height, so rows are as tall in every language; rounded selection block using `Theme.Fill.macSelected` (`Theme.Sidebar.radius`); Needs you counts use a red badge, other counts use secondary gray text |
 | List column | Row: status dot + title + time / one-line summary / metadata, no ›; group headings use `sectionHeader` (11pt bold, secondary color), with `Theme.Space.l` between groups; nested groups (machine › space) use indentation and font weight, not blank space |
 | Detail column | Pushed page: title row is ‹ + name; reading content is width-limited and centered (60–80 characters per line; add a width token to `MacTokens.swift` on first use); actions use regular size (`controlSize(.regular)`), grouped left or right, not stretched across a row |
 | Cards | Use only when a group of information needs a boundary (machine monitoring, pending questions); `Theme.Fill.well` background and `Theme.Radius.card`, no stacked shadows; cards at the same level on a page use the same treatment |
@@ -38,6 +38,8 @@ Requested 2026-11-05: define this language first, then produce mockups and imple
 - Do not change structures whose performance has already been measured: section pages stay mounted (`MacPageStack`, #390), and the toolbar changes one frame later. Compare changes with `-showPerfRun sections` (`docs/apple/mac.md`, "Switching sections: persistent pages").
 
 ## Reference layouts
+
+The changes this language called for, per screen. With the app frozen, the ones not made yet are not planned.
 
 | Screen | Changes |
 | --- | --- |

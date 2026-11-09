@@ -81,34 +81,62 @@ type spoolEntry struct {
 type spool struct {
 	path     string
 	replayMu sync.Mutex
+	logf     func(string, ...any)
 }
 
 var spoolMu sync.Mutex // one spool file per process
 
 func openSpool(path string) *spool { return &spool{path: path} }
 
+func (s *spool) log(format string, args ...any) {
+	if s.logf != nil {
+		s.logf(format, args...)
+	}
+}
+
 // load reads the entries; a line that does not parse is skipped.
 func (s *spool) load() []spoolEntry {
 	spoolMu.Lock()
 	defer spoolMu.Unlock()
-	return s.loadLocked()
+	entries, err := s.loadLocked()
+	if err != nil {
+		s.log("load %s: %v", s.path, err)
+	}
+	return entries
 }
 
-func (s *spool) loadLocked() []spoolEntry {
+func (s *spool) loadLocked() ([]spoolEntry, error) {
 	b, err := os.ReadFile(s.path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	var out []spoolEntry
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 0, 64<<10), spoolBytesMost+1)
+	badLines := 0
 	for sc.Scan() {
+		raw := sc.Bytes()
+		if len(bytes.TrimSpace(raw)) == 0 {
+			continue
+		}
 		var e spoolEntry
-		if json.Unmarshal(sc.Bytes(), &e) == nil && e.ID != "" {
+		if err := json.Unmarshal(raw, &e); err == nil && e.ID != "" {
 			out = append(out, e)
+		} else {
+			badLines++
 		}
 	}
-	return out
+	if err := sc.Err(); err != nil {
+		s.log("scanner error reading %s: %v", s.path, err)
+		return out, err
+	}
+	if badLines > 0 {
+		s.log("skipped %d bad line(s) in %s", badLines, s.path)
+	}
+	return out, nil
 }
 
 // add appends e, dropping the oldest entries past the bounds. dropped is how many went.
@@ -122,11 +150,18 @@ func (s *spool) add(e spoolEntry) (dropped int, err error) {
 	if len(line) >= spoolBytesMost {
 		return 0, errors.New("too large to keep")
 	}
-	all := append(s.loadLocked(), e)
+	loaded, err := s.loadLocked()
+	if err != nil {
+		return 0, err
+	}
+	all := append(loaded, e)
 	lines := make([][]byte, 0, len(all))
 	size := 0
 	for _, x := range all {
-		b, _ := json.Marshal(x)
+		b, err := json.Marshal(x)
+		if err != nil {
+			return 0, err
+		}
 		lines = append(lines, b)
 		size += len(b) + 1
 	}
@@ -143,14 +178,21 @@ func (s *spool) failed(id string) (drop bool, err error) {
 	spoolMu.Lock()
 	defer spoolMu.Unlock()
 	var lines [][]byte
-	for _, x := range s.loadLocked() {
+	loaded, err := s.loadLocked()
+	if err != nil {
+		return false, err
+	}
+	for _, x := range loaded {
 		if x.ID == id {
 			if x.Tries++; x.Tries >= spoolTriesMost {
 				drop = true
 				continue
 			}
 		}
-		b, _ := json.Marshal(x)
+		b, err := json.Marshal(x)
+		if err != nil {
+			return false, err
+		}
 		lines = append(lines, b)
 	}
 	return drop, s.writeLocked(lines)
@@ -161,9 +203,16 @@ func (s *spool) remove(id string) error {
 	spoolMu.Lock()
 	defer spoolMu.Unlock()
 	var lines [][]byte
-	for _, x := range s.loadLocked() {
+	loaded, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	for _, x := range loaded {
 		if x.ID != id {
-			b, _ := json.Marshal(x)
+			b, err := json.Marshal(x)
+			if err != nil {
+				return err
+			}
 			lines = append(lines, b)
 		}
 	}
@@ -233,6 +282,8 @@ type standby struct {
 	now  func() time.Time
 	// retry is how often standby looks whether it can (or still does) own node.sock while it is wanted.
 	retry time.Duration
+	// afterAsk, in tests only, runs between asking whether anything answers on node.sock and taking it.
+	afterAsk func()
 
 	mu      sync.Mutex
 	wanted  bool
@@ -244,6 +295,9 @@ type standby struct {
 }
 
 func newStandby(sp *spool, logf func(string, ...any)) *standby {
+	if sp != nil && sp.logf == nil {
+		sp.logf = logf
+	}
 	return &standby{sp: sp, logf: logf, now: time.Now, retry: 5 * time.Second}
 }
 
@@ -282,18 +336,30 @@ func (s *standby) loop() {
 	t := time.NewTicker(s.retry)
 	defer t.Stop()
 	for range t.C {
-		s.mu.Lock()
-		if !s.wanted {
-			s.looping = false
-			s.mu.Unlock()
+		if !s.check() {
 			return
 		}
-		if s.ln != nil && !s.ownsPathLocked() {
-			s.closeLocked() // a node serving by itself took the path: let it be, and take it back when it is gone
-		}
-		s.mu.Unlock()
-		s.tryListen()
 	}
+}
+
+// check is one look of loop: false once standby is no longer wanted (the loop ends).
+func (s *standby) check() bool {
+	s.mu.Lock()
+	if !s.wanted {
+		s.looping = false
+		s.mu.Unlock()
+		return false
+	}
+	if s.ln != nil && !s.ownsPathLocked() {
+		// A node serving by itself took the path, or is taking it (it removes the file, then listens): let it be for
+		// this round, and take it back once nothing answers there. Listening again now could beat that node's listen.
+		s.closeLocked()
+		s.mu.Unlock()
+		return true
+	}
+	s.mu.Unlock()
+	s.tryListen()
+	return true
 }
 
 func (s *standby) closeLocked() {
@@ -309,7 +375,9 @@ func (s *standby) ownsPathLocked() bool {
 }
 
 // tryListen listens on node.sock unless standby already does or something else answers there. It asks outside mu (a
-// ping takes up to 1.3 s, and holding, managerSeen and unwant wait for mu) and looks again under it.
+// ping takes up to 1.3 s, and holding, managerSeen and unwant wait for mu) and looks again under it. It takes only
+// what it asked about: the file that did not answer, or a path with nothing there. A node serving by itself may take
+// the path meanwhile (remove, then listen); standby removing that node's new file kept the path for good (#1556).
 func (s *standby) tryListen() {
 	s.mu.Lock()
 	skip := !s.wanted || s.ln != nil
@@ -318,8 +386,12 @@ func (s *standby) tryListen() {
 		return
 	}
 	path := nodeclient.SocketPath()
+	asked, _ := os.Lstat(path) // nil: nothing there
 	if answers(path) {
 		return // a live node serves it
+	}
+	if s.afterAsk != nil {
+		s.afterAsk()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -330,7 +402,11 @@ func (s *standby) tryListen() {
 		s.logf("standby: %v", err)
 		return
 	}
-	_ = os.Remove(path)
+	if now, _ := os.Lstat(path); !sameEntry(asked, now) {
+		return // a node is taking the path: ask again next time
+	} else if now != nil {
+		_ = os.Remove(path)
+	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		s.logf("standby: %v", err)
@@ -363,6 +439,14 @@ func (s *standby) tryListen() {
 			s.serve(c)
 		}()
 	})
+}
+
+// sameEntry says whether a and b (from os.Lstat; nil: nothing there) are the same file, or both nothing.
+func sameEntry(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return os.SameFile(a, b)
 }
 
 // answers says whether a node serves path: it answers a ping (a listener that is closing, or a stopped process whose
@@ -627,7 +711,9 @@ const (
 // answered, and drops one that can never be sent; it does not remove a sent one.
 func (n *Node) replayNotify(ctx context.Context, sp *spool, e spoolEntry) notifyOutcome {
 	cctx, cancel := context.WithTimeout(ctx, replayNotifyTimeout)
-	rep, err := n.notifyCall(cctx, e.Request, e.ID)
+	req := e.Request
+	req.Pane = n.ownPane(req.Pane) // kept as the client sent it (serveSock translates live ones)
+	rep, err := n.notifyCall(cctx, req, e.ID)
 	timedOut := cctx.Err() != nil && ctx.Err() == nil
 	cancel()
 	if err == nil && rep.Error != "" { // refused before the manager was asked (empty, not JSON): never sendable
@@ -744,6 +830,7 @@ func (n *Node) retryNotificationsOnce(ctx context.Context, sp *spool) (again boo
 // that standby answered: no card, it is long over or asks again by itself.
 func (n *Node) replayHook(e spoolEntry) error {
 	req := e.Request
+	req.Pane = n.ownPane(req.Pane)
 	var in hookInput
 	if json.Unmarshal(req.Input, &in) != nil {
 		return nil

@@ -73,14 +73,46 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.mergeList(w, r, key, h.forwardHTTP) })
 			continue
 		}
+		if pattern == "POST /api/v1/assistant/conversations" {
+			api.HandleFunc(pattern, h.startConversationOnce())
+			continue
+		}
 		by := h.byRequest
 		switch {
 		case strings.Contains(pattern, "/machines/{mid}/"):
 			by = h.byMachine
 		case strings.Contains(pattern, "/assistant/conversations/{id}/"):
 			by = h.byConversation
+		case strings.Contains(pattern, "/todos/{id}"):
+			by = h.byTodo
 		}
 		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) })
+	}
+}
+
+// startConversationOnce relays a new conversation's start (its first message) with an operation receipt (#1349): an app
+// whose answer was lost asks again with the same X-Persona-Op-Id and gets the first answer instead of a second
+// conversation. An accepted start finishes even if the caller went away. Offline nothing reached the assistant, so no
+// receipt is kept (the same op id tries again once it is back); cut off on the way it may have started
+// (assistant_in_doubt, kept as unknown).
+func (h *Hub) startConversationOnce() http.HandlerFunc {
+	receipt := h.withClientOp("assistant_start", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Persona-Op-Id") != "" {
+			r = r.WithContext(context.WithoutCancel(r.Context()))
+		}
+		h.forwardSend(w, r, managerOfContext(r))
+	})
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := h.owner(w, r, h.byRequest)
+		if !ok {
+			return
+		}
+		r = withManager(r, id)
+		if h.busConnOf(id) == nil {
+			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
+			return
+		}
+		receipt(w, r)
 	}
 }
 
@@ -412,12 +444,7 @@ func busCodedError(err error) error {
 	return err
 }
 
-// assistantHello is manager.hello's answer for the assistant, kept as what it last got.
-func (h *Hub) assistantHello(ctx context.Context) assistantwire.Hello {
-	return h.assistantHelloFor(ctx, assistantwire.AssistantID)
-}
-
-// assistantHelloFor is assistantHello for manager id.
+// assistantHelloFor is manager.hello's answer for manager id, kept as what it last got.
 func (h *Hub) assistantHelloFor(ctx context.Context, id string) assistantwire.Hello {
 	hello, _ := assistantLink{h}.Hello(ctx)
 	hello = h.placedFor(hello, id)

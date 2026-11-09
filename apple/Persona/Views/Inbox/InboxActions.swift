@@ -154,7 +154,7 @@ struct InboxDraftSheet: View {
             }
             .task {
                 guard text.isEmpty else { return }
-                if let u = InboxStore.shared.unsentReplies[item.id] { text = u } else if let d = item.agentDraft { text = d } else { await load() }
+                if let u = InboxStore.shared.unsentReplies[item.key] { text = u } else if let d = item.agentDraft { text = d } else { await load() }
             }
         }
         .presentationDetents([.medium, .large])
@@ -221,7 +221,7 @@ struct InboxDraftSheet: View {
     }
 
     private func load() async {
-        guard let api = model.api else { return }
+        guard let api = model.api?.manager(item.manager) else { return }
         loading = true
         defer { loading = false }
         do {
@@ -249,19 +249,23 @@ struct InboxDraftSheet: View {
 
 // MARK: - Hand to AI
 
-/// Hands the item to the assistant (a new conversation in Chat) or to a running agent, as a <persona-context> plus
-/// what to do with it.
+/// Hands the item to Persona (its main conversation by default, which may write back to the item, or a new one) or to a
+/// running agent, as a <persona-context> plus what to do with it (`InboxHandOffModel`), and opens where it went. The Mac
+/// and the iPhone's source pages (which have their own reply composer at the bottom) use it; an event's page has
+/// `InboxHandOffBar` instead.
 struct InboxHandOffSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let item: InboxItem
     @State private var instruction = ""
-    @State private var target: SessionKey? // nil = the assistant, new conversation
-    @State private var markDone = true
-    @State private var sending = false
-    @State private var error: String?
+    @State private var handOff: InboxHandOffModel
 
-    private static let presets = [String(localized: "Summarize it, tell me what to do, and suggest a reply"), String(localized: "Handle it for me, but ask before replying [Inbox Actions 6612fa]"), String(localized: "Handle it for me, but ask before replying [Inbox Actions 616ea2]")]
+    init(item: InboxItem) {
+        self.item = item
+        _handOff = State(initialValue: InboxHandOffModel.live(item, model: .shared))
+    }
+
+    private static let presets = InboxAsk.allCases.map(\.ask)
 
     private var agents: [Session] {
         model.allSessions.filter { !$0.assistant }
@@ -294,23 +298,24 @@ struct InboxHandOffSheet: View {
                     }
                 }
                 Section("Hand To") {
-                    Picker("Hand To", selection: $target) {
-                        Label("Persona (New Chat)", systemImage: Theme.Icon.ai).tag(SessionKey?.none)
+                    Picker("Hand To", selection: $handOff.target) {
+                        Label("Persona (Main Chat)", systemImage: Theme.Icon.persona).lineLimit(1).tag(InboxHandOffModel.Target.main)
+                        Label("Persona (New Chat)", systemImage: Theme.Icon.ai).lineLimit(1).tag(InboxHandOffModel.Target.newChat)
                         ForEach(agents) { s in
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 Text(s.displayTitle).lineLimit(1)
                                 Text(model.machine(s.machineRef)?.title ?? s.machineID).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                             }
-                            .tag(SessionKey?.some(s.key))
+                            .tag(InboxHandOffModel.Target.agent(s.key))
                         }
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
                 }
                 Section {
-                    Toggle("Also Mark as Done", isOn: $markDone)
+                    Toggle("Also Mark as Done", isOn: Binding(get: { handOff.markDone }, set: { handOff.setMarkDone($0) }))
                 }
-                if let error { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
+                if let error = handOff.error { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
             }
             .navigationTitle("Hand to AI")
             .navigationBarTitleDisplayMode(.inline)
@@ -318,38 +323,20 @@ struct InboxHandOffSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
-                        if sending { ProgressView() } else { Text("Send").lineLimit(1) }
+                        if handOff.sending { ProgressView() } else { Text("Send").lineLimit(1) }
                     }
-                    .disabled(sending)
+                    .disabled(handOff.sending)
                 }
             }
         }
     }
 
     private func send() async {
-        guard let api = model.api else { return }
-        sending = true
-        defer { sending = false }
-        do {
-            let full = try await api.inboxItem(item.id)
-            let ask = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-            let text = Self.message(full, ask: ask.isEmpty ? Self.presets[0] : ask)
-            if let key = target {
-                model.sendNow(key, text: text)
-                model.openChat = key
-                model.selectedTab = .chats
-            } else {
-                let s = try await api.startConversation(prompt: text)
-                model.began(s, text: text)
-                model.assistantCurrent = s.key
-                model.selectedTab = .assistant
-            }
-            if markDone { InboxStore.shared.setDone(item, true, haptic: false) }
-            Haptics.success()
-            dismiss()
-        } catch {
-            if let shown = error.shown { self.error = shown }
-        }
+        let ask = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard await handOff.send(ask: ask.isEmpty ? Self.presets[0] : ask) else { return }
+        Haptics.success()
+        handOff.open()
+        dismiss()
     }
 
     /// The item as context the chat shows as a chip, then the ask.

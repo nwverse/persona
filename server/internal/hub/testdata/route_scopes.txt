@@ -39,6 +39,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/conversations/{id}/always/{hash}
 -                    DELETE /api/v1/assistant/followups/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
+-                    DELETE /api/v1/assistant/places/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
@@ -54,9 +55,12 @@ extensions.call:{id} /api/v1/extensions/{id}/
 inbox.write          DELETE /api/v1/inbox/mutes/{id}
 inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/launchers/{name}
+-                    DELETE /api/v1/looks/uploads/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
+-                    DELETE /api/v1/machines/{mid}/computer/apps/revoke/{bundle}
 -                    DELETE /api/v1/machines/{mid}/computer/apps/{bundle}
 -                    DELETE /api/v1/machines/{mid}/health/reports/{name}
+-                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
 -                    DELETE /api/v1/model-profiles/{id}
 -                    DELETE /api/v1/recordings/{id}
@@ -99,8 +103,10 @@ assistant.ask        GET /api/v1/assistant
 assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
+-                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
 -                    GET /api/v1/assistant/memory
+-                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/routines
@@ -134,6 +140,8 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/extensions/-/widgets
 -                    GET /api/v1/extensions/{id}/-/auth
 -                    GET /api/v1/extensions/{id}/-/dev/logs
+-                    GET /api/v1/extensions/{id}/-/image/{token}
+-                    GET /api/v1/extensions/{id}/-/storage/retained
 -                    GET /api/v1/extensions/{id}/-/{$}
 -                    GET /api/v1/fleet
 -                    GET /api/v1/health
@@ -143,6 +151,8 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/imessage/chats
 -                    GET /api/v1/imessage/chats/{id}/messages
 inbox.read           GET /api/v1/inbox
+inbox.read           GET /api/v1/inbox/done
+inbox.read           GET /api/v1/inbox/folders
 inbox.read           GET /api/v1/inbox/mutes
 inbox.read           GET /api/v1/inbox/policies
 inbox.read           GET /api/v1/inbox/tree/{kind}/{id...}
@@ -153,6 +163,8 @@ kb.read              GET /api/v1/kb-search
 kb.read              GET /api/v1/kb/chats/{id}/context
 kb.read              GET /api/v1/kb/chats/{id}/days/{day}
 kb.read              GET /api/v1/kb/moments/{id}
+-                    GET /api/v1/kb/selection
+-                    GET /api/v1/kb/selection/candidates
 kb.read              GET /api/v1/kb/{kind}
 kb.read              GET /api/v1/kb/{kind}/{id}
 -                    GET /api/v1/launchers
@@ -170,6 +182,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/browser
 -                    GET /api/v1/machines/{mid}/browser/cookies
 -                    GET /api/v1/machines/{mid}/claude-dirs
+-                    GET /api/v1/machines/{mid}/claude-live-replies
 -                    GET /api/v1/machines/{mid}/claude-settings
 -                    GET /api/v1/machines/{mid}/codex-settings
 -                    GET /api/v1/machines/{mid}/computer
@@ -284,9 +297,12 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/unarchive
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/actions
 -                    POST /api/v1/assistant/conversations/{id}/views/{key}/html-actions
+-                    POST /api/v1/assistant/feishu/notices/action
+-                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
+-                    POST /api/v1/assistant/places
 -                    POST /api/v1/assistant/readiness/dismiss
 -                    POST /api/v1/assistant/routines/{id}/run
 -                    POST /api/v1/assistant/tasks
@@ -313,11 +329,14 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
 -                    POST /api/v1/extensions/-/preview
+-                    POST /api/v1/extensions/{id}/-/attach
 -                    POST /api/v1/extensions/{id}/-/auth/logout
 -                    POST /api/v1/extensions/{id}/-/auth/step
+-                    POST /api/v1/extensions/{id}/-/detach
 -                    POST /api/v1/extensions/{id}/-/dev/restart
 -                    POST /api/v1/extensions/{id}/-/rollback
 -                    POST /api/v1/extensions/{id}/-/shortcut/{sid}
+-                    POST /api/v1/extensions/{id}/-/storage/restore
 -                    POST /api/v1/extensions/{id}/-/ui/{ui}
 -                    POST /api/v1/extensions/{id}/-/upgrade
 -                    POST /api/v1/extensions/{id}/-/widget/{ui}
@@ -331,6 +350,7 @@ inbox.write          POST /api/v1/inbox/refresh
 inbox.write          POST /api/v1/inbox/{id}/doc/status
 inbox.write          POST /api/v1/inbox/{id}/done
 inbox.write          POST /api/v1/inbox/{id}/draft
+inbox.write          POST /api/v1/inbox/{id}/handoff
 inbox.write          POST /api/v1/inbox/{id}/reply
 inbox.write          POST /api/v1/inbox/{id}/suggestion
 agents.control       POST /api/v1/interactions/{id}/choose
@@ -344,6 +364,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/launchers/test
 -                    POST /api/v1/launchers/{name}/check
 -                    POST /api/v1/launchers/{name}/restore
+-                    POST /api/v1/looks/uploads
 -                    POST /api/v1/machines/{id}/confirm
 -                    POST /api/v1/machines/{id}/reject
 -                    POST /api/v1/machines/{mid}/browser/cookies
@@ -353,6 +374,10 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/deploy
 -                    POST /api/v1/machines/{mid}/doctor/fix
 -                    POST /api/v1/machines/{mid}/files
+-                    POST /api/v1/machines/{mid}/files/move
+-                    POST /api/v1/machines/{mid}/files/rename
+-                    POST /api/v1/machines/{mid}/files/restore
+-                    POST /api/v1/machines/{mid}/files/trash
 -                    POST /api/v1/machines/{mid}/git/commit
 -                    POST /api/v1/machines/{mid}/git/pr
 -                    POST /api/v1/machines/{mid}/git/pr/merge
@@ -362,6 +387,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/git/stash
 -                    POST /api/v1/machines/{mid}/git/switch
 -                    POST /api/v1/machines/{mid}/herdr/start
+-                    POST /api/v1/machines/{mid}/node-update/{action}
 -                    POST /api/v1/machines/{mid}/panes
 -                    POST /api/v1/machines/{mid}/panes/agent
 -                    POST /api/v1/machines/{mid}/panes/close
@@ -377,6 +403,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/worktree/create
 -                    POST /api/v1/machines/{mid}/worktree/prepare
 -                    POST /api/v1/machines/{mid}/worktree/remove
+-                    POST /api/v1/machines/{mid}/worktree/rename
 -                    POST /api/v1/machines/{mid}/worktree/status
 -                    POST /api/v1/managers
 -                    POST /api/v1/managers/{id}/code
@@ -394,10 +421,10 @@ agents.control       POST /api/v1/sessions
 agents.control       POST /api/v1/sessions/{mid}/{sid}/interrupt
 -                    POST /api/v1/sessions/{mid}/{sid}/keys
 agents.control       POST /api/v1/sessions/{mid}/{sid}/messages
--                    POST /api/v1/sessions/{mid}/{sid}/modes
+agents.permission_mode POST /api/v1/sessions/{mid}/{sid}/modes
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue/send-now
--                    POST /api/v1/sessions/{mid}/{sid}/rename
+agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
 -                    POST /api/v1/sessions/{mid}/{sid}/rewind
 -                    POST /api/v1/sessions/{mid}/{sid}/screen/before
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
@@ -408,7 +435,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
--                    POST /api/v1/todos/{id}/decisions
+todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/retry
 -                    POST /api/v1/translate
@@ -432,7 +459,9 @@ todos.write          POST /api/v1/todos
 -                    PUT /api/v1/agents/prefs
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
+-                    PUT /api/v1/assistant/feishu/companions
 -                    PUT /api/v1/assistant/memory/{name}
+-                    PUT /api/v1/assistant/places/{id}
 -                    PUT /api/v1/assistant/routines
 -                    PUT /api/v1/assistant/tasks/{id}
 -                    PUT /api/v1/bots/feishu
@@ -450,7 +479,10 @@ todos.write          POST /api/v1/todos
 -                    PUT /api/v1/extensions/{id}/-/secrets/{name}
 -                    PUT /api/v1/hub/update/settings
 -                    PUT /api/v1/imessage/settings
+inbox.write          PUT /api/v1/inbox/folders
+inbox.write          PUT /api/v1/inbox/{id}/folder
 inbox.write          PUT /api/v1/inbox/{id}/parent
+-                    PUT /api/v1/kb/selection
 kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}
 -                    PUT /api/v1/looks/current
@@ -459,6 +491,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/botmux
 -                    PUT /api/v1/machines/{mid}/browser
 -                    PUT /api/v1/machines/{mid}/claude-dirs/blocked
+-                    PUT /api/v1/machines/{mid}/claude-live-replies
 -                    PUT /api/v1/machines/{mid}/claude-settings
 -                    PUT /api/v1/machines/{mid}/codex-settings
 -                    PUT /api/v1/machines/{mid}/computer

@@ -8,12 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -36,7 +36,7 @@ var (
 	reviewAlone = reviewBudget{left: 2 << 20, fileBytes: 2 << 20, fileLines: 20000}
 )
 
-var hunkHead = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$`)
+var hunkHead = lazyre.New(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$`)
 
 func reviewErr(code, msg string) error { return &rpc.Error{Code: code, Message: msg} }
 
@@ -378,7 +378,11 @@ func (n *Node) reviewHunks(ctx context.Context, root, base string, spec []string
 			break
 		}
 		line = strings.TrimSuffix(line, "\n")
-		if strings.HasPrefix(line, "diff --git ") {
+		if strings.HasPrefix(line, "diff --git ") && cur != nil && cur.Status == "type_changed" && headerNames(line, cur.Path) {
+			// a type change (file to symlink or back) comes as a deletion and then a creation of the same path: the
+			// second section is the same file's, and its share keeps counting both
+			inHunk = false
+		} else if strings.HasPrefix(line, "diff --git ") {
 			if cur != nil && cur.Big {
 				cur.Hunks = nil
 			}

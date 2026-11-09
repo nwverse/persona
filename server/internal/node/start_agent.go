@@ -73,11 +73,15 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
 	// A Codex wrapper is told to herdr as Codex (hostherdr.go); a compatible CLI is herdr's to detect. The node's
 	// directory in front, the assistant's environment left out (agentenv.go).
-	shells := paneShells(ctx)
+	shells := paneShells(ctx, created)
 	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(launcher, resume, prompt))
-	if err := launch.Run(ctx, created.Pane, n.agentCommand(cmd, shellQuote, shells...)); err != nil {
-		return nil, fmt.Errorf("run launcher: %w", err)
+	// Not in the agent sandbox (agentsandbox.go).
+	n.notePaneStart(launcher)
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(cmd, shellQuote, shells...), shells...) // typedstart.go
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {

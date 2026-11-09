@@ -12,7 +12,6 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -29,6 +28,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 	wechat "github.com/nwverse/persona/server/internal/wechat/spec"
 )
@@ -38,7 +38,7 @@ import (
 // connector into the connector registry, a voice plugin into the app's voice conversation (relayed under
 // /api/v1/plugins/<id>/…).
 
-// PluginConfig is hub.json's plugins[]: a process the hub runs next to itself (docs/extensions/extensions.md "Extensions in
+// ExtensionConfig is hub.json's plugins[]: a process the hub runs next to itself (docs/extensions/extensions.md "Extensions in
 // hub.json"). The hub starts it, restarts it when it exits and relays /api/v1/plugins/{id}/… to the HTTP server it
 // serves on the unix socket in PERSONA_PLUGIN_SOCKET (WebSockets included). Without a command the plugin runs elsewhere
 // and only its socket is here (e.g. forwarded with ssh -R from a machine that reaches what the plugin needs). The
@@ -58,7 +58,7 @@ type ExtensionConfig struct {
 	Config json.RawMessage `json:"config,omitempty"`
 }
 
-// PluginView is a plugin as the app sees it (GET /api/v1/plugins). id, name, kind, status and error are what it has
+// ExtensionView is a plugin as the app sees it (GET /api/v1/plugins). id, name, kind, status and error are what it has
 // always said; the rest came with the plugin base.
 type ExtensionView struct {
 	ID     string `json:"id"`
@@ -75,11 +75,13 @@ type ExtensionView struct {
 	NeedsSetup  []string            `json:"needs_setup,omitempty"`
 	Warnings    []string            `json:"warnings,omitempty"`
 
-	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, its newer version and what
+	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, why that switch does not apply
+	// now ("disabled": the extension is switched off; the switch is kept for when it is on), its newer version and what
 	// happened last with an upgrade.
-	AutoUpgrade *bool                 `json:"auto_upgrade,omitempty"`
-	Upgrade     *ExtensionUpgrade     `json:"upgrade,omitempty"`
-	UpgradeNote *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
+	AutoUpgrade       *bool                 `json:"auto_upgrade,omitempty"`
+	AutoUpgradePaused string                `json:"auto_upgrade_paused,omitempty"`
+	Upgrade           *ExtensionUpgrade     `json:"upgrade,omitempty"`
+	UpgradeNote       *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
 	// Nodes: its program on each computer it is switched on for (extension_nodes.go), for a plugin with one.
 	Nodes []ExtensionNodeView `json:"nodes,omitempty"`
 	// Sandbox: an installed extension's sandbox and its connections through the egress proxy (extension_sandbox.go).
@@ -88,6 +90,22 @@ type ExtensionView struct {
 	// (manifest.tools).
 	Auth  *ExtensionAuth      `json:"auth,omitempty"`
 	Tools []ExtensionToolView `json:"tools,omitempty"`
+	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
+	// is connected.
+	Attached *ExtensionAttached `json:"attached,omitempty"`
+}
+
+// ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
+type ExtensionAttached struct {
+	Online bool `json:"online"`
+	// Since is when it came online or went offline (none while it is switched off or nothing needs it), in the user's
+	// zone.
+	Since time.Time `json:"since,omitzero"`
+	// Error is why it is offline, also while its status is still starting.
+	Error string `json:"error,omitempty"`
+	// Version is the version the program says it is, when that is not the approved Version: it is not used until
+	// that version is approved.
+	Version string `json:"version,omitempty"`
 }
 
 // ExtensionToolView is one of an extension's command-line programs: Reused when it is the machine's own copy.
@@ -105,9 +123,9 @@ const (
 	extensionIncompatible = "incompatible"
 )
 
-var extensionIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+var extensionIDPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
-// hubPlugin is one plugin as the hub runs it now.
+// hubExtension is one plugin as the hub runs it now.
 type hubExtension struct {
 	contributionsMu sync.Mutex
 	contributions   map[string][]extension.ExportedContribution
@@ -120,7 +138,7 @@ type hubExtension struct {
 	// proxyTransport is proxy's: closeIdle closes its idle connections.
 	proxyTransport *http.Transport
 
-	pending bool         // made before the plugins start (newPlugins): startPlugins runs it
+	pending bool         // made before the plugins start (newExtensions): startExtensions runs it
 	proc    *host.Proc   // nil while it does not run (disabled, needs setup, incompatible, nothing to run)
 	conns   []*proc.Conn // its connectors
 	links   []*proc.Link // theirs, to proc
@@ -176,7 +194,7 @@ type extensions struct {
 	auth authCache
 	// dev streams what the extensions being written log (extension_dev.go).
 	dev devTaps
-	// badges are the plugins' badges on their nav_pages' entries ("<plugin>/<ui>" → plugin.Badge; extension_ui.go).
+	// badges are the plugins' badges on their nav_pages' entries ("<plugin>/<ui>" → extension.Badge; extension_ui.go).
 	badges sync.Map
 	// events and todoEvents keep slow extension programs out of the assistant bus read loop: the knowledge base's and the
 	// todos' queues, apart so that a flood of one does not push out the other's.
@@ -202,8 +220,8 @@ type extensions struct {
 	hubRelay hubRelay
 }
 
-// newPlugins is the registry with hub.json's plugins: a bad entry is logged and skipped. Built-in and installed ones
-// join when the hub attaches its database (attachPlugins).
+// newExtensions is the registry with hub.json's plugins: a bad entry is logged and skipped. Built-in and installed ones
+// join when the hub attaches its database (attachExtensions).
 func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)) *extensions {
 	root := extensionsRoot(dir, logf)
 	ps := &extensions{dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
@@ -327,11 +345,35 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		}
 	}
 	v.Error = i18n.ExtensionStatusText(l, v.Error)
+	if p.Record.Remote != nil {
+		v.Attached = &ExtensionAttached{}
+		if hp != nil && hp.proc != nil && v.Status != host.StateStopped { // stopped: nothing needs it, so not connected
+			link := hp.proc.Link()
+			v.Attached.Online, v.Attached.Since = link.Online, link.Since
+			if !link.Since.IsZero() {
+				v.Attached.Since = link.Since.In(ps.h.userLocation()) // `extension list` prints it as it comes
+			}
+			if !link.Online {
+				v.Attached.Error = i18n.ExtensionStatusText(l, link.Why)
+			}
+			if link.Said != "" && link.Said != p.Record.Version {
+				v.Attached.Version = link.Said
+				if v.Status == host.StateError {
+					key := "extension-status.attached_version"
+					if p.Record.AttachedPackage() { // its package's version is the one approved: no upgrade while attached
+						key = "extension-status.attached_package_version"
+					}
+					v.Error = i18n.T(l, key, i18n.Args{"current": link.Said, "approved": p.Record.Version, "id": p.Record.ID})
+				}
+			}
+		}
+	}
 	if p.Record.Enabled && ps.h != nil && ps.h.hubJSONWaitsForTriageModel(ctx, p) { // runs, but its inbox waits
 		v.Status, v.NeedsSetup = extensionNeedsSetup, append(v.NeedsSetup, needsTriageModelSetup(ps.h.contextLang(ctx)))
 	}
 	if ps.h != nil {
-		ps.voiceView(ctx, p, &v) // runs, but no conversation starts without an upstream (voice_extension.go)
+		ps.voiceView(ctx, p, &v)    // runs, but no conversation starts without an upstream (voice_extension.go)
+		ps.imessageView(ctx, p, &v) // no connector until its one Mac is picked (imessage_extension.go)
 	}
 	if ps.h != nil {
 		ps.h.extensionUpgrades().decorate(ctx, &v, p)
@@ -359,6 +401,9 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 
 // get is the running state of plugin id (nil when none).
 func (ps *extensions) get(id string) *hubExtension {
+	if ps.reg != nil {
+		id = ps.reg.CanonicalID(id)
+	}
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.byID[id]
@@ -370,7 +415,7 @@ type hubSealer struct{ h *Manager }
 func (s hubSealer) Seal(plain string) (string, error)  { return s.h.sealKey(plain) }
 func (s hubSealer) Open(sealed string) (string, error) { return s.h.openKey(sealed) }
 
-// attachPlugins gives the registry the database, the hub's build and the built-in plugins, reads the rows and
+// attachExtensions gives the registry the database, the hub's build and the built-in plugins, reads the rows and
 // registers the connectors plugins contribute (startConnectors calls it between the hub's own connectors and Start).
 func (h *Manager) attachExtensions(ctx context.Context) {
 	if h.extensions == nil {
@@ -406,7 +451,7 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	reg.Reserve("looks", extension.RetiredLookIDs...)
 	// No agent_sources id is reserved: the hub has no personal agents source of its own (extension_agents.go).
 	if path := siblingProgram(wechat.Program); path != "" {
-		if err := reg.AddBuiltin(wechatManifest(h, path), filepath.Dir(path), true); err != nil {
+		if err := h.addWeChatBuiltin(reg, path); err != nil {
 			h.logf("plugin wechat: %v", err)
 		}
 	}
@@ -446,7 +491,7 @@ func (h *Manager) dataDirOrTemp() string {
 	return os.TempDir()
 }
 
-// startPlugins runs every plugin that is not running yet (connectors' ones run since attachPlugins).
+// startExtensions runs every plugin that is not running yet (connectors' ones run since attachExtensions).
 func (h *Manager) startExtensions(ctx context.Context) {
 	if h.extensions == nil {
 		return
@@ -471,6 +516,13 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if c.Kind == "config" {
 		ps.settingsMoved(c.ID) // before the restart: the old address is refused from now on
+	}
+	if c.Old != nil && c.Old.Record.ID != c.ID {
+		// Retire the old public identity synchronously before opening the same data slot.
+		// This is not an uninstall: connector data and upgrade preferences survive.
+		ps.apply(ctx, c.Old.Record.ID)
+		ps.forgetAuth(c.Old.Record.ID)
+		ps.nodes.drop(ps.root, c.Old.Record.ID, "")
 	}
 	ps.apply(ctx, c.ID)
 	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
@@ -524,10 +576,13 @@ func (ps *extensions) changed(c extension.Change) {
 			ps.h.forgetConnector(ctx, id)
 		}
 	}
-	if c.Kind == "removed" && ps.h != nil && ps.reg.Get(c.ID) == nil {
-		ps.h.extensionUpgrades().forget(ctx, c.ID) // installed again later, it starts afresh (extension_autoupgrade.go)
+	if c.Kind == "removed" && c.Old != nil && ps.h != nil && ps.reg.Get(c.ID) == nil {
+		if c.Old.Record.StorageKey() != c.ID {
+			ps.forgetSandbox(ctx, c.Old.Record.StorageKey())
+		}
+		ps.h.extensionUpgrades().forget(ctx, c.Old.Record.StorageKey()) // installed again later, it starts afresh (extension_autoupgrade.go)
 	}
-	if c.Kind == "upgraded" && c.Old != nil {
+	if (c.Kind == "upgraded" || c.Kind == "renamed") && c.Old != nil {
 		from := c.Old.Record.Version
 		to := ""
 		if p := ps.reg.Get(c.ID); p != nil {
@@ -579,14 +634,20 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	old := ps.byID[id]
 	delete(ps.byID, id)
 	ps.mu.Unlock()
-	why := tokenStopReason(ps.reg.Get(id))
+	why := tokenStopReason(ps.reg.GetExact(id))
 	if ps.h != nil {
+		ps.h.widgetsDropExtension(id)
+		// Wake after the replacement is published, so a catalog refresh sees the new contributions.
+		defer ps.h.widgetsWake(id, nil, true)
 		ps.h.pageDropExtension(id)
 		// Switched off, upgraded (maybe to fewer scopes), uninstalled or reconfigured: its token goes now, and a new
 		// one comes with its next start.
 		ps.h.extTokens.revoke(id, why)
 	}
 	ps.forgetEgress(id) // the same for its proxy credential (extension_sandbox.go)
+	if ps.h != nil {
+		ps.h.forgetImages(id) // and the pictures it served (extension_images.go)
+	}
 	if old != nil {
 		ps.removeAgentSources(old)
 		for _, c := range old.conns {
@@ -603,9 +664,12 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 		// Stop waits for the old start/initialize callbacks too: a token minted during shutdown must not survive.
 		ps.h.extTokens.revoke(id, why)
 	}
-	p := ps.reg.Get(id)
+	p := ps.reg.GetExact(id)
 	if p == nil {
-		ps.forgetSandbox(ctx, id)
+		// An alias still owns this slot; only a genuine removal forgets its preferences.
+		if ps.reg.Get(id) == nil {
+			ps.forgetSandbox(ctx, id)
+		}
 		return
 	}
 	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id)}
@@ -693,7 +757,7 @@ func (hp *hubExtension) setProxy(id string) {
 		Transport:     hp.proxyTransport,
 		FlushInterval: -1, // stream (audio, server-sent events) as it comes
 		// The plugin says how its answers may be cached (images, emojis); the hub's no-store only when it says nothing.
-		// The caller drops the hub's own Cache-Control first (servePluginHTTP): the proxy adds headers, it does not
+		// The caller drops the hub's own Cache-Control first (serveExtensionHTTP): the proxy adds headers, it does not
 		// replace them, and "no-store, private, max-age=3600" kept the apps from caching anything.
 		ModifyResponse: func(res *http.Response) error {
 			if res.Header.Get("Cache-Control") == "" {
@@ -719,7 +783,7 @@ func (hp *hubExtension) closeIdle() {
 	}
 }
 
-// servePluginHTTP hands one request to the plugin's HTTP side, counted by route (extension_metrics.go).
+// serveExtensionHTTP hands one request to the plugin's HTTP side, counted by route (extension_metrics_relay.go).
 func (hp *hubExtension) serveExtensionHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Del("Cache-Control") // set by the hub's auth for its own answers: the plugin's own goes instead
 	if hp.stats == nil {
@@ -766,13 +830,18 @@ func (ps *extensions) spec(ctx context.Context, p *extension.Extension, hp *hubE
 // specOf is spec with only the old names of the extension's variables (PERSONA_PLUGIN_*).
 func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hubExtension) (host.Spec, error) {
 	if ps.reg != nil {
-		if snapshot := ps.reg.Snapshot(p.Record.ID); snapshot != nil {
+		if snapshot := ps.reg.SnapshotExact(p.Record.ID); snapshot != nil {
 			p = snapshot
 		}
 	}
 	m := p.Manifest
 	id := p.Record.ID
 	s := host.Spec{ID: id, Name: m.Name, Logf: ps.hostLogf()}
+	if ps.h != nil {
+		// A start that does not come up keeps no token, whatever stopped it: initialize or the environment had it already.
+		// Nor does a program elsewhere once its run ends (an idle stop, a lost connection): it goes on running there.
+		s.Release = func() { ps.h.extTokens.revoke(id, tokenStopReason(ps.reg.GetExact(id))) }
+	}
 	if st := ps.stats.of(id); st != nil {
 		s.Observe = st
 	}
@@ -834,6 +903,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		s.RPCSocket, s.Socket = r.RPCSocket, r.HTTPSocket
 		s.RPC, s.HTTP = r.RPCSocket != "", r.HTTPSocket != ""
 		hp.socket = r.HTTPSocket
+		s.Attached = true
+		s.Version = p.Record.Version // the program on the sockets must say it is this one before Init gives it anything
 	} else {
 		if rt.IsDeno() {
 			if err := ps.sourceSpec(ctx, p, &s); err != nil {
@@ -867,7 +938,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			s.Env = append(s.Env, k+"="+v)
 		}
 		if rt.HTTP {
-			hp.socket = filepath.Join(ps.root, id+".sock")
+			hp.socket = filepath.Join(ps.root, p.Record.StorageKey()+".sock")
 			s.HTTP, s.Socket = true, hp.socket
 			s.Env = append(s.Env, "PERSONA_PLUGIN_SOCKET="+hp.socket)
 		}
@@ -896,9 +967,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if err != nil {
 			return extension.InitializeParams{}, err
 		}
-		info := extension.ExtensionInfo{ID: id, Version: p.Record.Version, Dir: p.Dir}
-		if p.Record.Remote == nil {
-			info.DataDir = ps.reg.DataDir(id)
+		info := extension.ExtensionInfo{ID: id, Version: p.Record.Version}
+		if p.Record.Remote == nil { // paths on the manager's machine, for the program it runs
+			info.Dir, info.DataDir = p.Dir, ps.reg.DataDir(id)
 		}
 		var build int64
 		if ps.h != nil {
@@ -918,7 +989,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if ps.h != nil && !ps.h.builtin() {
 			params.Hub.Manager = ps.h.opts.ManagerID
 		}
-		if g := p.Record.Granted; !g.FullHub() && len(g.Hub) > 0 && ps.h != nil {
+		// An attached package granted the full token the old way (hub_api) gets one of every scope instead: never the
+		// hub's own, whatever runs on its sockets. One installed from remote: gets none, as before.
+		attachedFull := p.Record.AttachedPackage() && p.Record.Granted.FullHub()
+		if g := p.Record.Granted; (attachedFull || !g.FullHub() && len(g.Hub) > 0) && ps.h != nil {
 			url, err := ps.hubURL()
 			if err != nil {
 				return extension.InitializeParams{}, err
@@ -926,9 +1000,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			// The program the hub started has it already (StartEnv); one elsewhere gets its first here.
 			tok := hubToken.current()
 			if tok == "" || p.Record.Remote != nil {
-				tok = hubToken.renew(ps, p, false)
+				tok = hubToken.renew(ps, p, attachedFull)
 			}
-			params.Hub.URL, params.Hub.Token, params.Hub.Scopes = url, tok, slices.Clone(g.Hub)
+			scopes := slices.Clone(g.Hub)
+			if attachedFull { // the routes' scopes: model calls are granted by name only (extension_model_calls.go)
+				scopes = slices.DeleteFunc(extension.EveryScope(), func(s string) bool { return s == extension.ScopeModels })
+			}
+			params.Hub.URL, params.Hub.Token, params.Hub.Scopes = url, tok, scopes
 		}
 		for _, c := range conns {
 			if ps.h == nil || ps.h.connectors.Enabled(c.ID) {
@@ -948,6 +1026,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			params.ContributionsToMe = ps.reg.ContributionsToContext(ctx, id)
 			hp.contributions = params.ContributionsToMe
 			hp.contributionsMu.Unlock()
+		}
+		if err := ps.storageStart(ctx, p); err != nil {
+			return extension.InitializeParams{}, storeError(ctx, err)
 		}
 		return params, nil
 	}
@@ -971,9 +1052,19 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 	}
 	byID := map[string]*proc.Conn{}
 	s.Handle = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		if current := ps.reg.SnapshotExact(id); current == nil || current.Record.Version != p.Record.Version || !current.Record.UpdatedAt.Equal(p.Record.UpdatedAt) {
+			return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: "retired extension runtime"}
+		}
+		if strings.HasPrefix(method, "storage.") {
+			// Keep this process's captured epoch/grants. Re-resolving after the
+			// preliminary fence could lend a retired run the replacement's scope.
+			return ps.storageCall(ctx, p, method, params)
+		}
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
 			return ps.extensionKBCall(ctx, id, method, params)
+		case "assistant.conversations", "assistant.messages": // assistant.read (extension_assistant_read.go)
+			return ps.extensionAssistantCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
 		case connector.MethodSentRecord:
@@ -1009,6 +1100,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		return nil, &rpc.Error{Code: extension.CodeUnknownMethod, Message: "unknown method " + method}
 	}
 	s.OnEvent = func(event string, params json.RawMessage) {
+		if current := ps.reg.SnapshotExact(id); current == nil || current.Record.Version != p.Record.Version || !current.Record.UpdatedAt.Equal(p.Record.UpdatedAt) {
+			return // A retired run cannot publish through an owner alias or replace newer state.
+		}
 		if event == "ui.page.snapshot" && ps.h != nil && hp.proc != nil {
 			ps.h.pageSnapshot(id, hp.proc, params)
 			return
@@ -1106,22 +1200,22 @@ func (ps *extensions) knownOnly(extensionID string, m connector.Manifest) connec
 
 var unknownCapabilities sync.Map
 
-// pluginKinds are the plugin connectors' kinds of inbox things as they describe them: "<connector>/<kind>" → words.
+// extensionKinds are the plugin connectors' kinds of inbox things as they describe them: "<connector>/<kind>" → words.
 var extensionKinds sync.Map
 
-// pluginConnectors are the connectors a plugin provides (installed, or from hub.json), not a built-in plugin's: their
+// extensionConnectors are the connectors a plugin provides (installed, or from hub.json), not a built-in plugin's: their
 // new inbox items are triaged before they enter (the manager's inbox_admit.go; a round says it: InboxSource.Extension).
 // Connector id → the plugin's
-// source (plugin.SourceInstalled, plugin.SourceHubJSON).
+// source (extension.SourceInstalled, extension.SourceHubJSON).
 var extensionConnectors sync.Map
 
-// fromPlugin says whether a connector (an item's source) is provided by a plugin.
+// fromExtension says whether a connector (an item's source) is provided by a plugin.
 func fromExtension(connectorID string) bool {
 	_, ok := extensionConnectors.Load(connectorID)
 	return ok
 }
 
-// pluginSource is where the plugin providing a connector comes from ("" not a plugin's).
+// extensionSource is where the plugin providing a connector comes from ("" not a plugin's).
 func extensionSource(connectorID string) string {
 	v, _ := extensionConnectors.Load(connectorID)
 	s, _ := v.(string)
@@ -1169,7 +1263,11 @@ func (ps *extensions) remoteManifest(ctx context.Context, r extension.Remote) (*
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", r.HTTPSocket)
 		}
-		client := &http.Client{Transport: &http.Transport{DialContext: dial}, Timeout: 10 * time.Second}
+		// One request per transport: nothing reuses its connection, which would otherwise stay idle (and keep its
+		// goroutines and descriptor) until the plugin closes it.
+		tr := &http.Transport{DialContext: dial, DisableKeepAlives: true}
+		defer tr.CloseIdleConnections()
+		client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://plugin/manifest", nil)
 		res, err := client.Do(req)
 		if err != nil {
@@ -1205,7 +1303,7 @@ func (ps *extensions) remoteManifest(ctx context.Context, r extension.Remote) (*
 	return extension.Parse(b)
 }
 
-// addPluginConnector registers a plugin's connector: built-in ones start switched off until the user turns them on,
+// addExtensionConnector registers a plugin's connector: built-in ones start switched off until the user turns them on,
 // installed ones on; the user's switches and settings apply.
 func (h *Manager) addExtensionConnector(ctx context.Context, c *proc.Conn, off bool) error {
 	if off {
@@ -1279,7 +1377,7 @@ func hubLocalURL(listen string) string {
 }
 
 // roleChanged restarts the plugins that run something for the group's center (connectors, a part of the API): they
-// got this hub's role at initialize (plugin.HubInfo.Role), and a member leaves that work to the center.
+// got this hub's role at initialize (extension.HubInfo.Role), and a member leaves that work to the center.
 func (ps *extensions) roleChanged(ctx context.Context) {
 	if ps == nil {
 		return

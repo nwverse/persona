@@ -45,7 +45,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	defer unlock()
 	if n.externalCodex(id) {
 		if n.codexResumable(id) { // nothing runs it: resumed in a new tab with the message (codex_resume.go)
-			return n.resumeCodexThread(ctx, id, opts.Launcher, text, images) // a refusal says nothing was sent
+			return n.resumeCodexThread(ctx, id, opts.Launcher, text, images, "") // a refusal says nothing was sent
 		}
 		return n.sendCodex(ctx, id, text, images)
 	}
@@ -131,7 +131,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	var watch *promptWatch
 	if kind == "claude" {
 		text = keepImagePaths(text)
-		watch = n.watchPrompt(id, text) // where the transcript ends before the typing: what comes after may be this (sendsafe.go)
+		watch = n.watchPrompt(id, text) // where the transcript ends before the typing: what comes after may be this (sendsafe_submit.go)
 	}
 	typedAt := time.Now()
 	err = n.prompt(ctx, pane, text)
@@ -147,7 +147,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		n.typing.typed(pane, text)
 		n.lostFirst.clear(id) // the message the start could not deliver went in now, or another one
 		if kind == "claude" {
-			return n.afterPrompt(ctx, id, pane, text, typedAt, watch) // sendsafe.go
+			return n.afterPrompt(ctx, id, pane, text, typedAt, watch) // sendsafe_submit.go
 		}
 	}
 	return uncertain(err)

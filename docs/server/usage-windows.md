@@ -128,7 +128,7 @@ Mapping (`server/internal/usagesource`):
 | `plan_display_name` (or `plan` if missing) | Plan, written next to the name (not repeated if the name already contains it) |
 | Window `kind` | Window length: `five_hour` / `5h` → 5h, `weekly` / `7d` → 7d, `hourly`, `daily`, `monthly` (30 days), `<n>m|h|d|w`; kinds like `weekly_fable`, `gemini_argon_weekly` that use the length as one of their words are recognized too. **Kinds with no readable length (`credits`, `blocked`…) are not time windows and are not drawn** |
 | `scope: "model"` / `scoped_model` | Per-model quota: the model name is shown next to the window of the same length ("7d Fable"); it **does not affect account sorting and is not used to identify the same account** (one model being used up does not mean the account is) |
-| `used_ratio` (0–1) | Percent used (without `used_ratio` but with `remaining` and `limit`, computed from those; windows with neither are not drawn) |
+| `used_ratio` (0–1) | Percent used, rounded to 1e-9 so 0.29 reads as exactly 29 (without `used_ratio` but with `remaining` and `limit`, computed from those; windows with neither are not drawn) |
 | `resets_at` | Reset time |
 | Window `checked_at` (the newest, or the entry's if missing) | Sample time |
 | `unsupported`, an account with no drawable window, `status: disabled` | Not listed |
@@ -184,7 +184,7 @@ Any account-pool gateway that wants to feed usage into the sidebar implements on
 }]}
 ```
 
-`id` is optional (a stable identifier for the account in the gateway, used to guarantee that two accounts are never merged); `label` (`5h`, `7d`, `45m`) is used if its length can be read, otherwise `window_minutes`; `used_percent` is 0–100, clamped when out of range;
+`id` is optional (a stable identifier for the account in the gateway, used to guarantee that two accounts are never merged); `label` (`5h`, `7d`, `45m`) is used if its length can be read, otherwise `window_minutes`; `used_percent` is 0–100, kept as sent and clamped when out of range;
 `sampled_at` defaults to the time of reading; each source has at most 500 accounts and each account at most 32 windows; accounts with an empty `provider` are dropped.
 
 
@@ -196,7 +196,7 @@ User decision: the hub is only a communication center, and computers belong to t
 | --- | --- |
 | Manager: asks each node for `usage.windows`, merges accounts, reads account-pool gateways (it holds the keys), keeps the gateway's account list (`devices.usage_gateway_accounts`; the extensions' `usage.gateway_accounts` is served by `extmgr/extension_usage.go` asking it in the same process), the API for the admin UI's "Subscription usage sources" page | `server/internal/devices/usagewindows.go`, `usagegateways.go`, `admin_usage.go` (moved from the hub as-is, receiver changed from `Hub` to `Devices`); edits to `manager.json` go through `managerconf.Edit` (`server/internal/managerconf`, under a lock on its directory) |
 | Route tables shared by both sides | `server/internal/devicewire/` (`UsageRoutes`, `AdminUsageRoutes`), the admin UI marker `assistantwire.AdminHeader` |
-| hub: forwarding | `server/internal/hub/devices_link.go` (`usageRoutesRelayed`, `adminUsageRoutesRelayed`) |
+| hub: forwarding | `server/internal/hub/devices_routes.go` (`usageRoutesRelayed`, `adminUsageRoutesRelayed`) |
 
 - The hub forwards `GET /api/v1/usage/windows` as an `http.request`, like the manager's other routes (still not usable with extension tokens, `testdata/route_scopes.txt`).
 - `/api/v1/admin/usage-sources…` is forwarded only from the hub's admin UI route group: the hub first checks the admin session (plus CSRF for writes), then adds `X-Persona-Admin: 1` (the header is always stripped if a client sends it); the manager returns 403 without this marker, and the App's API has none of these routes.

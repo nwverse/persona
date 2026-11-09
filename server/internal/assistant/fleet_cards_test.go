@@ -15,13 +15,14 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
 )
 
-// The cards the manager makes itself (fleet_ix.go): a TUI dialog read off the screen, the Codex cards a node lists,
-// a plan answered in the terminal. Moved from the hub's tests with them.
+// The cards the manager makes itself: a TUI dialog read off the screen (fleet_ix_screen.go), the Codex cards a node
+// lists (fleet_ix_codex.go), a plan answered in the terminal (fleet_ix_terminal.go). Moved from the hub's tests with them.
 
 // Screens with a dialog the manager can read (screen.ParseDialog).
 const (
@@ -343,8 +344,23 @@ func TestScreenCardWithoutDialogShowsWithoutAPush(t *testing.T) {
 	if !strings.Contains(told, `"id":"scr_mac_s1"`) {
 		t.Fatal("the placeholder was not put on the apps")
 	}
+	// Persona Link's summary lists it, but notifies only the real card, which the phone is pushed for.
+	summary := func() link.Attention {
+		agents, ixs, told := ft.s.fleetInputs()
+		return linkAttention("en", agents, ixs, told)
+	}
+	if a := summary(); len(a.Items) != 1 || a.Items[0].InteractionID != "scr_mac_s1" || a.Items[0].Notify {
+		t.Fatalf("summary with the placeholder %+v", a)
+	}
 	n.setScreen(pickModel)
-	waitReplaced(ft.s, "scr_mac_s1", 2*time.Second)
+	realID, ok := waitReplaced(ft.s, "scr_mac_s1", 2*time.Second)
+	if !ok {
+		t.Fatal("no real card")
+	}
+	waitUntil(t, func() bool {
+		a := summary()
+		return len(a.Items) == 1 && a.Items[0].InteractionID == realID && a.Items[0].Notify
+	})
 }
 
 // The dialog shows during the window, after reads failed, or on the poll that crosses the window's end: the
@@ -483,6 +499,19 @@ func TestScreenCardBackHalfDrawnAfterTheNodeReconnectsIsQuiet(t *testing.T) {
 	if back, _ := waitCards(s, 1, 2*time.Second); len(back) != 1 || back["scr_mac_s1"] == "" {
 		t.Fatalf("the card before the dialog: %v", back)
 	}
+	// Persona Link: the card read before the dialog matched only by its session (an older card's mark matches so too):
+	// not the user's; the dialog's card back by its own id is, as it rang before the detach.
+	summarized := func() link.AttentionItem {
+		agents, ixs, told := s.fleetInputs()
+		a := linkAttention("en", agents, ixs, told)
+		if len(a.Items) != 1 {
+			t.Fatalf("summary %+v", a)
+		}
+		return a.Items[0]
+	}
+	if it := summarized(); it.InteractionID != "scr_mac_s1" || it.Notify {
+		t.Fatalf("the card before the dialog in the summary %+v", it)
+	}
 	n.setScreen(pickModel)
 	var first string
 	for id := range got {
@@ -495,6 +524,9 @@ func TestScreenCardBackHalfDrawnAfterTheNodeReconnectsIsQuiet(t *testing.T) {
 	}
 	if ids := pendingIDs(s); len(ids) != 1 || ids[first] == "" {
 		t.Fatalf("the dialog's card did not come back: %v, had %v", ids, got)
+	}
+	if it := summarized(); it.InteractionID != first || !it.Notify {
+		t.Fatalf("the dialog's card back in the summary %+v", it)
 	}
 	if pushes := ft.pushesOf(assistantwire.NotifyInput, 2, 300*time.Millisecond); len(pushes) != 1 {
 		t.Fatalf("pushed %d times", len(pushes))
@@ -1050,9 +1082,8 @@ func TestTerminalPlanResultClearsTheCardWithoutApprovingAnything(t *testing.T) {
 			if status != "dismissed" || res != nil {
 				t.Fatalf("must not record a made-up phone approval: %s %+v", status, res)
 			}
-			if len(ft.toldOf(assistantwire.EventFleetResolved)) == 0 {
-				t.Fatal("the hub never got interaction_resolved")
-			}
+			// finished tells the hub after the hook is released: wait for it rather than look once
+			waitFor(t, "the hub to get interaction_resolved", func() bool { return len(ft.toldOf(assistantwire.EventFleetResolved)) > 0 })
 		})
 	}
 }

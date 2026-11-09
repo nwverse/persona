@@ -91,7 +91,7 @@ Different homes do not share the lock namespace. Path aliases, external rollouts
 - `outgoing_message.rs:657–685` consumes the callback under a lock: **the first client to send a response/error wins, not the first to approve**. HumanCommand and user verification have extra eligibility/owner conditions; do not apply those special rules to ordinary approvals. Subscription is not a read-only ACL.
 - `serverRequest/resolved` contains only threadId/requestId, no approval result (`codex-rs/app-server-protocol/src/protocol/v2/notification.rs:71–76`). It is sent to current subscribers in listener order (`thread_lifecycle.rs:1314–1328`). The phone removes the card only; it must not fabricate Allow/Approve or elevate permissions from it.
 - connect/initialize does not directly replay approvals. Resume replays requests **still pending**, keeping their original IDs (`thread_lifecycle.rs:1230–1259`, `outgoing_message.rs:525–560,688–701`). User verification is not replayed and is canceled if the original owner disconnects. Deduplicate recovered cards; old answered / expired cards must never become approvable again.
-- A read-only observer must not automatically return errors or declines for unknown server requests: this can also consume the shared callback first, depriving the desktop of its chance to answer. Persona's existing single-owner unsupported-method error path (`assistant_codex.go:802`) cannot be copied directly to shared connections. Dynamic tools and similar requests belong only to clients with real handlers; ordinary phone approvals respond only after an explicit user tap.
+- A read-only observer must not automatically return errors or declines for unknown server requests: this can also consume the shared callback first, depriving the desktop of its chance to answer. Persona's existing single-owner unsupported-method error path (`assistant_codex_approve.go:35`) cannot be copied directly to shared connections. Dynamic tools and similar requests belong only to clients with real handlers; ordinary phone approvals respond only after an explicit user tap.
 - `connection_cleanup.rs:19–39` cleans up connections asynchronously after closing admission. A non-stdio server does not exit immediately when its last client disconnects; a thread unloads only after a timeout with no subscribers and no activity (`thread_lifecycle.rs:56–60`). Closing stdio stdin exits the main loop (`app-server/src/lib.rs:1196–1218`). Disconnecting Persona must not automatically kill external processes, but cannot promise that the last observer leaving has no lifecycle effect.
 - Slow WS clients are disconnected; a full stdio queue waits (`app-server/src/transport.rs:141–178,219–241`). Decode on node's callback thread, bound queues per thread, handle pagination/disk in the background, and never wait for phone approval in the receive path.
 
@@ -99,16 +99,16 @@ Different homes do not share the lock namespace. Path aliases, external rollouts
 
 | Current state | Evidence | Integration implications |
 | --- | --- | --- |
-| One self-started app-server and one thread per assistant chat | `docs/assistant/assistant.md:218`; `codexConn` in `server/internal/node/assistant_codex.go:46` has only one `threadID` / `turnID` | Reuse connection wrappers, but decouple connection state from thread state |
-| Numeric request IDs, pending table, result / error / timeout handling | `assistant_codex.go:92` | Pair request IDs within their own connections; no global numeric ID table |
-| initialize, thread/start/resume, start/steer, approvals, streaming output | `assistant_codex.go:266`, `:356`, `:683` | Reuse after adding multi-thread routing; do not rewrite the entire protocol |
-| initialize returns `codexHome`, currently neither saved nor used | `assistant_codex.go:268`; returned rollout `path` temporarily stored in `n.paths` (`:310`) | One active connection reading another home does not solve directory discovery after restart |
+| One self-started app-server and one thread per assistant chat | `docs/assistant/assistant.md:218`; `codexConn` in `server/internal/node/assistant_codex.go:33` has only one `threadID` / `turnID` | Reuse connection wrappers, but decouple connection state from thread state |
+| Numeric request IDs, pending table, result / error / timeout handling | `assistant_codex.go:89` | Pair request IDs within their own connections; no global numeric ID table |
+| initialize, thread/start/resume, start/steer, approvals, streaming output | `assistant_codex_thread.go:16`, `:113`; `assistant_codex_notify.go:61` | Reuse after adding multi-thread routing; do not rewrite the entire protocol |
+| initialize returns `codexHome`, currently neither saved nor used | `assistant_codex_thread.go:19`; returned rollout `path` temporarily stored in `n.paths` (`:66`) | One active connection reading another home does not solve directory discovery after restart |
 | Codex file lookup only uses default `~/.codex` | `server/internal/node/codex.go:52` | Support multiple homes as with Claude multi-directory discovery; do not hardcode desktop app directory names |
 | Offline listing scans Claude projects | `server/internal/node/sessions.go:559` | Reading a Codex rollout by known ID does not mean every desktop Codex history automatically appears in the list |
 | Multiple node caches / control tables key by session ID; hub / app / DB use machine + session | `server/internal/node/node.go:43`; `server/internal/proto/session.go:41`; `server/internal/db/migrations/manager/0001_init.sql:4` | Identical IDs from multiple sources collide; source identity must be more than display text |
-| Child-thread notifications are ignored | `assistant_codex.go:526` | Do not put multiple threads on one connection and retain this filter |
-| Approval ownership uses single-process `p.id`; ID hashes omit machine / connection generation | `assistant_codex.go:690`, `:948` | Route by actual request/thread/turn; never send another Agent's request to the current assistant for approval |
-| Any steer error falls back to start; interrupt cleans up background terminals | `assistant_codex.go:377`, `:408` | Do not retain these defaults for external servers: fallback start only for errors proving the turn ended; separate stopping a turn from cleaning all background commands |
+| Child-thread notifications are ignored | `assistant_codex_notify.go:92` | Do not put multiple threads on one connection and retain this filter |
+| Approval ownership uses single-process `p.id`; ID hashes omit machine / connection generation | `assistant_codex_approve.go:80`, `:265` | Route by actual request/thread/turn; never send another Agent's request to the current assistant for approval |
+| Any steer error falls back to start; interrupt cleans up background terminals | `assistant_codex_thread.go:138`, `:173` | Do not retain these defaults for external servers: fallback start only for errors proving the turn ended; separate stopping a turn from cleaning all background commands |
 
 Reuse directory discovery, realpath deduplication, and persistence: `server/internal/node/claudedirs.go:176`, `server/internal/devices/claudedirs.go:19`. Extract only allowlisted environment fields (such as `CODEX_HOME`), never send a process's entire environment, tokens, or account configuration to hub or logs. Codex's `find_codex_home` canonicalizes explicit homes (`codex-rs/core/src/config/mod.rs:5239`); Persona should deduplicate canonical directories too.
 
@@ -195,7 +195,7 @@ Not established: full Persona UI races when two subscribers send opposing decisi
 - Checked Persona's existing client / directory / routing source. This research is not a complete implementation; no running-server integration had been added yet.
 - Upstream source was not built or run, no real multi-client write tests, no deployment, no TestFlight release.
 
-## First implementation (2026-11-02)
+## First implementation
 
 Entry points are `node/codex_registry.go`, `codex_discovery.go`, and `codex_remote.go`. Reuses RPC envelopes/pending from `assistant_codex.go`, connecting external WebSockets through pluggable message writers and dispatch without putting external instances into assistant-process stop/reap.
 
@@ -211,11 +211,4 @@ Explicit limitations remain: parent-managed child threads do not receive direct 
 Synthetic regressions cover identical IDs across homes, multiple owners, loaded pagination, Unix handshake, legacy ID preservation, restart mapping, read-only zero control, no resend after steer failure, unknown delivery, approval replay/external resolution with zero replies, multi-thread deltas, and payload wrapping. `PERSONA_CODEX_NODE_BINARY=<built-personad> go test ./internal/node -run CodexRemoteNodeProcess` also starts an actual node with independent HOME, driving a test WebSocket through its stdio RPC without touching user sessions.
 
 Upstream source remains read-only; its Rust tests were not run, and no sends/approvals were tried on user desktop threads. If Apple/Android platforms are unavailable, report builds and light/dark screenshots as not run; Go/web tests do not replace them.
-
-### Acceptance record for this round
-
-Validated: full server tests against real test Postgres, repeated Codex/send-related race regressions, protocol driving of an actual node process with independent HOME, and all 16 web tests plus build. The new unknown-event regression covers the old parser overlay and genuinely fails on the old implementation. Synthetic data only; no changes to the shared worktree.
-
-Apple attempted xcodebuild test with an independent source directory/simulator and exited 70: although simctl had iOS 26.0 and the SDK list showed 26.2, Xcode reported the iOS 26.2 platform uninstalled and the destination unavailable. Actual Swift tests executed: 0; no iOS/watchOS light/dark screenshots obtained. Android had no available SDK/Gradle, so no build or tests. No platform installation, signing changes, or TestFlight release.
-
-Real-corpus validation attempted to select Codex snapshots from the user's independent corpus directory, but no eligible files were found. Corpus window/continuity was therefore not run this round; a skip is not a pass. Long history relies on existing fixture/window regressions. UI and real dual-client approval-race limitations remain.
+What that round ran, and what it could not run, is in `docs/archive/integrations/codex-app-server-records.md`.

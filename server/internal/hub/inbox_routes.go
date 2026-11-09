@@ -27,6 +27,10 @@ func (h *Hub) inboxRoutesRelayed(api *http.ServeMux) {
 			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.mergeList(w, r, key, h.forwardHTTP) })
 			continue
 		}
+		if key, ok := pagedLists[pattern]; ok { // the done items' history: one manager's page, its items stamped
+			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.pagedList(w, r, key, h.forwardHTTP) })
+			continue
+		}
 		if pattern == "POST /api/v1/inbox/{id}/reply" {
 			receipt := h.withReplyReceipt("inbox_reply", func(w http.ResponseWriter, r *http.Request) {
 				h.forwardSend(w, r, managerOfContext(r))
@@ -62,6 +66,26 @@ func (h *Hub) inboxRoutesRelayed(api *http.ServeMux) {
 					return
 				}
 				h.forwardSend(w, r, id)
+			})
+			continue
+		}
+		if pattern == "POST /api/v1/inbox/{id}/handoff" {
+			// Handing an item to the main conversation sends a message there: the item's manager, kept like a reply's
+			// receipt (a body client_id), in doubt when cut off on the way.
+			receipt := h.withReplyReceipt("inbox_handoff", func(w http.ResponseWriter, r *http.Request) {
+				h.forwardSend(w, r, managerOfContext(r))
+			})
+			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+				id, ok := h.owner(w, r, h.byRequest)
+				if !ok {
+					return
+				}
+				r = withManager(r, id)
+				if h.busConnOf(id) == nil {
+					writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
+					return
+				}
+				receipt(w, r)
 			})
 			continue
 		}

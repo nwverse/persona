@@ -52,6 +52,8 @@ func TestMain(m *testing.M) {
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
 	botmuxBin = func() string { return "" }
+	// Nor the user's gh outside the test's PATH (ghpath.go).
+	ghFallbackDirs = func() []string { return nil }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
 	os.Setenv("PASEO_HOME", "/tmp/persona-test-no-paseo")
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
@@ -418,23 +420,40 @@ func TestOrcaClose(t *testing.T) {
 	}
 }
 
-// Orca owns its worktrees' and tabs' names: renaming them is unsupported, with nothing sent to Orca.
-func TestOrcaRenameUnsupported(t *testing.T) {
+// Container and Agent renames use different runtime operations and exact scoped identities.
+func TestOrcaRenameTargetsTheWorktreeOrAgent(t *testing.T) {
 	n, o, _ := orcaSession(t)
-	for _, req := range []struct {
-		method string
-		params map[string]any
-	}{
-		{"space.rename", map[string]any{"workspace_id": "repo::" + orcaCwd, "name": "backend"}},
-		{"session.rename", map[string]any{"session_id": sidA, "tab_name": "review"}},
+	if _, err := request(t, n, "worktree.rename", map[string]any{"kind": "orca", "workspace_id": "repo::" + orcaCwd, "name": "  Backend work  "}); err != nil {
+		t.Fatal(err)
+	}
+	assertTrace(t, o.Trace("worktree.set"), []string{`worktree.set {"displayName":"Backend work","worktree":"id:repo::` + orcaCwd + `"}`})
+	if len(o.Trace("terminal.rename", "terminal.send")) != 0 {
+		t.Fatal("renaming a worktree touched its Agent")
+	}
+	o.Reset()
+	if _, err := request(t, n, "session.rename", map[string]any{"session_id": sidA, "tab_name": "Agent review"}); err != nil {
+		t.Fatal(err)
+	}
+	assertTrace(t, o.Trace("terminal.rename"), []string{`terminal.rename {"terminal":"term_1","title":"Agent review"}`})
+	if len(o.Trace("worktree.set")) != 0 {
+		t.Fatal("renaming an Agent touched its worktree")
+	}
+	o.Reset()
+	for _, body := range []map[string]any{
+		{"kind": "orca", "workspace_id": "missing", "name": "Other"},
+		{"kind": "orca", "workspace_id": "repo::" + orcaCwd, "name": " "},
+		{"kind": "orca", "workspace_id": "repo::" + orcaCwd, "name": strings.Repeat("x", maxLabel+1)},
 	} {
-		_, err := request(t, n, req.method, req.params)
-		if err == nil || !strings.Contains(err.Error(), "unsupported") || !strings.Contains(err.Error(), "不能从手机改名") {
-			t.Errorf("%s: %v", req.method, err)
+		if _, err := request(t, n, "worktree.rename", body); err == nil {
+			t.Fatal("invalid worktree rename accepted")
 		}
 	}
-	if tr := o.Trace(); len(tr) != 0 {
-		t.Errorf("orca called: %v", tr)
+	o.SetTerminals()
+	if _, err := request(t, n, "session.rename", map[string]any{"session_id": sidA, "tab_name": "Gone"}); err == nil {
+		t.Fatal("renamed a missing terminal")
+	}
+	if len(o.Trace("worktree.set", "terminal.rename", "terminal.send")) != 0 {
+		t.Fatal("a refused rename reached another target")
 	}
 }
 
@@ -786,9 +805,9 @@ func TestOrcaPromptSubmitFails(t *testing.T) {
 	}
 }
 
-// A session that is not running on an engine that cannot resume it (Herdr App), or that Orca does not resume (no
-// Claude transcript), is refused, nothing typed, with a reason: its claude not in front when its pane is still there
-// (suspended), else not running — not "unsupported". Orca resumes a Claude session whose pane is gone (#5548).
+// A session that is not running that Orca does not resume (no Claude transcript) is refused, nothing typed, with a
+// reason: its claude not in front when its pane is still there (suspended), else not running — not "unsupported".
+// Orca resumes a Claude session whose pane is gone (#5548); Herdr App resumes one as herdr does (#2532).
 func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 	n, o, procs := orcaSession(t)
 	n.claudeStart, n.claudeReady = 200*time.Millisecond, 200*time.Millisecond
@@ -834,13 +853,24 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 		t.Errorf("codex resumed in Orca: %v", c)
 	}
 
+	// Herdr App resumes it as herdr does (#2532): a new tab, its launcher with --resume through the start file.
 	hn, hc := hcSession(t)
+	hn.claudeStart, hn.claudeReady = 200*time.Millisecond, 200*time.Millisecond // the fake shell never runs claude
+	hc.doc = appDoc(hcCwd)
+	var typed string
+	hc.handle("terminal.send", func(p map[string]any) any {
+		typed, _ = startFileCommand(str(p["text"]))
+		return map[string]any{}
+	})
 	hc.setTerminals()
 	time.Sleep(time.Second) // past the failed-list cache
 	listSessions(t, hn)
 	_, err = request(t, hn, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
-	if code, _ := refusalOf(t, err); code != "not_running" || !strings.Contains(err.Error(), "Herdr App") {
+	if isRefusal(err, "not_running") {
 		t.Fatalf("herdr-core: %v", err)
+	}
+	if r := hc.trace("terminal.run"); len(r) != 1 || !strings.Contains(typed, "--resume "+sidA) {
+		t.Fatalf("herdr-core: not resumed in a new tab: runs %v, typed %q (%v)", r, typed, err)
 	}
 }
 

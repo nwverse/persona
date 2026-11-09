@@ -9,6 +9,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
 import java.time.OffsetDateTime
 
@@ -63,6 +66,11 @@ data class Machine(
     @SerialName("deploying") val deploying: Boolean = false,
     /** Why the last "Redeploy" did not work. */
     @SerialName("deploy_error") val deployError: String? = null,
+    /** Whether the hub would take a "Redeploy" here (docs/operations/node-update.md); false with [deployReason]; null from older hubs. */
+    @SerialName("can_deploy") val canDeploy: Boolean? = null,
+    @SerialName("deploy_reason") val deployReason: String? = null,
+    /** A redeploy's stage: waiting_idle, transferring, restarting or confirming; null from older hubs. */
+    @SerialName("deploy_phase") val deployPhase: String? = null,
     /** ego lite on a Mac while the hub's browser plugin is on (docs/plans/plan-ego-browser.md); absent otherwise. */
     @SerialName("browser") val browser: MachineBrowser? = null,
     /** How Cua Driver is on this Mac (docs/extensions/computer-use.md), while the cua extension is on; null elsewhere. */
@@ -335,6 +343,9 @@ data class Session(
      * under its own folder, whose paths name no repository). Group by repository goes by it (core:domain repoOf); older hubs never send it.
      */
     @SerialName("repo_root") val repoRoot: String? = null,
+    /** The top of the git working tree cwd is in (repoRoot for the main checkout) and its branch, from the node (#1805). */
+    @SerialName("worktree") val worktree: String? = null,
+    @SerialName("branch") val branch: String? = null,
     @WireEnum("needs_you", "unread", "working", "idle", "offline", "unknown")
     @SerialName("state") val state: String? = AgentState.of(null, status).wire,
     @WireTime @SerialName("seen_at") val seenAt: String? = null,
@@ -526,7 +537,20 @@ data class Item(
     /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by the user; the hub marks it
      *  (docs/protocol/protocol.md "Messages Persona injects"), older hubs do not (core/domain `injectedOf`). */
     val injected: Injected? = null,
+    /** Optional provenance for model input that was not typed by the user. Older hubs omit it. */
+    val source: MessageSource? = null,
 )
+
+/** Source titles are business data; clients localize the fallback for each kind. */
+@KeepGeneratedSerializer
+@Serializable(with = MessageSourceSerializer::class)
+data class MessageSource(
+    val kind: String = "",
+    @SerialName("conversation_id") val conversationId: String? = null,
+    val title: String? = null,
+)
+
+object MessageSourceSerializer : WireSerializer<MessageSource>(MessageSource.generatedSerializer())
 
 /** What a message Persona wrote for the model is: [line] is what the chat shows instead of it. */
 @KeepGeneratedSerializer
@@ -664,13 +688,32 @@ data class Interaction(
             else -> agentLabelHint?.takeIf(String::isNotBlank) ?: agent
         }
 
+    /**
+     * The assistant's password card (`secret_run`, #1137, #1581): commands run on one of the user's computers with a
+     * password the user types into the card. Only the card's own form in the conversation or the Agents tab takes the
+     * password (Run); every quick entry offers only Deny.
+     */
+    val isSecretRun: Boolean get() = kind == "permission" && toolName == "secret_run"
+
+    /** A password card's computer, purpose and commands (the commands exactly as sent); null for any other card. */
+    val secretRun: SecretRunRequest?
+        get() {
+            if (!isSecretRun) return null
+            val input = toolInput as? JsonObject
+            fun text(key: String) = (input?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
+            val commands = (input?.get("commands") as? JsonArray).orEmpty()
+                .mapNotNull { command -> (command as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank) }
+            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands)
+        }
+
     /** One line for a notification or a list row. */
     val headline: CoreText
         get() = when (kind) {
             "question" -> questions?.firstOrNull()?.question?.let(CoreText::plain) ?: CoreText.of(Key.HeadlineQuestion, agentDisplayName ?: "Claude")
             "elicitation" -> CoreText.of(Key.HeadlineElicitation)
             "plan" -> CoreText.of(Key.FleetPlanWaiting)
-            "permission" -> {
+            // A password card names the computer it runs on; its commands are in the card.
+            "permission" -> secretRun?.let { CoreText.of(Key.HeadlineSecretRun, it.machine) } ?: run {
                 // An MCP tool reads "github · create issue", not its raw mcp__github__create_issue (#4806).
                 val tool: Any = toolDisplayName(toolName) ?: CoreText.of(Key.ToolGeneric)
                 val detail = summary?.takeIf { it.isNotBlank() }
@@ -685,6 +728,14 @@ data class Interaction(
             "screen" -> dialog?.question?.takeIf { it.isNotBlank() }?.let(CoreText::plain) ?: CoreText.of(Key.HeadlineScreen)
             else -> CoreText.of(Key.HeadlineNeedsYou)
         }
+}
+
+/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, and the commands. */
+data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>) {
+    companion object {
+        /** The card's one field, declared by the hub: Run sends the typed password under this key in [Resolution.values]. */
+        const val PASSWORD = "password"
+    }
 }
 
 @Serializable
@@ -704,6 +755,8 @@ data class Resolution(
     @SerialName("option") val option: String? = null,
     /** A multi-select dialog's checked option keys. */
     @SerialName("options") val options: List<String>? = null,
+    /** A permission card's field values; only a password card's Run sends one ([SecretRunRequest.PASSWORD]). */
+    @SerialName("values") val values: Map<String, String>? = null,
     /** Who answered when it was not the user in the app (`assistant`); only in a resolution the hub hands back. */
     @SerialName("answered_by") val answeredBy: String? = null,
     val action: String? = null,

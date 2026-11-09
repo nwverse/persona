@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -54,6 +55,15 @@ func TestAskUserCardOutlivesTheDefaultNudge(t *testing.T) {
 	if !ix.ExpiresAt.After(nudgeDue) {
 		t.Errorf("the ask_user card lives %v (expires %s) but the default nudge is due after %v (%s): the card is gone before the nudge",
 			ix.ExpiresAt.Sub(ix.CreatedAt), ix.ExpiresAt.Format(time.TimeOnly), nudgeDue.Sub(ix.CreatedAt), nudgeDue.Format(time.TimeOnly))
+	}
+}
+
+// The tool call that asked must live as long as the card: `personad mcp` ends a call at mcpserver.CallTimeout, and a
+// shorter cap ended ask_user before its own deadline, before the nudge (#1498; it was 40 minutes). The margin is for
+// the answer's way back from the phone.
+func TestAskUserWaitFitsTheMCPServersCap(t *testing.T) {
+	if margin := mcpserver.CallTimeout - askUserWait; margin < 5*time.Minute {
+		t.Errorf("ask_user waits %v but personad mcp ends a tool call after %v: raise mcpserver.CallTimeout with it", askUserWait, mcpserver.CallTimeout)
 	}
 }
 
@@ -271,8 +281,8 @@ func TestUserWritingWithdrawsAskUserWithoutTheQueue(t *testing.T) {
 	}
 }
 
-// A question that expires after its wait ends as before: the history says expired, the Lark card closes (as ended),
-// and it is never nudged. The wait is shortened to 300 ms here; the real one
+// A question that expires after its wait ends for good: the history says expired, the Lark card closes saying it moved
+// to the to-dos (the question becomes one, ask_todo.go), and it is never nudged. The wait is shortened to 300 ms here; the real one
 // is askUserWait.
 func TestExpiredAskUserCardIsEndedForGood(t *testing.T) {
 	a := newAskRig(t)
@@ -297,8 +307,8 @@ func TestExpiredAskUserCardIsEndedForGood(t *testing.T) {
 	for time.Now().Before(deadline) && a.closed() == "" {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(a.closed(), i18n.T(a.s.botLang(ctx), "assistant-channels.ended")) {
-		t.Errorf("the Lark card was not closed as ended: %q", a.closed())
+	if !strings.Contains(a.closed(), i18n.T(a.s.botLang(ctx), "assistant-feishu_cards.moved_to_todos")) {
+		t.Errorf("the Lark card was not closed as moved to the to-dos: %q", a.closed())
 	}
 	a.tick(a.s, 2*time.Hour)
 	for _, n := range a.sent() { // the card the shape was taken from still waits, and is nudged
@@ -327,7 +337,7 @@ func TestAskUserLateAnswerFindsNoQuestion(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	// What askOnPhone sends to the question when its card expires (fleet_ix.go): a dismiss.
+	// What askOnPhone sends to the question when its card expires (fleet_ix_own.go): a dismiss.
 	if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: ix.ID, Answer: json.RawMessage(`{"dismiss":true}`)}); err != nil {
 		t.Fatal(err)
 	}

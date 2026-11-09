@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -12,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -46,8 +46,8 @@ type taskDoneSignals struct {
 }
 
 var (
-	mergedWords  = regexp.MustCompile(`(?i)\bmerged\b|\bsquash(ed)?\b|已合并|合并了|已合入|合入了|自行合并`)
-	buildNumbers = regexp.MustCompile(`(?i)testflight[^\n]{0,40}?\d{3,}|构建号?\s*[:：#]?\s*\d{3,}|\bbuild\s*#?\s*\d{3,}`)
+	mergedWords  = lazyre.New(`(?i)\bmerged\b|\bsquash(ed)?\b|已合并|合并了|已合入|合入了|自行合并`)
+	buildNumbers = lazyre.New(`(?i)testflight[^\n]{0,40}?\d{3,}|构建号?\s*[:：#]?\s*\d{3,}|\bbuild\s*#?\s*\d{3,}`)
 )
 
 func doneSignals(replies []prompts.TaskDoneReply) taskDoneSignals {
@@ -81,6 +81,8 @@ func autoDoneSkip(t Todo, work time.Time, worked bool) string {
 	switch {
 	case t.Origin == "":
 		return "not_a_task" // a todo the user made by hand: only they close it
+	case t.Cancelled():
+		return "cancelled"
 	case t.DoneAt != nil:
 		return "done"
 	case t.ReopenedAt != nil && !(worked && work.After(*t.ReopenedAt)):
@@ -91,8 +93,7 @@ func autoDoneSkip(t Todo, work time.Time, worked bool) string {
 
 // taskReplies are the last replies of t's active agents: the whole last answer read from the agent's transcript, or
 // the session list's clipped last_text when that cannot be read.
-func (s *Service) taskReplies(ctx context.Context, t Todo) []prompts.TaskDoneReply {
-	var out []prompts.TaskDoneReply
+func (s *Service) taskReplies(ctx context.Context, t Todo) (out []prompts.TaskDoneReply, sideTurnBlocked bool) {
 	for _, a := range t.Agents {
 		if a.ReleasedAt != nil || a.DismissedAt != nil {
 			continue
@@ -103,9 +104,21 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) []prompts.TaskDoneRep
 		}
 		items, read := s.lastTurnItems(ctx, m.ID, a.SessionID)
 		if read && taskTurnAwaitingAnswer(items) {
-			return nil // one unfinished agent invalidates the whole task's completion evidence
+			return nil, false // one unfinished agent invalidates the whole task's completion evidence
 		}
 		ask, text := turnExchange(items)
+		from, source := taskTurnSource(t, items)
+		if source != "" {
+			current, ok := s.todoNow(t.ID)
+			s.tasks.mu.Lock()
+			since := s.tasks.working[t.ID]
+			s.tasks.mu.Unlock()
+			if report, evidence, valid := freshTaskDoneReport(current, items, since); ok && valid {
+				text = strings.Join(append([]string{text, report}, evidence...), "\n")
+			} else {
+				sideTurnBlocked = true
+			}
+		}
 		if text == "" {
 			if c, ok := s.session(ctx, m.ID, a.SessionID); ok {
 				text = strings.TrimSpace(c.LastText)
@@ -114,17 +127,16 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) []prompts.TaskDoneRep
 		if text == "" {
 			continue
 		}
-		if sameRequest(ask, t.Notes) {
+		if source == "" && sameRequest(ask, t.Notes) {
 			ask = "" // the turn that answers the task's own prompt: the prompt is already in the input
 		}
-		out = append(out, prompts.TaskDoneReply{Machine: m.Name, Ask: clipMiddle(ask, 500), Text: clipMiddle(text, 1500)})
+		out = append(out, prompts.TaskDoneReply{Machine: m.Name, From: from, Source: source, Ask: clipMiddle(ask, 500), Text: clipMiddle(text, 1500)})
 	}
-	return out
+	return out, sideTurnBlocked
 }
 
-// lastTurn is the agent's latest turn: what the user asked in it (its first user message; "" when none) and its last
-// reply ("" when the turn cannot be read). The user may have sent the agent a follow-up since the task's prompt: the
-// work to judge is then that.
+// lastTurn reads the latest exchange, not necessarily a user request about the task.
+// Completion separately retains and gates its peer/injected provenance.
 func (s *Service) lastTurn(ctx context.Context, machine, sid string) (ask, answer string) {
 	items, _ := s.lastTurnItems(ctx, machine, sid)
 	return turnExchange(items)
@@ -215,22 +227,66 @@ func clipMiddle(s string, n int) string {
 
 // judgeTaskDone asks the judge model whether t's work is finished. An error: no model, or no answer to go by.
 func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, error) {
-	replies := s.taskReplies(ctx, t)
-	c := taskDoneCheck{Replies: len(replies), Signals: doneSignals(replies)}
+	replies, sideTurnBlocked := s.taskReplies(ctx, t)
+	if c, ok := taskDoneWithoutModel(replies, sideTurnBlocked); ok {
+		if sideTurnBlocked {
+			s.logf("task %s: side-conversation reply without current task completion evidence: left open", t.ID)
+		}
+		return c, nil
+	}
+	in := taskDoneInput{Owner: s.owner(ctx), Delivery: s.doneNeedsDelivery(ctx), Title: t.Title, Notes: t.Notes, Replies: replies}
+	if t.Supervision != nil {
+		in.Criteria = t.Supervision.DoneWhen
+	}
+	return judgeTaskDoneWith(ctx, s.purposeModel("inbox.judge"), in)
+}
+
+// jsonModel is the one call the done judge makes: a system and a user text in, a JSON answer decoded into out.
+// *ai.Client is the real one; tests and behaviour checks give their own.
+type jsonModel interface {
+	JSON(ctx context.Context, system, user string, out any) error
+}
+
+// taskDoneInput is everything the done judge decides on, read from the todo, its agents and the assistant's
+// settings (judgeTaskDone) or written out by a test.
+type taskDoneInput struct {
+	Owner    string                  // how the prompt names the user
+	Delivery bool                    // assistant.done_needs_delivery
+	Title    string                  // the todo's title
+	Notes    string                  // what it was handed out with (clipped here)
+	Criteria []string                // a supervised task's done_when
+	Replies  []prompts.TaskDoneReply // its agents' last replies
+}
+
+// taskDoneWithoutModel is the verdict given before any model is asked: a reply from a side conversation with no
+// evidence for this task, no reply at all, or a turn the model service cut off. ok false: the model decides.
+func taskDoneWithoutModel(replies []prompts.TaskDoneReply, sideTurnBlocked bool) (c taskDoneCheck, ok bool) {
+	c = taskDoneCheck{Replies: len(replies), Signals: doneSignals(replies)}
+	if sideTurnBlocked {
+		c.Verdict, c.Reason = verdictNotDone, verdictWords[verdictNotDone]
+		return c, true
+	}
 	if len(replies) == 0 {
 		c.Verdict, c.Reason = verdictUnsure, "没读到 Agent 的回复"
-		return c, nil
+		return c, true
 	}
 	for _, r := range replies {
 		if cutOff(r.Text) { // its turn was cut off by the model service: not finished, whatever came before (#1516)
 			c.Verdict, c.Reason = verdictNotDone, interruptedSummary
-			return c, nil
+			return c, true
 		}
 	}
-	delivery := s.doneNeedsDelivery(ctx)
-	system := prompts.RenderTaskDone(prompts.TaskDone{Owner: s.owner(ctx), Delivery: delivery})
-	input := prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: t.Title, Prompt: clipMiddle(strings.TrimSpace(t.Notes), 1500),
-		Replies: replies, MergedPR: c.Signals.MergedPR, Build: c.Signals.Build})
+	return c, false
+}
+
+// judgeTaskDoneWith asks m about in and applies the hub's own rules to what it answers: a verdict it made up is
+// unsure, the reason is one short line, and while delivery is judged, done with the work not out yet is undelivered.
+// It reads nothing else, so a behaviour check can run it on written-out cases.
+func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (taskDoneCheck, error) {
+	c := taskDoneCheck{Replies: len(in.Replies), Signals: doneSignals(in.Replies)}
+	system := prompts.RenderTaskDone(prompts.TaskDone{Owner: in.Owner, Delivery: in.Delivery})
+	input := prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: in.Title, Prompt: clipMiddle(strings.TrimSpace(in.Notes), 1500),
+		Criteria: in.Criteria, Replies: in.Replies, MergedPR: c.Signals.MergedPR, Build: c.Signals.Build})
 	var out struct {
 		Verdict  string `json:"verdict"`
 		Reason   string `json:"reason"`
@@ -238,7 +294,7 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 		Gate     string `json:"gate"`
 		Unblock  string `json:"unblock"`
 	}
-	if err := s.purposeModel("inbox.judge").JSON(ctx, system, input, &out); err != nil {
+	if err := m.JSON(ctx, system, input, &out); err != nil {
 		return c, err
 	}
 	switch v := strings.ToLower(strings.TrimSpace(out.Verdict)); v {
@@ -249,8 +305,8 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 	}
 	c.Reason = clip(oneLine(out.Reason), 40)
 	c.WouldClose = c.Verdict == verdictDone
-	if delivery {
-		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, replies)
+	if in.Delivery {
+		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
 		d.At = time.Now()
 		c.Delivery = &d
 		if c.Verdict == verdictDone && !deliveryClosable(d.State) {

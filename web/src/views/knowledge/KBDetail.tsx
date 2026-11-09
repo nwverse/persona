@@ -1,8 +1,11 @@
 // One knowledge entry (/kb/<kind>/<id>): its tile, name, badges, one line and tags, "Ask Persona"; then the places a
 // search found, the Agents on a project, the timeline, the profile, Moments, related entries by kind, code directories,
 // a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
-import { useEffect, useState } from "react";
-import { api, enc, errorText, isAbort } from "../../lib/api";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
+import { defaultManager, MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
+import { ConfirmedFacts } from "./ConfirmedFacts";
+import { Relationships } from "./Relationships";
 import { ago, sessionPreview, sessionTitle, shortPath, stateOf, tabLabel } from "../../lib/format";
 import {
   agentPreset,
@@ -13,9 +16,8 @@ import {
   factsOf,
   formatAt,
   hitView,
-  importanceTone,
+  isKind,
   kindTitle,
-  linkGroups,
   parseMessageLine,
   parseRecent,
   profile,
@@ -44,7 +46,7 @@ import { askPersona } from "../../lib/outbox";
 import { openNewAgent } from "../../lib/new-agent";
 import { DayDialog, MessageView, MomentDialog, TagEditor } from "./KBDialogs";
 import { ErrorBox } from "./KBList";
-import { Badges, Card, importanceLabel, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
+import { Badges, Card, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
 /** Timeline lines shown before "Show all". */
@@ -66,16 +68,7 @@ export function EmptyDetail() {
   );
 }
 
-export function EntryDetail({
-  kind,
-  id,
-  query,
-  reloadKey,
-  onToggleSidebar,
-  onBack,
-  onOpen,
-  onSaved,
-}: {
+type EntryDetailProps = {
   kind: string;
   id: string;
   /** Opened from a search: the places it was found come first. */
@@ -85,7 +78,20 @@ export function EntryDetail({
   onBack: () => void;
   onOpen: (e: KBEntry) => void;
   onSaved: () => void;
-}) {
+};
+
+export function EntryDetail(props: EntryDetailProps) {
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const manager = useKnownDefault();
+  if (!manager || !getToken()) return <Loading />;
+  // Retained detail and editors belong to the requested route and owner, including the default manager.
+  return <OwnedEntryDetail key={JSON.stringify([props.kind, props.id, owner, manager])} {...props} owner={owner} manager={manager} />;
+}
+
+function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack, onOpen, onSaved, owner, manager }: EntryDetailProps & { owner: string; manager: string }) {
+  const [token] = useState(getToken);
+  const current = useCallback(() => credentialOwner() === owner && defaultManager() === manager, [owner, manager]);
+  const request = useRef(0);
   const [resp, setResp] = useState<KBDetailResponse | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -94,24 +100,40 @@ export function EntryDetail({
   const [allLog, setAllLog] = useState(false);
   const [allMatches, setAllMatches] = useState(false);
   const [allMoments, setAllMoments] = useState(false);
-  const [openKinds, setOpenKinds] = useState<Set<string>>(new Set());
   const [showRecent, setShowRecent] = useState(false);
   const [day, setDay] = useState<{ day: string; focus?: number; query?: string } | null>(null);
   const [moment, setMoment] = useState<KBMomentRef | null>(null);
 
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const version = ++request.current;
+    const valid = () => current() && version === request.current && !signal?.aborted;
+    try {
+      const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, {
+        signal, token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager },
+      });
+      if (!valid()) return false;
+      // The server canonicalizes source IDs (including recording UUID case); the request owns this response.
+      if (r.detail.kind !== kind) throw new Error(t("knowledge-confirmedfacts.entry_changed"));
+      remember(r.detail.links ?? []);
+      setResp(r);
+      setError("");
+      return true;
+    } catch (err) {
+      if (!valid()) return false;
+      if (!isAbort(err)) setError(errorText(err));
+      throw err;
+    }
+  }, [kind, id, query, token, owner, manager, current]);
+
   useEffect(() => {
     setError("");
     const ac = new AbortController();
-    api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, { signal: ac.signal })
-      .then((r) => {
-        remember(r.detail.links ?? []);
-        setResp(r);
-      })
-      .catch((e) => !isAbort(e) && setError(errorText(e)));
-    return () => ac.abort();
-  }, [kind, id, query, reloadKey, retry]);
+    void load(ac.signal).catch(() => {});
+    return () => { ac.abort(); request.current++; };
+  }, [load, reloadKey, retry]);
 
   const d = resp?.detail;
+
   const base = known(kind, id);
   const e: KBEntry = d ? entryFromDetail(base, d) : (base ?? { kind, id, name: id, relevance: 0 });
   const status = statusLabel(projectInfo(e)?.status);
@@ -132,7 +154,6 @@ export function EntryDetail({
   const rec = d ? recordingView(d.kind, d.meta, d.segments) : null;
   const log = timeline(d?.log);
   const prof = profile(d?.summary, e.one_line, e.name);
-  const links = linkGroups(d?.links);
   const dirs = dirsOf(d?.meta);
   const recent = d?.kind === "chats" ? parseRecent(d.recent) : [];
   const into = typeof d?.meta?.merged_into === "string" ? d.meta.merged_into : "";
@@ -269,6 +290,16 @@ export function EntryDetail({
                 </section>
               )}
 
+              {isKind(kind) && <ConfirmedFacts
+                kind={kind}
+                id={id}
+                value={typeof d.meta?.pinned === "string" ? d.meta.pinned : ""}
+                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                current={current}
+                refresh={load}
+                onSaved={onSaved}
+              />}
+
               {prof && (
                 <section>
                   <SectionTitle title={t("knowledge-kbdetail.profile")} />
@@ -324,50 +355,21 @@ export function EntryDetail({
                 </section>
               )}
 
-              {links.map((g) => {
-                const open = openKinds.has(g.kind);
-                return (
-                  <section key={g.kind}>
-                    <SectionTitle title={g.title} count={g.items.length} />
-                    <Card>
-                      {(open ? g.items : g.items.slice(0, LINKS_SHOWN)).map((x) => (
-                        <a
-                          key={`${x.kind}/${x.id}`}
-                          href={href({ name: "kb", kind: x.kind, id: x.id })}
-                          onClick={(ev) => onPlainClick(ev, () => onOpen(x))}
-                          className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover"
-                        >
-                          <Tile entry={x} size={30} />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-medium text-ink">{x.name}</span>
-                            {x.one_line && <span className="block truncate text-[12px] text-ink-3">{x.one_line}</span>}
-                          </span>
-                          {x.importance && (
-                            <TonePill tone={importanceTone(x.importance)} strong>
-                              {importanceLabel(x.importance)}
-                            </TonePill>
-                          )}
-                          <Icon name="chevronRight" size={12} stroke={2.2} className="shrink-0 text-ink-3" />
-                        </a>
-                      ))}
-                      {g.items.length > LINKS_SHOWN && (
-                        <MoreRow
-                          open={open}
-                          label={t("knowledge-kbdetail.all_items", { count: g.items.length })}
-                          onClick={() =>
-                            setOpenKinds((s) => {
-                              const n = new Set(s);
-                              if (n.has(g.kind)) n.delete(g.kind);
-                              else n.add(g.kind);
-                              return n;
-                            })
-                          }
-                        />
-                      )}
-                    </Card>
-                  </section>
-                );
-              })}
+              <Relationships
+                detail={d}
+                name={e.name}
+                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                current={current}
+                onOpen={onOpen}
+                onRefreshed={(r) => {
+                  if (!current()) return;
+                  request.current++;
+                  remember(r.detail.links ?? []);
+                  setResp(r);
+                  setError("");
+                }}
+                onSaved={onSaved}
+              />
 
               {dirs.length > 0 && <Dirs dirs={dirs} />}
 

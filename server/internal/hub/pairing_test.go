@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -74,6 +75,27 @@ func (s *pairStore) RevokeDeviceToken(_ context.Context, id string) (bool, error
 	return false, nil
 }
 
+// RevokeMachineCredentials is db.DB's: the machine's live credentials revoked, its unused codes expired.
+func (s *pairStore) RevokeMachineCredentials(_ context.Context, machine string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for hash, p := range s.pairs {
+		if p.MachineID == machine && p.UsedAt == nil && now.Before(p.ExpiresAt) {
+			p.ExpiresAt = now
+			s.pairs[hash] = p
+		}
+	}
+	var ids []string
+	for _, device := range s.rows {
+		if device.MachineID == machine && device.Role == roleLink && !s.rev[device.ID] {
+			s.rev[device.ID] = true
+			ids = append(ids, device.ID)
+		}
+	}
+	return ids, nil
+}
+
 func newPairCode(t *testing.T, h *Hub) pairCode {
 	t.Helper()
 	w := securityRequest(h.routes(), "POST", "/api/v1/auth/pair-codes", h.cfg.Token, "", "127.0.0.1:1", false)
@@ -83,6 +105,44 @@ func newPairCode(t *testing.T, h *Hub) pairCode {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestNewPairCodeAddressFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		name, machine, host string
+	}{
+		{"app", "", "pair"},
+		{"machine", "laptop", "link"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPublicTestHub(t)
+			h.store = newPairStore()
+			h.public.endpoints = []Endpoint{
+				{URL: "https://[2001:db8::a]:19443", Kind: "ipv6", Scheme: "https"},
+				{URL: "https://[2001:db8::b]:19443", Kind: "ipv6", Scheme: "https"},
+				{URL: "https://example.com:443", Kind: "name", Scheme: "https"},
+				{URL: "https://203.0.113.10:19443", Kind: "ipv4", Scheme: "https"},
+			}
+			p, err := h.newPairCode(context.Background(), tc.machine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"https://[2001:db8::a]:19443", "https://203.0.113.10:19443"}
+			if !slices.Equal(p.Alt, want) {
+				t.Fatalf("pair code alternates = %v, want %v", p.Alt, want)
+			}
+			u, err := url.Parse(p.PairURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := u.Query()["alt"]; !slices.Equal(got, want) {
+				t.Fatalf("pair URL alternates = %v, want %v", got, want)
+			}
+			if u.Host != tc.host || p.Machine != tc.machine || u.Query().Get("machine") != tc.machine {
+				t.Fatal("pairing target changed")
+			}
+		})
+	}
 }
 
 func TestPairTokenLifecycle(t *testing.T) {

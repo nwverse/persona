@@ -1,7 +1,9 @@
 package kb
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,8 +42,11 @@ func (s *Store) Rezone(to *time.Location) (int, error) {
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockArchive()
+	defer s.unlockArchive()
+	if err := s.recoverIngestsLocked(); err != nil {
+		return 0, err
+	}
 	s.zone = to
 	if s.settled == to.String() {
 		return 0, nil // every file is in it; what is written from now on is too
@@ -86,6 +91,9 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 	if s.readOnly {
 		return false, nil
 	}
+	if err := s.pendingIngestLocked(id); err != nil {
+		return false, err
+	}
 	dir := s.path(KindChat, id, "messages")
 	tmp, old := dir+".rezone", dir+".old"
 	// A move cut short: before the swap, the old days are still the chat's; after it, only the leftovers go.
@@ -123,6 +131,8 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 	type entry struct {
 		at   time.Time
 		text string
+		// oldDay and old: the day and text it had before (a message line's), to carry its retention ledger entry.
+		oldDay, old string
 	}
 	byDay := map[string][]entry{}
 	chatName := ""
@@ -157,9 +167,12 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 					cur = &entry{at: at, text: l}
 					continue
 				}
-				cur = &entry{at: at, text: "- " + at.In(to).Format("15:04") + l[7:]}
+				cur = &entry{at: at, text: "- " + at.In(to).Format("15:04") + l[7:], oldDay: d, old: l}
 			case strings.HasPrefix(l, "  ") && cur != nil:
 				cur.text += "\n" + l
+				if cur.old != "" {
+					cur.old += "\n" + l
+				}
 			default:
 				flush()
 			}
@@ -167,6 +180,37 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 		flush()
 	}
 
+	// The retention ledger keys lines by their day and minute, which move: their entries move with them. The ledger
+	// is written with both keys before the swap (a move cut short still finds either) and with the new ones after.
+	ledger, hasLedger, err := s.readLedger(id)
+	if err != nil {
+		hasLedger = false // one that does not read stays as it is (pruning keeps such a chat's lines longest)
+	}
+	moved := retentionLedger{Version: 1, Rule: ledger.Rule}
+	both := retentionLedger{Version: 1, Rule: ledger.Rule, Lines: map[string]map[string]string{}}
+	for d, keys := range ledger.Lines {
+		both.Lines[d] = map[string]string{}
+		for k, r := range keys {
+			both.Lines[d][k] = r
+		}
+	}
+	for d, es := range byDay {
+		for _, e := range es {
+			if e.old == "" || !hasLedger {
+				continue
+			}
+			if r, ok := ledger.Lines[e.oldDay][lineKey(e.old)]; ok {
+				key := lineKey(e.text)
+				moved.note(d, key, r, false)
+				both.note(d, key, r, false)
+			}
+		}
+	}
+	if hasLedger {
+		if err := writeJSON(s.ledgerPath(id), both); err != nil {
+			return false, err
+		}
+	}
 	for d, es := range byDay {
 		sort.SliceStable(es, func(i, j int) bool { return es[i].at.Before(es[j].at) })
 		var b strings.Builder
@@ -189,6 +233,11 @@ func (s *Store) settleChatLocked(id string) (bool, error) {
 		return false, err
 	}
 	_ = os.RemoveAll(old)
+	if hasLedger {
+		if err := writeJSON(s.ledgerPath(id), moved); err != nil {
+			return true, err
+		}
+	}
 	return true, nil
 }
 
@@ -208,13 +257,14 @@ func logHeader(zone *time.Location) string {
 	return logTitle + " · " + zone.String() + "\n\n"
 }
 
-// settleLogLocked moves a project's timeline into the archive's zone if its header names another one.
+// settleLogLocked moves a project's timeline into the archive's zone if its header names another one. It runs before
+// every append and read, so it reads only the header; the whole timeline only when it moves it.
 func (s *Store) settleLogLocked(slug string) (bool, error) {
 	if s.readOnly {
 		return false, nil
 	}
 	p := s.path(KindProject, slug, "log.md")
-	raw, err := os.ReadFile(p)
+	head, err := firstLine(p)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -222,8 +272,6 @@ func (s *Store) settleLogLocked(slug string) (bool, error) {
 		return false, err
 	}
 	to := s.zoneLocked()
-	text := string(raw)
-	head, _, _ := strings.Cut(text, "\n")
 	name := ""
 	if z, ok := strings.CutPrefix(head, logTitle+" · "); ok {
 		name = strings.TrimSpace(z)
@@ -235,8 +283,15 @@ func (s *Store) settleLogLocked(slug string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("log.md names %q: %w", name, err)
 	}
+	raw, err := os.ReadFile(p)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
 	var lines []string
-	for _, l := range strings.Split(text, "\n") {
+	for _, l := range strings.Split(string(raw), "\n") {
 		if !strings.HasPrefix(l, "- ") {
 			continue
 		}
@@ -246,6 +301,20 @@ func (s *Store) settleLogLocked(slug string) (bool, error) {
 		lines = append(lines, l)
 	}
 	return true, s.writeLogLocked(slug, lines)
+}
+
+// firstLine is the first line of the file at p without its "\n" (the whole file when it has none), read without the rest.
+func firstLine(p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	line, err := bufio.NewReaderSize(f, 256).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return strings.TrimSuffix(line, "\n"), nil
 }
 
 // writeLogLocked replaces a project's timeline with lines (each "- 2006-01-02 15:04 · …", in the archive's zone).

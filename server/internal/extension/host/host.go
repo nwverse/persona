@@ -8,6 +8,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -54,6 +56,8 @@ var (
 	StopGrace     = 5 * time.Second  // after stdin closes, and again after SIGTERM
 	StrikesToKill = 3                // timeouts or missed pings in a row before it is restarted
 	LogLineMost   = 4 << 10
+	RemoteRetry   = 10 * time.Second // an attached plugin that cannot be reached is tried again this often
+	OfflineGrace  = 30 * time.Second // and is starting for this long after it went offline, then an error
 )
 
 // ErrNotRunning is a call to a plugin that is not running and is not started by calls.
@@ -89,6 +93,10 @@ type Spec struct {
 	// HTTP: it serves HTTP on Socket (the hub's path for a program it runs: removed before each start and after each run).
 	HTTP   bool
 	Socket string
+	// Attached: a plugin elsewhere (Command "") that runs on its own. One that cannot be reached is tried again every
+	// RemoteRetry and stays starting for OfflineGrace before it is an error; one that answers and is refused (another
+	// protocol, id or version) is an error at once and tried again with the backoff. Link says how it is connected.
+	Attached bool
 
 	// Startup: it runs from the start. OnCall / OnHTTP: a call / a relayed request starts it, and it stops after
 	// Idle without either. Holds (Hold) keep it running too.
@@ -98,6 +106,13 @@ type Spec struct {
 
 	// Init is what initialize sends, asked at each start (the configuration and secrets of the moment).
 	Init func(ctx context.Context) (extension.InitializeParams, error)
+	// Version, for an attached plugin that speaks the protocol, is the version it must be: before Init is asked it must
+	// answer manifest as ID at Version, or it is refused and gets nothing Init makes (a token, the settings, secrets).
+	Version string
+	// Release is called after each run that never became ready (a start that failed or was refused, or stopped first),
+	// and after every run of an attached plugin, whose program goes on elsewhere once its run ends: what Init or StartEnv
+	// handed out for it must not outlive it.
+	Release func()
 	// Check runs before each start (a built-in program must be the hub's build); its error is the status's.
 	Check func(ctx context.Context) error
 	// Accept holds what the program said to what the hub expects; an error stops it.
@@ -155,6 +170,25 @@ func (s *Spec) callTimeout() time.Duration {
 	return DefaultCall
 }
 
+func (s *Spec) attached() bool { return s.Attached && s.Command == "" }
+
+// Link is how an attached plugin is connected.
+type Link struct {
+	Online bool
+	// Since is when it came online, went offline, or was needed while it was stopped.
+	Since time.Time
+	// Why it is offline, also while it is still starting; "" online.
+	Why string
+	// Said is the version it gave when it last answered initialize as this plugin (its protocol and id), whether or not
+	// the hub took it; "" once a try fails before that.
+	Said string
+}
+
+// refused is an initialize answer the hub does not take: the program is there, so trying again soon changes nothing.
+type refused struct{ error }
+
+func (r refused) Unwrap() error { return r.error }
+
 // session is one run's protocol connection.
 type session struct {
 	peer   *rpc.Peer
@@ -182,6 +216,12 @@ type Proc struct {
 	lastUse    time.Time
 	strikes    int
 	kill       func() // ends the current run (a restart); nil between runs
+	// An attached plugin's Link; linkKind is what failed last (failureKind; a refusal's whole text), so one that stays
+	// away is not logged each try.
+	linkSince time.Time
+	linkWhy   string
+	linkKind  string
+	said      string
 }
 
 // Start runs spec until Stop or ctx ends. Nothing starts before something needs it, unless spec.Startup.
@@ -194,7 +234,7 @@ func Start(ctx context.Context, spec Spec) *Proc {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	p := &Proc{spec: spec, cancel: cancel, done: make(chan struct{}), kick: make(chan struct{}, 1), state: StateStopped,
-		change: make(chan struct{})}
+		change: make(chan struct{}), linkSince: time.Now()}
 	if spec.Startup {
 		p.state = StateStarting // it starts right away
 	}
@@ -222,6 +262,15 @@ func (p *Proc) Stop() {
 	}
 }
 
+type invocationRunKey struct{}
+
+// InvocationRun identifies the trusted transport's exact process attempt, also
+// during initialization. It is not a guest field or an authorization credential.
+func InvocationRun(ctx context.Context) string {
+	run, _ := ctx.Value(invocationRunKey{}).(string)
+	return run
+}
+
 // Generation identifies the active initialized process run, never a source claim.
 func (p *Proc) Generation() uint64 {
 	p.mu.Lock()
@@ -240,6 +289,13 @@ func (p *Proc) Status() (state, err string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.state, p.err
+}
+
+// Link is how an attached plugin is connected.
+func (p *Proc) Link() Link {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return Link{Online: p.ready, Since: p.linkSince, Why: p.linkWhy, Said: p.said}
 }
 
 // Result is what the program said at initialize this run (false while not initialized).
@@ -476,6 +532,11 @@ func (p *Proc) BeginHTTP(ctx context.Context) (end func(), err error) {
 	return end, nil
 }
 
+// healthBodyMost is how much of a /health answer Healthy reads. The verdict is the status code alone; the body is read
+// only so the connection can be reused, and one that goes on longer (or forever) costs a new connection on the next
+// check instead of being read for the whole HealthTimeout.
+const healthBodyMost = 4 << 10
+
 // Healthy says whether its HTTP side answers GET /health with 200.
 func (p *Proc) Healthy(ctx context.Context) bool {
 	if p.client == nil {
@@ -488,7 +549,7 @@ func (p *Proc) Healthy(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	_, _ = io.Copy(io.Discard, res.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, healthBodyMost))
 	res.Body.Close()
 	return res.StatusCode == http.StatusOK
 }
@@ -507,8 +568,12 @@ func (p *Proc) loop(ctx context.Context) {
 		start := time.Now()
 		err := p.runOnce(ctx)
 		p.mu.Lock()
+		wasUp := p.ready
 		p.sess, p.ready, p.kill, p.strikes = nil, false, nil, 0
 		p.mu.Unlock()
+		if (!wasUp || p.spec.attached()) && p.spec.Release != nil {
+			p.spec.Release()
+		}
 		if ctx.Err() != nil {
 			p.set(StateStopped, "")
 			return
@@ -522,17 +587,80 @@ func (p *Proc) loop(ctx context.Context) {
 		if time.Since(start) >= RanAWhile {
 			wait = RestartFirst
 		}
-		p.set(StateError, err.Error())
-		p.run(RunExit, err.Error())
-		p.note("%v (again in %s)", err, wait)
+		again := wait
+		if p.spec.attached() {
+			if errors.As(err, new(refused)) {
+				wait = min(wait*2, RestartLast)
+			} else {
+				again, wait = RemoteRetry, RestartFirst
+			}
+			p.offline(err, wasUp, again)
+		} else {
+			p.set(StateError, err.Error())
+			p.run(RunExit, err.Error())
+			p.note("%v (again in %s)", err, wait)
+			wait = min(wait*2, RestartLast)
+		}
 		select {
 		case <-ctx.Done():
 			p.set(StateStopped, "")
 			return
-		case <-time.After(wait):
+		case <-time.After(again):
 		}
-		wait = min(wait*2, RestartLast)
+		if p.spec.attached() {
+			// Nothing needs it any more: stopped, not offline, so when it is needed again it gets its grace anew
+			// (runOnce) and a call waits for it instead of failing on the error it was left in.
+			p.mu.Lock()
+			if !p.wantedLocked() {
+				p.setLocked(StateStopped, "")
+			}
+			p.mu.Unlock()
+		}
 	}
+}
+
+// offline is an attached plugin's failed try or lost connection (wasUp). It stays starting for OfflineGrace after it
+// went offline, then it is an error; one that answered and was refused is an error at once. A try that changes nothing
+// changes nothing: no state flip, no log line, no exit told to the Observer.
+func (p *Proc) offline(err error, wasUp bool, again time.Duration) {
+	why, kind, refusal := err.Error(), failureKind(err), errors.As(err, new(refused))
+	if refusal { // its details are the answer (another version is other news); the backoff bounds the lines
+		kind = why
+	}
+	p.mu.Lock()
+	now := time.Now()
+	if wasUp {
+		p.linkSince = now
+	}
+	if !refusal {
+		p.said = ""
+	}
+	news := wasUp || kind != p.linkKind
+	if news {
+		p.linkKind, p.linkWhy = kind, why
+	}
+	state, msg := StateStarting, ""
+	if refusal || now.Sub(p.linkSince) >= OfflineGrace {
+		state, msg = StateError, p.linkWhy
+	}
+	if p.state != state || p.err != msg {
+		p.setLocked(state, msg)
+	}
+	p.mu.Unlock()
+	if news {
+		p.run(RunExit, why)
+		p.note("%v (again in %s)", err, again)
+	}
+}
+
+// failureKind is what failed without its details (a message's key): tries that fail alike, a closed connection and
+// then a broken pipe, are the same news.
+func failureKind(err error) string {
+	var m *i18n.Message
+	if errors.As(err, &m) {
+		return m.Key
+	}
+	return err.Error()
 }
 
 // waitWanted waits until something needs it; false when ctx ended first.
@@ -565,7 +693,16 @@ type child struct {
 
 // runOnce runs the plugin once: nil when it was stopped because nothing needed it, the reason otherwise.
 func (p *Proc) runOnce(ctx context.Context) error {
-	p.set(StateStarting, "")
+	// An attached plugin keeps the state its last try left (offline): each try is not a start of its own.
+	switch st, _ := p.Status(); {
+	case !p.spec.attached():
+		p.set(StateStarting, "")
+	case st == StateStopped: // needed again: its grace counts from now
+		p.mu.Lock()
+		p.linkSince, p.linkWhy, p.linkKind = time.Now(), "", ""
+		p.setLocked(StateStarting, "")
+		p.mu.Unlock()
+	}
 	if p.spec.Check != nil {
 		if err := p.spec.Check(ctx); err != nil {
 			return err
@@ -575,18 +712,32 @@ func (p *Proc) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	p.run(RunStart, "")
-	runCtx, stopRun := context.WithCancel(ctx)
+	if !p.spec.attached() { // an attached one's run starts when it comes online (up)
+		p.run(RunStart, "")
+	}
+	runCtx, stopRun := context.WithCancel(context.WithValue(ctx, invocationRunKey{}, rand.Text()))
 	defer stopRun()
 	var s *session
 	if p.spec.RPC {
 		peer := rpc.New("h", writerOf(ch))
 		peer.Limits = p.spec.RPCBounds
-		peer.OnRequest = p.spec.Handle
+		if p.spec.Handle != nil {
+			peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+				call, cancel := context.WithCancel(context.WithValue(ctx, invocationRunKey{}, InvocationRun(runCtx)))
+				stop := context.AfterFunc(runCtx, cancel)
+				defer stop()
+				defer cancel()
+				if err := runCtx.Err(); err != nil {
+					return nil, err
+				}
+				return p.spec.Handle(call, method, params)
+			}
+		}
 		peer.OnEvent = p.spec.OnEvent
 		go func() { _ = peer.Serve(context.Background(), out) }()
 		s = &session{peer: peer}
 		if err := p.initialize(runCtx, s); err != nil {
+			stopRun()
 			p.end(ch, peer)
 			return err
 		}
@@ -599,6 +750,9 @@ func (p *Proc) runOnce(ctx context.Context) error {
 	p.kill = func() { once.Do(func() { close(killed) }) }
 	p.mu.Unlock()
 	defer func() {
+		// Fence host callbacks before waiting for child/peer cleanup. Neither
+		// process loss nor slow cleanup may extend a storage invocation's life.
+		stopRun()
 		var peer *rpc.Peer
 		if s != nil {
 			peer = s.peer
@@ -690,7 +844,17 @@ func (p *Proc) up() {
 	p.mu.Lock()
 	p.ready = true
 	p.setLocked(StateRunning, "")
+	attached, away, was := p.spec.attached(), time.Since(p.linkSince), p.linkWhy
+	if attached {
+		p.linkSince, p.linkWhy, p.linkKind = time.Now(), "", ""
+	}
 	p.mu.Unlock()
+	if attached {
+		p.run(RunStart, "")
+		if was != "" {
+			p.note("connected after %s offline", away.Round(time.Second))
+		}
+	}
 	if p.spec.OnUp != nil {
 		go p.spec.OnUp()
 	}
@@ -704,6 +868,20 @@ func (p *Proc) checkHealth(ctx context.Context, t *time.Ticker) (missed bool) {
 	state := p.state
 	p.mu.Unlock()
 	missed = !ok && (state == StateRunning || state == StateError)
+	if p.spec.attached() && !p.spec.RPC { // its /health is its link
+		switch {
+		case ok && state != StateRunning:
+			p.up()
+			t.Reset(HealthEvery)
+		case !ok:
+			p.mu.Lock()
+			p.ready = false
+			p.mu.Unlock()
+			p.offline(i18n.ErrEnglish("extension-status.socket_not_answering", i18n.Args{"path": p.spec.Socket}), state == StateRunning, RemoteRetry)
+			t.Reset(RemoteRetry)
+		}
+		return missed
+	}
 	switch {
 	case ok && !p.spec.RPC && state != StateRunning:
 		p.up()
@@ -724,6 +902,11 @@ func (p *Proc) checkHealth(ctx context.Context, t *time.Ticker) (missed bool) {
 
 // initialize sends initialize and holds the answer to the spec.
 func (p *Proc) initialize(ctx context.Context, s *session) error {
+	if p.spec.attached() && p.spec.Version != "" {
+		if err := p.sameProgram(ctx, s); err != nil {
+			return err
+		}
+	}
 	params := extension.InitializeParams{Protocol: extension.Protocol}
 	if p.spec.Init != nil {
 		var err error
@@ -738,25 +921,66 @@ func (p *Proc) initialize(ctx context.Context, s *session) error {
 	if err := s.peer.Call(ictx, extension.MInitialize, params, &res); err != nil {
 		var re *rpc.Error
 		if errors.As(err, &re) && re.Code == extension.CodeWrongProtocol {
-			return i18n.Err("extension-status.wrong_protocol", i18n.Args{"err": re.Message})
+			return refused{i18n.Err("extension-status.wrong_protocol", i18n.Args{"err": re.Message})}
 		}
 		return i18n.Err("extension-status.not_ready", i18n.Args{"err": err.Error()})
 	}
+	said := ""
+	if res.Protocol == extension.Protocol && (res.ID == params.Extension.ID || params.Extension.ID == "") {
+		said = res.Version // another program's version says nothing about this one
+	}
+	p.mu.Lock()
+	p.said = said
+	p.mu.Unlock()
 	if res.Protocol != extension.Protocol {
-		return i18n.Err("extension-status.protocol_version", i18n.Args{"current": res.Protocol, "required": extension.Protocol})
+		return refused{i18n.Err("extension-status.protocol_version", i18n.Args{"current": res.Protocol, "required": extension.Protocol})}
 	}
 	if res.ID != params.Extension.ID && params.Extension.ID != "" {
-		return i18n.ErrEnglish("extension-status.wrong_id", i18n.Args{"current": res.ID, "required": params.Extension.ID})
+		return refused{i18n.ErrEnglish("extension-status.wrong_id", i18n.Args{"current": res.ID, "required": params.Extension.ID})}
 	}
 	if res.Version != params.Extension.Version && params.Extension.Version != "" {
-		return i18n.ErrEnglish("extension-status.wrong_version", i18n.Args{"current": res.Version, "required": params.Extension.Version})
+		return refused{i18n.ErrEnglish("extension-status.wrong_version", i18n.Args{"current": res.Version, "required": params.Extension.Version})}
 	}
 	if p.spec.Accept != nil {
 		if err := p.spec.Accept(res); err != nil {
-			return err
+			return refused{err}
 		}
 	}
 	s.result = res
+	if res.UIPageCancellation == 1 {
+		// Negotiate before readiness; older installed SDKs never receive rpc.cancel.
+		s.peer.Cancels = map[string]bool{"ui.page.mount": true, "ui.page.event": true, "ui.page.resume": true}
+	}
+	return nil
+}
+
+// sameProgram asks an attached plugin which program it is (manifest) before initialize hands it anything: one that
+// says another id or version, or will not say, is refused.
+func (p *Proc) sameProgram(ctx context.Context, s *session) error {
+	mctx, cancel := context.WithTimeout(ctx, ReadyWithin)
+	defer cancel()
+	var m extension.Manifest
+	err := s.peer.Call(mctx, extension.MManifest, struct{}{}, &m)
+	said := ""
+	if err == nil && m.ID == p.spec.ID {
+		said = m.Version // another program's version (or the one before this, when it will not say) says nothing
+	}
+	p.mu.Lock()
+	p.said = said
+	p.mu.Unlock()
+	if err != nil {
+		var re *rpc.Error
+		if errors.As(err, &re) { // it is there and answered
+			return refused{i18n.Err("extension-status.not_ready", i18n.Args{"err": "manifest: " + re.Message})}
+		}
+		return i18n.Err("extension-status.not_ready", i18n.Args{"err": err.Error()})
+	}
+	if m.ID != p.spec.ID {
+		return refused{i18n.ErrEnglish("extension-status.wrong_id", i18n.Args{"current": m.ID, "required": p.spec.ID})}
+	}
+	if m.Version != p.spec.Version {
+		return refused{i18n.ErrEnglish("extension-status.wrong_version", i18n.Args{"current": m.Version, "required": p.spec.Version})}
+	}
 	return nil
 }
 

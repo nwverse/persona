@@ -9,7 +9,7 @@ import Testing
 struct ExtensionUpgradeTests {
     private static let gateway = #"""
     {"id":"example-gateway","name":"Example 网关面板","kind":"ui","status":"running","version":"1.0.0","source":"installed",
-     "auto_upgrade":true,
+     "auto_upgrade":true,"origin":"market:m1/example-gateway",
      "upgrade":{"id":"example-gateway","name":"Example 网关面板","market":"m1","from":"1.0.0","to":"1.1.0","state":"needs_permission",
                 "added_permissions":[{"key":"network","title":"访问更多网络","detail":"status.example.com"}]},
      "upgrade_note":{"kind":"needs_permission","from":"1.0.0","to":"1.1.0","at":"2026-11-04T14:34:21.439310005Z"},
@@ -40,6 +40,14 @@ struct ExtensionUpgradeTests {
         #expect(ExtensionText.upgradeDetail(up("waiting_idle")) == "扩展空闲时自动升级")
         #expect(ExtensionText.upgradeDetail(up("off")) == "自动升级关着" && ExtensionText.upgradeAction(up("off")) == "去升级")
         #expect(ExtensionText.upgradeDetail(up("skipped")) == "上次升级后起不来，已回到 1.0.0，不再自动升级到这个版本")
+        // A version the user rolled back from by hand (#1826) says so, not "didn't start"; the hub sends skipped_by.
+        var byUser = up("skipped")
+        byUser.skippedBy = "user"
+        #expect(ExtensionText.upgradeDetail(byUser) == "你从这个版本回滚到了 1.0.0，不会再自动升级到它")
+        #expect(ExtensionText.upgradeAction(byUser) == "去升级")
+        let decoded = try? JSON.decoder.decode(ExtensionUpgrade.self, from: Data(
+            #"{"id":"p","market":"m1","from":"1.0.0","to":"1.1.0","state":"skipped","skipped_by":"user"}"#.utf8))
+        #expect(decoded?.skippedBy == "user")
         #expect(ExtensionText.upgradeDetail(up("failed", detail: "下载失败")) == "没装上：下载失败")
         #expect(ExtensionText.upgradeAction(up("waiting_idle")) == nil && ExtensionText.upgradeAction(up("incompatible")) == nil)
         #expect(ExtensionText.morePermissions([]) == "要的权限有变化")
@@ -48,6 +56,19 @@ struct ExtensionUpgradeTests {
         let at = Date()
         #expect(ExtensionText.upgradeNote(ExtensionUpgradeNote(kind: "upgraded", from: "0.9.0", to: "1.0.0", at: at)) == "已自动升级到 1.0.0（原来是 0.9.0）")
         #expect(ExtensionText.upgradeNote(ExtensionUpgradeNote(kind: "rolled_back", from: "1.0.0", to: "1.1.0", at: at)) == "1.1.0 起不来，已回到 1.0.0")
+    }
+
+    /// Pausing upgrades never changes the preference shown to the user.
+    @Test(arguments: [
+        (#""auto_upgrade":true"#, nil, true),
+        (#""auto_upgrade":false"#, nil, false),
+        (#""auto_upgrade":true,"auto_upgrade_paused":"disabled""#, "disabled", true),
+        (#""auto_upgrade":false,"auto_upgrade_paused":"disabled""#, "disabled", false),
+    ] as [(String, String?, Bool)])
+    func theSwitchShowsItsPreferenceWhilePaused(fields: String, paused: String?, shown: Bool) throws {
+        let p = try JSON.decoder.decode(HubExtension.self, from: Data(#"{"id":"x","name":"X","kind":"ui","status":"running",\#(fields)}"#.utf8))
+        #expect(p.autoUpgradePaused == paused)
+        #expect(ExtensionText.autoUpgradeShown(p) == shown)
     }
 
     @Test func theExtensionsSwitchGoesToTheHub() async throws {

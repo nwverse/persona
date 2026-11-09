@@ -47,6 +47,7 @@ type Hub struct {
 	build     update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
 	upd       *updater     // updating itself to the publisher's release (selfupdate.go)
 	logger    *log.Logger
+	traffic   trafficLog // privacy-safe minute counters, flushed to the journal
 	machines  []*Machine
 	byID      map[string]*Machine
 	push      *Pusher
@@ -69,6 +70,9 @@ type Hub struct {
 	mutesMu   sync.Mutex
 	mutesSend sync.Mutex // one send of the mutes to the managers at a time (fleet_link.go)
 	mutes     *Pins      // muted spaces / agents (no pushes); loaded from settings on first use
+
+	todoOwnersMu sync.RWMutex
+	todoOwners   map[string]string // todo id -> manager id
 
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
@@ -106,7 +110,7 @@ type Hub struct {
 	assistant assistantState
 	owners    ownerCache    // the default manager, kept a moment (ownership.go)
 	others    managerStates // the other managers' (manager_state.go)
-	moving    moves         // who carries what changing (ownership.go)
+	moving    moves         // who carries what changing (ownership_moves.go)
 	// userLocale: the user's language, an i18n.Lang (locale.go)
 	userLocale atomic.Value
 	deleted    deletedBook // conversations taken out of the apps' lists (deleted_sessions.go)
@@ -159,9 +163,12 @@ type Store interface {
 	UpsertDevice(ctx context.Context, d db.Device) error
 	Devices(ctx context.Context) ([]db.Device, error)
 	DeleteDevice(ctx context.Context, id string) error
+	DeleteDeviceIfCurrent(ctx context.Context, expected db.Device) (bool, error)
+	ReconcilePushDevices(ctx context.Context, at time.Time, maxIdle time.Duration) ([]db.PushDeviceRetirement, error)
 	SetDevicePrefs(ctx context.Context, id, credential string, prefs json.RawMessage) error
 	LiveActivities(ctx context.Context) ([]db.LiveActivity, error)
 	SaveLiveActivity(ctx context.Context, v db.LiveActivity) error
+	ClaimLiveActivityStart(ctx context.Context, device, startToken string, at time.Time, cooldown, maxAge time.Duration) (time.Time, bool, error)
 	Setting(ctx context.Context, key string, out any) (bool, error)
 	PutSetting(ctx context.Context, key string, v any) error
 	TakeSetting(ctx context.Context, key string, out any) (bool, error)
@@ -176,6 +183,7 @@ type Store interface {
 }
 
 func Run(ctx context.Context, b update.Build) error {
+	claimInherited() // before anything can start a process: runHub starts the manager before it listens (listen.go)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	// An update that keeps failing goes back before anything else can fail, the config included (selfupdate.go).
 	updating := newUpdater(&Hub{build: b, version: b.Version, logger: logger}).boot()
@@ -208,6 +216,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 		byID: map[string]*Machine{}, clients: map[*client]struct{}{}, calls: map[string]chan proto.ToolResult{},
 		slot: slot,
 	}
+	defer func() { h.flushTraffic(time.Now(), true) }()
 	h.extLost.started = time.Now() // managers' extensions may call before their managers are back (extensions_proof.go)
 	h.teeErrors()                  // the log's error lines become reports while an extension takes them (error_reports.go)
 	h.builtinLooks = builtinPersonaFS()
@@ -250,11 +259,13 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.loadUserLang(ctx)
 	h.loadPhoneTools()
 	h.push = newPusher(cfg.dir, h.store, h.logf)
+	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
 	h.push.desktopOpen = h.desktopOpen
 	h.push.hubID = h.hubID
 	h.push.userLang = h.userLang
 	h.push.userLoc = h.userLocation
+	go h.push.maintenanceLoop(ctx)
 	// The machines are the manager's to connect (devices_link.go); until it reports them they show as before a
 	// restart (what it handed over), before the assistant's process starts and takes that hand-over.
 	h.loadMachineTrust(ctx) // before the manager connects them and the assistant asks (machine_trust.go)
@@ -297,7 +308,7 @@ func (h *Hub) broadcastMachines() {
 
 // sessionsChanged sends the apps the machine's list as the hub has it (the manager's last, fleet_link.go).
 func (h *Hub) sessionsChanged(m *Machine) {
-	h.broadcastSessions(m, h.decorated(m))
+	h.broadcastSessions(m, m.keptSessions())
 }
 
 func (h *Hub) machineName(id string) string {

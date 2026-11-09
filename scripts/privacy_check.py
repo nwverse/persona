@@ -3,8 +3,15 @@
 
     python3 scripts/privacy_check.py            # tracked files (content and paths)
     python3 scripts/privacy_check.py --staged   # what `git commit` is about to record, plus its message file if given
-    python3 scripts/privacy_check.py --staged --message .git/COMMIT_EDITMSG
-    python3 scripts/privacy_check.py --range origin/master..HEAD   # what those commits change, and their messages
+    python3 scripts/privacy_check.py --staged --commit-msg .git/COMMIT_EDITMSG   # the commit-msg hook (commit_msg_lines)
+    python3 scripts/privacy_check.py --range origin/main..HEAD   # what those commits change, and their messages;
+                                                     # all of HEAD when the two share no history (an orphan branch)
+    python3 scripts/privacy_check.py --range <base sha>..<head> --message <file>   # plus text recorded as it is, every
+                                                     # line (merge-pr.sh: the fetched base sha, the squash message)
+
+Every mode reads what Git records: a symlink is scanned as its link text, never the file it points to; --staged and
+--range take added, copied, modified, renamed and type-changed files (a file turned into a symlink); the tracked-files
+scan reads a tracked file the worktree lacks (sparse checkout, skip-worktree, deleted but not staged) from the index.
 
 What counts as private comes from this machine, never from the repo: the values of ~/.config/persona/config.json
 (hosts, hub address, machine names, Apple ids, emails), ~/.config/persona/private-words.txt (one word per line:
@@ -306,6 +313,58 @@ def term_sources():
     return {v: sorted(found[v]) for v in sorted(found, key=len, reverse=True)}, public, waivable
 
 
+# Exact governance references, not a global waiver for an administrator's coincident private first name (#2568).
+# A changed line cannot approve itself: both the owner and each rendered line must already exist on origin/main.
+PUBLIC_ADMIN_LINES = {
+    ".github/CODEOWNERS": ("/docs/SUPER_RULES.md @{login}",),
+    "CLAUDE.md": ("GitHub issue and explicit approval from administrator `{login}` in that issue before editing or opening a PR.",),
+    "docs/README.md": ("file require explicit approval from administrator `{login}` in a GitHub issue before editing or opening a linked PR.",),
+    "docs/SUPER_RULES.md": (
+        "   Wait for administrator `{login}` to explicitly approve the proposed change in that issue. Only after that approval",
+        "   open the issue and wait for `{login}`'s explicit approval before proceeding.",
+    ),
+}
+PUBLIC_ADMIN_SOURCES = frozenset({"config app_store.external.review.first_name", "config app_store.testers.first_name"})
+
+
+def regular_governance_files(head=None):
+    """A symlink's target is not governance prose, even if its text equals an approved reference."""
+    args = ["ls-tree", "-z", head] if head else ["ls-files", "--stage", "-z"]
+    records = subprocess.run(["git", "-C", ROOT, *args, "--", *PUBLIC_ADMIN_LINES],
+                             capture_output=True, check=True, timeout=10).stdout.split(b"\0")
+    return {record.split(b"\t", 1)[1].decode("utf-8") for record in records
+            if b"\t" in record and record.split(b" ", 1)[0] in (b"100644", b"100755")}
+
+
+def public_admin_lines():
+    """Exact published references by path; missing/unreadable evidence grants no exception."""
+    try:
+        base = subprocess.run(["git", "-C", ROOT, "rev-parse", "--verify", "origin/main^{commit}"],
+                              capture_output=True, check=True, text=True, timeout=10).stdout.strip()
+        regular = regular_governance_files(base)
+        published = git_file_data(list(regular), base + ":")
+        owner = re.fullmatch(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)",
+                             published.get(".github/CODEOWNERS", b"").decode("utf-8").strip())
+        if not owner:
+            return {}
+        login = owner.group(1)
+        return {path: {line: login for template in templates
+                       for line in (template.format(login=login),)
+                       if line in published.get(path, b"").decode("utf-8").splitlines()}
+                for path, templates in PUBLIC_ADMIN_LINES.items()}
+    except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return {}
+
+
+def governance_words(path, line, words, sources, published):
+    """Only the exact published login loses its first-name sources on an exact authorized line."""
+    login = published.get(path, {}).get(line)
+    if login is None:
+        return words
+    return [w for w in words if not (w == login and sources.get(w)
+                                    and set(sources[w]) <= PUBLIC_ADMIN_SOURCES)]
+
+
 def terms():
     """Words to look for, longest first, and those of them allowed in PUBLIC_DIRS."""
     found, public, _ = term_sources()
@@ -331,6 +390,10 @@ IPV4 = re.compile(r"(?<!\d)(?<!\d\.)(\d{1,3}(?:\.\d{1,3}){3})(?!\d|\.\d)")
 # as a cloud metadata address).
 DOC_NETS = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "192.0.0.0/24")]
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})")
+# What every IPV4 and EMAIL match holds. Both patterns try every start position (EMAIL backtracks at each word start);
+# problems() runs them only on a line that has the hint, which a quick scan finds.
+IPV4_HINT = re.compile(r"\d\.\d")
+EMAIL_HINT = re.compile(r"[A-Za-z0-9._%+-]@[A-Za-z0-9-]")
 # Placeholders (example domains, public mail providers, noreply) are fine; so are made-up TLDs (the fixture redactor
 # scrambles domains): only addresses at a real-looking domain of somebody's are flagged.
 OK_EMAIL_DOMAINS = re.compile(r"(^|\.)(example(\.(com|org|net))?|test|invalid|localhost|users\.noreply\.github\.com|anthropic\.com|"
@@ -349,6 +412,12 @@ PUBLIC_DIRS = ("site/",)
 # private configuration needed. This file is the only place they are spelled, as patterns.
 BANNED_NAMES = re.compile(r"aster[-_ ]?gate|open[-_ ]?lark|open[-_ ]?wechat|extensions[-_ ]?internal|corp[-_ ]?link",
                           re.IGNORECASE)
+# The same pattern without IGNORECASE, run on the lowercased line problems() already has: about twice as fast. It finds
+# the same spans when lowering kept every character in place (same length) and the line holds neither of the two
+# characters IGNORECASE also takes for a pattern letter but lower() leaves alone (dotless i, long s); otherwise
+# problems() falls back to BANNED_NAMES.
+BANNED_NAMES_LOWER = re.compile(BANNED_NAMES.pattern)
+CASE_FOLD_ONLY = ("\u0131", "\u017f")
 
 
 CAMEL_JOIN = re.compile(r"[a-z][A-Z]")
@@ -375,15 +444,18 @@ def problems(text, words, emails=True):
                 found.append(w)
         elif w.lower() in low and not only_in_camel_joins(text, w):
             found.append(w)
-    found += [m.group(0) for m in BANNED_NAMES.finditer(text)]
-    for m in IPV4.finditer(text):
+    if len(low) == len(text) and not any(c in text for c in CASE_FOLD_ONLY):
+        found += [text[m.start():m.end()] for m in BANNED_NAMES_LOWER.finditer(low)]
+    else:
+        found += [m.group(0) for m in BANNED_NAMES.finditer(text)]
+    for m in IPV4.finditer(text) if "." in text and IPV4_HINT.search(text) else ():
         try:
             ip = ipaddress.ip_address(m.group(1))
         except ValueError:
             continue
         if ip.is_private and not ip.is_loopback and not ip.is_unspecified and not any(ip in n for n in DOC_NETS):
             found.append(m.group(1))
-    for m in EMAIL.finditer(text) if emails else ():
+    for m in EMAIL.finditer(text) if emails and "@" in text and EMAIL_HINT.search(text) else ():
         domain = m.group(1).lower()
         if not OK_EMAIL_DOMAINS.search(domain) and domain.rsplit(".", 1)[-1] in REAL_TLDS:
             found.append(m.group(0))
@@ -520,37 +592,131 @@ def git_file_data(files, prefix):
     return data
 
 
+GIT_OID = re.compile(rb"[0-9a-f]{40}|[0-9a-f]{64}")
+# Git's empty tree, by object id length (SHA-1, SHA-256): the base of a range whose two ends share no history.
+EMPTY_TREE = {40: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+              64: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"}
+
+
+def commit_messages(base, head):
+    """(commit, message) of every commit in base..head (every commit reachable from head when base is the empty tree),
+    newest first, from one `git log` instead of one per commit (a long range spent most of its time starting git). Git
+    ends %B at a NUL byte, so NULs only separate the fields; no signature check output, which log.showSignature would
+    mix into the messages."""
+    commits = head if base in EMPTY_TREE.values() else base + ".." + head
+    parts = git("log", "-z", "--no-show-signature", "--format=%H%x00%B", commits).split(b"\0")
+    if len(parts) % 2 != 1 or parts[-1] or not all(GIT_OID.fullmatch(c) for c in parts[0:-1:2]):
+        raise ValueError("unexpected git log output")
+    return [(parts[i].decode(), parts[i + 1].decode("utf-8", "replace")) for i in range(0, len(parts) - 1, 2)]
+
+
 def commit_range(spec):
-    """<base>..<head>: the fork point of the two (what a branch adds on top of base), and head."""
+    """<base>..<head>: the fork point of the two (what a branch adds on top of base), and head. Two ends that share no
+    history (an orphan branch, a base left from a rewritten history) give the empty tree: all of head is scanned."""
     base, sep, head = spec.partition("..")
     if not sep or not base or not head or head.startswith("."):
         sys.exit("privacy_check: --range wants <base>..<head>")
-    head = git("rev-parse", "--verify", head + "^{commit}").decode().strip()
-    base = git("merge-base", base, head).decode().strip()
-    return base, head
+    try:
+        head = git("rev-parse", "--verify", head + "^{commit}").decode().strip()
+        base = git("rev-parse", "--verify", base + "^{commit}").decode().strip()
+    except subprocess.CalledProcessError:
+        sys.exit("privacy_check: --range %s does not name two commits; scan did not complete" % spec)
+    fork = subprocess.run(["git", "-C", ROOT, "merge-base", base, head], capture_output=True)
+    if fork.returncode == 1 and not fork.stdout:  # no common ancestor
+        return EMPTY_TREE[len(head)], head
+    if fork.returncode:
+        sys.exit("privacy_check: git merge-base failed; scan did not complete")
+    return fork.stdout.decode().strip(), head
+
+
+def git_config(key):
+    """The value Git uses for key ("" when unset)."""
+    result = subprocess.run(["git", "-C", ROOT, "config", "--get", key], capture_output=True, text=True)
+    if result.returncode == 1:
+        return ""
+    result.check_returncode()
+    return result.stdout.strip()
+
+
+def comment_string():
+    """The string git starts comment lines with, read from its config by git itself (core.commentChar or
+    core.commentString, the one set last; `auto` gives `#`)."""
+    commented = subprocess.run(["git", "-C", ROOT, "stripspace", "--comment-lines"], input="x\n", capture_output=True,
+                               text=True, check=True).stdout
+    comment = commented.rpartition(" x\n")[0]
+    if not comment:  # an empty prefix would skip every line
+        sys.exit("privacy_check: cannot tell git's comment string")
+    return comment
+
+
+CUT_LINE = " ------------------------ >8 ------------------------"
+
+
+def commit_msg_lines(path):
+    """(line number, line) of the file `git commit` hands its commit-msg hook, for the lines the commit records.
+
+    Git cleans the file up after the hook. When it opened an editor (otherwise it sets GIT_EDITOR=: for the hook), the
+    default cleanup drops the comment lines (hints, branch, local paths) and everything from the scissors line down
+    (the `commit -v` diff); a message from -m or -F keeps its lines that start with the comment string (Markdown
+    headings) unless commit.cleanup is strip. Lines end at \n only, as in git. Not visible here: --cleanup and -v given
+    to `git commit` (git ends a message at the scissors line only with -v, commit.verbose or cleanup scissors) and the
+    character `auto` picks; pre-push's --range scan reads every line of what was recorded.
+    """
+    edited = os.environ.get("GIT_EDITOR") != ":"
+    cleanup = git_config("commit.cleanup") or "default"
+    strip = cleanup == "strip" or (cleanup == "default" and edited)
+    comment = comment_string()
+    text = open(path, encoding="utf-8", errors="replace", newline="").read()  # as --range decodes recorded messages
+    for n, line in enumerate(text.split("\n"), 1):
+        if edited and line == comment + CUT_LINE:
+            break
+        if not (strip and line.startswith(comment)):
+            yield n, line
+
+
+def option(name):
+    """The argument after name on the command line (None without name); name as the last argument is an error."""
+    if name not in sys.argv:
+        return None
+    if sys.argv.index(name) + 1 == len(sys.argv):
+        sys.exit("privacy_check: %s wants a value" % name)
+    return sys.argv[sys.argv.index(name) + 1]
 
 
 def main():
     staged = "--staged" in sys.argv
-    message = sys.argv[sys.argv.index("--message") + 1] if "--message" in sys.argv else None
-    span = commit_range(sys.argv[sys.argv.index("--range") + 1]) if "--range" in sys.argv else None
+    message = option("--message")
+    commit_msg = option("--commit-msg")
+    span = commit_range(option("--range")) if "--range" in sys.argv else None
     sources, public_words, waivable = term_sources()
     words = list(sources)
+    governance = public_admin_lines() if any(set(where) <= PUBLIC_ADMIN_SOURCES for where in sources.values()) else {}
+    if governance:
+        try:
+            regular = regular_governance_files(span[1] if span and not staged else None)
+            governance = {path: lines for path, lines in governance.items() if path in regular}
+        except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            governance = {}
     modules = module_paths()
     if staged:
-        files = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").decode().split("\0")
+        files = git("diff", "--cached", "--name-only", "--diff-filter=ACMRT", "-z").decode().split("\0")
     elif span:
-        files = git("diff", "--name-only", "--diff-filter=ACMR", "-z", span[0], span[1]).decode().split("\0")
+        files = git("diff", "--name-only", "--diff-filter=ACMRT", "-z", span[0], span[1]).decode().split("\0")
     else:
         files = git("ls-files", "-z").decode().split("\0")
     files = list(filter(None, files))
-    snapshots = {}
     if staged or span:
+        from_git = [name for name in files if name not in SKIP_FILES]
+    else:
+        # Tracked files the worktree lacks (sparse checkout, skip-worktree, deleted but not staged): the index's copy.
+        from_git = [name for name in files if name not in SKIP_FILES and not os.path.lexists(os.path.join(ROOT, name))]
+    snapshots = {}
+    if from_git:
         try:
-            snapshots = git_file_data([name for name in files if name not in SKIP_FILES],
-                                      ":" if staged else span[1] + ":")
+            snapshots = git_file_data(from_git, span[1] + ":" if span and not staged else ":")
         except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             sys.exit("privacy_check: cannot read Git objects; scan did not complete")
+    from_git = set(from_git)
     bad, hit = [], set()
 
     def report(f, where, w):
@@ -564,13 +730,16 @@ def main():
             report(f, "path", w)
         if f in SKIP_FILES:
             continue
+        path = os.path.join(ROOT, f)
         try:
-            if staged or span:
+            if f in from_git:
                 data = snapshots.get(f)
                 if data is None:
                     continue
+            elif os.path.islink(path):
+                data = os.fsencode(os.readlink(path))  # the link text git records, never the file it points to
             else:
-                data = open(os.path.join(ROOT, f), "rb").read()
+                data = open(path, "rb").read()
         except (OSError, subprocess.CalledProcessError):
             continue
         npm_lock = os.path.basename(f) in NPM_LOCK_FILES
@@ -586,23 +755,35 @@ def main():
                 bad.extend((f, n, kind) for n, kind in npm_lock_problems(lock_text))
         if modules:
             text = modules.sub("", text)
+        published_lines = governance if f in from_git or not os.path.islink(path) else {}
         for n, line in enumerate(text.splitlines(), 1):
-            for w in problems(line, allowed, emails=not public):
+            line_words = governance_words(f, line, allowed, sources, published_lines)
+            for w in problems(line, line_words, emails=not public):
                 report(f, n, w)
     if span:
-        for c in filter(None, git("rev-list", span[0] + ".." + span[1]).decode().split()):
-            for n, line in enumerate(git("log", "-1", "--format=%B", c).decode("utf-8", "replace").splitlines(), 1):
+        try:
+            messages = commit_messages(*span)
+        except (ValueError, subprocess.CalledProcessError):
+            sys.exit("privacy_check: cannot read commit messages; scan did not complete")
+        for c, body in messages:
+            for n, line in enumerate(body.splitlines(), 1):
                 for w in problems(line, words):
                     report("commit " + c[:9] + " message", n, w)
-    if message and os.path.exists(message):
-        for n, line in enumerate(open(message).read().splitlines(), 1):
-            if not line.startswith("#"):
-                for w in problems(line, words):
-                    report("commit message", n, w)
+    lines = []
+    for name, path in (("--message", message), ("--commit-msg", commit_msg)):
+        if path is not None and not os.path.isfile(path):
+            sys.exit("privacy_check: %s %s is not a file; scan did not complete" % (name, path))
+    if message is not None:
+        lines.extend(enumerate(open(message).read().splitlines(), 1))
+    if commit_msg is not None:
+        lines.extend(commit_msg_lines(commit_msg))
+    for n, line in lines:
+        for w in problems(line, words):
+            report("commit message", n, w)
     for f, where, kind in bad:
         print("%s:%s: %s" % (f, where, kind))
     if bad:
-        print("privacy_check: %d hit(s). Use placeholders (<hub 地址>, me@example.com); see CLAUDE.md." % len(bad), file=sys.stderr)
+        print("privacy_check: %d hit(s). Use placeholders (<hub address>, me@example.com); see CLAUDE.md." % len(bad), file=sys.stderr)
         if hit & waivable:
             print("privacy_check: a config value that is an ordinary word and names nobody (a machine id like a room's "
                   "name) can be marked not private with a !<word> line in private-words.txt "

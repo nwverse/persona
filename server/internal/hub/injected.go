@@ -16,7 +16,8 @@ import (
 func (h *Hub) withInjected(items []proto.Item) []proto.Item {
 	for i := range items {
 		it := &items[i]
-		if it.Role != "user" || it.Kind != proto.KindText || it.ClientMsgID != "" || it.From != "" || it.Injected != nil {
+		it.Source = prompts.ItemSource(*it)
+		if it.Role != "user" || it.Kind != proto.KindText || it.ClientMsgID != "" || it.From != "" || it.Injected != nil || prompts.UserAuthoredContext(it.Text) {
 			continue
 		}
 		in := prompts.ParseInjected(it.Text)
@@ -28,6 +29,7 @@ func (h *Hub) withInjected(items []proto.Item) []proto.Item {
 		}
 		in.Line = injectedLine(h.userLang(), in)
 		it.Injected = in
+		it.Source = prompts.ItemSource(*it)
 	}
 	return items
 }
@@ -67,12 +69,17 @@ func injectedLine(l i18n.Lang, in *proto.Injected) string {
 		switch in.State {
 		case "wake":
 			return i18n.T(l, "injected.wake", args)
+		case "limit_continue":
+			return i18n.T(l, "injected.limit_continue")
 		case "once":
 			return i18n.T(l, "injected.followup_due", args)
 		case "daily", "interval":
 			return i18n.T(l, "injected.routine_started", args)
 		}
 	case proto.InjectedSystem:
+		if in.State == "inbox" {
+			return i18n.T(l, "injected.inbox_update", args)
+		}
 		if in.State == "lost_tasks" {
 			// the count is in the Chinese line: "node restarted, 3 background tasks stopped"
 			n := 0

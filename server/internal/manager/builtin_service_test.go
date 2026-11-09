@@ -28,7 +28,7 @@ func TestBuiltinServiceNames(t *testing.T) {
 	if unitName(assistantwire.AssistantID) != managerconf.BuiltinService+".service" || launchdLabel(assistantwire.AssistantID) != managerconf.BuiltinLabel {
 		t.Fatalf("%s %s", unitName(assistantwire.AssistantID), launchdLabel(assistantwire.AssistantID))
 	}
-	unit := builtinUnit("/home/someone/.persona/bin/personad", "/home/someone/.persona")
+	unit := builtinUnit("/home/someone/.persona/bin/personad", "/home/someone/.persona", false)
 	for _, line := range []string{`ExecStart="/home/someone/.persona/bin/personad" assistant`, `Environment="PERSONA_ASSISTANT_DEPLOY=service"`,
 		`Environment="PERSONA_HOME=/home/someone/.persona"`, "Restart=always", "RestartPreventExitStatus=2", "WantedBy=default.target"} {
 		if !strings.Contains(unit, line+"\n") {
@@ -722,6 +722,50 @@ func TestInstallBuiltinLaunchd(t *testing.T) {
 	}
 	if f.called("launchctl bootstrap") || f.called("launchctl kickstart") || f.called("launchctl bootout") || !strings.Contains(out.String(), "left as it was") {
 		t.Fatalf("calls %v\n%s", f.calls, out)
+	}
+}
+
+// The built-in manager's unit (or agent) is replaced in one step when its text changes, never cut short in place, and
+// left as it is (the same file) when it does not.
+func TestBuiltinServiceReplacesTheFile(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			home := isolate(t)
+			data := filepath.Join(home, ".persona")
+			f := &fakeServices{}
+			e, _ := f.env(t, goos)
+			path := e.unitPath(assistantwire.AssistantID)
+			if goos == "darwin" {
+				path = e.plistPath(assistantwire.AssistantID)
+			}
+			if err := e.builtinService(context.Background(), data, "/opt/personad", false); err != nil {
+				t.Fatal(err)
+			}
+			old, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer old.Close()
+			had, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.builtinService(context.Background(), data, "/opt/new/persona-manager", false); err != nil {
+				t.Fatal(err)
+			}
+			checkReplaced(t, path, old, had, "/opt/new/persona-manager")
+
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.builtinService(context.Background(), data, "/opt/new/persona-manager", false); err != nil {
+				t.Fatal(err)
+			}
+			if after, err := os.Stat(path); err != nil || !os.SameFile(before, after) {
+				t.Fatalf("unchanged text written again: %v", err)
+			}
+		})
 	}
 }
 

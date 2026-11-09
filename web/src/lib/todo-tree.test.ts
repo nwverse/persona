@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState } from "./todo-tree";
+import { agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel } from "./todo-tree";
 import { makeSessionLookup, type Todo } from "./todos";
 import { matchesFilter } from "./agent-filter";
 import { sessionSource } from "./agent-groups";
@@ -79,7 +79,34 @@ describe("项目 › 待办 › Agent 三层树 (#2526)", () => {
   it("待办页按项目分段，没 Agent 的放最后", () => {
     const all = [s("a", "working", "/code/persona")];
     const groups = groupTodosByProject([todo("t1", [link("a")]), todo("t2", [])], makeSessionLookup(all), NOW);
-    expect(groups.map((g) => [g.name, g.state, g.todos.map((t) => t.id)])).toEqual([["persona", "working", ["t1"]], ["还没有 Agent", "done", ["t2"]]]);
+    expect(groups.map((g) => [g.name, g.state, g.todos.map((t) => t.id)])).toEqual([["persona", "working", ["t1"]], ["未归类", "done", ["t2"]]]);
+  });
+
+  it("待办页先按待办所属的知识库项目分段，再按仓库，都没有的最后 (#2581)", () => {
+    const all = [s("a", "working", "/code/persona"), s("b", "needs_you", "/code/persona")];
+    const inArea = (id: string, project: string, links: ReturnType<typeof link>[] = []) => ({ ...todo(id, links), project });
+    const names = (slug: string) => (slug === "community" ? "社群运营" : slug);
+    const groups = groupTodosByProject(
+      [todo("t1", [link("a")]), inArea("t2", "community"), todo("t3", []), inArea("t4", "community", [link("b")]), inArea("t5", "gone")],
+      makeSessionLookup(all),
+      NOW,
+      names,
+    );
+    // an area's to-dos stay together whatever their agents' repository; its order kept; a project not in the list shows its slug
+    expect(groups.map((g) => [g.key, g.name, g.todos.map((t) => t.id)])).toEqual([
+      ["todos-kb:community", "社群运营", ["t2", "t4"]],
+      ["todos-kb:gone", "gone", ["t5"]],
+      ["todos-project:persona", "persona", ["t1"]],
+      ["todos-project:\u0000", "未归类", ["t3"]],
+    ]);
+    expect(groups[0].state).toBe("needs_you");
+    // an area with nothing at work stays open however long it was quiet; a repository's folds as before
+    const old = { updated_at: new Date(NOW - 3 * STALE_MS).toISOString() };
+    const quiet = groupTodosByProject([todo("q1", [], { ...old, project: "community" }), todo("q2", [link("gone")], old)], makeSessionLookup([]), NOW, names);
+    expect(quiet.map((g) => [g.name, g.state, g.folded, g.area ?? false])).toEqual([
+      ["社群运营", "done", false, true],
+      ["未归类", "done", true, false],
+    ]);
   });
 });
 
@@ -97,6 +124,27 @@ describe("来源：飞书群 / 终端 / 桌面端 (#2526)", () => {
     expect(matchesFilter(s("b", "idle", "/", { pane_id: "botmux:abc" }), "feishu", noMutes)).toBe(true);
     expect(matchesFilter(s("h", "idle", "/", { pane_id: "w1:p1" }), "feishu", noMutes)).toBe(false);
     expect(matchesFilter(s("x", "idle", "/", { space_kind: "codex_app" }), "terminal", noMutes)).toBe(false);
+  });
+});
+
+describe("a usage limit rolls up as Waiting, not Working", () => {
+  const reset = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const limited = s("lim", "idle", "/code/weather", { turn_error: "You've hit your usage limit", turn_error_kind: "usage_limit", turn_error_resets_at: reset, turn_error_resumes: true });
+
+  it("is Waiting for the agent, the todo and a project that has only that", () => {
+    expect(agentTreeState(limited)).toBe("waiting");
+    expect(todoTreeState("usage_limit", [limited])).toBe("waiting");
+    expect(treeStateLabel("waiting")).toBe("待唤醒");
+    const tree = buildTodoTree([limited], machines, [todo("t", [link("lim")])], noMutes, NOW);
+    expect(tree.projects.map((p) => [p.name, p.state, p.todos.map((td) => td.state)])).toEqual([["weather", "waiting", ["waiting"]]]);
+  });
+
+  it("does not hide a todo that is actually working", () => {
+    const busy = s("busy", "working", "/code/weather");
+    const tree = buildTodoTree([limited, busy], machines, [todo("t-lim", [link("lim")]), todo("t-busy", [link("busy")])], noMutes, NOW);
+    const project = tree.projects.find((p) => p.name === "weather");
+    expect(project?.state).toBe("working");
+    expect(project?.todos.map((td) => td.state).sort()).toEqual(["waiting", "working"]);
   });
 });
 

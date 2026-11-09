@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -133,13 +134,14 @@ func TestInboxAgentMachineTrust(t *testing.T) {
 
 func TestInboxDoesNotResumeOnWorkMachine(t *testing.T) {
 	h := agentHub(t)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
 	ctx := context.Background()
 	delegationMachineTrust(t, h.Service, "work", "work")
 	it := actionItem("event", time.Now())
 	it.Agent = &InboxAgent{State: AgentRunning, MachineID: "work", SessionID: "twin-session"}
 	h.inbox.items[it.ID] = it
 	h.inbox.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: "Private update"}, true, time.Now())
-	h.originSet(ctx, "work", "twin-session", OriginInbox, it.ID)
+	h.originSet(ctx, "work", "twin-session", OriginInbox, it.ID, "")
 	if _, found := h.conversationsByEvent(ctx)[it.ID]; found {
 		t.Fatal("work conversation eligible for adoption")
 	}

@@ -14,9 +14,16 @@ struct TodosView: View {
     @State private var showCreate = false
     @State private var creatingTitle = ""
     @State private var creatingNotes = ""
+    /// The New To-Do sheet's notes mic (#2188).
+    @State private var dictation = Dictation()
     @State private var expandedDone = false
-    /// DEBUG screenshots: `-openTodoTitled <text>` opens the first todo whose title has the text.
-    @State private var debugOpen: TodoDetailRoute?
+    /// A to-do opened from the calendar (and, in DEBUG screenshots, `-openTodoTitled <text>`: the first whose title has it).
+    @State private var pushed: TodoDetailRoute?
+    /// List or calendar, and the calendar's day / week / month (#2029): each device keeps its own.
+    @StoredValue("todos.view") private var viewMode = TodosViewMode.list
+    @StoredValue("todos.calendar.mode") private var calendarMode = TodoCalendarMode.day
+    @State private var calendarAnchor = Date.now
+    @State private var quickAdd: TodoCalendarSlot?
     @Environment(\.tabIsActive) private var inFront
 
     private var allTodos: [TodoItem] {
@@ -41,6 +48,55 @@ struct TodosView: View {
     }
 
     var body: some View {
+        VStack(spacing: Theme.Space.flush) {
+            TodosModeBar(view: $viewMode, mode: $calendarMode)
+            if viewMode == .calendar {
+                TodoCalendarView(todos: store.todos, mode: $calendarMode, anchor: $calendarAnchor,
+                                 open: { pushed = TodoDetailRoute(id: $0) }, showList: { viewMode = .list })
+            } else {
+                list
+            }
+        }
+        .themedGroupedPage()
+        .detailTitle(String(localized: "To-dos"))
+        .navigationBarTitleDisplayMode(.inline)
+        .pageToolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    if viewMode == .calendar {
+                        quickAdd = TodoCalendarSlot(day: calendarAnchor, time: nil)
+                    } else {
+                        creatingTitle = ""
+                        creatingNotes = ""
+                        showCreate = true
+                    }
+                } label: {
+                    ThemedIcon(Theme.Icon.add)
+                }
+                .accessibilityLabel("New To-Do")
+            }
+        }
+        .sheet(isPresented: $showCreate) {
+            createSheet
+        }
+        .sheet(item: $quickAdd) { slot in
+            TodoQuickAddSheet(slot: slot)
+        }
+        .task {
+            await store.refresh()
+            #if DEBUG
+            // `-showDoneTodos YES`: the Done section starts open (screenshots of done todos).
+            if UserDefaults.standard.bool(forKey: "showDoneTodos") { expandedDone = true }
+            if let match = UserDefaults.standard.string(forKey: "openTodoTitled"),
+               let todo = store.todos.first(where: { $0.title.contains(match) }) {
+                pushed = TodoDetailRoute(id: todo.id)
+            }
+            #endif
+        }
+        .navigationDestination(item: $pushed) { r in TodoDetailView(todoID: r.id) }
+    }
+
+    private var list: some View {
         List {
             Section {
                 searchRow
@@ -118,50 +174,21 @@ struct TodosView: View {
             }
         }
         .themedPage()
-        .detailTitle(String(localized: "To-dos"))
-        .navigationBarTitleDisplayMode(.inline)
-        .pageToolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    creatingTitle = ""
-                    creatingNotes = ""
-                    showCreate = true
-                } label: {
-                    Image(systemName: Theme.Icon.add)
-                }
-                .accessibilityLabel("New To-Do")
-            }
-        }
-        .sheet(isPresented: $showCreate) {
-            createSheet
-        }
         .refreshable {
             await store.refresh()
         }
-        .task {
-            await store.refresh()
-            #if DEBUG
-            // `-showDoneTodos YES`: the Done section starts open (screenshots of done todos).
-            if UserDefaults.standard.bool(forKey: "showDoneTodos") { expandedDone = true }
-            if let match = UserDefaults.standard.string(forKey: "openTodoTitled"),
-               let todo = store.todos.first(where: { $0.title.contains(match) }) {
-                debugOpen = TodoDetailRoute(id: todo.id)
-            }
-            #endif
-        }
-        .navigationDestination(item: $debugOpen) { r in TodoDetailView(todoID: r.id) }
     }
 
     private var searchRow: some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.search)
+            ThemedIcon(Theme.Icon.search)
                 .font(Theme.Font.secondaryMedium)
                 .foregroundStyle(.secondary)
             TextField(String(localized: "Search to-dos"), text: $query)
                 .textFieldStyle(.plain)
             if !query.isEmpty {
                 Button { query = "" } label: {
-                    Image(systemName: Theme.Icon.clear).foregroundStyle(.tertiary)
+                    ThemedIcon(Theme.Icon.clear).foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
             }
@@ -193,11 +220,17 @@ struct TodosView: View {
                     TextField(String(localized: "Title"), text: $creatingTitle)
                         .lineLimit(1)
                         .onSubmit { add() }
-                    TextField(String(localized: "Notes (sent along when handed to an agent)"), text: $creatingNotes, axis: .vertical)
-                        .lineLimit(3...8)
+                    HStack(alignment: .top, spacing: Theme.Space.s) {
+                        TextField(String(localized: "Notes (sent along when handed to an agent)"), text: $creatingNotes, axis: .vertical)
+                            .lineLimit(3...8)
+                        FieldMicButton(dictation: dictation, text: $creatingNotes, id: "todo.new.notes.mic")
+                            .font(Theme.Font.body)
+                            .foregroundStyle(Theme.accent)
+                    }
                 }
             }
             .themedPage()
+            .onDisappear(perform: stopDictation) // cancelled, swiped away or added
             .navigationTitle("New To-Do")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -218,6 +251,7 @@ struct TodosView: View {
     private func add() {
         let t = creatingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
+        stopDictation() // what is saved is what the field shows
         let n = creatingNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         // The sheet closes only once the todo is saved: a failed save keeps the typed title and notes.
         Task {
@@ -228,6 +262,10 @@ struct TodosView: View {
                 AppModel.shared.show(error)
             }
         }
+    }
+
+    private func stopDictation() {
+        if dictation.isListening { dictation.stop() }
     }
 }
 
@@ -242,10 +280,11 @@ struct TodoRow: View {
         let status = TodosLogic.todoStatus(todo, lookup: lookup)
         let urgent = TodosLogic.mostUrgentAgent(todo, lookup: lookup)
         let activeAgents = todo.agents.filter { $0.releasedAt == nil }
+        let ultracode = Ultracode.todoShown(todo, lookup: lookup)
 
         HStack(alignment: .top, spacing: Theme.Space.m) {
             Button(action: onToggleDone) {
-                Image(systemName: todo.isDone ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                ThemedIcon(todo.isDone ? Theme.Icon.successFilled : Theme.Icon.unchecked)
                     .font(Theme.Font.title)
                     .foregroundStyle(todo.isDone ? Theme.positive : .secondary)
             }
@@ -254,11 +293,12 @@ struct TodoRow: View {
 
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(todo.title)
+                    UltracodeMark.after(todo.title, on: ultracode, font: Theme.Font.labelStrong)
                         .font(Theme.Font.bodyStrong)
                         .foregroundStyle(todo.isDone ? Color.secondary : Color.primary)
                         .strikethrough(todo.isDone)
                         .lineLimit(2)
+                        .animation(UltracodeMark.motion, value: ultracode)
                     Spacer(minLength: Theme.Space.xs)
                     if let d = todo.updatedAt ?? todo.createdAt {
                         Text(Fmt.relative(d))
@@ -281,6 +321,8 @@ struct TodoRow: View {
                     }
                     if !todo.isDone { ReviewChip(todo: todo, compact: true) }
                 }
+
+                TodoPlanLine(todo: todo)
 
                 if let reason = todo.closedReason {
                     Text(reason)

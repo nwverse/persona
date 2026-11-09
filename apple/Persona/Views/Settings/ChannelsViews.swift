@@ -46,7 +46,7 @@ struct ChannelsEntryRow: View {
                                 Text(ChannelText.summary(channels)).lineLimit(1)
                                     .foregroundStyle(ChannelText.hasProblem(channels) ? Theme.danger : Color.secondary)
                             } label: {
-                                Label { Text("Channels").lineLimit(1) } icon: { Image(systemName: Theme.Icon.channels) }
+                                Label { Text("Channels").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.channels) }
                             }
                         }
                     }
@@ -127,7 +127,7 @@ private struct ChannelRowLabel: View {
                 if let brand = ChannelText.brand(channel.id) {
                     SettingsBrandMark(asset: brand)
                 } else {
-                    BUIIconTile(ChannelText.symbol(channel), tint: Theme.accent)
+                    IconTile(ChannelText.symbol(channel), tint: Theme.accent)
                 }
             } trailing: {
                 ChannelStateDot(channel: channel)
@@ -263,7 +263,7 @@ struct ChannelDetailView: View {
     private func market(_ c: HubChannel) -> some View {
         Section {
             NavigationLink(value: ChannelsView.destination(c)) {
-                Label { Text("Install from Extension Market").lineLimit(1) } icon: { Image(systemName: Theme.Icon.pluginMarket) }
+                Label { Text("Install from Extension Market").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.pluginMarket) }
             }
             .accessibilityIdentifier("channel-install")
         } footer: {
@@ -410,7 +410,7 @@ struct ChannelDetailView: View {
                             if let at = conv.at { Text(Fmt.relative(at)).lineLimit(1) }
                         } label: {
                             Label { Text(conv.title?.isEmpty == false ? conv.title! : String(localized: "A chat")).lineLimit(1) } icon: {
-                                Image(systemName: Theme.Icon.conversation)
+                                ThemedIcon(Theme.Icon.conversation)
                             }
                         }
                     }
@@ -457,10 +457,17 @@ struct ChannelDetailView: View {
     @ViewBuilder private func more(_ c: HubChannel) -> some View {
         if let dest = ChannelText.page(page.detail?.settingsURL) {
             Section {
-                NavigationLink(value: dest) {
-                    Label { Text(moreTitle(dest)).lineLimit(1) } icon: { Image(systemName: Theme.Icon.options) }
+                if dest == .sent {
+                    Button { model.openSentRecords() } label: {
+                        Label { Text("Records sent as you").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.sentAsYou) }
+                    }
+                    .accessibilityIdentifier("channel-more")
+                } else {
+                    NavigationLink(value: dest) {
+                        Label { Text(moreTitle(dest)).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.options) }
+                    }
+                    .accessibilityIdentifier("channel-more")
                 }
-                .accessibilityIdentifier("channel-more")
             }
         }
     }
@@ -489,7 +496,7 @@ struct ChannelLinkSection: View {
                             Text("Set it up in Settings › Channels").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                         }
                     } icon: {
-                        Image(systemName: Theme.Icon.channels).foregroundStyle(Theme.accent)
+                        ThemedIcon(Theme.Icon.channels).foregroundStyle(Theme.accent)
                     }
                 }
                 .accessibilityIdentifier("connector-channel-link")

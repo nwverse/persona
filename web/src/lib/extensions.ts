@@ -1,6 +1,6 @@
-// Settings › Extensions (docs/extensions/extensions.md "The hub's API" and "App: Settings › Extensions", iOS ExtensionsModel): the hub's extensions, each one's
-// switch, its configuration as a form drawn from its schema (`form.fields`), and its secrets, write-only. Installing,
-// upgrading and removing happen on the hub's machine (`personad extension`), never here.
+// Manager-owned extension metadata and settings APIs (docs/extensions/extension-settings.md).
+// Configuration is schema-backed and secrets are write-only. Lifecycle management is host-owned;
+// market installation and consent flows live in extension-market.ts.
 import { api, ApiError, enc } from "./api";
 import type { Machine } from "./types";
 import { placeOf, type UIPlace } from "./extension-ui";
@@ -9,6 +9,8 @@ import { refreshExtensionPlaces } from "./extension-slots";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import type { Contribution, DependencyState, PackMember } from "./extension-model";
 import type { ExtensionAuth, ExtensionTool } from "./extension-auth";
+import { clock } from "./format";
+import { itemHeaders } from "./manager-choice";
 import { t } from "../i18n";
 
 export type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
@@ -37,6 +39,8 @@ export interface HubExtension {
   /** An extension from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
    *  happened last with an upgrade (docs/extensions/extensions.md "Automatic upgrades"). */
   auto_upgrade?: boolean;
+  /** Why its own switch does not apply now: "disabled" while the extension is off (the switch is kept for when it is on). */
+  auto_upgrade_paused?: string;
   upgrade?: ExtensionUpgrade;
   upgrade_note?: ExtensionUpgradeNote;
   /** An extension with a program on computers: how that program is on each machine it is switched on for. */
@@ -47,6 +51,19 @@ export interface HubExtension {
   auth?: ExtensionAuth;
   /** The command-line programs this version uses. */
   tools?: ExtensionTool[];
+  /** An extension running on its own that the hub reaches on its sockets (a `remote:` install): how it is connected. */
+  attached?: ExtensionAttached;
+}
+
+/** How an attached extension is connected (docs/extensions/extensions.md "Attached extensions"). */
+export interface ExtensionAttached {
+  online: boolean;
+  /** When it came online or went offline; none while it is switched off or nothing needs it. */
+  since?: string;
+  /** Why it is offline, also while its status is still `starting` (the hub waits 30 seconds before it says `error`). */
+  error?: string;
+  /** The version the program says it is, when that is not the approved `version`: it is not used until approved. */
+  version?: string;
 }
 
 /** Whether an installed extension runs isolated, and what it reached through the egress proxy (Android ExtensionSandbox). */
@@ -102,6 +119,8 @@ export interface ExtensionUpgrade {
   state: string;
   added_permissions?: ExtensionPermission[];
   detail?: string;
+  /** "user" when a skipped version is one the user rolled back from (absent: it didn't start). */
+  skipped_by?: string;
 }
 
 /** What happened last with an extension's upgrade. */
@@ -129,7 +148,10 @@ export interface ExtensionField {
   default?: Json;
   required?: boolean;
   enum?: ExtensionChoice[];
+  /** uri | email | hostname | machine (one of the hub's machines, by id) | launcher (one of its launchers, by name). */
   format?: string;
+  /** format machine: only machines of these systems (x-os). */
+  os?: string[];
   pattern?: string;
   min_length?: number;
   max_length?: number;
@@ -215,8 +237,8 @@ export const setContribution = (id: string, point: string, cid: string, enabled:
 export const setExtensionAutoUpgrade = (id: string, auto: boolean) =>
   api<HubExtensionDetail>(`${base(id)}/auto-upgrade`, { method: "PUT", json: { auto } }).then(detailOf);
 /** The auto-upgrade switch for all market extensions; a hub from before it has no route (null). */
-export const extensionUpgrades = () =>
-  api<{ auto: boolean; upgrades?: ExtensionUpgrade[] }>(`${extRoot()}/-/upgrades`).then((r) => r.auto, () => null);
+export const extensionUpgrades = (manager?: string) =>
+  api<{ auto: boolean; upgrades?: ExtensionUpgrade[] }>(`${extRoot()}/-/upgrades`, { headers: itemHeaders(manager) }).then((r) => r.auto, () => null);
 export const setExtensionUpgrades = (auto: boolean) => api<{ auto: boolean }>(`${extRoot()}/-/upgrades`, { method: "PUT", json: { auto } }).then((r) => r.auto);
 export const setExtensionConfig = (id: string, config: JsonObject) =>
   api<HubExtensionDetail>(`${base(id)}/config`, { method: "PUT", json: { config } }).then(detailOf).then(changed);
@@ -269,7 +291,26 @@ const STATES: Record<string, string> = {
 export const extensionState = (p: HubExtension) => STATES[p.status] ?? t("lib-extensions.state_unknown");
 
 /** Whether an enabled extension's program runs right now (the detail page's small print); "" for any other state. */
-export const runNote = (p: HubExtension) => (p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "");
+export const runNote = (p: HubExtension) =>
+  p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+
+/** An attached extension's small print: online or offline since when, and why while it is still reconnecting (its
+ *  status says no error yet); "" while it is switched off. */
+export function attachedNote(p: Pick<HubExtension, "status" | "attached">): string {
+  const a = p.attached;
+  if (!a || p.status === "disabled") return "";
+  const time = clock(a.since);
+  if (!time) return p.status === "stopped" ? t("lib-extensions.attached_idle") : "";
+  if (a.online) return t("lib-extensions.attached_online", { time });
+  if (p.status === "starting") return a.error ? t("lib-extensions.attached_reconnecting_why", { time, why: a.error }) : t("lib-extensions.attached_reconnecting", { time });
+  return t("lib-extensions.attached_offline", { time });
+}
+
+/** The version as the detail's line says it: the approved one, and the program's when it says another. */
+export function versionText(p: Pick<HubExtension, "version" | "attached">): string | undefined {
+  const current = p.attached?.version;
+  return current ? t("lib-extensions.version_differs", { approved: p.version ?? "", current }) : p.version;
+}
 
 export const isProblem = (p: HubExtension) => p.status === "error" || p.status === "incompatible";
 
@@ -297,7 +338,10 @@ export function upgradeDetail(u: ExtensionUpgrade): string {
     case "waiting_idle": return t("lib-extensions.upgrade_waiting_idle");
     case "available": return t("lib-extensions.upgrade_available");
     case "off": return t("lib-extensions.upgrade_off");
-    case "skipped": return t("lib-extensions.upgrade_skipped", { from: u.from ?? "" });
+    case "skipped":
+      return u.skipped_by === "user"
+        ? t("lib-extensions.upgrade_skipped_user", { from: u.from ?? "" })
+        : t("lib-extensions.upgrade_skipped", { from: u.from ?? "" });
     case "failed": return u.detail ? t("lib-extensions.upgrade_failed_detail", { detail: u.detail }) : t("lib-extensions.upgrade_failed");
     case "incompatible": return u.detail ? t("lib-extensions.upgrade_incompatible_detail", { detail: u.detail }) : t("lib-extensions.upgrade_incompatible");
     default: return "";
@@ -327,7 +371,7 @@ export function upgradeNote(n: ExtensionUpgradeNote): string | null {
   return null;
 }
 
-export const stateLine = (p: HubExtension) => [extensionState(p), p.version, sourceText(p.source)].filter(Boolean).join(" · ");
+export const stateLine = (p: HubExtension) => [extensionState(p), versionText(p), sourceText(p.source)].filter(Boolean).join(" · ");
 
 /** How many, and how many need the user. */
 export function listSummary(list?: HubExtension[] | null): string {
@@ -352,6 +396,41 @@ export function placeholder(f: ExtensionField): string {
     if (text) return t("lib-extensions.default_value", { value: text });
   }
   return t("lib-extensions.not_set");
+}
+
+/** A launcher as the form's picker reads it (GET /launchers' entry). */
+export interface PickerLauncher {
+  name: string;
+  display_name?: string;
+  hidden?: boolean;
+}
+
+/** One choice of a machine or launcher picker; `missing`: the value names none of them (it still shows, to change it). */
+export interface PickerChoice {
+  value: string;
+  label: string;
+  missing?: boolean;
+}
+
+/** The picker a string field draws instead of a text box: the hub's machines (format machine, of the systems x-os names)
+ *  or launchers (format launcher, the hidden ones left out), by name; a current value that names none of them comes
+ *  first, so it can be seen and changed. null: the field is not one of these, or its list is not in yet. */
+export function pickerChoices(f: ExtensionField, current: Json | undefined, machines: Pick<Machine, "id" | "name" | "os">[], launchers: PickerLauncher[] | null): PickerChoice[] | null {
+  if (f.type !== "string" || f.enum?.length) return null;
+  let out: PickerChoice[];
+  if (f.format === "machine") {
+    const os = f.os ?? [];
+    out = machines.filter((m) => !os.length || os.includes(m.os ?? "")).map((m) => ({ value: m.id, label: m.name || m.id }));
+  } else if (f.format === "launcher") {
+    if (!launchers) return null;
+    out = launchers.filter((l) => !l.hidden).map((l) => ({ value: l.name, label: l.display_name?.trim() && l.display_name.trim() !== l.name ? `${l.display_name.trim()} (${l.name})` : l.name }));
+  } else {
+    return null;
+  }
+  if (typeof current === "string" && current && !out.some((c) => c.value === current)) {
+    out.unshift({ value: current, label: t(f.format === "machine" ? "lib-extensions.machine_missing" : "lib-extensions.launcher_missing", { name: current }), missing: true });
+  }
+  return out;
 }
 
 export function secretState(s: ExtensionSecret): string {

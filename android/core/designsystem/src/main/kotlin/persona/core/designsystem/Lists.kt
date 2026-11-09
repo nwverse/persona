@@ -9,10 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,7 +30,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
-import kotlinx.coroutines.launch
 
 /** Paints a board holder down the left edge without asking the content for its intrinsic height. */
 internal fun Modifier.holder(color: androidx.compose.ui.graphics.Color, width: Dp): Modifier = drawBehind {
@@ -194,12 +190,14 @@ fun JRow(
     changingValue: Boolean = false,
     /** What accessibility services call the row's click: a switch row says [Role.Switch] so its on / off is read. */
     role: Role = Role.Button,
+    /** [leadingIcon]'s colour in place of the quiet ink (an extension's named `icon_color`). */
+    leadingIconTint: Color? = null,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
         if (leading != null) { leading(); Spacer(Modifier.width(14.dp)) }
         else if (leadingIcon != null) {
-            JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else palette.ink2, decorative = true)
+            JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else leadingIconTint ?: palette.ink2, decorative = true)
             Spacer(Modifier.width(16.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -361,14 +359,17 @@ fun JEmptyState(
     modifier: Modifier = Modifier,
     icon: PhIcon? = null,
     action: (@Composable () -> Unit)? = null,
+    /** A named colour for the icon and its well (an extension's `icon_color`); none: the quiet ink. */
+    iconHue: JHue? = null,
 ) {
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         icon?.let {
+            val hue = iconHue?.let { h -> palette.hue(h) }
             Box(
-                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(palette.surfaceStrong),
+                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(hue?.tint ?: palette.surfaceStrong),
                 contentAlignment = Alignment.Center,
-            ) { JIcon(it, null, size = 28.dp, tint = palette.ink2, decorative = true) }
+            ) { JIcon(it, null, size = 28.dp, tint = hue?.dot ?: palette.ink2, decorative = true) }
             Spacer(Modifier.height(16.dp))
         }
         Text(title, style = PersonaTheme.type.title, color = palette.ink, textAlign = TextAlign.Center)
@@ -427,71 +428,6 @@ fun JAvatar(
             ) { JIcon(it, null, size = size * 0.26f, tint = if (style == AppStyle.Brief) palette.background else Color.White, selected = true) }
         }
     }
-}
-
-/**
- * A swipe gesture on a row. The row springs back; the data change removes it. [destructive] ones ("Close") are drawn in the
- * danger colour instead of the status's.
- */
-@Immutable
-data class SwipeAction(val label: String, val icon: PhIcon, val status: Status, val onTrigger: () -> Unit, val destructive: Boolean = false)
-
-@Composable
-fun JSwipeActions(
-    modifier: Modifier = Modifier,
-    start: SwipeAction? = null,
-    end: SwipeAction? = null,
-    content: @Composable () -> Unit,
-) {
-    if (start == null && end == null) return Box(modifier) { content() }
-    val palette = PersonaTheme.palette
-    val state = rememberSwipeToDismissBoxState()
-    val scope = rememberCoroutineScope()
-    SwipeToDismissBox(
-        state = state, modifier = modifier,
-        enableDismissFromStartToEnd = start != null, enableDismissFromEndToStart = end != null,
-        onDismiss = { value ->
-            when (value) {
-                SwipeToDismissBoxValue.StartToEnd -> start?.onTrigger?.invoke()
-                SwipeToDismissBoxValue.EndToStart -> end?.onTrigger?.invoke()
-                SwipeToDismissBoxValue.Settled -> Unit
-            }
-            scope.launch { state.reset() }
-        },
-        backgroundContent = {
-            // Only while dragging, and only in the gap the row leaves: rows without a fill of their own (the Agents
-            // tree in glass and brief) and translucent ones would otherwise show the action colour under their words.
-            val action = when (state.dismissDirection) {
-                SwipeToDismissBoxValue.StartToEnd -> start
-                SwipeToDismissBoxValue.EndToStart -> end
-                SwipeToDismissBoxValue.Settled -> null
-            }
-            if (action != null) {
-                val tone = if (action.destructive) palette.danger else palette.status(action.status)
-                val fromEnd = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
-                val gap = with(androidx.compose.ui.platform.LocalDensity.current) {
-                    kotlin.math.abs(runCatching { state.requireOffset() }.getOrDefault(0f)).toDp()
-                }
-                Box(Modifier.fillMaxSize(), contentAlignment = if (fromEnd) Alignment.CenterEnd else Alignment.CenterStart) {
-                    Box(
-                        Modifier.fillMaxHeight().width(gap).clip(PersonaTheme.shapes.cardShape).background(palette.statusSurface),
-                        contentAlignment = if (fromEnd) Alignment.CenterEnd else Alignment.CenterStart,
-                    ) {
-                        // The words keep their size and show as the gap opens.
-                        Row(
-                            Modifier.wrapContentWidth(if (fromEnd) Alignment.End else Alignment.Start, unbounded = true)
-                                .padding(horizontal = 24.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            JIcon(action.icon, null, size = 22.dp, tint = tone.text, selected = true)
-                            Spacer(Modifier.width(8.dp))
-                            Text(action.label, style = PersonaTheme.type.label, color = tone.text, maxLines = 1)
-                        }
-                    }
-                }
-            }
-        },
-    ) { content() }
 }
 
 /**

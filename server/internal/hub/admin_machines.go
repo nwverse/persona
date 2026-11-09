@@ -6,11 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -21,7 +21,7 @@ import (
 // service: its persona://connector link pasted here). ssh is not offered any more; hub.json entries of kind ssh keep
 // working.
 
-var adminMachineID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+var adminMachineID = lazyre.New(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 type adminMachine struct {
 	ID           string             `json:"id"`
@@ -212,6 +212,34 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("DELETE /api/v1/admin/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		// One waiting to be confirmed goes as rejecting it does: its pending row and place too (machine_trust.go).
+		if h.machinePending(id) {
+			switch err := h.rejectMachine(r.Context(), id, "admin", "remove"); {
+			case err == nil:
+				writeJSON(w, map[string]any{"ok": true, "restart": h.pendingRestart(h.requestLang(r))})
+				return
+			case errors.Is(err, errKeeperAway):
+				writeErrCode(w, http.StatusServiceUnavailable, "assistant_offline", err)
+				return
+			case !errors.Is(err, errNotPending): // confirmed meanwhile: removed below as one
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		// Its Persona Link goes now, before the entry: until a restart a hub.json entry is still there to connect to,
+		// and a credential left under the id would let a computer added with it again back in. One that cannot be
+		// revoked leaves the entry, to delete again.
+		revoked, err := h.revokeComputer(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		removed := func(where string) {
+			detail, _ := json.Marshal(map[string]any{"credentials_revoked": revoked})
+			h.machineAudit(r.Context(), id, "remove", "admin", detail)
+			h.logf("admin: machine %q removed%s", id, where)
+			writeJSON(w, map[string]any{"ok": true, "restart": h.pendingRestart(h.requestLang(r))})
+		}
 		// One its manager keeps: it lets it go now (machines_kept.go).
 		if kept, err := h.removeKeptMachine(r.Context(), id); kept {
 			if err != nil {
@@ -219,8 +247,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 				writeErrCode(w, status, code, err)
 				return
 			}
-			h.logf("admin: machine %q removed", id)
-			writeJSON(w, map[string]any{"ok": true, "restart": h.pendingRestart(h.requestLang(r))})
+			removed("")
 			return
 		}
 		found, err := removeMachineEntry(h.cfg.dir, id)
@@ -233,8 +260,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 			return
 		}
 		h.clearKept(r.Context(), id) // an old record of a manager that kept it (machines_kept.go)
-		h.logf("admin: machine %q removed from hub.json", id)
-		writeJSON(w, map[string]any{"ok": true, "restart": h.pendingRestart(h.requestLang(r))})
+		removed(" from hub.json")
 	})
 	// Pair a service machine's connector again (it was paired with another hub, or reinstalled).
 	mux.HandleFunc("POST /api/v1/admin/machines/{id}/connector", func(w http.ResponseWriter, r *http.Request) {
@@ -321,7 +347,7 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 // machineEntries is hub.json's "machines", each entry as it is in the file.
 func machineEntries(o *jsonObject) ([]json.RawMessage, error) {
 	var list []json.RawMessage
-	if raw, ok := o.get("machines"); ok && strings.TrimSpace(string(raw)) != "null" {
+	if raw, ok := o.Get("machines"); ok && strings.TrimSpace(string(raw)) != "null" {
 		if err := json.Unmarshal(raw, &list); err != nil {
 			return nil, errors.New("hub.json machines is not a list")
 		}
@@ -370,11 +396,11 @@ func setMachineField(o *jsonObject, id, key string, v any) error {
 		if err != nil {
 			return err
 		}
-		if err := entry.set(key, v); err != nil {
+		if err := entry.Set(key, v); err != nil {
 			return err
 		}
-		list[i] = entry.marshal()
-		return o.set("machines", list)
+		list[i] = entry.Marshal()
+		return o.Set("machines", list)
 	}
 	return errors.New("hub.json has no such machine")
 }

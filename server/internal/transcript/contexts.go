@@ -3,8 +3,8 @@ package transcript
 import (
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"html"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -15,11 +15,11 @@ import (
 // user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How the app shows it").
 
 // contextBlockRe is one attributed block (the bare snapshot, ContextRe, is dropped before this).
-var contextBlockRe = regexp.MustCompile(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)
+var contextBlockRe = lazyre.New(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)
 
 // legacyLarkAgentRe is a Feishu /agent prompt as hub wrote it before the instructions moved into a block: an intro line,
 // then a request heading (what was asked), a context heading (blocks, plus a loose line or two), and a how-to heading (the rules).
-var legacyLarkAgentRe = regexp.MustCompile(`(?s)^([^\n]*(?:用 /agent 叫你|又(?:发|写)了一条 /agent 请求)[^\n]*)\n+## 请求\n+(.*?)\n+## 上下文\n+(.*)\n+## 怎么做\n+(.*?)\s*$`)
+var legacyLarkAgentRe = lazyre.New(`(?s)^([^\n]*(?:用 /agent 叫你|又(?:发|写)了一条 /agent 请求)[^\n]*)\n+## 请求\n+(.*?)\n+## 上下文\n+(.*)\n+## 怎么做\n+(.*?)\s*$`)
 
 // legacyLarkAgent rewrites an old Feishu /agent prompt into today's shape, so conversations started before the change
 // show the same way: the instructions and context in blocks, the request outside them.
@@ -50,11 +50,21 @@ func legacyLarkAgent(s string) string {
 	return b.String()
 }
 
+// messageSourceKindRe identifies provenance metadata, including the user-authored
+// sentinel. Cutting its JSON changes authorship, so it is fixed-size context.
+var messageSourceKindRe = lazyre.New(`\bkind\s*=\s*["']message-source["']`)
+
 // lightContexts fits a message with context blocks into limit bytes by cutting the blocks' bodies, longest first,
 // so what the user wrote and every block's title stay whole (a plain cut could end inside a block). ok is false when
 // even that does not fit, or there is nothing to cut.
 func lightContexts(s string, limit int) (string, bool) {
-	locs := contextBlockRe.FindAllStringSubmatchIndex(s, -1)
+	all := contextBlockRe.FindAllStringSubmatchIndex(s, -1)
+	locs := all[:0]
+	for _, loc := range all {
+		if !messageSourceKindRe.MatchString(s[loc[2]:loc[3]]) {
+			locs = append(locs, loc)
+		}
+	}
 	if len(locs) == 0 {
 		return "", false
 	}
@@ -109,14 +119,14 @@ func lightContexts(s string, limit int) (string, bool) {
 
 // injectedBlockRes are the blocks Persona and Claude Code put into a user message around what the user wrote: the
 // <persona-context> snapshot and attributed blocks, the <persona-view-errors> feedback, <system-reminder>s.
-var injectedBlockRes = []*regexp.Regexp{
-	regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`),
-	regexp.MustCompile(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>`),
-	regexp.MustCompile(`(?s)<system-reminder\b[^>]*>.*?</system-reminder>`),
+var injectedBlockRes = []*lazyre.Regexp{
+	lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`),
+	lazyre.New(`(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>`),
+	lazyre.New(`(?s)<system-reminder\b[^>]*>.*?</system-reminder>`),
 }
 
 // injectedOpenRe is one of those blocks left open: a message clipped inside it (Meta.FirstUser is) ends there.
-var injectedOpenRe = regexp.MustCompile(`<(?:` + compat.ContextPattern() + `|persona-view-errors|system-reminder)\b`)
+var injectedOpenRe = lazyre.New(`<(?:` + compat.ContextPattern() + `|persona-view-errors|system-reminder)\b`)
 
 // StripInjected is what the user wrote in a message, for a line that shows it (a title, a notification): without the
 // injected blocks, a block cut off by a clip, and the paste wrappers (what was pasted stays). "" when nothing is left.
@@ -160,18 +170,45 @@ func cutPartialTag(s string) string {
 }
 
 // blockTitleRe is an attributed block's whole opening tag with its title.
-var blockTitleRe = regexp.MustCompile(`<` + compat.ContextPattern() + `\b[^>]*?\stitle="([^"]*)"[^>]*>`)
+var blockTitleRe = lazyre.New(`<` + compat.ContextPattern() + `\b[^>]*?\stitle="([^"]*)"[^>]*>`)
 
 // Title is a message (or a title someone made of one) as a title or a preview line: what the user wrote, else the
 // title of the first attributed block ("Continuing the old main chat" for a main conversation handed over), else "" (the caller
 // falls back to the agent's project). A tag cut off by a clip ("<persona-context kind="context" title="Continuing…") has
 // no title to take: it is dropped. Strip first, then clip: a clip first can end inside a tag.
 func Title(s string) string {
-	if t := StripInjected(s); t != "" {
+	if t := dropLeadingBlocks(StripInjected(s)); t != "" {
 		return t
 	}
 	if m := blockTitleRe.FindStringSubmatch(s); m != nil {
 		return strings.TrimSpace(html.UnescapeString(m[1]))
 	}
 	return ""
+}
+
+// leadingTagRe is an opening tag with attributes at the start of a message (`<memory-index file="MEMORY.md">`), or one a
+// clip cut off before its ">": markup a tool wrote into the first message, not words a person typed. Like a custom element
+// the name has a "-" or "_", so HTML someone pasted (`<a href="…">`) stays.
+var leadingTagRe = lazyre.New(`^<([A-Za-z][\w.]*[-_][\w.-]*)(?:\s+[\w:.-]+="[^"]*(?:"|$))+\s*(?:>|$)`)
+
+// dropLeadingBlocks is a title without the blocks other tools put in front of what the user wrote: each one up to its
+// closing tag, or to the end when a clip cut it off. Persona's own blocks are gone already (StripInjected).
+func dropLeadingBlocks(s string) string {
+	for {
+		// Most titles start with words: skip the regexp for them, it allocates on every call (the session lists title
+		// every row, #2371).
+		if !strings.HasPrefix(s, "<") {
+			return s
+		}
+		m := leadingTagRe.FindStringSubmatchIndex(s)
+		if m == nil {
+			return s
+		}
+		end := "</" + s[m[2]:m[3]] + ">"
+		i := strings.Index(s[m[1]:], end)
+		if i < 0 {
+			return ""
+		}
+		s = strings.TrimSpace(s[m[1]+i+len(end):])
+	}
 }

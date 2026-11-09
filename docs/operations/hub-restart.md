@@ -5,9 +5,9 @@ Requirement: **when the server restarts, clients notice nothing at all**. Issue 
 
 Goal: in a normal deployment, no client shows a disconnect notice, no message is lost, and no running chat is interrupted.
 
-## Current state (verified 2026-11-04, before the change, master `2fe55f92`)
+## Before the change
 
-Code locations refer to the current files and functions (checked 2026-11-06; after `2fe55f92`, machine connections (spawning nodes, disconnect handling) moved from hub/machine.go and hub/machine_conn.go to `devices/`; `hub/machine.go` still exists, and `onEvent`, which forwards node events, stayed there); the behavior described is still that before the change.
+Verified on 2026-11-04 against master `2fe55f92`, before the work below. Code locations refer to the current files and functions (checked 2026-11-06; after `2fe55f92`, machine connections (spawning nodes, disconnect handling) moved from hub/machine.go and hub/machine_conn.go to `devices/`; `hub/machine.go` still exists, and `onEvent`, which forwards node events, stayed there); the behavior described is still that before the change.
 
 ### What a restart does
 
@@ -17,7 +17,7 @@ Code locations refer to the current files and functions (checked 2026-11-06; aft
   i.e. control-group), then runs `systemctl --user restart personad`. There is no health check beyond `is-active`.
 - On SIGTERM (`signal.NotifyContext` in `main` of `cmd/personad/main.go`): the hub's ctx is cancelled at once, and every machine connection is killed at the same moment (the connections started by `startDevices(ctx)` in `runHub` of `hub/hub.go`).
   The shutdown order in `serveHTTP` of `hub/public.go`: close the listener first → `stopWebSockets` sends each client 1001 "hub stopping" and force-closes after 0.5 s (`stopWebSockets` in `hub/shutdown.go`)
-  → `http.Server.Shutdown` (2 s per step, 8 s total budget, `defaultShutdownTimeout` / `shutdownStepTimeout` in `shutdown.go`) → wait for node connections → close the database. **The listener closes before draining**, so the port is closed during the drain.
+  → `http.Server.Shutdown` (2 s per step, 8 s total budget, `DefaultShutdownTimeout` / `shutdownStepTimeout` in `shutdown.go`) → wait for node connections → close the database. **The listener closes before draining**, so the port is closed during the drain.
 - The process listens itself with `net.Listen` (`serveHTTP` in `public.go`, the TLS port in `startPublic`); there is no `SO_REUSEPORT`, `LISTEN_FDS` or socket activation.
   The new process only listens after `db.Open` (migrations), extensions, the knowledge base and everything else is up (`runHub` in `hub.go`).
 - Measured (journal of the restart on this dev machine at 19:30 on 2026-11-04): stopping began at 19:30:29.88, finished at 30.93, and the new process started listening at 31.14: **the port was closed for about 1.3 s**,
@@ -33,7 +33,7 @@ Code locations refer to the current files and functions (checked 2026-11-06; aft
 | Local node | A child process of the hub (`node --stdio`), killed together with the hub by systemd's cgroup | `command` in `devices/machine.go` (the `local` branch) |
 | Extensions (the Lark extension and others) | Child processes of the hub (stdio RPC), killed with the hub's cgroup and respawned by the new hub; login state lives in each extension's own directory, so a restart only loses the hub-side session and readiness state | `spawn` in `extension/host/host.go` |
 | Connector programs (telegram, wechat) | Same, restarted with a 5 s backoff | `Conn.Run` in `connector/proc/proc.go` (`restartFirst`) |
-| persona-link (computers of kind link) | Receives 1001, reconnects with 1–60 s exponential backoff, status text "hub restarted" | `backoff`, `summary` in `link/client.go` |
+| persona-link (computers of kind link) | Receives 1001, reconnects with 1–60 s exponential backoff, status text "hub restarted" | `backoff` in `link/client.go`, `summary` in `link/client_race.go` |
 
 After the new hub comes up: the local node connects within 0.2 s; a Mac over ssh takes 2–8 s (measured: one at +2.4 s, another at +8 s). During that time the machine shows as offline and its session list is empty.
 
@@ -57,7 +57,7 @@ on the Mac, ssh machines go offline for 2–8 s, and their sessions disappear fr
 ### Work in progress inside the hub
 
 - The assistant (the Persona tab's main chat, side chats, scheduled tasks, the AI twin, Lark /agent, bots, channel extensions: `hub/assistant*.go`; the AI twin is the manager's `assistant/inbox_agent.go`; Lark /agent lives in the Lark extension (since #1571, opening chats through the hub's public API);
-  the Lark bot is `botSend` in `assistant/feishu.go`; channel extensions are `channelForward` in `assistant/channels_plugin.go`) all goes through `assistant.send` (bots and channel extensions now use it only to open new chats; continuing uses `session.send_once` via `sendOnce`), and **the node on the assistant's machine** starts a headless claude:
+  the Lark bot is `botSend` in `assistant/feishu_message.go`; channel extensions are `channelForward` in `assistant/channels_plugin.go`) all goes through `assistant.send` (bots and channel extensions now use it only to open new chats; continuing uses `session.send_once` via `sendOnce`), and **the node on the assistant's machine** starts a headless claude:
   `zsh -ic "<launcher> \"$@\"" … -p --input-format stream-json --output-format stream-json --include-partial-messages` (`spawnClaude` in `node/assistant_start.go`),
   in its own process group (`Setpgid`), with pipes for stdin / stdout.
 - Streaming output: `readAssistant` accumulates `text_delta` in memory in `p.partial` and sends a `session.delta` every 80 ms (`readAssistant`, `emitDelta` in `node/assistant.go`); the hub forwards it to subscribers
@@ -86,10 +86,14 @@ Why this one:
 - **Socket activation**: standard, a few lines of code, no effect on Docker / launchd / running by hand (without `LISTEN_FDS` the hub listens itself); rolling back means deleting the socket unit.
   Cost: during the ~1 s while the old process stops, connections wait and get no immediate response, which is far within the clients' grace periods.
 
+Every hub process takes the passed sockets first thing (`claimInherited` in `hub/listen.go`, at the top of `Serve`, `Run` and `RunSlot`), before anything can start another process: `LISTEN_*` are cleared and the sockets made close-on-exec, and so is anything else the process was handed past stderr (`osproc.SealInherited`).
+Until 2026-11-08 a hub without its edge took them only when it first listened, and `runHub` could start the built-in manager before that: the manager, and through it every node, extension and agent it started, then held the hub's listening socket for as long as it lived (several pids on `ss -tlnp` for the hub's port).
+The manager's and the node's run entries (`managercli.Assistant`, `manager run`, `node`, `node --attach`) seal what they were handed as well, so a socket an older hub still leaks stops there. Not in `main`: the sandbox's launcher and the source validator are the same binaries and hand descriptors on by exec on purpose.
+
 `hub-systemd.sh` writes both units: the first time (or when the address changes) it stops the service once to hand the port to the socket (only this once is there a ~1 s gap); after that it always just runs `restart personad`.
 `TimeoutStopSec=20` (headroom beyond the 8 s shutdown budget).
 
-### Blue-green switching: the hub's edge (`internal/hubedge`, 2026-11-06)
+### Blue-green switching: the hub's edge (`internal/hubedge`)
 
 Modeled on an account-pool relay gateway's approach: a resident edge process holds the port, with two slots behind it. The trigger was a problem reproduced on Linux on 2026-11-05: when self-update `syscall.Exec`'d the new binary in place, the listening socket passed by systemd was lost.
 `LISTEN_FDS` was cleared at startup, and the fd duplicated by `net.FileListener` had close-on-exec set, so the new process had to `bind` itself while the port was still held by `personad.socket`; it exited with `address already in use`,
@@ -98,7 +102,7 @@ and had to wait for systemd's `Restart=always` to bring it back, needlessly burn
 Now `personad hub run` (Linux, macOS) is an **edge**:
 
 - The edge holds the hub's ports: the socket from systemd, or its own listener if there is none. It never lets go while the service runs.
-- The hub itself runs as a **slot**: `personad hub slot`, a child process of the edge, listening on `~/.persona/run/slot-<a|b>-<port>.sock`.
+- The hub itself runs as a **slot**: `personad hub slot`, a child process of the edge, listening on `~/.persona/run/slot-<a|b>-<port>.sock`. The edge runs its slots from its own program (`persona-hub hub slot` for an edge started as `persona-hub run`); a switch names the binary for the next one. `hub switch` without `--binary` names the program the active slot runs, whichever program runs the command (`persona-hub switch` or `personad hub switch`), so while a slot serves a switch never moves a hub between `personad` and `persona-hub`; a slot that went back to `<program>.prev` after a failed switch names `<program>`. With nothing serving it names `personad` (`hub.ServerBinary`), as before the hub could run as `persona-hub`. While the edge backs off a slot that keeps failing it refuses any switch, whatever binary it names, so that default only reaches a switch the edge takes once a slot is up again (the edge starting the slot again, or another switch handing over). On a hub that runs `persona-hub` it moves the hub to `personad` until its service restarts, so give `--binary` there.
 - The edge forwards every connection byte for byte, first writing a PROXY v2 header stating the origin. So the slot's `RemoteAddr` / `LocalAddr` are still the client's address and the address it connected to,
   and trust decisions by origin (loopback, LAN, VPN interface, the user's own PROXY protocol upstream) work as before.
 - TLS certificates, public-key pinning and the database belong to the slot; the edge only forwards TCP.
@@ -125,7 +129,7 @@ Why not two hubs serving at once (that gateway's parallel switch): the hub has m
 Old and new coexist only during the standby self-check, with a 1–2 second hold at handover. Measured (NAS, 2026-11-06): one switch took 0.68 seconds, with 607 requests across 4 concurrent streams during it and 0 failures.
 
 Cases that bypass the edge: Windows, Docker (image updates), `PERSONA_HUB_EDGE=0`, a data directory path that is too long (Unix socket address limit). In these the hub listens itself as before.
-The in-place exec problem on this path is fixed too: the fds from systemd are kept (close-on-exec), the flag is cleared before exec, and `LISTEN_FDS` / `LISTEN_PID` are passed along (`execListenEnv` in `listen.go`).
+The in-place exec problem on this path is fixed too: the fds from systemd are kept (close-on-exec), the flag is cleared before exec, and `LISTEN_FDS` / `LISTEN_PID` are passed along (`execKeepingListeners` in `listen.go`: it holds `syscall.ForkLock` for reading from clearing the flag to the exec, so no process started meanwhile inherits the sockets, and sets the flag again when the exec fails).
 
 ### Planned shutdown (`hub/restart.go`)
 
@@ -153,7 +157,7 @@ Previously clients received a string of "machine offline" and "interaction ended
   It is reused only if handed over within 10 minutes. After a crash there is no handover; the new process opens a new stream and clients do a full refresh, so they never get duplicate sequence numbers.
 - Approval cards that need filling in (elicitation) are sent only to clients that declared the capability; during the reconnect replay the client has not sent `client_hello` yet, so the replay skips them and the pending-interactions snapshot after connecting fills them in.
 
-### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_link.go`)
+### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_reports.go`)
 
 Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
 It first hands the `NodeInfo` and session lists of the machines online at this moment to its next process (its own settings `hub.warm_machines`, plus each machine's engines `engines`), then disconnects them (without reporting them offline).
@@ -188,7 +192,7 @@ The assistant's claude no longer belongs to a single hub connection:
 - Monitor and background commands are child processes of claude, and they keep running as long as claude does, so they **continue automatically after a hub restart** and wake the chat as usual when they finish.
   `recoverAssistantTasks` only sends "just restarted" when the chat process is really gone (for example, the node itself restarted).
 - **The node updating itself** (a deployment swapped the binary): `deploy.sh` now uses `node-launchd.sh restart-idle`, which sends SIGHUP to the node's main process only
-  (`systemctl --user kill -s HUP --kill-whom=main`; on the Mac `launchctl kill SIGHUP`). The node waits until no chat is answering or waiting on background tasks,
+  (`systemctl --user kill -s HUP --kill-who=main`; on the Mac `launchctl kill SIGHUP`). The node waits until no chat is answering or waiting on background tasks,
   stops idle chat processes, and `exec`s the new binary (same PID, invisible to systemd / launchd). Idle chats `--resume` on their next message. Old resident nodes do not understand SIGHUP; they simply exit and are restarted, like the old `restart`.
 
 Machines without a resident node (where the hub starts `node --stdio` directly over ssh and it handles everything itself) behave as before: a hub restart still interrupts chats, and background tasks still get "just restarted".
@@ -254,12 +258,18 @@ Unchanged: Docker deployment (`deploy/docker/`, no `LISTEN_FDS`, still listens i
 
 After blue-green switching ("Blue-green switching" above):
 
-- Before replacing the hub binary, deploy.sh saves the old one as `personad.prev`.
-- When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --prev …`:
+- Before replacing the hub binary, deploy.sh saves the old one as `personad.prev` (and `persona-hub.prev`, `persona-manager.prev` for the two programs it puts beside it).
+- When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --binary <personad> --prev …` (the program it means, not the default):
   - Exit code 0: switch complete, restart nothing;
   - Exit code 1: the new version could not take over, the old one keeps serving; the script restores `personad.prev` and deployment fails;
   - Other exit codes: no edge (the first deployment of this version, an old binary), or an older edge protocol; restart the service the old way.
-- Mac (launchd) also tries switching first, then `kickstart` if that fails.
+- The unit keeps the program it runs ([../server/server.md](../server/server.md) ("Programs")). The script reads the unit's `ExecStart` as systemd does and as the hub's self-update does (`unit_program`; one table of forms tests both): the last one in `[Service]`, the drop-ins' after the unit's, spaces around the key's `=`, the first word unquoted (double or single quotes), `%h`, `%%` and `$$` replaced, compared by real path.
+  - A unit that runs this data directory's `persona-hub` stays `persona-hub run`, and the switch is `persona-hub hub switch --binary persona-hub --prev persona-hub.prev`; when that fails, `personad`, `persona-hub` and `persona-manager` all go back to their `.prev`. Without `persona-hub.prev` (the script run outside deploy.sh) there would be nothing to go back to, so the service restarts on the build on disk instead of switching.
+  - Every other unit is written for `personad` as before.
+  - It stops with an error and leaves the unit as it is when the unit runs a `persona-hub` that is not there, or when its `ExecStart` names a `persona-hub` other than this data directory's (a wrapper such as `sh -c '…/persona-hub run'`, another copy, a bare name).
+  - A `.prev` goes back through a symlink onto the file it names (an install under the former name keeps `personad` as a link to that file), so both names run the old build. A program whose `.prev` could not be put back (a full disk, a directory left where its copy goes) is named in the error, still on the new build; the others go back all the same.
+  - The script never moves an install from one program to the other.
+- Mac (launchd) also tries switching first, then `kickstart` if that fails. It finds the agent that runs this data directory's `personad hub` or its `persona-hub` (`run`, or no arguments; the program is `Program` when the agent has one, else `ProgramArguments[0]`, as launchd runs it) and switches with that program, given with `--binary`.
 - Rollback: run `PERSONA_HUB_EDGE=0 scripts/deploy/hub-systemd.sh` on the hub machine. It writes this variable into the unit's `Environment=`, and after the service restarts the hub listens itself;
   later deployments preserve it until you run it again with `PERSONA_HUB_EDGE=1`. When running manually, set this environment variable directly.
 
@@ -295,18 +305,8 @@ Socket activation caveats:
     the background command's result came back, and the chat received no "just restarted" message.
   - The last line is `PASS` / `FAIL` / `TIMEOUT` and the numbers.
 
-## Measured results (2026-11-04, this dev machine's hub, after deploying #1617)
-
-Deployment: switched the hub to `personad.socket`, installed the resident node (`personad-node`); that initial switch stopped it for about 1 s. Afterwards:
-
-| Scenario | Result |
-| --- | --- |
-| `hub_restart_seamless.py --restarts 3` (client only) | PASS: 247 health probes, 0 failures (slowest 0.95 s, waiting in the backlog); all 3 reconnects among 4 connections were `resumed` on the same stream, 54 events with no loss or duplicates; client-visible disconnects 0.73–1.01 s (web / Android grace is 8 s, 30 s during restart, so the UI stays unchanged); 1.3–1.6 s per restart including the command |
-| `--restarts 3 --converse --count 300` (a streaming side chat plus a `sleep 75` background command) | PASS: 827 health probes, 0 failures; all 3 reconnects resumed, 121 events with no loss or duplicates, longest disconnect 0.81 s; all 300 answer lines present, the background command finished and reported back, no "just restarted" message in the chat; the node logged "took over 1 running conversations" three times (the same claude process) |
-| Hub logs | Each restart: `event log: continuing stream … at N`, `warm start: 3 machines shown as before`, local node reconnects in 0.2–1 s, the two Macs over ssh in 1–3 s |
-| Resident node idle restart (`node-launchd.sh restart-idle`) | PID unchanged (`exec`), the local node disconnected from the hub for about 2 s, which then broadcast an offline event; the 5 s grace and `dialResident` above were added afterwards (follow-up PR for #1574) |
-
-Before-change comparison (journal of the deployment at 19:30 on 2026-11-04 on the same machine): the port closed for about 1.3 s and connections were refused; the local node and its assistant processes were killed; the two Macs reconnected after 2.4 s and 8 s, showing offline in between.
+After socket activation and the resident node were deployed (#1617), repeated restarts with a streaming side chat passed on a real hub: no failed health probe, every reconnect resumed on the same stream with no lost or duplicated event, and each disconnect lasted about a second, well inside the clients' grace period.
+Before the change a restart refused connections for about 1.3 s and killed the local node's assistant processes. The numbers are in `docs/archive/operations/hub-restart-records.md`.
 
 ## iOS / Mac (#1634)
 

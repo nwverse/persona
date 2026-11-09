@@ -1,12 +1,12 @@
-import { Fragment, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
 import { getSession, getState } from "../../lib/store";
 import { agentStatus, subagentFor } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
-import { exchangeSteps, isLoopTick, isOwnMessage, type Segment, type Step, type UserMessage } from "../../lib/turns";
+import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Segment, type UserMessage } from "../../lib/turns";
 import type { Item } from "../../lib/types";
-import { foldsHoldingCalls, planSteps, thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
+import { thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { channelOf, useChannels } from "../../lib/channels";
 import { splitQuotes } from "../../lib/drafts";
@@ -16,6 +16,7 @@ import { Markdown } from "../../ui/Markdown";
 import { CardConversation, CardItem } from "../../ui/AssistantCard";
 import { cardReply } from "../../lib/assistant-blocks";
 import { InjectedHint, LoopTick, MergedBubble, PeerMessage } from "./Messages";
+import { SourceMessage } from "./SourceMessage";
 import { ContextGroup } from "./ContextGroup";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { useFullText } from "./FullText";
@@ -25,7 +26,7 @@ import { QuoteStack } from "./Quote";
 import { PathText } from "../../ui/PathLinks";
 import { Thumb } from "./Steps";
 import { useFoldScroll } from "./fold-scroll";
-import { useChatContext } from "./chat-context";
+import { FreshWords, useChatContext } from "./chat-context";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
 import { useCallSeeker } from "./jump";
@@ -43,10 +44,14 @@ export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
   return text.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / perLine)), 0);
 }
 
-export function UserBubble({ msg, mid, sid, pending }: { msg: UserMessage; mid: string; sid: string; pending?: boolean }) {
+/** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
+ *  (spec/fixtures/sync); the transcript's own bubbles have none. `starting`: the first message of a conversation still
+ *  starting (the new-conversation page, #1697): drawn as it will be once sent, without actions (there is nothing yet to
+ *  act on) and without "Sending…" (the page says it is preparing). */
+export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean }) {
   const own = isOwnMessage(msg);
   return (
-    <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-items={pending ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
+    <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
       {msg.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1.5">
           {msg.images.map((im) => (
@@ -58,7 +63,9 @@ export function UserBubble({ msg, mid, sid, pending }: { msg: UserMessage; mid: 
       {msg.contexts.length > 0 && <ContextGroup contexts={msg.contexts} />}
       {msg.files && <FileCards files={msg.files} mid={mid} />}
       {msg.text &&
-        (pending ? (
+        (starting ? (
+          <BubbleText text={msg.text} mid={mid} sid={sid} own={own} />
+        ) : pending ? (
           <BubbleText text={msg.text} mid={mid} sid={sid} own={own} pending />
         ) : (
           <MessageActions text={msg.text} isUser ts={msg.ts} side messageId={msg.id} className="max-w-full">
@@ -66,7 +73,7 @@ export function UserBubble({ msg, mid, sid, pending }: { msg: UserMessage; mid: 
           </MessageActions>
         ))}
       {(pending || msg.queued) && <span className="text-[11px] text-ink-3">{pending ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
-      {!pending && <ChannelSource clientMsgId={msg.client_msg_id} />}
+      {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} />}
     </div>
   );
 }
@@ -99,6 +106,7 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
       {...fold}
       className={`text-[length:var(--chat-body)] leading-[1.6] whitespace-pre-wrap [overflow-wrap:anywhere] ${folded ? FOLDED : ""}`}
       data-folded={folded || undefined}
+      data-bubble-text
     >
       <PathText text={text} mid={mid} cwd={getSession(mid, sid)?.cwd} />
     </div>
@@ -160,7 +168,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: 
     return (
       <MessageActions text={text}>
         <div className={ANSWER} data-answer="streaming">
-          <Markdown text={text} mid={mid} cwd={cwd} streaming />
+          <Markdown text={text} mid={mid} cwd={cwd} streaming lineBreaks />
         </div>
       </MessageActions>
     );
@@ -170,7 +178,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: 
       <div className={ANSWER} data-answer data-items={item?.id}>
         {/* the cards in it are this item's blocks (ui/AssistantCard.tsx): `<item id>/<n>` */}
         <CardItem.Provider value={item?.id ? { id: item.id, text } : null}>
-          <Markdown text={text} mid={mid} cwd={cwd} fade={fade || undefined} />
+          <Markdown text={text} mid={mid} cwd={cwd} fade={fade || undefined} lineBreaks />
         </CardItem.Provider>
       </div>
       {full.more}
@@ -179,88 +187,95 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: 
   );
 });
 
+/** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary. */
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid }: { item?: Item; streaming?: string; mid: string; sid: string }) {
+  const fresh = useContext(FreshWords);
+  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={streaming === undefined && item ? fresh?.has(item.id) : undefined} />;
+});
+
 export const SegmentView = memo(function SegmentView({
   seg,
   live,
   mid,
   sid,
   streaming,
+  batchedWords,
   expandFold,
   beforeWords,
+  trace,
 }: {
   seg: Segment;
   live: boolean;
   mid: string;
   sid: string;
   streaming?: string;
+  /** The live words are an agent's as Claude shows them (docs/integrations/claude-integration.md "Live replies"): a batch
+   *  of lines at a time, and still while a tool runs. The live work row stays under them; the headless assistant's
+   *  words stream as they are written and stand for it. */
+  batchedWords?: boolean;
   expandFold: (f: Item) => Promise<void>;
   /** Drawn between the work and the agent's last words (the wakes chip, #3783); above the work while it is live. */
   beforeWords?: ReactNode;
+  /** An opened supervision round shows its original input instead of the injected hint. */
+  trace?: boolean;
 }) {
-  const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS } = useChatContext();
-  const steps = useMemo(() => planSteps(exchangeSteps(seg)), [seg]);
+  const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle } = useChatContext();
+  const steps = useMemo(() => exchangeSteps(seg), [seg]);
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {
     const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live);
-    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls };
-  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls]);
+    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live };
+  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
+  const identity = segmentIdentity(seg);
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, agentStatus: p.agentStatus, workflowCard: (s) => workflowCalls.known.has(s.use.tool_use_id ?? "") }),
-    [steps, live, turnStart, p.agentStatus, workflowCalls],
+    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
+    [steps, live, turnStart, streaming !== undefined, identity],
   );
   useCallSeeker(scope, nodes);
-  useWorkflowFolds(steps, workflowCalls.startedAt, expandFold);
   // the pictures the agent looked at this turn, between its work and its last words
   const images = useMemo(() => turnImages(seg, getState().machines.find((m) => m.id === mid)?.name), [seg, mid]);
-  // a finished exchange's last words (the run of them at its end) come after those pictures
+  // The text slot is fixed during the run and after completion. Streamed text replaces persisted narration.
   let cut = nodes.length;
-  for (let n = nodes[cut - 1]; !live && n?.kind === "step" && n.step.kind === "text"; n = nodes[cut - 1]) cut--;
-  const working = live && streaming === undefined && !nodes.some((n) => n.kind === "group" && n.live);
+  const tail = nodes[cut - 1];
+  if (tail?.kind === "step" && tail.step.kind === "text") cut--;
+  const latest = nodes.at(-1);
+  const latestItem = latest?.kind === "step" && latest.step.kind === "text" ? latest.step.item : undefined;
+  const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
+  const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
   return (
     <section className="flex flex-col gap-3" data-segment>
-      {seg.user && (seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
-      {/* while the agent works, its live work stays at the bottom */}
+      {trace && seg.user?.rawInput ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
+      {/* Work stays collapsed above the single latest-text slot. */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
-      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows */}
-      {working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />}
+      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows, under an
+          agent's live words while they are there (batchedWords) */}
+      {streaming === undefined && liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
-      <WorkNodes nodes={nodes.slice(cut)} p={p} fade />
-      {streaming !== undefined && <Answer streaming={streaming} mid={mid} sid={sid} />}
+      {streaming !== undefined && liveRow}
+      {(latestItem || streaming !== undefined) && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} /></div>}
     </section>
   );
 });
 
-/** After a fold failed to come, the next try waits this long, doubling up to WORKFLOW_FOLD_RETRY_MAX_MS. */
-const WORKFLOW_FOLD_RETRY_MS = 5000;
-const WORKFLOW_FOLD_RETRY_MAX_MS = 60_000;
+function RawInjectedInput({ items, mid, sid }: { items: Item[]; mid: string; sid: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1" data-supervision-input>
+      <span className="text-[length:var(--chat-secondary)] text-ink-3">{t("chat-lines.supervision_input")}</span>
+      {items.map((item) => item.kind === "image" ? <Thumb key={item.id} item={item} mid={mid} sid={sid} /> : <RawInjectedText key={item.id} item={item} mid={mid} sid={sid} />)}
+    </div>
+  );
+}
 
-/** A workflow run's call the hub folded into this exchange's work (the page counted back from the end, #3434): its steps
- *  are fetched, so the run's card comes out of the fold and stays in the open. Kept by this exchange as drawn now, not
- *  for the page: a transcript loaded again (another chat and back, a rewrite) mounts it afresh and brings the same fold
- *  back, which is fetched again. A fold that came is gone from the steps; one that failed is asked for again later. */
-function useWorkflowFolds(steps: Step[], calls: ReadonlyMap<string, number>, expandFold: (f: Item) => Promise<void>) {
-  const folds = useMemo(() => foldsHoldingCalls(steps, calls), [steps, calls]);
-  // asked for (on its way, or come: one that came back empty stays among the steps and is not asked for again)
-  const asked = useRef(new Set<string>());
-  const wait = useRef(WORKFLOW_FOLD_RETRY_MS);
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    for (const f of folds) {
-      if (asked.current.has(f.id)) continue;
-      asked.current.add(f.id);
-      expandFold(f).then(
-        () => void (wait.current = WORKFLOW_FOLD_RETRY_MS),
-        () => {
-          asked.current.delete(f.id);
-          const ms = wait.current;
-          wait.current = Math.min(ms * 2, WORKFLOW_FOLD_RETRY_MAX_MS);
-          window.setTimeout(() => setRetry((n) => n + 1), ms);
-        },
-      );
-    }
-  }, [folds, expandFold, retry]);
+function RawInjectedText({ item, mid, sid }: { item: Item; mid: string; sid: string }) {
+  const full = useFullText(item, mid, sid);
+  return (
+    <div data-items={item.id}>
+      <pre className="rounded-card bg-inset p-3 text-[length:var(--chat-secondary)] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{full.text}</pre>
+      {full.more}
+    </div>
+  );
 }

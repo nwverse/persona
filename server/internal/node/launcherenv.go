@@ -3,12 +3,12 @@ package node
 import (
 	"cmp"
 	"maps"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -175,9 +175,9 @@ func envLine(line string) (k, v string, ok bool) {
 	return k, strings.TrimSpace(v), true
 }
 
-var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var envNameRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-var exportRe = regexp.MustCompile(`^export\s+`)
+var exportRe = lazyre.New(`^export\s+`)
 
 // withoutEnv is environ (KEY=value entries) without the variables clear names.
 func withoutEnv(environ, clear []string) []string {
@@ -191,9 +191,6 @@ func withoutEnv(environ, clear []string) []string {
 		return false
 	})
 }
-
-// withoutProviderEnv is environ without what providerEnvClear names (the Agent SDK bridge's env).
-func withoutProviderEnv(environ []string) []string { return withoutEnv(environ, providerEnvClear) }
 
 const (
 	// oneMillionSuffix: Claude Code runs a model with a 1M context window only when its name says so.
@@ -285,11 +282,9 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	} else if c := cmp.Or(l.CompactWindow, w); c > 0 {
 		env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = strconv.Itoa(c)
 	}
-	// the main conversation switches its thinking level while it runs (apply_flag_settings, modes.go), which the
-	// environment variable would win over: it takes the level from the start and the switch, not from here
-	if !mainConversation {
-		set("CLAUDE_CODE_EFFORT_LEVEL", cmp.Or(effort, l.Effort, pm.DefaultEffort))
-	}
+	// Claude Code puts CLAUDE_CODE_EFFORT_LEVEL above --effort and /effort, which would override the caller's
+	// choice and lock the session's effort control (#2307). A default effort goes to the command line (--effort)
+	// instead, and the environment variable is set only when the provider's own env sets it explicitly.
 	set("ANTHROPIC_CUSTOM_HEADERS", l.Headers)
 	// Both spellings: Node's fetch reads the lower-case one first, so an upper-case value alone would lose to a lower-case
 	// one in the user's settings env.
@@ -398,4 +393,11 @@ func launchEnvFor(clear, env []string, assistant bool) ([]string, []string) {
 		return slices.Contains(perStartEnv, k)
 	})
 	return clear, env
+}
+
+// launcherDefaultEffort returns the provider's default effort level (its configured Effort,
+// or its default model's DefaultEffort).
+func launcherDefaultEffort(l proto.ManagedLauncher) string {
+	pm, _ := providerModel(l, l.Model)
+	return cmp.Or(l.Effort, pm.DefaultEffort)
 }

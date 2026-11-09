@@ -80,7 +80,7 @@ func TestSetupChildModeWithoutServices(t *testing.T) {
 			}
 			e.pingDB = func(context.Context, string) error {
 				cfg, _ := readHubJSON(e.root)
-				raw, _ := cfg.get("token")
+				raw, _ := cfg.Get("token")
 				_ = json.Unmarshal(raw, &token)
 				return nil
 			}
@@ -120,7 +120,7 @@ func TestSetupNoSystemdStaysChild(t *testing.T) {
 	e.o.noService = true
 	e.pingDB = func(context.Context, string) error {
 		cfg, _ := readHubJSON(e.root)
-		raw, _ := cfg.get("token")
+		raw, _ := cfg.Get("token")
 		_ = json.Unmarshal(raw, &token)
 		return nil
 	}
@@ -309,6 +309,42 @@ func TestSetupBuiltinManagerProblems(t *testing.T) {
 			t.Fatalf("%v %v\n%s", err, cmds.calls, out)
 		}
 	})
+	for _, active := range []bool{true, false} {
+		t.Run("program switched, running "+strconv.FormatBool(active), func(t *testing.T) {
+			e, out, cmds := newEnv(t, true)
+			if !active {
+				for _, unit := range []string{"persona-manager-assistant.service", compat.LegacyManagerUnit("assistant")} {
+					cmds.replies["systemctl --user is-active --quiet "+unit] = fakeReply{err: true}
+				}
+			}
+			unit := filepath.Join(e.unitDir(), "persona-manager-assistant.service")
+			if err := os.MkdirAll(e.unitDir(), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			execStart := func(prog string) string {
+				return "[Service]\nExecStart=" + filepath.Join(e.root, "bin", prog) + " assistant\n"
+			}
+			if err := os.WriteFile(unit, []byte(execStart("personad")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			e.run = func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
+				if len(args) > 1 && args[0] == "manager" && args[1] == "install" {
+					_ = os.WriteFile(unit, []byte(execStart("persona-manager")), 0o644)
+				}
+				return cmds.run(ctx, env, name, args...)
+			}
+			if err := e.setup(context.Background()); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			want := "已绑定这个 hub、连上了；服务改成运行 persona-manager"
+			if active {
+				want += "，重启了它"
+			}
+			if s := setupSteps(t, out.String())["manager"]; !s.OK || !strings.HasSuffix(s.Detail, want) {
+				t.Fatalf("manager step %+v", s)
+			}
+		})
+	}
 	t.Run("not online", func(t *testing.T) {
 		e, out, _ := newEnv(t, false)
 		if err := e.setup(context.Background()); err != nil {
@@ -368,7 +404,7 @@ func TestFreshManagerMode(t *testing.T) {
 		if err := freshManagerMode(o, c.service, c.force); err != nil {
 			t.Fatal(err)
 		}
-		if got := string(o.marshal()); got != c.want {
+		if got := string(o.Marshal()); got != c.want {
 			t.Errorf("%s service=%v force=%v: %s, want %s", c.in, c.service, c.force, got, c.want)
 		}
 	}

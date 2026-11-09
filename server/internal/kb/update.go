@@ -14,51 +14,173 @@ import (
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
-// Ingest appends messages of one chat that a source pushes (mail), creating the chat. Same lines, people and
-// links as Archive, and the same retention (the first read of a quiet mailbox reaches back years).
+// Ingest durably archives a source's messages. Nonempty IDs are scoped by the
+// exact source and chat, and first-write-wins: replay or an edited body with the
+// same ID adds nothing. Missing IDs retain legacy append behavior. Old Markdown
+// has no recoverable IDs, so only messages ingested with receipts are replay-safe.
 //
-// The lines (and their attachments) are made first; only then is the chat read, changed and written, under chatMu,
-// so a history import of the same chat (WriteHistory) never writes back counters older than these.
+// With a selection (Engine.Selection), every message goes through it first (Selection.Evaluate): only what it
+// stores is written, with its rule's days, and the mine rule's context is kept per chat between batches
+// (select_context.go). A chat outside the selection (Selected false) is archived as before.
 func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []SourceMessage) (int, error) {
-	id := ChatID(src.Name(), sc.ID)
+	if e.Store.ReadOnly() {
+		return 0, ErrReadOnly
+	}
+	// Reserve live ingestion through attachment preparation too: a replay must
+	// not overwrite the first version's files. History and compression can still
+	// run while a connector downloads, so reread their metadata before commit.
+	e.Store.ingestMu.Lock()
+	defer e.Store.ingestMu.Unlock()
 	cut := e.textCutoff()
-	probe := &Chat{ID: id, Source: src.Name()} // what line needs: where attachments go, how long they are kept
-	var lines []Line
-	var kept []SourceMessage
+	e.Store.chatMu.Lock()
+	c, exists, r, err := e.Store.ingestState(src.Name(), sc, cut)
+	e.Store.chatMu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	if err := attributeChat(c, src); err != nil {
+		return 0, err
+	}
+	sel, ret, facts := e.selection(), e.Retention(), ChatFactsOf(src.Name(), sc)
+	selecting := sel != nil && facts.Selected()
+	unchanged := func() (int, error) {
+		if exists {
+			e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
+		}
+		return 0, nil
+	}
+	span := 0
+	var win mineWindow
+	if selecting {
+		if !sel.ReadChat(ret, facts).Read {
+			return unchanged()
+		}
+		if span = sel.MineContext(); span > 0 {
+			if win, err = e.Store.mineWindow(c.ID, src.Name(), sc.ID); err != nil {
+				return 0, err
+			}
+		}
+	}
+	type pick struct {
+		m    SourceMessage
+		d    Decision
+		late bool // stored with a later message of the owner's: older than lines written before it
+	}
+	var picks []pick
 	for _, m := range msgs {
-		if m.At.Before(cut) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
 			continue
 		}
-		l := e.line(ctx, src.Download, probe, m)
+		if !selecting {
+			if !m.At.Before(cut) {
+				picks = append(picks, pick{m: m, d: Decision{Store: true, Days: or(e.TextDays, 365), AttachmentDays: e.AttachmentDaysFor(src.Name())}})
+			}
+			continue
+		}
+		if span > 0 && win.seen(m.ID) {
+			continue
+		}
+		mf := MessageFactsOf(m)
+		switch {
+		case m.Mine && span > 0:
+			for _, b := range win.Before {
+				if b.Stored {
+					continue
+				}
+				bf := MessageFactsOf(b.M)
+				bf.NearMine = true
+				if d := sel.Evaluate(ret, facts, bf); d.Store {
+					picks = append(picks, pick{m: b.M, d: d, late: true})
+				}
+			}
+			win.Before, win.After = nil, span
+		case win.After > 0:
+			mf.NearMine = true
+			win.After--
+		}
+		d := sel.Evaluate(ret, facts, mf)
+		if d.Store {
+			picks = append(picks, pick{m: m, d: d})
+		}
+		if span > 0 {
+			win.push(m, d.Store, span)
+		}
+	}
+	saveWindow := func() error {
+		if span == 0 {
+			return nil
+		}
+		return e.Store.putMineWindow(c.ID, win)
+	}
+	var lines []ingestLine
+	var kept []SourceMessage
+	for _, p := range picks {
+		m := p.m
+		if m.At.Before(e.CutoffFor(p.d.Days)) {
+			continue
+		}
+		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
+			continue
+		}
+		l := e.buildLine(ctx, src.Download, c, m, false, p.d.AttachmentDays)
 		if l.Text == "" {
 			continue
 		}
-		lines = append(lines, l)
+		lines = append(lines, ingestLine{Line: l, rule: p.d.Rule, late: p.late})
+		if m.ID != "" {
+			r.IDs[m.ID] = m.At
+		}
 		kept = append(kept, m)
 	}
 	if len(lines) == 0 {
-		return 0, nil
+		if err := saveWindow(); err != nil {
+			return 0, err
+		}
+		return unchanged()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	e.Store.chatMu.Lock()
 	defer e.Store.chatMu.Unlock()
-	c, ok := e.Store.Chat(id)
-	if !ok {
-		c = &Chat{ID: id, Source: src.Name(), SourceID: sc.ID, Kind: sc.Kind, Name: sc.Name, Created: time.Now().UTC()}
+	c, _, r, err = e.Store.ingestState(src.Name(), sc, cut)
+	if err != nil {
+		return 0, err
+	}
+	if err := attributeChat(c, src); err != nil {
+		return 0, err
 	}
 	for _, m := range kept {
+		if m.ID != "" {
+			r.IDs[m.ID] = m.At
+		}
 		e.notePerson(c, src.Name(), m)
 		c.Mine = c.Mine || m.Mine
 		if m.At.After(c.LastAt) {
 			c.LastAt = m.At
 		}
-	}
-	if err := e.Store.AppendMessages(c, lines); err != nil {
-		return 0, err
+		// A new ID can arrive in a minute already summarized or refused. Reopen
+		// that minute instead of letting the old watermark hide its pending line.
+		if !c.CoveredUntil.IsZero() && m.At.Before(c.CoveredUntil) {
+			c.CoveredUntil = m.At.Truncate(time.Minute)
+		}
 	}
 	c.Messages += len(lines)
 	c.Pending += len(lines)
-	if err := e.Store.PutChat(c); err != nil {
+	usual := ""
+	if selecting {
+		usual = sel.UsualRule(ret, facts)
+		c.Rule = usual
+	}
+	if err := e.Store.commitIngest(c, lines, r, selecting, usual); err != nil {
 		return 0, err
+	}
+	// After the commit: a window saved before it would say messages are stored that a failed commit never wrote.
+	if err := saveWindow(); err != nil {
+		e.logf("selection context of %s: %v", c.ID, err)
 	}
 	e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 	return len(lines), nil
@@ -94,7 +216,18 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	default:
 		return nil, fmt.Errorf("unknown kind %q", kind)
 	}
-	raw, err := os.ReadFile(meta)
+	var recording map[string][]byte
+	var raw []byte
+	var err error
+	if kind == KindRecording {
+		recording, err = e.Store.recordingSnapshot(id)
+		raw = recording["meta.json"]
+		if err == nil && raw == nil {
+			err = ErrNotFound
+		}
+	} else {
+		raw, err = os.ReadFile(meta)
+	}
 	if err != nil {
 		return nil, ErrNotFound
 	}
@@ -111,9 +244,11 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		}
 	}
 	if kind == KindRecording {
-		d.Segments = nonNilSegments(e.Store.RecordingSegments(id))
+		var segs []RecordingSegment
+		_ = json.Unmarshal(recording["segments.json"], &segs)
+		d.Segments = nonNilSegments(segs)
 		if recentChars > 0 {
-			raw, _ := os.ReadFile(e.Store.path(kind, id, "transcript.md"))
+			raw := recording["transcript.md"]
 			d.Recent = clip(string(raw), recentChars)
 		}
 	}

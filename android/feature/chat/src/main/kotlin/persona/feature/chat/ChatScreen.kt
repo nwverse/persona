@@ -286,8 +286,18 @@ private fun ChatPage(
     val projection by produceState(persona.core.domain.lines.ChatSnapshot(emptyList(), emptyList(), persona.core.domain.lines.TaskIndex()),
         snapshot.items, live, openWork, timelineVersion) {
         val items = snapshot.items
-        value = withContext(Dispatchers.Default) { timeline.lines(items, live, openWork.toSet()) }
+        value = withContext(Dispatchers.Default) {
+            timeline.lines(items, live, openWork.toSet())
+        }
         projectedFrom = items
+    }
+    val liveWorkLines = remember(projection) { liveWorkIds(projection.lines) }
+    var previousLiveWork by remember { mutableStateOf(emptySet<String>()) }
+    // Fold the completed run, but keep choices made on historical lines and transfer an opened placeholder.
+    LaunchedEffect(liveWorkLines) {
+        val settled = settleWorkOpen(openWork.toSet(), liveWorkLines, previousLiveWork)
+        previousLiveWork = liveWorkLines
+        if (settled != openWork.toSet()) chatList.setExpanded(settled)
     }
     val feeds by (tasks?.feeds ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<persona.core.contracts.FeedItem>>()) })
         .collectAsStateWithLifecycle()
@@ -317,6 +327,7 @@ private fun ChatPage(
             photos.id.takeIf { photos is ChatLine.UserImages && user.id in contentUserImages }
         }.toSet()
     }
+    val contentSourceLabels = remember(lines) { sourceLabelIds(lines.asReversed()) }
     val contentWorkGroups = remember(lines) { lines.filterIsInstance<ChatLine.Work>().associateBy { it.id } }
     // Each open work line's plan card (web #1990 draws only the latest plan of an exchange).
     val contentPlans = remember(contentWorkGroups) { contentWorkGroups.filterValues { it.open }.mapValues { latestPlan(it.value.steps) } }
@@ -375,10 +386,14 @@ private fun ChatPage(
         }
     }
     fun toggle(id: String) {
-        val wasOpen = id in openWork
-        chatList.setExpanded(if (wasOpen) openWork - id else openWork + id)
-        if (!wasOpen) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
+        val (next, opened) = toggleWork(WorkOpenState(openWork.toSet()), id)
+        chatList.setExpanded(next.open)
+        if (opened) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
             ?.filterIsInstance<persona.core.domain.lines.WorkItem.Folded>()?.forEach { expand(it.item.item) }
+    }
+    // Restored open lines and folds arriving while expanded load just as a manual tap does.
+    LaunchedEffect(projection) {
+        openFoldsToFetch(projection.lines, folding, foldErrors.keys).forEach(::expand)
     }
     /** Whether the message was taken (false: nothing went, the box or another send stands); [onFailed] if it then fails. */
     fun send(command: String? = null, onFailed: () -> Unit = {}): Boolean {
@@ -580,10 +595,11 @@ private fun ChatPage(
             !snapshot.ended && !snapshot.replaced && (connection == null || connection == ConnectionState.Online))
     val unreadEntry = if (session?.agentState == AgentState.Unread) lines.firstOrNull { line ->
         line.holds(lastUserId)
-    }?.let { ChatListEntry(it.id, lastLineAtTop = true) } else null
-    ChatListEffects(chatList, messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.id },
+    }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
+    ChatListEffects(chatList, messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
         ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty()) &&
             (unreadEntry == null || markdownReadyFor == snapshot.items), entry = unreadEntry,
+        rowAliases = lines.associate { it.id to it.contentKey },
         hasOlder = snapshot.hasOlder, loadingOlder = snapshot.loadingOlder,
         onFreeze = { timeline.freeze(currentItems); timelineVersion++ },
         onFollow = { timeline.follow(); timelineVersion++ },
@@ -709,9 +725,11 @@ private fun ChatPage(
                                                 uncertain = uncertain - interaction.id
                                                 interactionFeedback = result.notice(res, interaction, resolution)
                                                 if (result.offersNext(resolution)) answeredHere++
-                                            } else uncertain = uncertain + interaction.id
-                                            notice = if (result.submission == InteractionSubmission.Unknown) res.getString(result.submission.notice) else null
-                                            if (result.submission == InteractionSubmission.PromptChanged || result.submission == InteractionSubmission.Unknown) {
+                                            } else if (result.submission == InteractionSubmission.Unknown) uncertain = uncertain + interaction.id
+                                            // refused: nothing was done, so the card stays answerable, with the hub's reason (#1881)
+                                            else uncertain = uncertain - interaction.id
+                                            notice = if (result.withdraw) null else result.notice(res, interaction, resolution)
+                                            if (result.submission == InteractionSubmission.PromptChanged || !result.withdraw) {
                                                 try { interactions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                                             }
                                         } finally { busyId = null }
@@ -821,14 +839,14 @@ private fun ChatPage(
                                         }
                                     }
                                 }
-                                items(lines, key = { it.id }, contentType = { it.contentType() }) { line ->
-                                    ChatSearchHighlight(search, line.id) {
+                                items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
+                                    ChatSearchHighlight(search, line.contentKey) {
                                         androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
                                         ChatLineContent(line, key, loader,
                                         line.recordedDuration(snapshot.recordedTurnDurations),
                                         ::toggle, ::expand, folding, foldErrors,
                                         lastUserId = lastUserId,
-                                        onLastLine = { extent -> chatList.reportLastLine(line.id, extent) }, onFullText = { item ->
+                                        onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = { item ->
                                         scope.launch {
                                             try { fullText = repository.fullText(key, item.id) }
                                             catch (e: CancellationException) { throw e }
@@ -841,7 +859,8 @@ private fun ChatPage(
                                         lastWorkStep = (line as? ChatLine.Step)?.let {
                                             contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
                                         } == true,
-                                        plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] })
+                                        plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
+                                        showSourceLabel = line.id in contentSourceLabels)
                                         }
                                     }
                                 }
@@ -860,7 +879,7 @@ private fun ChatPage(
                                     stringResource(if (readOnly) R.string.chat_screen_empty_read_only else R.string.chat_screen_empty_hint),
                                     Modifier.align(Alignment.Center).padding(padding).padding(horizontal = horizontalPadding))
                             // The newest plan card scrolled out of view: "Step N/M" above the composer brings it back (web PlanPill).
-                            val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans, renderStyle.compactToolSummary) }
+                            val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans) }
                             val planOut by remember(anchor) { derivedStateOf {
                                 anchor != null && list.layoutInfo.totalItemsCount > 0 &&
                                     list.layoutInfo.visibleItemsInfo.none { it.key == anchor.lineId }

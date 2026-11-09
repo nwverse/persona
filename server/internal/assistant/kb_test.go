@@ -28,6 +28,7 @@ type kbStore struct {
 	mu      sync.Mutex
 	rows    map[string]string // "kind/id" → name
 	down    bool
+	reads   int // Setting calls
 	deleted []string
 }
 
@@ -36,6 +37,7 @@ func newKBStore() *kbStore { return &kbStore{memStore: &memStore{}, rows: map[st
 func (k *kbStore) Setting(ctx context.Context, key string, out any) (bool, error) {
 	k.mu.Lock()
 	down := k.down
+	k.reads++
 	k.mu.Unlock()
 	if down {
 		return false, errors.New("database down")
@@ -118,7 +120,7 @@ func TestKBAnswersTheHub(t *testing.T) {
 	_ = e.Store.PutChat(&kb.Chat{ID: "example-c1", Source: "example", Name: "示例群"})
 	_ = e.Store.PutPerson(&kb.Person{ID: "example-p1", Source: "example", Name: "示例用户"})
 	st.rows["chats/example-c1"], st.rows["people/example-p1"] = "示例群", "示例用户"
-	if got := fmt.Sprint(ask(assistantwire.MethodKBForget, map[string]any{"source": "example"})); got != "map[chats:1 people:1]" {
+	if got := fmt.Sprint(ask(assistantwire.MethodKBForget, map[string]any{"source": "example"})); got != "map[chats:1 items:0 people:1 posts:0]" {
 		t.Fatalf("forget: %s", got)
 	}
 	if _, ok := e.Store.Chat("example-c1"); ok {
@@ -360,11 +362,12 @@ func TestKBKeptAsTheHubSays(t *testing.T) {
 	if e2 := kbEng(t, s); e2.TextDays != 90 || e2.Store != e.Store {
 		t.Fatalf("after the hub's change %+v", e2)
 	}
-	// Attachment days per source: the engine goes by them, and a change opens it again.
+	// Attachment days per source: the engine goes by them (never past the text retention: no line, no attachment),
+	// and a change opens it again.
 	f.mu.Lock()
 	f.hello.KB = &KBSettings{TextDays: 90, AttachmentDaysBySource: map[string]int{"chat": 3650}}
 	f.mu.Unlock()
-	if e3 := kbEng(t, s); e3.AttachmentDaysFor("chat") != 3650 || e3.AttachmentDaysFor("other") != 30 || e3.Store != e.Store {
+	if e3 := kbEng(t, s); e3.AttachmentDaysBySource["chat"] != 3650 || e3.AttachmentDaysFor("chat") != 90 || e3.AttachmentDaysFor("other") != 30 || e3.Store != e.Store {
 		t.Fatalf("attachment days by source %+v", e3)
 	}
 	if !sameKBSettings(KBSettings{}, KBSettings{AttachmentDaysBySource: map[string]int{}}) ||

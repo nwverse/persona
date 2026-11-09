@@ -155,15 +155,17 @@ func (s *Service) boardRefresh() {
 	}
 	// The status first: it starts the chat afresh when the bot was paired again, and the board of the old owner goes
 	// with it.
+	// The workbench (feishu_workbench_pin.go) is the board drawn as a home card: either switch keeps it current.
 	f, ready := s.feishuFeatures(ctx)
+	on := ready && (f.Board || s.workbenchOn(f, ready))
 	p.mu.Lock()
-	if ready && f.Board {
+	if on {
 		p.offAt = time.Time{}
 	} else {
 		p.offAt = p.clock()
 	}
 	p.mu.Unlock()
-	if !ready || !f.Board {
+	if !on {
 		return
 	}
 	ref := s.boardRef(ctx)
@@ -208,7 +210,7 @@ func (s *Service) standingBoardCommand(ctx context.Context) bool {
 // that would say what the board already says is not made (the settle-time refresh; /tasks always writes). p.run is held.
 func (s *Service) boardPut(ctx context.Context, ref *botBoardRef, quiet bool) (edited bool, err error) {
 	p := &s.standing
-	card, fallback, rows := s.boardCard(ctx)
+	card, fallback, rows := s.standingCard(ctx)
 	if ref != nil && p.clock().Sub(ref.At) < boardEditFor {
 		if quiet && p.written.id == ref.MessageID && p.written.rows == rows {
 			return false, nil
@@ -226,6 +228,9 @@ func (s *Service) boardPut(ctx context.Context, ref *botBoardRef, quiet bool) (e
 	mid, err := s.botPostKeyed(ctx, "", card, fallback, s.boardKey(ctx, ref))
 	if err != nil {
 		return false, err
+	}
+	if s.workbench.on.Load() {
+		s.workbenchPin(ctx, mid) // the workbench that replaces one is pinned in its place
 	}
 	s.setBoardRef(ctx, &botBoardRef{MessageID: mid, At: p.clock()})
 	p.written.id, p.written.rows = mid, rows
@@ -261,6 +266,9 @@ type boardRow struct {
 	from     string
 	link     string
 	nudged   bool // the bot nudged under its card in the chat (feishu_nudge.go, #6084)
+	// machine and session are the chat a card or a question that can wait came from, empty when it came from none; the
+	// apps open it from the brief item (briefing_feed.go).
+	machine, session string
 	// asked is when the "Please verify" ask of a to-do waiting to be verified was made (its card, if it has one, went out then) (zero: the row is not one); id is the to-do.
 	asked time.Time
 }
@@ -278,7 +286,8 @@ func (s *Service) boardRows(ctx context.Context, l i18n.Lang, web string, now ti
 			link = sessionLink(web, ix.MachineID, ix.SessionID, s.sessionAssistantLocal(ix.MachineID, ix.SessionID))
 		}
 		rows = append(rows, boardRow{blocking: true, waited: boardWaited(now, ix.CreatedAt), id: ix.ID,
-			summary: boardSummary(l, ix), from: s.boardFrom(l, ix.MachineID, ix.SessionID, ix.SessionTitle), link: link, nudged: s.cardNudged(ix.ID)})
+			summary: boardSummary(l, ix), from: s.boardFrom(l, ix.MachineID, ix.SessionID, ix.SessionTitle), link: link, nudged: s.cardNudged(ix.ID),
+			machine: ix.MachineID, session: ix.SessionID})
 	}
 	for _, a := range s.awaitingAcceptance(ctx) {
 		summary := i18n.T(l, "assistant-feishu_cards.board_verify", i18n.Args{"title": clip(oneLine(a.title), 40)})

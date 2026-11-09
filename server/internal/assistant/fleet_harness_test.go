@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devices"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,6 +29,8 @@ type fleetDevs struct {
 	machines map[string]*fleetNode
 	order    []string
 	usage    assistantwire.UsageSummary
+	// attention is every Persona Link summary handed over (SetAttention), in order.
+	attention []link.Attention
 }
 
 type fleetNode struct {
@@ -122,6 +126,10 @@ func (d *fleetDevs) List() []devices.Summary {
 	return out
 }
 
+func (d *fleetDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *fleetDevs) Canonical(id string) string { return id }
 
 func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
@@ -134,11 +142,39 @@ func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	return append([]proto.Session(nil), n.sessions...), true
 }
 
+// SessionsWhere copies out only what keep accepts, as the devices do: a benchmark of a view then counts no copy of the
+// whole list.
+func (d *fleetDevs) SessionsWhere(id string, keep func(*proto.Session) bool) ([]proto.Session, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil {
+		return nil, false
+	}
+	return keptWhere(n.sessions, keep), true
+}
+
+// keptWhere is the sessions of list keep accepts, copied (Devices.SessionsWhere).
+func keptWhere(list []proto.Session, keep func(*proto.Session) bool) []proto.Session {
+	var out []proto.Session
+	for i := range list {
+		if keep(&list[i]) {
+			out = append(out, list[i])
+		}
+	}
+	return out
+}
+
+// Session finds one session in place, as devices.Session does: copying the whole list here would make a benchmark of a
+// lookup measure this fake instead.
 func (d *fleetDevs) Session(id, session string) (proto.Session, bool) {
-	list, _ := d.Sessions(id)
-	for _, s := range list {
-		if s.SessionID == session {
-			return s, true
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if n := d.machines[id]; n != nil {
+		for i := range n.sessions {
+			if n.sessions[i].SessionID == session {
+				return n.sessions[i], true
+			}
 		}
 	}
 	return proto.Session{}, false
@@ -159,6 +195,19 @@ func (d *fleetDevs) Usage() assistantwire.UsageSummary {
 	return d.usage
 }
 
+func (d *fleetDevs) SetAttention(a link.Attention) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.attention = append(d.attention, a)
+}
+
+// handedAttention is every summary handed over so far.
+func (d *fleetDevs) handedAttention() []link.Attention {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.attention)
+}
+
 // fleetMem is the in-memory store of the fleet's tests: the assistant's settings, the interactions table, "Always Allow in Session",
 // the seen times.
 type fleetMem struct {
@@ -169,6 +218,8 @@ type fleetMem struct {
 	recs   []db.InteractionRecord
 	always map[string]map[string]bool // session → keys
 	seen   map[[2]string]time.Time
+	// insertGate, when set before the cards come, holds each interaction write until it is closed (a slow database).
+	insertGate chan struct{}
 }
 
 func newFleetMem() *fleetMem {
@@ -176,7 +227,14 @@ func newFleetMem() *fleetMem {
 		seen: map[[2]string]time.Time{}}
 }
 
-func (m *fleetMem) InsertInteraction(_ context.Context, ix proto.Interaction) error {
+func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) error {
+	if m.insertGate != nil {
+		select {
+		case <-m.insertGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
 	if _, ok := m.status[ix.ID]; !ok {

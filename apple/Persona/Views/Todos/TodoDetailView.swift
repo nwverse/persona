@@ -12,6 +12,8 @@ struct TodoDetailView: View {
     @FocusState private var titleFocused: Bool
     @State private var isEditingNotes = false
     @State private var editingNotesText = ""
+    /// The notes' mic (#2188): Done and leaving the page end it.
+    @State private var dictation = Dictation()
     @State private var showHandoff = false
     @State private var showDeleteConfirm = false
     @State private var showReleased = false
@@ -50,7 +52,7 @@ struct TodoDetailView: View {
                         Label("Delete To-Do", systemImage: Theme.Icon.delete)
                     }
                 } label: {
-                    Image(systemName: Theme.Icon.more)
+                    ThemedIcon(Theme.Icon.more)
                 }
             }
         }
@@ -101,6 +103,8 @@ struct TodoDetailView: View {
             if !focused { commitTitle() }
         }
         .onDisappear { commitTitle() }
+        // A tab switch hides the page without onDisappear: the mic must not go on listening behind it.
+        .onTabVisibility(appear: {}, disappear: stopDictation)
         .onAppear {
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "showTodoHandoff") {
@@ -131,6 +135,10 @@ struct TodoDetailView: View {
             do { _ = try await store.update(id: todo.id, title: t) } catch { model.show(error) }
             if savingTitle == t { savingTitle = nil }
         }
+    }
+
+    private func stopDictation() {
+        if dictation.isListening { dictation.stop() }
     }
 
     /// Deletes the todo and leaves its page; a failed delete keeps the page and shows the error.
@@ -191,6 +199,8 @@ struct TodoDetailView: View {
                 .padding(.vertical, Theme.Space.xs)
             }
 
+            TodoPlanSection(todo: todo).id(todo.id) // due date, reminder, priority (#1683)
+
             if todo.supervision != nil {
                 // A task the main conversation supervises (#3124): its criteria as the latest review found them.
                 Section { ReviewChecklist(todo: todo).padding(.vertical, Theme.Space.xs) }
@@ -205,8 +215,18 @@ struct TodoDetailView: View {
                             .font(Theme.Font.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
+                        FieldMicButton(dictation: dictation, text: $editingNotesText, id: "todo.notes.mic") {
+                            // On the notes as they are, one tap opens the editor and dictates into it.
+                            if !isEditingNotes {
+                                editingNotesText = text.notes
+                                isEditingNotes = true
+                            }
+                        }
+                        .font(Theme.Font.captionStrong)
+                        .foregroundStyle(Theme.accent)
                         Button(isEditingNotes ? String(localized: "Done [Extension System Presentation c0b3fb]") : String(localized: "Edit [Message Menu 051836]")) {
                             if isEditingNotes {
+                                stopDictation() // what is saved is what the field shows
                                 let n = editingNotesText.trimmingCharacters(in: .whitespacesAndNewlines)
                                 Task {
                                     do {
@@ -226,12 +246,14 @@ struct TodoDetailView: View {
                         .font(Theme.Font.captionStrong)
                         .lineLimit(1)
                         .foregroundStyle(Theme.accent)
+                        .accessibilityIdentifier("todo.notes.edit")
                     }
 
                     if isEditingNotes {
                         TextField(String(localized: "To-do notes"), text: $editingNotesText, axis: .vertical)
                             .lineLimit(3...8)
                             .textFieldStyle(.plain)
+                            .accessibilityIdentifier("todo.notes.field")
                             .padding(Theme.Space.s)
                             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
                     } else if !text.notes.isEmpty {
@@ -359,7 +381,7 @@ struct TodoDetailView: View {
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 if isFailed {
-                    Image(systemName: Theme.Icon.errorFilled)
+                    ThemedIcon(Theme.Icon.errorFilled)
                         .foregroundStyle(Theme.danger)
                         .font(Theme.Font.body)
                         .padding(.top, Theme.Space.xs)
@@ -401,7 +423,7 @@ struct TodoDetailView: View {
                         .foregroundStyle(isFailed ? Theme.danger : s?.state == .needsYou ? StatusPalette.needsYou.text : .secondary)
                         .lineLimit(2)
                 }
-                Image(systemName: Theme.Icon.disclosure)
+                ThemedIcon(Theme.Icon.disclosure)
                     .font(Theme.Font.label)
                     .foregroundStyle(.tertiary)
                     .padding(.top, Theme.Space.xs)
@@ -446,7 +468,7 @@ struct TodoDetailView: View {
                 showHandoff = true
             } label: {
                 HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: Theme.Icon.handToAI)
+                    ThemedIcon(Theme.Icon.handToAI)
                     Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .font(Theme.Font.heading)
@@ -459,7 +481,7 @@ struct TodoDetailView: View {
                 store.toggleDone(todo)
             } label: {
                 HStack(spacing: Theme.Space.xs) {
-                    Image(systemName: todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
+                    ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
                     Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .font(Theme.Font.heading)

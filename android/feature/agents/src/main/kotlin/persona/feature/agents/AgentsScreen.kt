@@ -246,6 +246,9 @@ internal fun AgentsScreen(
     Box(Modifier.fillMaxSize()) {
         JListPage(
             title = if (connection == ConnectionState.Online) names[page.settings.machineFilter] ?: "Agents" else connection.title,
+            // The list holds text fields (search, a password card's password, #1581): it ends above the keyboard so the
+            // focused one scrolls into view; the root leaves keyboard padding to each page (#867).
+            modifier = Modifier.imePadding(),
             state = listState,
             summary = summary, subtitle = subtitle, greet = true,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
@@ -257,7 +260,8 @@ internal fun AgentsScreen(
             },
         ) {
             item("search") {
-                JSearchField(page.settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
+                val settings by model.listSettings.collectAsStateWithLifecycle()
+                JSearchField(settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
             }
             if (groups.size > 1) item("groups") {
                 GroupFilterRow(groups, page.groupCounts, group, model::group)

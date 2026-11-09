@@ -161,6 +161,7 @@ type InboxHandlingNote struct {
 	Edited           bool
 	Context          string
 	Machine, Session string
+	Handoff          bool // the note goes to a conversation the event was handed to (wrapped by inbox/handoff_note)
 }
 
 // The notes (their templates).
@@ -177,3 +178,57 @@ const (
 func RenderInboxHandlingNote(name string, n InboxHandlingNote) string {
 	return render(name, n)
 }
+
+// InboxHandoff is the message that hands an event to Persona's main conversation (inbox/handoff): the user's Text
+// after a context block naming the event, so that conversation can write back with inbox_suggest.
+type InboxHandoff struct {
+	ID, Title string
+	Text      string
+}
+
+func RenderInboxHandoff(h InboxHandoff) string { return render("inbox/handoff", h) }
+
+// InboxHandoffNote wraps a handling note (Note) for a conversation the event was handed to (inbox/handoff_note).
+type InboxHandoffNote struct {
+	ID, Title string
+	Note      string
+}
+
+func RenderInboxHandoffNote(n InboxHandoffNote) string { return render("inbox/handoff_note", n) }
+
+// InboxFolders is the system prompt that files items into folder paths (inbox/folders, #2463).
+type InboxFolders struct {
+	Owner       string // "" is the Chinese "you"
+	FolderRules string // the user's folder rules, trimmed
+	Rules       string // the user's triage rules (inbox.rules), trimmed: what they care about
+	// Language is the new folders' language by its own name; "" leaves it to Chinese or the folders already there.
+	Language string
+	MaxDepth int // levels a new folder may have
+}
+
+func RenderInboxFolders(f InboxFolders) string { return render("inbox/folders", f) }
+
+// InboxFoldersInput is one batch of items to file, with the folders in use and the user's own moves (inbox/folders_input).
+type InboxFoldersInput struct {
+	Folders  []InboxFolderUse
+	Examples []InboxFolderExample
+	Items    []InboxFolderItem
+}
+
+// InboxFolderUse is a folder in use and how many items are in it.
+type InboxFolderUse struct {
+	Path  string
+	Count int
+}
+
+// InboxFolderExample is an item the user filed by hand.
+type InboxFolderExample struct {
+	Title, Sender, Folder string
+}
+
+// InboxFolderItem is an item to file, as the model reads it (one line each, the preview cut).
+type InboxFolderItem struct {
+	ID, Kind, Source, Title, Sender, Summary, Preview string
+}
+
+func RenderInboxFoldersInput(in InboxFoldersInput) string { return render("inbox/folders_input", in) }

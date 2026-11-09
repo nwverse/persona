@@ -34,11 +34,13 @@ import (
 // ErrTools: a command-line program could not be installed.
 var ErrTools = errors.New("tools failed")
 
-// Tool limits: an unpacked tool (Node.js is about 200 MB in 6000 files) and how long a check may take.
+// Tool limits: an unpacked tool (Node.js is about 200 MB in 6000 files), how long a check may take and how much of
+// what it prints is read for the version.
 const (
-	toolMostBytes = 1 << 30
-	toolMostFiles = 100000
-	toolCheckWait = 10 * time.Second
+	toolMostBytes   = 1 << 30
+	toolMostFiles   = 100000
+	toolCheckWait   = 10 * time.Second
+	toolCheckOutput = 64 << 10
 )
 
 // ResolvedTool is how a version of an extension runs one of its tools.
@@ -55,15 +57,21 @@ type ResolvedTool struct {
 }
 
 // ToolsDir is where an extension's tools are.
-func (r *Registry) ToolsDir(id string) string { return filepath.Join(r.dir, "tools", id) }
+func (r *Registry) ToolsDir(id string) string { return r.toolsDir(r.storageKey(id)) }
+
+func (r *Registry) toolsDir(id string) string { return filepath.Join(r.dir, "tools", id) }
 
 func (r *Registry) toolsVersionFile(id, version string) string {
-	return filepath.Join(r.ToolsDir(id), "versions", version+".json")
+	return filepath.Join(r.toolsDir(id), "versions", version+".json")
 }
 
 // Tools are the tools a version of id runs with (nil when it has none, or they are not installed).
 func (r *Registry) Tools(id, version string) []ResolvedTool {
-	b, err := os.ReadFile(r.toolsVersionFile(id, version))
+	return r.toolsAt(r.storageKey(id), version)
+}
+
+func (r *Registry) toolsAt(storageID, version string) []ResolvedTool {
+	b, err := os.ReadFile(r.toolsVersionFile(storageID, version))
 	if err != nil {
 		return nil
 	}
@@ -93,9 +101,7 @@ func (r *Registry) ToolPath(id, version, path string) string {
 	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
-// installTools installs the tools of version m.Version of extension m.ID, reporting StepTools on ctx. Nothing of a
-// failed install is left for that version (the tool directories it made may stay: they are complete or absent).
-func (r *Registry) installTools(ctx context.Context, m *Manifest) error {
+func (r *Registry) installToolsAt(ctx context.Context, m *Manifest, storageID string) error {
 	if len(m.Tools) == 0 {
 		reportState(ctx, StepTools, StepSkipped)
 		return nil
@@ -108,7 +114,7 @@ func (r *Registry) installTools(ctx context.Context, m *Manifest) error {
 	if platform == "" {
 		platform = Platform()
 	}
-	root := r.ToolsDir(m.ID)
+	root := r.toolsDir(storageID)
 	if err := os.MkdirAll(filepath.Join(root, "versions"), 0o755); err != nil {
 		return err
 	}
@@ -124,7 +130,7 @@ func (r *Registry) installTools(ctx context.Context, m *Manifest) error {
 		report(ctx, StepTools, StepEvent{State: StepRunning, Tool: t.Name, ToolState: StepDone, Reused: got.Reused})
 	}
 	b, _ := json.MarshalIndent(done, "", "  ")
-	if err := writeAtomic(r.toolsVersionFile(m.ID, m.Version), b); err != nil {
+	if err := writeAtomic(r.toolsVersionFile(storageID, m.Version), b); err != nil {
 		return err
 	}
 	reportState(ctx, StepTools, StepDone)
@@ -246,14 +252,15 @@ func runCheck(ctx context.Context, bin string, c *ToolCheck, env []string) (stri
 	if len(args) == 0 {
 		args = []string{"--version"}
 	}
-	var out bytes.Buffer
+	out := &headBuffer{max: toolCheckOutput}
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env, cmd.Stdout, cmd.Stderr = env, &out, &out
+	cmd.Env, cmd.Stdout, cmd.Stderr = env, out, out
 	cmd.Dir = os.TempDir()
-	if err := cmd.Run(); err != nil {
+	inOwnGroup(cmd)
+	if err := endGroup(cmd, cmd.Run()); err != nil {
 		return "", fmt.Errorf("%s %s：%v", filepath.Base(bin), strings.Join(args, " "), err)
 	}
-	m := semverInText.FindString(out.String())
+	m := semverInText.FindString(string(out.buf))
 	if m == "" {
 		return "", fmt.Errorf("%s %s 没有写版本号", filepath.Base(bin), strings.Join(args, " "))
 	}
@@ -564,7 +571,7 @@ func sha256Sum(b []byte) []byte {
 
 // pruneTools keeps the tools of id's versions in keep (and what they use); everything else of id's goes.
 func (r *Registry) pruneTools(id string, keep ...string) {
-	root := r.ToolsDir(id)
+	root := r.toolsDir(id)
 	entries, err := os.ReadDir(filepath.Join(root, "versions"))
 	if err != nil {
 		return
@@ -576,7 +583,7 @@ func (r *Registry) pruneTools(id string, keep ...string) {
 			_ = os.Remove(filepath.Join(root, "versions", e.Name()))
 			continue
 		}
-		for _, t := range r.Tools(id, v) {
+		for _, t := range r.toolsAt(id, v) {
 			used[filepath.Base(filepath.Dir(t.Bin))] = true
 		}
 	}

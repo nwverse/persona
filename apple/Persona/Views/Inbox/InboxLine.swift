@@ -120,7 +120,7 @@ struct InboxLineSection: View {
 
     private func label(_ r: InboxLine.Row) -> some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: InboxLine.symbol(r.kind))
+            ThemedIcon(InboxLine.symbol(r.kind))
                 .font(Theme.Font.label)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.iconXS)
@@ -132,7 +132,7 @@ struct InboxLineSection: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if r.target != nil {
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.label).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label).foregroundStyle(.tertiary)
             }
         }
         .padding(.vertical, Theme.Space.xs)
@@ -157,7 +157,7 @@ private struct InboxLineLoader: ViewModifier {
 
     func body(content: Content) -> some View {
         content.task(id: item.id + "|" + (item.parent.map { $0.kind + ":" + $0.id } ?? "")) {
-            guard let api = model.api, let t = try? await api.inboxTree("inbox", item.id) else { return }
+            guard let api = model.api?.manager(item.manager), let t = try? await api.inboxTree("inbox", item.id) else { return }
             withAnimation(Theme.Motion.layout) { tree = t }
         }
     }

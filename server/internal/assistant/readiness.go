@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -323,9 +323,16 @@ func (s *Service) readiness(ctx context.Context, probe bool, wait time.Duration)
 	out := Readiness{Version: 1, Launcher: launcher, CheckedAt: time.Now().UTC().Truncate(time.Second)}
 
 	d, has := s.device(ctx, v.MachineID)
+	pending := false
+	if !has || v.MachineID == "" {
+		d, pending = s.pendingAssistantMachine(ctx)
+		has = pending
+	}
 	computer := ReadinessStep{ID: StepComputer, State: StepOK}
 	switch {
-	case !has || v.MachineID == "":
+	case pending:
+		computer = s.readinessStep(lang, StepComputer, StepTodo, proto.CodeMachinePending, d.Name, launcher, "confirm_computer")
+	case !has:
 		computer = s.readinessStep(lang, StepComputer, StepTodo, proto.CodeNoMachine, "", launcher, "add_computer")
 	case !d.Online && !d.Reachable:
 		computer = s.readinessStep(lang, StepComputer, StepProblem, codeNodeUnreachable, d.Name, launcher, "wake_computer")
@@ -411,13 +418,14 @@ func (s *Service) readinessQuick(ctx context.Context, within time.Duration) *Rea
 	return last
 }
 
-// readinessBlocks: the step keeps the main conversation from answering (mode setup). A rate limit passes by itself.
+// readinessBlocks: the step keeps the main conversation from answering (mode setup). A rate limit passes by itself;
+// a session refusal fallback says nothing about the configured model a new conversation will use.
 func readinessBlocks(st ReadinessStep) bool {
 	switch st.State {
 	case StepTodo:
 		return true
 	case StepProblem:
-		return st.Code != proto.TurnErrorRateLimited
+		return st.Code != proto.TurnErrorRateLimited && st.Code != proto.TurnErrorModelFallbackUnavailable
 	}
 	return false
 }
@@ -463,9 +471,7 @@ func (s *Service) readinessMain(ctx context.Context, machine, main string) (prot
 			if text, kind := turnError(sess); text != "" && sess.TurnError == "" {
 				sess.TurnError, sess.TurnErrorKind = text, kind
 			}
-			if sess.TurnError != "" && sess.TurnErrorCode == "" {
-				sess.TurnErrorCode = turnErrorCode(sess.TurnError)
-			}
+			sess.TurnErrorCode = sessionTurnErrorCode(sess)
 			return sess, true
 		}
 	}
@@ -491,15 +497,23 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 	if hasMain && (main.Launcher == "" || main.Launcher == launcher) {
 		switch {
 		case main.TurnError != "":
-			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError})
+			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError, code: sessionTurnErrorCode(main)})
 		case answeredWell(main):
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, ok: true})
 		}
 	}
-	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && time.Since(h.CheckedAt) < healthStale && h.State != "" {
-		if h.State == healthOK {
+	// A launcher only the terminal cannot run says nothing of the main conversation, which runs in the login shell.
+	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && h.State != "" && h.Kind != errKindNotInTerminal {
+		switch {
+		case h.Kind == errKindUsageLimit:
+			// The subscription's limit, used up: it recovers on its own, and says nothing once it reset.
+			if h.unusable() {
+				ev = append(ev, readinessEvidence{at: h.CheckedAt, code: proto.TurnErrorRateLimited})
+			}
+		case time.Since(h.CheckedAt) >= healthStale:
+		case h.State == healthOK:
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, ok: true})
-		} else if missingCode(h.Error) == "" { // a start that found no claude is the claude step's
+		case missingCode(h.Error) == "": // a start that found no claude is the claude step's
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, text: h.Error})
 		}
 	}
@@ -544,7 +558,11 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 			case proto.TurnErrorNotLoggedIn:
 				alt = "login_claude"
 			case proto.TurnErrorAuthFailed:
-				action = "edit_provider"
+				action, alt = "edit_provider", "test_assistant"
+			case proto.TurnErrorModelRoute:
+				alt = "test_assistant"
+			case proto.TurnErrorModelFallbackUnavailable:
+				action = "" // recovery is a new conversation or the TUI's /model, neither is a model-settings action
 			}
 			st := s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action)
 			st.Machine = d.ID
@@ -595,7 +613,7 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		}
 		s.clearStart(ctx, *st)
 	}
-	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK {
+	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK && h.Kind != errKindNotInTerminal {
 		switch missingCode(h.Error) { // the launcher's health record: its start or check found no such command
 		case proto.CodeClaudeMissing:
 			return problem(proto.CodeClaudeMissing, "install_claude")
@@ -628,13 +646,13 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 }
 
 // readinessFirst is the first_message step: the main conversation answered once (a main conversation was replaced:
-// it did long ago), or its one turn failed.
+// it did long ago), a probe check succeeded, or its one turn failed.
 func (s *Service) readinessFirst(ctx context.Context, lang i18n.Lang, d Device, rec readinessRecord, v Settings,
 	main proto.Session, hasMain bool) ReadinessStep {
 	if rec.AnsweredAt != nil || len(v.Former) > 0 {
 		return ReadinessStep{ID: StepFirstMessage, State: StepOK}
 	}
-	if hasMain && answeredWell(main) {
+	if (hasMain && answeredWell(main)) || (rec.Probe != nil && rec.Probe.Check.OK) {
 		now := time.Now().UTC()
 		if err := s.readinessUpdate(ctx, func(r *readinessRecord) { r.AnsweredAt = &now }); err != nil {
 			s.logf("assistant: readiness: %v", err)
@@ -642,7 +660,11 @@ func (s *Service) readinessFirst(ctx context.Context, lang i18n.Lang, d Device, 
 		return ReadinessStep{ID: StepFirstMessage, State: StepOK}
 	}
 	if hasMain && main.TurnErrorCode != "" {
-		return s.readinessStep(lang, StepFirstMessage, StepProblem, main.TurnErrorCode, d.Name, "", "test_assistant")
+		action := "test_assistant"
+		if main.TurnErrorCode == proto.TurnErrorModelFallbackUnavailable {
+			action = ""
+		}
+		return s.readinessStep(lang, StepFirstMessage, StepProblem, main.TurnErrorCode, d.Name, "", action)
 	}
 	return s.readinessStep(lang, StepFirstMessage, StepTodo, codeNeverTried, d.Name, "", "test_assistant")
 }
@@ -719,7 +741,11 @@ func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) 
 		return &proto.LauncherCheck{Error: i18n.Localize(err, s.requestCtxLang(ctx))}
 	}
 	if err := s.readinessUpdate(ctx, func(r *readinessRecord) {
-		r.Probe = &readinessProbe{Machine: machine, Launcher: launcher, At: time.Now().UTC(), Check: res}
+		now := time.Now().UTC()
+		r.Probe = &readinessProbe{Machine: machine, Launcher: launcher, At: now, Check: res}
+		if res.OK && r.AnsweredAt == nil {
+			r.AnsweredAt = &now
+		}
 	}); err != nil {
 		s.logf("assistant: readiness: %v", err)
 	}
@@ -737,9 +763,9 @@ const (
 // assistant launcher counts as not Claude Code) and whether it is there.
 func (s *Service) readinessLauncher(ctx context.Context, machine, launcher string) (string, int) {
 	// A managed launcher runs Claude Code through personad launch, and so does a direct API provider speaking Messages
-	// (its gateway, #2455); a Responses one cannot start Claude.
+	// (its gateway, #2455); other direct API protocols cannot start Claude.
 	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool {
-		return l.Name == launcher && !(l.Kind == "api" && l.API == "responses")
+		return l.Name == launcher && !(l.Kind == "api" && !messagesAPI(l.API))
 	}) {
 		return "", launcherThere
 	}
@@ -840,21 +866,31 @@ func (s *Service) askAhead(machine, launcher string) {
 }
 
 // claudeAuthStatus is launcher's sign-in status on machine (claude.auth_status), cached readinessAuthFresh, and
-// readinessClaudeRetry when signed out or not answered (readinessAuthFresh for an old node). done false when the node did not answer within wait (the
+// readinessClaudeRetry when signed out or not answered (readinessAuthFresh for an old node). An expired answer that
+// said nothing is answered at once while it is asked again. done false when the node did not answer within wait (the
 // question goes on, and is cached).
 func (s *Service) claudeAuthStatus(ctx context.Context, machine, launcher string, wait time.Duration) (claudeAuth, bool) {
 	key := machine + "/" + launcher
 	b := &s.ready
 	b.mu.Lock()
+	var stale *claudeAuth
 	if a, ok := b.auth[key]; ok {
 		fresh := readinessAuthFresh
-		if !a.known && !a.old || a.st.State == proto.ClaudeNotLoggedIn ||
-			a.st.State == proto.ClaudeAuthUnknown && (a.st.Reason == proto.ClaudeAuthTimeout || a.st.Reason == proto.ClaudeAuthUnreadable) {
+		saidNothing := !a.known && !a.old ||
+			a.st.State == proto.ClaudeAuthUnknown && (a.st.Reason == proto.ClaudeAuthTimeout || a.st.Reason == proto.ClaudeAuthUnreadable)
+		if saidNothing || a.st.State == proto.ClaudeNotLoggedIn {
 			fresh = readinessClaudeRetry
 		}
 		if time.Since(a.at) < fresh {
 			b.mu.Unlock()
 			return a, true
+		}
+		if saidNothing {
+			// The last ask said nothing (no answer, a timeout, output with no status): asked again below, but not
+			// waited for. A launcher whose status cannot be read says so again on every ask, and each ask runs the
+			// login shell and Claude Code (seconds, up to claudeAuthTimeout); the readiness takes unknown as not
+			// known either way. Signed out is still waited for: the user may have just signed in.
+			stale = &a
 		}
 	}
 	ch := b.authIn[key]
@@ -867,6 +903,9 @@ func (s *Service) claudeAuthStatus(ctx context.Context, machine, launcher string
 		go s.askClaudeAuth(machine, launcher, key, ch)
 	}
 	b.mu.Unlock()
+	if stale != nil {
+		return *stale, true
+	}
 	if wait <= 0 {
 		return claudeAuth{}, false
 	}
@@ -914,7 +953,7 @@ const deviceNodeDoctor = "node.doctor"
 
 // doctorVersion is the version at the start of the claude-version check's detail ("2.1.308, supports --plugin-dir");
 // none when it could not read one.
-var doctorVersion = regexp.MustCompile(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
+var doctorVersion = lazyre.New(`^\s*v?(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)`)
 
 // missingCode is the start refusal's code a launcher error reads as (Claude Code or the command missing), "" else.
 func missingCode(text string) string {

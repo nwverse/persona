@@ -1,6 +1,7 @@
 package assistantwire
 
 import (
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -22,6 +23,41 @@ type AgentsConfig struct {
 	Delegate DelegateConfig `json:"delegate,omitzero"`
 	// LauncherHealth is manager.json agents.launcher_health: checking each machine's launchers (docs/server/launcher-health.md).
 	LauncherHealth LauncherHealthConfig `json:"launcher_health,omitzero"`
+	// Review is manager.json agents.review: the independent reviewer of a supervised task's finished change (#2173,
+	// docs/assistant/unified-entry.md "Independent review").
+	Review ReviewConfig `json:"review,omitzero"`
+}
+
+// ReviewConfig is manager.json agents.review: when a supervised task's agent is judged done, a reviewer agent started
+// with Launcher (a launcher on the agent's computer), Model and Effort (its defaults when empty) and Permission (a
+// permission mode; default plan) reviews the change before the task waits for review. TimeoutMinutes bounds one
+// review (default 30). Off unless Launcher is set: there is no default reviewer, so the review runs on a model the
+// user picked, apart from the agents'.
+type ReviewConfig struct {
+	Launcher       string `json:"launcher,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	Permission     string `json:"permission,omitempty"`
+	TimeoutMinutes int    `json:"timeout_minutes,omitempty"`
+}
+
+// On: a reviewer launcher is configured.
+func (c ReviewConfig) On() bool { return strings.TrimSpace(c.Launcher) != "" }
+
+// Timeout is TimeoutMinutes, 30 minutes when unset.
+func (c ReviewConfig) Timeout() time.Duration {
+	if c.TimeoutMinutes <= 0 {
+		return 30 * time.Minute
+	}
+	return time.Duration(c.TimeoutMinutes) * time.Minute
+}
+
+// PermissionMode is Permission, plan when unset: the launcher reads and answers, it does not edit.
+func (c ReviewConfig) PermissionMode() string {
+	if p := strings.TrimSpace(c.Permission); p != "" {
+		return p
+	}
+	return "plan"
 }
 
 // LauncherHealthConfig is manager.json agents.launcher_health: how often each machine's launchers are checked, and the agent
@@ -76,6 +112,7 @@ type TriageConfig struct {
 	AutoContinue *bool `json:"auto_continue,omitempty"`
 	Wake         *bool `json:"wake,omitempty"`
 	Decide       *bool `json:"decide,omitempty"`
+	ToolLoop     *bool `json:"tool_loop,omitempty"`
 	// MaxRetries: "Continue" sent for one run of transient errors before asking the user. Default 3.
 	MaxRetries int `json:"max_retries,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
@@ -122,11 +159,13 @@ const (
 )
 
 // AgentStartParams is agents.start_params's params: Params are POST /api/v1/sessions's (the node's session.start);
-// NameFrom is what the tab is named from now ("": not now: it has a name, resumes a session, or is named later).
+// NameFrom is what the tab is named from now ("": not now: it has a name, resumes a session, or is named later). Lang
+// is the app's language, the one a refusal is said in ("": the user's; an older hub sends none).
 type AgentStartParams struct {
 	MachineID string         `json:"machine_id"`
 	Params    map[string]any `json:"params"`
 	NameFrom  string         `json:"name_from,omitempty"`
+	Lang      string         `json:"lang,omitempty"`
 }
 
 // AgentResumeParams is agents.resume_params's params: Params are the message's (the node's session.send; the hub

@@ -374,7 +374,7 @@ struct InboxChainSection: View {
                 // An entry that goes somewhere and has messages too: they open here with the chevron.
                 if target.navigates && e.expandable {
                     Button { toggle(e) } label: {
-                        Image(systemName: open ? Theme.Icon.collapse : Theme.Icon.expand)
+                        ThemedIcon(open ? Theme.Icon.collapse : Theme.Icon.expand)
                             .font(Theme.Font.labelHeavy).foregroundStyle(.secondary)
                             .scaledFrame(width: Theme.Size.tapTarget, alignment: .trailing)
                             .contentShape(.rect)
@@ -391,7 +391,7 @@ struct InboxChainSection: View {
     private func line(_ e: InboxItem.ChainEntry, target: InboxChainTarget, open: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             Text(LarkTime.short(e.at)).font(Theme.Font.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
-            Image(systemName: InboxEventText.symbol(e))
+            ThemedIcon(InboxEventText.symbol(e))
                 .font(Theme.Font.label)
                 .foregroundStyle(tint(e))
                 .scaledFrame(width: Theme.Size.iconXS)
@@ -402,11 +402,11 @@ struct InboxChainSection: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             switch target {
             case .inline:
-                Image(systemName: open ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
+                ThemedIcon(open ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
             case .nothing:
                 EmptyView()
             default:
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
             }
         }
         .contentShape(.rect)
@@ -433,7 +433,7 @@ struct InboxChainSection: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("inbox.chain.session")
         case .item(let id):
-            if let it = InboxStore.shared.items.first(where: { $0.id == id }) {
+            if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: id, manager: item.manager) }) {
                 if let openItem {
                     Button { openItem(it) } label: { label() }.buttonStyle(.plain)
                 } else {
@@ -496,15 +496,15 @@ struct InboxRelatedSection: View {
                 InboxBlockTitle(title: String(localized: "Related"))
                 ForEach(related) { r in
                     let label = HStack(spacing: Theme.Space.s) {
-                        Image(systemName: Theme.Icon.link).font(Theme.Font.label).foregroundStyle(.secondary)
+                        ThemedIcon(Theme.Icon.link).font(Theme.Font.label).foregroundStyle(.secondary)
                             .scaledFrame(width: Theme.Size.iconXS)
                         Text(r.title).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
                         Spacer(minLength: 0)
-                        Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
+                        ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
                     }
                     .padding(.vertical, Theme.Space.xs)
                     .contentShape(.rect)
-                    if let it = InboxStore.shared.items.first(where: { $0.id == r.id }) {
+                    if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: r.id, manager: item.manager) }) {
                         if let openItem {
                             Button { openItem(it) } label: { label }.buttonStyle(.plain)
                         } else {
@@ -594,22 +594,21 @@ struct InboxSourcePage: View {
 // MARK: - iPhone
 
 /// One event opened on the iPhone: the summary with 'view original', the processing state, recap, the suggestion and its buttons,
-/// the chain, the thread line and related items, then draft reply / hand to AI. The source is a push away (view original, the received entry).
+/// the chain, the thread line and related items; Hand to AI (with Draft Reply among its chips) is the bar along the bottom
+/// (`InboxHandOffBar`). The source is a push away (view original, the received entry).
 struct InboxEventPage: View {
     var item: InboxItem
     var accounts: [MailAccount]
     var draft: () -> Void
-    var handOff: () -> Void
     @State private var suggestion: InboxSuggestionModel
     @State private var editing = false
     @State private var line: InboxTree?
 
-    init(item: InboxItem, accounts: [MailAccount], draft: @escaping () -> Void, handOff: @escaping () -> Void) {
+    init(item: InboxItem, accounts: [MailAccount], draft: @escaping () -> Void) {
         self.item = item
         self.accounts = accounts
         self.draft = draft
-        self.handOff = handOff
-        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id))
+        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id, manager: item.manager))
     }
 
     var body: some View {
@@ -618,12 +617,16 @@ struct InboxEventPage: View {
                 header
                 InboxEventBlocks(item: item, model: suggestion, edit: { editing = true })
                 InboxLineSection(tree: line)
-                actions
             }
             .padding(.horizontal, Theme.Space.page)
             .padding(.vertical, Theme.Space.l)
             .frame(maxWidth: Theme.Size.readable, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            InboxHandOffBar(item: item, draft: canDraft ? draft : nil,
+                            draftTitle: item.agentDraft == nil ? nil : String(localized: "View Draft"))
         }
         .themedPage()
         .inboxLine(item, tree: $line)
@@ -665,16 +668,9 @@ struct InboxEventPage: View {
         return [source, it.title].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// draft reply (when there is no suggested reply already) and hand to AI, as the old detail's strip had them.
-    private var actions: some View {
-        HStack(spacing: Theme.Space.s) {
-            let canReply = item.connector.map { $0.canReply == true } ?? true
-            if canReply && item.currentSuggestion?.kind != "reply" && !item.isDone {
-                InboxSuggestionButton(title: item.agentDraft == nil ? String(localized: "AI Draft Reply") : String(localized: "View Draft"),
-                                      prominent: false, spinning: false, perform: draft)
-            }
-            InboxSuggestionButton(title: String(localized: "Hand to AI"), prominent: false, spinning: false, perform: handOff)
-            Spacer(minLength: 0)
-        }
+    /// Draft Reply is offered when the item can be answered from here and no suggested reply is there already.
+    private var canDraft: Bool {
+        let canReply = item.connector.map { $0.canReply == true } ?? true
+        return canReply && item.currentSuggestion?.kind != "reply" && !item.isDone
     }
 }

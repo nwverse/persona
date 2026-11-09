@@ -3,8 +3,9 @@
   "already_answered": "这张卡片已经回答过了",
   "prompt_changed": "电脑上的对话框变了，已按新的屏幕重新生成",
   "send_failed": "没送到：{error}",
-  "hand_back": "交回电脑处理",
+  "hand_back": "交给电脑处理",
   "question": "提问",
+  "tool_loop_kicker": "可能陷入工具调用循环",
   "previous_question": "上一题",
   "question_n": "第 {n} 题",
   "next_question": "下一题",
@@ -81,5 +82,12 @@
   "always_scope_directory": "总是允许会放行这段对话中对这个目录的操作。",
   "always_scope_commands": "总是允许会放行这段对话里的所有命令。",
   "always_scope_tool": "总是允许会放行这段对话里的所有 {tool} 调用。",
-  "always_scope_saved": "已批准的范围会在这段对话中持续放行。"
+  "always_scope_saved": "已批准的范围会在这段对话中持续放行。",
+  "secret_run_kicker": "需要密码",
+  "secret_run_title": "用你的密码在 {machine} 上运行",
+  "secret_run_commands": "依次运行的命令",
+  "secret_run_decline": "拒绝",
+  "secret_run_run": "运行",
+  "secret_run_note": "只用这一次，不会保存，助手也看不到。",
+  "secret_run_card_only": "请在卡片上答复：填密码后点运行，或拒绝"
 }

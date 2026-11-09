@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/nwverse/persona/server/internal/compat"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -261,7 +261,7 @@ func fieldValues(l i18n.Lang, ix proto.Interaction, r proto.Resolution) []string
 }
 
 // secretName is a field or property name that holds a credential whatever the card says about it.
-var secretName = regexp.MustCompile(`(?i)pass|secret|token|credential|api[_-]?key|private|otp|pin\b`)
+var secretName = lazyre.New(`(?i)pass|secret|token|credential|api[_-]?key|private|otp|pin\b`)
 
 // toolDisplayName is a tool's name for a sentence: an MCP tool as "Persona · mail send" (Persona's own server keeps
 // its old id persona, which allow lists and hooks match), others as written.

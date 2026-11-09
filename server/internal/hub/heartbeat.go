@@ -73,17 +73,25 @@ func (c *client) writeWS(ctx context.Context, conn wsWriter, keepAlive func(hear
 			keepAlive(hb)
 			c.helloAck(hb)
 		case b := <-c.out:
+			if c.dropped.Load() {
+				// queue lost a message and dropSlow is closing the client: writing what was queued after it would move
+				// the client's event_seq (or since_seq, after_seq) past the loss, so a resume would skip it. Keep
+				// draining instead of returning, so the 1008 "too slow" close still goes out.
+				continue
+			}
 			wctx, wcancel := context.WithTimeout(ctx, 20*time.Second)
 			err := conn.Write(wctx, websocket.MessageText, b)
 			wcancel()
 			if err != nil {
 				return err
 			}
+			c.recordSocketTraffic("websocket_frame", "written", int64(len(b)), 0)
 		case <-ping.C:
 			if pongDeadline != nil {
 				continue // Only one protocol ping may be outstanding.
 			}
 			pingStarted = time.Now()
+			c.recordSocketTraffic("websocket_ping", "started", 0, 0)
 			pong.Reset(time.Duration(hb.PongTimeout) * time.Second)
 			pongDeadline = pong.C
 			go func() { result <- conn.Ping(ctx) }()
@@ -92,6 +100,7 @@ func (c *client) writeWS(ctx context.Context, conn wsWriter, keepAlive func(hear
 				return err
 			}
 			pong.Stop()
+			c.recordSocketTraffic("websocket_pong", "received", 0, time.Since(pingStarted))
 			pongDeadline = nil
 		case <-pongDeadline:
 			return errDeviceSessionPongTimeout

@@ -37,10 +37,161 @@ func open(t testing.TB) *DB {
 	t.Cleanup(d.Close)
 	// Union of the integration branch's list and master's TruncateForTest: TruncateForTest alone
 	// does not clear lock_tests, client_ops, pair_tokens or device_sessions.
-	if _, err := d.pool.Exec(context.Background(), `TRUNCATE lock_tests, client_ops, devices, device_tokens, pair_tokens, device_sessions, live_activities, phone_tools, node_sessions, mail_accounts, interactions, settings, inbox_items, kb_entities, connector_secrets, machine_systems, machine_metrics, machine_usage, sent_messages, todos, todo_agents, assistant_always, sent_as_user CASCADE`); err != nil {
+	if _, err := d.pool.Exec(context.Background(), `TRUNCATE push_device_retirements, lock_tests, client_ops, devices, device_tokens, pair_tokens, device_sessions, live_activities, phone_tools, node_sessions, mail_accounts, interactions, settings, inbox_items, kb_entities, connector_secrets, machine_systems, machine_metrics, machine_usage, sent_messages, todos, todo_agents, assistant_always, sent_as_user CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	return d
+}
+
+func TestLiveActivityStartBudget(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	const cooldown, maxAge = 10 * time.Minute, 8 * time.Hour
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	// Independent pools represent the two blue-green processes, not an in-memory mutex.
+	other, err := Open(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	var wg sync.WaitGroup
+	results := make(chan bool, 20)
+	for i := range 20 {
+		pool := d
+		if i%2 == 1 {
+			pool = other
+		}
+		wg.Go(func() {
+			due, claimed, err := pool.ClaimLiveActivityStart(ctx, "phone", "start", at, cooldown, maxAge)
+			if err != nil {
+				t.Error(err)
+			}
+			if !due.Equal(at.Add(cooldown)) {
+				t.Errorf("claim due=%s", due)
+			}
+			results <- claimed
+		})
+	}
+	wg.Wait()
+	close(results)
+	claims := 0
+	for claimed := range results {
+		if claimed {
+			claims++
+		}
+	}
+	if claims != 1 {
+		t.Fatalf("two pools made %d claims, want 1", claims)
+	}
+	// Registration, a new episode, token rotation and client started_at are not the budget.
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone", APNSToken: "renewed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "rotated", StartedAt: at.Add(-24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	due, claimed, err := other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(cooldown-time.Microsecond), cooldown, maxAge)
+	if err != nil || claimed || !due.Equal(at.Add(cooldown)) {
+		t.Fatalf("renewal reset budget: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	// A committed fresh update token suppresses a stale process even at expiry.
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "rotated", PushToken: "update", StartedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	due, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || claimed || !due.IsZero() {
+		t.Fatalf("fresh token allowed start: %s %v %v", due, claimed, err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "rotated"}); err != nil {
+		t.Fatal(err)
+	}
+	_, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "old-token", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || claimed {
+		t.Fatalf("stale token allowed start: %v %v", claimed, err)
+	}
+	_, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || !claimed {
+		t.Fatalf("expiry failed: %v %v", claimed, err)
+	}
+	// A budget write error must roll back, never grant dispatch permission.
+	if _, err := d.pool.Exec(ctx, `ALTER TABLE live_activity_start_budget ADD CONSTRAINT reject_test_claim CHECK (claimed_at < '2026-11-09 00:20:00+00')`); err != nil {
+		t.Fatal(err)
+	}
+	_, claimed, err = d.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(2*cooldown), cooldown, maxAge)
+	if err == nil || claimed {
+		t.Fatalf("failed budget save allowed push: %v %v", claimed, err)
+	}
+	if _, err := d.pool.Exec(ctx, `ALTER TABLE live_activity_start_budget DROP CONSTRAINT reject_test_claim`); err != nil {
+		t.Fatal(err)
+	}
+	_, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "rotated", at.Add(2*cooldown), cooldown, maxAge)
+	if err != nil || !claimed {
+		t.Fatalf("failed claim did not roll back: %v %v", claimed, err)
+	}
+	// FK cleanup is confined to forgetting the device, not registering it again.
+	if err := d.DeleteDevice(ctx, "phone"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM live_activity_start_budget`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("budget FK cleanup: n=%d err=%v", n, err)
+	}
+	t.Log("two independent pools: 20 concurrent attempts, one claim; renewal retained budget; failed save rolled back")
+}
+
+func TestLiveActivityStartParentLockOrder(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	// Retirement holds the parent first. A claimant must wait there, without
+	// holding the activity row that retirement will delete next.
+	parent, err := d.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Rollback(ctx)
+	if _, err := parent.Exec(ctx, `SELECT 1 FROM devices WHERE device_id='phone' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := d.ClaimLiveActivityStart(claimCtx, "phone", "start", time.Now(), 10*time.Minute, 8*time.Hour)
+		result <- err
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var blocked bool
+		if err := d.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'SELECT 1 FROM devices WHERE device_id=$1 FOR KEY SHARE%' AND wait_event_type='Lock')`).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("claim did not wait on parent lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := parent.Exec(ctx, `SELECT 1 FROM live_activities WHERE device_id='phone' FOR UPDATE NOWAIT`); err != nil {
+		t.Fatalf("claim locked activity before parent: %v", err)
+	}
+	if err := parent.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestMigrateIsIdempotent(t *testing.T) {
@@ -592,6 +743,36 @@ func TestInteractions(t *testing.T) {
 	}
 }
 
+func TestLoopInteractionRestart(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	for _, id := range []string{"tool_loop_kept", "tool_loop_orphan", "tool_loop_expiring"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "box", SessionID: "session", Kind: proto.IxQuestion, CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.PutSetting(ctx, "agents.tool_loops", []any{map[string]any{"card": map[string]any{"id": "tool_loop_kept"}}, map[string]any{"expired_id": "tool_loop_expiring"}, map[string]any{"silenced": true}}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		var value any
+		_, _ = d.TakeSetting(ctx, "agents.tool_loops", &value)
+	}()
+	if _, err := d.ExpireStaleInteractions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"tool_loop_kept": "pending", "tool_loop_expiring": "pending", "tool_loop_orphan": "cancelled"} {
+		if status, _, err := d.InteractionOutcome(ctx, id); err != nil || status != want {
+			t.Fatalf("%s status = %s, %v; want %s", id, status, err, want)
+		}
+	}
+	if err := d.FinishInteraction(ctx, "tool_loop_expiring", "expired", nil); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, err := d.InteractionOutcome(ctx, "tool_loop_expiring"); err != nil || status != "expired" {
+		t.Fatalf("restored expiry status = %s, %v", status, err)
+	}
+}
+
 // The startup lookup of pending interactions can use the partial index instead of scanning every past interaction.
 func TestPendingInteractionsIndexed(t *testing.T) {
 	d, ctx := open(t), context.Background()
@@ -850,7 +1031,7 @@ func TestInboxItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want the old done item gone", len(rows))
+		t.Fatalf("rows = %d, want the old done item left out", len(rows))
 	}
 	var it struct {
 		Count int `json:"count"`
@@ -859,9 +1040,9 @@ func TestInboxItems(t *testing.T) {
 		t.Fatalf("row = %s", rows[0])
 	}
 	// Deleted for good: a source taken back.
-	_ = d.PutInboxItem(ctx, "imessage:1", []byte(`{"id":"imessage:1"}`), now, nil)
-	if err := d.DeleteInboxItems(ctx, []string{"imessage:1"}); err != nil {
-		t.Fatal(err)
+	_ = d.PutInboxItem(ctx, "imessage:1", []byte(`{"id":"imessage:1","source":"imessage"}`), now, nil)
+	if gone, err := d.DeleteInboxSource(ctx, "imessage", nil); err != nil || len(gone) != 1 || gone[0] != "imessage:1" {
+		t.Fatalf("delete the source: %v %v", gone, err)
 	}
 	if rows, _ := d.InboxItems(ctx, now.Add(-8*24*time.Hour)); len(rows) != 1 {
 		t.Fatalf("rows after delete = %d", len(rows))

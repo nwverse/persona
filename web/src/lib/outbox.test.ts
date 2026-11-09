@@ -4,6 +4,7 @@ vi.mock("./store", () => {
   const state = {
     outbox: {} as Record<string, import("./outbox").OutboxEntry[]>,
     assistant: null as null | { machine_id: string; main?: string; conversations: unknown[] },
+    features: [] as string[], // a hub without start receipts: the start goes as it always did (lib/assistant-start.ts)
   };
   return {
     getState: () => state,
@@ -16,7 +17,9 @@ vi.mock("./store", () => {
 });
 vi.mock("./router", () => ({ navigate: vi.fn() }));
 
-import { arrived, askPersona, discardOutbox, noteSent, outboxMessage, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
+import { arrived, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
+import type { ChatLine } from "./turns";
+import { ApiError } from "./api";
 import { pickLauncher } from "./assistant-chat";
 import { navigate } from "./router";
 import { getState } from "./store";
@@ -48,6 +51,12 @@ describe("which bubbles stay", () => {
     expect(settle(list, users, 1000).map((e) => e.id)).toEqual(["a", "b", "c"]);
     const copies = ["u1", "u2", "u3"].map((id) => ({ id, text: "你好", images: [] }));
     expect(settle(list, copies, 1000).map((e) => e.id)).toEqual(["b"]);
+  });
+
+  it("drops a failed one the hub tied a copy to (it went in after all), and only that one", () => {
+    const list = [entry({ id: "a", state: "failed" }), entry({ id: "b", state: "failed" }), entry({ id: "w", state: "failed", wordsOnly: true })];
+    expect(settle(list, [{ id: "u1", client_msg_id: "a", text: "改过的字", images: [] }], 1000).map((e) => e.id)).toEqual(["b", "w"]);
+    expect(settle(list, [{ id: "u1", text: "你好", images: [] }], 1000).map((e) => e.id)).toEqual(["a", "b", "w"]); // words alone: not it
   });
 
   it("takes one bubble per copy, never an older message's copy, and a copy only once", () => {
@@ -154,5 +163,136 @@ describe("问 Persona", () => {
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({ prompt: "说说进展", main: true });
     expect(outbox()["hub/new1"][0]).toMatchObject({ state: "sent", text: "说说进展" });
     expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "new1" });
+  });
+});
+
+describe("where a failed message goes (#1122)", () => {
+  // an exchange whose message was sent from here (`cmid`, written at `at`) or typed elsewhere (`ts` only)
+  const line = (id: string, user: { cmid?: string; ts?: number }): ChatLine =>
+    ({ kind: "segment", id, live: false, seg: { id, steps: [], tools: 0, thoughts: 0, replies: 0, folds: [], user: { id: `${id}u`, text: "x", images: [], contexts: [], client_msg_id: user.cmid, ts: user.ts === undefined ? undefined : new Date(user.ts).toISOString() } } }) as ChatLine;
+
+  it("goes right before the first message written after it; with none after, and while sending, at the end", () => {
+    noteWritten("later", 5_000_000);
+    const lines = [line("l1", { ts: 1_000_000 }), line("l2", { cmid: "later" }), line("l3", { cmid: "later2" })];
+    const failed = entry({ id: "f", state: "failed", at: 4_000_000 });
+    const last = entry({ id: "g", state: "failed", at: 9_000_000 });
+    const sending = entry({ id: "s", state: "sending", at: 2_000_000 });
+    const { before, rest } = placeFailed(lines, [last, failed, sending]);
+    expect([...before.entries()].map(([id, es]) => [id, es.map((e) => e.id)])).toEqual([["l2", ["f"]]]);
+    expect(rest.map((e) => e.id)).toEqual(["s", "g"]);
+  });
+
+  it("goes by the computer's time for a message typed there, with two minutes' slack for its clock", () => {
+    const failed = entry({ id: "f", state: "failed", at: 10_000_000 });
+    expect(placeFailed([line("l1", { ts: 10_000_000 + 60_000 })], [failed]).rest.map((e) => e.id)).toEqual(["f"]);
+    expect([...placeFailed([line("l1", { ts: 10_000_000 + 180_000 })], [failed]).before.keys()]).toEqual(["l1"]);
+  });
+
+  it("keeps failed real messages outside a quiet supervision wrapper at its original input time", () => {
+    const quiet: ChatLine = { kind: "supervision", id: "quiet", live: false, lines: [line("child", { ts: 10_000_000 + 180_000 })] };
+    const failed = entry({ id: "f", state: "failed", at: 10_000_000 });
+    const placed = placeFailed([quiet], [failed]);
+    expect([...placed.before.keys()]).toEqual(["quiet"]);
+    expect(placed.rest).toEqual([]);
+  });
+
+  it("keepFailed puts the composer's message in the outbox as failed, with why", () => {
+    keepFailed("m", "s", { id: "k1", text: "你好", images: [], at: 1000 }, new Error("断了"));
+    expect(outbox()["m/s"]).toEqual([expect.objectContaining({ id: "k1", state: "failed", error: "断了", text: "你好" })]);
+  });
+});
+
+describe("messages kept across a reload", () => {
+  const store = new Map<string, string>();
+  const fakeStorage = {
+    get length() { return store.size; },
+    key: (i: number) => [...store.keys()][i] ?? null,
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  const reload = () => {
+    delete outbox()["m/s"];
+    resetRestoredForTests();
+  };
+  beforeEach(() => {
+    store.clear();
+    delete outbox()["m/s"];
+    resetRestoredForTests();
+    vi.stubGlobal("localStorage", fakeStorage);
+  });
+
+  it("comes back as a failed bubble, and Retry sends the same id", async () => {
+    keepFailed("m", "s", { id: "a1", text: "还在吗", images: [], at: 1000 }, new TypeError("network"));
+    expect(store.size).toBe(1);
+    reload();
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "a1", text: "还在吗", state: "failed", restored: true }]);
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ ok: true }));
+    vi.stubGlobal("fetch", fetcher);
+    expect(await retryOutbox("m", "s", "a1")).toBe(true);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).client_msg_id).toBe("a1");
+    expect(store.size).toBe(0);
+  });
+
+  it("a message the hub answered keeps that reason, and its new id on Retry", () => {
+    keepFailed("m", "s", { id: "a6", text: "到了吗", images: [], at: 1000 }, new ApiError(502, "x", { delivered: "unknown" }));
+    const reason = outbox()["m/s"][0].error;
+    reload();
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "a6", error: reason, newId: true }]);
+  });
+
+  it("a message still sending when the page closed comes back too", () => {
+    keepOutgoing("m/s", { id: "a2", text: "发出去了吗", images: [], at: 2000 });
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "a2", state: "failed", restored: true }]);
+  });
+
+  it("does not show twice when the transcript has it, by its id or by its words", () => {
+    keepOutgoing("m/s", { id: "a3", text: "第一条消息内容", images: [], at: 2000 });
+    keepOutgoing("m/s", { id: "a4", text: "第二条消息内容", images: [], at: 2000 });
+    restoreOutbox("m", "s");
+    settleOutbox("m", "s", [
+      { id: "u1", client_msg_id: "a3", text: "第一条消息内容", images: [] },
+      { id: "u2", text: "第二条消息内容", images: [], ts: new Date(3000).toISOString() },
+    ]);
+    expect(outbox()["m/s"]).toBeUndefined();
+    expect(store.size).toBe(0);
+  });
+
+  it("forgets a deleted message", () => {
+    keepFailed("m", "s", { id: "a5", text: "别发了", images: [], at: 1000 }, new TypeError("network"));
+    discardOutbox("m", "s", "a5");
+    expect(store.size).toBe(0);
+  });
+});
+
+describe("inSendOrder", () => {
+  it("stops waiting for a POST that hung", async () => {
+    vi.useFakeTimers();
+    try {
+      void inSendOrder("hung", () => new Promise(() => {}));
+      const next = vi.fn(async () => {});
+      void inSendOrder("hung", next);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(next).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(next).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs a conversation's sends one at a time, past a failure", async () => {
+    let fail!: (e: Error) => void;
+    const first = inSendOrder("k", () => new Promise((_, reject) => (fail = reject)));
+    const second = vi.fn(async () => "two");
+    const after = inSendOrder("k", second);
+    await Promise.resolve();
+    expect(second).not.toHaveBeenCalled();
+    fail(new Error("no"));
+    await expect(first).rejects.toThrow("no");
+    await expect(after).resolves.toBe("two");
   });
 });

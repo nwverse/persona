@@ -4,11 +4,22 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: scripts-${{ github.repository }}-${{ github.ref_name }}-scripts
+  cancel-in-progress: true
 jobs:
   scripts:
-    name: Scripts, docs and repository guards
+    name: Scripts and guards shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [0, 1]
+    env:
+      CI_PYTHON_SHARD_INDEX: ${{ matrix.shard }}
+      CI_PYTHON_SHARD_COUNT: '2'
     steps:
       - uses: actions/checkout@v4
         with:

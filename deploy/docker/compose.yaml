@@ -13,6 +13,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # The image's own check (wget /api/v1/health) on a schedule from .env; each run makes dockerd rewrite and fsync
+    # the container's state, docs/operations/docker.md "Disk writes".
+    healthcheck:
+      interval: ${PERSONA_HUB_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${PERSONA_HUB_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${PERSONA_HUB_HEALTHCHECK_RETRIES:-3}
+    logging: &logging
+      driver: ${PERSONA_LOG_DRIVER:-json-file}
+      options:
+        max-size: "${PERSONA_LOG_MAX_SIZE:-10m}"
+        max-file: "${PERSONA_LOG_MAX_FILE:-3}"
     environment:
       PUID: ${PUID:-}
       PGID: ${PGID:-}
@@ -32,6 +43,9 @@ services:
       # Where node builds for the computers' other platforms come from (a release's dl/, a mirror, or off; empty: the
       # image's own, docs/operations/docker.md "Node builds").
       PERSONA_NODE_PACKAGES: ${PERSONA_NODE_PACKAGES:-}
+      # 0: the hub and the built-in manager run on personad rather than as persona-hub and persona-manager
+      # (docs/operations/docker.md "Programs").
+      PERSONA_SPLIT_PROGRAMS: ${PERSONA_SPLIT_PROGRAMS:-}
       # With the built-in manager in a container of its own (the manager service below): this one runs the hub alone.
       # PERSONA_BUILTIN_MANAGER: separate
     ports:
@@ -59,6 +73,7 @@ services:
   #       condition: service_healthy
   #   healthcheck:
   #     disable: true
+  #   logging: *logging
   #   environment:
   #     PUID: ${PUID:-}
   #     PGID: ${PGID:-}
@@ -66,6 +81,7 @@ services:
   #     PERSONA_DATABASE_URL: postgres://${PERSONA_DB_USER:-jarvis}:${PERSONA_DB_PASSWORD-${JARVIS_DB_PASSWORD:-}}@postgres:5432/${PERSONA_DB_NAME:-jarvis}?sslmode=disable
   #     PERSONA_IMAGE: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
   #     PERSONA_NODE_PACKAGES: ${PERSONA_NODE_PACKAGES:-}
+  #     PERSONA_SPLIT_PROGRAMS: ${PERSONA_SPLIT_PROGRAMS:-}
   #   volumes:
   #     # The hub's data folder, at both paths the hub's container has it: the built-in manager keeps its files in
   #     # it as beside the hub, and the paths it writes down are the same ones there.
@@ -97,7 +113,19 @@ services:
         fi
         exec docker-entrypoint.sh "$$@"
       - postgres-entrypoint
-    command: ["postgres"]
+    # PostgreSQL's own defaults unless .env says otherwise (docs/operations/docker.md "Disk writes"). Settings given
+    # here win over ALTER SYSTEM and postgresql.conf.
+    command:
+      - postgres
+      - -c
+      - synchronous_commit=${PERSONA_POSTGRES_SYNCHRONOUS_COMMIT:-on}
+      - -c
+      - wal_compression=${PERSONA_POSTGRES_WAL_COMPRESSION:-off}
+      - -c
+      - checkpoint_timeout=${PERSONA_POSTGRES_CHECKPOINT_TIMEOUT:-5min}
+      - -c
+      - wal_writer_delay=${PERSONA_POSTGRES_WAL_WRITER_DELAY:-200ms}
+    logging: *logging
     environment:
       # These are persistent database identities, not product display names.
       # Installations explicitly migrated to another role/database must configure them.
@@ -110,6 +138,6 @@ services:
       - ./data/docker:/run/persona
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${PERSONA_DB_USER:-jarvis}", "-d", "${PERSONA_DB_NAME:-jarvis}"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
+      interval: ${PERSONA_POSTGRES_HEALTHCHECK_INTERVAL:-5s}
+      timeout: ${PERSONA_POSTGRES_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${PERSONA_POSTGRES_HEALTHCHECK_RETRIES:-30}

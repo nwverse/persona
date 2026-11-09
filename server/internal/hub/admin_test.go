@@ -38,10 +38,18 @@ type adminMemStore struct {
 	sessions map[string]db.AdminSession
 	pairs    map[string]string // pairing token hash -> machine
 	devices  []db.DeviceToken
+	revoked  []string // the machines whose credentials were revoked, in order
 }
 
 func newAdminMemStore() *adminMemStore {
 	return &adminMemStore{sessions: map[string]db.AdminSession{}, pairs: map[string]string{}}
+}
+
+func (s *adminMemStore) RevokeMachineCredentials(_ context.Context, machine string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revoked = append(s.revoked, machine)
+	return nil, nil
 }
 
 func (s *adminMemStore) AdminPasswordHash(context.Context) (string, error) {
@@ -732,20 +740,20 @@ func TestEditHubJSONKeepsWhatItDoesNotKnow(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := editHubJSON(dir, func(o *jsonObject) error {
-		if err := o.set("name", "家里"); err != nil {
+		if err := o.Set("name", "家里"); err != nil {
 			return err
 		}
-		public, err := o.object("public")
+		public, err := o.Object("public")
 		if err != nil {
 			return err
 		}
-		if err := public.set("tls_listen", ":18662"); err != nil {
+		if err := public.Set("tls_listen", ":18662"); err != nil {
 			return err
 		}
-		o.setObject("public", public)
-		admin, _ := o.object("admin")
-		_ = admin.set("access", "loopback")
-		o.setObject("admin", admin)
+		o.SetObject("public", public)
+		admin, _ := o.Object("admin")
+		_ = admin.Set("access", "loopback")
+		o.SetObject("admin", admin)
 		return nil
 	})
 	if err != nil {
@@ -798,7 +806,7 @@ func TestEditHubJSONKeepsWhatItDoesNotKnow(t *testing.T) {
 	}
 	// Not an object: refused, the file stays as it was.
 	_ = os.WriteFile(path, []byte(`[1,2]`), 0o600)
-	if err := editHubJSON(dir, func(o *jsonObject) error { return o.set("x", 1) }); err == nil {
+	if err := editHubJSON(dir, func(o *jsonObject) error { return o.Set("x", 1) }); err == nil {
 		t.Fatal("edited a non-object")
 	}
 	if b, _ := os.ReadFile(path); string(b) != `[1,2]` {
@@ -807,7 +815,7 @@ func TestEditHubJSONKeepsWhatItDoesNotKnow(t *testing.T) {
 }
 
 func TestAdminMachinesWriteHubJSON(t *testing.T) {
-	h, _, mux := adminTestHub(t)
+	h, store, mux := adminTestHub(t)
 	_ = os.WriteFile(filepath.Join(h.cfg.dir, "hub.json"), []byte(`{"token":"t","machines":[{"id":"old","kind":"ssh","ssh_host":"old","x":1}]}`), 0o600)
 	h.cfg.Machines = []MachineConfig{{ID: "old", Kind: "ssh", SSHHost: "old"}}
 	c := signedIn(t, mux, ip4(192, 168, 1, 20)+":1")
@@ -832,6 +840,11 @@ func TestAdminMachinesWriteHubJSON(t *testing.T) {
 	}
 	if code, _, _ := c.do("DELETE", "/api/v1/admin/machines/old", `{}`); code != 200 {
 		t.Fatalf("delete: %d", code)
+	}
+	// A new link computer's id loses what was left under it before it is added; "old" only when it is deleted, not
+	// when an add of its id is refused.
+	if got := strings.Join(store.revoked, ","); got != "box,mac,old" {
+		t.Fatalf("credentials revoked for %q", got)
 	}
 	b, _ := os.ReadFile(filepath.Join(h.cfg.dir, "hub.json"))
 	var file struct {

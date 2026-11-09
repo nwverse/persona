@@ -53,8 +53,9 @@ class AppleRenameTests(unittest.TestCase):
         targets = blocks(TARGETS)
         expected = {
             'Persona': 'Persona', 'PersonaMac': 'Persona', 'PersonaWatch': 'Persona', 'PersonaVision': 'Persona',
-            'PersonaWidgets': 'PersonaWidgets', 'PersonaNotify': 'PersonaNotify', 'PersonaMacNotify': 'PersonaNotify',
+            'PersonaWidgets': 'PersonaWidgets', 'PersonaNotify': 'PersonaNotify', 'PersonaMacNotify': 'PersonaNotify', 'PersonaVisionNotify': 'PersonaNotify',
             'PersonaShare': 'PersonaShare', 'PersonaVisionShare': 'PersonaShare',
+            'PersonaWatchWidgets': 'PersonaWatchWidgets',
         }
         self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaMacTests', 'PersonaUITests', 'PersonaMacUITests'})
         for target, module in expected.items():
@@ -128,11 +129,11 @@ class AppleRenameTests(unittest.TestCase):
                 self.assertTrue(all(isinstance(value, int) and value >= 0 for value in thresholds.values()))
 
     def test_launch_and_ctl_have_one_canonical_entry(self):
-        launch = (APPLE / 'PersonaUITests/LaunchLayout.swift').read_text()
+        launch = (APPLE / 'PersonaUITests/UITestStyle.swift').read_text()
         self.assertEqual(len(re.findall(r'func launchPersona\(\)', launch)), 1)
         self.assertNotRegex(launch, r'func launchPersona\(\)\s*\{\s*launchPersona\(\)')
         self.assertNotIn('func launch' + FORMER_NAME + '()', launch)
-        self.assertIn('func launchPinned()', (APPLE / 'PersonaUITests/UITestStyle.swift').read_text())
+        self.assertEqual(len(re.findall(r'func launchPinned\(\)', launch)), 1)
         command = ROOT / 'scripts/app/personactl.py'
         self.assertTrue(command.is_file())
         self.assertFalse(command.is_symlink())
@@ -140,6 +141,42 @@ class AppleRenameTests(unittest.TestCase):
         self.assertTrue(alias.is_symlink())
         self.assertEqual(alias.readlink().as_posix(), command.name)
         self.assertEqual(alias.resolve(), command.resolve())
+
+    def test_compact_shell_and_regular_sidebar_are_platform_defaults(self):
+        root = (APPLE / 'Persona/Views/RootView.swift').read_text()
+        selection = root.split('private var usesShell: Bool {', 1)[1].split('\n    }', 1)[0]
+        self.assertRegex(selection, r'#if os\(visionOS\)[\s\S]*?return false')
+        self.assertRegex(selection, r'#elseif os\(iOS\)\s+return widthClass == \.compact \|\| flipped\s+#else\s+return false')
+        self.assertIn('if usesShell { ShellView() } else { RootTabs()', root)
+        self.assertIn('RootTabs().visionShell()', root)
+        tabs = root.split('private struct RootTabs: View {', 1)[1].split('\n#if os(iOS)', 1)[0]
+        self.assertIn('TabView(selection: $model.selectedTab)', tabs)
+        self.assertIn('AssistantRootTab()', tabs)
+        self.assertIn('AgentsRootTab()', tabs)
+        self.assertRegex(tabs, r'#if !os\(iOS\)\s+InboxRootTab\(\)\s+SettingsRootTab\(\)\s+#endif')
+        self.assertRegex(tabs, r'#if os\(iOS\)\s+\.modifier\(PadRoutes\(router: pad\)\)\s+#endif')
+        for name in ('Assistant', 'Agents', 'Inbox', 'Settings'):
+            self.assertRegex(root, r'private struct ' + name + r'RootTab: TabContent')
+        routes = root.split('final class PadRouter: TabRouter {', 1)[1].split('private struct PadRoutes:', 1)[0]
+        self.assertRegex(routes, r'func route\(_ t: AppTab, in model: AppModel\)\s*\{\s*switch t')
+        self.assertIn('show(.inbox)', routes)
+        self.assertIn('model.shellSettings = true', routes)
+
+    def test_ui_launch_helpers_preserve_default_navigation(self):
+        source = (APPLE / 'PersonaUITests/UITestStyle.swift').read_text()
+        launch = source.split('func launchPersona() {', 1)[1].split('\n    }', 1)[0]
+        # Only the clean Demo Mode reset may add arguments; navigation belongs to the app.
+        self.assertEqual(re.findall(r'launchArguments\s*\+=\s*(\[[^\]]*\])', launch),
+                         ['["-openWelcome", "YES"]'])
+        self.assertIn('Self.wantsDemo(launchArguments)', launch)
+        self.assertRegex(launch, r'\blaunch\(\)')
+        self.assertNotIn('ProcessInfo', launch)
+        harness = (ROOT / 'scripts/app/cli-tests/clitest.py').read_text()
+        self.assertRegex(harness, r'(?m)^PINNED = \["-ui\.style", os\.environ\.get\("PERSONA_UI_STYLE", "glass"\)\]$')
+        assets = (ROOT / 'scripts/assets/make_readme_assets.py').read_text()
+        fresh = assets.split('def fresh(', 1)[1].split('\ndef ', 1)[0]
+        # Capture controls can select style/color, but cannot choose a different navigation tree.
+        self.assertEqual(set(re.findall(r'"(-ui\.[^"]+)"', fresh)), {'-ui.style', '-ui.color'})
 
     def test_menu_bar_package_uses_canonical_process_name(self):
         package = (APPLE / 'PersonaLink/Package.swift').read_text()

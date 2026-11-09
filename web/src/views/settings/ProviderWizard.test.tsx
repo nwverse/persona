@@ -24,6 +24,7 @@ let calls: { method: string; path: string; body?: Record<string, unknown> }[] = 
 let testOK = true;
 // set: what the hub's key test answers instead (a region block, #4526)
 let testAnswer: Record<string, unknown> | null = null;
+let discovered: Record<string, unknown>[] = [];
 let readiness: Readiness | null = null;
 // set: readiness answers only once it resolves (a node self-check can take seconds)
 let readinessGate: Promise<void> | null = null;
@@ -41,6 +42,7 @@ function hub(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   calls.push({ method, path, body });
   if (path.endsWith("/assistant/readiness")) return (readinessGate ?? Promise.resolve()).then(() => (readiness ? json(readiness) : json({ error: "not found" }, 404)));
   if (path.endsWith("/launchers/presets")) return Promise.resolve(json({ presets }));
+  if (path.endsWith("/launchers/discover")) return Promise.resolve(json({ models: discovered }));
   if (path.endsWith("/launchers/test") && testAnswer) return Promise.resolve(json(testAnswer));
   if (path.endsWith("/launchers/test")) return Promise.resolve(json(testOK ? { ok: true, ms: 321, model: "glm-x" } : { ok: false, ms: 80, model: "glm-x", error: "Key 不对（401）" }));
   if (path.endsWith("/launchers") && method === "POST")
@@ -81,6 +83,7 @@ beforeEach(() => {
   calls = [];
   testOK = true;
   testAnswer = null;
+  discovered = [];
   readiness = null;
   readinessGate = null;
   resetReadiness();
@@ -253,15 +256,34 @@ describe("ProviderWizard from presets", () => {
     expect(post?.body).toEqual({ name: "jv_team", api_key: "sk-test-123456", preset: "example-gateway/team" });
   });
 
-  it("does not test a Responses preset's key, which the hub's test cannot reach", async () => {
+  it("tests a Responses preset using its configured protocol", async () => {
     await open();
     act(() => button("示例 Responses")!.click());
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
-    expect(keyTests()).toHaveLength(0);
-    expect(text()).toContain("Responses 协议的 Key 没法在这里测试");
-    expect(text()).not.toContain("重新测试");
+    expect(keyTests()).toHaveLength(1);
+    expect(keyTests()[0]!.body).toMatchObject({ preset: "example-gateway/api", api_key: "sk-test-123456" });
+    expect(text()).toContain("Key 能用");
     expect(button("保存")!.disabled).toBe(false);
+  });
+
+  it("keeps a direct API off the main conversation: no switch, no assign, no Claude Code warning", async () => {
+    Object.assign(getState(), { features: ["builtin_presets", "assistant_readiness"] });
+    readiness = withSteps("setup", [step("computer", "ok"), step("claude", "problem", "claude_missing"), step("model", "unknown"), step("first_message", "todo")]);
+    await open();
+    act(() => button("示例 Responses")!.click());
+    expect(document.body.querySelector('button[role="switch"]')).toBeNull();
+    // said before saving: uses with no model picked may move to it
+    expect(text()).toContain("没有单独选模型的用途，现在可能会改用它");
+    type(keyInput(), "sk-test-123456");
+    await waitAutoTest();
+    await act(async () => button("保存")!.click());
+    await flush();
+    const post = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"));
+    expect(post?.body).toEqual({ api_key: "sk-test-123456", preset: "example-gateway/api" });
+    expect(text()).toContain("主对话和 Agent 不能用它");
+    expect(text()).not.toContain("要让主对话或 Agent 用它");
+    expect(document.body.querySelector('[data-testid="wizard-no-claude"]')).toBeNull();
   });
 
   it("asks for the address and the auth only for the custom gateway", async () => {
@@ -269,6 +291,171 @@ describe("ProviderWizard from presets", () => {
     act(() => button("自定义兼容网关")!.click());
     expect(text()).toContain("鉴权方式");
     expect(text()).toContain("地址");
+  });
+
+  it("lets a custom Responses provider test and discover using its selected protocol", async () => {
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    act(() => button("OpenAI Responses")!.click());
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/prefix");
+    type(keyInput(), "sk-test-123456");
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试用的模型"]')!, "example-r");
+    await act(async () => button("测试连接")!.click());
+    await act(async () => button("获取模型列表")!.click());
+    expect(keyTests()[0]!.body).toMatchObject({ api: "responses", model: "example-r", base_url: "https://api.example.com/prefix" });
+    expect(calls.find((c) => c.path.endsWith("/launchers/discover"))?.body).toMatchObject({ api: "responses" });
+  });
+
+  it("tests, discovers and saves a Chat Completions provider", async () => {
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    act(() => button("Chat Completions")!.click());
+    expect(text()).toContain("Chat Completions 兼容 API 的基础地址");
+    expect(text()).not.toContain("鉴权方式");
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
+    type(keyInput(), "sk-test-123456");
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试用的模型"]')!, "example-chat");
+    await act(async () => button("测试连接")!.click());
+    await act(async () => button("获取模型列表")!.click());
+    expect(keyTests()[0]!.body).toMatchObject({ api: "chat", model: "example-chat", base_url: "https://api.example.com/v1" });
+    expect(calls.find((c) => c.path.endsWith("/launchers/discover"))?.body).toMatchObject({ api: "chat" });
+    act(() => button("下一步")!.click());
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="手动添加模型 ID"]')!, "example-chat");
+    act(() => button("添加")!.click());
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body).toMatchObject({ kind: "api", api: "chat", auth: "api_key", model: "example-chat" });
+  });
+
+  it("saves discovered Chat models with inconsistent effort metadata", async () => {
+    discovered = [{ id: "example-chat", context_window: 16000, efforts: ["low"], default_effort: "high" }];
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    act(() => button("Chat Completions")!.click());
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
+    type(keyInput(), "sk-test-123456");
+    await act(async () => button("获取模型列表")!.click());
+    act(() => button("下一步")!.click());
+    expect(button("保存")!.disabled).toBe(false);
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body).toMatchObject({
+      api: "chat", models: [{ id: "example-chat", context_window: 16000 }],
+    });
+  });
+
+  it("hides unsupported chat options and excludes drafts from test and save", async () => {
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
+    type(keyInput(), "sk-test-123456");
+    act(() => button("下一步")!.click());
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="手动添加模型 ID"]')!, "example-chat");
+    act(() => button("添加")!.click());
+    act(() => button("高级")!.click());
+    const header = document.body.querySelector<HTMLTextAreaElement>('textarea[placeholder^="X-Name"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => { setter.call(header, "X-Example: value"); header.dispatchEvent(new Event("input", { bubbles: true })); });
+    type(document.body.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:7890"]')!, "http://proxy.example.com");
+    type(document.body.querySelector<HTMLInputElement>('input[placeholder="localhost,127.0.0.1"]')!, "example.com");
+    type(document.body.querySelector<HTMLInputElement>('input[placeholder="3000000"]')!, "1234");
+    act(() => button("上一步")!.click());
+    act(() => button("Chat Completions")!.click());
+    await act(async () => button("测试连接")!.click());
+    expect(keyTests()[0]!.body).not.toHaveProperty("headers");
+    act(() => button("下一步")!.click());
+    expect(text()).toContain("上下文限制、默认思考档位");
+    expect(text()).toContain("模型列表中仍可记录各模型的上下文窗口");
+    expect(document.body.querySelector('textarea[placeholder^="X-Name"]')).toBeNull();
+    expect(document.body.querySelector('input[placeholder="http://127.0.0.1:7890"]')).toBeNull();
+    expect(document.body.querySelector('input[placeholder="localhost,127.0.0.1"]')).toBeNull();
+    expect(document.body.querySelector('input[placeholder="3000000"]')).toBeNull();
+    expect(document.body.querySelector('textarea[placeholder^="NAME=value"]')).toBeNull();
+    act(() => button("上一步")!.click());
+    act(() => button("Anthropic Messages")!.click());
+    act(() => button("下一步")!.click());
+    expect(document.body.querySelector<HTMLInputElement>('input[placeholder="3000000"]')?.value).toBe("1234");
+    expect(document.body.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:7890"]')?.value).toBe("http://proxy.example.com");
+    act(() => button("上一步")!.click());
+    act(() => button("Chat Completions")!.click());
+    act(() => button("下一步")!.click());
+    await act(async () => button("保存")!.click());
+    const body = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body;
+    expect(body).toMatchObject({ api: "chat" });
+    for (const key of ["headers", "proxy", "no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort"]) expect(body).not.toHaveProperty(key);
+  });
+
+  it("keeps model metadata while hiding unused chat thinking controls", async () => {
+    act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true, models: [{ id: "example-chat", context_window: 16000, efforts: ["high"], default_effort: "high" }] }} onClose={() => {}} onSaved={() => {}} />));
+    await flush();
+    act(() => button("下一步")!.click());
+    expect(document.body.querySelector<HTMLInputElement>('input[aria-label="example-chat 的上下文窗口"]')?.value).toBe("16000");
+    expect(document.body.querySelector('[aria-label="example-chat 支持的思考档位"]')).toBeNull();
+    expect(document.body.querySelector('[aria-label="example-chat 的默认思考档位"]')).toBeNull();
+    expect(text()).toContain("Chat Completions 不使用模型的思考档位设置");
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("models");
+  });
+
+  it("preserves existing Chat effort metadata when discovery updates context", async () => {
+    discovered = [{ id: "example-chat", context_window: 32000, efforts: ["low"], default_effort: "low" }];
+    act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true, models: [{ id: "example-chat", efforts: ["high"], default_effort: "high" }] }} onClose={() => {}} onSaved={() => {}} />));
+    await flush();
+    await act(async () => button("获取模型列表")!.click());
+    act(() => button("下一步")!.click());
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).toMatchObject({
+      models: [{ id: "example-chat", context_window: 32000, efforts: ["high"], default_effort: "high" }],
+    });
+  });
+
+  it("requires an explicit choice before clearing unsupported stored Chat settings", async () => {
+    const existing = { name: "chat", kind: "api" as const, api: "chat" as const, base_url: "https://api.example.com", model: "example-chat", has_key: true, has_headers: true, has_env: true, proxy: "http://proxy.example.com", no_proxy: "example.com", timeout_ms: 1200, compact_window: 100, max_context: 200, effort: "high", opus_model: "tier-a", sonnet_model: "tier-b", haiku_model: "tier-c", fable_model: "tier-d", subagent_force: true };
+    act(() => root.render(<ProviderWizard existing={existing} onClose={() => {}} onSaved={() => {}} />));
+    await flush();
+    expect(text()).toContain("保存时清除这些设置");
+    expect(text()).toContain("请先清除已保存的设置并保存供应商，再测试连接或获取模型列表");
+    expect(button("测试连接")!.disabled).toBe(true);
+    expect(button("获取模型列表")!.disabled).toBe(true);
+    act(() => { button("测试连接")!.click(); button("获取模型列表")!.click(); });
+    expect(calls.some((c) => /\/launchers\/(test|discover)$/.test(c.path))).toBe(false);
+    const checkbox = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.checked).toBe(false);
+    expect(button("保存")!.disabled).toBe(true);
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    act(() => checkbox.click());
+    expect(button("保存")!.disabled).toBe(false);
+    expect(button("测试连接")!.disabled).toBe(true);
+    expect(button("获取模型列表")!.disabled).toBe(true);
+    act(() => { button("测试连接")!.click(); button("获取模型列表")!.click(); });
+    expect(calls.some((c) => /\/launchers\/(test|discover)$/.test(c.path))).toBe(false);
+    act(() => checkbox.click());
+    expect(button("保存")!.disabled).toBe(true);
+    act(() => checkbox.click());
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).toMatchObject({
+      headers: "", env: "", proxy: "", no_proxy: "", timeout_ms: 0, compact_window: 0, max_context: 0,
+      effort: "", opus_model: "", sonnet_model: "", haiku_model: "", fable_model: "", subagent_force: false,
+    });
+  });
+
+  it("keeps the Chat Completions protocol when editing", async () => {
+    act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true }} onClose={() => {}} onSaved={() => {}} />));
+    await flush();
+    expect(text()).toContain("Chat Completions 兼容 API 的基础地址");
+    expect(text()).not.toContain("鉴权方式");
+    await act(async () => button("保存")!.click());
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).toMatchObject({ api: "chat", auth: "api_key" });
   });
 
   it("leaves a Claude Code that already answers in place unless told otherwise", async () => {

@@ -7,16 +7,34 @@
 #   scripts/check-fast.sh --base main     # diff against another ref
 #   scripts/check-fast.sh --all           # every local fast check except iOS/macOS builds and the Postgres suite,
 #                                         # including every scripts/**/test_*.py suite CI's Scripts tests job runs
+#                                         # (a test_*.py that never mentions unittest is a SKIP line, as in
+#                                         # scripts/ci/python-tests.py; diff mode skips it too)
 #   scripts/check-fast.sh -h|--help
 #
 # Path mapping (diff mode):
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
 #                              typecheck, vitest run
+#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, spec/fixtures/attention/**,
+#   scripts/mock/inbox_events.json
+#                              also the web check: web/src and its vitest suite read these files. They are the inputs
+#                              outside web/ of the web lane in scripts/ci/paths.py; test_check_fast.py keeps the two in sync
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
 #   site/**                    node --test site/worker.test.mjs
 #   sdk/ts/**                  bun test (skipped with a reason when bun is absent)
 #   sdk/go/**                  go test ./... inside the sdk/go module
-#   server/internal/foo/**     go test ./internal/foo/...   (cmd/ likewise; uncategorized server changes: go build ./...)
+#   server/internal/foo/**     go test ./internal/foo/...   (cmd/<x>/** and plugins/<x>/** likewise; other server
+#                              changes: go build ./...)
+#   server/**, sdk/go/**       also the server's repo-wide guard tests (GO_GUARD_PKGS, GO_GUARD_TESTS), which fail on
+#                              code outside their own package; --all runs them as part of go test ./...
+#   server/internal/db/migrations/**, scripts/ci/migration_freeze.py
+#                              python3 scripts/ci/migration_freeze.py (a migration already on the base must not be
+#                              edited, deleted or renamed; comment- and whitespace-only edits pass; a new file may be
+#                              added). A rename out of the directory counts too. --all runs it when the script is present.
+#   server/**/*_test.go, sdk/go/**/*_test.go, scripts/ci/sleep_ratchet.py, scripts/ci/sleep_baseline.json
+#                              python3 scripts/ci/sleep_ratchet.py (each Go test file's time.Sleep count may stay or
+#                              fall, never rise; comments, strings and a // sleep-ok: reason line do not count; a new
+#                              file starts at zero; --update only lowers). A rename out of those trees counts too.
+#                              --all runs it when the script is present.
 #   spec/fixtures/**, schema/extension/**, integrations/**, docs/<file>, scripts/test/server_test_env.py
 #                              also go test on each server package whose _test.go names that input (server-test.yml's
 #                              path filter), found at run time with git grep (comment lines are ignored)
@@ -27,9 +45,13 @@
 #                              ambiguous (a case "*" matches slashes, so scripts/* covers nested paths too); plus
 #                              each changed scripts/<dir>/test_*.py and the test_<name>.py of each changed script
 #                              <name>.py / <name>.sh (- read as _; db.sh's is test_db_sh.py), run from its
-#                              directory as CI does (#3968)
+#                              directory as CI does (#3968). scripts/hooks/** also runs
+#                              scripts/test/test_privacy_check.py (it runs the hooks); scripts/privacy_check.py also
+#                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
-#                              CLAUDE.md doc index)
+#                              CLAUDE.md doc index), test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#   server/internal/{proto,hub,extension}/**, schema/extension/manifest.schema.json
+#                              also test_doc_wire.py: the code side of those wire lists
 #   apple/**                   scripts/test/test_apple_l10n.py (String Catalogs, Chinese Swift literals); the iOS/macOS
 #                              builds and tests are skipped with a note (they need a Mac)
 #   deploy/docker/**, docs/operations/docker.md, Dockerfile
@@ -43,6 +65,8 @@
 #
 # Exit codes: 0 all checks passed, skipped or not needed; 1 one or more checks FAILED; 124 no failure but at least
 # one check TIMEOUT (a timeout is reported, not silently treated as success; run the full suite when that happens).
+# Ctrl-C, SIGTERM and SIGHUP, to the script or to its whole process group, stop every running check first, keep the
+# log directory, and exit 130, 143 or 129.
 # A missing optional toolchain (node < 22, go, bun) skips only its checks in diff mode; in --all mode a missing
 # core tool (node >= 22, go, python3) is a failure.
 #
@@ -108,6 +132,80 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/check-fast.XXXXXX")
 KEEP_WORK=0
 cleanup_work() { [ "$KEEP_WORK" -eq 0 ] && rm -rf "$WORK"; }
 trap cleanup_work EXIT
+
+# descendants prints every process below pid $1, parents before their children (POSIX ps, so it runs on macOS too).
+descendants() {
+  ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$1" '
+    { kids[$2] = kids[$2] " " $1 }
+    END {
+      n = split(kids[root], queue, " ")
+      for (i = 1; i <= n; i++) {
+        print queue[i]
+        m = split(kids[queue[i]], c, " ")
+        for (j = 1; j <= m; j++) queue[++n] = c[j]
+      }
+    }'
+}
+
+# on_signal stops every check on Ctrl-C, TERM or HUP. A signal to this script alone never reaches them: the job
+# subshells run in the background (a non-interactive shell starts them ignoring SIGINT) and GNU timeout moves each
+# command into its own process group, so without this they keep running, reparented to init, writing into $WORK.
+# A signal to the whole process group (a closed terminal or tmux pane, kill -- -PGID) reaches the job subshells and
+# tee as well, so they ignore TERM and HUP too (launch_all); otherwise they would die first and orphan the checks.
+# The whole tree is frozen first (SIGSTOP, repeated until no new process appears) so nothing forks the next step or
+# escapes to init while it is being collected. The processes in this script's own process group (subshells, tee,
+# short helpers) then get KILL while still frozen; every other one is a check in the group timeout made for it and
+# gets TERM and CONT (timeout forwards the TERM to its group), and whatever is still alive after timeout's own -k
+# grace gets KILL.
+on_signal() {  # on_signal <signal name> <exit code>
+  local _sig=$1 _code=$2 _all=" " _new _p _g _pass _list _left _own _groups
+  trap '' INT TERM HUP
+  for _pass in 1 2 3 4 5 6 7 8 9 10; do
+    _new=0
+    for _p in $(descendants $$); do
+      case "$_all" in *" $_p "*) continue ;; esac
+      # The ps and awk of the snapshot have exited by now, so kill fails for them and they are not collected.
+      kill -STOP "$_p" 2>/dev/null || continue
+      _all="$_all$_p "; _new=1
+    done
+    [ "$_new" -eq 0 ] && break
+  done
+  # One ps for the process group of each frozen process; if it fails, every process takes the TERM path below.
+  _own=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+  _list=$(echo $_all | tr ' ' ',')
+  _groups=$(ps -o pid= -o pgid= -p "$_list" 2>/dev/null)
+  # bash reports each job subshell it reaps after a KILL ("line N: <pid> Killed ( ... )"); keep that noise off stderr.
+  exec 3>&2 2>/dev/null
+  if [ -n "$_own" ] && [ -n "$_groups" ]; then
+    _all=" "
+    while read -r _p _g; do
+      [ -n "$_p" ] || continue
+      if [ "$_g" = "$_own" ]; then kill -KILL "$_p" 2>/dev/null; else _all="$_all$_p "; fi
+    done < <(printf '%s\n' "$_groups")
+  fi
+  for _p in $_all; do kill -TERM "$_p" 2>/dev/null; kill -CONT "$_p" 2>/dev/null; done
+  _list=$(echo $_all | tr ' ' ',')
+  if [ -n "$_list" ]; then
+    _pass=0
+    while [ "$_pass" -lt 70 ]; do  # up to ~7s: timeout's -k 5s grace plus a margin
+      # A process that has exited stays a zombie (Z) until its parent reaps it; count only live processes.
+      _left=$(ps -o stat= -p "$_list" 2>/dev/null | grep -vc '^Z')
+      [ "${_left:-0}" -eq 0 ] && break
+      sleep 0.1
+      _pass=$((_pass + 1))
+    done
+    for _p in $_all; do kill -KILL "$_p" 2>/dev/null; done
+  fi
+  wait
+  exec 2>&3 3>&-
+  KEEP_WORK=1
+  echo >&2
+  echo "check-fast: interrupted (SIG$_sig); stopped the running checks; logs in $WORK" >&2
+  exit "$_code"
+}
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+trap 'on_signal HUP 129' HUP
 
 # Job bookkeeping (plain indexed arrays for macOS's bash 3.2).
 JOB_NAME=(); JOB_FN=(); JOB_ARG=(); JOB_LOG=(); JOB_STATUS=(); JOB_PID=()
@@ -179,6 +277,9 @@ launch_all() {
   local _i
   for _i in "${!JOB_NAME[@]}"; do
     (
+      # A TERM or HUP to the whole process group must not end the subshell (or the tee its steps start) before
+      # on_signal has frozen the checks under it; on_signal KILLs them itself (see there).
+      trap '' TERM HUP
       JOB_STATUS=${JOB_STATUS[$_i]}
       JOB_I=$_i
       SECONDS=0
@@ -239,12 +340,35 @@ job_sdk_ts() {
   in_dir sdk/ts step "$TIMEOUT_OTHER" "sdk/ts: bun test" bun test
 }
 
-job_go() {  # $1 = a package dir (internal/foo, cmd/bar) or ALL for ./...
+job_go() {  # $1 = a package dir (internal/foo, cmd/bar, plugins/baz) or ALL for ./...
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
   local _pattern _label _inner
   if [ "$1" = ALL ]; then _pattern=./...; _label="go test ./..."; else _pattern="./$1/..."; _label="go test ./$1/..."; fi
   _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
   in_dir server step "$TIMEOUT_GO_TEST" "$_label" go test -count=1 -timeout "${_inner}s" "$_pattern"
+}
+
+# The server's repo-wide guards: tests that read other packages' source, go list output, the migrations or sdk/go, so
+# a change anywhere under server/ or sdk/go/ can fail them while go test on the touched packages passes (#1936 broke
+# the lazyre guard on main that way). The list is curated, not every *guard*_test.go: internal/node's pathguard and
+# writeguard tests and internal/hub's ownership_guard_test.go test their own package's behaviour. GO_GUARD_PKGS run
+# whole; GO_GUARD_TESTS names the guard tests of GO_GUARD_TEST_PKGS, whose other tests are slow or need Postgres.
+GO_GUARD_PKGS=(./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins)
+GO_GUARD_TEST_PKGS=(./internal/hub ./internal/assistant)
+GO_GUARD_TESTS='^(TestHubAnswersOnlyItsOwnRoutes|TestHubDoesNotImportTheManager|TestHubCallsNoModel|TestHubStoreStaysSmall'\
+'|TestTheHubOpensNoneOfTheManagersFiles|TestStoresTouchTheirOwnTables|TestSettingsKeysAreOneSidesOwn'\
+'|TestTheLaunchersSealedFieldsAreReSealed|TestPlacesThatSealAreKnown)$'
+
+# job_go_guards runs both guard commands, the second one also when the first failed, so one run names every failure.
+job_go_guards() {
+  [ "$HAVE_GO" -eq 1 ] || skip "go not found"
+  local _inner=$((TIMEOUT_GO_TEST - 10)) _rc=0
+  [ "$_inner" -lt 5 ] && _inner=5
+  in_dir server step "$TIMEOUT_GO_TEST" "go test ${GO_GUARD_PKGS[*]}" \
+    go test -count=1 -timeout "${_inner}s" "${GO_GUARD_PKGS[@]}" || _rc=$?
+  in_dir server step "$TIMEOUT_GO_TEST" "go test -run <guard tests> ${GO_GUARD_TEST_PKGS[*]}" \
+    go test -count=1 -timeout "${_inner}s" -run "$GO_GUARD_TESTS" "${GO_GUARD_TEST_PKGS[@]}" || _rc=$?
+  return "$_rc"
 }
 
 job_go_build() {
@@ -319,6 +443,90 @@ job_pr_needs_issue() {
   step "$TIMEOUT_OTHER" "node scripts/test/pr_needs_issue_test.mjs" node scripts/test/pr_needs_issue_test.mjs || return $?
 }
 
+# job_migration_freeze compares migrations already on the base with the index and the working tree. In diff mode the
+# base is the merge-base check-fast already resolved (so --base agrees); --all resolves the default branch itself.
+job_migration_freeze() {
+  [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
+  if [ "$ALL" -eq 1 ]; then
+    step "$TIMEOUT_OTHER" "python3 scripts/ci/migration_freeze.py" python3 scripts/ci/migration_freeze.py || return $?
+  else
+    step "$TIMEOUT_OTHER" "python3 scripts/ci/migration_freeze.py --base $MB" \
+      python3 scripts/ci/migration_freeze.py --base "$MB" || return $?
+  fi
+}
+
+# job_sleep_ratchet counts fixed time.Sleep calls in Go tests. In diff mode the base is the merge-base check-fast
+# already resolved (so --base agrees); --all resolves the default branch itself.
+job_sleep_ratchet() {
+  [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
+  if [ "$ALL" -eq 1 ]; then
+    step "$TIMEOUT_OTHER" "python3 scripts/ci/sleep_ratchet.py" python3 scripts/ci/sleep_ratchet.py || return $?
+  else
+    step "$TIMEOUT_OTHER" "python3 scripts/ci/sleep_ratchet.py --base $MB" \
+      python3 scripts/ci/sleep_ratchet.py --base "$MB" || return $?
+  fi
+}
+
+# migration_freeze_wanted is true when a migration already on the base might have changed, or when the checker itself
+# changed. --name-only lists a rename's destination only, so a file moved out of the directory shows up in the
+# name-status scan (status, then the old path, then the new path).
+migration_freeze_wanted() {
+  [ "$ALL" -eq 1 ] && return 0
+  local f status path newpath
+  while IFS= read -r f; do
+    case "$f" in
+      server/internal/db/migrations/*|scripts/ci/migration_freeze.py) return 0 ;;
+    esac
+  done <<< "$CHANGED"
+  while IFS= read -r -d '' status; do
+    IFS= read -r -d '' path || return 1
+    case "$status" in
+      R*|C*)
+        IFS= read -r -d '' newpath || return 1
+        case "$path" in server/internal/db/migrations/*) return 0 ;; esac
+        path=$newpath
+        ;;
+    esac
+    case "$path" in
+      server/internal/db/migrations/*|scripts/ci/migration_freeze.py) return 0 ;;
+    esac
+  done < <(git diff --name-status --find-renames -z "$MB" HEAD
+           git diff --name-status --find-renames -z
+           git diff --cached --name-status --find-renames -z)
+  return 1
+}
+
+# sleep_ratchet_wanted is true when a Go test's fixed sleeps might have changed, or when the checker or its baseline
+# changed. --name-only lists a rename's destination only, so a test file moved out of server/ or sdk/go/ shows up in
+# the name-status scan (status, then the old path, then the new path).
+sleep_ratchet_wanted() {
+  [ "$ALL" -eq 1 ] && return 0
+  local f status path newpath
+  while IFS= read -r f; do
+    case "$f" in
+      server/*_test.go|sdk/go/*_test.go|scripts/ci/sleep_ratchet.py|scripts/ci/sleep_baseline.json) return 0 ;;
+    esac
+  done <<< "$CHANGED"
+  while IFS= read -r -d '' status; do
+    IFS= read -r -d '' path || return 1
+    case "$status" in
+      R*|C*)
+        IFS= read -r -d '' newpath || return 1
+        case "$path" in
+          server/*_test.go|sdk/go/*_test.go) return 0 ;;
+        esac
+        path=$newpath
+        ;;
+    esac
+    case "$path" in
+      server/*_test.go|sdk/go/*_test.go|scripts/ci/sleep_ratchet.py|scripts/ci/sleep_baseline.json) return 0 ;;
+    esac
+  done < <(git diff --name-status --find-renames -z "$MB" HEAD
+           git diff --name-status --find-renames -z
+           git diff --cached --name-status --find-renames -z)
+  return 1
+}
+
 job_extension_schema() {
   [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
   # The codegen-current check reformats generated Go and needs gofmt.
@@ -330,7 +538,7 @@ job_extension_schema() {
 
 CORE_FAIL=0
 CHANGED=""
-WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0
+WEB=0; SDKTS=0; ANDROID=0; PRNEEDS=0; EXTSCHEMA=0; SERVER_BUILD=0; APPLE=0; UNMAPPED=0; GO_GUARDS=0
 SITE=0; SDKGO=0; EXTREFS=0; SDKBUNDLE=0
 INTEG=(); GO_GROUPS=(); UNMAPPED_FILES=(); SCRIPT_TESTS=()
 CORE_MISSING=()
@@ -389,6 +597,12 @@ else
   fi
   echo "check-fast: $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') changed file(s) against $(git rev-parse --short "$MB") (merge-base with $BASE_REF)"
   while IFS= read -r f; do
+    # Repository files outside web/ that web/src and its vitest suite read: a change to one also runs the web check,
+    # on top of its own mapping below. The same list is the web lane's filter in scripts/ci/paths.py.
+    case "$f" in
+      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|spec/fixtures/attention/*|scripts/mock/inbox_events.json) WEB=1 ;;
+    esac
+    case "$f" in server/*|sdk/go/*) GO_GUARDS=1 ;; esac  # on top of the mapping below (job_go_guards)
     case "$f" in
       web/*) WEB=1 ;;
       site/*) SITE=1 ;;
@@ -400,7 +614,9 @@ else
       server/*)
         _rest=${f#server/}
         case "$_rest" in
-          internal/*/*) ;;  # package groups are collected in a second pass below
+          # Package groups are collected in a second pass below; plugins/<file> is the plugins package, which the
+          # repo-wide guard job runs.
+          internal/*/*|plugins/*) ;;
           cmd/*)
             _after=${_rest#cmd/}
             case "$_after" in
@@ -437,13 +653,14 @@ else
   done <<< "$CHANGED"
 fi
 
-# Collect affected server packages: server/internal/foo/... -> ./internal/foo/...
+# Collect affected server packages: server/internal/foo/... -> ./internal/foo/..., plugins/bar/... likewise.
 if [ "$ALL" -eq 0 ]; then
   while IFS= read -r f; do
     case "$f" in
-      server/internal/*/*)
-        _rest=${f#server/internal/}
-        _g="internal/${_rest%%/*}"
+      server/internal/*/*|server/plugins/*/*)
+        _rest=${f#server/}
+        _top=${_rest%%/*}; _rest=${_rest#*/}
+        _g="$_top/${_rest%%/*}"
         arr_has "$_g" "${GO_GROUPS[@]:-}" || GO_GROUPS+=("$_g") ;;
     esac
   done <<< "$CHANGED"
@@ -481,13 +698,19 @@ if [ "$ALL" -eq 0 ]; then
 fi
 
 # script_test_add adds a scripts/<dir>/test_*.py that exists (a deleted one is not run) and that no dedicated job above
-# already runs (refs, bundle, extension schema, the android checkers).
+# already runs (refs, bundle, extension schema, the android checkers). A file that never mentions unittest is a SKIP
+# line instead, the rule of is_suite in scripts/ci/python-tests.py: python -m unittest runs no tests in such a
+# verification script and exits 5 ("NO TESTS RAN") on Python 3.12 and later.
 script_test_add() {
   case "$1" in
     scripts/test/test_external_service_refs.py|scripts/test/test_sdk_bundle.py|scripts/test/test_extension_schema.py) return 0 ;;
     scripts/app/test_android_*) return 0 ;;
   esac
   [ -f "$1" ] || return 0
+  if ! grep -q unittest "$1"; then
+    arr_has "SKIP  $1 (not a unittest suite)" "${INFO[@]:-}" || INFO+=("SKIP  $1 (not a unittest suite)")
+    return 0
+  fi
   arr_has "$1" "${SCRIPT_TESTS[@]:-}" || SCRIPT_TESTS+=("$1")
 }
 
@@ -497,6 +720,7 @@ script_test_add() {
 # Changes to docs, markdown, apple/, deploy/docker/ and the root Dockerfile add the scripts/test suites that guard them.
 # --all runs every scripts/**/test_*.py suite, the same find as CI's Scripts tests job, minus the few script_test_add
 # skips because a dedicated check above runs them; renaming or dropping one of those checks must update that skip list.
+# test_check_fast.py compares this selection with python-tests.py's.
 if [ "$ALL" -eq 1 ]; then
   while IFS= read -r f; do
     script_test_add "$f"
@@ -513,9 +737,22 @@ else
     esac
     # The Linux suites in CI's Scripts tests job that guard files outside scripts/; a file can need several.
     case "$f" in
-      docs/*|*.md) script_test_add scripts/test/test_doc_paths.py; script_test_add scripts/test/test_doc_go_paths.py ;;
+      docs/*|*.md)
+        script_test_add scripts/test/test_doc_paths.py; script_test_add scripts/test/test_doc_go_paths.py
+        script_test_add scripts/test/test_doc_wire.py ;;
+      # The code side of the wire lists test_doc_wire.py compares with the docs.
+      server/internal/proto/*|server/internal/hub/*|server/internal/extension/*|schema/extension/manifest.schema.json)
+        script_test_add scripts/test/test_doc_wire.py ;;
     esac
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
+    # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp
+    # repositories and runs the hooks there; check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py
+    # copies privacy_check.py into its temp repositories, where merge-pr.sh runs it.
+    case "$f" in
+      scripts/hooks/*) script_test_add scripts/test/test_privacy_check.py ;;
+      scripts/privacy_check.py)
+        script_test_add scripts/release/test_check_bundle_privacy.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
+    esac
     case "$f" in deploy/docker/*|docs/operations/docker.md|Dockerfile) script_test_add scripts/test/test_docker_entrypoint.py ;; esac
   done <<< "$CHANGED"
 fi
@@ -601,6 +838,9 @@ else
   if [ "$SERVER_BUILD" -eq 1 ]; then
     if [ "$HAVE_GO" -eq 1 ]; then schedule "server go build ./..." job_go_build ""; else INFO+=("SKIP  server go build: go not found"); fi
   fi
+  if [ "$GO_GUARDS" -eq 1 ]; then
+    if [ "$HAVE_GO" -eq 1 ]; then schedule "server repo-wide guards" job_go_guards ""; else INFO+=("SKIP  server repo-wide guards: go not found"); fi
+  fi
 fi
 
 if [ "$ANDROID" -eq 1 ]; then
@@ -611,6 +851,26 @@ if [ "$PRNEEDS" -eq 1 ]; then
 fi
 if [ "$EXTSCHEMA" -eq 1 ]; then
   if [ "$HAVE_PY" -eq 1 ]; then schedule "extension schema conformance" job_extension_schema ""; else core_missing "python3 not found; extension schema test skipped"; fi
+fi
+
+if [ -f scripts/ci/migration_freeze.py ] && migration_freeze_wanted; then
+  if [ "$HAVE_PY" -eq 1 ]; then
+    schedule "frozen migrations" job_migration_freeze ""
+  elif [ "$ALL" -eq 1 ]; then
+    core_missing "python3 not found; frozen migration check skipped"
+  else
+    INFO+=("SKIP  frozen migrations: python3 not found")
+  fi
+fi
+
+if [ -f scripts/ci/sleep_ratchet.py ] && sleep_ratchet_wanted; then
+  if [ "$HAVE_PY" -eq 1 ]; then
+    schedule "fixed sleeps" job_sleep_ratchet ""
+  elif [ "$ALL" -eq 1 ]; then
+    core_missing "python3 not found; fixed sleep check skipped"
+  else
+    INFO+=("SKIP  fixed sleeps: python3 not found")
+  fi
 fi
 
 if [ "$APPLE" -eq 1 ]; then

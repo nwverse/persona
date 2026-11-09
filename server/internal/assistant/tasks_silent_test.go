@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -30,10 +31,10 @@ func TestTaskTurnEndWithoutOutputIsInterrupted(t *testing.T) {
 		judged    bool
 	}{
 		{name: "no output", items: []proto.Item{prompt, {Kind: proto.KindThinking, Role: "assistant", Text: "…"}},
-			state: "interrupted", summary: interruptedSummary, errText: silentTurnError,
+			state: "interrupted", summary: interruptedSummary, errText: silentTurnErrorIn(i18n.Default),
 			notice: []string{"被模型服务出错打断了", "这一轮没有任何输出"}},
 		{name: "codex, no output", agent: "codex", items: []proto.Item{prompt},
-			state: "interrupted", summary: interruptedSummary, errText: silentTurnError,
+			state: "interrupted", summary: interruptedSummary, errText: silentTurnErrorIn(i18n.Default),
 			notice: []string{"这一轮没有任何输出"}},
 		{name: "a reply", items: []proto.Item{prompt, {Kind: proto.KindToolUse, Role: "assistant", ToolName: "Edit"},
 			{Kind: proto.KindText, Role: "assistant", Text: "修好了，提了 https://github.com/o/r/pull/901"}},

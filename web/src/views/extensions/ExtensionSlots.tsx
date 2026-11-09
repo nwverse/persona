@@ -1,20 +1,26 @@
 // The extensions' places among the web's own pages (docs/extensions/extensions.md "UI slots"): a nav_page's full page (/extension/<id>/<ui>,
 // its entry is on the sidebar), the cards on "Overview" (overview_card) and the sections on a machine's page
 // (machine_section). Each draws the extension's declarative View with ExtensionUI; the list comes from lib/extension-slots.ts.
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { uiIcon, type UIIcon, type UIPlace, type UITone } from "../../lib/extension-ui";
 import { useExtensionPlace, useExtensionSlot } from "../../lib/extension-slots";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { useKnownDefault } from "../../lib/manager-choice";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
-import { cx, EASE, IconButton } from "../../ui/atoms";
+import { cx, EASE, IconButton, Loading } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
-import { ExtensionUI } from "../settings/ExtensionView";
+import { lazyPage } from "../../lib/lazy-page";
+import { NEW_ICON_GLYPH } from "./icon-map";
+
+// The extension page is its own chunk (#1794): App.tsx reaches this file for the sidebar's and the nav page's icons and
+// titles, and the first screen draws no extension UI. A page, a card and a section each wait under their own Suspense
+// (the page keeps its top bar) with the Loading that ExtensionUI shows while it asks for its view.
+const ExtensionUI = lazyPage(() => import("../settings/ExtensionView").then((m) => m.ExtensionUI));
 
 /** A nav_page's icon from the fixed vocabulary, as one of the web's icons (unknown: the extension's). */
 const NAV_ICON: Record<UIIcon, IconName> = { extension: "extension", plugin: "extension", chart: "chart", gauge: "gauge", list: "list", bell: "bell", doc: "read", calendar: "calendar", money: "money",
-  branch: "branch", code: "code", pull_request: "pullRequest", merge: "merge" };
+  branch: "branch", code: "code", pull_request: "pullRequest", merge: "merge", ...NEW_ICON_GLYPH };
 export const navIcon = (icon?: string): IconName => NAV_ICON[uiIcon(icon)];
 
 /** A badge's tone as the sidebar's badge colors. */
@@ -49,7 +55,9 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className={cx("mx-auto flex flex-col px-4 py-6 sm:px-8", wide ? "max-w-[1680px]" : "max-w-[880px]")}>
-          <ExtensionUI key={`${extension}/${ui}/${n}`} extension={extension} ui={ui} title={title} bare state={state} onWide={setWide} />
+          <Suspense fallback={<Loading />}>
+            <ExtensionUI key={`${extension}/${ui}/${n}`} extension={extension} ui={ui} title={title} bare state={state} onWide={setWide} />
+          </Suspense>
         </div>
       </div>
     </div>
@@ -100,7 +108,9 @@ function OverviewCard({ place, i }: { place: UIPlace; i: number }) {
         )}
         {place.extension_name && <span className="max-w-[45%] shrink-0 truncate text-[11px] text-ink-3">{place.extension_name}</span>}
       </div>
-      <ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} />
+      <Suspense fallback={<Loading />}>
+        <ExtensionUI extension={place.extension} ui={place.id} context={context} compact onMissing={() => setGone(true)} />
+      </Suspense>
     </div>
   );
 }
@@ -138,7 +148,9 @@ function MachineSection({ place, mid, manager, heading }: { place: UIPlace; mid:
           </span>
         ),
       )}
-      <ExtensionUI extension={place.extension} ui={place.id} context={context} manager={manager} bare title={place.title} pages="open" onMissing={() => setGone(true)} />
+      <Suspense fallback={<Loading />}>
+        <ExtensionUI extension={place.extension} ui={place.id} context={context} manager={manager} bare title={place.title} pages="open" onMissing={() => setGone(true)} />
+      </Suspense>
     </section>
   );
 }

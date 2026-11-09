@@ -1,13 +1,25 @@
 import PersonaKit
+import PhotosUI
 import SwiftUI
 
 /// Start a session inside an existing space (a new herdr tab next to the other agents).
-struct SpacePreset {
+nonisolated struct SpacePreset {
     /// The machine id, or "group|id" for another group of hubs (`MachineRef.path`).
     var machineID: String
     var cwd: String
     var workspaceID: String
     var spaceName: String
+    /// Workspace IDs belong to their host; nil keeps directory-only and legacy starts on the machine's default.
+    var host: String? = nil
+
+    static func destination(preset: Self?, workspace: HostWorkspace?) -> Self? {
+        preset ?? workspace?.preset
+    }
+
+    /// The same directory can switch between joining a host workspace and offering an independent Git worktree.
+    static func repositoryLookupKey(machineID: String, cwd: String, online: Bool, destination: Self?) -> [String] {
+        [machineID, cwd, String(online)] + (destination.map { ["workspace", $0.workspaceID, $0.host ?? ""] } ?? ["directory"])
+    }
 }
 
 /// Pick a machine, a project directory and a launcher (model), optionally with a first message.
@@ -33,16 +45,18 @@ struct NewChatView: View {
     @State private var configuredModel = ""
     @State private var mode = ""   // "" = whatever the launcher uses
     @State private var effort = ""
+    /// Claude Code's ultracode for this start (#1307): off each time the sheet opens and never saved, unlike the effort
+    /// (no choice carries over, the server's rule); only an explicit on is sent.
+    @State private var ultracode = false
     @State private var prompt = ""
     @State private var tabName = ""
     @State private var launchers: [Launcher] = []
-    /// The models of the launcher that will run (`runLauncher`), for `modelsFor`; nil: none to pick (not loaded, an
-    /// older hub). `pickedModel` "": the default.
-    @State private var models: LauncherModels?
-    @State private var modelsFor = ""
-    @State private var modelsLoading = false
-    @State private var modelsError: String?
+    /// The models of the launcher that will run (`runLauncher`) and the IDs typed for it before (#1644). `pickedModel`
+    /// "": the default; an ID the list doesn't have (typed) stays picked when the list comes.
+    @State private var modelList = LauncherModelsModel()
     @State private var pickedModel = ""
+    /// "Enter Model ID…" while the list couldn't be read.
+    @State private var typingModel = false
     @State private var recent: [RecentDir] = []
     @State private var loading = false
     /// Machine whose saved defaults were applied; `.task` re-runs when a pushed picker pops, which must not clobber picks.
@@ -54,11 +68,34 @@ struct NewChatView: View {
     @State private var purposeGroup: String?
     @State private var starting = false
     @State private var error: String?
+    @State private var workspaceCatalog = WorkspaceCatalog()
+    @State private var pickedWorkspace: HostWorkspace?
+    @State private var childSource: HostWorkspace?
+    /// The picked folder's repository, as its computer says (#6115); nil: not in one, or it cannot say.
+    @State private var repo: WorktreeStatus?
+    /// Start the agent in a new worktree of `repo`; off each time the sheet opens.
+    @State private var inWorktree = false
+    /// The worktree's branch as typed; "": the one the computer picks.
+    @State private var worktreeBranch = ""
+    /// Photos and files for the first message (#2321), and the pickers that add them.
+    @State private var attachments = NewAgentAttachments()
+    @State private var photoPicks: [PhotosPickerItem] = []
+    @State private var showPhotos = false
+    @State private var showCamera = false
+    @State private var showFiles = false
     @FocusState private var promptFocused: Bool
+    #if DEBUG
+    @State private var debugLaunchers = false
+    @State private var debugAttached = false
+    #endif
 
     /// `machineID` is what is remembered: the machine id, "group|id" for another group of hubs (`MachineRef.path`).
     private var ref: MachineRef { MachineRef(path: machineID) }
     private var machine: Machine? { model.machine(ref) }
+    private var targetPreset: SpacePreset? { SpacePreset.destination(preset: preset, workspace: pickedWorkspace) }
+    private var workspaceChoices: [HostWorkspace] {
+        workspaceCatalog.workspaces.filter { $0.machineRef == ref && $0.source == "orca" }
+    }
 
     /// The launcher that will run: the one picked, or Model Settings'.
     private var runLauncher: String { launcher.isEmpty && unifiedModels ? defaultLauncher : launcher }
@@ -69,11 +106,28 @@ struct NewChatView: View {
             ?? String(localized: "Use Model Configuration")
     }
 
+    /// Why the launcher that will run is grayed out on this computer (#1643); nil when it is not.
+    private var runBlock: LauncherBlock? { launchers.first(where: { $0.name == runLauncher })?.block }
+
     /// The launcher runs Codex: it starts with its first message (Codex makes the thread then) and the start waits for it.
     private var codex: Bool { launchers.first(where: { $0.name == runLauncher })?.isCodex == true }
 
+    /// The list for `runLauncher`; nil: none to pick (not loaded, an older hub).
+    private var models: LauncherModels? { modelList.list }
+    private var modelsLoading: Bool { modelList.loading }
+    private var modelsError: String? { modelList.error }
+
     private var modelChoice: LauncherModelChoice? {
         models.map { LauncherModelChoice(list: $0, picked: pickedModel, configured: unifiedModels && runLauncher == defaultLauncher ? configuredModel : "") }
+    }
+
+    /// The list couldn't be read, but the launcher runs Claude Code or Codex: a model ID can still be typed (#1644).
+    private var typesWithoutList: Bool { modelsError != nil && LauncherModels.takesTypedModel(agent: startAgent) }
+
+    /// The `model` the start sends: the pick (from the list or typed), or an ID typed while the list couldn't be read.
+    private var sentModel: String? {
+        if let c = modelChoice { return c.sent }
+        return typesWithoutList && ModelID.isValid(pickedModel) ? pickedModel : nil
     }
 
     /// The efforts the model that will run takes (all of them when that is not known).
@@ -82,13 +136,38 @@ struct NewChatView: View {
         return SessionModes.startEffortLevels.filter { efforts.contains($0.id) }
     }
 
+    /// What the launcher that will run starts: its model list's agent, else the launcher's; Claude Code by default.
+    private var startAgent: String {
+        if let a = models?.agent, !a.isEmpty { return a }
+        guard let l = launchers.first(where: { $0.name == runLauncher }) else { return "claude" }
+        if l.baseURL == "(traex)" { return "traex" }
+        return l.agent.flatMap { $0.isEmpty ? nil : $0 } ?? "claude"
+    }
+
+    /// The ultracode row (#1307): Claude Code whose effort can be set here, on a hub that has the switch.
+    private var ultracodeShown: Bool {
+        !codex && !effortOptions.isEmpty && Ultracode.startOffered(features: model.features(ref.group), agent: startAgent)
+    }
+
+    /// Why this computer can't start with it (its Claude Code is known to be too old); nil when it can.
+    private var ultracodeBlocked: String? { ultracodeShown ? Ultracode.startBlocked(claudeVersion: machine?.claudeVersion) : nil }
+
     private var promptHint: String { codex ? String(localized: "What should Codex do? (Required: Codex starts a session only after the first message)")
                                        : String(localized: "What should Claude do? (Optional)") }
 
     /// Nothing missing for Start Chat, and the machine's own launchers and directories are in.
     private var ready: Bool {
         machine?.online == true && defaultsFor == machineID && !cwd.isEmpty && (!launcher.isEmpty || unifiedModels)
-            && !(codex && contextBlock == nil && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            && !codexNeedsMessage && attachmentsHold == nil
+    }
+
+    private var codexNeedsMessage: Bool {
+        codex && contextBlock == nil && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// What the attachments hold the start back for (a Codex launcher, uploads still going); nil: nothing.
+    private var attachmentsHold: String? {
+        FirstMessage.hold(codex: codex, attached: !attachments.isEmpty, uploading: attachments.uploading)
     }
 
     /// Why Start Chat is greyed out, the first thing missing in `ready`'s order; nil when it is ready (or still loading).
@@ -107,7 +186,8 @@ struct NewChatView: View {
         guard defaultsFor == machineID else { return nil }
         if cwd.isEmpty { return String(localized: "Choose a directory first") }
         if launcher.isEmpty && !unifiedModels { return launchers.isEmpty ? String(localized: "This computer has no launchers") : String(localized: "Choose a launcher first") }
-        return String(localized: "Codex needs a first message")
+        if codexNeedsMessage { return String(localized: "Codex needs a first message") }
+        return attachmentsHold
     }
 
     private var startingLabel: String {
@@ -135,7 +215,7 @@ struct NewChatView: View {
                         Label(preset.spaceName, systemImage: Theme.Icon.spaceFilled)
                         Text(Fmt.path(preset.cwd, home: machine?.home)).font(Theme.Font.code).foregroundStyle(.secondary)
                     } header: { Text("Join Space") } footer: {
-                        Text("Opens a new tab in this herdr workspace on \(machine?.name ?? "").")
+                        Text(String(localized: "workspace.joinHelp", defaultValue: "Opens a new tab in the selected workspace."))
                     }
                 } else {
                 Section {
@@ -148,12 +228,33 @@ struct NewChatView: View {
                     .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.page, bottom: Theme.Space.s, trailing: Theme.Space.page))
                 } header: { Text("Machines") }
 
+                if !workspaceChoices.isEmpty {
+                    Section {
+                        NavigationLink {
+                            WorkspacePicker(workspaces: workspaceChoices, selectedID: pickedWorkspace?.sourceID, allowDirectory: true) { picked in
+                                pickedWorkspace = picked
+                                if let picked { cwd = picked.cwd }
+                            }
+                        } label: {
+                            LabeledContent(String(localized: "workspace.target", defaultValue: "Worktree"),
+                                           value: pickedWorkspace?.title ?? String(localized: "workspace.useDirectory", defaultValue: "Choose by Folder"))
+                        }
+                        .accessibilityIdentifier("newChat.workspace")
+                        if let pickedWorkspace {
+                            Button { childSource = pickedWorkspace } label: {
+                                Label(String(localized: "workspace.newChild", defaultValue: "New Child Worktree…"), systemImage: Theme.Icon.newWorktree)
+                            }
+                            .accessibilityIdentifier("newChat.newChild")
+                        }
+                    }
+                }
+                if pickedWorkspace == nil {
                 Section {
                     NavigationLink {
                         DirectoryBrowser(ref: ref, start: cwd.isEmpty ? "" : cwd) { picked in cwd = picked }
                     } label: {
                         HStack {
-                            Image(systemName: Theme.Icon.folderFilled).foregroundStyle(Theme.accent)
+                            ThemedIcon(Theme.Icon.folderFilled).foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 Text(cwd.isEmpty ? String(localized: "Choose Directory") : (cwd as NSString).lastPathComponent).font(Theme.Font.heading)
                                 if !cwd.isEmpty {
@@ -170,7 +271,7 @@ struct NewChatView: View {
                                 Haptics.tap()
                             } label: {
                                 HStack {
-                                    Image(systemName: cwd == r.path ? Theme.Icon.successFilled : Theme.Icon.recent)
+                                    ThemedIcon(cwd == r.path ? Theme.Icon.successFilled : Theme.Icon.recent)
                                         .foregroundStyle(cwd == r.path ? Theme.accent : .secondary)
                                     VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                         Text(r.name).foregroundStyle(Color.primary)
@@ -184,14 +285,19 @@ struct NewChatView: View {
                         }
                     }
                 } header: { Text("Folder [Task Views 52daa7]") }
+                if let repo, !repo.path.isEmpty {
+                    NewAgentWorktreeSection(repo: repo, on: $inWorktree, branch: $worktreeBranch,
+                                            suggested: AgentWorktree.branch(nameHint: worktreeNameHint), home: machine?.home)
+                }
+                }
                 }
 
                 Section {
                     NavigationLink {
-                        LauncherPicker(launchers: launchers, selection: $launcher, allowDefault: unifiedModels, defaultLabel: defaultLabel)
+                        launcherPicker
                     } label: {
                         HStack {
-                            Image(systemName: Theme.Icon.model).foregroundStyle(Theme.accent)
+                            ThemedIcon(Theme.Icon.model).foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 HStack(spacing: Theme.Space.sm) {
                                     Text(launcher.isEmpty ? (unifiedModels ? defaultLabel : String(localized: "Choose Launcher")) : launcher).font(Theme.Font.heading.monospaced()).lineLimit(1)
@@ -201,6 +307,8 @@ struct NewChatView: View {
                                 if let l = launchers.first(where: { $0.name == launcher }), let m = l.model, !m.isEmpty {
                                     Text(m).font(Theme.Font.label).foregroundStyle(.secondary)
                                 }
+                                // Picked anyway (Try Anyway), or what Default runs: still said, the start is not held back.
+                                if let runBlock { LauncherBlockLine(block: runBlock) }
                             }
                             Spacer()
                             if loading { ProgressView().controlSize(.small) }
@@ -208,7 +316,7 @@ struct NewChatView: View {
                     }
                     .accessibilityIdentifier("newChat.launcher")
                     modelRow
-                } header: { Text(models?.models.isEmpty == false ? String(localized: "Launcher & Model (This Time Only)") : String(localized: "Launcher (This Time Only)")) } footer: {
+                } header: { Text(models?.models.isEmpty == false || modelChoice?.canPick == true ? String(localized: "Launcher & Model (This Time Only)") : String(localized: "Launcher (This Time Only)")) } footer: {
                     let about = unifiedModels ? String(localized: "Uses Model Configuration › New Agent by default. A choice here applies to this session only and doesn't change the global default.")
                         : String(localized: "Claude Code / Codex launchers from this machine. It runs in a new tab in the terminal engine.")
                     Text(modelChoice?.canPick == true ? String(localized: "\(about) Models are the same as what /model shows in the terminal.") : about)
@@ -219,12 +327,15 @@ struct NewChatView: View {
                         Picker(selection: $mode) {
                             Text("Use Launcher's").tag("")
                             ForEach(SessionModes.permissionModes) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
-                        } label: { Label { Text("Permission Mode") } icon: { Image(systemName: Theme.Icon.permissions).foregroundStyle(Theme.accent) } }
+                        } label: { Label { Text("Permission Mode") } icon: { ThemedIcon(Theme.Icon.permissions).foregroundStyle(Theme.accent) } }
                         if !effortOptions.isEmpty {
                             Picker(selection: $effort) {
                                 Text("Use Launcher's").tag("")
                                 ForEach(effortOptions) { o in Label(o.title, systemImage: o.symbol).tag(o.id) }
-                            } label: { Label { Text("Thinking Effort") } icon: { Image(systemName: Theme.Icon.effort).foregroundStyle(Theme.accent) } }
+                            } label: { Label { Text("Thinking Effort") } icon: { ThemedIcon(Theme.Icon.effort).foregroundStyle(Theme.accent) } }
+                        }
+                        if ultracodeShown {
+                            UltracodeStartRow(on: $ultracode, blocked: ultracodeBlocked, group: ref.group)
                         }
                     } header: { Text("Permissions & Thinking") } footer: {
                         Text(SessionModes.mode(mode)?.detail
@@ -239,7 +350,20 @@ struct NewChatView: View {
                     promptField
                         .focused($promptFocused)
                         .accessibilityIdentifier("newChat.prompt")
-                } header: { Text("First Message") }
+                    // A Codex launcher takes no attachments: no menu, only those picked before to take out (#2321).
+                    NewAgentAttachmentRows(attachments: attachments, adds: !codex, photos: { showPhotos = true },
+                                           camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+                                           files: { showFiles = true })
+                } header: { Text("First Message") } footer: {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        if codex && !attachments.isEmpty {
+                            Text(FirstMessage.codexRefusal).accessibilityIdentifier("newChat.codexNote")
+                        }
+                        if let note = attachments.note {
+                            Text(note).accessibilityIdentifier("newChat.attachNote")
+                        }
+                    }
+                }
 
                 Section {
                     TextField(String(localized: "Leave empty to name it from the first message"), text: $tabName)
@@ -248,7 +372,7 @@ struct NewChatView: View {
                         .submitLabel(.done)
                         .accessibilityIdentifier("newChat.tabName")
                 } header: { Text("Tab Name (Optional)") } footer: {
-                    Text("The tab's name in herdr. If left empty, a short English name is made from the first message (like fix-login); with no first message it's agent-1, agent-2…")
+                    Text(String(localized: "workspace.tabNameHelp", defaultValue: "Optional name for the new session tab. If empty, it is named from the first message."))
                 }
 
             }
@@ -256,7 +380,12 @@ struct NewChatView: View {
             .navigationTitle("New Chat [Quick Actions ea4b29]")
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        attachments.cancelUploads()
+                        dismiss()
+                    }
+                }
                 #if os(macOS)
                 // A Mac sheet's primary button sits beside Cancel and answers ⏎ (docs/apple/mac.md「和 iOS 的对应」).
                 ToolbarItem(placement: .confirmationAction) {
@@ -278,10 +407,13 @@ struct NewChatView: View {
                         .background(.regularMaterial, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
                         .accessibilityIdentifier("newChat.error")
                 } else if let notReadyReason {
-                    // A grey button alone left the user checking every row for what was missing.
+                    // A grey button alone left the user checking every row for what was missing. On the error's card:
+                    // the form scrolls under this inset, and bare text mixed with the form's (#2677).
                     Label(notReadyReason, systemImage: Theme.Icon.info)
                         .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.Space.m)
+                        .background(.regularMaterial, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
                         .accessibilityIdentifier("newChat.notReady")
                 }
                 #if os(iOS) || os(visionOS)
@@ -304,7 +436,26 @@ struct NewChatView: View {
                 .padding(.bottom, Theme.Space.s)
             }
             .task(id: machineID) { await loadMachine() }
+            .task(id: machineID) { await workspaceCatalog.refresh([ref.group]) { model.api($0) } }
+            // A provider added from a grayed-out launcher's help (Add Provider): this computer's list again.
+            .onChange(of: model.launchersRevision) { _, _ in Task { await loadMachine() } }
+            #if DEBUG
+            // `-openLauncherPicker YES`: the launcher list open once this computer's launchers are in, for screenshots.
+            .navigationDestination(isPresented: $debugLaunchers) { launcherPicker }
+            .onChange(of: defaultsFor) { _, now in
+                if !now.isEmpty, UserDefaults.standard.bool(forKey: "openLauncherPicker") { debugLaunchers = true }
+            }
+            #endif
+            // The Claude quota under ultracode's row (#1307).
+            .task(id: ultracodeShown) { if ultracodeShown { await UsageWindowsStore.shared.loadIfOld(model) } }
             .task(id: "\(machineID)|\(runLauncher)|\(machine?.online == true)|\(defaultsFor)") { await loadModels() }
+            .task(id: SpacePreset.repositoryLookupKey(machineID: machineID, cwd: cwd, online: machine?.online == true,
+                                                      destination: targetPreset)) { await loadRepo() }
+            .sheet(isPresented: $typingModel) {
+                TypedModelSheet(initial: pickedModel, note: String(localized: "Used for this start only. Once it runs, it's listed under Typed Before.")) { id in
+                    pickedModel = id
+                }
+            }
             .onChange(of: effortOptions.map(\.id)) { _, ids in
                 if !effort.isEmpty, !ids.contains(effort) { effort = "" } // the picked model does not take it
             }
@@ -313,7 +464,50 @@ struct NewChatView: View {
                 if let preset { machineID = preset.machineID; cwd = preset.cwd } else { pickDefaultMachine() }
             }
             .onChange(of: model.machines) { _, _ in if preset == nil { pickDefaultMachine() } }
+            // A file is on the computer it was uploaded to (#2321): another one picked takes the files out.
+            .onChange(of: machineID) { _, now in
+                attachments.computerChanged(to: now) { model.machine(MachineRef(path: $0))?.name }
+            }
+            .photosPicker(isPresented: $showPhotos, selection: $photoPicks, maxSelectionCount: MessagePhotos.limit,
+                          matching: .images, preferredItemEncoding: .current)
+            .onChange(of: photoPicks) { _, items in
+                guard !items.isEmpty else { return }
+                Task {
+                    await attachments.load(items, model: model)
+                    photoPicks = []
+                }
+            }
+            .fileUploadPicker(isPresented: $showFiles) { urls in attachments.upload(urls, to: ref, model: model) }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker { img in attachments.add(img, model: model) }.ignoresSafeArea()
+            }
+            #if DEBUG && (os(iOS) || os(visionOS))
+            // `-openNewAgentAttachments photo,build.log`: once this computer's launchers are in, the made-up photo
+            // attached and a made-up 3 MB file uploading for every other name, for screenshots and UI tests (#2321).
+            .onChange(of: defaultsFor) { _, now in
+                guard !now.isEmpty, !debugAttached, let list = UserDefaults.standard.string(forKey: "openNewAgentAttachments") else { return }
+                debugAttached = true
+                for name in list.split(separator: ",").map(String.init) {
+                    if name == "photo" {
+                        attachments.add(ChatView.debugPhoto, model: model)
+                        continue
+                    }
+                    let url = FileManager.default.temporaryDirectory.appending(path: name)
+                    try? Data(count: 3 << 20).write(to: url)
+                    attachments.upload([url], to: ref, model: model)
+                }
+            }
+            #endif
             .interactiveDismissDisabled(starting)
+        }
+        .sheet(item: $childSource) { source in
+            NewWorktreeSheet(group: SpaceGroup(id: source.key, machineID: source.machineID, spaceID: source.sourceID, group: source.group,
+                                              name: source.title, index: source.index ?? 0, sessions: []), workspace: source) { made in
+                pickedWorkspace = HostWorkspace(machineID: source.machineID, source: source.source, sourceID: made.workspaceID,
+                                                title: made.branch, cwd: made.path, parentSourceID: made.parentWorkspaceID, group: source.group)
+                cwd = made.path
+                childSource = nil
+            }
         }
         #if os(macOS)
         // On the stack, not its root: with the minimum size on the form, pushing Launcher / Folder shrank a sheet opened
@@ -321,6 +515,13 @@ struct NewChatView: View {
         // that miss macLook's (Knowledge › Start Agent).
         .macSheet()
         #endif
+    }
+
+    private var launcherPicker: some View {
+        LauncherPicker(launchers: launchers, selection: $launcher, allowDefault: unifiedModels, defaultLabel: defaultLabel,
+                       defaultBlock: unifiedModels ? launchers.first(where: { $0.name == defaultLauncher })?.block : nil,
+                       // The provider wizard saves to the hub-level group: on another group's computer it would land elsewhere.
+                       addsProvider: ref.group == (model.hub?.group ?? ""))
     }
 
     /// The machines offered: this hub's when a todo is handed over (`onlyGroup`), else all of them.
@@ -350,7 +551,7 @@ struct NewChatView: View {
         } label: {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 HStack {
-                    Image(systemName: m.symbol).font(Theme.Font.title)
+                    ThemedIcon(m.symbol).font(Theme.Font.title)
                     Spacer()
                     Circle().fill(m.online ? Theme.positive : Color.secondary.opacity(0.4)).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
                 }
@@ -399,7 +600,9 @@ struct NewChatView: View {
             // The three requests are independent; start all of them together,
             // then apply the purpose result before launchers and dirs finish.
             async let p: ModelPurpose? = purposeForNewChat(api)
-            async let l = model.launchers(ref)
+            // Read again each time, not the app's cached list: a launcher's health here (#1643) changes behind it (a
+            // start that fails blocks it, one that works clears it), and the web's dialog reads it fresh too.
+            async let l = model.launchersForStart(ref)
             async let d = api.dirs(machine: ref.id, path: "")
             let purpose = try await p
             guard current() else { return }
@@ -425,13 +628,13 @@ struct NewChatView: View {
                 mode = UserDefaults.standard.string(forKey: "mode.\(machineID)") ?? ""
                 effort = UserDefaults.standard.string(forKey: "effort.\(machineID)") ?? ""
                 if unifiedModels { launcher = ""; effort = "" }
-                else if let saved, ls.contains(where: { $0.name == saved }) { launcher = saved }
-                if let preset { cwd = preset.cwd } else {
+                else { launcher = LauncherChoices.initial(saved: saved, in: ls) }
+                if let preset = targetPreset { cwd = preset.cwd } else {
                     cwd = UserDefaults.standard.string(forKey: "cwd.\(machineID)") ?? recent.first?.path ?? ""
                 }
             }
             if !ls.contains(where: { $0.name == launcher }), !(unifiedModels && launcher.isEmpty) {
-                launcher = unifiedModels ? "" : ls.first?.name ?? ""
+                launcher = unifiedModels ? "" : LauncherChoices.initial(saved: nil, in: ls)
             }
         } catch {
             guard current(), !error.isCancellation else { return }
@@ -444,6 +647,7 @@ struct NewChatView: View {
     /// saved defaults (applied again for the next machine), and its hub's New Agent model when the new machine is in
     /// another group of hubs.
     private func forgetLastMachine() {
+        pickedWorkspace = nil
         recent = []
         launchers = []
         launcher = ""
@@ -461,35 +665,55 @@ struct NewChatView: View {
         }
     }
 
-    /// New Agent's Model row: loading, the pick (into the list), why it cannot be picked, or what went wrong.
+    /// New Agent's Model row: loading, the pick (into the list), why it cannot be picked, or what went wrong (and then
+    /// "Enter Model ID…" where one can be typed anyway).
     @ViewBuilder private var modelRow: some View {
         if let modelsError {
             HStack(spacing: Theme.Space.m) {
-                Image(systemName: Theme.Icon.error).foregroundStyle(Theme.cautionText)
+                ThemedIcon(Theme.Icon.error).foregroundStyle(Theme.cautionText)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text("Couldn't Load Models").font(Theme.Font.heading).lineLimit(1)
                     Text(modelsError).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(3)
                 }
                 Spacer(minLength: Theme.Space.s)
-                Button { Task { await loadModels(refresh: true) } } label: { Image(systemName: Theme.Icon.retry) }
+                Button { Task { await loadModels(refresh: true) } } label: { ThemedIcon(Theme.Icon.retry) }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Retry [Components b8784c]")
             }
             .accessibilityIdentifier("newChat.model.error")
-        } else if let c = modelChoice, !c.list.models.isEmpty {
-            if c.canPick {
-                NavigationLink {
-                    LauncherModelPicker(choice: c, picked: $pickedModel, refresh: { await loadModels(refresh: true) },
-                                        defaultFooter: c.configured.isEmpty ? String(localized: "No model chosen: runs with the launcher's own settings.")
-                                            : String(localized: "No model chosen: runs with the launcher's own settings and Model Configuration."))
-                } label: {
-                    modelLabel(title: c.selected?.displayName ?? String(localized: "Default Model"), detail: c.detail, trailing: nil)
+            if typesWithoutList {
+                HStack(spacing: Theme.Space.m) {
+                    Button { typingModel = true } label: {
+                        modelLabel(title: pickedModel.isEmpty ? String(localized: "Enter Model ID…") : SessionModes.gptModelName(pickedModel) ?? pickedModel,
+                                   detail: pickedModel.isEmpty ? String(localized: "Without the list, a model can still be used by its ID") : String(localized: "Typed model ID"),
+                                   trailing: pickedModel.isEmpty ? Theme.Icon.keyboard : nil)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("newChat.model.enter")
+                    // A typed pick can be dropped again: the start goes with the launcher's default.
+                    if !pickedModel.isEmpty {
+                        Button { pickedModel = "" } label: { ThemedIcon(Theme.Icon.clear).foregroundStyle(.secondary) }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Use Default Model")
+                            .accessibilityIdentifier("newChat.model.clearTyped")
+                    }
                 }
-                .accessibilityIdentifier("newChat.model")
-            } else {
-                modelLabel(title: String(localized: "Default Model"), detail: c.list.locked, trailing: Theme.Icon.locked)
-                    .accessibilityIdentifier("newChat.model.locked")
             }
+        } else if let c = modelChoice, c.canPick {
+            NavigationLink {
+                LauncherModelPicker(choice: c, picked: $pickedModel, refresh: { await loadModels(refresh: true) }, offersTyping: true,
+                                    forget: { id in await modelList.forget(id, machine: ref, launcher: runLauncher) },
+                                    forgetError: modelList.forgetError,
+                                    defaultFooter: c.configured.isEmpty ? String(localized: "No model chosen: runs with the launcher's own settings.")
+                                        : String(localized: "No model chosen: runs with the launcher's own settings and Model Configuration."))
+            } label: {
+                modelLabel(title: c.selected?.displayName ?? c.typed.map { SessionModes.gptModelName($0) ?? $0 } ?? String(localized: "Default Model"),
+                           detail: c.detail, trailing: nil)
+            }
+            .accessibilityIdentifier("newChat.model")
+        } else if let c = modelChoice, c.showsLocked, let locked = c.list.locked {
+            modelLabel(title: String(localized: "Default Model"), detail: locked, trailing: Theme.Icon.locked)
+                .accessibilityIdentifier("newChat.model.locked")
         } else if modelsLoading {
             modelLabel(title: String(localized: "Model [Assistant View c98e11]"), detail: String(localized: "Loading models for \(runLauncher)…"), trailing: nil)
                 .accessibilityIdentifier("newChat.model.loading")
@@ -498,7 +722,7 @@ struct NewChatView: View {
 
     private func modelLabel(title: String, detail: String?, trailing: String?) -> some View {
         HStack {
-            Image(systemName: Theme.Icon.ai).foregroundStyle(Theme.accent)
+            ThemedIcon(Theme.Icon.ai).foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(title).font(Theme.Font.heading).lineLimit(1)
                 if let detail {
@@ -507,33 +731,38 @@ struct NewChatView: View {
             }
             Spacer()
             if modelsLoading { ProgressView().controlSize(.small) }
-            if let trailing { Image(systemName: trailing).foregroundStyle(.secondary) }
+            if let trailing { ThemedIcon(trailing).foregroundStyle(.secondary) }
         }
     }
 
     /// The model list of the launcher that will run. Again only when that launcher (or machine) changed, or refresh:
-    /// `.task` runs again when a pushed list pops.
+    /// `.task` runs again when a pushed list pops. A typed pick stays when the list comes (it isn't in it, #1644); another
+    /// launcher or machine starts over from the default.
     private func loadModels(refresh: Bool = false) async {
-        let key = "\(machineID)|\(runLauncher)"
-        if !refresh, modelsFor == key, models != nil || modelsLoading { return }
-        if modelsFor != key { pickedModel = ""; models = nil }
-        modelsFor = key
-        modelsError = nil
+        let key = LauncherModelsModel.key(ref, runLauncher)
+        if !refresh, modelList.key == key, modelList.list != nil || modelList.loading { return }
+        if modelList.key != key { pickedModel = "" }
+        modelList.select(ref, launcher: runLauncher)
         // Only once this machine's launchers are in: before that `launcher` is still the last machine's.
-        guard defaultsFor == machineID, launchers.contains(where: { $0.name == runLauncher }), machine?.online == true,
-              let api = model.api(ref.group) else { return }
-        modelsLoading = true
-        defer { if modelsFor == key { modelsLoading = false } }
-        do {
-            let list = try await api.launcherModels(machine: ref.id, launcher: runLauncher, refresh: refresh)
-            guard modelsFor == key else { return }
-            models = list
-            if !pickedModel.isEmpty, !list.models.contains(where: { $0.id == pickedModel }) { pickedModel = "" }
-        } catch {
-            guard modelsFor == key, !Task.isCancelled else { return }
-            if let e = error as? APIError, e.status == 404 { return } // an older hub: no list, as before
-            modelsError = error.shown
-        }
+        guard defaultsFor == machineID, launchers.contains(where: { $0.name == runLauncher }), machine?.online == true else { return }
+        await modelList.load(ref, launcher: runLauncher, refresh: refresh)
+    }
+
+    /// What names the worktree's branch: the todo's name, else the first message, else the folder.
+    private var worktreeNameHint: String {
+        AgentWorktree.nameHint(prompt: nameHint ?? prompt, cwd: cwd)
+    }
+
+    /// Asks the computer whether the folder is in a Git repository, a moment after it stops changing.
+    private func loadRepo() async {
+        repo = nil
+        let dir = cwd
+        guard targetPreset == nil, !dir.isEmpty, machine?.online == true, let api = model.api(ref.group) else { return }
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        let st = await api.worktreeStatus(machine: ref.id, cwd: dir)
+        guard !Task.isCancelled, targetPreset == nil, dir == cwd else { return }
+        repo = st
     }
 
     private func start() async {
@@ -544,6 +773,17 @@ struct NewChatView: View {
         starting = true
         error = nil
         defer { starting = false }
+        // In a worktree of its own (#6115): made first; a failure says why, and nothing starts.
+        var dir = cwd
+        if inWorktree, targetPreset == nil, repo?.path.isEmpty == false {
+            do {
+                dir = try await api.addAgentWorktree(machine: ref.id, cwd: cwd, nameHint: worktreeNameHint, branch: worktreeBranch).path
+            } catch {
+                self.error = String(localized: "Couldn't create the worktree: \(error.shown ?? error.localizedDescription) [Agent Worktree]")
+                Haptics.error()
+                return
+            }
+        }
         do {
             let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = tabName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -552,8 +792,8 @@ struct NewChatView: View {
             if codex {
                 // Codex picks its thread's id once it has the first message: it goes with the start, which answers
                 // with that thread (one session, already working on it).
-                let s = try await api.start(.init(machineID: ref.id, cwd: cwd, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
-                                                  workspaceID: preset?.workspaceID, model: modelChoice?.sent, tabName: name.isEmpty ? nil : name,
+                let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: contextBlock == nil ? prompt : outgoing,
+                                                  workspaceID: targetPreset?.workspaceID, host: targetPreset?.host, model: sentModel, tabName: name.isEmpty ? nil : name,
                                                   nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
@@ -564,10 +804,11 @@ struct NewChatView: View {
             }
             // The hub answers at once and starts claude in the background; the first message goes out as an ordinary
             // message (on screen right away, typed in once claude is ready).
-            let s = try await api.start(.init(machineID: ref.id, cwd: cwd, launcher: launcher, prompt: nil,
-                                              workspaceID: preset?.workspaceID, permissionMode: mode.isEmpty ? nil : mode,
-                                              effort: effort.isEmpty ? nil : effort, model: modelChoice?.sent, tabName: name.isEmpty ? nil : name,
-                                              async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
+            let s = try await api.start(.init(machineID: ref.id, cwd: dir, launcher: launcher, prompt: nil,
+                                              workspaceID: targetPreset?.workspaceID, host: targetPreset?.host, permissionMode: mode.isEmpty ? nil : mode,
+                                              effort: effort.isEmpty ? nil : effort, model: sentModel, tabName: name.isEmpty ? nil : name,
+                                              async: true, nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID,
+                                              ultracode: sendsUltracode ? true : nil))
             if !unifiedModels {
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(effort, forKey: "effort.\(machineID)")
@@ -576,23 +817,47 @@ struct NewChatView: View {
             UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
             Haptics.success()
             model.adopt(s)
-            if !outgoing.isEmpty { model.sendNow(s.key, text: outgoing) }
+            // The photos and the uploaded files' paths go with it (#2321).
+            let photos = attachments.images.map(\.1)
+            let first = FirstMessage.text(prompt: prompt, contextBlock: contextBlock, paths: attachments.paths, photos: photos.count)
+            if !first.isEmpty { model.sendNow(s.key, text: first, images: photos) }
             onStarted(s)
         } catch {
-            self.error = error.shown
+            if sendsUltracode, Ultracode.refused(error) {
+                // The hub won't start it with ultracode here (an old node, a CLI or engine that can't take it): asking
+                // again would get the same answer, so the switch goes off and Start Chat starts it without.
+                ultracode = false
+                self.error = String(localized: "Couldn't start with ultracode: \(Ultracode.errorText(error)). Retry starts without it")
+            } else {
+                self.error = error.shown
+            }
             Haptics.error()
         }
     }
+
+    /// The start asks for ultracode: offered, not blocked, switched on.
+    private var sendsUltracode: Bool { ultracodeShown && ultracodeBlocked == nil && ultracode }
 }
 
+/// New Agent's launchers. One grayed out on this computer (`Launcher.block`, #1643) stays listed with why; choosing it
+/// shows how to fix it instead of picking it, and the help's Try Anyway picks it after all.
 struct LauncherPicker: View {
     var launchers: [Launcher]
     @Binding var selection: String
     var allowDefault = false
     /// The first row's words: 「默认：…」 (what runs with no pick).
     var defaultLabel = String(localized: "Use Model Configuration")
+    /// Why the launcher Default runs is grayed out on this computer; nil when it is not. Default stays pickable: it is
+    /// Model Settings' choice, said under it.
+    var defaultBlock: LauncherBlock? = nil
+    /// The help offers Add Provider: the computer is in the hub group the provider wizard saves to.
+    var addsProvider = true
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    /// The grayed-out launcher whose help is open.
+    @State private var help: Launcher?
+    /// Try Anyway in the help: picked once the help has closed, then the list closes too.
+    @State private var pickAfterHelp: String?
 
     var body: some View {
         List {
@@ -602,33 +867,42 @@ struct LauncherPicker: View {
                     dismiss()
                 } label: {
                     HStack {
-                        Label(defaultLabel, systemImage: Theme.Icon.model).lineLimit(1)
+                        if let defaultBlock {
+                            // Why under the words, in the Label's title column: lined up with the title and the separator.
+                            Label {
+                                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                    Text(defaultLabel).lineLimit(1)
+                                    LauncherBlockLine(block: defaultBlock)
+                                }
+                            } icon: {
+                                ThemedIcon(Theme.Icon.model)
+                            }
+                        } else {
+                            Label(defaultLabel, systemImage: Theme.Icon.model).lineLimit(1)
+                        }
                         Spacer()
-                        if selection.isEmpty { Image(systemName: Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
+                        if selection.isEmpty { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
                     }
                 }
                 .accessibilityIdentifier("launcherPicker.default")
             }
-            ForEach(launchers.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || ($0.model ?? "").localizedCaseInsensitiveContains(query) }) { l in
-                Button {
-                    selection = l.name
-                    Haptics.tap()
-                    dismiss()
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text(l.name).font(Theme.Font.heading.monospaced()).foregroundStyle(.primary)
-                            HStack(spacing: Theme.Space.sm) {
-                                if allowDefault, l.name == selection { Chip(text: String(localized: "Just Once"), look: .tint(Theme.accent)) }
-                                if l.isCodex { Chip(text: "Codex") }
-                                if let m = l.model, !m.isEmpty { Chip(text: m) }
-                                if let host = l.baseURL.flatMap({ URL(string: $0)?.host() }) {
-                                    Text(host).font(Theme.Font.label).foregroundStyle(.tertiary).lineLimit(1)
-                                }
+            ForEach(LauncherChoices.shown(launchers, query: query)) { l in
+                if let block = l.block {
+                    blockedRow(l, block)
+                } else {
+                    Button {
+                        selection = l.name
+                        Haptics.tap()
+                        dismiss()
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                Text(l.name).font(Theme.Font.heading.monospaced()).foregroundStyle(.primary)
+                                chips(l, look: .neutral)
                             }
+                            Spacer()
+                            if l.name == selection { ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
                         }
-                        Spacer()
-                        if l.name == selection { Image(systemName: Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold) }
                     }
                 }
             }
@@ -636,6 +910,76 @@ struct LauncherPicker: View {
         .pageSearchable(text: $query, prompt: String(localized: "Function name or model"))
         .themedPage()
         .navigationTitle("Launcher")
+        .sheet(item: $help, onDismiss: {
+            guard let name = pickAfterHelp else { return }
+            pickAfterHelp = nil
+            selection = name
+            Haptics.tap()
+            dismiss()
+        }) { l in
+            LauncherBlockedHelp(launcher: l, block: l.block ?? LauncherBlock(kind: ""), addsProvider: addsProvider) {
+                pickAfterHelp = l.name
+                help = nil
+            }
+        }
+        #if DEBUG
+        .task { // `-showLauncherHelp <name>`: that launcher's help open, for screenshots
+            if let name = UserDefaults.standard.string(forKey: "showLauncherHelp"), let l = launchers.first(where: { $0.name == name && $0.block != nil }) {
+                try? await Task.sleep(for: .seconds(1))
+                help = l
+            }
+        }
+        #endif
+    }
+
+    /// Grayed out: the name dimmed, why under it, and a tap opens how to fix it.
+    private func blockedRow(_ l: Launcher, _ block: LauncherBlock) -> some View {
+        Button {
+            help = l
+            Haptics.tap()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    // Gray, not the row tint's lighter shade: it reads as unavailable, like a disabled row.
+                    Text(l.name).font(Theme.Font.heading.monospaced()).foregroundStyle(Color.secondary)
+                    chips(l, look: .outline)
+                    LauncherBlockLine(block: block)
+                }
+                Spacer()
+                if l.name == selection { ThemedIcon(Theme.Icon.done).foregroundStyle(Color.secondary).fontWeight(.semibold) }
+                ThemedIcon(Theme.Icon.info).foregroundStyle(Color.secondary)
+            }
+        }
+        .accessibilityHint(Text("Shows how to fix it"))
+        .accessibilityIdentifier("launcherPicker.blocked.\(l.name)")
+    }
+
+    @ViewBuilder private func chips(_ l: Launcher, look: Chip.Look) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            if allowDefault, l.name == selection { Chip(text: String(localized: "Just Once"), look: .tint(Theme.accent)) }
+            if l.isCodex { Chip(text: "Codex", look: look) }
+            if let m = l.model, !m.isEmpty { Chip(text: m, look: look) }
+            if let host = l.baseURL.flatMap({ URL(string: $0)?.host() }) {
+                Text(host).font(Theme.Font.label).foregroundStyle(.tertiary).lineLimit(1)
+            }
+        }
+    }
+}
+
+/// Why a launcher is grayed out, in one line under it (`LauncherBlock.reason`).
+struct LauncherBlockLine: View {
+    var block: LauncherBlock
+
+    var body: some View {
+        // Not a Label: in a list row its icon takes a column of its own, far from the words.
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+            ThemedIcon(Theme.Icon.error)
+            Text(block.reason).lineLimit(2)
+        }
+        .font(Theme.Font.label)
+        .foregroundStyle(Theme.cautionText)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("launcher.blockReason")
     }
 }
 
@@ -670,7 +1014,7 @@ struct DirectoryBrowser: View {
                         if loading {
                             ProgressView()
                         } else if editing, DirectoryPath.resolve(draft, from: list.path) != list.path {
-                            Button { go() } label: { Image(systemName: Theme.Icon.enter) }
+                            Button { go() } label: { ThemedIcon(Theme.Icon.enter) }
                                 .accessibilityLabel("Go [New Chat View fa9607]")
                         }
                     }
@@ -699,7 +1043,7 @@ struct DirectoryBrowser: View {
                     ForEach(list.entries) { e in
                         Button { Task { await load(e.path) } } label: {
                             HStack {
-                                Image(systemName: e.isGit ? Theme.Icon.gitRepository : Theme.Icon.folder).foregroundStyle(e.isGit ? Theme.accent : .secondary)
+                                ThemedIcon(e.isGit ? Theme.Icon.gitRepository : Theme.Icon.folder).foregroundStyle(e.isGit ? Theme.accent : .secondary)
                                 Text(e.name).foregroundStyle(.primary)
                                 Spacer()
                                 if e.isGit { Chip(text: "git") }

@@ -69,7 +69,7 @@ private struct CriterionRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: symbol)
+            ThemedIcon(symbol)
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(color)
                 .scaledFrame(width: Theme.Size.markM)
@@ -124,7 +124,7 @@ struct TaskProgressLine: View {
         Label {
             Text(line).lineLimit(1)
         } icon: {
-            Image(systemName: Theme.Icon.reported).font(Theme.Font.labelStrong)
+            ThemedIcon(Theme.Icon.reported).font(Theme.Font.labelStrong)
         }
         .labelStyle(.titleAndIcon)
         .font(Theme.Font.caption)
@@ -142,7 +142,7 @@ struct ReviewFeedLine: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.supervised).font(Theme.Font.labelStrong)
+            ThemedIcon(Theme.Icon.supervised).font(Theme.Font.labelStrong)
             HStack(spacing: Theme.Space.xs) {
                 if let id = item.ref, store.todos[id] != nil {
                     Button { store.detailTask = id } label: { Text(taskTitle).lineLimit(1) }
@@ -172,12 +172,9 @@ struct ReviewFeedLine: View {
     }
 }
 
-/// A supervised task's agent reported to Persona (feed kind `report`: a question, a block, a finish): who, what it said
-/// in a bubble (newlines kept), and its evidence below. On the left, as the agent's words, not the user's.
+/// A supervised task's agent reported to Persona (feed kind `report`: a question, a block, a finish): who and what it said
+/// in a bubble (newlines kept). Evidence remains in the feed data, not appended to the agent's words.
 struct ReportFeedLine: View {
-    /// At most this many evidence lines, like the web.
-    static let evidenceShown = 8
-
     var item: FeedItem
     var taskTitle: String
     private var store: TasksStore { .shared }
@@ -204,18 +201,6 @@ struct ReportFeedLine: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
                 .background(Theme.Fill.chip, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
-            let evidence = item.evidence.prefix(Self.evidenceShown)
-            if !evidence.isEmpty {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    ForEach(Array(evidence.enumerated()), id: \.offset) { _, e in
-                        Text("· \(e)").lineLimit(1).truncationMode(.middle)
-                    }
-                }
-                .font(Theme.Font.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(.leading, Theme.Space.xs)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, Theme.Space.xxl)

@@ -94,7 +94,12 @@ struct PromptComposer: View {
             .background { Color.clear.surface(interactive: true, in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous)) }
             .onAppear { bar.selectedModelID = modelID }
             .onChange(of: modelID) { _, id in bar.selectedModelID = id }
-            .onChange(of: bar.selectedModelID) { _, id in if id != modelID { pickModel(id) } }
+            .onChange(of: bar.selectedModelID) { _, id in
+                guard id != modelID else { return }
+                // "Other Model…" is an action, not a model (#1644): the menu goes back to the one that runs.
+                if id == PromptItems.otherModel.id { bar.selectedModelID = modelID }
+                pickModel(id)
+            }
             .onChange(of: bar.token?.kind == .mention) { _, open in if open { mentionRows = mentions() } }
             .onChange(of: dictation.isListening) { _, on in bar.isListening = on }
             .onDisappear { stopDictation() }
@@ -181,7 +186,7 @@ struct PromptComposer: View {
 /// What the composer's menus offer.
 enum PromptItems {
     static func attachments(camera: Bool, glasses: Bool = false) -> [PromptSource] {
-        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos, up to 4"), icon: .symbol("photo.on.rectangle"), kind: .attach)]
+        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos, up to 4"), icon: .symbol(Theme.Icon.photos), kind: .attach)]
         if camera { out.append(PromptSource(id: "camera", name: String(localized: "Take Photo [Chat View 6e3a10]"), detail: String(localized: "Take one with the camera"), icon: .symbol("camera"), kind: .attach)) }
         if glasses { out.append(PromptSource(id: "glasses", name: String(localized: "Glasses Photo"), detail: String(localized: "Take one with the Meta glasses"), icon: .symbol(Theme.Icon.glasses), kind: .attach)) }
         out.append(PromptSource(id: "file", name: String(localized: "Files"), detail: String(localized: "Uploads to that computer and inserts the path"), icon: .symbol("doc"), kind: .attach))
@@ -204,28 +209,61 @@ enum PromptItems {
         PromptModel(id: "haiku", name: "Haiku", tag: String(localized: "Fastest")),
     ]
 
-    /// The alias a session's model reads as ("claude-opus-…" → opus).
-    static func claudeModelID(_ model: String?) -> String {
-        let m = (model ?? "").lowercased()
-        return ["opus", "sonnet", "haiku"].first { m.contains($0) } ?? "default"
+    /// The model menu's last row (#1644): opens the field for a model ID typed by hand (`SessionTypedModelSheet`).
+    static let otherModel = PromptModel(id: "persona.typed-model", name: String(localized: "Other Model…"), tag: String(localized: "Type a model ID"))
+
+    /// What a session runs, as its model menu's selection: the alias its model reads as ("claude-opus-…" → opus),
+    /// "default" while nothing is known; any other model (one typed by hand, #1644) is its own ID, so no alias is
+    /// ticked for it and picking Default switches back.
+    static func runningModelID(_ model: String?) -> String {
+        let m = (model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Not a model ID (Claude's `<synthetic>`): nothing known.
+        guard ModelID.isValid(m) else { return "default" }
+        return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+    }
+
+    /// The model a session runs when the aliases don't name it (a typed ID); nil: one of them does, or nothing is known.
+    static func unlistedModel(_ model: String?) -> String? {
+        let id = runningModelID(model)
+        return claudeModels.contains { $0.id == id } ? nil : id
+    }
+
+    /// A running session's model menu: the aliases, then the model it runs when they don't name it, by its ID (the one
+    /// ticked; a menu row has no room for a second line saying it).
+    static func runningModels(_ model: String?) -> [PromptModel] {
+        claudeModels + (unlistedModel(model).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    }
+
+    /// BeautifulUI's model menu for a running session: `runningModels` (the button names the ticked one), then "Other Model…".
+    static func composerModels(running model: String?) -> [PromptModel] {
+        runningModels(model) + [otherModel]
+    }
+
+    /// What picking a row of a running Claude Code session's model menu does where the pick is typed as `/model`
+    /// (the shell composer's, BeautifulUI's): "Other Model…" opens the field (its ID goes through POST …/modes, #1644),
+    /// the model it runs already does nothing, another row sends `/model <alias>`.
+    enum ModelPick: Equatable {
+        case typeID
+        case keep
+        case send(String)
+    }
+
+    static func modelPick(_ picked: String, running model: String?) -> ModelPick {
+        if picked == otherModel.id { return .typeID }
+        if picked == runningModelID(model) { return .keep }
+        return .send("/model \(picked)")
     }
 
     /// Files the chat's tools read or wrote, newest first: picking one types `@path` (relative to the session's
     /// folder), which Claude Code and Codex read as that file.
     static func files(_ items: [Item], cwd: String) -> [PromptSource] {
-        var seen = Set<String>()
-        var out: [PromptSource] = []
-        for it in items.reversed() where it.kind == .toolUse {
-            guard let path = it.toolInput?["file_path"]?.string ?? it.toolInput?["notebook_path"]?.string,
-                  !path.isEmpty, seen.insert(path).inserted else { continue }
+        MentionRows.usedPaths(items).map { path in
             let rel = !cwd.isEmpty && path.hasPrefix(cwd + "/") ? String(path.dropFirst(cwd.count + 1)) : path
             let name = (rel as NSString).lastPathComponent
             let dir = (rel as NSString).deletingLastPathComponent
-            out.append(PromptSource(id: "file:" + path, name: name, detail: dir.isEmpty ? String(localized: "Used in this session") : dir,
-                                    icon: .symbol("doc.text"), insert: "@\(rel) "))
-            if out.count == 12 { break }
+            return PromptSource(id: "file:" + path, name: name, detail: dir.isEmpty ? String(localized: "Used in this session") : dir,
+                                icon: .symbol(Theme.Icon.document), insert: "@\(rel) ")
         }
-        return out
     }
 
     /// Other agents' sessions, most recently active first: picking one quotes it (title, folder, state, its last
@@ -236,13 +274,18 @@ enum PromptItems {
             .prefix(8)
             .map { s in
                 PromptSource(id: "session:" + s.id, name: s.displayTitle, detail: "\(s.agentLabel) · \(s.folderName)",
-                             icon: .symbol("bubble.left.and.text.bubble.right"))
+                             icon: .symbol(Theme.Icon.agentChat))
             }
     }
 
     /// The quote for a picked session (`ContextRef`, sent as a `<persona-context>` tag before the message).
     static func quote(_ source: PromptSource, in all: [Session]) -> ContextRef? {
         guard source.id.hasPrefix("session:"), let s = all.first(where: { "session:" + $0.id == source.id }) else { return nil }
+        return quote(s)
+    }
+
+    /// A session's quote: its title, agent and folder, and its last words (the shell composer's @ list, #2319, too).
+    static func quote(_ s: Session) -> ContextRef {
         var lines = ["另一个会话：\(s.displayTitle)（\(s.agentLabel)）", "目录：\(s.cwd)"] // i18n-ignore
         if let last = s.lastText?.trimmingCharacters(in: .whitespacesAndNewlines), !last.isEmpty {
             lines.append("它最近说：\(String(last.prefix(600)))") // i18n-ignore

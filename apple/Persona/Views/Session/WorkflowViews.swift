@@ -18,7 +18,7 @@ struct WorkflowLine: View {
     var body: some View {
         if let run = runs.first {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
-                Image(systemName: Theme.Icon.workflow)
+                ThemedIcon(Theme.Icon.workflow)
                     .font(font)
                     .foregroundStyle(Theme.ai)
                 // Every minute: many rows tick at once.
@@ -65,6 +65,8 @@ struct WorkflowSection: View {
     var runs: [WorkflowRun]
     /// The most it may take; nil: as tall as it is.
     var maxHeight: CGFloat?
+    /// The running cards are their heads until tapped (`WorkflowCard.compact`).
+    var compact = false
     /// Opens one of a workflow's agents in the chat (its transcript, read as a subagent).
     var open: (WorkflowAgent) -> Void
     @State private var contentHeight: CGFloat = 0
@@ -91,7 +93,7 @@ struct WorkflowSection: View {
         let ended = runs.filter { !$0.isRunning }
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             ForEach(live) { run in
-                WorkflowCard(run: run, open: open)
+                WorkflowCard(run: run, compact: compact, open: open)
             }
             if !ended.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
@@ -111,12 +113,18 @@ struct WorkflowSection: View {
 /// their agents (the same blocks as its card in the chat, `WorkflowRunBody`).
 struct WorkflowCard: View {
     var run: WorkflowRun
+    /// Only its head until tapped, then all of it: a header that never folds (iPhone Duo's side bars) on a short screen,
+    /// where two full cards left the chat a third of it (#2161).
+    var compact = false
     var open: (WorkflowAgent) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
 
+    /// Shows where it is now and its progress bar.
+    private var showsBody: Bool { !compact || expanded }
+
     var body: some View {
-        let opens = !run.phaseBlocks.isEmpty
+        let opens = !run.phaseBlocks.isEmpty || (compact && (run.now != nil || run.tally.started > 0))
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if opens {
                 Button {
@@ -131,8 +139,10 @@ struct WorkflowCard: View {
                 top(opens: false)
             }
             // Under the name, as in its card in the chat.
-            WorkflowRunBody(run: run, open: open, scope: "header-" + run.id, phases: expanded)
-                .padding(.leading, WorkflowMark.textLeading - Theme.Space.s)
+            if showsBody {
+                WorkflowRunBody(run: run, open: open, scope: "header-" + run.id, phases: expanded)
+                    .padding(.leading, WorkflowMark.textLeading - Theme.Space.s)
+            }
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s)
@@ -147,14 +157,16 @@ struct WorkflowCard: View {
             HStack(spacing: Theme.Space.s) {
                 WorkflowHead(run: run)
                 if opens {
-                    Image(systemName: Theme.Icon.disclosure)
+                    ThemedIcon(Theme.Icon.disclosure)
                         .font(Theme.Font.labelStrong)
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                 }
             }
-            WorkflowSubline(run: run, whole: expanded)
-                .padding(.leading, WorkflowMark.textLeading)
+            if showsBody {
+                WorkflowSubline(run: run, whole: expanded)
+                    .padding(.leading, WorkflowMark.textLeading)
+            }
         }
     }
 }
@@ -195,7 +207,7 @@ struct WorkflowEndedRow: View {
 
     private func line(opens: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.workflow)
+            ThemedIcon(Theme.Icon.workflow)
                 .font(Theme.Font.label)
                 .foregroundStyle(WorkflowLook.tint(run))
             Text(run.title)
@@ -211,7 +223,7 @@ struct WorkflowEndedRow: View {
                 .fixedSize()
             if opens {
                 // The same › as the running card's, the phases' and the chat card's: turned down while open.
-                Image(systemName: Theme.Icon.disclosure)
+                ThemedIcon(Theme.Icon.disclosure)
                     .font(Theme.Font.label)
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -242,7 +254,7 @@ struct WorkflowMark: View {
         ZStack {
             if onRail { Circle().fill(Theme.pageBackground) }
             Circle().fill(Theme.aiTint)
-            Image(systemName: Theme.Icon.workflow)
+            ThemedIcon(Theme.Icon.workflow)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xLarge)
                 .foregroundStyle(Theme.ai)
         }
@@ -527,7 +539,7 @@ struct WorkflowPhaseView: View {
                     .animation(reduceMotion ? nil : Theme.Motion.state, value: block.count)
             }
             if opens {
-                Image(systemName: Theme.Icon.disclosure)
+                ThemedIcon(Theme.Icon.disclosure)
                     .font(Theme.Font.label)
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
@@ -623,7 +635,7 @@ struct WorkflowPhaseMark: View {
         ZStack {
             switch state {
             case .done:
-                Image(systemName: failed ? Theme.Icon.error : Theme.Icon.done)
+                ThemedIcon(failed ? Theme.Icon.error : Theme.Icon.done)
                     .font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xLarge)
                     .foregroundStyle(failed ? Theme.danger : Theme.positive)
                     .transition(.opacity)

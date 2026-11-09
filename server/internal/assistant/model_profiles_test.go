@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,8 +73,11 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	}
 	before, puts := profileStoreSnapshot(st.memStore)
 	v := profilesOf(t, s)
-	if v.Revision != 1 || v.Active != "" || v.Rollback != nil || len(v.Events) != 0 || len(v.Profiles) != 2 {
-		t.Fatalf("seeding applied a profile: %+v", v)
+	// The templates are copies of the configuration: performance is marked in use (its tiers work from the start),
+	// nothing switches and there is nothing to roll back.
+	if v.Revision != 1 || v.Active != seededProfile || v.Rollback != nil || len(v.Events) != 1 || v.Events[0].Action != "seed" ||
+		v.Events[0].By.Kind != "system" || len(v.Profiles) != 2 {
+		t.Fatalf("seeding: %+v", v)
 	}
 	for _, p := range v.Profiles {
 		if p.Purposes["assistant"].Model != "test-chat" || p.Purposes["assistant"].Runtime != "" ||
@@ -85,14 +90,19 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 				t.Fatalf("capture lost launcher field %s", field.name)
 			}
 		}
-		if p.Tiers["strong"] != (ModelTier{Launcher: "current", Model: "test-chat"}) ||
-			p.Tiers["standard"] != (ModelTier{Launcher: "current", Model: "test-agents"}) {
+		strong, standard := p.Tiers["strong"], p.Tiers["standard"]
+		if strong.Description == "" || standard.Description == "" {
+			t.Fatalf("seeded tiers say nothing of when to use them: %+v", p.Tiers)
+		}
+		strong.Description, standard.Description = "", ""
+		if strong != (ModelTier{Launcher: "current", Model: "test-chat"}) || standard != (ModelTier{Launcher: "current", Model: "test-agents"}) {
 			t.Fatalf("tiers are not the current configuration: %+v", p.Tiers)
 		}
 	}
 	after, n := profileStoreSnapshot(st.memStore)
 	delete(after, modelProfilesKey)
-	if !reflect.DeepEqual(before, after) || n != puts+1 {
+	delete(after, modelProfileStateKey)
+	if !reflect.DeepEqual(before, after) || n != puts+2 { // the profiles and the state, in one transaction
 		t.Fatal("seeding reset model defaults or changed another setting")
 	}
 	if f.eventTypes() != "" || len(f.managed) != 0 {
@@ -120,7 +130,7 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	}
 	v = profilesOf(t, s)
 	if v.Profiles[0].Purposes["assistant"].Model != "test-later" ||
-		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != "" {
+		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != seededProfile {
 		t.Fatalf("capture applied or overwrote other profile data: %+v", v)
 	}
 	if got, err := s.modelRecord(ctx, "assistant"); err != nil || got.Binding.Model != "test-later" || got.Revision != 4 {
@@ -618,4 +628,155 @@ func TestModelProfileCannotClearTriageWhilePluginsNeedIt(t *testing.T) {
 		t.Fatalf("triage safety check was bypassed: %v", err)
 	}
 	requireProfileStoreUnchanged(t, st.memStore, before, puts)
+}
+
+// recordReadStore counts the reads of each category's record (modelRecordKey) on top of a downStore.
+type recordReadStore struct {
+	*downStore
+	mu    sync.Mutex
+	reads map[string]int // category id -> reads
+}
+
+func (st *recordReadStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if i := slices.IndexFunc(modelCategoryIDs, func(id string) bool { return modelRecordKey(id) == key }); i >= 0 {
+		st.mu.Lock()
+		st.reads[modelCategoryIDs[i]]++
+		st.mu.Unlock()
+	}
+	return st.downStore.Setting(ctx, key, out)
+}
+
+// takeReads is the reads counted since the last call, by category id.
+func (st *recordReadStore) takeReads() map[string]int {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	reads := st.reads
+	st.reads = map[string]int{}
+	return reads
+}
+
+// countRecordReads makes s read its settings through a recordReadStore on st.
+func countRecordReads(s *Service, st *downStore) *recordReadStore {
+	counter := &recordReadStore{downStore: st, reads: map[string]int{}}
+	s.store = func() Store { return counter }
+	return counter
+}
+
+// storeManyProfiles stores a record for every category and n profiles that each name every category: the even ones
+// as the records are (the main chat's runtime aside), the odd ones with other kb and agent.delegate choices. It
+// returns the Changes each profile's view shows.
+func storeManyProfiles(tb testing.TB, st *downStore, n int) [][]string {
+	tb.Helper()
+	ctx := context.Background()
+	records := map[string]ModelBinding{
+		"assistant":      {Provider: "launcher.current", Model: "test-chat", Runtime: proto.AssistantRuntimeAgentSDK},
+		"agent.new":      {Provider: "launcher.current", Model: "test-agents"},
+		"kb":             {Model: "test-kb"},
+		"inbox.triage":   {Effort: "high"},
+		"agent.delegate": {Model: "test-delegate"},
+	}
+	for id, b := range records {
+		if err := st.PutSetting(ctx, modelRecordKey(id), modelRecord{Revision: 2, Binding: b}); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	profiles, want := make([]ModelProfile, n), make([][]string, n)
+	for i := range profiles {
+		purposes := maps.Clone(records)
+		purposes["assistant"] = ModelBinding{Provider: "launcher.current", Model: "test-chat"}
+		want[i] = []string{}
+		if i%2 == 1 {
+			purposes["kb"], purposes["agent.delegate"] = ModelBinding{Model: "test-kb-other"}, ModelBinding{}
+			want[i] = []string{"kb", "agent.delegate"}
+		}
+		profiles[i] = ModelProfile{ID: fmt.Sprintf("profile-%d", i), Name: fmt.Sprintf("Profile %d", i), Purposes: purposes}
+	}
+	if err := st.PutSetting(ctx, modelProfilesKey, modelProfiles{Revision: 1, Profiles: profiles}); err != nil {
+		tb.Fatal(err)
+	}
+	return want
+}
+
+// The view compares every profile with the configuration, but reads each category's record once, not once per
+// profile (P x 5 point reads under models.mu before).
+func TestModelProfilesViewReadsEachRecordOnce(t *testing.T) {
+	for _, n := range []int{2, 4, 8} {
+		t.Run(fmt.Sprintf("%d profiles", n), func(t *testing.T) {
+			s, _, st := modelService(t)
+			want := storeManyProfiles(t, st, n)
+			counter := countRecordReads(s, st)
+			v := profilesOf(t, s)
+			if reads := counter.takeReads(); len(reads) != len(modelCategoryIDs) || slices.ContainsFunc(modelCategoryIDs, func(id string) bool { return reads[id] != 1 }) {
+				t.Fatalf("record reads = %v, want each of %v once", reads, modelCategoryIDs)
+			}
+			if len(v.Profiles) != n {
+				t.Fatalf("profiles = %d, want %d", len(v.Profiles), n)
+			}
+			for i, p := range v.Profiles {
+				if !reflect.DeepEqual(p.Changes, want[i]) {
+					t.Fatalf("%s changes = %v, want %v", p.ID, p.Changes, want[i])
+				}
+			}
+		})
+	}
+
+	// A category no profile names is not read.
+	s, _, st := modelService(t)
+	storeProfiles(t, st, ModelProfile{ID: "one", Name: "One", Purposes: map[string]ModelBinding{"kb": {Model: "test-kb"}}},
+		ModelProfile{ID: "two", Name: "Two", Purposes: map[string]ModelBinding{"kb": {}, "assistant": {Model: "test-chat"}}})
+	counter := countRecordReads(s, st)
+	v := profilesOf(t, s)
+	if reads := counter.takeReads(); !maps.Equal(reads, map[string]int{"assistant": 1, "kb": 1}) {
+		t.Fatalf("record reads = %v, want assistant and kb once", reads)
+	}
+	if !reflect.DeepEqual(v.Profiles[0].Changes, []string{"kb"}) || !reflect.DeepEqual(v.Profiles[1].Changes, []string{"assistant"}) {
+		t.Fatalf("changes = %v, %v", v.Profiles[0].Changes, v.Profiles[1].Changes)
+	}
+
+	// Seeding captures every record once for the templates (inbox.triage once more: agent.delegate's default is resolved
+	// from its connection), then the view reads each once to compare the two templates with it.
+	s, _, st = modelService(t)
+	counter = countRecordReads(s, st)
+	capture := map[string]int{"assistant": 1, "agent.new": 1, "kb": 1, "inbox.triage": 2, "agent.delegate": 1}
+	if _, _, _, err := s.captureModels(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if reads := counter.takeReads(); !maps.Equal(reads, capture) {
+		t.Fatalf("capture record reads = %v, want %v", reads, capture)
+	}
+	if v := profilesOf(t, s); len(v.Profiles) != 2 || len(v.Profiles[0].Changes) != 0 || len(v.Profiles[1].Changes) != 0 {
+		t.Fatalf("seeded view: %+v", v.Profiles)
+	}
+	seed := maps.Clone(capture)
+	for id := range seed {
+		seed[id]++
+	}
+	if reads := counter.takeReads(); !maps.Equal(reads, seed) {
+		t.Fatalf("seeding view record reads = %v, want %v", reads, seed)
+	}
+}
+
+// BenchmarkModelProfilesView is GET /api/v1/model-profiles' view on memStore with P stored profiles that each name
+// every category; record-reads/op is the category record reads it makes.
+func BenchmarkModelProfilesView(b *testing.B) {
+	for _, n := range []int{2, 4, 8} {
+		b.Run(fmt.Sprintf("profiles=%d", n), func(b *testing.B) {
+			st := &downStore{memStore: &memStore{}}
+			storeManyProfiles(b, st, n)
+			s := New(Options{Hub: newFakeHub(), Store: func() Store { return st }})
+			counter := countRecordReads(s, st)
+			ctx := context.Background()
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := s.modelProfilesView(ctx); err != nil {
+					b.Fatal(err)
+				}
+			}
+			reads := 0
+			for _, r := range counter.takeReads() {
+				reads += r
+			}
+			b.ReportMetric(float64(reads)/float64(b.N), "record-reads/op")
+		})
+	}
 }

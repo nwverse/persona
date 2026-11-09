@@ -13,6 +13,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.*
 import org.junit.Test
+import java.time.Instant
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.api.*
@@ -64,8 +65,8 @@ class ExtensionOperationStateTest {
     private val res get() = ApplicationProvider.getApplicationContext<android.content.Context>().resources
 
     /** Runs the model's watch beside block, as the page does while it is open. */
-    private fun watching(api: FakeOperations, block: suspend (CatalogExtensionModel, MutableList<String>) -> Unit) = runBlocking {
-        val model = CatalogExtensionModel(api, "m1", "example-notes", res)
+    private fun watching(api: FakeOperations, now: () -> Instant = Instant::now, block: suspend (CatalogExtensionModel, MutableList<String>) -> Unit) = runBlocking {
+        val model = CatalogExtensionModel(api, "m1", "example-notes", res, now)
         val notices = mutableListOf<String>()
         model.load()
         val job = launch(Dispatchers.Unconfined) { model.watch { notices += it } }
@@ -135,6 +136,35 @@ class ExtensionOperationStateTest {
         }
     }
 
+    @Test fun anExpiredConsentIsCanceledAndPreviewedAfresh() {
+        var clock = Instant.parse("2026-11-06T08:05:00Z")
+        // op1's preview expires at 08:10; the one an operation started later gets is fresh.
+        val hub = object : FakeOperations() {
+            override suspend fun operation(id: String) = super.operation(id).copy(preview =
+                if (id == "op1") opPreview.copy(expiresAt = "2026-11-06T08:10:00Z") else opPreview.copy(previewId = "pv2"))
+        }
+        hub.started = op("needs_consent", "consent", 2, "download" to "done", "consent" to "pending")
+        watching(hub, now = { clock }) { model, _ ->
+            model.preview()
+            until { model.state.value.preview != null }
+            clock = Instant.parse("2026-11-06T08:10:01Z")
+            assertNull(model.confirm())
+            assertFalse(hub.calls.any { it.startsWith("agree") })
+            // The waiting operation is canceled and a new one started; its own preview is what the sheet shows.
+            hub.started = op("needs_consent", "consent", 3, "download" to "done", "consent" to "pending", id = "op2")
+            assertTrue(model.previewAgain())
+            until { model.state.value.preview?.previewId == "pv2" }
+            assertTrue("cancel op1" in hub.calls)
+            assertEquals(2, hub.calls.count { it == "start m1/example-notes" })
+            assertEquals("op2", model.state.value.consentFor)
+            // The hub's canceled push for the old one does not close the new sheet.
+            hub.pushes.emit(op("canceled", "consent", 4))
+            assertEquals("pv2", model.state.value.preview?.previewId)
+            assertNull(model.confirm())
+            assertTrue("agree pv2 null" in hub.calls)
+        }
+    }
+
     @Test fun reopeningShowsTheOneStuckAndRetries() {
         val api = FakeOperations()
         val stuck = op("failed", "download", 5, "download" to "failed", "verify" to "pending", error = "下载 x：30 秒没有收到数据", retryable = true)
@@ -155,6 +185,45 @@ class ExtensionOperationStateTest {
             model.closeOperation()
             assertNull(model.state.value.operation)
             assertTrue("cancel op1" in api.calls)
+            assertTrue(notices.isEmpty())
+        }
+    }
+
+    @Test fun anOperationTheManagerLostLetsThePageGo() {
+        // #1832: operations live only in the manager's memory; one that restarted lost them and pushes nothing more.
+        var refuse: Exception? = null
+        val api = object : FakeOperations() {
+            override suspend fun cancelOperation(id: String) { calls += "cancel $id"; refuse?.let { throw it } }
+        }
+        val downloading = op("running", "download", 1, "download" to "running", "verify" to "pending")
+        api.listed = listOf(downloading)
+        watching(api) { model, notices ->
+            until { model.state.value.operation != null }
+            assertTrue(model.state.value.busy)
+            // The manager came back without it (the managers push lists them again): Install can start over.
+            api.listed = listOf(op("running", "download", 1, id = "other").copy(extension = "someone-else"))
+            api.pushes.emit(null)
+            until { model.state.value.operation == null }
+            assertFalse(model.state.value.busy)
+
+            // Cancel on one the manager answers 404 for puts it away instead of saying why it could not.
+            api.listed = listOf(downloading)
+            api.pushes.emit(null)
+            until { model.state.value.operation != null }
+            refuse = object : Exception("No such install, upgrade or uninstall"), HubCodedFailure {
+                override val status = 404
+                override val code = "not_found"
+            }
+            model.closeOperation()
+            assertNull(model.state.value.operation)
+            assertNull(model.state.value.actionError)
+            // Any other failure still keeps it and says why.
+            api.pushes.emit(null)
+            until { model.state.value.operation != null }
+            refuse = IllegalStateException("hub offline")
+            model.closeOperation()
+            assertNotNull(model.state.value.operation)
+            assertNotNull(model.state.value.actionError)
             assertTrue(notices.isEmpty())
         }
     }

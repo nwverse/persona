@@ -6,6 +6,7 @@ import { createContext, useContext } from "react";
 import { emptyTaskIndex, type TaskIndex } from "../../lib/tasks";
 import type { Subagent } from "../../lib/types";
 import { NO_WORKFLOW_CALLS, type WorkflowCalls } from "../../lib/workflows";
+import type { WorkLineStyle } from "../../lib/work-groups";
 
 export interface ChatContextValue {
   tasks: TaskIndex;
@@ -19,6 +20,8 @@ export interface ChatContextValue {
   /** The Workflow calls whose run the hub lists (#3434): they draw the run's card, and a running one stays out of the
    *  folded work. Only which runs there are, not their progress (each card reads that), so it seldom changes. */
   workflowCalls?: WorkflowCalls;
+  /** Conversation identity; both styles share the collapsed work-line default (#2602). */
+  lineStyle?: WorkLineStyle;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });

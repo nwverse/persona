@@ -31,7 +31,7 @@ import (
 //   - fleet.interaction / fleet.interaction_resolved / fleet.interactions: the pending interactions, kept here,
 //     sent to the apps, answered on GET /api/v1/interactions and to a connecting app;
 //   - fleet.live: the Live Activity's content and the island's numbers (liveactivity.go pushes it per device);
-//   - notify.request: a push to deliver (push.go, notifyws.go): which devices take it is each device's settings.
+//   - notify.request: a push to deliver (push_send.go, notifyws.go): which devices take it is each device's settings.
 //
 // What is kept stays while the manager is away (the apps see the last of it); answers to the cards need it (the
 // relayed routes answer 503 assistant_offline). The hub tells it what of the apps it needs (fleet.clients, fleet.seen,
@@ -50,11 +50,31 @@ type fleetCache struct {
 
 func init() {
 	handleBusEvent(assistantwire.EventFleetSessions, func(h *Hub, c *busConn, params json.RawMessage) {
-		var p assistantwire.FleetSessions
-		if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
-			return // only its manager lists a machine's sessions (ownership.go)
+		rest, rows, scanned := proto.ScanSessionList(params)
+		if !scanned || !proto.DecodeChangedSessions {
+			var p assistantwire.FleetSessions
+			if json.Unmarshal(params, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
+				return // only its manager lists a machine's sessions (ownership.go)
+			}
+			h.takeFleetSessions(p)
+			return
 		}
-		h.takeFleetSessions(p)
+		// The list apart from the rest (proto.ScanSessionList): decoded the same, but only its sessions whose bytes
+		// changed since the machine's last list (Machine.lists); what does not decode drops the whole event, as before.
+		var p assistantwire.FleetSessions
+		if json.Unmarshal(rest, &p) != nil || h.ownsMachine(c, p.MachineID) != nil {
+			return
+		}
+		m := h.localMachine(p.MachineID)
+		if m == nil {
+			return
+		}
+		list, raws, err := m.lists.Decode(rows)
+		if err != nil {
+			return
+		}
+		p.Sessions = list
+		h.takeFleetSessionsFrom(m, p, raws)
 	})
 	handleBusEvent(assistantwire.EventFleetInteraction, func(h *Hub, c *busConn, params json.RawMessage) {
 		var p assistantwire.FleetInteraction
@@ -137,15 +157,18 @@ func init() {
 
 // takeFleetSessions keeps a machine's list as the manager reported it and sends it to the apps.
 func (h *Hub) takeFleetSessions(p assistantwire.FleetSessions) {
-	m := h.localMachine(p.MachineID)
-	if m == nil {
-		return
+	if m := h.localMachine(p.MachineID); m != nil {
+		h.takeFleetSessionsFrom(m, p, nil)
 	}
+}
+
+// takeFleetSessionsFrom is takeFleetSessions for machine m, with raws, what each session came in (nil: unknown).
+func (h *Hub) takeFleetSessionsFrom(m *Machine, p assistantwire.FleetSessions, raws []string) {
 	list := p.Sessions
 	if list == nil {
 		list = []proto.Session{}
 	}
-	m.setSessionList(list)
+	m.setSessionListRaws(list, raws)
 	f := &h.reported
 	f.mu.Lock()
 	if f.muted == nil {
@@ -153,7 +176,7 @@ func (h *Hub) takeFleetSessions(p assistantwire.FleetSessions) {
 	}
 	f.muted[m.cfg.ID] = p.Muted
 	f.mu.Unlock()
-	h.broadcastSessions(m, h.decorated(m))
+	h.broadcastSessions(m, m.keptSessions())
 }
 
 // takeFleetInteractions is takeFleetInteractionsFrom the assistant the hub starts.
@@ -252,14 +275,28 @@ func (h *Hub) stampSessions(m *Machine, list []proto.Session) {
 	}
 }
 
-// decoratedSession is one of m's sessions as the apps get it.
-func (h *Hub) decoratedSession(m *Machine, sid string) (proto.Session, bool) {
-	for _, s := range h.decorated(m) {
-		if s.SessionID == sid {
-			return s, true
+// stamped is list with manager on each session, as stampSessions puts it: list itself when every session has it
+// already, else a copy. list is never changed.
+func stamped(list []proto.Session, manager string) []proto.Session {
+	for i := range list {
+		if list[i].Manager != manager {
+			out := slices.Clone(list)
+			for j := i; j < len(out); j++ {
+				out[j].Manager = manager
+			}
+			return out
 		}
 	}
-	return proto.Session{}, false
+	return list
+}
+
+// decoratedSession is one of m's sessions as the apps get it: that one copied and stamped, not the whole list.
+func (h *Hub) decoratedSession(m *Machine, sid string) (proto.Session, bool) {
+	s, ok := m.session(sid)
+	if ok {
+		s.Manager = h.machineOwner(m.cfg.ID)
+	}
+	return s, ok
 }
 
 // listedWaitMax is how long awaitListed waits at most (Hub.listedWait shortens it in tests: their fake nodes start
@@ -498,6 +535,12 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			writeErr(w, http.StatusForbidden, errors.New("this device can only answer with a card's own choices"))
 			return
 		}
+		if pr := principalOf(r.Context()); pr.Role == roleExtension {
+			if why, mode, mid, sid := h.extensionResolveRefused(pr, r.PathValue("id"), res); why != "" { // extension_modes.go
+				h.refuseExtensionMode(w, r, pr, mid, sid, mode, why)
+				return
+			}
+		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		h.forwardOwned(w, r, h.byInteraction)
 	}))
@@ -588,7 +631,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 		}
 		h.notifyInteraction(from, ix, n.Subtitle)
 		return nil
-	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply:
+	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {
 			return &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("a push about machine %q, session %q: another manager's",
 				clip(n.DeviceID, 64), clip(n.SessionID, 64))}
@@ -602,6 +645,11 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 			pushWants{Kind: "done", Took: time.Duration(n.TookMS) * time.Millisecond, Long: time.Duration(n.LongMS) * time.Millisecond})
 	case assistantwire.NotifyReply:
 		h.notifyReply(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body)
+	case assistantwire.NotifyDecide:
+		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() || n.Todo.Recommend == "" {
+			return errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")
+		}
+		h.notifyDecide(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo)
 	default:
 		return fmt.Errorf("unknown notification kind %q", n.Kind)
 	}

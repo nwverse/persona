@@ -4,7 +4,7 @@
 // another of its models; the hub fills in the name, the address, the kind and the rest.
 import { formatList, t } from "../i18n";
 import { api, ApiError } from "./api";
-import type { TestResult } from "./providers";
+import type { ProviderAPI, TestResult } from "./providers";
 
 export interface PresetModel {
   id: string;
@@ -17,7 +17,7 @@ export interface LauncherPreset {
   name: string;
   description?: string;
   kind: "launcher" | "api";
-  api?: "messages" | "responses";
+  api?: ProviderAPI;
   base_url: string;
   model?: string;
   small_model?: string;
@@ -104,6 +104,11 @@ export function launcherNameProblem(name: string): string {
 /** The categories a provider added in the wizard takes over while they are still at their default (docs/assistant/onboarding.md 5.4). */
 export const ASSIGN_PURPOSES = ["assistant", "agent.new"] as const;
 
+/** Whether the main conversation and Agents can run on a provider added from p (docs/assistant/model-config.md): Claude Code
+ *  needs a Messages endpoint, so a direct API on Responses or Chat Completions serves only the hub's own calls. An
+ *  empty `api` is Messages. */
+export const presetRunsClaude = (p: LauncherPreset) => p.kind !== "api" || !p.api || p.api === "messages";
+
 /** The hub says the provider blocks this region: no key will work here, only another provider (#4482, #4526). */
 export const regionBlocked = (r: TestResult | null | undefined) => !!r && !r.ok && r.code === "region_blocked";
 
@@ -128,9 +133,9 @@ export function presetBody(p: LauncherPreset, name: string, key: string, model: 
   };
 }
 
-/** Whether the hub can test a preset's key: its test speaks the Messages protocol only, so a Responses API cannot be. */
+/** Whether the preset uses a protocol supported by the connection test. */
 export function presetTestable(p: LauncherPreset): boolean {
-  return !(p.kind === "api" && p.api === "responses");
+  return !p.api || p.api === "messages" || p.api === "responses" || p.api === "chat";
 }
 
 /** POST /api/v1/launchers/test's body for a preset: the hub fills in its address and, without one here, its default model. */

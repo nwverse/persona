@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,8 +22,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mdp/qrterminal/v3"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/pgdocker"
 )
@@ -134,6 +137,8 @@ type setupEnv struct {
 	// it when the manager's program did not trade it.
 	builtinCode func(ctx context.Context, cfg *Config) (string, error)
 	voidCode    func(ctx context.Context, cfg *Config, code string) error
+	// keptMachines: machine → the manager that keeps it, as the hub's database has it (keptMachines).
+	keptMachines func(ctx context.Context, cfg *Config) (map[string]string, error)
 
 	healthWait  time.Duration
 	dbWait      time.Duration
@@ -164,7 +169,7 @@ func newSetupEnv(out io.Writer, o setupOptions) (*setupEnv, error) {
 		ask:         askTerminal,
 		lanIPv4:     defaultLANIPv4,
 		portFree:    tcpPortFree,
-		exe:         ServerBinary, // persona-hub setup installs the personad beside it (the service runs personad)
+		exe:         ServerBinary, // persona-hub setup installs the personad beside it (the service: splitHub)
 		pingDB:      pingPostgres,
 		doctor:      setupDoctor,
 		getenv:      identity.Getenv,
@@ -174,7 +179,8 @@ func newSetupEnv(out io.Writer, o setupOptions) (*setupEnv, error) {
 			code, _, err := builtinCode(ctx, cfg)
 			return code, err
 		},
-		voidCode: voidBuiltinCode,
+		voidCode:     voidBuiltinCode,
+		keptMachines: keptMachines,
 
 		healthWait:  90 * time.Second,
 		dbWait:      30 * time.Second,
@@ -233,6 +239,9 @@ func (e *setupEnv) setup(ctx context.Context) error {
 		return err
 	}
 	if err := e.database(ctx, cfg); err != nil {
+		return err
+	}
+	if err := e.localMachine(ctx, cfg); err != nil {
 		return err
 	}
 	if err := e.service(ctx, cfg); err != nil {
@@ -294,6 +303,8 @@ func newInstallConfig(in installInputs) *Config {
 type setupConfig struct {
 	*Config
 	fresh bool
+	// noLocal: a hub.json a hub has run with lists no machine, and claude or herdr is here (localMachine).
+	noLocal bool
 }
 
 func (e *setupEnv) hubJSON() string { return filepath.Join(e.root, "hub.json") }
@@ -306,7 +317,7 @@ func (e *setupEnv) config() (*setupConfig, error) {
 	if err != nil {
 		return nil, e.fail("config", e.hubJSON()+" 读不了或不是 JSON 对象："+err.Error(), "修好或挪走这个文件，再运行 personad hub setup")
 	}
-	_, hasToken := raw.get("token")
+	_, hasToken := raw.Get("token")
 	fresh := !hasToken
 	e.restartHub, e.restartWhy, e.hubRestart, e.switched, e.prevMode = false, nil, nil, false, ""
 	var notes []string
@@ -352,20 +363,6 @@ func (e *setupEnv) config() (*setupConfig, error) {
 				return nil, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
 			}
 		}
-		// No machine yet (installed before claude / herdr were, #4083): this machine is the first one once it has them.
-		if noMachines(raw) && e.hasAgents() {
-			if err := editHubJSON(e.root, func(o *jsonObject) error {
-				if !noMachines(o) {
-					return nil
-				}
-				return o.set("machines", []MachineConfig{defaultLocalMachine()})
-			}); err != nil {
-				return nil, e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
-			}
-			e.restartHub = true // a running hub reads machines only when it starts
-			e.restartWhy = append(e.restartWhy, "hub.json 补了本机")
-			notes = append(notes, "补上本机作为电脑（kind: local）")
-		}
 	}
 	b, err := os.ReadFile(e.hubJSON())
 	if err != nil {
@@ -396,7 +393,60 @@ func (e *setupEnv) config() (*setupConfig, error) {
 		detail += "；" + strings.Join(notes, "；")
 	}
 	e.report("config", true, detail, "")
-	return &setupConfig{Config: cfg, fresh: fresh}, nil
+	return &setupConfig{Config: cfg, fresh: fresh, noLocal: !fresh && noMachines(raw) && e.hasAgents()}, nil
+}
+
+// localMachine adds this machine to a hub.json a hub has run with that lists none, once claude or herdr is here
+// (installed before them, #4083), and has service restart the hub, which reads machines only when it starts. Not while
+// a manager keeps any machine (machines_kept.go): their entries left hub.json for its own list, and one added here
+// would be handed to a manager on every rerun, over the entry it keeps. It reads that from the database, so it runs
+// after database (which may start it).
+func (e *setupEnv) localMachine(ctx context.Context, cfg *setupConfig) error {
+	if !cfg.noLocal {
+		return nil
+	}
+	kept, err := e.keptMachines(ctx, cfg.Config)
+	if err != nil {
+		e.report("config", false, "hub.json 里没有电脑，但读不了哪些电脑归管理者管（"+err.Error()+"），这次没补本机",
+			"看管理界面的「电脑」里有没有这台电脑，没有就加上；修好后重跑 personad hub setup")
+		return nil
+	}
+	if len(kept) > 0 {
+		return nil
+	}
+	if err := editHubJSON(e.root, func(o *jsonObject) error {
+		if !noMachines(o) {
+			return nil
+		}
+		return o.Set("machines", []MachineConfig{defaultLocalMachine()})
+	}); err != nil {
+		return e.fail("config", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
+	}
+	e.restartHub = true
+	e.restartWhy = append(e.restartWhy, "hub.json 补了本机")
+	e.report("config", true, "补上本机作为电脑（kind: local）", "")
+	return nil
+}
+
+// keptMachines is machine → the manager that keeps it, as the hub reads it (loadMachinesKept). It migrates nothing:
+// the hub running may be an older build than this program.
+func keptMachines(ctx context.Context, cfg *Config) (map[string]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	database, err := db.Attach(ctx, cfg.DatabaseURL, db.HubSet)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", machinesKeptKey, err)
+	}
+	defer database.Close()
+	h := &Hub{cfg: cfg, store: database, logger: log.New(io.Discard, "", 0)}
+	if err := h.loadMachinesKept(ctx); err != nil {
+		var pe *pgconn.PgError
+		if errors.As(err, &pe) && pe.Code == "42P01" {
+			return nil, nil // no hub_settings: a hub from before managers kept machines
+		}
+		return nil, fmt.Errorf("read %s: %w", machinesKeptKey, err)
+	}
+	return h.devices.kept, nil
 }
 
 // keptListenNote is what a rerun says about --listen / --tls on a hub.json a hub has run with: those flags only shape
@@ -410,10 +460,10 @@ func (e *setupEnv) keptListenNote(raw *jsonObject) string {
 		}
 	}
 	file.Listen = ":18660" // Config's default when hub.json has none
-	if b, ok := raw.get("listen"); ok {
+	if b, ok := raw.Get("listen"); ok {
 		_ = json.Unmarshal(b, &file.Listen)
 	}
-	if b, ok := raw.get("public"); ok {
+	if b, ok := raw.Get("public"); ok {
 		_ = json.Unmarshal(b, &file.Public)
 	}
 	var diffs []string
@@ -485,7 +535,7 @@ func (e *setupEnv) installInputs(notes *[]string) installInputs {
 
 // noMachines: hub.json says "machines": []. Without the key the hub starts with this machine already (defaultConfig).
 func noMachines(o *jsonObject) bool {
-	raw, ok := o.get("machines")
+	raw, ok := o.Get("machines")
 	var list []json.RawMessage
 	return ok && json.Unmarshal(raw, &list) == nil && len(list) == 0
 }
@@ -519,16 +569,17 @@ func (e *setupEnv) hasProgram(name string) bool {
 
 // fillMissing adds what src has and dst does not, into nested objects too; nothing dst has is changed.
 func fillMissing(dst, src *jsonObject) error {
-	for _, k := range src.keys {
-		have, ok := dst.get(k)
+	for _, k := range src.Keys() {
+		want, _ := src.Get(k)
+		have, ok := dst.Get(k)
 		if !ok {
-			dst.setRaw(k, src.vals[k])
+			dst.SetRaw(k, want)
 			continue
 		}
-		if !isJSONObject(src.vals[k]) || !isJSONObject(have) {
+		if !isJSONObject(want) || !isJSONObject(have) {
 			continue
 		}
-		srcNested, srcErr := parseJSONObject(src.vals[k])
+		srcNested, srcErr := parseJSONObject(want)
 		dstNested, dstErr := parseJSONObject(have)
 		if srcErr != nil || dstErr != nil {
 			continue
@@ -536,7 +587,7 @@ func fillMissing(dst, src *jsonObject) error {
 		if err := fillMissing(dstNested, srcNested); err != nil {
 			return err
 		}
-		dst.setRaw(k, dstNested.marshal())
+		dst.SetRaw(k, dstNested.Marshal())
 	}
 	return nil
 }
@@ -549,12 +600,12 @@ func isJSONObject(raw json.RawMessage) bool {
 // outsideTLS is --outside on an existing hub.json: TLS on every address (a LAN-only "<address>:18662" becomes
 // ":18662"; none becomes ":18662"). The person asked for it, so this one existing value does change.
 func outsideTLS(o *jsonObject) error {
-	pub, err := o.object("public")
+	pub, err := o.Object("public")
 	if err != nil {
 		return err
 	}
 	var cur string
-	if raw, ok := pub.get("tls_listen"); ok {
+	if raw, ok := pub.Get("tls_listen"); ok {
 		_ = json.Unmarshal(raw, &cur)
 	}
 	want := ":18662"
@@ -564,10 +615,10 @@ func outsideTLS(o *jsonObject) error {
 	if cur == want {
 		return nil
 	}
-	if err := pub.set("tls_listen", want); err != nil {
+	if err := pub.Set("tls_listen", want); err != nil {
 		return err
 	}
-	o.setObject("public", pub)
+	o.SetObject("public", pub)
 	return nil
 }
 
@@ -630,7 +681,7 @@ func (e *setupEnv) database(ctx context.Context, cfg *setupConfig) error {
 		port = e.dbPort // a container on the host's network (db.sh): its port is the one it was made with
 	}
 	dbURL := pgdocker.URL(password, port)
-	if err := editHubJSON(e.root, func(o *jsonObject) error { return o.set("database_url", dbURL) }); err != nil {
+	if err := editHubJSON(e.root, func(o *jsonObject) error { return o.Set("database_url", dbURL) }); err != nil {
 		return e.fail("database", "写不了 "+e.hubJSON()+"："+err.Error(), "检查这个目录的权限")
 	}
 	cfg.DatabaseURL = dbURL

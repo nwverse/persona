@@ -73,7 +73,11 @@ struct MachineDetailView: View {
                         if AddComputerText.machineProblem(machine.errorCode) != nil, let raw = machine.error, !raw.isEmpty {
                             problemDetails(raw)
                         }
-                        if !online, !machine.isPending { connection(machine) }
+                        // Offline with its manager (the card says so): it comes back with that manager, and Reconnect
+                        // goes through it.
+                        if !online, !machine.isPending, model.offlineManager(of: machine, group: ref.group) == nil {
+                            connection(machine)
+                        }
                     }
                     agentsSection(machine)
                     filesRow(online: online)
@@ -202,7 +206,7 @@ struct MachineDetailView: View {
                         NavigationLink(value: s.key) {
                             HStack(spacing: Theme.Space.s) {
                                 SessionRow(session: s, machine: machine, showMachine: false)
-                                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                             }
                             .padding(.horizontal, Theme.Space.l)
                             .padding(.vertical, Theme.Space.m)
@@ -240,7 +244,7 @@ struct MachineDetailView: View {
                     Text("Engine").font(Theme.Font.body).lineLimit(1)
                     Spacer(minLength: Theme.Space.s)
                     Text(machine.engineName).font(Theme.Font.body).foregroundStyle(.secondary).lineLimit(1)
-                    Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.vertical, Theme.Space.m)
@@ -267,11 +271,11 @@ struct MachineDetailView: View {
             renaming = true
         } label: {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.edit).font(Theme.Font.body).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.icon)
+                ThemedIcon(Theme.Icon.edit).font(Theme.Font.body).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.icon)
                 Text("Rename").font(Theme.Font.body).lineLimit(1)
                 Spacer(minLength: Theme.Space.s)
                 Text(machine.name).font(Theme.Font.body).foregroundStyle(.secondary).lineLimit(1)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, Theme.Space.l)
             .padding(.vertical, Theme.Space.m)
@@ -289,11 +293,11 @@ struct MachineDetailView: View {
             filesOpen = true
         } label: {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.folder).font(Theme.Font.body).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.icon)
+                ThemedIcon(Theme.Icon.folder).font(Theme.Font.body).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.icon)
                 Text("Files").font(Theme.Font.body).lineLimit(1)
                 Spacer(minLength: Theme.Space.s)
                 Text(online ? String(localized: "Home") : String(localized: "Offline [Machine Entity be1b4f]")).font(Theme.Font.body).foregroundStyle(.secondary).lineLimit(1)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, Theme.Space.l)
             .padding(.vertical, Theme.Space.m)
@@ -557,7 +561,7 @@ private struct NowGrid: View {
                 Text(title).font(Theme.Font.label).foregroundStyle(.secondary)
                 if level > .normal {
                     HStack(spacing: Theme.Space.xxs) {
-                        Image(systemName: Theme.Icon.errorFilled).foregroundStyle(MetricColor.level(level))
+                        ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(MetricColor.level(level))
                         Text(level == .critical ? String(localized: "Critical") : String(localized: "High [Machine Detail View cde631]")).foregroundStyle(.secondary)
                     }
                     .font(Theme.Font.labelStrong).lineLimit(1)

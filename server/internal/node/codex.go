@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Codex support: herdr reports Codex panes as agent "codex"; their conversations are rollouts under
@@ -38,22 +38,23 @@ type codexRollout struct {
 
 // rolloutMeta is what a rollout's first line (session_meta) says about its thread.
 type rolloutMeta struct {
-	cwd  string
-	sub  bool   // a subagent: thread_source "subagent", or a source of {"subagent": …}
-	root string // the conversation a subagent belongs to (session_id, else parent_thread_id); "" when not given
+	threadID string
+	cwd      string
+	sub      bool   // a subagent: thread_source "subagent", or a source of {"subagent": …}
+	root     string // the conversation a subagent belongs to (session_id, else parent_thread_id); "" when not given
 }
 
 // rolloutCache is one rollout home's scan (Codex: ~/.codex, a compatible CLI: the CLI-specific data directory — the same layout).
 type rolloutCache struct {
 	at       time.Time
 	rollouts []codexRollout
-	older    []string // rollouts in day directories before the window, listed once a minute
+	older    []rolloutFile // rollouts in day directories before the window and archived ones, listed once a minute
 	olderAt  time.Time
 	// misses are the ids rolloutPath globbed for and found nowhere, with missStamp then: a thread with no rollout (an
 	// app-server thread that never wrote one) was globbed across all of history every second. A miss holds while the
 	// recent day directories and archived_sessions are unchanged, and until the older days are listed again.
 	misses   map[string][]int64
-	metas    map[string]rolloutMeta // path → its session_meta (never changes once written)
+	metas    map[string]rolloutMeta // path → its session_meta (never changes once written); gone paths leave it once a minute
 	titles   map[string]string
 	titlesAt time.Time
 }
@@ -63,7 +64,53 @@ var rolloutCaches = struct {
 	byHome map[string]*rolloutCache
 }{byHome: map[string]*rolloutCache{}}
 
-var rolloutIDRe = regexp.MustCompile(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$`)
+var rolloutIDRe = lazyre.New(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})*\.jsonl$`)
+
+// rolloutFile is a rollout's path and the thread id its name ends in.
+type rolloutFile struct {
+	path string
+	id   string
+}
+
+// rolloutID is a rollout filename's thread UUID, before any _<segment UUID> suffix, or empty when absent:
+// what rolloutIDRe captures, without a regular expression. rollouts reads it for every rollout on disk once a minute,
+// where rolloutIDRe took most of each refresh's CPU time.
+func rolloutID(path string) string {
+	const ext, idLen = ".jsonl", 36
+	if len(path) < idLen+len(ext) || !strings.HasSuffix(path, ext) {
+		return ""
+	}
+	end := len(path) - len(ext)
+	start := end - idLen
+	if !rolloutUUID(path[start:end]) {
+		return ""
+	}
+	for start >= idLen+1 && path[start-1] == '_' && rolloutUUID(path[start-idLen-1:start-1]) {
+		end, start = start-1, start-idLen-1
+	}
+	return path[start:end]
+}
+
+func rolloutUUID(id string) bool {
+	const idLen = 36
+	if len(id) != idLen {
+		return false
+	}
+	for i := range idLen {
+		c := id[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 func (n *Node) codexHome() string {
 	if n.sessionScope != nil {
@@ -97,7 +144,8 @@ func cacheFor(home string) *rolloutCache {
 // rollouts lists a home's rollouts written in the last two weeks, newest first; cached for 5s. A rollout lives in the
 // directory of the day its thread started (<home>/sessions/YYYY/MM/DD) and grows there for as long as the thread is
 // resumed: one started six weeks earlier and in use every day was not found at all (2026-10-31), so the older days
-// are listed too, once a minute, and kept when written lately.
+// are listed too, once a minute, and kept when written lately. Every older rollout is still looked at on each refresh,
+// so a thread resumed after weeks shows within 5 seconds.
 func rollouts(home string) []codexRollout {
 	rolloutCaches.Lock()
 	defer rolloutCaches.Unlock()
@@ -106,14 +154,18 @@ func rollouts(home string) []codexRollout {
 	if now.Sub(c.at) < 5*time.Second {
 		return c.rollouts
 	}
-	var paths []string
+	var files []rolloutFile
 	recent := map[string]bool{}
 	for d := 0; d <= int(codexWindow/(24*time.Hour)); d++ {
 		day := now.AddDate(0, 0, -d)
 		dir := filepath.Join(home, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"))
 		recent[dir] = true
-		files, _ := filepath.Glob(filepath.Join(dir, "rollout-*.jsonl"))
-		paths = append(paths, files...)
+		paths, _ := filepath.Glob(filepath.Join(dir, "rollout-*.jsonl"))
+		for _, p := range paths {
+			if id := rolloutID(p); id != "" {
+				files = append(files, rolloutFile{path: p, id: id})
+			}
+		}
 	}
 	if now.Sub(c.olderAt) > time.Minute {
 		all, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl"))
@@ -121,43 +173,83 @@ func rollouts(home string) []codexRollout {
 		all = append(all, archived...)
 		c.older = c.older[:0]
 		for _, p := range all {
-			if !recent[filepath.Dir(p)] {
-				c.older = append(c.older, p)
+			if id := rolloutID(p); id != "" && !recent[filepath.Dir(p)] {
+				c.older = append(c.older, rolloutFile{path: p, id: id})
 			}
 		}
 		c.olderAt = now
 		c.misses = nil
+		c.pruneMetas(files)
 	}
-	firstOlder := len(paths)
-	paths = append(paths, c.older...)
+	firstOlder := len(files)
+	files = append(files, c.older...)
 	var out []codexRollout
-	for i, p := range paths {
-		m := rolloutIDRe.FindStringSubmatch(p)
-		st, err := os.Stat(p)
-		if m == nil || err != nil || (i >= firstOlder && now.Sub(st.ModTime()) > codexWindow) {
+	for i, f := range files {
+		st, err := os.Stat(f.path)
+		if err != nil || (i >= firstOlder && now.Sub(st.ModTime()) > codexWindow) {
 			continue
 		}
-		meta, ok := c.metas[p]
-		if !ok {
-			meta = readRolloutMeta(p)
-			c.metas[p] = meta
+		meta, ok := c.metas[f.path]
+		if !ok || meta.threadID == "" { // a first line still being written must not stay cached as missing
+			var whole bool
+			if meta, whole = readRolloutMeta(f.path); whole {
+				c.metas[f.path] = meta
+			}
 		}
-		out = append(out, codexRollout{id: m[1], path: p, mtime: st.ModTime(), rolloutMeta: meta})
+		id := firstNonEmpty(meta.threadID, f.id)
+		if meta.threadID == "" && !strings.HasSuffix(f.path, f.id+".jsonl") {
+			continue // an ambiguous continuation header is still being written
+		}
+		out = append(out, codexRollout{id: id, path: f.path, mtime: st.ModTime(), rolloutMeta: meta})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].mtime.After(out[j].mtime) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].mtime.Equal(out[j].mtime) {
+			return out[i].path > out[j].path
+		}
+		return out[i].mtime.After(out[j].mtime)
+	})
+	// A continuation is another physical rollout for the same logical thread. As with resumed
+	// transcript copies, follow its newest file; do not advertise each segment as a new session.
+	seen := map[string]bool{}
+	unique := out[:0]
+	for _, r := range out {
+		if !seen[r.id] {
+			seen[r.id] = true
+			unique = append(unique, r)
+		}
+	}
+	out = unique
 	c.rollouts, c.at = out, now
 	return out
 }
 
-// readRolloutMeta reads a rollout's first line (session_meta, tens of KB of instructions).
-func readRolloutMeta(path string) rolloutMeta {
+// pruneMetas keeps the session_meta of the rollouts just listed (recent and older), so a deleted or moved rollout
+// does not stay for the life of the node. Into a new map: deleting from a map never gives its memory back.
+func (c *rolloutCache) pruneMetas(recent []rolloutFile) {
+	metas := make(map[string]rolloutMeta, min(len(c.metas), len(recent)+len(c.older)))
+	for _, list := range [][]rolloutFile{recent, c.older} {
+		for _, f := range list {
+			if m, ok := c.metas[f.path]; ok {
+				metas[f.path] = m
+			}
+		}
+	}
+	c.metas = metas
+}
+
+// readRolloutMeta reads a rollout's first line (session_meta, tens of KB of instructions); whole says that line was all
+// written, and only then is what it says worth keeping. Codex 0.167 creates the file empty and writes the line 8–19 ms
+// later: a meta read in between and kept left the thread without a directory for good, and a start in that directory
+// never found its thread (#2351).
+func readRolloutMeta(path string) (m rolloutMeta, whole bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return rolloutMeta{}
+		return rolloutMeta{}, false
 	}
 	defer f.Close()
 	r := bufio.NewReaderSize(f, 256<<10)
-	line, _ := r.ReadBytes('\n')
+	line, err := r.ReadBytes('\n')
+	whole = err == nil
 	var l struct {
 		Type    string `json:"type"`
 		Payload struct {
@@ -170,10 +262,13 @@ func readRolloutMeta(path string) rolloutMeta {
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &l) != nil || l.Type != "session_meta" {
-		return rolloutMeta{}
+		return rolloutMeta{}, whole
 	}
 	p := l.Payload
-	m := rolloutMeta{cwd: p.Cwd}
+	m = rolloutMeta{cwd: p.Cwd}
+	if rolloutUUID(p.ID) {
+		m.threadID = p.ID
+	}
 	var source map[string]json.RawMessage
 	m.sub = p.ThreadSource == "subagent" || (json.Unmarshal(p.Source, &source) == nil && source["subagent"] != nil)
 	if m.sub {
@@ -184,22 +279,36 @@ func readRolloutMeta(path string) rolloutMeta {
 			}
 		}
 	}
-	return m
+	return m, whole
 }
 
-// metaOf is a rollout's session_meta, read once (rollouts older than the scan window are read on demand).
+// metaOf is a rollout's session_meta, read once it is all written (rollouts older than the scan window are read on
+// demand).
 func metaOf(home, path string) rolloutMeta {
 	rolloutCaches.Lock()
 	m, ok := cacheFor(home).metas[path]
 	rolloutCaches.Unlock()
-	if ok {
+	if ok && m.threadID != "" {
 		return m
 	}
-	m = readRolloutMeta(path)
-	rolloutCaches.Lock()
-	cacheFor(home).metas[path] = m
-	rolloutCaches.Unlock()
+	m, whole := readRolloutMeta(path)
+	if whole {
+		rolloutCaches.Lock()
+		cacheFor(home).metas[path] = m
+		rolloutCaches.Unlock()
+	}
 	return m
+}
+
+// rolloutThreadID uses the header as the authority; the filename is a fallback while a header is incomplete.
+func rolloutThreadID(home, path string) string {
+	if id := metaOf(home, path).threadID; id != "" {
+		return id
+	}
+	if id := rolloutID(path); id != "" && strings.HasSuffix(path, id+".jsonl") {
+		return id
+	}
+	return ""
 }
 
 // mainThread maps a subagent's thread to the conversation it belongs to; any other thread maps to itself.
@@ -232,9 +341,11 @@ func rolloutPath(home, id string) string {
 	if ok && slices.Equal(missed, stamp) {
 		return ""
 	}
-	matches, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+".jsonl"))
+	matches, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+"*.jsonl"))
+	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadID(home, path) != id })
 	if len(matches) == 0 {
-		matches, _ = filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+".jsonl"))
+		matches, _ = filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+"*.jsonl"))
+		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadID(home, path) != id })
 	}
 	if len(matches) == 0 {
 		// A directory changed in the last second may change again within its mtime's granularity (a coarse clock

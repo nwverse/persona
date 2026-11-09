@@ -1,18 +1,21 @@
 // Messages other pages send for a conversation ("Ask Persona" from "Knowledge", "Hand to AI" from the inbox, a new Persona conversation):
 // the page moves to the conversation at once and the message shows there as a sending bubble until the transcript has
-// it, as the app's outbox does (AppModel.sendNow / askPersona). A failed one stays with the reason, "Retry" and "Delete".
-// The conversation's own composer keeps its local sending bubbles (ChatView); both look the same.
+// it, as the app's outbox does (AppModel.sendNow / askPersona). A failed one stays with the reason, "Retry" and "Delete",
+// where it was sent (placeFailed). The conversation's own composer keeps its local sending bubbles (ChatView); one of
+// those that fails comes here (keepFailed), so its words stay in the chat and not in the box, as in the apps (#1122).
 import { t } from "../i18n";
 import { api, ApiError, errorText, sessionPath } from "./api";
 import { pickedLauncher, pickedModel, conversationKey } from "./assistant-chat";
+import { startConversation } from "./assistant-start";
+import { removeStoredValue, storedValue, storeValue } from "./compatibility";
 import { uuid } from "./format";
 import { navigate } from "./router";
 import { getState, refreshAssistant, setOutbox } from "./store";
 import { chooseManager, chosenManager, noteConversation, otherManager, ownerHeaders } from "./manager-choice";
-import { apiOp, isTransient } from "./ops";
+import { apiOp, isTransient, OP_OFFLINE_MS, OP_RETRY_MS } from "./ops";
 import { echoed, isEcho, type Seen, type Sent } from "./echo";
-import { parseUserText, type UserMessage } from "./turns";
-import type { AssistantInfo, Item, Session } from "./types";
+import { parseUserText, type ChatLine, type UserMessage } from "./turns";
+import type { AssistantInfo, Item } from "./types";
 
 export interface OutboxImage {
   mime: string;
@@ -34,6 +37,8 @@ export interface OutboxEntry {
   clearable?: string;
   /** The hub could not tell whether it went in: a retry is a new message. */
   newId?: boolean;
+  /** Brought back from this browser after a reload: its first try's outcome is unknown, so the transcript's copy (by words too) settles it. */
+  restored?: boolean;
   launcher?: string;
   model?: string;
 }
@@ -64,11 +69,55 @@ export function arrived(e: Described, users: Seen[]): boolean {
 }
 
 /** What stays once the transcript moved: arrived ones go (one copy each), and sent ones past the grace; sending and
- *  failed stay. `users`: the latest user messages and the items the hub tied to a message (taggedSeen). `claimed`: the
- *  ones that already answered one, kept across calls. */
+ *  failed stay, but a failed one the hub tied a copy to went in after all (delivered unknown, #1121): the copy is it.
+ *  `users`: the latest user messages and the items the hub tied to a message (taggedSeen). `claimed`: the ones that
+ *  already answered one, kept across calls. */
 export function settle(list: OutboxEntry[], users: Seen[], now: number, claimed = new Set<string>()): OutboxEntry[] {
-  const shown = echoed(list.filter((e) => e.state !== "failed"), users, seenAs, claimed);
-  return list.filter((e) => !shown.has(e) && (e.state !== "sent" || now - e.at < SENT_GRACE_MS));
+  const shown = echoed(list.filter((e) => e.state !== "failed" || e.restored), users, seenAs, claimed);
+  const tied = new Set(users.flatMap((u) => u.client_msg_id ?? []));
+  return list.filter((e) => !shown.has(e) && !(e.state === "failed" && !e.wordsOnly && tied.has(e.id)) && (e.state !== "sent" || now - e.at < SENT_GRACE_MS));
+}
+
+// When this page wrote the messages it sent, by client_msg_id: a failed message goes before the first one written
+// after it (placeFailed), by this clock rather than the computer's.
+const written = new Map<string, number>();
+
+/** A message this page sends now (ChatView's own, or an outbox entry): its time, for placeFailed. */
+export function noteWritten(id: string, at: number) {
+  if (written.size >= 500) written.delete(written.keys().next().value!);
+  written.set(id, at);
+}
+
+/** When a line was written, for placeFailed: an exchange's message (this page's time for one sent from here; else the
+ *  computer's, two minutes' slack for its clock, so a near tie leaves the failed message below); none for other lines. */
+function lineWritten(line: ChatLine): number | undefined {
+  if (line.kind === "supervision") return line.lines.map(lineWritten).find((at) => at !== undefined);
+  if (line.kind !== "segment" || !line.seg.user) return undefined;
+  const mine = line.seg.user.client_msg_id ? written.get(line.seg.user.client_msg_id) : undefined;
+  if (mine !== undefined) return mine;
+  const ts = Date.parse(line.seg.user.ts ?? "");
+  return Number.isNaN(ts) ? undefined : ts - 120_000;
+}
+
+/** Where failed messages go (#1122, ChatLines.placeFailed in the apps): one written before a message sent after it goes
+ *  right before the first such message's exchange, so the chat reads in the order things were written. One with nothing
+ *  after it, and every message still on its way, stay at the end (`rest`), in the order they were written. `before`: by
+ *  the id of the line each goes before. */
+export function placeFailed(lines: ChatLine[], list: OutboxEntry[]): { before: Map<string, OutboxEntry[]>; rest: OutboxEntry[] } {
+  const ordered = [...list].sort((a, b) => a.at - b.at);
+  const before = new Map<string, OutboxEntry[]>();
+  if (!ordered.some((e) => e.state === "failed")) return { before, rest: ordered };
+  const after = lines.flatMap((line) => {
+    const at = lineWritten(line);
+    return at === undefined ? [] : [{ id: line.id, at }];
+  });
+  const rest: OutboxEntry[] = [];
+  for (const e of ordered) {
+    const next = e.state === "failed" ? after.find((l) => l.at > e.at) : undefined;
+    if (next) before.set(next.id, [...(before.get(next.id) ?? []), e]);
+    else rest.push(e);
+  }
+  return { before, rest };
 }
 
 /** Why it didn't go, in words. */
@@ -85,11 +134,28 @@ function list(key: string): OutboxEntry[] {
   return getState().outbox[key] ?? [];
 }
 
+/** Every change to a conversation's outbox: the entries that are sending or failed stay in this browser, the rest leave it. */
+function write(key: string, next: OutboxEntry[]) {
+  const before = list(key);
+  setOutbox(key, next);
+  for (const e of before) if (!next.some((x) => x.id === e.id)) forgetOutgoing(key, e.id);
+  for (const e of next) {
+    if (e.state === "sent") forgetOutgoing(key, e.id);
+    else keepOutgoing(key, e);
+  }
+}
+
 function update(key: string, id: string, patch: Partial<OutboxEntry>) {
-  setOutbox(key, list(key).map((e) => (e.id === id ? { ...e, ...patch } : e)));
+  write(key, list(key).map((e) => (e.id === id ? { ...e, ...patch } : e)));
 }
 
 const claimedBy = new Map<string, Set<string>>();
+
+/** A fresh page for the tests: which transcript lines answered a sent message is kept for as long as the page runs
+ *  (one answers no later message with the same words), so cases with the same chat and line ids start without it. */
+export function resetOutboxClaimsForTests() {
+  claimedBy.clear();
+}
 
 /** Drops what the transcript now has (ChatView calls it with the latest user messages and the tagged items). */
 export function settleOutbox(mid: string, sid: string, users: Seen[]) {
@@ -99,29 +165,122 @@ export function settleOutbox(mid: string, sid: string, users: Seen[]) {
   const claimed = claimedBy.get(key) ?? new Set<string>();
   claimedBy.set(key, claimed);
   const after = settle(before, users, Date.now(), claimed);
-  if (after.length !== before.length) setOutbox(key, after);
+  if (after.length !== before.length) write(key, after);
+}
+
+/** A failed entry's fields for the error its send ended with. */
+function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "clearable" | "newId"> {
+  return {
+    state: "failed",
+    error: failureText(err),
+    clearable: err instanceof ApiError && err.code === "input_draft" && typeof err.body.clearable === "string" ? err.body.clearable : undefined,
+    // the hub answered: it keeps that answer for this id, so a retry is another operation; a gap it never
+    // answered is retried with the same id (the hub does it at most once)
+    newId: !isTransient(err),
+  };
+}
+
+/** A message this conversation's own composer sent that did not go (ChatView): from now on a failed bubble here, with
+ *  why, "Retry" and "Delete", where it was sent; the box stays empty (#1122). */
+export function keepFailed(mid: string, sid: string, sent: Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model">, err: unknown) {
+  const key = outboxKey(mid, sid);
+  write(key, [...list(key).filter((e) => e.id !== sent.id), { ...sent, ...failedWith(err) }]);
+}
+
+// ── one conversation's sends, in order ──────────────────
+
+const sendTurns = new Map<string, Promise<void>>();
+/** As long as a send can honestly take (a gap waited out, a session resuming): a POST still open after this hung (a send
+ *  has no fetch timeout), and the later ones stop waiting for it. */
+const SEND_TURN_MAX_MS = OP_OFFLINE_MS + OP_RETRY_MS;
+
+/** Runs `post` once the conversation's earlier sends have settled, however they ended: two POSTs in flight can reach the
+ *  hub in either order. With none before it, it starts at once. */
+export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> {
+  const before = sendTurns.get(key);
+  const turn = before ? Promise.race([before, new Promise<void>((done) => setTimeout(done, SEND_TURN_MAX_MS))]).then(post) : post();
+  const settled = turn.then(() => {}, () => {});
+  sendTurns.set(key, settled);
+  void settled.then(() => {
+    if (sendTurns.get(key) === settled) sendTurns.delete(key);
+  });
+  return turn;
+}
+
+// ── kept across reloads ─────────────────────────────────
+
+const KEPT_PREFIX = "outbox-msg:";
+const keptKey = (key: string, id: string) => `${KEPT_PREFIX}${key}/${id}`;
+type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "error">>;
+
+/** Keeps one message's words in this browser while it is on its way or failed (pictures are not kept: they would fill the
+ *  storage). Storage can be full or refused; the message then lasts only as long as the page. */
+export function keepOutgoing(key: string, e: Outgoing) {
+  if (!e.text.trim()) return;
+  try {
+    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, error: e.error, images: e.images.length }));
+  } catch {
+    // only this page's copy then
+  }
+}
+
+export function forgetOutgoing(key: string, id: string) {
+  try {
+    removeStoredValue(keptKey(key, id));
+  } catch {
+    // nothing to clear
+  }
+}
+
+function keptEntries(key: string): (Omit<Outgoing, "images"> & { lostImages: boolean })[] {
+  const out: (Omit<Outgoing, "images"> & { lostImages: boolean })[] = [];
+  try {
+    const prefix = keptKey(key, "");
+    for (let i = 0; i < localStorage.length; i++) {
+      const name = localStorage.key(i);
+      if (!name?.startsWith(prefix)) continue;
+      const { images, ...k } = JSON.parse(storedValue(name) ?? "null") as Omit<Outgoing, "images"> & { images?: number };
+      if (k.id && typeof k.text === "string") out.push({ ...k, lostImages: Boolean(images) });
+    }
+  } catch {
+    // storage unavailable or an unreadable entry: nothing to bring back
+  }
+  return out;
+}
+
+const restored = new Set<string>();
+
+/** After a reload: this conversation's messages still kept here come back as failed bubbles with Retry and Delete, once
+ *  per page. Called once the transcript is in, so a message that did reach the hub is settled (settle) before it shows.
+ *  `inFlight`: ids this page is sending right now, which already have their bubble. */
+export function restoreOutbox(mid: string, sid: string, inFlight: string[] = []) {
+  const key = outboxKey(mid, sid);
+  if (restored.has(key)) return;
+  restored.add(key);
+  const back = keptEntries(key).filter((k) => !inFlight.includes(k.id) && !list(key).some((e) => e.id === k.id));
+  if (!back.length) return;
+  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: "failed", restored: true, error: lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
+  setOutbox(key, [...list(key), ...entries]);
+}
+
+/** A fresh page for the tests: every conversation can be restored again. */
+export function resetRestoredForTests() {
+  restored.clear();
 }
 
 async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: string): Promise<boolean> {
   const key = outboxKey(mid, sid);
   try {
     // stays sending through a gap (a hub restart); the client_msg_id is the op id
-    await apiOp(`${sessionPath(mid, sid)}/messages`, {
+    await inSendOrder(key, () => apiOp(`${sessionPath(mid, sid)}/messages`, {
       method: "POST",
       opId: e.id,
       json: { text: e.text, images: e.images.length ? e.images : undefined, client_msg_id: e.id, launcher: e.launcher || undefined, model: e.model || undefined, clear_draft: clearDraft },
-    });
+    }));
     update(key, e.id, { state: "sent", at: Date.now(), error: undefined, clearable: undefined });
     return true;
   } catch (err) {
-    update(key, e.id, {
-      state: "failed",
-      error: failureText(err),
-      clearable: err instanceof ApiError && err.code === "input_draft" && typeof err.body.clearable === "string" ? err.body.clearable : undefined,
-      // the hub answered: it keeps that answer for this id, so a retry is another operation; a gap it never
-      // answered is retried with the same id (the hub does it at most once)
-      newId: !isTransient(err),
-    });
+    update(key, e.id, failedWith(err));
     return false;
   }
 }
@@ -135,7 +294,8 @@ export function sendToSession(mid: string, sid: string, out: { text: string; ima
 export function queueToSession(mid: string, sid: string, out: { text: string; images?: OutboxImage[] }, opts: { launcher?: string; model?: string } = {}): { id: string; sent: Promise<boolean> } {
   const key = outboxKey(mid, sid);
   const e: OutboxEntry = { id: uuid(), text: out.text, images: out.images ?? [], at: Date.now(), state: "sending", launcher: opts.launcher, model: opts.model };
-  setOutbox(key, [...list(key), e]);
+  noteWritten(e.id, e.at);
+  write(key, [...list(key), e]);
   return { id: e.id, sent: deliver(mid, sid, e) };
 }
 
@@ -147,7 +307,7 @@ export function outboxEntry(mid: string, sid: string, id: string): OutboxEntry |
 /** A message that already went in another way (the prompt that started a conversation): its bubble until the transcript has it. */
 export function noteSent(mid: string, sid: string, out: { text: string; images?: OutboxImage[] }) {
   const key = outboxKey(mid, sid);
-  setOutbox(key, [...list(key), { id: uuid(), wordsOnly: true, text: out.text, images: out.images ?? [], at: Date.now(), state: "sent" }]);
+  write(key, [...list(key), { id: uuid(), wordsOnly: true, text: out.text, images: out.images ?? [], at: Date.now(), state: "sent" }]);
 }
 
 export function retryOutbox(mid: string, sid: string, id: string, clearDraft?: string): Promise<boolean> {
@@ -161,13 +321,14 @@ export function retryOutboxEntry(mid: string, sid: string, id: string, clearDraf
   if (!e || e.state === "sending") return { id, sent: Promise.resolve(false) };
   // the hub said it may have gone in: the user looked and wants it sent again, as a new message
   const next: OutboxEntry = { ...e, id: e.newId ? uuid() : e.id, newId: false, state: "sending", error: undefined, at: Date.now() };
-  setOutbox(key, list(key).map((x) => (x.id === id ? next : x)));
+  noteWritten(next.id, next.at);
+  write(key, list(key).map((x) => (x.id === id ? next : x)));
   return { id: next.id, sent: deliver(mid, sid, next, clearDraft) };
 }
 
 export function discardOutbox(mid: string, sid: string, id: string) {
   const key = outboxKey(mid, sid);
-  setOutbox(key, list(key).filter((e) => e.id !== id));
+  write(key, list(key).filter((e) => e.id !== id));
 }
 
 /**
@@ -185,7 +346,7 @@ export async function askPersona(text: string): Promise<void> {
     return;
   }
   const chosen = chosenManager() ?? undefined;
-  const r = await api<{ session: Session }>("/assistant/conversations", { method: "POST", json: { prompt: text, main: true } });
+  const r = await startConversation({ prompt: text, main: true });
   // the manager the page showed when it started (it named that one): the conversation's requests go there
   noteConversation(r.session.session_id, chosen);
   noteSent(r.session.machine_id, r.session.session_id, { text });
@@ -207,7 +368,7 @@ export async function askPersonaOf(owner: string | undefined, text: string): Pro
     adoptConversation(owner, a.main);
     return { sent: sendToMain(a.machine_id, a.main, text) };
   }
-  const r = await api<{ session: Session }>("/assistant/conversations", { method: "POST", json: { prompt: text, main: true }, headers });
+  const r = await startConversation({ prompt: text, main: true }, headers);
   adoptConversation(owner, r.session.session_id);
   noteSent(r.session.machine_id, r.session.session_id, { text });
   void refreshAssistant().catch(() => {});
@@ -223,7 +384,7 @@ function sendToMain(mid: string, sid: string, text: string): Promise<boolean> {
 }
 
 /** owner's conversation sid: its requests go to owner, and the assistant page shows owner (none: the default). */
-function adoptConversation(owner: string | undefined, sid: string) {
+export function adoptConversation(owner: string | undefined, sid: string) {
   noteConversation(sid, otherManager(owner));
   chooseManager(owner || null);
 }

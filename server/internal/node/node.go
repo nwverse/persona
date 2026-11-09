@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -102,6 +102,7 @@ type Node struct {
 	// suspended), to tell the two apart when a send finds it gone on a host that cannot resume it.
 	lastPanes map[string]string
 	launches  map[string]claudeLaunch    // herdr pane -> how Persona started its Claude, for herdr's restore (herdrresume.go)
+	resumes   resumeLocks                // one resume report at a time per herdr pane (herdrresume.go reportResume)
 	panes     map[string]string          // pane id -> session id (learned from hooks)
 	layouts   map[string]layout          // host kind -> space / slot names from its last snapshot
 	shellTabs *shellTabs                 // the sweep's memory; nil: the process's own (shelltabs.go)
@@ -111,7 +112,8 @@ type Node struct {
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
 	lastRevs  map[string]int64           // session id -> rev as last pushed (sessions.changed or sessions.revs)
-	metas     map[string]quickMeta       // transcript path -> cached meta
+	metas     map[string]quickMeta       // transcript path -> cached meta; deleted ones leave it (meta_prune.go)
+	goneDirs  map[string]time.Time       // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
 	bgScans   map[string]*bgScan         // transcript path -> incremental background-task scan
 	panePIDs  map[string]panePID         // pane -> its claude pid (machines without herdr's claude integration)
 	paneSeen  map[string]time.Time       // claude pane without a host session id -> first seen (zero: there when node started)
@@ -129,14 +131,15 @@ type Node struct {
 	hostSig   map[string]*watcherSignals // change signals of the registered watcher hosts, by host kind (herdrevents.go)
 	cdirs     *claudeDirs                // Claude Code config directories in use (claudedirs.go)
 	hooks     *hookTurns                 // per-session turn counters from Persona's hooks (hookturn.go)
+	live      liveReplies                // the replies Claude is showing, from its MessageDisplay hook (livereply.go)
 	bgWait    bgWatch                    // whether background commands only wait (bgwait.go)
 	codices   *codexRegistry
 	usageWin  usageWindowsState // subscription rate-limit windows (usagewindows.go, #2432)
 	machineID string
 	sends     sentLog         // recent client_msg_ids (sendsafe.go)
 	echoes    echoLog         // sends tied to their transcript lines (echo.go)
-	typing    typingLocks     // one send at a time per session (sendsafe.go)
-	sendOrder sendQueue       // sends waiting for a start, in the order they came (sendsafe.go)
+	typing    typingLocks     // one send at a time per session (sendsafe_turns.go)
+	sendOrder sendQueue       // sends waiting for a start, in the order they came (sendsafe_turns.go)
 	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
 	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
@@ -172,6 +175,8 @@ type Node struct {
 
 	// codexStarting: panes a Codex start is opening (codex_start.go): no thread is guessed for them meanwhile.
 	codexStarting map[string]bool
+	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
+	codexAbandoned map[string][]codexAbandonedStart
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -191,6 +196,9 @@ type Node struct {
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
 	hostAgents map[string][]host.Agent
+	// paneClaudes: when the outside-claude list first saw each claude whose environment names an engine pane, by pid
+	// (claudeInPane's grace while its engine has not reported it yet).
+	paneClaudes map[int]paneClaudeSeen
 	// workspaceDirs avoids resolving every listed session directory every second.
 	workspaceDirs workspaceDirectoryCache
 
@@ -323,12 +331,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	ln, err := n.listenHookSocket(ctx)
-	if err != nil {
-		n.logger.Printf("hook socket: %v", err)
-	} else {
-		defer ln.Close()
-	}
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
 	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
 		rh.attach(n)
 		defer rh.detach(n)
@@ -337,10 +340,16 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	} else {
 		defer rh.detach(n)
 	}
+	ln, err := n.listenHookSocket(ctx)
+	if err != nil {
+		n.logger.Printf("hook socket: %v", err)
+	} else {
+		defer ln.Close()
+	}
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
 	go n.reapAssistants(ctx)
-	go n.meterUsage(ctx)
+	go n.meterUsage(ctx, n.stateReady)
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
@@ -389,16 +398,30 @@ func (n *Node) loadState(ctx context.Context) bool {
 	defer n.ultracodeStateLoaded()
 	n.state.mu.Lock()
 	n.state.persist = func(id string, v sessionState) {
-		_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		if n.peer != nil {
+			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		}
 	}
 	n.state.mu.Unlock()
 	legacyPath := filepath.Join(n.dir, "sessions.json")
-	if legacy := legacyState(legacyPath); len(legacy) > 0 {
+	if legacy := legacyState(legacyPath, n.logf); len(legacy) > 0 {
+		allOk := true
 		for id, v := range legacy {
-			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+			if n.peer == nil {
+				allOk = false
+				break
+			}
+			if err := n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v}); err != nil {
+				allOk = false
+				n.logf("legacy migration: state.put for %s failed: %v", id, err)
+			}
 		}
 		n.state.merge(legacy)
-		_ = os.Rename(legacyPath, legacyPath+".migrated")
+		if allOk {
+			_ = os.Rename(legacyPath, legacyPath+".migrated")
+		} else {
+			n.logf("legacy migration: kept %s for retry because not all entries could be notified", legacyPath)
+		}
 	}
 	return n.fetchState(ctx)
 }
@@ -421,6 +444,9 @@ func (n *Node) reloadState(ctx context.Context) bool {
 
 // fetchState is one try of state.load: what it brings is merged under what this connection already has.
 func (n *Node) fetchState(ctx context.Context) bool {
+	if n.peer == nil {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(ctx, stateLoadTimeout)
 	defer cancel()
 	var res struct {
@@ -461,6 +487,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
 		return n.doctor(ctx, params, true)
+	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
+		return n.secretRun(ctx, params)
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
@@ -497,6 +525,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Skip             int           `json:"skip"`
 		Turns            int           `json:"turns"`
 		LazyImages       bool          `json:"lazy_images"`
+		UserInputs       bool          `json:"user_inputs"`
 		FoldWork         bool          `json:"fold_work"`
 		FromSeq          int           `json:"from_seq"`
 		ThroughSeq       int           `json:"through_seq"`
@@ -526,6 +555,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Configured     bool            `json:"configured"` // launchers.models, .probe, .http, .model.check: hub.json names this launcher
 		Guest          *guestParams    `json:"guest"`      // assistant.send: a new guest conversation (assistant_guest.go)
 		Raw            json.RawMessage `json:"-"`
+
+		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
+		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -660,6 +692,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			// AgentFilters: the extensions' filters of sessions left out (agentfilters.go); nil (an older hub, a call
 			// that says nothing of them) leaves them as they are.
 			AgentFilters *[]proto.AgentFilter `json:"agent_filters"`
+			// ClaudeLiveReplies: the Agents' starts load the live replies plugin (Settings › Claude Code, hooksplugin.go,
+			// #1309); nil (an older hub) leaves it as it is, on at first.
+			ClaudeLiveReplies *bool `json:"claude_live_replies"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -706,6 +741,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if c.AgentFilters != nil {
 			n.setAgentFilters(*c.AgentFilters)
+		}
+		if c.ClaudeLiveReplies != nil {
+			n.setLiveReplies(*c.ClaudeLiveReplies)
 		}
 		return map[string]any{"claude_dirs": n.claudeConfigDirs()}, nil
 	case "usage.windows": // subscription rate-limit windows read from local files (usagewindows.go, #2432)
@@ -999,7 +1037,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
 		return n.worktreePrepare(ctx, p.Kind, p.WorkspaceID, p.Cwd)
 	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
-		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path)
+		if p.AutoName {
+			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
+				return nil, errors.New("Choose automatic naming or an explicit branch and path")
+			}
+			return n.worktreeCreateAutomatic(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
+		}
+		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
 	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
 		var a struct {
 			NameHint     string `json:"name_hint"`
@@ -1014,6 +1058,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return n.worktreeStatus(ctx, p.Kind, p.Cwd)
 		}
 		return n.worktreeRemove(ctx, p.Kind, p.Path, a.DeleteBranch, a.Force)
+	case "worktree.snapshot": // a reviewer's own copy of an agent's change (reviewsnapshot.go, #2173)
+		var a struct {
+			NameHint string `json:"name_hint"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.worktreeSnapshot(ctx, p.Kind, p.Cwd, a.NameHint)
 	case "tabs.close":
 		return ok(n.closeTab(ctx, p.Kind, p.TabID))
 	case "tabs.rename":
@@ -1061,11 +1111,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		f, err := n.file(p.SessionID)
 		if err != nil {
 			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat, not an error
+				if p.UserInputs {
+					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
+				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
 			return nil, err
 		}
-		n.refresh(p.SessionID, f)
+		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
+			return nil, err
+		}
+		if p.UserInputs {
+			return f.UserInputs(ctx)
+		}
 		// Items are kept without their image data; a caller that did not ask for lazy images (an older hub) gets it.
 		items := func(items []proto.Item) []proto.Item {
 			if !p.LazyImages {
@@ -1175,6 +1233,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"settings": list}, err
 	case "file.upload.begin", "file.upload.chunk", "file.upload.end", "file.upload.abort":
 		return n.uploadCall(method, params)
+	case "file.rename", "file.move", "file.trash", "file.restore":
+		return n.fileEditCall(method, params)
 	case "health.reports.list", "health.reports.delete":
 		return n.healthReportsCall(method, params)
 	case "file.chunk":
@@ -1222,7 +1282,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "fs.stat":
 		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd)}, nil
 	case "space.rename":
-		return ok(n.renameSpace(ctx, p.WorkspaceID, p.Name))
+		name, err := n.renameSpace(ctx, p.WorkspaceID, p.Name)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true, "name": name}, nil
+	case "worktree.rename":
+		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":
@@ -1287,7 +1353,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") {
 			return nil, fmt.Errorf("bad assistant dir")
 		}
-		dir := n.assistantDirOf(a.Dir)
+		dir, err := n.preparedDir(a.Dir)
+		if err != nil {
+			return nil, err
+		}
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
@@ -1478,9 +1547,9 @@ func parseClaudeVersion(out string) string {
 }
 
 // terminalEscapes are OSC (ESC ] … BEL or ESC \\, e.g. iTerm2's shell integration) and CSI (colors) sequences.
-var terminalEscapes = regexp.MustCompile(`\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]`)
+var terminalEscapes = lazyre.New(`\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[A-Za-z]`)
 
-var claudeVersionLine = regexp.MustCompile(`^\s*v?(\d+\.\d+\.\d+\S*)\s*(\(Claude Code\))?\s*$`)
+var claudeVersionLine = lazyre.New(`^\s*v?(\d+\.\d+\.\d+\S*)\s*(\(Claude Code\))?\s*$`)
 
 // interactiveShell is the shell a launcher runs in interactively, so its rc file defines the launcher function:
 // loginShellProgram. On Windows that is Git Bash, never a bare bash, which is WSL there (a claude handed to WSL found

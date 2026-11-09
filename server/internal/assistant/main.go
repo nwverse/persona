@@ -3,6 +3,8 @@ package assistant
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -104,9 +107,8 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 		if token == "" {
 			return errors.New("no bus token: set PERSONA_ASSISTANT_TOKEN (personad hub assistant-token prints one)")
 		}
-		hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
-		if hub == "" {
-			hub = localHubURL(cfg.Listen)
+		if hub, fingerprint, err = externalHub(deploy, cfg.Listen); err != nil {
+			return err
 		}
 	}
 	home := identity.HomeDir()
@@ -353,7 +355,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			if out, ok, err := svc.NodeAnswer(ctx, machine, method, params); ok {
 				return out, ok, err
 			}
-			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet.go)
+			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet_events.go)
 		},
 		Event:    func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
 		Detached: func(machine string) { svc.NodeDetached(machine) },
@@ -362,17 +364,10 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
 		OnConnected: func(machine string) { ext.NodeConnected(machine) },
 		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
-		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers.go).
+		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
 		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
-			if svc.machinePending(ctx, machine) {
-				return nil
-			}
-			b, err := json.Marshal(map[string]any{"launchers": svc.managedForNodes(ctx)})
-			if err != nil {
-				return nil
-			}
-			return []devicewire.NodeCall{{MachineID: machine, Method: DeviceLaunchersManaged, Params: b}}
+			return svc.managedNodeCalls(ctx, machine)
 		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
@@ -493,6 +488,33 @@ func readHubConfig() (hubConfig, error) {
 		cfg.Listen = v
 	}
 	return cfg, nil
+}
+
+// externalHub is the hub an assistant the hub didn't bind connects to, and its TLS pin. PERSONA_ASSISTANT_HUB is the
+// hub (the one on this machine, from listen, without it). PERSONA_ASSISTANT_FINGERPRINT pins an https hub's public key,
+// the fp `personad hub pair` prints (docs/operations/network.md): what an assistant elsewhere (assistant.external)
+// needs to reach a hub with its own self-signed certificate, as a manager's manager.json has it (#1255). Without it
+// the system's CAs are trusted. The hub's own child dials its local address and takes no pin.
+func externalHub(deploy, listen string) (hub, fingerprint string, err error) {
+	hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
+	if hub == "" {
+		hub = localHubURL(listen)
+	}
+	if deploy == "child" {
+		return hub, "", nil
+	}
+	fingerprint = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_FINGERPRINT"))
+	if fingerprint == "" {
+		return hub, "", nil
+	}
+	if sum, err := base64.RawURLEncoding.DecodeString(fingerprint); err != nil || len(sum) != sha256.Size {
+		return "", "", errors.New("PERSONA_ASSISTANT_FINGERPRINT is not a hub fingerprint: 43 characters of base64url, " +
+			"the fp personad hub pair prints")
+	}
+	if u, err := url.Parse(hub); err != nil || u.Scheme != "https" {
+		return "", "", fmt.Errorf("PERSONA_ASSISTANT_FINGERPRINT pins an https hub, and PERSONA_ASSISTANT_HUB is %q", hub)
+	}
+	return hub, fingerprint, nil
 }
 
 // localHubURL is the hub on this machine, from its listen address.

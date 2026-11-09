@@ -37,6 +37,13 @@ describe("answerCard", () => {
     expect(ended).toEqual([["p1", { ix, resolution: { allow: false, message: "用户拒绝了" }, already: false, handedBack: false }]]);
   });
 
+  it("leaves a handed-back receipt for a fresh hand back, as for an answer", async () => {
+    apiOp.mockResolvedValue({ ok: true });
+    expect(await answerCard(ix, { dismiss: true })).toEqual({ ok: true, already: false });
+    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { dismiss: true } });
+    expect(ended).toEqual([["p1", { ix, resolution: { dismiss: true }, already: false, handedBack: true }]]);
+  });
+
   it("别处已经答过：按 hub 说的答案记下，already", async () => {
     apiOp.mockResolvedValue({ already: true, resolution: { allow: true } });
     expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: true });
@@ -57,4 +64,53 @@ describe("answerCard", () => {
     expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: expect.stringMatching(/^没送到：.+（HTTP 500: boom）$/) });
     expect(ended).toEqual([]);
   });
+});
+
+it("sends secret text unchanged and stores only a redacted receipt", async () => {
+  const card: Interaction = { ...ix, kind: "screen", secret: true };
+  const body = Object.freeze({ text: "synthetic-secret" });
+  apiOp.mockResolvedValue({});
+  expect(await answerCard(card, body)).toEqual({ ok: true, already: false });
+  expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: body });
+  expect(ended[0]?.[1]).toMatchObject({ resolution: { text: "<redacted>" } });
+  expect(body.text).toBe("synthetic-secret");
+});
+
+it("redacts field and elicitation secrets by schema and name without mutating the payload", async () => {
+  const card: Interaction = {
+    ...ix, kind: "elicitation", fields: [{ key: "hidden", label: "Hidden", secret: true }],
+    elicitation: { mode: "form", requested_schema: { type: "object", properties: {
+      hidden: { type: "string", format: "password" }, write: { type: "string", writeOnly: true }, visible: { type: "string" },
+    } } },
+  };
+  const values = Object.freeze({ hidden: "synthetic", api_key: "synthetic", visible: "keep" });
+  const content = Object.freeze({ hidden: "synthetic", write: "synthetic", TOKEN: "synthetic", visible: "keep", count: 3, enabled: false });
+  const body = Object.freeze({ action: "accept", values, content });
+  apiOp.mockResolvedValue({});
+  expect(await answerCard(card, body)).toEqual({ ok: true, already: false });
+  expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: body });
+  expect(ended[0]?.[1]).toMatchObject({ resolution: {
+    action: "accept", values: { hidden: "<redacted>", api_key: "<redacted>", visible: "<redacted>" },
+    content: { hidden: "<redacted>", write: "<redacted>", TOKEN: "<redacted>", visible: "keep", count: 3, enabled: false },
+  } });
+  expect(body.content.hidden).toBe("synthetic");
+  expect(body.values.hidden).toBe("synthetic");
+});
+
+it("preserves non-secret text and does not record failed secret answers", async () => {
+  apiOp.mockResolvedValue({});
+  await answerCard({ ...ix, kind: "screen" }, { text: "ordinary answer" });
+  expect(ended[0]?.[1]).toMatchObject({ resolution: { text: "ordinary answer" } });
+  ended.length = 0;
+  apiOp.mockRejectedValue(new Error("offline"));
+  expect((await answerCard({ ...ix, kind: "screen", secret: true }, { text: "synthetic" })).ok).toBe(false);
+  expect(ended).toEqual([]);
+});
+
+it("answers an explicitly sessionless script card without a session lookup result", async () => {
+  session = undefined;
+  apiOp.mockResolvedValue({});
+  const script = { ...ix, id: "script-request", session_id: "", tool_name: "personad_ask", agent: "script" };
+  expect(await answerCard(script, allowBody())).toEqual({ ok: true, already: false });
+  expect(apiOp).toHaveBeenCalledWith("/interactions/script-request/resolve", { method: "POST", json: { allow: true } });
 });

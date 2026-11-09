@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"net/url"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Command-line programs an extension needs (docs/extensions/extensions.md "Command-line programs (tools)", #4507): the hub installs them
@@ -21,10 +21,10 @@ import (
 const ToolsMost = 8
 
 var (
-	toolNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,31}$`)
-	semverInText    = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
-	npmPackage      = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
-	sha256Hex       = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	toolNamePattern = lazyre.New(`^[a-z0-9][a-z0-9._-]{0,31}$`)
+	semverInText    = lazyre.New(`(\d+)\.(\d+)\.(\d+)`)
+	npmPackage      = lazyre.New(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+	sha256Hex       = lazyre.New(`^[0-9a-f]{64}$`)
 )
 
 // ToolSpec is one command-line program of manifest.tools.

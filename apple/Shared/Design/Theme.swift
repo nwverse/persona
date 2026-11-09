@@ -39,6 +39,39 @@ nonisolated enum AppStyle: String, CaseIterable, Identifiable, Sendable {
 }
 
 nonisolated enum Theme {
+    /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
+    enum WorkspaceSidebar {
+        static let background = Color(light: 0xF5F5F5, dark: 0x2A2A2A)
+        static let foreground = Color(light: 0x0A0A0A, dark: 0xF0F0F0)
+        static let muted = Color(light: 0x737373, dark: 0xA3A3A3)
+        static let border = Color(light: 0xE5E5E5, dark: 0x404040)
+        static let chip = Color(light: 0xFFFFFF, dark: 0x353535)
+        static let success = Color(light: 0x00BC7D, dark: 0x00BC7D)
+        static let unread = Color(light: 0xFF9800, dark: 0xFFB020)
+        static let selected = foreground.opacity(0.08)
+        static let hovered = foreground.opacity(0.04)
+        static let cardLeading: CGFloat = 10
+        static let childInset: CGFloat = 10
+        static let statusLane: CGFloat = 16
+        static let titleHeight: CGFloat = 20
+        static let agentHeight: CGFloat = 24
+        static let badgeHeight: CGFloat = 16
+        static let projectBadgeWidth: CGFloat = 96
+        static let cardRadius: CGFloat = 8
+        static let chipRadius: CGFloat = 4
+        static let rule: CGFloat = 1
+        static let hostRotation = Angle.degrees(90)
+        #if os(macOS)
+        static var title: SwiftUI.Font { Font.body }
+        static var titleUnread: SwiftUI.Font { Font.bodyStrong }
+        #else
+        static var title: SwiftUI.Font { Font.caption }
+        static var titleUnread: SwiftUI.Font { Font.captionStrong }
+        #endif
+        static var meta: SwiftUI.Font { Font.label }
+        static var agent: SwiftUI.Font { Font.label }
+    }
+
     private static var spec: StyleSpec { StyleSpec.current }
     #if os(watchOS)
     static let systemPage = Color.black
@@ -190,6 +223,18 @@ nonisolated enum Theme {
         static let scrim = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor.black.withAlphaComponent(0.45) : UIColor.black.withAlphaComponent(0.2) })
         #endif
     }
+
+    #if !os(watchOS)
+    /// A long-pressed message lifted over its chat (`MessageLift`, #603).
+    enum Lift {
+        /// How far the chat behind is blurred: its words still show, faintly.
+        static let blur: CGFloat = 3
+        /// Over the blurred chat: lighter than `Fill.scrim`, for the same reason.
+        static let scrim = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor.black.withAlphaComponent(0.3) : UIColor.black.withAlphaComponent(0.08) })
+        /// The bar of actions next to it: light in light mode, the dark bar it always was in dark mode.
+        static let bar = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.17, alpha: 1) : UIColor.white })
+    }
+    #endif
 
     /// The image viewer's backdrop (`ImageViewer`), as Photos has it: the page's own color while its bars show (white
     /// in light mode, black in dark), black once a tap hides them.
@@ -437,6 +482,8 @@ nonisolated enum Theme {
         static let box72: CGFloat = 72
         static let box76: CGFloat = 76
         static let box80: CGFloat = 80
+        /// The height of a saved place's map in its editor: the reminder's circle and a street or two around it.
+        static let placeMap: CGFloat = 160
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the
@@ -465,6 +512,9 @@ nonisolated enum Theme {
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
         static let cardColumn: CGFloat = 330
+        /// The narrowest column of a chat's grid of subagent cards: two side by side from about 540 pt (iPad, Mac), as
+        /// the web's from 560 px; one on a phone.
+        static let subagentColumn: CGFloat = 260
         // CarPlay.
         /// The image of a CarPlay voice control state: Apple's guide asks for 150 pt (CarPlay sets its own size).
         static let carPlayVoiceImage: CGFloat = 150
@@ -477,6 +527,41 @@ nonisolated enum Theme {
     /// The system's sidebar column on iPad (iOS 26, the glass styles), measured from its pixels: the split fills the
     /// status bar above the column with it (`SidebarTopFill`), which the column itself cannot draw into.
     static let systemSidebar = Color(light: 0xE6E9EE, dark: 0x191C20)
+
+    /// The to-dos' calendar (#2029, docs/assistant/todos.md "Calendar"): its time axis, its columns and how a to-do's
+    /// block is drawn on it.
+    enum CalendarGrid {
+        /// An hour on the time axis: a to-do's block (`Size.tapTarget` high) takes most of one, so two an hour apart
+        /// never overlap.
+        static let hour: CGFloat = 52
+        /// The column of hours at the left of a day: "09:00", "11:00 AM" and the now line's "2:20 PM" fit.
+        static let gutter: CGFloat = 60
+        /// The same on a phone's week, whose seven columns need the room: the hours alone, and the moment's "14:20".
+        static let gutterNarrow: CGFloat = 40
+        /// A day of the month grid, at the least: its date and two lines.
+        static let monthCell: CGFloat = 92
+        /// The width from which the week shows each to-do's own block with its time and state (iPad, Mac); narrower,
+        /// a block is a few characters and the to-dos due at one time share one.
+        static let wide: CGFloat = 600
+        /// A day's dots in the week strip: at most this many, the rest are counted in the day.
+        static let dots = 3
+        /// The ground of a to-do's block and chip: its state's color, this strong.
+        static let tint: Double = 0.14
+        /// A done to-do, faded.
+        static let doneFade: Double = 0.5
+        /// A day of the month grid that belongs to the month before or after.
+        static let outsideFade: Double = 0.45
+        /// Lines a day of the month grid shows: its entries, or one fewer and "N more".
+        static let monthLines = 3
+        /// Where a new to-do's time snaps to when the empty axis is tapped, in minutes.
+        static let snapMinutes = 30
+        /// The calendar's ground under the page's controls: white on the grouped gray in the glass styles, as the list's
+        /// rows are; the style's card otherwise.
+        static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
+        /// The hour lines and the columns' edges; the line under the all-day row is `lineStrong`.
+        static let line = Color.primary.opacity(0.1)
+        static let lineStrong = Color.primary.opacity(0.18)
+    }
 
     /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner and
     /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), and those stop with Reduce Motion (the spinner
@@ -492,6 +577,14 @@ nonisolated enum Theme {
         static let expand = Animation.smooth(duration: 0.4)
         /// One way of a blink (the built-in persona's eyes): a blink is shut and open again, well under a quarter second.
         static let blink = Animation.easeInOut(duration: 0.07)
+        /// Mochi's nominal drawing cadence; a periodic schedule does not request display-rate updates.
+        static let personaFrameInterval: TimeInterval = 1 / 15
+        static let needsYouBreathDuration: TimeInterval = 1
+        static let needsYouBreathScale: CGFloat = 1.2
+        static let needsYouRingOpacity = 0.6
+        /// A compositor request, not a guaranteed upper bound on rendering frequency.
+        static let breathMinimumFPS: Float = 10
+        static let breathPreferredFPS: Float = 30
         /// What opens in the chat shows itself (a mask growing down from its header, and a fade); its height does not
         /// animate (`unfolding`). Closing folds it away first, quicker, then removes it.
         static let revealTime = 0.28
@@ -548,7 +641,7 @@ nonisolated enum Theme {
         LinearGradient(colors: [c, c.blended(with: .black, by: 0.12)], startPoint: .top, endPoint: .bottom)
     }
 
-    /// The ChatGPT-style shell (docs/apple/ios.md「新外壳」, iPhone without Old Layout): neutral like ChatGPT's, in every style.
+    /// The iPhone shell: neutral like ChatGPT's, in every style.
     enum Shell {
         /// The Assistant | Agents switch's selected segment, inside its glass capsule.
         static let segment = Color(light: 0xE6E6E6, dark: 0x3A3A3C)
@@ -580,6 +673,9 @@ nonisolated enum Theme {
         static let agentsRoom: CGFloat = 34
         /// The optional third segment must leave both side buttons reachable on narrow screens.
         static let compactSwitchLargestTypeSize: DynamicTypeSize = .large
+        /// A segment of the switch on iPhone Duo's side rail (`ShellSideRail`): square, a symbol over the page's name, within
+        /// the column the system's bars take beside the content.
+        static let railSegment: CGFloat = 54
     }
 
     /// The page behind lists and chats.

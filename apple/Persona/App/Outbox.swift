@@ -3,9 +3,9 @@ import Foundation
 // Messages written while the hub is out of reach (docs/apple/ios.md「连接状态」): they stay in their chat as pending bubbles
 // with a clock (Sends when connected) and go out by themselves once the app is connected and caught up, in the order they
 // were written. Kept on disk too, so quitting the app (or iOS ending it in the background) does not lose them.
-// Sent bubbles live here too: they stay until the transcript's copy arrives (`settleSend`, `showSent`).
+// Sent bubbles live here too: they stay until the transcript's copy arrives (`settleSend`, `showSent`), on disk as well.
 
-enum SendOutcome: Equatable {
+nonisolated enum SendOutcome: Equatable, Sendable {
     case sent, failed, waiting
 
     var state: PendingMessage.State {
@@ -25,36 +25,79 @@ extension AppModel {
 
     /// A message the hub already has, on screen as sent until its transcript copy arrives: a new Persona conversation's
     /// first one went with the start request, and the node shows no transcript until claude has written it (#511).
-    func showSent(_ key: SessionKey, text: String, images: [ImagePayload]) {
-        let msg = PendingMessage(text: text, images: images)
+    /// `id`: the message id the hub sent it under (an inbox hand-off's client id), which its transcript copy carries; no
+    /// bubble when that copy is in already (a retried hand-off the hub answered from its receipt).
+    func showSent(_ key: SessionKey, text: String, images: [ImagePayload], id: UUID = UUID()) {
+        guard !chat(key).items.contains(where: { PendingMessage.tied($0, to: id) == true }) else { return }
+        let msg = PendingMessage(id: id, text: text, images: images)
         chat(key).pending.append(msg)
         settleSend(key, msg.id, .sent)
     }
 
-    /// Records how a send went; a sent bubble stays until its transcript copy arrives (a minute at most).
-    func settleSend(_ key: SessionKey, _ id: UUID, _ outcome: SendOutcome) {
+    /// Records how a send went and returns what it recorded (nil: the message is no longer in its chat). A sent bubble
+    /// stays until its transcript copy arrives (a minute at most); one that keeps coming back waiting on a link that is
+    /// up fails after `OutboxWait.connectedLimit`.
+    @discardableResult
+    func settleSend(_ key: SessionKey, _ id: UUID, _ outcome: SendOutcome) -> SendOutcome? {
         let store = chat(key)
-        guard let i = store.pending.firstIndex(where: { $0.id == id }) else { return }
-        store.pending[i].state = outcome.state
+        guard let i = store.pending.firstIndex(where: { $0.id == id }) else { return nil }
+        let linkUp = outboxLinkUp(key.group)
+        let wait = OutboxWait.next(outcome, since: store.pending[i].stalledSince, now: .now, linkUp: linkUp)
+        store.pending[i].state = wait.outcome.state
+        store.pending[i].stalledSince = wait.since
+        if wait.gaveUp, session(key) == nil {
+            // No row for its chat after a minute on a link that is up (deleted, or its computer removed, on another
+            // device): the chat's other waiting messages have nowhere to go either, and fail with it under one notice.
+            for j in store.pending.indices where store.pending[j].state == .waiting {
+                store.pending[j].state = .failed
+                store.pending[j].stalledSince = nil
+            }
+            toast = Toast(String(localized: "Waiting messages weren't sent: their chat wasn't found on the hub."), style: .error)
+        }
         saveOutbox()
-        switch outcome {
+        switch wait.outcome {
         case .sent:
             Task {
                 // Normally the transcript shows it within a second or two. Behind a long turn it may only be written
                 // when that turn ends (Codex keeps its queue to itself): stay while the agent works, then go.
-                try? await Task.sleep(for: .seconds(60))
+                try? await clock.sleep(for: .seconds(60))
                 for _ in 0..<90 where store.pending.contains(where: { $0.id == id }) && session(key)?.status.isActive == true {
-                    try? await Task.sleep(for: .seconds(10))
+                    try? await clock.sleep(for: .seconds(10))
                 }
                 store.pending.removeAll { $0.id == id }
             }
-        case .waiting where socket(key.group).map({ $0.state == .connected && !$0.stalled }) == true:
-            // The socket looks fine but the request got no answer (a weak network): try again shortly.
-            Task {
-                try? await Task.sleep(for: .seconds(10))
-                flushOutbox()
-            }
+        case .waiting where linkUp:
+            // The socket looks fine but the request got no answer (a weak network), or the chat is not in the session
+            // list yet: try again shortly.
+            retryOutboxSoon(key.group)
         default: break
+        }
+        return wait.outcome
+    }
+
+    /// The group's socket is connected and answering: a send that comes back waiting then is not an outage.
+    private func outboxLinkUp(_ group: String) -> Bool {
+        #if DEBUG
+        if let linksUpForTests { return linksUpForTests }
+        #endif
+        return socket(group).map { $0.state == .connected && !$0.stalled } == true
+    }
+
+    /// The group's waiting messages go again in 10 seconds: one retry per group, however many came back waiting.
+    func retryOutboxSoon(_ group: String) {
+        guard outboxRetry[group] == nil else { return }
+        outboxRetry[group] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard let self else { return }
+            self.outboxRetry[group] = nil
+            if !Task.isCancelled { self.flushOutbox() }
+        }
+    }
+
+    /// A new socket for the group: its waiting messages' runs of waits start again (`OutboxWait`).
+    func restartOutboxWaits(_ group: String) {
+        for (key, store) in chats where key.group == group {
+            for i in store.pending.indices where store.pending[i].stalledSince != nil { store.pending[i].stalledSince = nil }
         }
     }
 
@@ -73,16 +116,23 @@ extension AppModel {
                 defer { flushingOutbox.remove(group) }
                 for key in keys {
                     let store = chat(key)
+                    // A paged session list holds only the pages loaded: ask for this chat's row (no-op otherwise).
+                    if session(key) == nil { await refreshSessionDetail(key) }
                     if !isSubscribed(key) {
                         if store.loadedOnce { await fill(key) } else { await loadInitial(key) }
                     }
                     for msg in store.pending where msg.state == .waiting {
-                        guard isLive(group), let i = store.pending.firstIndex(where: { $0.id == msg.id }) else { break }
+                        guard isLive(group) else { break }
+                        // Gone, failed with an earlier one, or resent by hand meanwhile: not this pass's to send.
+                        guard let i = store.pending.firstIndex(where: { $0.id == msg.id }), store.pending[i].state == .waiting else { continue }
                         store.pending[i].state = .sending
-                        let outcome = await sendPending(key, msg)
-                        settleSend(key, msg.id, outcome)
-                        if outcome == .waiting { break } // keep the order: the rest go after it
+                        let settled = settleSend(key, msg.id, await sendPending(key, msg))
+                        if settled == .waiting { break } // keep the order: the rest go after it
                     }
+                }
+                // A retry that came due during this pass found the group busy: what still waits goes again shortly.
+                if outboxLinkUp(group), chats.contains(where: { $0.key.group == group && $0.value.pending.contains { $0.state == .waiting } }) {
+                    retryOutboxSoon(group)
                 }
             }
         }
@@ -90,28 +140,40 @@ extension AppModel {
 
     private static let outboxName = "outbox"
 
+    /// The longest a sent message waits for its transcript copy (`settleSend`): a minute, then ten seconds at a time
+    /// while the agent works, 90 times.
+    static let sentWait: TimeInterval = 60 + 90 * 10
+
     func saveOutbox() {
         outboxWriter.run { [weak self] in // one write at a time, the latest last
             guard let self else { return }
-            let list = self.chats.flatMap { key, store in
-                store.pending.filter { $0.state != .sent }.map { OutboxEntry(key: key, message: $0) }
-            }
-            StateCache.save(Self.outboxName, list)
+            let list = self.chats.flatMap { key, store in store.pending.map { OutboxEntry(key: key, message: $0) } }
+            StateCache.save(Self.outboxName, list, in: self.stateFolder)
         }
     }
 
     /// At launch: what was still going out comes back as waiting (a resend carries the same id, so one that did
-    /// arrive is not typed twice).
+    /// arrive is not typed twice). A sent one comes back as sent, waiting for its transcript copy again: it was left
+    /// out, and a message the hub had taken was gone from its chat until the copy came, behind a long turn for minutes
+    /// (#1455). One whose copy is already in the chat's cache does not come back: copies are looked for only among
+    /// the items that arrive from now on, and it showed twice until its wait ran out.
     func restoreOutbox() {
-        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self) ?? [] {
+        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self, in: stateFolder) ?? [] {
             var msg = e.message
-            if msg.state == .failed { // a failed one stays failed, the user decides; not forever
+            switch msg.state {
+            case .failed: // a failed one stays failed, the user decides; not forever
                 if let at = msg.createdAt, at < Date().addingTimeInterval(-86400) { continue }
-            } else {
+            case .sent:
+                if let at = msg.createdAt, at < Date().addingTimeInterval(-Self.sentWait) { continue }
+            case .sending, .waiting: // a week on, its chat may be long gone
+                if let at = msg.createdAt, at < Date().addingTimeInterval(-OutboxWait.restoreLimit) { continue }
                 msg.state = .waiting
             }
             let store = chat(e.key)
-            if !store.pending.contains(where: { $0.id == msg.id }) { store.pending.append(msg) }
+            guard !store.pending.contains(where: { $0.id == msg.id }),
+                  !store.items.contains(where: { PendingMessage.tied($0, to: msg.id) == true }) else { continue }
+            store.pending.append(msg)
+            if msg.state == .sent { settleSend(e.key, msg.id, .sent) } // its wait for the copy starts again
         }
     }
 }
@@ -129,5 +191,32 @@ nonisolated enum OutboxFlush {
         var out: [String: [SessionKey]] = [:]
         for key in keys where !busy.contains(key.group) && ready(key.group) { out[key.group, default: []].append(key) }
         return out.mapValues { $0.sorted { ($0.machineID, $0.sessionID) < ($1.machineID, $1.sessionID) } }
+    }
+}
+
+/// How long a message may keep coming back waiting while its group's link is up (pure, for the tests). Waiting on a
+/// link that is up means a request with no answer (a weak network) or a chat missing from the session list (deleted,
+/// or its computer removed, on another device); past the limit the message fails and the user decides. Waiting while
+/// the link is down has no limit: that is what the outbox is for.
+nonisolated enum OutboxWait {
+    /// How long sends may keep coming back waiting on a link that is up: about six tries, 10 seconds apart.
+    static let connectedLimit: TimeInterval = 60
+    /// How old a waiting message may be and still come back at launch.
+    static let restoreLimit: TimeInterval = 7 * 86400
+
+    struct Next: Equatable {
+        /// The outcome to record.
+        var outcome: SendOutcome
+        /// When the run of waits on a link that is up began; nil once the message no longer waits on one.
+        var since: Date?
+        /// It failed because the run reached the limit.
+        var gaveUp = false
+    }
+
+    static func next(_ outcome: SendOutcome, since: Date?, now: Date, linkUp: Bool) -> Next {
+        guard outcome == .waiting, linkUp else { return Next(outcome: outcome, since: nil) }
+        let start = since ?? now
+        if now.timeIntervalSince(start) >= connectedLimit { return Next(outcome: .failed, since: nil, gaveUp: true) }
+        return Next(outcome: .waiting, since: start)
     }
 }

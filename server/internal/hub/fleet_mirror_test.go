@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -62,6 +63,10 @@ func (d *mirrorDevices) List() []devices.Summary {
 	return out
 }
 
+func (d *mirrorDevices) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
+	return nil, nil, nil
+}
+
 func (d *mirrorDevices) Canonical(id string) string {
 	if m := d.h.localMachine(id); m != nil {
 		return m.cfg.ID
@@ -81,6 +86,11 @@ func (d *mirrorDevices) Sessions(id string) ([]proto.Session, bool) {
 		list = m.sessionList() // set on the machine by the test itself
 	}
 	return slices.Clone(list), true
+}
+
+func (d *mirrorDevices) SessionsWhere(id string, keep func(*proto.Session) bool) ([]proto.Session, bool) {
+	list, ok := d.Sessions(id)
+	return slices.DeleteFunc(list, func(s proto.Session) bool { return !keep(&s) }), ok
 }
 
 func (d *mirrorDevices) Session(id, session string) (proto.Session, bool) {
@@ -105,6 +115,8 @@ func (d *mirrorDevices) ConnectedAt(id string) time.Time {
 func (d *mirrorDevices) Usage() assistantwire.UsageSummary {
 	return assistantwire.UsageSummary{Machines: []assistantwire.MachineUsage{}}
 }
+
+func (d *mirrorDevices) SetAttention(link.Attention) {}
 
 // mirrors are the tests' hubs' mirror devices.
 var mirrors sync.Map // *Hub → *mirrorDevices
@@ -166,6 +178,7 @@ func editSessions(m *Machine, edit func([]proto.Session) []proto.Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions = edit(m.sessions)
+	m.raws, m.rawsOf = nil, keptList{} // edited in place maybe: no longer what the manager's bytes gave
 }
 
 // nodeAsks is a node's request on m as the manager takes it (devices.Options.Answer): the assistant's own, then the

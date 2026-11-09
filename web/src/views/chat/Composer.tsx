@@ -2,7 +2,7 @@ import { storedValue } from "../../lib/compatibility";
 // Beautiful UI's Prompt Bar, wired to a session: multi-line input, / commands, @ files and sessions, image attachments
 // (paste, drop, pick; click one to mark it up), files uploaded to the session's machine, send — and stop while the
 // agent works and nothing is typed. Quotes, edits and edited images from the chat arrive as draft events (drafts.ts).
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
@@ -31,6 +31,7 @@ import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
 import { MAX_IMAGES } from "../../lib/composer-commands";
 import { t } from "../../i18n";
+import type { VoiceOffer } from "./voice/VoiceParts";
 
 // Drawn only while an attached image is edited: its own chunk, fetched by the idle preload or the first edit (lib/lazy-page.ts).
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor));
@@ -77,7 +78,8 @@ function fromDraftImage(img: DraftImage, id = uuid()): Attachment {
   return { ...img, id, url: URL.createObjectURL(new Blob([bytes], { type: img.mime })) };
 }
 
-export function Composer({
+// memo: a chat renders again for each transcript item, and this box takes none of them (ChatView keeps its props stable)
+export const Composer = memo(function Composer({
   draftKey,
   placeholder,
   machineId,
@@ -88,14 +90,14 @@ export function Composer({
   commands = AGENT_COMMANDS,
   onSend,
   onStop,
+  stopping,
   autoFocus,
   footer,
   suggestion,
   mention,
   onFocusChange,
   blocked,
-  resendRef,
-  onEdit,
+  voice,
 }: {
   draftKey: string;
   placeholder: string;
@@ -107,9 +109,12 @@ export function Composer({
   needsYou?: boolean;
   disabled?: boolean;
   commands?: Command[];
-  /** `fromBox`: the words were in this box and go back into it if the send fails. */
-  onSend: (m: Outgoing, fromBox?: boolean) => Promise<boolean>;
+  /** False: it did not go and nothing shows it (the chat keeps one that failed as a failed bubble, true), so the words go
+   *  back into the box. */
+  onSend: (m: Outgoing) => Promise<boolean>;
   onStop?: () => void;
+  /** A stop is on its way: the button shows it and takes no more presses. */
+  stopping?: boolean;
   autoFocus?: boolean;
   footer?: React.ReactNode;
   suggestion?: string;
@@ -120,16 +125,19 @@ export function Composer({
   /** The main conversation cannot answer yet (docs/assistant/onboarding.md 4.4): the send button says what to do first and opens
    *  it; the box still takes typing and keeps the draft, nothing is sent or queued. */
   blocked?: { label: string; onClick?: () => void; onNudge?: () => void };
-  /** Set to this box's send (what is in it now): a failed send's "Send again" sends the words that were put back (#4270). */
-  resendRef?: React.MutableRefObject<(() => void) | null>;
-  /** You typed in the box (not a send putting words back). */
-  onEdit?: () => void;
+  /** Voice chat (docs/web/web.md "Voice"): with an empty box and an idle agent it takes the send button's place, round;
+   *  otherwise it is a plain icon before send / stop. "explain": its click says why a call cannot start here. */
+  voice?: VoiceOffer;
 }) {
   const [draft, setDraft] = useState(() => storedValue(`draft:${draftKey}`) ?? "");
   const [atts, setAtts] = useState<Attachment[]>([]);
+  // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
+  const [sentPill, setSentPill] = useState<string | null>(null);
+  useEffect(() => {
+    if (working) setSentPill(null);
+  }, [working]);
   // "Quote" and comments (lib/comments.ts): bars above the input, sent as `> ` blocks in front of the message (lib/drafts.ts)
   const quotes = useQuotes(draftKey).list;
-  const [sending, setSending] = useState(false);
   // files still on their way to the machine, per conversation: the spinner belongs to the one they were picked in
   const [uploads, setUploads] = useState<Record<string, number>>({});
   const uploading = uploads[draftKey] ?? 0;
@@ -149,6 +157,7 @@ export function Composer({
     return () => clearTimeout(timer);
   }, [nudge]);
   const input = useRef<HTMLTextAreaElement>(null);
+  const box = useRef<HTMLDivElement>(null);
   // Phones (#5688): the box grows to a line limit from the visible height, then scrolls and offers Expand, the draft
   // full screen. `grow` is what the last measure found: the limit, a line's height, the padding, and whether it is past it.
   const compact = useMedia(COMPACT_COMPOSER);
@@ -236,11 +245,42 @@ export function Composer({
           requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
           return;
         }
-        if (e.type === "replace" && replaceNeedsConfirm(draftNow.current, e.text) && !confirm(t("chat-composer.replace_confirm"))) return;
         // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
         const split = e.type === "replace" ? splitQuotes(e.text) : null;
-        if (e.type === "replace") setQuotes(draftKey, split ? parseQuotes(split.quotes) : []);
+        const nextQuotes = e.type === "replace" ? (split ? parseQuotes(split.quotes) : []) : null;
         const next = split ? split.rest : applyDraft(draftNow.current, e);
+        // "Edit" or a rewind over unsent words, quotes or comments puts the message in at once, with no question first:
+        // the notice's Undo brings back what was typed, the quotes on the bar and where the caret was (#2450). An empty
+        // bar, or one that would send the same blocks, loses nothing.
+        const before = getQuotes(draftKey).list;
+        const dropsQuotes = before.length > 0 && withQuoteBlock(before, "") !== withQuoteBlock(nextQuotes ?? [], "");
+        const kept =
+          nextQuotes && (replaceNeedsConfirm(draftNow.current, next) || dropsQuotes)
+            ? { text: draftNow.current, quotes: before, caret: input.current?.selectionStart ?? draftNow.current.length }
+            : null;
+        if (kept) {
+          toast(t("chat-composer.replaced"), "ok", {
+            label: t("chat-composer.undo"),
+            run: () => {
+              setQuotes(draftKey, kept.quotes);
+              // the box went away or shows another conversation: the words go back to this one's stored draft
+              if (!mounted.current || keyNow.current !== draftKey) {
+                storeDraft(draftKey, kept.text);
+                return;
+              }
+              setDraft(kept.text);
+              setDismissed(false);
+              requestAnimationFrame(() => {
+                const el = input.current;
+                if (!el) return;
+                el.focus({ preventScroll: true });
+                el.setSelectionRange(kept.caret, kept.caret);
+                setCaret(kept.caret);
+              });
+            },
+          });
+        }
+        if (nextQuotes) setQuotes(draftKey, nextQuotes);
         setDraft(next);
         setDismissed(false);
         requestAnimationFrame(() => {
@@ -481,11 +521,11 @@ export function Composer({
     }
   };
 
-  const canSend = (draft.trim().length > 0 || atts.length > 0 || contexts.length > 0 || quote) && !sending && !disabled;
+  const canSend = (draft.trim().length > 0 || atts.length > 0 || contexts.length > 0 || quote) && !disabled;
   // Claude's suggested next message (iOS SuggestionPill): while the box is empty and the agent waits for a message
   // (not working, not on a card); a tap fills it
   // in, "Send now" sends it as it is (the node drops it once the agent works again)
-  const pill = suggestion && !blocked && !draft && !atts.length && !contexts.length && !quote && !working && !needsYou && !disabled ? suggestion : null;
+  const pill = suggestion && suggestion !== sentPill && !blocked && !draft && !atts.length && !contexts.length && !quote && !working && !needsYou && !disabled ? suggestion : null;
   const fillSuggestion = (text: string) => {
     setDraft(text);
     setDismissed(true);
@@ -497,15 +537,17 @@ export function Composer({
       el.setSelectionRange(text.length, text.length);
     });
   };
-  const showStop = working && !sending && !draft.trim() && !atts.length && !contexts.length && !quote && onStop;
+  const showStop = working && !draft.trim() && !atts.length && !contexts.length && !quote && onStop;
+  // an empty box and an idle agent: voice takes the send button's place (it would be off anyway), as on iOS
+  const roundVoice = voice?.mode === "start" && !canSend && !showStop && !blocked && !disabled;
 
   const submit = async (text = draft) => {
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
-    if (sending || disabled || blocked || (!text.trim() && !atts.length && !refs.length && !q.length)) return;
-    setSending(true);
+    if (disabled || blocked || (!text.trim() && !atts.length && !refs.length && !q.length)) return;
     // The message shows in the chat at once (a sending bubble), so the box empties at once too: waiting for the hub to
-    // hand it to the agent (seconds when it starts up) left the same words in both places. A failure puts them back.
+    // hand it to the agent (seconds when it starts up) left the same words in both places. A send that never went
+    // (onSend false) puts them back; one that failed stays in the chat as a failed bubble.
     const sent = atts;
     setDraft("");
     draftNow.current = "";
@@ -514,9 +556,13 @@ export function Composer({
     setAtts([]);
     refs.forEach((r) => removeContext(draftKey, r.id));
     setQuotes(draftKey, []);
+    // Ready for the next message now, not when the hub answers (the chat sends them in order). Back to the box only with
+    // a precise pointer and if the focus has not gone elsewhere: on a touch screen it would raise the keyboard and fold
+    // the waiting cards (dock.ts).
+    const at = document.activeElement;
+    if (hasFinePointer() && (!at || at === document.body || box.current?.contains(at))) input.current?.focus({ preventScroll: true });
     // picked contexts ride in front as <persona-context> tags (docs/protocol/protocol.md "Tags in messages"), the quote as `> ` lines
-    const ok = await onSend({ text: withContexts(refs, withQuoteBlock(q, text), sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })) }, true);
-    setSending(false);
+    const ok = await onSend({ text: withContexts(refs, withQuoteBlock(q, text), sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })) });
     if (ok) {
       history.record(text);
       releaseAttachments(sent);
@@ -534,10 +580,7 @@ export function Composer({
       // the quotes back above this conversation's box (kept for it when the box shows another one or closed)
       if (q.length && !getQuotes(draftKey).list.length) setQuotes(draftKey, q);
     }
-    input.current?.focus({ preventScroll: true });
   };
-
-  if (resendRef) resendRef.current = () => void submit();
 
   const pick = (c: Command) => {
     if (c.confirm && !confirm(c.confirm)) return;
@@ -548,6 +591,7 @@ export function Composer({
 
   return (
     <div
+      ref={box}
       className="relative"
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files") || dragHasEntry(e.dataTransfer)) {
@@ -597,7 +641,7 @@ export function Composer({
         <MentionMenu rows={mRows} active={Math.min(mActive, Math.max(mRows.length - 1, 0))} loading={mLoading} browsing={Boolean(token && browseTarget(token.query, mention?.cwd))} onHover={setMActive} onPick={pickMention} />
       )}
 
-      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={() => void submit(pill)} />}
+      {pill && <SuggestionPill text={pill} onFill={() => fillSuggestion(pill)} onSend={() => { setSentPill(pill); void submit(pill); }} />}
 
       <div
         className={cx(
@@ -644,7 +688,6 @@ export function Composer({
           }}
           onChange={(e) => {
             setDraft(e.target.value);
-            onEdit?.();
             setDismissed(false);
             setCaret(e.target.selectionStart);
           }}
@@ -719,7 +762,8 @@ export function Composer({
               // any Enter while blocked says why (also an empty box or attachments only): submit() would do nothing
               if (blocked) {
                 setNudge((n) => n + 1);
-                blocked.onNudge?.();
+                // held down, the key repeats: one fresh ask, not one per repeat
+                if (!e.repeat) blocked.onNudge?.();
               } else void submit();
             }
           }}
@@ -796,16 +840,43 @@ export function Composer({
           )}
           {/* not overflow-hidden: the chips' tap areas reach past this row (touch-hit); the footer truncates its own text */}
           <div className="min-w-0 flex-1 px-1 text-[11.5px] whitespace-nowrap text-ink-3">{footer}</div>
-          {showStop ? (
+          {voice && !roundVoice && (
             <button
               type="button"
-              aria-label={t("chat-composer.interrupt")}
-              title={t("chat-composer.interrupt_hint")}
-              onClick={onStop}
-              className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-danger-fill text-white transition-transform duration-150 active:scale-[0.94]"
+              data-testid="composer-voice"
+              data-voice-mode={voice.mode}
+              aria-label={t("voice.voice_chat")}
+              title={voice.label}
+              onClick={voice.onClick}
+              className={cx("touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] transition-colors hover:bg-hover hover:text-ink", voice.mode === "start" ? "text-ink-2" : "text-ink-3")}
+            >
+              <Icon name="voice" size={15} stroke={2} />
+            </button>
+          )}
+          {roundVoice ? (
+            <button
+              type="button"
+              data-testid="composer-voice"
+              data-voice-mode="start"
+              aria-label={t("voice.voice_chat")}
+              title={voice!.label}
+              onClick={voice!.onClick}
+              className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-ink text-surface transition-[opacity,transform] duration-200 hover:opacity-90 active:scale-[0.94]"
               style={{ animation: `pop-in 200ms ${EASE} both` }}
             >
-              <Icon name="stop" size={12} />
+              <Icon name="voice" size={15} stroke={2.2} />
+            </button>
+          ) : showStop ? (
+            <button
+              type="button"
+              aria-label={stopping ? t("chat-composer.stopping") : t("chat-composer.interrupt")}
+              title={stopping ? t("chat-composer.stopping") : t("chat-composer.interrupt_hint")}
+              onClick={onStop}
+              disabled={stopping}
+              className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-danger-fill text-white transition-transform duration-150 enabled:active:scale-[0.94] disabled:opacity-60"
+              style={{ animation: `pop-in 200ms ${EASE} both` }}
+            >
+              {stopping ? <Spinner size={12} /> : <Icon name="stop" size={12} />}
             </button>
           ) : blocked ? (
             <button
@@ -830,7 +901,7 @@ export function Composer({
               className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.94]"
               style={{ background: canSend ? "var(--ink)" : "var(--line-strong)", color: canSend ? "var(--surface)" : "var(--ink-2)" }}
             >
-              {sending ? <Spinner /> : <Icon name="up" size={16} stroke={2.4} />}
+              <Icon name="up" size={16} stroke={2.4} />
             </button>
           )}
         </div>
@@ -842,7 +913,6 @@ export function Composer({
           selection={[input.current?.selectionStart ?? draft.length, input.current?.selectionEnd ?? draft.length]}
           onChange={(v) => {
             setDraft(v);
-            onEdit?.();
             setDismissed(false);
           }}
           onCollapse={(sel) => {
@@ -850,7 +920,6 @@ export function Composer({
             setExpanded(false);
           }}
           canSend={Boolean(canSend) && !blocked}
-          sending={sending}
           onSend={(sel) => {
             collapsedSel.current = sel;
             setExpanded(false);
@@ -874,7 +943,7 @@ export function Composer({
       )}
     </div>
   );
-}
+});
 
 /** The visible height (above the keyboard), followed while `on`: the grow limit comes from it. */
 function useVisibleHeight(on: boolean): number {
@@ -897,14 +966,13 @@ function useVisibleHeight(on: boolean): number {
 
 /** The draft full screen on a phone (#5688): collapse at the top right, the text filling the visible height, send at the
  *  bottom right. It edits the box's own draft; closing hands back the caret so the box picks up where this left off. */
-function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, sending, onSend }: {
+function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, onSend }: {
   value: string;
   placeholder: string;
   selection: [number, number];
   onChange: (v: string) => void;
   onCollapse: (sel: [number, number]) => void;
   canSend: boolean;
-  sending: boolean;
   onSend: (sel: [number, number]) => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
@@ -966,7 +1034,7 @@ function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse,
           className="touch-hit flex size-9 shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-200 enabled:active:scale-[0.94]"
           style={{ background: canSend ? "var(--ink)" : "var(--line-strong)", color: canSend ? "var(--surface)" : "var(--ink-2)" }}
         >
-          {sending ? <Spinner /> : <Icon name="up" size={18} stroke={2.4} />}
+          <Icon name="up" size={18} stroke={2.4} />
         </button>
       </div>
     </div>

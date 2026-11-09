@@ -56,6 +56,102 @@ import Testing
         #expect(s.pages.isEmpty && s.cards.isEmpty && hub.sent("GET", "/api/v1/plugins/-/ui").isEmpty)
     }
 
+    @MainActor private final class PendingReply {
+        private var reply: CheckedContinuation<Data, Never>?
+        private var started: CheckedContinuation<Void, Never>?
+
+        func response() async -> Data {
+            await withCheckedContinuation { continuation in
+                reply = continuation
+                started?.resume()
+                started = nil
+            }
+        }
+
+        func waitForRequest() async {
+            if reply != nil { return }
+            await withCheckedContinuation { started = $0 }
+        }
+
+        func finish(_ json: String) {
+            reply?.resume(returning: Data(json.utf8))
+            reply = nil
+        }
+    }
+
+    @Test func theCurrentExtensionRoutesAndBadgeEvents() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/extensions/-/ui", json: Self.all.replacingOccurrences(of: "plugin", with: "extension"))
+        var api = hub.client
+        api.extensionsAPI = true
+        let client = api
+        let s = ExtensionSlots(deps: .init(api: { client }), features: { ["extensions", "extension_ui_slots"] })
+        await s.reload(for: "https://first.example")
+        #expect(s.pages.map(\.owner) == ["example-gateway", "example-gateway"])
+        #expect(s.cards.map(\.id) == ["today", "plain"])
+        #expect(hub.sent("GET", "/api/v1/extensions/-/ui").count == 1)
+        #expect(hub.sent("GET", "/api/v1/plugins/-/ui").isEmpty)
+        let data = Data(#"{"type":"extension_ui","extension":"example-gateway","id":"usage","badge":{"text":"4","tone":"positive"}}"#.utf8)
+        guard case .pluginBadge(let owner, let id, let badge, _)? = ServerEvent.decode(data) else {
+            Issue.record("The extension badge event was not decoded"); return
+        }
+        s.received(plugin: owner, id: id, badge: badge)
+        #expect(s.total.count == 4 && s.pages[0].badge?.tone == "positive")
+        #expect(hub.sent("GET", "/api/v1/extensions/-/ui").count == 1, "a badge push does not reload the catalog")
+    }
+
+    @Test func aLateReplyCannotRestoreThePreviousHubsSlots() async {
+        let pending = PendingReply()
+        var old = FakeHub().client
+        old.transport = { _ in await pending.response() }
+        let newer = FakeHub()
+        newer.on("GET", "/api/v1/plugins/-/ui", json: #"{"ui":[{"plugin":"new-owner","id":"new-page","title":"New page","placement":"nav_page"}]}"#)
+        var current = old
+        let s = ExtensionSlots(deps: .init(api: { current }), features: { ["extension_ui_slots"] })
+        let first = Task { await s.reload(for: "https://first.example") }
+        await pending.waitForRequest()
+        current = newer.client
+        await s.reload(for: "https://second.example")
+        pending.finish(Self.all)
+        await first.value
+        #expect(s.pages.map(\.owner) == ["new-owner"] && s.cards.isEmpty)
+        #expect(s.total.count == 0 && !s.total.dot)
+    }
+
+    @Test func aLateReplyCannotRestoreSlotsAfterFeatureRemoval() async {
+        let pending = PendingReply()
+        var api = FakeHub().client
+        api.transport = { _ in await pending.response() }
+        let client = api
+        var features: Set<String> = ["extension_ui_slots"]
+        let s = ExtensionSlots(deps: .init(api: { client }), features: { features })
+        let first = Task { await s.reload(for: "https://first.example") }
+        await pending.waitForRequest()
+        features = []
+        await s.reload(for: "https://first.example")
+        pending.finish(Self.all)
+        await first.value
+        #expect(s.pages.isEmpty && s.cards.isEmpty && s.cardPages.isEmpty)
+        #expect(s.total.count == 0 && !s.total.dot)
+    }
+
+    @Test func aNewerReloadWinsOnTheSameHub() async {
+        let pending = PendingReply()
+        var slow = FakeHub().client
+        slow.transport = { _ in await pending.response() }
+        let fresh = FakeHub()
+        fresh.on("GET", "/api/v1/plugins/-/ui", json: #"{"ui":[]}"#)
+        var current = slow
+        let s = ExtensionSlots(deps: .init(api: { current }), features: { ["extension_ui_slots"] })
+        let first = Task { await s.reload(for: "https://first.example") }
+        await pending.waitForRequest()
+        current = fresh.client
+        await s.reload(for: "https://first.example")
+        pending.finish(Self.all)
+        await first.value
+        #expect(s.pages.isEmpty && s.cards.isEmpty)
+    }
+
     private static let chartView = #"""
     {"view":{"refresh_after":300,"sections":[{"items":[
       {"type":"stat_grid","stats":[{"label":"今天","value":"1.2M","detail":"+12% 比昨天","tone":"caution"},{"label":"费用","value":"¥36.20"}]},
@@ -111,10 +207,10 @@ import Testing
 
     @Test func theExtensionUIEvent() throws {
         let set = ServerEvent.decode(Data(#"{"type":"plugin_ui","plugin":"example-gateway","id":"usage","badge":{"text":"3","tone":"danger"}}"#.utf8))
-        guard case .pluginBadge(let plugin, let id, let badge)? = set else { Issue.record("not decoded"); return }
+        guard case .pluginBadge(let plugin, let id, let badge, _)? = set else { Issue.record("not decoded"); return }
         #expect(plugin == "example-gateway" && id == "usage" && badge == ExtensionBadge(text: "3", tone: "danger"))
         let cleared = ServerEvent.decode(Data(#"{"type":"plugin_ui","plugin":"example-gateway","id":"usage","badge":null}"#.utf8))
-        guard case .pluginBadge(_, _, let none)? = cleared else { Issue.record("not decoded"); return }
+        guard case .pluginBadge(_, _, let none, _)? = cleared else { Issue.record("not decoded"); return }
         #expect(none == nil)
     }
 

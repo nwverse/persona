@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { t } from "../../i18n";
 import type { FeedItem } from "../../lib/feed";
-import { checkCount, checklist, latestReview, reportLine, reviewBadge, reviewVerdictLabel, type CheckMark, type ReviewTone } from "../../lib/supervision";
+import { autoReviewLine, checkCount, checklist, latestReview, reportLine, reviewBadge, reviewVerdictLabel, type CheckMark, type ReviewTone, type Supervision } from "../../lib/supervision";
 import type { Todo } from "../../lib/todos";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -73,13 +73,56 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
         </ul>
       )}
       {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
+      <AutoReviewResult sup={sup} />
     </section>
   );
 }
 
+/** The independent reviewer's result (#2173) under the criteria: a line, and its report on a click. Nothing when no
+ *  review ran, so a task without one looks as it did. */
+function AutoReviewResult({ sup }: { sup: Supervision }) {
+  const [open, setOpen] = useState(false);
+  const line = autoReviewLine(sup);
+  if (!line) return null;
+  const findings = sup.auto_review?.findings;
+  return (
+    <div data-testid="auto-review" className="mt-2 flex flex-col gap-1 text-[12.5px] text-ink-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <Icon name="target" size={12} className="shrink-0" />
+        <span className="shrink-0 whitespace-nowrap font-semibold">{t("assistant-tasks.auto_review_title")}</span>
+        <span className="min-w-0">· {line}</span>
+        {findings && (
+          <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="touch-hit ml-auto shrink-0 whitespace-nowrap text-ink-3 hover:text-ink-2">
+            {t(open ? "assistant-tasks.auto_review_hide" : "assistant-tasks.auto_review_show")}
+          </button>
+        )}
+      </div>
+      {open && findings && (
+        <div data-testid="auto-review-findings" className="leading-[1.55] whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">
+          {findings}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** A supervised task's agent reported to Persona (feed kind "report": a question, a block, a finish): who, and what. */
-export function ReportLine({ item, title, onOpenTask }: { item: FeedItem; title: string; onOpenTask?: () => void }) {
-  const body = (item.body ?? {}) as { kind?: string; text?: string; step?: number; steps?: number; evidence?: string[]; later?: boolean };
+export function ReportLine(props: { item: FeedItem; title: string; onOpenTask?: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (props.item.body?.kind !== "progress") return <ReportBody {...props} />;
+  return (
+    <div className="flex min-w-0 flex-col gap-1" data-testid="progress-report">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="touch-hit flex min-w-0 items-center gap-1 text-left text-xs whitespace-nowrap text-ink-3 hover:text-ink-2">
+        <span className="min-w-0 truncate">{t("assistant-tasks.report_progress", { title: props.title })}</span>
+        <Icon name="chevronRight" size={12} className="shrink-0" style={{ transform: open ? "rotate(90deg)" : undefined }} />
+      </button>
+      {open && <ReportBody {...props} />}
+    </div>
+  );
+}
+
+function ReportBody({ item, title, onOpenTask }: { item: FeedItem; title: string; onOpenTask?: () => void }) {
+  const body = (item.body ?? {}) as { kind?: string; text?: string; step?: number; steps?: number; later?: boolean };
   // A question that can wait is no call on the owner now: it is drawn quietly, with its mark.
   const tone = !body.later && (body.kind === "blocked" || body.kind === "question") ? "text-orange" : "text-ink-2";
   return (
@@ -96,13 +139,6 @@ export function ReportLine({ item, title, onOpenTask }: { item: FeedItem; title:
         {body.later && <span className="shrink-0 font-normal" data-testid="report-later">· {t("assistant-tasks.report_later")}</span>}
       </span>
       <div className="rounded-[18px] bg-field px-3.5 py-2 text-[14.5px] whitespace-pre-wrap">{reportLine(body.kind ?? "", body.text ?? "", body.step, body.steps)}</div>
-      {body.evidence && body.evidence.length > 0 && (
-        <ul className="flex flex-col gap-0.5 pl-1 text-[12px] text-ink-3">
-          {body.evidence.slice(0, 8).map((e) => (
-            <li key={e} className="truncate">· {e}</li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

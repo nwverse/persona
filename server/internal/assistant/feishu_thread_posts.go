@@ -171,6 +171,9 @@ func (s *Service) insertDecision(ctx context.Context, st todoStore, row db.TodoD
 	ok, err := st.InsertTodoDecision(ctx, row)
 	if err == nil && ok {
 		s.todoDecisionEvent(row)
+		if row.Source == db.DecisionManual {
+			s.askTodoDecided(context.WithoutCancel(ctx), row) // the owner's call on a question's to-do (ask_todo.go)
+		}
 	}
 	if err == nil && ok && postable(row) {
 		s.threadPost(row.TodoID, threadEvent{kind: threadDecision, text: decisionLine(row)})

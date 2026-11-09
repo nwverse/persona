@@ -326,6 +326,21 @@ func TestShellFirstWord(t *testing.T) {
 	}
 }
 
+// A shell-form hook's program is its command line's first word; an exec-form one's ("args" given) is its command as it
+// is, spaces included.
+func TestConfigCommandsBothForms(t *testing.T) {
+	b := []byte(`{"hooks": {
+		"Stop": [{"hooks": [{"type": "command", "command": "'/opt/my dir/personad' hook"}]}],
+		"MessageDisplay": [{"hooks": [{"type": "command", "command": "/opt/my dir/persona-node", "args": ["hook"]}]}],
+		"Notification": [{"hooks": [{"type": "command", "command": "/opt/no args", "args": []}]}]
+	}}`)
+	got := configCommands(b)
+	slices.Sort(got)
+	if want := []string{"/opt/my dir/persona-node", "/opt/my dir/personad", "/opt/no args"}; !slices.Equal(got, want) {
+		t.Fatalf("configCommands = %q, want %q", got, want)
+	}
+}
+
 func TestDoctorClaudeVersion(t *testing.T) {
 	e := newDoctorEnv(t)
 	for v, status := range map[string]string{"": DoctorWarn, "2.0.9": DoctorWarn, "2.1.0": DoctorOK, "3.0.1-beta": DoctorOK} {
@@ -451,7 +466,7 @@ func TestCheckAgentSandbox(t *testing.T) {
 	}{
 		{"off", macSandbox, false, nil, DoctorOK, []string{"未开启", "本机可以开启"}},
 		{"off on linux", sandbox.Support{OS: "linux"}, false, nil, DoctorOK, []string{"未开启", "不支持"}},
-		{"on", macSandbox, true, &sandbox.AgentStatus{State: sandbox.AgentActive}, DoctorOK, []string{"已开启", "已在沙箱里", "docker", "sudo"}},
+		{"on", macSandbox, true, &sandbox.AgentStatus{State: sandbox.AgentActive}, DoctorOK, []string{"已开启", "已在沙箱里", "docker", "sudo", "herdr", "personad launch"}},
 		{"on on linux", sandbox.Support{OS: "linux"}, true, nil, DoctorWarn, []string{"不支持"}},
 		{"on without sandbox-exec", sandbox.Support{OS: "darwin", Why: "机器上没有 sandbox-exec"}, true, nil, DoctorWarn, []string{"工具不可用", "sandbox-exec"}},
 		{"a start skipped", macSandbox, true, &sandbox.AgentStatus{State: sandbox.AgentSkipped, Why: "Claude 开了自带 sandbox"}, DoctorWarn, []string{"跳过", "Claude 开了自带 sandbox"}},

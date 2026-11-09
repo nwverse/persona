@@ -222,8 +222,10 @@ extension MacMenuBar {
                 return QuickAnswer(title: recommended ? String(localized: "\(name) (Recommended)") : name, resolution: Resolution(answers: [q.question: o.label]))
             }
         case .permission:
-            return [QuickAnswer(title: String(localized: "Allow [Notification Actions ce7ef2]"), resolution: Resolution(allow: true)),
-                    QuickAnswer(title: String(localized: "Deny"), resolution: Resolution(allow: false))]
+            let deny = QuickAnswer(title: String(localized: "Deny"), resolution: Resolution(allow: false))
+            // Something to fill in first (a password card's password): no Allow without it, as on the phone's cards.
+            if ix.requiresInput { return [deny] }
+            return [QuickAnswer(title: String(localized: "Allow [Notification Actions ce7ef2]"), resolution: Resolution(allow: true)), deny]
         case .plan:
             return [QuickAnswer(title: String(localized: "Approve [Notification Actions 8cbe69]"), resolution: Resolution(approve: true, mode: "acceptEdits"))]
         case .screen:
@@ -231,6 +233,8 @@ extension MacMenuBar {
             let plain = d.options.filter { $0.kind == .plain && $0.label.count <= 24 }
             guard (1...4).contains(plain.count) else { return nil }
             return plain.map { QuickAnswer(title: $0.label, resolution: Resolution(option: $0.key)) }
+        case .elicitation:
+            return nil
         }
     }
 
@@ -241,7 +245,7 @@ extension MacMenuBar {
         switch ix.kind {
         case .question: fallback = String(localized: "Claude Has a Question")
         case .screen: fallback = String(localized: "The terminal is asking you")
-        case .plan, .permission: fallback = ""
+        case .plan, .permission, .elicitation: fallback = ""
         }
         return String((ix.askLine(includeToolName: true) ?? fallback).prefix(80))
     }

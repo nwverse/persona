@@ -49,12 +49,24 @@ type Machine struct {
 	// engineHosts: the set the last manager handed over (#2576), nil when it handed over none (a single engine then).
 	engineHosts *proto.EngineChoice
 	// warmUntil: shown as before a restart until then — the hub's, while the manager comes back (calls wait for it in
-	// busNode), or the manager's, while the node comes back (its report's) (devices_link.go).
+	// busNode), or the manager's, while the node comes back (its report's) (devices_warm.go).
 	warmUntil time.Time
 	err       string
 	lastSeen  time.Time
-	sessions  []proto.Session
-	watchers  map[string]int // session id -> subscribed clients
+	// sessions is the manager's last list. A list once kept is never changed in place, only replaced (a change copies
+	// it first): keptSessions hands it out without a copy, to be read after m.mu is let go.
+	sessions []proto.Session
+	// lists decodes the manager's lists (fleet.sessions), only the sessions whose bytes changed (fleet_link.go).
+	lists proto.SessionListDecoder
+	// raws are the bytes each session of the list rawsOf names came in, by id ("" for an id the list names twice),
+	// when that list was decoded from them: a list kept any other way since has none (rawsFor). Never changed: a new
+	// list gets a new map.
+	raws   map[string]string
+	rawsOf keptList
+	// rows are the sessions' rows as last pushed, by id (encodeKept), under rowsMu; never changed in place.
+	rowsMu   sync.Mutex
+	rows     map[string]keptRow
+	watchers map[string]int // session id -> subscribed clients
 	// What the node was told about each session's watch (syncWatch): watchMu orders the session.watch /
 	// session.unwatch calls per session (a 1-slot channel, so a wait for it can end with the caller's ctx), nodeWatch
 	// is what the last of them left (absent: not watched). A slot goes when no call holds or waits for it and the
@@ -70,7 +82,7 @@ type Machine struct {
 	// derived: a computer only a member hub has in hub.json; the center reaches it through that hub.
 	derived bool
 
-	// The manager's report (devices_link.go): managed is set once one came for this machine (or the hub made it for
+	// The manager's report (devices_reports.go): managed is set once one came for this machine (or the hub made it for
 	// one the manager will report); snap is the machine as it said; connected, a call would reach the node now;
 	// hookedAt, the connection the hub did its part for (devices.connected); paths, its ways for the admin page.
 	managed bool
@@ -281,12 +293,20 @@ func (m *Machine) sessionList() []proto.Session {
 	return out
 }
 
+// keptSessions is the machine's list itself, not a copy: only to be read (Machine.sessions). The pushes read a busy
+// machine's ~200 KB list on every change of one session; a copy each time was most of what they allocated.
+func (m *Machine) keptSessions() []proto.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions
+}
+
 func (m *Machine) session(id string) (proto.Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, s := range m.sessions {
-		if s.SessionID == id {
-			return s, true
+	for i := range m.sessions { // by index: a range value copies every (large) session it passes
+		if m.sessions[i].SessionID == id {
+			return m.sessions[i], true
 		}
 	}
 	return proto.Session{}, false
@@ -315,9 +335,26 @@ func (m *Machine) removeWatcher(id string) {
 // lists that no app watches and the node was not told to watch: nothing will ask for their since_seq again. A
 // session it no longer lists whose last session.watch / session.unwatch failed (nodeWatchUnknown) and that no app
 // watches gets its unwatch sent again in the background, then its watch state goes (settleEnded).
-func (m *Machine) setSessionList(list []proto.Session) {
+func (m *Machine) setSessionList(list []proto.Session) { m.setSessionListRaws(list, nil) }
+
+// setSessionListRaws is setSessionList of a list the manager's bytes were decoded into: raws[i] are the bytes list[i]
+// came in (proto.SessionListDecoder), by which a push tells which sessions' rows it can send again (encodeKept); nil
+// for a list that came another way.
+func (m *Machine) setSessionListRaws(list []proto.Session, raws []string) {
 	m.mu.Lock()
 	m.sessions = list
+	m.raws, m.rawsOf = nil, keptList{}
+	if len(raws) == len(list) && len(list) > 0 {
+		byID := make(map[string]string, len(list))
+		for i, raw := range raws {
+			id := list[i].SessionID
+			if _, twice := byID[id]; twice {
+				raw = "" // named twice, which no manager does: encoded every time
+			}
+			byID[id] = raw
+		}
+		m.raws, m.rawsOf = byID, keptListOf(list)
+	}
 	m.lastSeen = time.Now().UTC()
 	listed := make(map[string]bool, len(list))
 	for _, s := range list {
@@ -338,6 +375,34 @@ func (m *Machine) setSessionList(list []proto.Session) {
 	for _, id := range unsettled {
 		go m.settleEnded(id)
 	}
+}
+
+// keptList is a kept list as rawsOf names it: where its sessions are and how many. A list is never changed in place
+// (Machine.sessions), so the same first session and length are the same list.
+type keptList struct {
+	first *proto.Session
+	n     int
+}
+
+func keptListOf(list []proto.Session) keptList {
+	if len(list) == 0 {
+		return keptList{}
+	}
+	return keptList{&list[0], len(list)}
+}
+
+// rawsFor is the bytes each session of list came in, by id, when list is the kept list they were recorded for (an
+// older or a decorated copy has none); only read.
+func (m *Machine) rawsFor(list []proto.Session) map[string]string {
+	if !proto.DecodeChangedSessions || len(list) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rawsOf != keptListOf(list) {
+		return nil
+	}
+	return m.raws
 }
 
 // settleEnded sends the unwatch an ended session's failed call left owed (syncWatch), then drops what the hub keeps
@@ -544,10 +609,17 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			return
 		}
 		m.mu.Lock()
+		described := m.rawsOf == keptListOf(m.sessions)
+		m.sessions = slices.Clone(m.sessions) // the kept list may be being read (keptSessions)
 		for i := range m.sessions {
 			if r, ok := p.Revs[m.sessions[i].SessionID]; ok {
 				m.sessions[i].Rev = r
 			}
+		}
+		if described {
+			// Each session is still what its bytes give but for its rev, which its kept row is checked against too
+			// (encodeKept): the sessions whose rev changed are encoded again, the others' rows still hold.
+			m.rawsOf = keptListOf(m.sessions)
 		}
 		m.mu.Unlock()
 		// Every app, not only those watching: this is what lets them pull a session before it is opened.
@@ -557,6 +629,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		var p struct {
 			SessionID string       `json:"session_id"`
 			Items     []proto.Item `json:"items"`
+			MoreAfter bool         `json:"more_after"`
 			itemSpan
 		}
 		// A batch without items still matters when it has a span: it moves the apps' "complete up to" forward.
@@ -576,7 +649,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		}
 		m.mu.Unlock()
 		p.Items = m.hub.withInjected(p.Items)
-		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan)
+		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan, p.MoreAfter)
 	case "session.screen":
 		var p struct {
 			SessionID string `json:"session_id"`

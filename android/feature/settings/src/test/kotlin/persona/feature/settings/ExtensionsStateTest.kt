@@ -279,12 +279,33 @@ class ExtensionsStateTest {
         assertNull(ExtensionText.upgradeAction(res, u.copy(state = "waiting_idle")))
         assertEquals("扩展空闲时自动升级", ExtensionText.upgradeDetail(res, u.copy(state = "waiting_idle")))
         assertEquals("上次升级后起不来，已回到 1.0.0，不再自动升级到这个版本", ExtensionText.upgradeDetail(res, u.copy(state = "skipped")))
+        // A version the user rolled back from by hand (#1826) says so, not "didn't start".
+        assertEquals("你从这个版本回滚到了 1.0.0，不会再自动升级到它", ExtensionText.upgradeDetail(res, u.copy(state = "skipped", skippedBy = "user")))
         assertEquals("已自动升级到 1.2.0（原来是 1.0.0）", ExtensionText.upgradeNote(res, ExtensionUpgradeNote("upgraded", "1.0.0", "1.2.0")))
         assertEquals("1.1.0 起不来，已回到 1.0.0", ExtensionText.upgradeNote(res, ExtensionUpgradeNote("rolled_back", "1.0.0", "1.1.0")))
         assertNull(ExtensionText.upgradeNote(res, ExtensionUpgradeNote("needs_permission", "1.0.0", "1.2.0")))
         val ext = HubExtension("example-ui", "Example UI", "ui", "running", upgrade = u)
         assertEquals(ExtensionText.state(res, ext) + " · 新版本待确认", ExtensionText.listLine(res, ext))
         assertEquals(ExtensionText.state(res, ext), ExtensionText.listLine(res, ext.copy(upgrade = u.copy(state = "available"))))
+    }
+
+    // Pausing execution never changes the manager's persisted preference.
+    @Test fun theAutoUpgradeSwitchKeepsItsSavedValueWhilePaused() {
+        val ext = HubExtension("example-ui", "Example UI", "ui", "running")
+        for ((own, paused, shown) in listOf(
+            Triple(true, null, true),
+            Triple(false, null, false),
+            Triple(true, "disabled", true),
+            Triple(false, "disabled", false),
+            Triple(true, "market_removed", true),
+            Triple(false, "market_removed", false),
+        )) {
+            assertEquals("own $own, paused $paused", shown, ExtensionText.autoUpgradeShown(ext.copy(autoUpgrade = own, autoUpgradePaused = paused)))
+        }
+        val decoded = Json { ignoreUnknownKeys = true }.decodeFromString<HubExtension>(
+            """{"id":"x","name":"X","kind":"ui","status":"disabled","enabled":false,"auto_upgrade":true,"auto_upgrade_paused":"disabled"}""")
+        assertEquals("disabled", decoded.autoUpgradePaused)
+        assertTrue(ExtensionText.autoUpgradeShown(decoded))
     }
 
     @Test fun aMachineListIsASwitchPerMachineSavedAtOnce() = runBlocking {

@@ -561,7 +561,8 @@ class InboxRepositoryTest {
             val calls = transport.inboxCalls.get()
             val result = repository.bulk(listOf(InboxDoneTarget("a", "va"), InboxDoneTarget("b", "vb"), InboxDoneTarget("c", "vc")), InboxBulkAction.Done)
             assertEquals(listOf("a"), result.changed)
-            // Nothing took new messages, yet the hub's own state for b and c is asked for once.
+            // Reconciliation is deferred; it must not hold up this accepted action.
+            withTimeout(5_000) { repository.snapshot.first { it.error != null } }
             assertEquals(calls + 1, transport.inboxCalls.get())
             // Already done elsewhere stays done; one the hub no longer has leaves the list; neither comes back open.
             assertEquals(mapOf("a" to true, "b" to true), repository.snapshot.value.records.associate { it.item.id to it.item.isDone })
@@ -782,7 +783,8 @@ class InboxRepositoryTest {
             val calls = transport.inboxCalls.get()
             repository.bulk(listOf(InboxDoneTarget("a", "va")), InboxBulkAction.Done)
             assertNull(repository.snapshot.value.records.first { it.item.id == "a" }.item.doneAt)
-            // The hub's own state is asked for, as for the other ids it did not move.
+            // The reconciliation runs after the action returns, without blocking the next swipe.
+            withTimeout(5_000) { repository.snapshot.first { it.error != null } }
             assertEquals(calls + 1, transport.inboxCalls.get())
             repository.bulk(listOf(InboxDoneTarget("b")), InboxBulkAction.Reopen)
             assertEquals("2026-11-06T07:00:00Z", repository.snapshot.value.records.first { it.item.id == "b" }.item.doneAt)
@@ -825,9 +827,13 @@ class InboxRepositoryTest {
             assertEquals(listOf(listOf(InboxDoneTarget("a", "va"), InboxDoneTarget("b", "vb")) to true), transport.bulk)
             assertEquals(listOf("a"), result.changed)
             assertEquals(listOf("b"), result.changedSince)
-            // Refreshed for b's new mail: its new version is what the next bulk sends.
+            // The follow-up refresh is asynchronous; b remains open while it loads the new version.
+            withTimeout(5_000) { repository.snapshot.first { state -> state.records.any { it.item.version == "vb2" } } }
             val after = repository.snapshot.value.records.associate { it.item.id to (it.item.isDone to it.item.version) }
             assertEquals(mapOf("a" to (true to "va"), "b" to (false to "vb2"), "c" to (false to "vc")), after)
+            // A fresh server read must retain the accepted filing, not resurrect the optimistic row.
+            repository.refresh()
+            assertEquals(after, repository.snapshot.value.records.associate { it.item.id to (it.item.isDone to it.item.version) })
 
             assertEquals(listOf(InboxBulkAction.Done), transport.actions)
             // Clean up all is the same request with action dismiss; c is filed.
@@ -963,6 +969,65 @@ class InboxRepositoryTest {
             repository.mute(records.getValue("b"), records.getValue("b").mutes.single())
             assertEquals(setOf("a", "b"), seen.last())
             assertEquals(setOf("a", "b"), done())
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun aRulesTierMovesWhatItCoversAtOnceAndAFailurePutsThemBack() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-policy-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            fun item(id: String, repo: String, status: String = "action", manager: String? = null) = buildJsonObject {
+                put("id", id); put("source", "github"); put("kind", "mention"); put("title", id)
+                put("tier", "action"); put("status", status); put("urgent", true)
+                if (manager != null) put("manager", manager)
+                putJsonArray("mutes") { add(buildJsonObject { put("tag", "repo"); put("value", repo) }) }
+            }
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(item("a", "o/r"), item("b", "o/r", status = "working"), item("c", "o/other"), item("d", "o/r", manager = "m-3")))
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            fun sections() = repository.snapshot.value.records.associate { it.hubItemId to "${it.item.tier}/${it.item.status}/${it.item.urgent}" }
+            val before = sections()
+            val a = repository.snapshot.value.records.single { it.hubItemId == "a" }
+            val target = InboxPolicyTarget.of(a, a.mutes.single())
+
+            val seen = mutableListOf<Map<String, String>>()
+            transport.onSetPolicy = { _, _, _, _ -> seen += sections(); throw IOException("offline") }
+            assertThrows(IOException::class.java) { runBlocking { repository.savePolicy(target, InboxPolicyTier.Noise, InboxPolicyTwin.First) } }
+            // Moved while the request was out: not the one being handled, the other repository's, or another manager's.
+            assertEquals(before + ("a" to "noise/noise/false"), seen.single())
+            assertEquals(before, sections())
+            assertEquals(listOf("POST a repo noise first "), transport.policyCalls)
+
+            transport.onSetPolicy = { _, tag, tier, twin -> buildJsonObject {
+                putJsonObject("policy") { put("id", "p1"); put("source", "github"); put("tag", tag); put("value", "o/r"); put("tier", tier); put("twin", twin) }
+                put("applied", 1)
+            } }
+            transport.items = JsonArray(transport.items.map { row ->
+                if ((row as JsonObject)["id"]!!.jsonPrimitive.content == "a") JsonObject(row + mapOf("tier" to JsonPrimitive("noise"), "status" to JsonPrimitive("noise"),
+                    "urgent" to JsonPrimitive(false))) else row
+            })
+            val saved = repository.savePolicy(target, InboxPolicyTier.Noise, InboxPolicyTwin.First)
+            assertEquals(InboxPolicy("p1", "github", tag = "repo", value = "o/r", name = "o/r", tier = InboxPolicyTier.Noise, twin = InboxPolicyTwin.First), saved)
+            assertEquals("noise/noise/false", sections()["a"])
+
+            // From "Rules": the rule's id, the default manager's items; clearing both parts removes it.
+            transport.onUpdatePolicy = { _, _, _ -> buildJsonObject { put("applied", 0) } }
+            assertNull(repository.savePolicy(InboxPolicyTarget.of(checkNotNull(saved)), InboxPolicyTier.None, InboxPolicyTwin.None))
+            assertEquals("PATCH p1   null", transport.policyCalls.last())
+            assertEquals("noise/noise/false", sections()["a"])
+
+            transport.policies = JsonArray(listOf(buildJsonObject { put("id", "p1"); put("source", "github"); put("tag", "repo"); put("value", "o/r") }))
+            assertEquals(listOf("p1"), repository.inboxPolicies().map { it.id })
+            val d = repository.snapshot.value.records.single { it.hubItemId == "d" }
+            repository.inboxPolicies(d)
+            repository.removePolicy("p1")
+            assertEquals(listOf("GET null", "GET m-3", "DELETE p1"), transport.policyCalls.takeLast(3))
         } finally {
             owner.coroutineContext[Job]!!.cancelAndJoin()
             directory.deleteRecursively()
@@ -1176,5 +1241,21 @@ class InboxRepositoryTest {
         override suspend fun avatar(ref: String) = media(ref).also { avatarRefs += ref }
         var onMute: suspend (String, String) -> JsonObject = { _, _ -> JsonObject(emptyMap()) }
         override suspend fun muteInbox(itemId: String, tag: String) = onMute(itemId, tag)
+        /** Each policy request: its method, what it named and the manager its request named (RequestManager). */
+        val policyCalls = mutableListOf<String>()
+        private suspend fun manager() = currentCoroutineContext()[RequestManager]?.id
+        var policies = JsonArray(emptyList())
+        override suspend fun inboxPolicies(): JsonObject { policyCalls += "GET ${manager()}"; return buildJsonObject { put("policies", policies) } }
+        var onSetPolicy: suspend (String, String, String, String) -> JsonObject = { _, _, _, _ -> JsonObject(emptyMap()) }
+        override suspend fun setInboxPolicy(itemId: String, tag: String, tier: String, twin: String): JsonObject {
+            policyCalls += "POST $itemId $tag $tier $twin ${manager()}"
+            return onSetPolicy(itemId, tag, tier, twin)
+        }
+        var onUpdatePolicy: suspend (String, String, String) -> JsonObject = { _, _, _ -> JsonObject(emptyMap()) }
+        override suspend fun updateInboxPolicy(id: String, tier: String, twin: String): JsonObject {
+            policyCalls += "PATCH $id $tier $twin ${manager()}"
+            return onUpdatePolicy(id, tier, twin)
+        }
+        override suspend fun removeInboxPolicy(id: String) { policyCalls += "DELETE $id" }
     }
 }

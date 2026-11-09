@@ -4,8 +4,8 @@ import SwiftUI
 // Settings › Managers (docs/assistant/managers.md): the list, one manager's page, and the install code sheet. The logic and words
 // are in ManagersModel.swift.
 
-/// The dot before a manager's status: online, offline, installing.
-private func managerDot(_ tone: ManagersText.Tone) -> some View {
+/// The dot before a manager's status: online, offline, installing (its rows here, the headings of grouped pages).
+func managerDot(_ tone: ManagersText.Tone) -> some View {
     Circle()
         .fill(tone == .online ? Theme.positive : tone == .installing ? Theme.accent : Theme.Hue.gray)
         .scaledFrame(width: Theme.Size.dotS, height: Theme.Size.dotS)
@@ -92,12 +92,13 @@ private struct ManagerRow: View {
         let status = ManagersText.status(manager, now: now)
         let place = ManagersText.whereItRuns(manager)
         HStack(spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.managers)
+            ThemedIcon(Theme.Icon.managers)
                 .scaledFrame(width: Theme.Size.icon)
                 .foregroundStyle(manager.online || manager.installing != nil ? Theme.accent : Theme.Hue.gray)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                HStack(spacing: Theme.Space.sm) {
+                NameWithChips {
                     Text(manager.name).lineLimit(1)
+                } chips: {
                     if manager.isDefault { Chip(text: String(localized: "Default [Prompt Composer 844b8c]"), look: .tint(Theme.accent)) }
                 }
                 HStack(spacing: Theme.Space.sm) {
@@ -121,14 +122,16 @@ struct ManagerDetailView: View {
     let id: String
     @Environment(AppModel.self) private var app
     @State private var page: ManagersModel
+    @State private var push: ManagerPushModel
     @State private var renaming = false
     @State private var newName = ""
     @State private var confirmMove = false
     @State private var confirmDelete = false
 
-    init(id: String, model: ManagersModel = ManagersModel()) {
+    init(id: String, model: ManagersModel = ManagersModel(), push: ManagerPushModel? = nil) {
         self.id = id
         _page = State(initialValue: model)
+        _push = State(initialValue: push ?? ManagerPushModel(id: id))
     }
 
     var body: some View {
@@ -138,6 +141,8 @@ struct ManagerDetailView: View {
                 Section { Text("This hub's version doesn't support managers yet. Update the hub and come back.").foregroundStyle(.secondary) }
             } else if let m {
                 facts(m)
+                // This device's pushes from it (#1863); one still installing sends none yet.
+                if m.installing == nil { ManagerPushSection(push: push) }
                 actions(m)
             } else if page.managers != nil {
                 Section { Text("This manager is no longer there").foregroundStyle(.secondary) }
@@ -150,7 +155,11 @@ struct ManagerDetailView: View {
         .themedPage()
         .detailTitle(m?.name ?? String(localized: "Managers"))
         .task { await page.load() }
-        .refreshable { await page.load() }
+        .task { await push.load() }
+        .refreshable {
+            await page.load()
+            await push.load()
+        }
         .onChange(of: app.managersRevision) { Task { await page.load() } }
         .task {
             while !Task.isCancelled {

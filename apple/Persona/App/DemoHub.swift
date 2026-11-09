@@ -33,6 +33,8 @@ final class DemoHub {
     private let providers = DemoProviders()
     /// Settings › Claude Code › Blocked Config Folders: machine id → the rules typed in the demo (it has no other directories).
     private var blockedClaudeDirs: [String: [JSONValue]] = [:]
+    /// Settings › Claude Code › Live Replies, by machine (on unless turned off, as on a hub).
+    private var liveReplies: [String: Bool] = [:]
     private var memory: [JSONValue] = []
     private var prefs: JSONValue = .object([:])
     private var pins: JSONValue = .object([:])
@@ -91,13 +93,23 @@ final class DemoHub {
         tokens = all["tokens"]?.array ?? []
     }
 
-    /// "@rel:<seconds>" → that moment as an ISO date, "@unix:<seconds>" → Unix seconds (make_demo_data.py).
+    /// "@rel:<seconds>" → that moment as an ISO date, "@unix:<seconds>" → Unix seconds, "@day:<days>@<HH:MM>" → that
+    /// clock time so many days from today (a to-do due at 18:00, #2029), "@date:<days>" → that day as "yyyy-MM-dd"
+    /// (make_demo_data.py).
     private static func resolve(_ v: JSONValue, now: Date) -> JSONValue {
         switch v {
         case .object(let o): return .object(o.mapValues { resolve($0, now: now) })
         case .array(let a): return .array(a.map { resolve($0, now: now) })
         case .string(let s) where s.hasPrefix("@rel:"):
             return .string(iso(now.addingTimeInterval(Double(s.dropFirst(5)) ?? 0)))
+        case .string(let s) where s.hasPrefix("@day:"):
+            let parts = s.dropFirst(5).split(separator: "@")
+            let clock = parts.dropFirst().first?.split(separator: ":").compactMap { Int($0) } ?? []
+            let day = Calendar.current.date(byAdding: .day, value: Int(parts.first ?? "") ?? 0, to: now) ?? now
+            let at = Calendar.current.date(bySettingHour: clock.first ?? 0, minute: clock.dropFirst().first ?? 0, second: 0, of: day) ?? day
+            return .string(iso(at))
+        case .string(let s) where s.hasPrefix("@date:"):
+            return .string(TodoPlanText.day(Calendar.current.date(byAdding: .day, value: Int(s.dropFirst(6)) ?? 0, to: now) ?? now))
         case .string(let s) where s.hasPrefix("@unix:"):
             return .number((now.timeIntervalSince1970 + (Double(s.dropFirst(6)) ?? 0)).rounded())
         default: return v
@@ -198,6 +210,7 @@ final class DemoHub {
             return .object(a)
         case ["model-config"]: return DemoModelCatalog.configuration(tasks: tasks, overrides: modelBindings)
         case ["assistant", "tasks"]: return ["tasks": .array(tasks)]
+        case ["assistant", "places"]: return ["places": .array([])] // Saved Places, empty in the demo
         case ["assistant", "runs"]:
             let runs = data["runs"]?.array ?? []
             return ["runs": .array(q["ref"].map { ref in runs.filter { $0["ref_id"]?.string == ref } } ?? runs)]
@@ -241,6 +254,7 @@ final class DemoHub {
                 return data["dirs"] ?? .object([:])
             case "claude-settings", "codex-settings": return ["settings": .array([])]
             case "claude-dirs": return claudeDirsState(id)
+            case "claude-live-replies": return ["on": .bool(liveReplies[id] ?? true)]
             #if os(macOS)
             case "file": // the Mac's file viewer (and its ⌘F find): one made-up source file, whatever is asked for
                 let path = q["path"] ?? "Sources/Forecast.swift"
@@ -401,6 +415,16 @@ final class DemoHub {
             if let title = edit["title"] { t["title"] = title }
             if let notes = edit["notes"] { t["notes"] = notes }
             if let done = edit["done"]?.bool { t["done_at"] = done ? .string(Self.iso(.now)) : .null }
+            // Due date, reminder, priority (#1683): either due field replaces the other; a new reminder is pushed again.
+            if edit["due_at"] != nil || edit["due_date"] != nil {
+                t["due_at"] = edit["due_at"] ?? .null
+                t["due_date"] = edit["due_date"] ?? .null
+            }
+            if let remind = edit["remind_at"], remind != t["remind_at"] {
+                t["remind_at"] = remind
+                t["reminded_at"] = .null
+            }
+            if let priority = edit["priority"] { t["priority"] = priority }
             t["updated_at"] = .string(Self.iso(.now))
             todos[i] = .object(t)
             return ["todo": .object(t)]
@@ -475,6 +499,10 @@ final class DemoHub {
                 return .object(o)
             }
             return ["ok": true]
+        case ("machines", 3) where p[2] == "claude-live-replies" && method == "PUT":
+            guard let on = body["on"]?.bool else { throw refuse() }
+            liveReplies[p[1]] = on
+            return ["on": .bool(on)]
         case ("machines", 4) where p[2] == "claude-dirs" && p[3] == "blocked" && method == "PUT":
             blockedClaudeDirs[p[1]] = body["blocked"]?.array ?? []
             return claudeDirsState(p[1])

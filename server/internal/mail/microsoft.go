@@ -10,12 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Outlook "Sign in with Microsoft" (docs/extensions/mail.md "Connecting Outlook"): the same flow as Google's. The app opens
+// Outlook "Sign in with Microsoft" (docs/extensions/mail.md "Outlook: Sign In with Microsoft"): the same flow as Google's. The app opens
 // Microsoft's sign-in page (ASWebAuthenticationSession) for a public client the user registered in Microsoft Entra
 // themselves (no client secret, PKCE), Microsoft redirects to a fixed custom scheme, and the hub exchanges the code
 // for a refresh token. IMAP and SMTP authenticate with SASL XOAUTH2. The client ID is not built in: the user enters
@@ -37,8 +38,8 @@ var (
 	microsoftAuthURL  = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
 	microsoftTokenURL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
-	clientIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$`)
-	aadCode         = regexp.MustCompile(`AADSTS\d+`)
+	clientIDPattern = lazyre.New(`^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$`)
+	aadCode         = lazyre.New(`AADSTS\d+`)
 )
 
 // outlookServers are Microsoft's IMAP and SMTP endpoints for every Outlook / Microsoft 365 mailbox.

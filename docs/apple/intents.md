@@ -1,6 +1,6 @@
 # App Intents (Siri / Shortcuts)
 
-`apple/Persona/Intents/` holds 9 intents that drive the hub without unlocking the phone or opening the app. This doc covers these 4: Ask Claude, status, approve the first pending item, open a session.
+`apple/Persona/Intents/` holds 9 intents that drive the hub without opening the app; of the background intents, only Approve First Pending needs the phone unlocked (below). This doc covers these 4: Ask Claude, status, approve the first pending item, open a session.
 The other 5 (Ask Persona, have an Agent do it, personal Agent unread, open a personal Agent, new to-do) are in `docs/apple/siri.md`; the two intents behind the Control Center controls live in `apple/LiveActivity/`, also covered in `docs/apple/siri.md`.
 They do not need the app in the foreground and do not use WebSocket: each call reads `Keychain.serverConfig` fresh and talks to the hub's REST API directly through `APIClient`.
 
@@ -8,7 +8,7 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | --- | --- | --- | --- |
 | `AskClaudeIntent` | Ask Claude | Sends a message to the most recent live session on a machine, or starts a new one with the remembered directory / launcher | Background |
 | `PersonaStatusIntent` | Persona Status | "N working, M need you" + the content of the first pending item | Background |
-| `ApproveFirstIntent` | Approve First Pending | Allows the oldest tool permission request, or approves a plan (`bypassPermissions`) | Background |
+| `ApproveFirstIntent` | Approve First Pending | Allows the oldest tool permission request, or approves a plan (`acceptEdits`); asks for an unlock on a locked phone | Background |
 | `OpenSessionIntent` | Open Session | Switches the app to the chat page and jumps to that session (`AppModel.shared.openChat`) | Foreground |
 
 `OpenSessionIntent` is not meant to be used on its own: `AskClaudeIntent` returns it, so one tap on the button in the Siri result card opens that session.
@@ -24,6 +24,16 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | `AskPersonaIntent.swift` / `PersonalAgentIntents.swift` / `AddTodoIntent.swift` | Ask Persona, personal Agents, new to-do (`docs/apple/siri.md`) |
 | `IntentAnswerSnippet.swift` | The answer card for Ask Persona (question + full text) |
 | `PersonaShortcuts.swift` | `AppShortcutsProvider`, Chinese phrases and icons |
+
+## Extension actions (#1147)
+
+`apple/Shared/RunExtensionActionIntent.swift` adds **Run Extension Action** to the containing Apple apps, including watchOS 10; the phone's `PersonaShortcuts` offers its localized Siri phrase. Dynamic entity ids encode hub group, extension and action together. Execution uses `APIClient` with the exact selected group's App Group credential; missing groups never use the default hub. The watch's separate container contains only credentials already issued to the watch.
+
+App Intent parameters are compile-time metadata, so an extension manifest cannot add new `@Parameter` properties. Optional Text/Number/Toggle/Choice target the first parameter of that kind; optional JSON Values is a string-to-string object for multiple fields of the same kind and overrides the corresponding single-value inputs. Required values, finite numbers, boolean strings and choices are checked before submission, then validated by the hub. Choosing an action refreshes the directory; execution rereads the selected hub's actions before sending. No automatic write retry is added.
+
+Text is returned as both result value and Siri dialog. iOS/visionOS with compiler 6.4+ also show a read-only `ExtensionSurfaceView` snippet and optional Open link preserving the original group. Xcode 26.x, macOS and watchOS use the text/dialog fallback. This does not raise the minimum compiler. Widget and action details, cache/revocation behavior and device acceptance boundaries are in [Extensions](../extensions/extensions.md) ("Apple system surface boundaries").
+
+No Apple build, metadata extraction, simulator screenshot or device acceptance was run for this implementation while builds were paused; the Swift tests are additions, not passing evidence.
 
 ## Selection rules
 
@@ -42,8 +52,13 @@ They do not need the app in the foreground and do not use WebSocket: each call r
   task's agent's (the hub's `quiet`, #1731) and a muted agent's (itself or its space unless turned back on, from each
   group's `GET /api/v1/mutes`, or the hub's `muted` stamp on the card) are skipped. So Siri never approves a card other
   than the one it just read out.
-- `permission` → `{allow:true}`; `plan` → `{approve:true, mode:"bypassPermissions"}` (same as **Approve & Auto-Run** in the app,
-  see `docs/integrations/claude-integration.md`).
+- `permission` → `{allow:true}`; `plan` → `{approve:true, mode:"acceptEdits"}`, as the notification and Live Activity buttons
+  send: Siri never shows the plan in full, so edits go through but commands still ask. **Approve & Auto-Run**
+  (`bypassPermissions`) stays in the app (`docs/integrations/claude-integration.md`).
+- `authenticationPolicy` is `.requiresAuthentication`, as on `AllowPermissionIntent` / `ApprovePlanIntent` (`apple/LiveActivity/FleetIntents.swift`):
+  Siri runs intents on a locked phone and the hub credentials are readable after the first unlock, so without it a
+  locked phone could say yes to an agent (#1878). The system asks for Face ID or the passcode before `perform()` runs.
+  The policy covers the whole intent: on a locked phone even "nothing pending" or "open Persona" comes after the unlock.
 - `question` / `screen` need the screen, so it only replies "Open Persona to handle this." and records no decision.
 
 ## Error messages

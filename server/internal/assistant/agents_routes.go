@@ -32,14 +32,22 @@ func (s *Service) agentRoutes() {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot change the triage"))
 			return
 		}
-		var in TriageSwitches
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
+		var request struct {
+			TriageSwitches
+			ToolLoop *bool `json:"tool_loop"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&request); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
 		// An app that does not know the reminder's switch (#5096) leaves it as it was. While the saved switches cannot be
 		// read, a PUT still goes through (it saves the whole set): then the reminder's switch it leaves out is the default.
 		prev, _ := s.readTriageSwitches(r.Context())
+		in := request.TriageSwitches
+		in.ToolLoop = prev.ToolLoop
+		if request.ToolLoop != nil {
+			in.ToolLoop = *request.ToolLoop
+		}
 		if in.ReplyReminder == nil {
 			in.ReplyReminder = prev.ReplyReminder
 		}
@@ -133,7 +141,7 @@ func summarizeWork(hours int, events []db.WorkEvent) workStats {
 			s.By[str("by")]++
 		case "failed":
 			s.Triaged["failed"]++
-		case "continued", "woke", "asked", "answered", "withdrawn":
+		case "continued", "limit_continued", "woke", "asked", "answered", "withdrawn":
 			s.Actions[e.Kind]++
 		case "resumed", "seen":
 			if e.Kind == "resumed" {

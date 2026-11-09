@@ -3,8 +3,9 @@
   "already_answered": "This card was already answered",
   "prompt_changed": "The dialog on the computer changed, so the card was rebuilt from the new screen",
   "send_failed": "Not delivered: {error}",
-  "hand_back": "Hand back to the computer",
+  "hand_back": "Leave to computer",
   "question": "Question",
+  "tool_loop_kicker": "Possible tool loop",
   "previous_question": "Previous question",
   "question_n": "Question {n}",
   "next_question": "Next question",
@@ -84,5 +85,12 @@
   "always_scope_directory": "Always allow covers this directory in this conversation.",
   "always_scope_commands": "Always allow covers every command in this conversation.",
   "always_scope_tool": "Always allow covers every {tool} call in this conversation.",
-  "always_scope_saved": "The approved scope remains allowed in this conversation."
+  "always_scope_saved": "The approved scope remains allowed in this conversation.",
+  "secret_run_kicker": "Password needed",
+  "secret_run_title": "Run on {machine} with your password",
+  "secret_run_commands": "Commands, run in order",
+  "secret_run_decline": "Decline",
+  "secret_run_run": "Run",
+  "secret_run_note": "Used once, never saved. The assistant never sees it.",
+  "secret_run_card_only": "Answer it on the card: type the password and Run, or Decline"
 }

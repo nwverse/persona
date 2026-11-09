@@ -2,7 +2,7 @@ package proto
 
 // PanesResponse is a machine's terminal host layout for the terminal browser (docs/integrations/terminal.md "Standalone terminal"): every
 // workspace, tab and pane of each host, agent or plain shell. It is read from the snapshot the node already takes;
-// ids are host-local.
+// ids are host-local (classic herdr's also per herdr session: a named session's are "@<session>:<id>", herdr.QualifyID).
 type PanesResponse struct {
 	Hosts []PaneHost `json:"hosts"`
 }
@@ -84,6 +84,10 @@ type WorktreePrepare struct {
 	// Branch is the branch checked out in the workspace ("" on a detached HEAD).
 	Branch string `json:"branch"`
 	Path   string `json:"path"`
+	// ChooseParent permits parent_workspace_id independently of the source workspace. Old nodes omit it.
+	ChooseParent bool `json:"choose_parent,omitempty"`
+	// AutomaticName permits an unnamed create. The host owns naming when supported, otherwise the node chooses a unique name.
+	AutomaticName bool `json:"automatic_name,omitempty"`
 }
 
 // WorktreeAdded is the worktree worktree.add made for a new agent (#6115): its checkout, its branch, the repository's root.
@@ -91,6 +95,16 @@ type WorktreeAdded struct {
 	Path   string `json:"path"`
 	Branch string `json:"branch"`
 	Root   string `json:"root"`
+}
+
+// WorktreeSnapshot is what worktree.snapshot made (#2173): a detached checkout of Root's HEAD at Path with Root's
+// uncommitted change in it, for a reviewer to read without touching Root. Skipped counts the untracked files left
+// out (over the copy's limits).
+type WorktreeSnapshot struct {
+	Path    string `json:"path"`
+	Root    string `json:"root"`
+	Head    string `json:"head"`
+	Skipped int    `json:"skipped,omitempty"`
 }
 
 // WorktreeStatus is what worktree.status says of a directory (#6115): whether it is a linked Git worktree, whether
@@ -117,10 +131,11 @@ type WorktreeRemoved struct {
 
 // WorktreeCreateResult is what worktree.create opened: the new workspace, and the checkout it is in.
 type WorktreeCreateResult struct {
-	WorkspaceID string `json:"workspace_id"`
-	TabID       string `json:"tab_id,omitempty"`
-	Pane        string `json:"pane,omitempty"`
-	Terminal    string `json:"terminal,omitempty"`
-	Path        string `json:"path"`
-	Branch      string `json:"branch"`
+	WorkspaceID       string `json:"workspace_id"`
+	ParentWorkspaceID string `json:"parent_workspace_id,omitempty"`
+	TabID             string `json:"tab_id,omitempty"`
+	Pane              string `json:"pane,omitempty"`
+	Terminal          string `json:"terminal,omitempty"`
+	Path              string `json:"path"`
+	Branch            string `json:"branch"`
 }

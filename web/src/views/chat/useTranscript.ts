@@ -4,11 +4,12 @@ import { api, errorText, isAbort, sessionPath } from "../../lib/api";
 import { sessionLoadError } from "../../lib/session-link";
 import { getState, listenSession, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, shouldPull, type StaleTally } from "../../lib/stale-page";
-import { mergeItems } from "../../lib/turns";
+import { mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
-import { discardFeedCache, readFeedCache, writeFeedCache, type FeedCache } from "../../lib/feed-cache";
+import { discardFeedCache, discardMemoryPage, feedCacheScope, readFeedCache, readMemoryPage, writeFeedCache, writeMemoryPage, type FeedCache } from "../../lib/feed-cache";
 import type { Item, ItemsPage } from "../../lib/types";
 import { createTextThrottle, type TextThrottle } from "../../ui/stream/throttle";
+import { unlandedLive } from "../../lib/live-text";
 
 const PAGE = "turns=2&fold_work=1&lazy_images=1";
 /** How often a page checks whether it is behind (a pure comparison; nothing is asked unless it is, lib/stale-page.ts). */
@@ -21,13 +22,19 @@ const EARLIER_RETRY_MAX_MS = 30_000;
 
 export interface Transcript {
   items: Item[];
+  /** Identity of the currently loaded history, independent of how many earlier pages are visible. */
+  history?: string;
   loading: boolean;
+  /** The hub's first page came or failed: until then a cached page says nothing about what went in since. */
+  firstRead: boolean;
   error: string;
   hasMore: boolean;
   loadingEarlier: boolean;
   loadEarlier: () => Promise<void>;
   expandFold: (fold: Item) => Promise<void>;
-  streaming: string; // the headless assistant's reply as it is written
+  /** The reply as it is written, before the transcript has it: the headless assistant's, or an agent's as Claude shows it
+   *  (a Claude session Persona started; docs/integrations/claude-integration.md "Live replies"). "" for none. */
+  streaming: string;
   /** The stream keeps losing items (the page got them by asking): say so, with a reload. */
   notLive: boolean;
   reload: () => void;
@@ -44,17 +51,21 @@ export interface TranscriptCache {
   manager?: string;
 }
 
+/** Without `cache` (any chat but the main conversation) the page comes from this tab's memory. */
 function cachedPage(mid: string, sid: string, cache?: TranscriptCache): FeedCache | null {
-  if (!cache) return null;
+  if (!cache) return readMemoryPage(feedCacheScope(), mid, sid);
   const page = readFeedCache(cache.scope);
   return page?.machineID === mid && page.sessionID === sid && (page.manager ?? "") === (cache.manager ?? "") ? page : null;
 }
 
-/** `updatedAt`: the session's `updated_at` from the list (a subagent's from its parent's), what the stale-page check compares. */
-export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; cache?: TranscriptCache } = {}): Transcript {
+/** `updatedAt`: the session's `updated_at` from the list (a subagent's from its parent's), what the stale-page check compares.
+ *  `assistant`: a Persona conversation, whose live text is the headless assistant's whole reply so far (any reply item
+ *  ends it); otherwise it is an agent's message as Claude shows it, which the transcript replaces by its start. */
+export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; cache?: TranscriptCache; assistant?: boolean } = {}): Transcript {
   const [initial] = useState(() => cachedPage(mid, sid, opts.cache));
   const [items, setItems] = useState<Item[]>(initial?.items ?? []);
   const [loading, setLoading] = useState(!initial);
+  const [firstRead, setFirstRead] = useState(false);
   const [error, setError] = useState("");
   const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -79,31 +90,42 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   // The back-off after a failed older page: when loadEarlier may ask again, and how long the last wait was.
   const earlierRetryAt = useRef(0);
   const earlierWait = useRef(0);
-  // The assistant's delta (the whole reply so far, about every 80 ms; "" when it ends) re-renders the chat at most once
-  // per throttle interval (ui/stream/throttle.ts), the last one never dropped; the end and the reply's item at once.
+  // The live text (the whole message so far: the assistant's about every 80 ms, an agent's a batch of lines at a time;
+  // "" when it ends) re-renders the chat at most once per throttle interval (ui/stream/throttle.ts), the last one never
+  // dropped; the end and the reply's item at once. Only the newest items touch it: an older page or an opened fold is
+  // never the reply being written.
   const deltas = useRef<TextThrottle>(null!);
   deltas.current ??= createTextThrottle(setStreaming);
+  const assistant = Boolean(opts.assistant);
+  // an agent's last delta as it came, and what of it the page shows (lib/live-text.ts)
+  const liveRaw = useRef("");
+  const liveShown = useRef("");
 
   const apply = useCallback((batch: Item[]) => {
     if (!batch.length) return;
     setItems((have) => mergeItems(have, batch));
-    if (batch.some((i) => i.role === "assistant" && i.kind === "text")) deltas.current.flush("");
   }, []);
 
   useEffect(() => {
     let dead = false;
     const ctl = new AbortController();
-    generation.current++;
-    earlierInFlight.current = false;
-    setLoadingEarlier(false);
+    // Older pages and folds still on their way were asked for from what is shown now: they must not land on what replaces it.
+    const disownReads = () => {
+      generation.current++;
+      earlierInFlight.current = false;
+      setLoadingEarlier(false);
+    };
+    disownReads();
     const kept = snapshot.current;
     const cached = cacheScope && kept?.scope === cacheScope && kept.page.machineID === mid && kept.page.sessionID === sid && (kept.page.manager ?? "") === cacheManager
       ? kept.page : cachedPage(mid, sid, opts.cache);
     setItems(cached?.items ?? []);
     setLoading(!cached);
+    setFirstRead(false);
     setError("");
     setHasMore(cached?.hasMore ?? false);
     deltas.current.flush("");
+    liveRaw.current = liveShown.current = "";
     covered.current = 0;
     history.current = cached?.history ?? "";
     earlierRetryAt.current = 0;
@@ -119,8 +141,16 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     let latestMore = cached?.hasMore ?? false;
     let pendingItems: Item[] = []; // pushes after the HTTP request started win over its answer
     let pendingHistory = "";
+    const memoryScope = cacheScope ? null : feedCacheScope();
+    // The newest page may start after everything the cached one holds, with turns missing between them: showing both
+    // would hide that hole, so the page takes over and older history loads on scroll.
+    const skipsCached = (page: Item[]) => page.length > 0 && page[0].seq > (cached?.items.at(-1)?.seq ?? Infinity);
     const save = () => {
-      if (!cacheScope || (chosenManager() ?? "") !== cacheManager) return;
+      if (!cacheScope) {
+        writeMemoryPage(memoryScope, { machineID: mid, sessionID: sid, items: latest, hasMore: latestMore, history: history.current || undefined });
+        return;
+      }
+      if ((chosenManager() ?? "") !== cacheManager) return;
       // The store may have accepted a new main before React unmounts this chat. Its old request must not
       // recreate the discarded cache in that interval, even though the credential scope is unchanged.
       const assistant = getState().assistant;
@@ -129,17 +159,37 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       snapshot.current = { scope: cacheScope, page };
       writeFeedCache(cacheScope, page);
     };
-    const remember = (batch: Item[]) => {
+    const remember = (batch: Item[], gap = false) => {
       if (!ready) pendingItems = mergeItems(pendingItems, batch);
       latest = mergeItems(latest, batch);
-      if (ready) save();
+      if (ready && !gap) save(); // a page with a hole is not kept: the fill saves once it is closed
     };
     const rewritten = () => {
       dead = true; // invalidate in-flight reads before React runs the next effect
       generation.current++;
       if (cacheScope) discardFeedCache(cacheScope);
+      else discardMemoryPage(memoryScope, mid, sid);
       snapshot.current = null;
       setNonce((x) => x + 1);
+    };
+
+    // The live text against the newest items, after they changed (`batch`) or a delta came: the assistant's ends at
+    // its reply's item; an agent's shows what of its message the latest one does not hold (lib/live-text.ts).
+    const showLive = (batch?: Item[]) => {
+      if (assistant) {
+        if (batch?.some((i) => i.role === "assistant" && i.kind === "text")) deltas.current.flush("");
+        return;
+      }
+      const want = liveRaw.current && unlandedLive(liveRaw.current, latest);
+      if (want === liveShown.current) return;
+      liveShown.current = want;
+      if (!want || batch) deltas.current.flush(want); // the end, and what items took off, at once
+      else deltas.current.push(want);
+    };
+    const onDelta = (text: string) => {
+      if (assistant) return applyDelta(deltas.current, text);
+      liveRaw.current = text;
+      showLive();
     };
 
     const subscribe = () => send({ type: "subscribe", machine_id: mid, session_id: sid, since_seq: covered.current || undefined, lazy_images: true, fold_work: true });
@@ -159,6 +209,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         fresh += got.filter((i) => i.seq > covered.current).length;
         apply(got);
         remember(got);
+        showLive(got);
         if (p.to_seq) covered.current = Math.max(covered.current, p.to_seq);
         lastArrival = Date.now();
         if (!p.more_after) return fresh;
@@ -200,13 +251,26 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       }
       if (e.history) history.current = e.history;
       if (!ready && e.history) pendingHistory = e.history;
-      remember(e.items ?? []);
+      if (e.has_more !== undefined) {
+        // The replay of a subscribe without since_seq (the first read failed) stands in for that read.
+        latestMore = e.has_more;
+        setHasMore(latestMore);
+        setError("");
+        const fresh = e.items ?? [];
+        const skips = skipsCached(fresh);
+        if (skips) disownReads();
+        latest = skips ? [] : withoutFolded(latest, fresh);
+        setItems((have) => (skips ? [] : withoutFolded(have, fresh)));
+      }
+      const gap = e.from_seq !== undefined && covered.current > 0 && e.from_seq > covered.current;
+      remember(e.items ?? [], gap);
+      showLive(e.items ?? []);
       lastArrival = Date.now();
       if (e.items?.length && tally !== FRESH_TALLY) {
         tally = afterPush(tally); // the stream works
         setNotLive(false);
       }
-      if (e.from_seq !== undefined && covered.current && e.from_seq > covered.current) {
+      if (gap) {
         apply(e.items ?? []);
         // Started once per gap: a busy turn pushes every second or so, and restarting it on each push put the fill
         // off until the agent paused (#5355). The fill reads everything after `covered`, so later pushes need no timer.
@@ -218,11 +282,17 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       }
       apply(e.items ?? []);
       if (e.to_seq) covered.current = Math.max(covered.current, e.to_seq);
+      if (e.more_after) {
+        gapTimer.current ??= window.setTimeout(() => {
+          gapTimer.current = undefined;
+          void fillGap().catch(() => {});
+        }, 1500);
+      }
     };
 
     const off = listenSession(mid, sid, {
       items: onItems,
-      delta: (text) => applyDelta(deltas.current, text),
+      delta: onDelta,
       reconnected: subscribe,
     });
 
@@ -235,21 +305,26 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           return;
         }
         const batch = p.items ?? [];
-        const replace = !batch.length || Boolean(p.history && history.current && p.history !== history.current);
-        setItems((have) => mergeItems(mergeItems(replace ? [] : have, batch), pendingItems));
-        latest = mergeItems(mergeItems(replace ? [] : latest, batch), pendingItems);
+        const replace = !batch.length || skipsCached(batch) || Boolean(p.history && history.current && p.history !== history.current);
+        if (replace) disownReads();
+        const refreshed = (have: Item[]) => mergeItems(mergeItems(replace ? [] : withoutFolded(have, batch), batch), withoutFolded(pendingItems, batch));
+        setItems(refreshed);
+        latest = refreshed(latest);
         latestMore = Boolean(p.has_more);
         setHasMore(latestMore);
         if (p.history) history.current = p.history;
         save();
-        if (batch.some((i) => i.role === "assistant" && i.kind === "text")) deltas.current.flush("");
+        showLive(batch);
         covered.current = Math.max(covered.current, p.to_seq ?? Math.max(0, ...batch.map((i) => i.seq)));
       } catch (e) {
         if (dead) return;
         // a session that is still starting has no transcript yet
         if (!opts.starting) setError(sessionLoadError(errorText(e)));
       } finally {
-        if (!dead) setLoading(false);
+        if (!dead) {
+          setLoading(false);
+          setFirstRead(true);
+        }
         lastArrival = Date.now();
         ready = true;
       }
@@ -268,7 +343,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       send({ type: "unsubscribe", machine_id: mid, session_id: sid });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mid, sid, nonce, cacheScope, cacheManager]);
+  }, [mid, sid, nonce, cacheScope, cacheManager, assistant]);
 
   const loadEarlier = useCallback(async () => {
     const first = itemsRef.current[0];
@@ -279,8 +354,14 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     try {
       const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}&before_seq=${first.seq}`);
       if (gen !== generation.current) return;
+      if (p.history && history.current && p.history !== history.current) {
+        generation.current++;
+        setNonce((n) => n + 1);
+        return;
+      }
       apply(p.items ?? []);
       setHasMore(Boolean(p.has_more));
+      setError("");
       earlierRetryAt.current = 0;
       earlierWait.current = 0;
     } catch (e) {
@@ -316,5 +397,5 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     [mid, sid, apply],
   );
 
-  return { items, loading, error, hasMore, loadingEarlier, loadEarlier, expandFold, streaming, notLive, reload: () => setNonce((x) => x + 1) };
+  return { items, history: history.current, loading, firstRead, error, hasMore, loadingEarlier, loadEarlier, expandFold, streaming, notLive, reload: () => setNonce((x) => x + 1) };
 }

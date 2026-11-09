@@ -1,9 +1,12 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,5 +143,189 @@ func TestTodayCardOmitsEmptyPendingReview(t *testing.T) {
 	}
 	if _, ok := body["pending_review"]; ok {
 		t.Fatalf("empty pending_review must be omitted: %s", it.Body)
+	}
+}
+
+// dayStart is the first instant of the user's day, also where the clocks jump forward at midnight: there time.Date
+// answers 23:00 the evening before, and the Today card was filed under yesterday's date.
+func TestDayStart(t *testing.T) {
+	for _, tc := range []struct {
+		name, zone, now, start string
+	}{
+		{"santiago spring forward at midnight", "America/Santiago", "2024-09-08 12:00", "2024-09-08T01:00:00-03:00"},
+		{"santiago just after the jump", "America/Santiago", "2024-09-08 01:00", "2024-09-08T01:00:00-03:00"},
+		{"santiago the evening before", "America/Santiago", "2024-09-07 23:59", "2024-09-07T00:00:00-04:00"},
+		{"havana spring forward at midnight", "America/Havana", "2024-03-10 08:30", "2024-03-10T01:00:00-04:00"},
+		{"asuncion spring forward at midnight", "America/Asuncion", "2023-10-01 20:00", "2023-10-01T01:00:00-03:00"},
+		{"santiago normal day", "America/Santiago", "2024-07-01 09:00", "2024-07-01T00:00:00-04:00"},
+		{"santiago fall back, the day before", "America/Santiago", "2024-04-06 22:00", "2024-04-06T00:00:00-03:00"},
+		{"santiago fall back, the day after", "America/Santiago", "2024-04-07 09:00", "2024-04-07T00:00:00-04:00"},
+		{"new york spring forward at 02:00", "America/New_York", "2024-03-10 12:00", "2024-03-10T00:00:00-05:00"},
+		{"utc", "UTC", "2024-09-08 12:00", "2024-09-08T00:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Skipf("no zone data for %s: %v", tc.zone, err)
+			}
+			now, err := time.ParseInLocation("2006-01-02 15:04", tc.now, loc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := time.Parse(time.RFC3339, tc.start)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := dayStart(now)
+			date := now.Format("2006-01-02")
+			if !got.Equal(want) || got.Location() != loc {
+				t.Fatalf("dayStart(%s) = %s, want %s in %s", now, got, want.In(loc), loc)
+			}
+			if got.Format("2006-01-02") != date || got.Add(-time.Nanosecond).Format("2006-01-02") == date {
+				t.Fatalf("dayStart(%s) = %s is not the first instant of %s", now, got, date)
+			}
+		})
+	}
+}
+
+// POST .../today reads the conversation's feed twice (is today's card there; what finished since yesterday 18:00) and
+// looks only at the items: it loads none of the plans its plan cards name, and the card is the same as before.
+func TestTodayCardReadsNoPlans(t *testing.T) {
+	st := &countingPlans{DB: todoTestDB(t)}
+	// planReads are the plan reads that reached the database, one plan at a time or in one batch.
+	planReads := func() int64 { return st.one.Load() + st.batch.Load() }
+	resetReads := func() {
+		st.one.Store(0)
+		st.batch.Store(0)
+	}
+	e := newTodoEnv(t, st)
+	ctx := context.Background()
+	loc := e.s.location(ctx)
+	now := time.Now().In(loc)
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	// task_plans and assistant_feed are not truncated between tests, so the names are fresh.
+	conversation := "today_" + randomHex(6)
+	planCard := func(i int, at time.Time) {
+		t.Helper()
+		p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: conversation, State: planOpen, CreatedAt: at, UpdatedAt: at,
+			Tasks: []PlanTask{{Title: fmt.Sprintf("Task %d", i), Prompt: "Fix the crash and add a test", Machine: "box", Cwd: "/code/app"}}}
+		if err := e.s.savePlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.s.appendFeedAt(ctx, conversation, feedPlan, p.ID, map[string]any{"plan": p}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const todayPlans = 20
+	planCard(0, day.Add(-4*time.Hour)) // yesterday 20:00: only the second read has it
+	if _, err := e.s.appendFeedAt(ctx, conversation, feedReceipt, "todo_night",
+		receiptBody{Title: "Overnight fix", State: "done"}, day.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= todayPlans; i++ {
+		planCard(i, now)
+	}
+
+	post := func() (FeedItem, bool) {
+		t.Helper()
+		var res struct {
+			Item FeedItem `json:"item"`
+			New  bool     `json:"new"`
+		}
+		if err := json.Unmarshal(e.must("POST", "/api/v1/assistant/conversations/"+conversation+"/today", "").Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		return res.Item, res.New
+	}
+	resetReads()
+	it, made := post()
+	t.Logf("plan reads with %d plan cards today and 1 overnight: %d on the first POST", todayPlans, planReads())
+	if n := planReads(); n != 0 {
+		t.Fatalf("the first POST read %d plans, want none", n)
+	}
+	if !made || it.Kind != feedToday || it.Ref != day.Format("2006-01-02") || !it.At.Equal(day) {
+		t.Fatalf("today = %+v new=%v", it, made)
+	}
+	var body todayBody
+	if err := json.Unmarshal(it.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	want := todayBody{Date: it.Ref, Done: []todayTask{{ID: "todo_night", Title: "Overnight fix"}}}
+	if !reflect.DeepEqual(body, want) {
+		t.Fatalf("body = %+v, want %+v", body, want)
+	}
+
+	resetReads()
+	again, made := post()
+	t.Logf("plan reads on the second POST: %d", planReads())
+	if n := planReads(); n != 0 {
+		t.Fatalf("the second POST read %d plans, want none", n)
+	}
+	if made || again.ID != it.ID || !bytes.Equal(again.Body, it.Body) {
+		t.Fatalf("second POST: %+v new=%v, want the first card %+v", again, made, it)
+	}
+}
+
+// Concurrent opens of a chat (two devices or tabs, the Lark workbench) make one "Today" card for the day: the first
+// caller makes it and the others get that card, not one each.
+func TestTodayCardConcurrentOpensMakeOne(t *testing.T) {
+	s, f := newTaskService(t)
+	// The connectors answer late, so each caller spends a while building the card after looking for one: without the
+	// lock every caller would find none and append its own.
+	f.slowSnapshots = 20 * time.Millisecond
+	ctx := context.Background()
+	const callers = 8
+	type result struct {
+		it   FeedItem
+		made bool
+		err  error
+	}
+	results := make([]result, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			it, made, err := s.ensureToday(ctx, "conv1")
+			results[i] = result{it, made, err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	made := 0
+	for i, r := range results {
+		if r.err != nil {
+			t.Fatalf("caller %d: %v", i, r.err)
+		}
+		if r.made {
+			made++
+		}
+	}
+	items, err := s.feedItems(ctx, "conv1", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards := 0
+	for _, it := range items {
+		if it.Kind == feedToday {
+			cards++
+		}
+	}
+	if cards != 1 {
+		t.Fatalf("%d Today cards for one day, want 1", cards)
+	}
+	if made != 1 {
+		t.Fatalf("%d callers made the card, want 1", made)
+	}
+	for i, r := range results {
+		if r.it.ID != results[0].it.ID {
+			t.Fatalf("caller %d got card %s, caller 0 got %s", i, r.it.ID, results[0].it.ID)
+		}
+	}
+	if n := s.tasks.todayLocks.len(); n != 0 {
+		t.Fatalf("%d conversation locks kept after the opens, want none", n)
 	}
 }

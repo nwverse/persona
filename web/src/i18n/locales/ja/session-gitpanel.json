@@ -16,6 +16,8 @@
   "behind_other": "アップストリームより{count}コミット遅れ",
   "no_upstream": "アップストリームブランチなし",
   "in_sync": "同期済み",
+  "upstream_gone": "リモートで削除済み",
+  "upstream_gone_hint": "アップストリームブランチはリモートから削除されています（マージ済みのプルリクエストのブランチなど）。もう一度プッシュするまで、ここのコミットはこのコンピュータにしかありません。",
   "stashes_hint": "git stashのエントリ数",
   "stashes_one": "スタッシュ{count}",
   "stashes_other": "スタッシュ{count}",
@@ -30,5 +32,6 @@
   "copy_hash": "コミットハッシュをコピー",
   "file_count_one": "{count}個のファイル",
   "file_count_other": "{count}個のファイル",
-  "diff_failed": "変更を読み取れません"
+  "diff_failed": "変更を読み取れません",
+  "review": "レビュー"
 }

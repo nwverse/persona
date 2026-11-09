@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -102,7 +103,6 @@ func LegacyRuntimePackage(name string) string {
 
 const NodeUpdateLock = ".jarvis-update.lock"
 
-func Scheme(name string) bool { return name == "persona" || name == "jarvis" }
 func LegacyURL(value string) string {
 	if strings.HasPrefix(value, "persona:") {
 		return "jarvis:" + strings.TrimPrefix(value, "persona:")
@@ -135,14 +135,17 @@ func HeaderConflict(h http.Header, name string) bool {
 func ContextPattern() string { return `(?:jarvis|persona)-context` }
 func ContextNames() []string { return []string{"jarvis-context", "persona-context"} }
 
-var legacyContextTags = regexp.MustCompile(`(</?)jarvis-(context|file)([[:space:]/>])`)
-var currentContextTags = regexp.MustCompile(`(</?)persona-(context|file)([[:space:]/>])`)
+// compat is also built on its own, copied without the rest of the server (scripts/test/test_persona_migration_edges.py),
+// so it uses the standard library only: its patterns compile on first use with sync.OnceValue, not internal/lazyre.
+var currentContextTags = lazy(`(</?)persona-(context|file)([[:space:]/>])`)
 
-func NormalizeContextTags(s string) string {
-	return legacyContextTags.ReplaceAllString(s, `${1}persona-${2}${3}`)
+// lazy is regexp.MustCompile(src) on first use.
+func lazy(src string) func() *regexp.Regexp {
+	return sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(src) })
 }
+
 func LegacyContextTags(s string) string {
-	return currentContextTags.ReplaceAllString(s, `${1}jarvis-${2}${3}`)
+	return currentContextTags().ReplaceAllString(s, `${1}jarvis-${2}${3}`)
 }
 func AssistantSuffixes() []string {
 	return []string{"--persona-assistant", "--jarvis-assistant", "--persona-health", "--jarvis-health"}

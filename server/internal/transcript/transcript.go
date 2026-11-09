@@ -3,13 +3,14 @@ package transcript
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -74,13 +75,23 @@ type entry struct {
 	// Origin: where a user line came from; a subagent handing back its report carries the report here (Claude Code
 	// 2.1.318+), on a hidden line its task notification then only points at (handbackOf). Raw: a shape not known yet
 	// must not lose the line.
-	Origin        json.RawMessage `json:"origin"`
-	Cwd           string          `json:"cwd"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
-	// system/api_error: {message, formatted} (raw: other lines may carry a plain string here), and which retry this is.
-	Error        json.RawMessage `json:"error"`
-	RetryAttempt int             `json:"retryAttempt"`
-	MaxRetries   int             `json:"maxRetries"`
+	Origin json.RawMessage `json:"origin"`
+	Cwd    string          `json:"cwd"`
+	// toolUseResult, a tool's own copy of its output (often as long as the tool_result itself), is not read: items take
+	// a result from the message, and a field here would copy every one of them for nothing.
+
+	// system/api_error: {message, formatted}, and which retry this is. An assistant line Claude Code wrote itself for a
+	// request that failed (isApiErrorMessage) carries the error's kind here as a string (rate_limit,
+	// authentication_failed…), and a subscription's limit the account's quota (quotaLimits; claudeErrorKind).
+	Error             json.RawMessage `json:"error"`
+	RetryAttempt      int             `json:"retryAttempt"`
+	MaxRetries        int             `json:"maxRetries"`
+	IsAPIErrorMessage bool            `json:"isApiErrorMessage"`
+	APIErrorStatus    int             `json:"apiErrorStatus"`
+	QuotaLimits       *struct {
+		Status   string          `json:"status"`   // "rejected": the limit refused the request
+		ResetsAt json.RawMessage `json:"resetsAt"` // epoch seconds
+	} `json:"quotaLimits"`
 	// system/scheduled_task_fire: the /loop prompt that is about to run.
 	Prompt string `json:"prompt"`
 }
@@ -174,10 +185,35 @@ type Meta struct {
 	// (a tail read from mid-turn).
 	TurnClosed bool
 	// TurnError / TurnErrorKind: the latest turn failed on the model service, as the agent's own record says it
-	// (Codex: task_complete's error, #2185); empty when it ended well, or when the record does not say (Claude Code
-	// writes its error as the answer: the hub reads that off LastText). Kind is proto.TurnErrorTransient / User, or
-	// "" when the record gives no kind to go by.
+	// (Codex: task_complete's error, #2185; Claude Code: the reply it writes itself for a failed request,
+	// isApiErrorMessage, #1710); empty when it ended well or the model answered since. Kind is
+	// proto.TurnErrorTransient / User / UsageLimit, or "" when the record gives no kind to go by (an older Claude Code,
+	// a gateway's 429): the hub reads the text then.
 	TurnError, TurnErrorKind string
+	// TurnErrorCode identifies a failed refusal fallback using the runtime's structured error.
+	TurnErrorCode string
+	// ModelFallback is the runtime's active refusal fallback. ModelFallbackObserved also records a clear, so
+	// partial readers can distinguish evidence that it ended from a tail that says nothing about it.
+	ModelFallback         *proto.ModelRefusal
+	ModelFallbackObserved bool
+	// TurnErrorResetsAt: when the subscription usage limit that failed the turn resets, as the record says (Claude
+	// Code's quotaLimits.resetsAt; for Codex the full window of the rollout's latest rate limits); zero when it does not.
+	TurnErrorResetsAt time.Time
+	// TurnErrorResumes: Claude Code said it goes on by itself once the limit resets, and nothing took that back since
+	// (claudeLimitNotice). It outlasts the turns background tasks wake the session for while it waits (each fails
+	// again at once, with no new notice), not a message: typing cancels Claude Code's own continuation.
+	TurnErrorResumes bool
+	// resumesSaid: a line read said whether Claude Code goes on by itself (TurnErrorResumesSaid).
+	resumesSaid bool
+	// TurnErrorAfterWork: the failed turn did some work (a reply, a tool call, thinking) before the error ended it.
+	TurnErrorAfterWork bool
+	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next
+	// turn's start sets it back. turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
+	turnWorked    bool
+	turnErrorLine string
+	// codexLimitFull: when the full windows of a rollout's latest rate limits (Codex's own limit, at 100%) reset, the
+	// latest of them; zero when none is full. A usage-limit failure resets then (TurnErrorResetsAt).
+	codexLimitFull time.Time
 	// codexSeen: newer rollouts record an item both as event_msg/item_completed and in history_mutation.
 	codexSeen   map[string]bool
 	codexTurnID string
@@ -257,14 +293,14 @@ func withoutBotmuxSentinel(text string) string {
 
 // pastedRe matches the wrapper Claude Code puts around long pasted input (also what herdr's bracketed paste from
 // the phone, e.g. a WeChat voice-input transcript, turns into): <pasted_content id="ae9b">…</pasted_content id="ae9b">.
-var pastedRe = regexp.MustCompile(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
+var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
 
 // ContextRe matches the live snapshot Persona starts each message to its assistant with (node/assistant_context.go):
 // context for the model, not something the user wrote. It is <persona-context>; history and older nodes have
 // <persona-context> (#3182).
-var ContextRe = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
+var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
 
-var tagRe = regexp.MustCompile(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
+var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
 
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
@@ -318,10 +354,13 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 		}
 		if !meta.Codex && (it.Wake || it.Role == "user" && it.Kind == proto.KindText && !it.Queued) {
-			if local := meta.localInput && !it.Wake; local && !meta.localTurn {
+			local := meta.localInput && !it.Wake
+			if local && !meta.localTurn {
 				meta.localTurn, meta.beforeLocal = true, [2]bool{meta.TurnOpen, meta.TurnClosed}
 			} else if !local {
 				meta.localTurn = false
+				// A local command (a slash command, "! cmd") is not sent to the model: it does not end a limit.
+				meta.ClaudeTurnStarted(it.Wake)
 			}
 			meta.TurnOpen, meta.TurnClosed = true, false // a Claude turn starts; parseLine closes it
 		}
@@ -329,9 +368,20 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	return items
 }
 
+// lineJSON is encoding/json's way of decoding without its check of the whole input before it decodes (its legacy
+// error semantics): the decoder checks each byte as it reads it anyway, so input that is not JSON fails all the same,
+// read once instead of twice. A transcript line is mostly its message, and a message's content was read up to four
+// times (the line, then the content as a string, as blocks, a tool result's again). The error differs from
+// json.Unmarshal's (its type and text, and it stops at the first value of the wrong type), so only for callers that
+// just ask whether decoding failed; TestLineJSONMatchesUnmarshal checks it fails and decodes as json.Unmarshal does.
+var lineJSON = jsonv2.JoinOptions(json.DefaultOptionsV1(), json.ReportErrorsWithLegacySemantics(false))
+
+// unmarshalLine is json.Unmarshal reading data once (lineJSON); err only says whether it failed.
+func unmarshalLine(data []byte, v any) error { return jsonv2.Unmarshal(data, v, lineJSON) }
+
 func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	var e entry
-	if err := json.Unmarshal(line, &e); err != nil {
+	if err := unmarshalLine(line, &e); err != nil {
 		return nil
 	}
 	meta.tree = treeLine{uuid: e.UUID, parent: e.ParentUUID, sidechain: e.IsSidechain, assistant: e.Type == "assistant",
@@ -483,10 +533,14 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		return append(items, images...) // the pictures dropped here once: the phone showed the message without them
 	case "system":
+		if strings.HasPrefix(e.Subtype, "model_refusal_") {
+			return meta.claudeModelRefusal(e.Subtype, line, mk(0, "system", proto.KindNotice))
+		}
 		var text string
 		switch e.Subtype {
 		case "turn_duration":
 			meta.TurnOpen, meta.TurnClosed = false, true
+			meta.turnWorked = false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
 			ms, ok := recordedMilliseconds(e.DurationMS)
 			if !ok || strings.TrimSpace(e.ParentUUID) == "" {
 				return nil
@@ -532,6 +586,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			return []proto.Item{it}
 		case "informational":
 			text = rawString(e.Content)
+			meta.claudeLimitNotice(text)
 		default:
 			return nil
 		}
@@ -565,7 +620,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 		}
 		var s string
-		if json.Unmarshal(e.Message.Content, &s) == nil {
+		if unmarshalLine(e.Message.Content, &s) == nil {
 			if strings.Contains(s, "<task-notification>") {
 				meta.taskFinished(s, e.Timestamp)
 			}
@@ -582,7 +637,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			return items
 		}
 		var blocks []block
-		if json.Unmarshal(e.Message.Content, &blocks) != nil {
+		if unmarshalLine(e.Message.Content, &blocks) != nil {
 			return nil
 		}
 		var out []proto.Item
@@ -639,9 +694,10 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		if e.Message.Model != "" && e.Message.Model != "<synthetic>" {
 			meta.Model = e.Message.Model
+			meta.observeReplyModel(e.Message.Model)
 		}
 		var blocks []block
-		if json.Unmarshal(e.Message.Content, &blocks) != nil {
+		if unmarshalLine(e.Message.Content, &blocks) != nil {
 			return nil
 		}
 		var out []proto.Item
@@ -689,6 +745,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				meta.trackBackground(b.ID, b.Name, b.Input, e.Timestamp)
 			}
 		}
+		meta.claudeReply(&e, blocks, len(out) > 0)
 		return out
 	}
 	return nil
@@ -705,7 +762,7 @@ func (m *Meta) said(t string, ts time.Time) {
 }
 
 // ansiRe matches terminal escape sequences (colors, bold) that local command output keeps.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var ansiRe = lazyre.New(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // apiErrorText is what an api_error line says went wrong: error.formatted / error.message, or older lines' content.
 func apiErrorText(e entry) string {
@@ -747,11 +804,11 @@ func firstTag(s, tag string) string {
 
 func toolResultContent(raw json.RawMessage) (string, []*proto.Image) {
 	var s string
-	if json.Unmarshal(raw, &s) == nil {
+	if unmarshalLine(raw, &s) == nil {
 		return s, nil
 	}
 	var blocks []block
-	if json.Unmarshal(raw, &blocks) != nil {
+	if unmarshalLine(raw, &blocks) != nil {
 		return "", nil
 	}
 	var parts []string

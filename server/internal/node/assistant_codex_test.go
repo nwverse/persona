@@ -284,7 +284,8 @@ func TestCodexStartAndTurns(t *testing.T) {
 	}
 	b, _ := json.Marshal(f.sent("thread/start")[0])
 	_ = json.Unmarshal(b, &start)
-	if start.Params.ApprovalPolicy != "untrusted" || start.Params.Sandbox != "workspace-write" || !strings.HasPrefix(start.Params.DeveloperInstructions, "# 记忆") ||
+	// No mode selected: keep the launcher's policy until the app makes an explicit choice below.
+	if start.Params.ApprovalPolicy != "" || start.Params.Sandbox != "" || !strings.HasPrefix(start.Params.DeveloperInstructions, "# 记忆") ||
 		strings.Contains(start.Params.DeveloperInstructions, "snapshot") { // the snapshot goes with each message, not here
 		t.Fatalf("thread/start params %+v", start.Params)
 	}
@@ -787,7 +788,7 @@ func TestAssistantCodexTurnError(t *testing.T) {
 		t.Fatalf("new turn still has error: %q, %q", s.TurnError, s.TurnErrorKind)
 	}
 	end("t2", "failed", map[string]any{"message": "You've hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"})
-	if s := session(); s.TurnError != "You've hit your usage limit." || s.TurnErrorKind != proto.TurnErrorUser {
+	if s := session(); s.TurnError != "You've hit your usage limit." || s.TurnErrorKind != proto.TurnErrorUsageLimit {
 		t.Fatalf("usage limit error: %q, %q", s.TurnError, s.TurnErrorKind)
 	}
 

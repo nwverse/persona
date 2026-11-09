@@ -2,9 +2,9 @@ import BeautifulUI
 import SwiftUI
 
 // Settings › Appearance (2026-11-01): laid out like Connectors, one row per thing that changes how the app looks
-// (Avatar, Theme Color, Interface Style, Light & Dark on iPhone and iPad, and Layout on an iPhone), each opening its own page; the first three are apart (docs/apple/ios.md「设计语言」).
+// (Avatar, Theme Color, Interface Style, Light & Dark on iPhone and iPad), each opening its own page; the first three are apart (docs/apple/ios.md「设计语言」).
 // The home screen icon is the Avatar's, not a row of its own (#3203). Picking anything
-// there rebuilds the whole tree (`AppModel.look`, the layout switch); the settings path lives in AppModel, so the
+// there rebuilds the whole tree (`AppModel.look`); the settings path lives in AppModel, so the
 // rebuilt app is back on the same page.
 
 /// The Appearance section of Settings: one row per scene with what it is set to now.
@@ -41,14 +41,6 @@ struct AppearanceSection: View {
                 }
                 .settingsListRow(SettingsPage.colorScheme)
                 .accessibilityIdentifier("settings-scheme")
-                if UIDevice.current.userInterfaceIdiom == .phone {
-                    NavigationLink(value: SettingsPage.layout) {
-                        SettingsRow(title: String(localized: "Layout"), symbol: Theme.Icon.layout, tint: Theme.Hue.blue,
-                                    value: model.oldLayout ? String(localized: "Old Layout") : String(localized: "New Layout"), look: .oneLine)
-                    }
-                    .settingsListRow(SettingsPage.layout)
-                    .accessibilityIdentifier("settings-layout")
-                }
                 #endif
             }
             .bareListRow()
@@ -127,7 +119,7 @@ struct StyleSettingsPage: View {
                 Group {
                     if AppStyle.current.usesBeautifulUI {
                         BUIListRow(String(localized: "Text Size")) {
-                            BUIIconTile(Theme.Icon.textSize, tint: Theme.Hue.gray)
+                            IconTile(Theme.Icon.textSize, tint: Theme.Hue.gray)
                         } trailing: {
                             BUISegmented(TextSize.allCases.map { .init($0, $0.title) },
                                          selection: Binding(get: { model.textSize }, set: { model.textSize = $0 }))
@@ -158,36 +150,6 @@ struct StyleSettingsPage: View {
 }
 
 #if os(iOS) || os(visionOS)
-/// Settings › Appearance › Layout (iPhone): the ChatGPT-style shell or the old four tabs.
-struct LayoutSettingsPage: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        List {
-            Section {
-                Toggle(isOn: Binding(get: { model.oldLayout }, set: { setOldLayout($0) })) {
-                    Text("Old Layout").lineLimit(1)
-                }
-                .accessibilityIdentifier("old-layout")
-            } footer: {
-                Text("Turn on to go back to the four tabs at the bottom (Persona, Agents, Inbox, Settings). The new layout has “Assistant | Agents” at the top, with Inbox, scheduled tasks and Knowledge in the sidebar at the top left. This switch goes away after a few days.")
-            }
-        }
-        .themedGroupedPage()
-        .navigationTitle("Layout")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    /// Switching rebuilds the root: land on Settings › Appearance › Layout again either way (the old layout's Settings tab, the shell's sheet).
-    private func setOldLayout(_ on: Bool) {
-        model.shellSettings = !on
-        model.oldLayout = on
-        model.selectedTab = .settings
-    }
-}
-#endif
-
-#if os(iOS) || os(visionOS)
 #if DEBUG
 /// `probe.scheme` (`-probes YES`): the choice and the look the page is actually drawn in (ColorSchemeIconTests).
 private struct SchemeProbe: ViewModifier {
@@ -214,7 +176,7 @@ struct ColorSchemeSettingsPage: View {
             Section {
                 Picker("Light & Dark", selection: Binding(get: { model.colorScheme }, set: { model.colorScheme = $0 })) {
                     ForEach(ColorSchemeChoice.allCases) { c in
-                        Label { Text(c.title).lineLimit(1) } icon: { Image(systemName: c.symbol) }
+                        Label { Text(c.title).lineLimit(1) } icon: { ThemedIcon(c.symbol) }
                             .tag(c)
                             .accessibilityIdentifier("scheme-\(c.rawValue)")
                     }

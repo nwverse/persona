@@ -5,18 +5,20 @@
 package kb
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -49,13 +51,14 @@ type Tagging struct {
 
 // Chat is one conversation: a Feishu chat (lark-<feedId>) or the mail exchanged with one address (mail-<account>-<addr>).
 type Chat struct {
-	ID       string   `json:"id"`
-	Source   string   `json:"source"` // lark | mail
-	SourceID string   `json:"source_id"`
-	Kind     string   `json:"kind"` // dm | group | bot | mail
-	Name     string   `json:"name"`
-	People   []string `json:"people,omitempty"`
-	Projects []string `json:"projects,omitempty"`
+	ID        string   `json:"id"`
+	Source    string   `json:"source"` // lark | mail
+	SourceID  string   `json:"source_id"`
+	Connector string   `json:"connector,omitempty"` // the connector that wrote this archive source
+	Kind      string   `json:"kind"`                // dm | group | bot | mail
+	Name      string   `json:"name"`
+	People    []string `json:"people,omitempty"`
+	Projects  []string `json:"projects,omitempty"`
 	Tagging
 	// Archive state: the newest position read, when the newest archived message was written, how many lines so far.
 	Cursor   string    `json:"cursor,omitempty"`
@@ -65,6 +68,9 @@ type Chat struct {
 	// HistoryMode: how its older history was imported (WriteHistory): HistoryFull, every message; HistoryAnchor, only
 	// windows around the owner's messages, the gaps marked by an omission line. "": none imported.
 	HistoryMode string `json:"history_mode,omitempty"`
+	// Rule is the selection rule that decides a plain message of the chat (Selection.UsualRule), as last written; the
+	// retention ledger records only lines another rule decided (retention.go). "": none yet, or outside the selection.
+	Rule string `json:"rule,omitempty"`
 	// Oldest and BackfillDone were an earlier backfill's progress; kept so files that have them still read the same.
 	// History imports keep theirs under history/state/ (HistoryState).
 	Oldest       string `json:"oldest,omitempty"`
@@ -84,14 +90,15 @@ type Chat struct {
 
 // Person is someone the owner talks to: lark-<userId> or mail-<address>.
 type Person struct {
-	ID       string    `json:"id"`
-	Source   string    `json:"source"`
-	SourceID string    `json:"source_id"`
-	Name     string    `json:"name"`
-	Note     string    `json:"note,omitempty"` // who they are to the owner, one line (AI)
-	Chats    []string  `json:"chats,omitempty"`
-	Projects []string  `json:"projects,omitempty"`
-	LastSeen time.Time `json:"last_seen,omitempty"`
+	ID        string    `json:"id"`
+	Source    string    `json:"source"`
+	SourceID  string    `json:"source_id"`
+	Connector string    `json:"connector,omitempty"`
+	Name      string    `json:"name"`
+	Note      string    `json:"note,omitempty"` // who they are to the owner, one line (AI)
+	Chats     []string  `json:"chats,omitempty"`
+	Projects  []string  `json:"projects,omitempty"`
+	LastSeen  time.Time `json:"last_seen,omitempty"`
 	Tagging
 }
 
@@ -165,7 +172,8 @@ func (p *Project) Live() bool { return p.Status != "merged" }
 
 // Item is a document, meeting or calendar event the owner came across.
 type Item struct {
-	Kind     string    `json:"kind"` // docs | meetings | events
+	Kind     string    `json:"kind"`             // docs | meetings | events
+	Source   string    `json:"source,omitempty"` // the connector that supplied the item
 	ID       string    `json:"id"`
 	Title    string    `json:"title"`
 	URL      string    `json:"url,omitempty"`
@@ -174,6 +182,7 @@ type Item struct {
 	Projects []string  `json:"projects,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Seen     time.Time `json:"seen"`
+	Signals  []string  `json:"signals,omitempty"` // kbwire.Signal*: why it concerns the owner, as the source told
 	Tagging
 }
 
@@ -182,10 +191,17 @@ type Store struct {
 	readOnly bool
 	Dir      string
 	mu       sync.Mutex
-	metaMu   sync.Mutex
+	metaMu   sync.Mutex // acquire before mu when both are needed (projectInput reads Log under metaMu)
 	applyMu  sync.Mutex
-	recMu    sync.Mutex // a recording's read-compare-write (recordings.go)
+
+	recMu             sync.Mutex                 // a recording's read-compare-write (recordings.go)
+	recFilesMu        sync.RWMutex               // acquire before metaMu for recording snapshots and recovery
+	recordingWrite    func(string, []byte) error // per-store candidate fault injection
+	recordingReadWait func()                     // per-store read-entry observation for concurrency tests
+	recordingRemove   func(string) error         // per-store commit fault injection
+
 	dedupeMu sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
+	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
 	// reads the chat again under it and changes only the fields it owns. (A person's edits, edit.go, are not under it.)
@@ -195,6 +211,8 @@ type Store struct {
 	zone      *time.Location // the user's zone, the archive's days and times are written in (zone.go); nil: time.Local
 	// settled: the zone every file was last moved into without an error (Rezone skips the walk while it holds).
 	settled string
+	// ingestWrite is a per-store failure-injection seam; nil uses fsync and atomic replacement.
+	ingestWrite func(string, []byte) error
 }
 
 func NewStore(dir string) (*Store, error) {
@@ -204,11 +222,17 @@ func NewStore(dir string) (*Store, error) {
 		}
 	}
 	s := &Store{Dir: dir}
-	_ = writeIfMissing(filepath.Join(dir, "README.md"), prompts.RenderKBReadme())
+	if err := s.recoverRecordings(); err != nil {
+		return nil, err
+	}
+	if err := s.recoverIngests(); err != nil {
+		return nil, err
+	}
+	_ = writeIfMissing(filepath.Join(dir, "README.md"), prompts.RenderKBReadme)
 	return s, nil
 }
 
-var unsafeID = regexp.MustCompile(`[^\p{L}\p{N}._@+-]+`)
+var unsafeID = lazyre.New(`[^\p{L}\p{N}._@+-]+`)
 
 // SafeID turns a source id into a directory name.
 func SafeID(s string) string {
@@ -259,11 +283,13 @@ func writeFile(p string, data []byte) error {
 	return os.Rename(tmp, p)
 }
 
-func writeIfMissing(p, content string) error {
+// writeIfMissing writes what content returns to p unless p exists. content runs only then: the README renders a prompt
+// template, which a store opened on an existing directory (every manager start) need not parse (#2475).
+func writeIfMissing(p string, content func() string) error {
 	if _, err := os.Stat(p); err == nil {
 		return nil
 	}
-	return writeFile(p, []byte(content))
+	return writeFile(p, []byte(content()))
 }
 
 func (s *Store) Chat(id string) (*Chat, bool) {
@@ -415,15 +441,27 @@ func (s *Store) Log(slug string, n int) []string {
 	_, _ = s.settleLogLocked(slug)
 	s.mu.Unlock()
 	raw, _ := os.ReadFile(s.path(KindProject, slug, "log.md"))
+	return lastLogLines(raw, n)
+}
+
+// lastLogLines are the last n "- " lines of a timeline, oldest first, taken from its end so that the lines before them
+// are never collected. nil when it has none; empty when n <= 0 and it has one.
+func lastLogLines(raw []byte, n int) []string {
 	var lines []string
-	for _, l := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(l, "- ") {
-			lines = append(lines, l)
+	for end := len(raw); end >= 0; {
+		start := bytes.LastIndexByte(raw[:end], '\n') + 1
+		if l := raw[start:end]; bytes.HasPrefix(l, []byte("- ")) {
+			if n <= 0 {
+				return []string{}
+			}
+			lines = append(lines, string(l))
+			if len(lines) == n {
+				break
+			}
 		}
+		end = start - 1
 	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
+	slices.Reverse(lines)
 	return lines
 }
 
@@ -516,31 +554,27 @@ func (s *Store) Since(chatID string, t time.Time, max int) string {
 			continue
 		}
 		raw, _ := os.ReadFile(s.path(KindChat, chatID, "messages", d+".md"))
+		// The kept messages' lines, joined once below: appending each continuation line to its message would copy
+		// the whole message again per line, quadratic in a long paste.
 		var keep []string
-		cur := ""
-		flush := func() {
-			if cur != "" {
-				keep = append(keep, cur)
-			}
-			cur = ""
-		}
+		open := false // the last "- " line was kept, so the indented lines that continue it are too
 		for _, l := range strings.Split(string(raw), "\n") {
 			switch {
 			case strings.HasPrefix(l, "- "):
-				flush()
+				open = false
 				if len(l) >= 7 {
 					if at, err := time.ParseInLocation("2006-01-02 15:04", d+" "+l[2:7], zone); err == nil && at.Before(t.Truncate(time.Minute)) {
 						continue
 					}
 				}
-				cur = l
-			case strings.HasPrefix(l, "  ") && cur != "":
-				cur += "\n" + l
+				keep = append(keep, l)
+				open = true
+			case strings.HasPrefix(l, "  ") && open:
+				keep = append(keep, l)
 			default:
-				flush()
+				open = false
 			}
 		}
-		flush()
 		if len(keep) > 0 {
 			fmt.Fprintf(&b, "## %s\n%s\n", d, strings.Join(keep, "\n"))
 		}
@@ -563,7 +597,14 @@ func (s *Store) PruneBySource(now time.Time, textDays int, attachmentDays func(s
 	if s.readOnly {
 		return 0
 	}
-	zone := s.Zone()
+	s.chatMu.Lock()
+	defer s.chatMu.Unlock()
+	s.lockArchive()
+	defer s.unlockArchive()
+	if err := s.recoverIngestsLocked(); err != nil {
+		return 0
+	}
+	zone := s.zoneLocked()
 	textCut := now.AddDate(0, 0, -textDays).In(zone).Format("2006-01-02")
 	for _, id := range s.IDs(KindChat) {
 		for _, d := range s.Days(id) {
@@ -571,6 +612,7 @@ func (s *Store) PruneBySource(now time.Time, textDays int, attachmentDays func(s
 				removed++
 			}
 		}
+		_ = s.pruneReceipts(id, textCut, zone)
 		entries, _ := os.ReadDir(s.path(KindChat, id, "attachments"))
 		if len(entries) == 0 {
 			continue
