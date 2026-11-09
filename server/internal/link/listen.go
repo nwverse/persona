@@ -530,6 +530,9 @@ func (s *passive) info(w http.ResponseWriter, r *http.Request) {
 	s.seen(r)
 	s.keepMachineName(p, r.Header.Get(MachineNameHeader))
 	info := ConnectorInfo{Machine: p.Machine, Version: s.o.Version, Features: []string{FeatureAttention}}
+	if pr, ok := s.o.Presence.Latest(time.Now()); ok {
+		info.Presence = &pr
+	}
 	s.mu.Lock()
 	if s.attention != nil {
 		info.AttentionRev = s.attention.Rev
@@ -540,13 +543,14 @@ func (s *passive) info(w http.ResponseWriter, r *http.Request) {
 
 // ConnectorInfo is GET ConnectorInfoPath's answer: which computer pairing named and which build, what this connector
 // takes besides streams (FeatureAttention), and the Rev of the summary it holds, so the hub posts one again whenever
-// they differ (a post that failed, a connector that restarted). Older connectors answer only machine and version, and
-// older managers read only those.
+// they differ (a post that failed, a connector that restarted); and the menu bar app's presence (presence.go), once
+// it said any. Older connectors answer only machine and version, and older managers read only those.
 type ConnectorInfo struct {
-	Machine      string   `json:"machine"`
-	Version      string   `json:"version"`
-	Features     []string `json:"features,omitempty"`
-	AttentionRev string   `json:"attention_rev,omitempty"`
+	Machine      string        `json:"machine"`
+	Version      string        `json:"version"`
+	Features     []string      `json:"features,omitempty"`
+	AttentionRev string        `json:"attention_rev,omitempty"`
+	Presence     *PresenceInfo `json:"presence,omitempty"`
 }
 
 // attentionStale is how long a summary is kept after the paired hub last came in: four of its 30 s info reads (a

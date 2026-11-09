@@ -71,6 +71,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 			Kind: l.ep.Kind, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
 	})
 	go l.renames(ctx, o, rep)
+	go l.presence(ctx, o)
 	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind)
 	drop := func(err error) {
 		cancel(err)
@@ -289,6 +290,27 @@ func clipName(s string) string {
 		s = string(r[:80])
 	}
 	return s
+}
+
+// presence tells the hub the app's presence (presence.go): the latest as the link comes up, then again for every line
+// the app writes. It never repeats one by itself: the app's own repeats keep it alive, so an app that went quiet lapses.
+func (l *link) presence(ctx context.Context, o Options) {
+	if o.Presence == nil {
+		return
+	}
+	for {
+		if p, ok := o.Presence.Latest(time.Now()); ok {
+			m := Message{Type: "presence", Active: p.Active, Notifies: p.Notifies, TTLMS: p.TTLMS}
+			if err := l.send(ctx, m); err != nil && ctx.Err() == nil {
+				o.Logf("link: presence: %v", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-o.Presence.Poked():
+		}
+	}
 }
 
 func (l *link) send(ctx context.Context, m Message) error {

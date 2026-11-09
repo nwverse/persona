@@ -73,7 +73,7 @@ func PingTimesMS(every, timeout int64) (time.Duration, time.Duration, bool) {
 
 // Message is one JSON message on the link.
 type Message struct {
-	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention
+	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention | presence
 	// hello (persona-link → hub, the first message): which machine, which build, and the hub URL it went to.
 	Machine string `json:"machine,omitempty"`
 	Version string `json:"version,omitempty"`
@@ -108,6 +108,11 @@ type Message struct {
 	ID string `json:"id,omitempty"`
 	// open_failed, node, renamed: why not.
 	Error string `json:"error,omitempty"`
+	// presence (persona-link → hub): whether the user is at this computer and its notifications show, and for how
+	// many more milliseconds an active one counts (PresenceInfo, presence.go). Left out: false. Older managers ignore it.
+	Active   bool  `json:"active,omitempty"`
+	Notifies bool  `json:"notifies,omitempty"`
+	TTLMS    int64 `json:"ttl_ms,omitempty"`
 }
 
 // Endpoint is a hub URL on its TLS port, or a reverse proxy's https URL with the path the hub sits under (no trailing
