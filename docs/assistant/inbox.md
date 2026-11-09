@@ -206,7 +206,7 @@ replies to my comments, and mentions of me in posts or comments. Likes and new f
 
 Connector activity needing me (`docs/plans/plan-connectors.md`) also enters the Inbox. A connector implements `connector.Inbox`, returning candidates (`InboxThing`, one per thread),
 which the manager turns into items (`server/internal/assistant/inbox_connectors.go`; hub delivers candidates each round). Rules match Lark chats: one unhandled item per thread, later activity merged with `count` incremented;
-after handling, new activity opens another. A thing whose `at` is older than its open item's latest step is an earlier step read again (a connector re-reading after a restart): it is not counted and never moves the item back (#1527), and its read state is not applied to the item (#2149).
+after handling, new activity opens another. A thing whose `at` is older than its open item's latest step is an earlier step read again (a connector re-reading after a restart): it is not counted and never moves the item back (#1527), and its read state is not applied to the item (#2149). This errs toward unread: a thread read elsewhere that the connector reports only at an older step stays unread here until its next activity or its end, instead of an unread one turning read.
 A new item never takes the id of an existing one (`sha1(thread, last)`): that step already made an item, perhaps handled since. If the connector says an item ended (merged, closed, replied by me), automatically handle it (`done_by` = read / replied); read elsewhere and not Needs you means `read`.
 Triage, drafting, AI twin, done state, and retention use hub's generic logic.
 
@@ -220,7 +220,7 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
   These times are kept in memory only: after a restart the connector rebuilds the item at its notification and may infer that read, which the hub then ignores for an item already at the later run (above).
   With under one tenth of request quota remaining, poll notifications only and show "Request quota nearly exhausted."
   A rate limit (429, or 403 for a secondary limit or a used-up hour) on any GitHub request pauses the background reads, the poll included: until `Retry-After`; without it, until `X-RateLimit-Reset` only when the hour is used up (`X-RateLimit-Remaining: 0`),
-  otherwise for a minute, doubling up to an hour only while requests keep failing: the limit comes back within one step of the end of the last such pause, whatever was answered in between (a pause GitHub named is not a step).
+  otherwise for a minute, doubling up to an hour while the limit keeps coming back: within one step of the end of the last such pause, whatever was answered in between (a pause GitHub named is not a step).
   A pause also stops the notification pages still to read. The poll waits it out instead of failing, so the watch is not restarted early.
 - Included `reason`: PRs requesting my review (`review_requested`), mentions (`mention`), team mentions (`team_mention`), new comments / reviews by others on my PRs / issues (`author`),
   CI results (`ci_activity`), assignments (`assign`). Others (`subscribed`, `comment`, `state_change`…) are excluded. One item per PR / issue (`example-org/example-repo#12`).
