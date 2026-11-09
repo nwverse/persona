@@ -2,8 +2,10 @@ package node
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -57,7 +59,10 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	seen := map[string]bool{}
 	livePanes := map[string]bool{} // the resting Claudes' panes, whose screens are read for a dialog
 	now := time.Now()
-	for id, a := range agents {
+	// In id order, not the map's: the list is sorted by UpdatedAt with a stable sort, and rows that tie on it (live panes
+	// with no transcript yet all have none) came out in a new order on every pass, each one a whole new list for the hub.
+	for _, id := range slices.Sorted(maps.Keys(agents)) {
+		a := agents[id]
 		if !onList[id] { // a pane on Claude's agents list stays idle: the transcript is its parked session's (claudebg.go)
 			a.AgentStatus = n.claudeStatus(id, a, now)
 		}

@@ -82,6 +82,9 @@ type PlanTask struct {
 	Error     string            `json:"error,omitempty"`
 	ErrorCode string            `json:"error_code,omitempty"`
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
+	// defaulted: Launcher was filled in from a default by an earlier try of this start (startTaskAgent), not named by
+	// whoever planned the task, so a retry may still swap it for one its computer has (launcher_fit.go).
+	defaulted bool
 }
 
 // Readonly is a launch constraint, including for older saved plans and card edits.
