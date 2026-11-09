@@ -334,20 +334,41 @@ fun JSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: M
 
 @Composable
 fun JCheckbox(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    val palette = PersonaTheme.palette
-    val style = PersonaTheme.style
-    val shape = when (style) { AppStyle.Glass -> CircleShape; AppStyle.Brief -> RoundedCornerShape(7.dp); AppStyle.Board -> RoundedCornerShape(4.dp) }
-    val on = if (style == AppStyle.Brief) palette.action else palette.accent
     Box(
         modifier.size(48.dp).then(if (onCheckedChange != null) Modifier.clickable(enabled = enabled, role = Role.Checkbox) { onCheckedChange(!checked) } else Modifier)
             .semantics { toggleableState = ToggleableState(checked) }.stableAlpha(if (enabled) 1f else 0.4f),
         contentAlignment = Alignment.Center,
+    ) { JCheckMark(ToggleableState(checked)) }
+}
+
+/**
+ * A checkbox of three states (#2576): a group's tick in a selection, none, some (–) or all (✓) of its items picked.
+ * A tap reports [onClick]; the caller decides what the group becomes.
+ */
+@Composable
+fun JTriCheckbox(state: ToggleableState, onClick: (() -> Unit)?, modifier: Modifier = Modifier, label: String? = null) {
+    Box(
+        modifier.size(48.dp).then(if (onClick != null) Modifier.clickable(role = Role.Checkbox, onClickLabel = label, onClick = onClick) else Modifier)
+            .semantics { toggleableState = state; if (label != null) contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) { JCheckMark(state) }
+}
+
+/** The box a checkbox draws, without its tap target: a row in a selection shows it before its avatar. */
+@Composable
+fun JCheckMark(state: ToggleableState, modifier: Modifier = Modifier) {
+    val palette = PersonaTheme.palette
+    val style = PersonaTheme.style
+    val shape = when (style) { AppStyle.Glass -> CircleShape; AppStyle.Brief -> RoundedCornerShape(7.dp); AppStyle.Board -> RoundedCornerShape(4.dp) }
+    val on = if (style == AppStyle.Brief) palette.action else palette.accent
+    val filled = state != ToggleableState.Off
+    Box(
+        modifier.size(22.dp).clip(shape).background(if (filled) on else Color.Transparent)
+            .border(if (filled) 0.dp else 1.5.dp, palette.ink3, shape),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier.size(22.dp).clip(shape).background(if (checked) on else Color.Transparent)
-                .border(if (checked) 0.dp else 1.5.dp, palette.ink3, shape),
-            contentAlignment = Alignment.Center,
-        ) { if (checked) JIcon(PhIcons.Check, null, size = 15.dp, tint = if (palette.customRoles) ExtensionThemeColors.on(on) else if (style == AppStyle.Brief) palette.onAction else Color.White, selected = false) }
+        if (filled) JIcon(if (state == ToggleableState.On) PhIcons.Check else PhIcons.Minus, null, size = 15.dp,
+            tint = if (palette.customRoles) ExtensionThemeColors.on(on) else if (style == AppStyle.Brief) palette.onAction else Color.White, selected = false)
     }
 }
 
