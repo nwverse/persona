@@ -704,6 +704,12 @@ otherwise page backward (up to 20 pages); once found, scroll to top and outline 
 Demo mode has no hub addresses and intercepts nothing. Opening hub links from other Apps / browsers into the App (App Links) is not implemented yet (second half of #2194 step 4).
 Unit tests `HubLinksTest` (`core:navigation`), `ShellHubLinksTest` (`app`), `ChatMessageJumpTest` (`feature:chat`).
 
+## Sharing to Persona (the share sheet)
+
+Share › Persona in another App opens `ShareActivity`: the shared text, link or files, a note, **As context**, and where it goes: the main chat or one of the running Agents (the Agents in the list's order). It is queued at once (`ShareQueue`) and sent when the hub is reachable.
+
+- Recent targets (#2395): a sent share remembers its target (the main chat or the session) with the time, at most 8, in the pairing's list settings (`ShareTargetStore`, `ScopedListPreferences`, so the keys are the ones the sheet lists and they go when the pairing does). The Agents shared to most recently that are still listed (at most 3, latest first) come before the others. The sheet starts on the last target when it was used within 24 hours and is still listed; otherwise on the main chat. A pick in the sheet wins (and survives rotation); sending is always the user's tap. The rules are pure (`ShareTargets.kt`), tests `ShareTargetsTest`.
+
 ## Ongoing notification and home-screen entries (ported from the old main-line App 2026-11-02)
 
 Android counterparts of iPhone Live Activities, widgets and shortcuts. All four say the same thing: copy and selection rules in `FleetSummary` / `FleetText` in `core:domain` (matching iOS `FleetText` and hub `buildFleet`), all data from `FleetFeed` in `:platform:notify`.
