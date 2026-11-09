@@ -92,9 +92,8 @@ func (l *mgrLink) readyForAttention() {
 	l.sendAttention()
 }
 
-// sendAttention sends the link the summary for its computer (attentionFor), unless its hello did not ask for one, its
-// endpoints have not gone out yet, or it has this one already. The web address is the hub's public one, else the hub
-// address the link went to.
+// sendAttention sends the link the summary for its computer (summary), unless its hello did not ask for one, its
+// endpoints have not gone out yet, or it took this one already.
 func (l *mgrLink) sendAttention() {
 	if !l.attention {
 		return
@@ -104,13 +103,27 @@ func (l *mgrLink) sendAttention() {
 	if !l.attReady {
 		return
 	}
-	a := l.m.d.attentionFor(l.m.cfg.ID, cmp.Or(l.m.d.config().WebURL, l.address))
-	if a == nil || a.Rev == l.attSent {
+	a := l.summary()
+	if a == nil {
 		return
 	}
-	if l.send(link.Message{Type: "attention", Attention: a}) == nil {
-		l.attSent = a.Rev
+	l.heldMu.Lock()
+	if a.Rev == l.held.sent {
+		l.heldMu.Unlock()
+		return
 	}
+	l.heldMu.Unlock()
+	ok := l.send(link.Message{Type: "attention", Attention: a}) == nil
+	l.heldMu.Lock()
+	l.held.done(a, ok)
+	l.heldMu.Unlock()
+	l.m.d.delivered()
+}
+
+// summary is the summary for the link's computer as it is now (attentionFor): the web address is the hub's public one,
+// else the hub address the link went to.
+func (l *mgrLink) summary() *link.Attention {
+	return l.m.d.attentionFor(l.m.cfg.ID, cmp.Or(l.m.d.config().WebURL, l.address))
 }
 
 // wakeAttention has the machine's sender look at the summary soon; a wake already waiting covers this one.
@@ -155,44 +168,49 @@ func (m *Machine) postAttention(ctx context.Context) {
 	if err != nil {
 		return // the info read says why
 	}
-	err = m.postConnectorAttention(ctx, cred, gen, a)
+	instance, err := m.postConnectorAttention(ctx, cred, gen, a)
 	m.mu.Lock()
 	if !m.svcMovedOnLocked(gen) {
 		m.svc.attRev = ""
 		if err == nil {
 			m.svc.attRev = a.Rev
 		}
+		if instance != "" && instance != m.svc.instance {
+			m.svc.held, m.svc.instance = summaryHeld{}, instance // it went to a new run: its menu bar app's baseline
+		}
+		m.svc.held.done(a, err == nil)
 	}
 	m.mu.Unlock()
+	m.d.delivered()
 	if err != nil {
 		m.d.logf("[%s] connector: Needs you summary not taken: %v", m.cfg.ID, err)
 	}
 }
 
-// postConnectorAttention is POST link.ConnectorAttentionPath with cred (of pairing gen); a refusal counts as an info
-// read's does (refused).
-func (m *Machine) postConnectorAttention(ctx context.Context, cred *connectorCred, gen int, a *link.Attention) error {
+// postConnectorAttention is POST link.ConnectorAttentionPath with cred (of pairing gen), and the run that took it
+// (link.InstanceHeader; "" from older connectors); a refusal counts as an info read's does (refused).
+func (m *Machine) postConnectorAttention(ctx context.Context, cred *connectorCred, gen int, a *link.Attention) (string, error) {
 	tr, err := connectorTransport(cred.fp, m.cfg.Proxy)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tr.CloseIdleConnections()
 	body, _ := json.Marshal(a)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+m.cfg.Address+link.ConnectorAttentionPath, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+cred.token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := connectorClient(tr).Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		herr := connectorError(resp)
 		m.refused(gen, resp.StatusCode, herr, false)
-		return herr
+		return "", herr
 	}
-	return nil
+	return resp.Header.Get(link.InstanceHeader), nil
 }

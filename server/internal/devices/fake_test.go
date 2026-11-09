@@ -26,6 +26,7 @@ type fakeHost struct {
 	mu        sync.Mutex
 	states    []devicewire.States
 	desktops  []devicewire.Desktops
+	notified  []string // every event's name, in order
 	events    []devicewire.NodeEvent
 	connected []devicewire.Connected
 	ended     []devicewire.RequestEnd
@@ -120,6 +121,7 @@ func (f *fakeHost) Notify(event string, params any) error {
 	raw, _ := json.Marshal(params)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.notified = append(f.notified, event)
 	switch event {
 	case devicewire.EventState:
 		var st devicewire.States

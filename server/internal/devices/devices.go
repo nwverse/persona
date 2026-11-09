@@ -145,6 +145,9 @@ type Devices struct {
 	// desktopsMu: one devices.desktops at a time; desktopsSent: the last one sent (presence.go).
 	desktopsMu   sync.Mutex
 	desktopsSent string
+	// ring is closed at the next summary delivery, for LinkRang (presence.go).
+	ringMu sync.Mutex
+	ring   chan struct{}
 
 	packages nodePackages // the node builds for the machines' platforms (packages.go)
 

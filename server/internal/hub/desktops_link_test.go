@@ -27,8 +27,27 @@ func reportLinkDesktop(t *testing.T, h *Hub, desktop *devicewire.Desktop, derive
 	busEvents[devicewire.EventDesktops](h, &busConn{ident: db.BusIdentity{ID: devicesOwner}}, raw)
 }
 
-func activeUntil(since time.Time, d time.Duration) *devicewire.Desktop {
-	return &devicewire.Desktop{MachineID: "lap", Since: since, ActiveUntil: time.Now().Add(d), Notifies: true}
+// activeUntil is "lap" active for ttl from when the hub takes it.
+func activeUntil(since time.Time, ttl time.Duration) *devicewire.Desktop {
+	return &devicewire.Desktop{MachineID: "lap", Since: since, TTLMS: ttl.Milliseconds(), Notifies: true}
+}
+
+// sendDesktops is manager owner's devices.desktops as the bus handler takes it.
+func sendDesktops(h *Hub, owner string, ds ...devicewire.Desktop) {
+	raw, _ := json.Marshal(devicewire.Desktops{Desktops: append([]devicewire.Desktop{}, ds...)})
+	busEvents[devicewire.EventDesktops](h, &busConn{ident: db.BusIdentity{ID: owner}}, raw)
+}
+
+// linkUntil is when the hub takes "lap" to lapse (zero: not a Persona Link desktop).
+func linkUntil(h *Hub) time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, d := range h.linkDesktops.list {
+		if d.machine == "lap" {
+			return d.until
+		}
+	}
+	return time.Time{}
 }
 
 // noEventOfType fails when c has an event of type typ queued.
@@ -57,7 +76,7 @@ func linkEntries(ev map[string]any) []map[string]any {
 }
 
 // A computer whose Persona Link says the user is at it is listed, with the wire's fields, to the clients that asked
-// for desktops_link only; a later active_until alone says nothing new; notifications that do not show, or a mesh
+// for desktops_link only; a later deadline alone says nothing new; notifications that do not show, or a mesh
 // member's computer, do not count; and it goes when its manager no longer reports it.
 func TestLinkDesktopListedToClientsThatAsk(t *testing.T) {
 	h := newTestHub(t)
@@ -91,7 +110,7 @@ func TestLinkDesktopListedToClientsThatAsk(t *testing.T) {
 	reportLinkDesktop(t, h, activeUntil(since, 2*time.Minute), false) // the app's repeat
 	noEventOfType(t, asks, "desktops")
 
-	reportLinkDesktop(t, h, &devicewire.Desktop{MachineID: "lap", Since: since, ActiveUntil: time.Now().Add(time.Minute)}, false)
+	reportLinkDesktop(t, h, &devicewire.Desktop{MachineID: "lap", Since: since, TTLMS: time.Minute.Milliseconds()}, false)
 	if got := linkEntries(nextOfType(t, asks, "desktops")); len(got) != 0 || h.linkDesktopOnline(devicesOwner) {
 		t.Fatalf("notifications that do not show: %v", got)
 	}
@@ -118,7 +137,7 @@ func TestLinkDesktopListedToClientsThatAsk(t *testing.T) {
 	noEventOfType(t, old, "desktops")
 }
 
-// A Persona Link desktop lapses at its active_until even when no manager says anything more: the mute ends when it is
+// A Persona Link desktop lapses at its deadline even when no manager says anything more: the mute ends when it is
 // asked, and the clients hear it.
 func TestLinkDesktopLapses(t *testing.T) {
 	h := newTestHub(t)
@@ -147,7 +166,7 @@ func TestLinkDesktopLapses(t *testing.T) {
 	}
 }
 
-// Whether a Persona Link desktop mutes is read when an alert goes out, not left to the timer: one past its active_until
+// Whether a Persona Link desktop mutes is read when an alert goes out, not left to the timer: one past its deadline
 // does not count even before the timer took it out.
 func TestLinkDesktopCountsOnlyUntilItsTime(t *testing.T) {
 	h := newTestHub(t)
@@ -218,7 +237,7 @@ func TestWSNotifyMuteWhileLinkDesktop(t *testing.T) {
 	}
 	ix := proto.Interaction{ID: "ix1", MachineID: "m", SessionID: "s", Kind: proto.IxQuestion, Summary: "Pick one"}
 	everything := func() {
-		h.notifyInteraction(assistantwire.AssistantID, ix, "box")
+		h.notifyInteraction(assistantwire.AssistantID, ix, "box", true)
 		h.notifyDone(assistantwire.AssistantID, "done", "m", "box", "s", "Done", "", pushWants{Kind: "done", Took: time.Hour, Long: time.Minute})
 		h.notifyReply(assistantwire.AssistantID, "m", "box", "s", "Still waiting", "")
 		alert := notifyPayload(notifyRequest{Title: "t", Level: levelActive}, "", "")
@@ -236,8 +255,14 @@ func TestWSNotifyMuteWhileLinkDesktop(t *testing.T) {
 	if got := kinds(); len(got) != 3 || got[0] == "interaction" || got[1] == "interaction" || got[2] == "interaction" {
 		t.Fatalf("with a Persona Link desktop: %v, want all but the card", got)
 	}
+	// A card the manager does not say Persona Link rings for (another card of the same agent, one past the summary's
+	// cap): the phone still gets it.
+	h.notifyInteraction(assistantwire.AssistantID, ix, "box", false)
+	if got := kinds(); len(got) != 1 || got[0] != "interaction" {
+		t.Fatalf("a card Persona Link does not ring for, with a Persona Link desktop: %v", got)
+	}
 	// Another manager's card: that Persona Link shows only its own manager's summary.
-	h.notifyInteraction("m-other", ix, "box")
+	h.notifyInteraction("m-other", ix, "box", true)
 	if got := kinds(); len(got) != 1 || got[0] != "interaction" {
 		t.Fatalf("another manager's card with a Persona Link desktop: %v", got)
 	}
@@ -260,8 +285,9 @@ func TestPushMuteWhileLinkDesktop(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := pushWants{Kind: "input"}
-	card := func(id string) {
-		h.notifyInteraction(assistantwire.AssistantID, proto.Interaction{ID: id, MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, Summary: "ls"}, "Laptop")
+	card := func(id string, covered bool) {
+		h.notifyInteraction(assistantwire.AssistantID, proto.Interaction{ID: id, MachineID: "m1", SessionID: "s1", Kind: proto.IxPermission, Summary: "ls"},
+			"Laptop", covered)
 	}
 	// Straight to the hub's list: testLive's store keeps no machine entries, which a devices.state would write.
 	setLinkDesktops := func(list []linkDesktop) {
@@ -271,14 +297,108 @@ func TestPushMuteWhileLinkDesktop(t *testing.T) {
 	}
 	setLinkDesktops([]linkDesktop{{owner: assistantwire.AssistantID, machine: "lap", name: "Laptop", since: time.Now(),
 		until: time.Now().Add(time.Minute)}})
-	card("ix1")
+	card("ix1", true)
 	h.push.notifyDone("m1", "Laptop", "s1", "Done", "", input.fn())
 	if got := pushedTo(t, f, 0, 1); !same(got, "devtok") {
 		t.Fatalf("with a Persona Link desktop: %v, want the finished turn only", got)
 	}
-	setLinkDesktops(nil)
-	card("ix2")
+	card("ix2", false) // not one Persona Link rings for
 	if got := pushedTo(t, f, 1, 1); !same(got, "devtok") {
+		t.Fatalf("a card Persona Link does not ring for went to %v", got)
+	}
+	setLinkDesktops(nil)
+	card("ix3", true)
+	if got := pushedTo(t, f, 2, 1); !same(got, "devtok") {
 		t.Fatalf("with no desktop the card went to %v", got)
+	}
+}
+
+// The hub counts a Persona Link desktop's TTL on its own clock from when it takes it, at most twice the presence TTL:
+// a manager's clock ahead or behind (since says it) changes nothing, and no TTL keeps the phone quiet longer.
+func TestLinkDesktopTimeIsTheHubs(t *testing.T) {
+	h := newTestHub(t)
+	for _, since := range []time.Time{time.Now().Add(10 * time.Minute), time.Now().Add(-10 * time.Minute)} {
+		before := time.Now()
+		reportLinkDesktop(t, h, activeUntil(since, time.Minute), false)
+		if u := linkUntil(h); u.Before(before.Add(time.Minute)) || u.After(time.Now().Add(time.Minute)) {
+			t.Fatalf("a manager whose since is %v: until %v, want a minute from now", time.Until(since).Round(time.Minute), u)
+		}
+	}
+	reportLinkDesktop(t, h, activeUntil(time.Now(), 24*time.Hour), false)
+	if u := linkUntil(h); u.After(time.Now().Add(devicewire.DesktopTTLMax)) {
+		t.Fatalf("a day's TTL taken as %v", time.Until(u))
+	}
+	reportLinkDesktop(t, h, &devicewire.Desktop{MachineID: "lap", Since: time.Now(), TTLMS: 0, Notifies: true}, false)
+	if !linkUntil(h).IsZero() || h.linkDesktopOnline(devicesOwner) {
+		t.Fatal("no TTL left counted")
+	}
+}
+
+// A desktop that lapsed while a snapshot comes before the timer: the clients that were told of it hear it went,
+// whichever comes first; the timer then has nothing more to say. Without sleeping: the lapsed one is put in by hand.
+func TestLapsedLinkDesktopIsAnnouncedWhenASnapshotComesFirst(t *testing.T) {
+	h := newTestHub(t)
+	asks := &client{out: make(chan []byte, 16), subs: map[[2]string]bool{}, role: roleFull,
+		urlFeatures: map[string]bool{featureDesktopsLink: true}}
+	h.applyDeviceStates(devicewire.States{Machines: []devicewire.State{
+		{Machine: proto.Machine{ID: "lap", Name: "Laptop", Kind: kindLink}},
+		{Machine: proto.Machine{ID: "desk", Name: "Desk", Kind: kindLink}},
+	}})
+	h.mu.Lock()
+	h.clients[asks] = struct{}{}
+	gone := linkDesktop{owner: devicesOwner, machine: "lap", name: "Laptop", since: time.Now().Add(-time.Hour),
+		until: time.Now().Add(-time.Second)}
+	h.linkDesktops.list, h.linkDesktops.shown = []linkDesktop{gone}, []linkDesktop{gone} // told, lapsed, timer not run
+	h.mu.Unlock()
+
+	sendDesktops(h, devicesOwner, devicewire.Desktop{MachineID: "desk", Since: time.Now(), TTLMS: 60_000, Notifies: true})
+	got := linkEntries(nextOfType(t, asks, "desktops"))
+	if len(got) != 1 || got[0]["machine_id"] != "desk" {
+		t.Fatalf("after the snapshot: %v, want desk only", got)
+	}
+	h.expireLinkDesktops()
+	noEventOfType(t, asks, "desktops")
+
+	// The same with an empty snapshot.
+	h.mu.Lock()
+	h.linkDesktops.list, h.linkDesktops.shown = []linkDesktop{gone}, []linkDesktop{gone}
+	h.mu.Unlock()
+	sendDesktops(h, devicesOwner)
+	if got := linkEntries(nextOfType(t, asks, "desktops")); len(got) != 0 {
+		t.Fatalf("after an empty snapshot: %v", got)
+	}
+}
+
+// The order the manager says things in: its devices.desktops naming a computer the hub does not have yet (a first
+// registration whose devices.state has not come) counts for nothing, and the next one after the devices.state does; a
+// hub that restarted has no Persona Link desktops until the manager's handshake brings them (devices.state, then
+// devices.desktops); a manager that connects again replaces its own list, and leaves another manager's.
+func TestLinkDesktopsFollowTheMachinesOrder(t *testing.T) {
+	h := newTestHub(t)
+	sendDesktops(h, devicesOwner, *activeUntil(time.Now(), time.Minute))
+	if h.linkDesktopOnline(devicesOwner) {
+		t.Fatal("a computer the hub does not have counted")
+	}
+	reportLinkDesktop(t, h, activeUntil(time.Now(), time.Minute), false)
+	if !h.linkDesktopOnline(devicesOwner) {
+		t.Fatal("not counted once its machine came")
+	}
+
+	restarted := newTestHub(t)
+	if restarted.linkDesktopOnline(devicesOwner) {
+		t.Fatal("a restarted hub mutes before the manager said anything")
+	}
+	reportLinkDesktop(t, restarted, activeUntil(time.Now(), time.Minute), false)
+	if !restarted.linkDesktopOnline(devicesOwner) {
+		t.Fatal("not counted after the manager's handshake")
+	}
+
+	h.mu.Lock() // another manager's, as its devices.desktops left it
+	h.linkDesktops.list = append(h.linkDesktops.list, linkDesktop{owner: "m-other", machine: "other-lap", name: "Other",
+		since: time.Now(), until: time.Now().Add(time.Minute)})
+	h.mu.Unlock()
+	sendDesktops(h, devicesOwner) // the manager connected again: none of its computers is a desktop now
+	if h.linkDesktopOnline(devicesOwner) || !h.linkDesktopOnline("m-other") {
+		t.Fatal("a manager's new list did not replace its own, or took another's")
 	}
 }

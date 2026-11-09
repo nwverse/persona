@@ -52,6 +52,9 @@ type Devices interface {
 	// SetAttention hands over Persona Link's "Needs you" summary (fleet_attention.go) on every look; it goes on to the
 	// computers only when it changed.
 	SetAttention(a link.Attention)
+	// LinkRang waits up to within for a summary one of the manager's Persona Link desktops took to ring for card:
+	// false at once while there is none (notifyInteraction).
+	LinkRang(card string, within time.Duration) bool
 }
 
 // localDeviceCall is a device.call the manager answers itself: a node's method on a machine it has. The hub still

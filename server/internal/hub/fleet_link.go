@@ -629,7 +629,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 		if !ok || cmp.Or(ix.Manager, assistantwire.AssistantID) != from {
 			return &rpc.Error{Code: devicewire.CodeNoDevice, Message: "an input push is for a pending card the manager reported"}
 		}
-		h.notifyInteraction(from, ix, n.Subtitle)
+		h.notifyInteraction(from, ix, n.Subtitle, n.LinkCovered)
 		return nil
 	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {

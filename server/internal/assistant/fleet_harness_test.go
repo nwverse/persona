@@ -31,6 +31,9 @@ type fleetDevs struct {
 	usage    assistantwire.UsageSummary
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
+	// linkDesktop: a Persona Link desktop of the manager's takes every summary handed over, the first as its baseline
+	// (LinkRang).
+	linkDesktop bool
 }
 
 type fleetNode struct {
@@ -199,6 +202,36 @@ func (d *fleetDevs) SetAttention(a link.Attention) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.attention = append(d.attention, a)
+}
+
+// LinkRang is the devices' (internal/devices LinkRang) with every summary handed over taken by the one Persona Link
+// desktop, if there is one: a card rang once the first summary listing it as notifying was not the first summary.
+func (d *fleetDevs) LinkRang(card string, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for {
+		d.mu.Lock()
+		on, rang := d.linkDesktop, rangIn(d.attention, card)
+		d.mu.Unlock()
+		if !on || rang {
+			return rang
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// rangIn: the first summary of list that lists card as notifying is not the first summary (the baseline).
+func rangIn(list []link.Attention, card string) bool {
+	for i, a := range list {
+		for _, it := range a.Items {
+			if it.InteractionID == card && it.Notify {
+				return i > 0
+			}
+		}
+	}
+	return false
 }
 
 // handedAttention is every summary handed over so far.

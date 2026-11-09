@@ -411,10 +411,25 @@ func (s *Service) kbAgentDone(machine string, sess proto.Session) {
 		Title: sess.Title, Line: workLogLine(sess)})
 }
 
-// notifyInteraction pushes a new card to the devices that take "needs you" pushes.
-func (s *Service) notifyInteraction(ix proto.Interaction, machine string) {
-	s.deliver(Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
-		Interaction: &ix})
+// linkRangWait is how long a card's push waits for Persona Link to ring for it (liveLoop looks within 100 ms, a summary
+// goes out in milliseconds): past it the phone is pushed as ever.
+const linkRangWait = 2 * time.Second
+
+// notifyInteraction pushes a new card to the devices that take "needs you" pushes. covered: Persona Link's summary is
+// to ring for it (linkCovers); then the push waits until a summary one of the manager's Persona Link desktops took
+// rang for it (LinkRang), and says so (LinkCovered) only if one did: a summary merged with newer cards may list it in
+// More, or not reach the computer.
+func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covered bool) {
+	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
+		Interaction: &ix}
+	if !covered || s.devs == nil {
+		s.deliver(n)
+		return
+	}
+	go func() {
+		n.LinkCovered = s.devs.LinkRang(ix.ID, linkRangWait)
+		s.deliver(n)
+	}()
 }
 
 // deliver has the hub deliver a push the manager decided on (notify.request), off the caller's way.

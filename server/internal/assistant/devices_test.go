@@ -70,3 +70,4 @@ func (f *fakeDevices) Usage() assistantwire.UsageSummary            { return ass
 
 func (f *fakeDevices) Follow(context.Context, string, string, bool) error { return nil }
 func (f *fakeDevices) SetAttention(link.Attention)                        {}
+func (f *fakeDevices) LinkRang(string, time.Duration) bool                { return false }

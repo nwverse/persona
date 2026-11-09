@@ -45,10 +45,11 @@ type linkDesktop struct {
 	since, until         time.Time
 }
 
-// linkDesktops are the Persona Link desktops (h.mu): each manager's as it last said, all of them by manager, and the
-// timer that takes the next one out when it lapses.
+// linkDesktops are the Persona Link desktops (h.mu): each manager's as it last said, all of them by manager; the ones
+// the clients that asked were last told of (shown); and the timer that takes the next one out when it lapses.
 type linkDesktops struct {
 	list   []linkDesktop
+	shown  []linkDesktop
 	expiry *time.Timer
 }
 
@@ -126,6 +127,7 @@ func (h *Hub) sendDesktops(c *client) {
 // announceDesktopsLocked queues the current list to every client, with the Persona Link desktops to those that asked;
 // linkOnly, to those only (only theirs changed). h.mu is held.
 func (h *Hub) announceDesktopsLocked(linkOnly bool) {
+	h.linkDesktops.shown = h.liveLinkDesktopsLocked(time.Now())
 	var lists [2][]byte
 	for c := range h.clients {
 		withLink := c.wants(featureDesktopsLink)
@@ -144,21 +146,23 @@ func (h *Hub) announceDesktopsLocked(linkOnly bool) {
 }
 
 // takeLinkDesktops is manager owner's devices.desktops: its computers whose Persona Link says the user is at them. Only
-// its own computers count, as the hub has them (named as the hub calls them), with notifications showing and not
-// lapsed; a mesh member's computer does not count yet.
+// its own computers count, as the hub has them (named as the hub calls them), with notifications showing; a mesh
+// member's computer does not count yet. Each counts for the TTL it says from now, on the hub's own clock and at most
+// DesktopTTLMax: a manager's clock, ahead or behind, never stretches it.
 func (h *Hub) takeLinkDesktops(owner string, ds []devicewire.Desktop) {
 	now := time.Now()
 	var mine []linkDesktop
 	for _, d := range ds {
 		m := h.machineByID(d.MachineID) // a hub.json entry another one absorbed names that one's computer
-		if m == nil || !d.Notifies || !d.ActiveUntil.After(now) {
+		if m == nil || !d.Notifies || d.TTLMS <= 0 {
 			continue
 		}
 		m.mu.Lock()
 		ours := m.managed && m.owner == owner && !m.derived
 		m.mu.Unlock()
 		if ours {
-			mine = append(mine, linkDesktop{owner: owner, machine: m.cfg.ID, name: m.name(), since: d.Since, until: d.ActiveUntil})
+			ttl := time.Duration(min(d.TTLMS, devicewire.DesktopTTLMax.Milliseconds())) * time.Millisecond
+			mine = append(mine, linkDesktop{owner: owner, machine: m.cfg.ID, name: m.name(), since: d.Since, until: now.Add(ttl)})
 		}
 	}
 	h.mu.Lock()
@@ -172,17 +176,24 @@ func (h *Hub) takeLinkDesktops(owner string, ds []devicewire.Desktop) {
 	h.setLinkDesktopsLocked(all, now)
 }
 
-// setLinkDesktopsLocked makes list the Persona Link desktops. A change in which computers they are is announced; a later
-// active_until alone is not. h.mu is held.
+// setLinkDesktopsLocked makes list the Persona Link desktops. A change from what the clients were last told of is
+// announced (one that lapsed meanwhile included, whether or not the timer came first); a later deadline alone is not.
+// h.mu is held.
 func (h *Hub) setLinkDesktopsLocked(list []linkDesktop, now time.Time) {
-	changed := !slices.EqualFunc(h.liveLinkDesktopsLocked(now), list, func(a, b linkDesktop) bool {
+	h.linkDesktops.list = list
+	h.announceLinkChangeLocked(now)
+	h.armLinkExpiryLocked(now)
+}
+
+// announceLinkChangeLocked tells the clients that asked of the Persona Link desktops when they are not the ones they
+// were last told of. h.mu is held.
+func (h *Hub) announceLinkChangeLocked(now time.Time) {
+	same := slices.EqualFunc(h.linkDesktops.shown, h.liveLinkDesktopsLocked(now), func(a, b linkDesktop) bool {
 		return a.machine == b.machine && a.name == b.name && a.since.Equal(b.since)
 	})
-	h.linkDesktops.list = list
-	if changed {
+	if !same {
 		h.announceDesktopsLocked(true)
 	}
-	h.armLinkExpiryLocked(now)
 }
 
 // liveLinkDesktopsLocked are the Persona Link desktops that have not lapsed at now; h.mu is held.
@@ -219,10 +230,8 @@ func (h *Hub) expireLinkDesktops() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := time.Now()
-	if live := h.liveLinkDesktopsLocked(now); len(live) != len(h.linkDesktops.list) {
-		h.linkDesktops.list = live
-		h.announceDesktopsLocked(true)
-	}
+	h.linkDesktops.list = h.liveLinkDesktopsLocked(now)
+	h.announceLinkChangeLocked(now)
 	h.armLinkExpiryLocked(now)
 }
 

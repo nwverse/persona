@@ -3,6 +3,7 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -218,6 +219,8 @@ type attConnector struct {
 	mu       sync.Mutex
 	features []string
 	presence *link.PresenceInfo // what its menu bar app says (presence_test.go)
+	stall    bool               // a post gets no answer until its request ends (presence_test.go)
+	instance string             // its run, in its info and on a taken post's answer (link.InstanceHeader)
 	held     string
 	posts    []link.Attention
 	fail     int
@@ -237,8 +240,15 @@ func newAttConnector(t *testing.T) *attConnector {
 		switch r.URL.Path {
 		case link.ConnectorInfoPath:
 			_ = json.NewEncoder(w).Encode(link.ConnectorInfo{Machine: "example-service", Version: "test", Features: ac.features,
-				AttentionRev: ac.held, Presence: ac.presence})
+				AttentionRev: ac.held, Presence: ac.presence, Instance: ac.instance})
 		case link.ConnectorAttentionPath:
+			if ac.stall {
+				ac.mu.Unlock()
+				_, _ = io.Copy(io.Discard, r.Body) // only then does the server see the client go (its context ends)
+				<-r.Context().Done()
+				ac.mu.Lock()
+				return
+			}
 			var a link.Attention
 			if json.NewDecoder(r.Body).Decode(&a) != nil {
 				http.Error(w, "bad", http.StatusBadRequest)
@@ -256,6 +266,9 @@ func newAttConnector(t *testing.T) *attConnector {
 				return
 			}
 			ac.held = a.Rev
+			if ac.instance != "" {
+				w.Header().Set(link.InstanceHeader, ac.instance)
+			}
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(w, r)
