@@ -78,29 +78,32 @@ type Service struct {
 
 	startingAssistants assistantStarts // machine_privacy.go
 
-	titles     titleBook         // titles.go
-	prefs      settingsBook      // profile.go
-	main       mainBook          // start.go
-	archived   archiveBook       // conversations.go
-	origins    originBook        // origins.go
-	guests     guestBook         // guest.go
-	relays     relayBook         // conversations.go
-	quiet      quietBook         // quiet.go
-	supervise  superviseBook     // supervise_signals.go
-	autoRuns   autoReviewBook    // supervise_autoreview.go
-	reports    reportBook        // reports.go
-	upReports  reportRate        // agent_control.go: report_to_supervisor
-	noteRate   reportRate        // todo_decisions.go: todo_decision_add
-	adoptMu    sync.Mutex        // agent_control.go: one agent_supervise at a time
-	placeBook  placeBook         // places.go
-	accept     acceptBook        // acceptance.go
-	later      laterBook         // later.go: questions that can wait for a briefing
-	brief      briefBook         // briefing.go
-	reporters  reporterBook      // reporters.go
-	sched      schedule          // schedule.go
-	tasks      tasksState        // tasks.go
-	questions  questions         // tools.go (ask_user)
-	askTodos   askTodoBook       // ask_todo.go: the questions nobody answered, now to-dos
+	titles    titleBook      // titles.go
+	prefs     settingsBook   // profile.go
+	main      mainBook       // start.go
+	archived  archiveBook    // conversations.go
+	origins   originBook     // origins.go
+	guests    guestBook      // guest.go
+	relays    relayBook      // conversations.go
+	quiet     quietBook      // quiet.go
+	supervise superviseBook  // supervise_signals.go
+	autoRuns  autoReviewBook // supervise_autoreview.go
+	reports   reportBook     // reports.go
+	upReports reportRate     // agent_control.go: report_to_supervisor
+	noteRate  reportRate     // todo_decisions.go: todo_decision_add
+	adoptMu   sync.Mutex     // agent_control.go: one agent_supervise at a time
+	placeBook placeBook      // places.go
+	accept    acceptBook     // acceptance.go
+	later     laterBook      // later.go: questions that can wait for a briefing
+	brief     briefBook      // briefing.go
+	reporters reporterBook   // reporters.go
+	sched     schedule       // schedule.go
+	tasks     tasksState     // tasks.go
+	questions questions      // tools.go (ask_user)
+	askTodos  askTodoBook    // ask_todo.go: the questions nobody answered, now to-dos
+	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
+	// confirmation at a time reads and records what the others made.
+	minutesMu  sync.Mutex
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business

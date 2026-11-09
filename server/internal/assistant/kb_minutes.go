@@ -41,7 +41,8 @@ func (s *Service) minutesWritten(ctx context.Context, r kb.Recording, m kb.Minut
 	if link := recordingLink(s.webBase(ctx), r.ID); link != "" {
 		body += "\n" + link
 	}
-	s.channelsPushed(set.MachineID, set.Main, title, body)
+	// Not as the main conversation's: a channel holds back its mirror of a conversation it was just pushed for.
+	s.channelsPushed("", "", title, body)
 }
 
 // recordingLink is a recording's page in the web app at web (web/src/lib/router.ts), "" when web is.
@@ -126,6 +127,8 @@ func (u unknownActionError) Error() string { return "no action item " + string(u
 // and records them in the minutes. A to-do's id comes from the recording, the version and the action, so a request
 // retried after its answer was lost makes none twice.
 func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, version int, actions []string) ([]Todo, *kb.Minutes, error) {
+	s.minutesMu.Lock()
+	defer s.minutesMu.Unlock()
 	rid, _ := kb.RecordingID(id)
 	m, err := e.Store.ReadMinutes(rid)
 	if err != nil {

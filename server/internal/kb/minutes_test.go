@@ -147,6 +147,10 @@ func TestMinutesWritten(t *testing.T) {
 	if len(found) != 1 || found[0].Entry.ID != recID || !strings.HasSuffix(found[0].Hits[0].Path, "/minutes.md") {
 		t.Errorf("find %+v", found)
 	}
+	// Opening the search result finds what only the minutes say.
+	if ms := e.Matches(KindRecording, recID, "覆盖不到老版本", 40); len(ms) != 1 || !strings.HasSuffix(ms[0].Path, "/minutes.md") {
+		t.Errorf("matches %+v", ms)
+	}
 	// Done: nothing more to write, no second push.
 	if n := e.WriteMinutes(context.Background(), 2); n != 0 || len(told) != 1 {
 		t.Errorf("again: wrote %d, told %d", n, len(told))
@@ -428,4 +432,110 @@ func TestGoldenMinutesMerge(t *testing.T) {
 	}
 	golden(t, "minutes_merge.system", prompts.RenderKBMinutesMerge(prompts.KBOwner{Owner: "示例用户"}))
 	golden(t, "minutes_merge.user", prompts.RenderKBMinutesMergeInput(in))
+}
+
+// A calendar item collected after the recording ended still names it within minutesMatchWait; after that, a recording
+// nothing overlaps is left alone.
+func TestMinutesLateCalendar(t *testing.T) {
+	e := goldenEngine(t, &funcModel{f: func(int, string, string) (string, error) {
+		return `{"title":"t","points":[{"text":"聊了排期","line":1}]}`, nil
+	}})
+	now := time.Now()
+	long := strings.Split(strings.Repeat("聊了排期 ", 40), " ")[:40] // 400 s
+	putRecording(t, e, recID, recUpload(1, now.Add(-10*time.Minute), true, long...), now)
+	const old = "5f8fad5b-d9cb-469f-a165-70867728950e"
+	putRecording(t, e, old, recUpload(1, now.Add(-3*time.Hour), true, long...), now)
+	e.WriteMinutes(context.Background(), 2)
+	if r := recordingNow(t, e, recID); r.Meeting != nil || r.MatchedRev != 0 || r.MinutesState != "" {
+		t.Fatalf("no item yet: %+v rev %d %q", r.Meeting, r.MatchedRev, r.MinutesState)
+	}
+	if r := recordingNow(t, e, old); r.MatchedRev != 1 {
+		t.Fatalf("an old recording nothing overlaps is not settled: rev %d", r.MatchedRev)
+	}
+	for _, it := range []*Item{
+		{Kind: KindMeeting, ID: "m9", Title: "临时讨论", At: now.Add(-9 * time.Minute)},
+		{Kind: KindMeeting, ID: "m8", Title: "更早的讨论", At: now.Add(-3*time.Hour + time.Minute)},
+	} {
+		if err := e.Store.PutItem(it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
+		t.Fatalf("wrote %d", n)
+	}
+	if r := recordingNow(t, e, recID); r.Meeting == nil || r.Meeting.ID != "m9" || r.Name != "临时讨论" || r.MinutesState != MinutesReady {
+		t.Fatalf("late item: %+v %q %q", r.Meeting, r.Name, r.MinutesState)
+	}
+	if r := recordingNow(t, e, old); r.Meeting != nil {
+		t.Fatalf("settled recording matched later: %+v", r.Meeting)
+	}
+}
+
+// Made again: a version past both meta.json's and minutes.json's (a crash may have left them apart), to-dos already
+// made carried over to the same task for the same person, the same task for two people kept as two; asked again
+// while a model call was running, the minutes it brings don't settle the new request.
+func TestMinutesRemade(t *testing.T) {
+	var e *Engine
+	askDuring := false
+	model := &funcModel{f: func(int, string, string) (string, error) {
+		if askDuring {
+			askDuring = false
+			if err := e.AskMinutes(recID); err != nil {
+				return "", err
+			}
+		}
+		return `{"title":"t","actions":[{"who":"Ada","what":"写计划","line":1},{"who":"Bo","what":"写计划","line":1},{"what":"发邮件","line":2}]}`, nil
+	}}
+	e = goldenEngine(t, model)
+	now := time.Now()
+	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "Ada 和 Bo 都写计划", "发邮件"), now)
+	e.WriteMinutes(context.Background(), 2)
+	m, _ := e.Store.ReadMinutes(recID)
+	if m == nil || len(m.Actions) != 3 {
+		t.Fatalf("actions %+v", m)
+	}
+	if _, err := e.SetMinutesTodos(recID, 1, map[string]string{"a2": "todo_bo"}); err != nil {
+		t.Fatal(err)
+	}
+	// minutes.json one version ahead of meta.json.
+	m, _ = e.Store.ReadMinutes(recID)
+	m.Version = 5
+	if _, err := e.Store.putMinutes(recID, m); err != nil {
+		t.Fatal(err)
+	}
+	askDuring = true
+	if err := e.AskMinutes(recID); err != nil {
+		t.Fatal(err)
+	}
+	e.WriteMinutes(context.Background(), 2)
+	m, _ = e.Store.ReadMinutes(recID)
+	if m.Version != 6 || m.Actions[1].Who != "Bo" || m.Actions[1].TodoID != "todo_bo" || m.Actions[0].TodoID != "" {
+		t.Fatalf("remade: v%d %+v", m.Version, m.Actions)
+	}
+	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending || r.MinutesVersion != 6 {
+		t.Fatalf("asked during the call: %q v%d", r.MinutesState, r.MinutesVersion)
+	}
+	e.WriteMinutes(context.Background(), 2)
+	if r := recordingNow(t, e, recID); r.MinutesState != MinutesReady || r.MinutesVersion != 7 {
+		t.Fatalf("then: %q v%d", r.MinutesState, r.MinutesVersion)
+	}
+	for _, unusable := range []error{ai.ErrUnterminated, fmt.Errorf("part 1 of 2: %w", ai.ErrNoObject)} {
+		if !unusableAnswer(unusable) {
+			t.Errorf("%v should count", unusable)
+		}
+	}
+}
+
+// A part the model takes too long for counts as a failure, so it can't hold the queue for ever.
+func TestMinutesCallTimeoutCounts(t *testing.T) {
+	model := &funcModel{f: func(int, string, string) (string, error) { return "", context.DeadlineExceeded }}
+	e := goldenEngine(t, model)
+	now := time.Now()
+	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "一句"), now)
+	for range minutesTries {
+		e.WriteMinutes(context.Background(), 2)
+	}
+	if r := recordingNow(t, e, recID); r.MinutesState != MinutesFailed {
+		t.Fatalf("%q after %d timeouts", r.MinutesState, minutesTries)
+	}
 }

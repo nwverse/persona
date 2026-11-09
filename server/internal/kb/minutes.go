@@ -79,12 +79,20 @@ const (
 	minutesTries         = 3      // unusable answers for one revision before the minutes are failed
 	minutesMinCalendar   = 5 * 60 // seconds: shorter recordings are not meetings just because a calendar item overlaps
 	minutesCalendarAhead = 15 * time.Minute
-	minutesOneCall       = 16000 // runes of transcript read in one call; longer ones go in chunks
-	minutesChunk         = 12000
-	minutesMaxChunks     = 40
-	minutesCallTimeout   = 3 * time.Minute
-	minutesMaxItems      = 50
-	minutesTextRunes     = 400
+	// minutesMatchWait: a recording no calendar item matched is looked at again until this long after it ended, the
+	// calendar items being collected every half hour (a meeting's video call is listed once it has been held).
+	minutesMatchWait   = time.Hour
+	minutesOneCall     = 16000 // runes of transcript read in one call; longer ones go in chunks
+	minutesChunk       = 12000
+	minutesMaxChunks   = 40
+	minutesCallTimeout = 3 * time.Minute
+	minutesMaxItems    = 50
+	minutesTextRunes   = 400
+	minutesLineRunes   = 4000 // a transcript line longer than this is cut (one segment, not the whole meeting)
+	// What the merging call reads of all the parts' notes: per section, at most this many items over all parts (an
+	// equal share each, at least 2), each at most minutesNoteRunes.
+	minutesMergeItems = 60
+	minutesNoteRunes  = 160
 )
 
 // isMeeting: the recording gets minutes.
@@ -177,6 +185,7 @@ func (e *Engine) AskMinutes(rawID string) error {
 		return ErrRecordingIncomplete
 	}
 	r.MinutesAsked, r.MinutesRev, r.MinutesFails, r.MinutesFailRev, r.MatchedRev = true, 0, 0, 0, 0
+	r.MinutesAsks++
 	r.planMinutes()
 	return st.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
 }
@@ -222,7 +231,7 @@ func (e *Engine) WriteMinutes(ctx context.Context, max int) int {
 	if e.Store.ReadOnly() {
 		return 0
 	}
-	e.matchRecordings()
+	e.matchRecordings(time.Now())
 	if e.Model == nil && e.ModelFor == nil {
 		return 0
 	}
@@ -244,7 +253,9 @@ func (e *Engine) WriteMinutes(ctx context.Context, max int) int {
 			continue
 		}
 		e.logf("recording %s: minutes: %v", r.ID, err)
-		if !unusableAnswer(err) {
+		// A call that ran out its own time counts too: a part too slow for the model would otherwise come first
+		// in every round, for ever.
+		if !unusableAnswer(err) && !(errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil) {
 			break // the model is paused or unreachable: the others would fail alike; still pending next round
 		}
 		e.minutesFailed(r.ID, r.Revision)
@@ -257,7 +268,7 @@ func (e *Engine) WriteMinutes(ctx context.Context, max int) int {
 func unusableAnswer(err error) bool {
 	var syntax *json.SyntaxError
 	var typ *json.UnmarshalTypeError
-	return errors.Is(err, errMinutesUnusable) || errors.Is(err, ai.ErrNoObject) || errors.Is(err, ai.ErrTruncated) ||
+	return errors.Is(err, errMinutesUnusable) || errors.Is(err, ai.ErrNoObject) || errors.Is(err, ai.ErrUnterminated) || errors.Is(err, ai.ErrTruncated) ||
 		errors.Is(err, ai.ErrRefused) || errors.As(err, &syntax) || errors.As(err, &typ)
 }
 
@@ -278,8 +289,9 @@ func (e *Engine) minutesFailed(id string, rev int64) {
 	_ = st.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
 }
 
-// matchRecordings links each complete recording not matched at its current revision to the calendar item it overlaps.
-func (e *Engine) matchRecordings() {
+// matchRecordings links each complete recording not matched at its current revision to the calendar item it overlaps;
+// one that none overlaps is looked at again until minutesMatchWait after it ended.
+func (e *Engine) matchRecordings(now time.Time) {
 	var due []string
 	for _, r := range e.Store.Recordings() {
 		if r.Complete && r.MatchedRev < r.Revision {
@@ -298,8 +310,13 @@ func (e *Engine) matchRecordings() {
 			if old := r.Meeting; old != nil {
 				r.Items = removeStrings(r.Items, []string{old.Kind + "/" + old.ID})
 			}
+			it := matchCalendar(r, events, meetings)
+			if it == nil && r.Meeting == nil && now.Sub(recordingEnd(r)) < minutesMatchWait {
+				st.recMu.Unlock()
+				continue // nothing yet: maybe at the next collection of calendar items
+			}
 			r.Meeting = nil
-			if it := matchCalendar(r, events, meetings); it != nil {
+			if it != nil {
 				r.Meeting = &MeetingRef{Kind: it.Kind, ID: it.ID, Name: oneLine(it.Title)}
 				r.Items = addUnique(r.Items, it.Kind+"/"+it.ID)
 			}
@@ -428,6 +445,9 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	lines := make([]minutesLine, 0, len(segs))
 	for i, sg := range segs {
 		if t := strings.Join(strings.Fields(sg.Text), " "); t != "" {
+			if r := []rune(t); len(r) > minutesLineRunes {
+				t = string(r[:minutesLineRunes]) + "…"
+			}
 			lines = append(lines, minutesLine{N: i + 1, At: sg.Start, Text: t})
 		}
 	}
@@ -460,7 +480,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 				return fmt.Errorf("part %d of %d: %w", i+1, len(chunks), err)
 			}
 			read = append(read, c...)
-			merge.Parts = append(merge.Parts, notesForMerge(i+1, notes, c, r.StartedAt, zone))
+			merge.Parts = append(merge.Parts, notesForMerge(i+1, notes, c, r.StartedAt, zone, max(2, minutesMergeItems/len(chunks))))
 		}
 		merge.Meeting.Transcript = ""
 		err := call(prompts.RenderKBMinutesMerge(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBMinutesMergeInput(merge), &ans)
@@ -549,8 +569,9 @@ func clockAt(start time.Time, sec float64, zone *time.Location) string {
 	return start.Add(time.Duration(sec * float64(time.Second))).In(zone).Format("15:04:05")
 }
 
-// notesForMerge is a chunk's notes for the merging call, keeping only items citing a line of that chunk.
-func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Time, zone *time.Location) prompts.KBMinutesPart {
+// notesForMerge is a chunk's notes for the merging call, keeping only items citing a line of that chunk, at most each
+// of a section, each clipped to minutesNoteRunes.
+func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Time, zone *time.Location, each int) prompts.KBMinutesPart {
 	in := map[int]bool{}
 	for _, l := range chunk {
 		in[l.N] = true
@@ -558,7 +579,7 @@ func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Ti
 	p := prompts.KBMinutesPart{Part: part, From: clockAt(start, chunk[0].At, zone), To: clockAt(start, chunk[len(chunk)-1].At, zone),
 		Where: oneLine(a.Where), Attendees: a.Attendees}
 	note := func(text string, line modelLine, extra ...string) (prompts.KBMinutesNote, bool) {
-		text = clipText(text)
+		text = clipRunes(text, minutesNoteRunes)
 		if text == "" || !in[int(line)] {
 			return prompts.KBMinutesNote{}, false
 		}
@@ -591,13 +612,24 @@ func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Ti
 			p.Open = append(p.Open, n)
 		}
 	}
+	p.Points, p.Decisions, p.Actions, p.Open = firstN(p.Points, each), firstN(p.Decisions, each), firstN(p.Actions, each), firstN(p.Open, each)
 	return p
 }
 
-func clipText(s string) string {
+func firstN[T any](s []T, n int) []T {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
+func clipText(s string) string { return clipRunes(s, minutesTextRunes) }
+
+// clipRunes is s on one line, at most n runes ("…" marking a cut).
+func clipRunes(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > minutesTextRunes {
-		s = string(r[:minutesTextRunes]) + "…"
+	if r := []rune(s); len(r) > n {
+		s = string(r[:n]) + "…"
 	}
 	return s
 }
@@ -680,7 +712,7 @@ func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 	day := r.StartedAt.In(zone)
 	day = time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, zone)
 	for _, x := range a.Actions {
-		if t := clipText(x.What); fresh("a", t) {
+		if t := clipText(x.What); fresh("a"+oneLine(x.Who), t) { // the same task for two people is two actions
 			if sec, ok := line(x.Line); ok {
 				m.Actions = append(m.Actions, MinutesAction{Who: named(x.Who), What: t, By: oneLine(x.By), DueDate: dueDate(x.DueDate, day), At: sec})
 			}
@@ -730,6 +762,22 @@ func minutesWhen(r *Recording, zone *time.Location) string {
 		return start.Format("2006-01-02 15:04") + "–" + end.Format("15:04")
 	}
 	return start.Format("2006-01-02 15:04") + "–" + end.Format("2006-01-02 15:04")
+}
+
+// keepTodos carries the to-dos made of the previous minutes' actions over to the same task for the same person in m,
+// so minutes made again don't offer what the user already added.
+func keepTodos(m, old *Minutes) {
+	made := map[string]string{}
+	for _, a := range old.Actions {
+		if a.TodoID != "" {
+			made[a.Who+"\x00"+a.What] = a.TodoID
+		}
+	}
+	for i, a := range m.Actions {
+		if t, ok := made[a.Who+"\x00"+a.What]; ok {
+			m.Actions[i].TodoID = t
+		}
+	}
 }
 
 // renderMinutes is minutes.md: the minutes with clock times, sections without anything left out.
@@ -794,13 +842,22 @@ func (e *Engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes) err
 		st.recMu.Unlock()
 		return nil
 	}
+	// The version after both meta's and the file's: a write of minutes.json that meta.json never caught up with (a
+	// crash between the two) must not give different actions the version an app may still confirm.
 	m.Version, m.Revision, m.GeneratedAt = cur.MinutesVersion+1, r.Revision, time.Now().UTC()
+	if old, err := st.ReadMinutes(cur.ID); err == nil {
+		m.Version = max(m.Version, old.Version+1)
+		keepTodos(m, old)
+	}
 	m.Markdown = renderMinutes(m, r.StartedAt, st.Zone())
 	if wrote, err := st.putMinutes(cur.ID, m); err != nil || !wrote {
 		st.recMu.Unlock()
 		return err
 	}
-	cur.MinutesVersion, cur.MinutesRev, cur.MinutesFails, cur.MinutesFailRev = m.Version, r.Revision, 0, 0
+	cur.MinutesVersion, cur.MinutesFails, cur.MinutesFailRev = m.Version, 0, 0
+	if cur.MinutesAsks == r.MinutesAsks { // else the user asked again meanwhile: made again at the next round
+		cur.MinutesRev = r.Revision
+	}
 	cur.planMinutes()
 	err := st.putEntity(KindRecording, cur.ID, cur, &cur.Tagging, false)
 	st.notify(KindRecording, cur.ID, "summary")

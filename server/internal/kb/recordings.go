@@ -133,6 +133,8 @@ type Recording struct {
 	MinutesVersion int   `json:"minutes_version,omitempty"`
 	MinutesFails   int   `json:"minutes_fails,omitempty"`
 	MinutesFailRev int64 `json:"minutes_fail_rev,omitempty"`
+	// MinutesAsks counts the user's requests: minutes made from before the latest one don't settle it.
+	MinutesAsks int `json:"minutes_asks,omitempty"`
 	Tagging
 }
 

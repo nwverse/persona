@@ -465,8 +465,8 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 	look := func(p string, msgs bool) {
 		var raw []byte
 		var err error
-		if kind == KindRecording && filepath.Base(p) != "summary.md" {
-			raw = recording[filepath.Base(p)]
+		if kind == KindRecording && filepath.Base(p) != "summary.md" && filepath.Base(p) != "minutes.md" {
+			raw = recording[filepath.Base(p)] // the uploaded files, as committed (summary and minutes are the hub's)
 		} else {
 			raw, err = os.ReadFile(p)
 		}
