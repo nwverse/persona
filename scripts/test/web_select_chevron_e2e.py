@@ -15,7 +15,7 @@ WebKit too when Playwright's WebKit runs on this machine):
     (cd web && PERSONA_HUB_URL=<mock hub URL> npx vite --port <web port> --strictPort &)
     python3 scripts/test/web_select_chevron_e2e.py <web URL> [--browser chromium|webkit|all] [--shots <dir>]
 
-It looks at every visible select on Settings › Claude Code, General, Assistant and Model configuration and on a
+It looks at every visible select on Settings › Agents (Claude Code, Codex, …), General, Persona and Models and on a
 machine's page, wide and at phone width, light and dark. Prints one line per page and a verdict; exits 1 on the first
 failure. --shots saves each select.
 """
@@ -27,7 +27,7 @@ import sys
 from PIL import Image, ImageChops
 from playwright.sync_api import sync_playwright
 
-PAGES = ["/settings?tab=claude", "/settings?tab=general", "/settings?tab=assistant", "/settings?tab=model-config", "/machines/studio"]
+PAGES = ["/settings?tab=agents", "/settings?tab=general", "/settings?tab=persona", "/settings?tab=models", "/machines/studio"]
 SIZES = (("wide", (1280, 860), False), ("narrow", (390, 844), True))
 SCALE = 2
 
