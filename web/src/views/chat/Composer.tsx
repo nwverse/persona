@@ -232,7 +232,34 @@ export const Composer = memo(function Composer({
           requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
           return;
         }
-        if (e.type === "replace" && replaceNeedsConfirm(draftNow.current, e.text) && !confirm(t("chat-composer.replace_confirm"))) return;
+        // "Edit" or a rewind over unsent words puts the message in at once, with no question first: the notice's Undo
+        // brings back what was typed, the quotes on the bar and where the caret was (#2450)
+        const kept =
+          e.type === "replace" && replaceNeedsConfirm(draftNow.current, e.text)
+            ? { text: draftNow.current, quotes: getQuotes(draftKey).list, caret: input.current?.selectionStart ?? draftNow.current.length }
+            : null;
+        if (kept) {
+          toast(t("chat-composer.replaced"), "ok", {
+            label: t("chat-composer.undo"),
+            run: () => {
+              setQuotes(draftKey, kept.quotes);
+              // the box went away or shows another conversation: the words go back to this one's stored draft
+              if (!mounted.current || keyNow.current !== draftKey) {
+                storeDraft(draftKey, kept.text);
+                return;
+              }
+              setDraft(kept.text);
+              setDismissed(false);
+              requestAnimationFrame(() => {
+                const el = input.current;
+                if (!el) return;
+                el.focus({ preventScroll: true });
+                el.setSelectionRange(kept.caret, kept.caret);
+                setCaret(kept.caret);
+              });
+            },
+          });
+        }
         // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
         const split = e.type === "replace" ? splitQuotes(e.text) : null;
         if (e.type === "replace") setQuotes(draftKey, split ? parseQuotes(split.quotes) : []);
