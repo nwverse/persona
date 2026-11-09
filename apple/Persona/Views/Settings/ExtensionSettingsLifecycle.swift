@@ -32,7 +32,7 @@ nonisolated struct ExtensionSettingsPolicy {
         let installed = plugin.source == "installed" && !attached && !configured
         let origin = detail.origin ?? ""
         let parts = origin.hasPrefix("market:") ? String(origin.dropFirst(7)).split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false) : []
-        market = installed && parts.count == 2 && !parts[0].isEmpty && parts[1] == plugin.id ? String(parts[0]) : nil
+        market = installed && parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty ? String(parts[0]) : nil
         canEnable = !configured && plugin.source != "dev" && (plugin.enabled != nil || builtin)
         canCheck = market != nil
         canAutoUpgrade = canCheck && plugin.autoUpgrade != nil

@@ -29,6 +29,11 @@ struct ExtensionSettingsLifecycleTests {
         #expect(market.runtime == String(localized: "Not provided"))
         #expect(market.runtime != detail.plugin.kind, "a contribution category is not execution-runtime metadata")
         #expect(ExtensionText.autoUpgradeShown(detail.plugin))
+        var renamed = detail
+        renamed.plugin.id = "renamed-p"
+        let renamedPolicy = ExtensionSettingsPolicy(detail: renamed)
+        #expect(renamedPolicy.market == "m1" && renamedPolicy.canCheck)
+        #expect(renamedPolicy.provenance == detail.origin, "installation provenance may retain an earlier package ID")
         detail.plugin.source = "builtin"
         let builtin = ExtensionSettingsPolicy(detail: detail)
         #expect(builtin.canEnable && !builtin.canCheck && !builtin.canAutoUpgrade && !builtin.canUninstall)
