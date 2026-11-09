@@ -77,7 +77,7 @@ func serveImagesExtensionForTest() {
 					age := 60
 					switch p.Ref {
 					case "slow":
-						time.Sleep(300 * time.Millisecond)
+						time.Sleep(300 * time.Millisecond) // sleep-ok: a slow camera, so the concurrent requests for it overlap and coalesce into one ui.image
 					case "noage":
 						age = 0
 					case "svg":
