@@ -4,11 +4,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -17,12 +15,9 @@ import (
 	"path/filepath"
 	"slices"
 	"time"
-)
 
-func spkiPin(cert *x509.Certificate) string {
-	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
+	"github.com/nwverse/persona/server/internal/link"
+)
 
 func loadTLSFiles(certFile, keyFile string) (tls.Certificate, string, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -34,7 +29,7 @@ func loadTLSFiles(certFile, keyFile string) (tls.Certificate, string, error) {
 		return tls.Certificate{}, "", err
 	}
 	cert.Leaf = leaf
-	return cert, spkiPin(leaf), nil
+	return cert, link.Pin(leaf), nil
 }
 
 // loadOrCreateTLS renews the certificate, never the identity key.
@@ -56,7 +51,7 @@ func loadOrCreateTLS(dir string, names []string, now time.Time) (tls.Certificate
 		if err != nil {
 			return tls.Certificate{}, "", err
 		}
-		if err := writeTLSFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), false); err != nil && !os.IsExist(err) {
+		if err := link.WritePrivate(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), false); err != nil && !os.IsExist(err) {
 			return tls.Certificate{}, "", err
 		}
 	} else if err != nil {
@@ -104,7 +99,7 @@ func loadOrCreateTLS(dir string, names []string, now time.Time) (tls.Certificate
 		return tls.Certificate{}, "", err
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	if err := writeTLSFile(certFile, certPEM, true); err != nil {
+	if err := link.WritePrivate(certFile, certPEM, true); err != nil {
 		return tls.Certificate{}, "", err
 	}
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
@@ -115,30 +110,7 @@ func loadOrCreateTLS(dir string, names []string, now time.Time) (tls.Certificate
 	if err != nil {
 		return tls.Certificate{}, "", err
 	}
-	return cert, spkiPin(cert.Leaf), nil
-}
-
-// Publish complete files atomically; a concurrent creator must use the winning key.
-func writeTLSFile(path string, data []byte, replace bool) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".tls-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if replace {
-		return os.Rename(f.Name(), path)
-	}
-	return os.Link(f.Name(), path)
+	return cert, link.Pin(cert.Leaf), nil
 }
 
 func certificateSANs(names []string) ([]string, []net.IP) {

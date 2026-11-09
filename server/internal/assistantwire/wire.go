@@ -249,8 +249,8 @@ type Snapshot struct {
 	Epoch string    `json:"epoch"` // this run of the assistant
 	Seq   uint64    `json:"seq"`   // increasing within Epoch
 	At    time.Time `json:"at"`
-	// Partial: some of the state could not be read (the database did not answer); the hub asks again (Resync) the
-	// next time it shows it.
+	// Partial: some of the state could not be read (the database did not answer). The hub no longer reads it: it
+	// used to ask again with manager.resync.
 	Partial bool `json:"partial,omitempty"`
 	// Sessions are the assistant's conversations it has something to say about.
 	Sessions []SessionView `json:"sessions"`
@@ -258,8 +258,8 @@ type Snapshot struct {
 	// cards about agents' turns (WorkCardTool). The hub shows each like any agent's and sends the answer back
 	// (Handler.Action); one that leaves the list is withdrawn.
 	Interactions []proto.Interaction `json:"interactions"`
-	// Tasks are its scheduled tasks, as the hub's other parts need them (the model configuration's "Scheduled tasks"); null
-	// while they could not be read.
+	// Tasks are its scheduled tasks; null while they could not be read. The hub no longer keeps them: the model
+	// configuration that read them is the manager's own now.
 	Tasks []TaskView `json:"tasks"`
 	// Todos is which todo each agent works for (TodoReport); null while the todos could not be read.
 	Todos *TodoReport `json:"todos"`

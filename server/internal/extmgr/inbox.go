@@ -120,12 +120,6 @@ func (h *Manager) kickInbox() {
 	h.inbox.signal()
 }
 
-// kickLarkChats asks for a collection of the Feishu chats soon (a Feishu realtime event arrived).
-func (h *Manager) kickLarkChats() {
-	h.inbox.init()
-	h.inbox.signal()
-}
-
 // kickedRound is the round a kick asks for: the Feishu chats, unless something else asked for every source too.
 func (b *inboxSources) kickedRound() inboxRound {
 	if b.wide.Swap(false) {

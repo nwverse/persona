@@ -77222,6 +77222,52 @@
       },
       "extractionState" : "manual"
     },
+    "Offline: its mutes show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its mutes show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにミュートが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的静音。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its rules show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its rules show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにルールが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的规则。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Offline: starts once connected" : {
       "localizations" : {
         "en" : {
@@ -87929,6 +87975,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Clear Recent Setups" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Recent Setups"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近の設定をすべて消去"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除最近配置"
+          }
+        }
+      }
+    },
+    "Remove from Recent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Recent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近から削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从最近中移除"
+          }
+        }
+      }
     },
     "Recent" : {
       "localizations" : {
