@@ -366,6 +366,9 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Within one NavigationStack, pushing view-based `NavigationLink { destination }` then value-based `NavigationLink(value:)` inserts the new page **underneath**:
   taps look ineffective until Back (Settings › Machines › card, machine detail › session; Knowledge search entries also reveal a yellow warning on return, 2026-10-31). Use an entirely value-based chain (`MachineListRoute`,
   `MachineDetailRoute` + `navigationDestination(for:)`) or entirely view-based. `navigationDestination(isPresented:)` is view-based too.
+- Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
+  Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
+  (`splitPush`), or give each link its own row.
 - If `x` in `NavigationPath([x])` is `AnyHashable`, the recorded type is `AnyHashable` and a concrete `navigationDestination(for:)` cannot match,
   producing a yellow warning. Append concrete types (`SettingsView.openDebugPage`).
 - `NavigationSplitView` detail pages use destinations registered in the sidebar and are built in its environment. Put detail environment values

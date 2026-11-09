@@ -602,7 +602,7 @@ func newFakeConnector(t *testing.T, node *meshNode) *fakeConnector {
 		t.Fatal(err)
 	}
 	leaf, _ := x509.ParseCertificate(der)
-	fc := &fakeConnector{t: t, node: node, fp: spkiPin(leaf), code: "code-" + randomHex(4)}
+	fc := &fakeConnector{t: t, node: node, fp: link.Pin(leaf), code: "code-" + randomHex(4)}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
 		NextProtos: []string{"http/1.1"}})
 	if err != nil {

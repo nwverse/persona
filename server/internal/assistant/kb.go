@@ -524,13 +524,6 @@ func expandHome(p string) string {
 	return p
 }
 
-func clipRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
-}
-
 // kbExtraDirs are manager.json's kb.extra_dirs as written, for CLAUDE.md (none while the knowledge base is off).
 func (s *Service) kbExtraDirs(ctx context.Context) []string {
 	if set := s.kbSettings(ctx); set != nil && !set.Off {

@@ -378,15 +378,6 @@ func (h *Hub) noteTodoOwner(id, manager string) {
 	h.todoOwnersMu.Unlock()
 }
 
-func (h *Hub) forgetTodoOwner(id string) {
-	if id == "" {
-		return
-	}
-	h.todoOwnersMu.Lock()
-	delete(h.todoOwners, id)
-	h.todoOwnersMu.Unlock()
-}
-
 // byTodo: the manager that owns todo {id}; when not known or not named, goes by the request.
 // An extension's token reaches only its own manager's todos.
 func (h *Hub) byTodo(r *http.Request) (string, error) {
