@@ -97,6 +97,19 @@ describe("active-chat snapshot lifecycle", () => {
     expect(api).toHaveBeenCalledTimes(2);
     expect(commit).toHaveBeenCalledTimes(2);
   });
+  it("keeps saying the session is gone while it asks again", async () => {
+    const model = loader(true, null);
+    vi.mocked(api).mockResolvedValueOnce(page([]));
+    await model.load();
+    const pending = deferred<ReturnType<typeof page>>();
+    vi.mocked(api).mockReturnValueOnce(pending.promise);
+    const again = model.load();
+    await tick();
+    expect(states.at(-1)).toMatchObject({ loading: true, missing: true });
+    pending.resolve(page());
+    await again;
+    expect(states.at(-1)).toMatchObject({ loading: false, missing: false, error: "" });
+  });
   it("keeps existing data on missing or failed lookup", async () => {
     const model = loader();
     vi.mocked(api).mockResolvedValueOnce(page([]));

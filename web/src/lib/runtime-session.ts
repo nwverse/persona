@@ -42,6 +42,7 @@ export class SessionDetailLoader {
   private controller?: AbortController;
   private legacy = false;
   private last = "";
+  private gone = false;
   private failures = 0;
   private retryTimer?: ReturnType<typeof setTimeout>;
   constructor(
@@ -61,8 +62,8 @@ export class SessionDetailLoader {
         if (this.stopped || generation !== this.generation) return;
         this.queued = false;
         this.controller = new AbortController();
-        // an earlier failure's words stay until an answer replaces them
-        this.emit({ loading: true, error: this.last, missing: false, legacy: this.legacy || !this.lookup() });
+        // an earlier failure's words, or "no such session", stay until an answer replaces them
+        this.emit({ loading: true, error: this.last, missing: this.gone, legacy: this.legacy || !this.lookup() });
         if (this.stopped || generation !== this.generation) return;
         try {
           if (this.lookup() && !this.legacy) {
@@ -71,7 +72,9 @@ export class SessionDetailLoader {
             if (row) this.commit(row);
             if (this.stopped || generation !== this.generation) return;
             this.answered();
-            this.emit({ loading: false, error: row ? "" : t("runtime-session.missing"), missing: !row, legacy: false });
+            this.gone = !row;
+            this.last = row ? "" : t("runtime-session.missing");
+            this.emit({ loading: false, error: this.last, missing: this.gone, legacy: false });
           } else {
             await this.readLegacy(generation);
           }
@@ -104,12 +107,13 @@ export class SessionDetailLoader {
   }
   private answered() {
     this.last = "";
+    this.gone = false;
     this.failures = 0;
     clearTimeout(this.retryTimer);
   }
   private failed(error: unknown, legacy: boolean) {
     this.last = errorText(error);
-    this.emit({ loading: false, error: this.last, missing: false, legacy });
+    this.emit({ loading: false, error: this.last, missing: this.gone, legacy });
     clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => void this.load(), detailRetryMs(++this.failures));
   }
