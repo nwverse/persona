@@ -628,6 +628,14 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Port forwarding (docs/operations/ports.md)
 
+- Credential revocation must cover auxiliary WebSockets too (#1823): closing `/api/v1/ws` leaves live screens, forwarded ports and previews usable.
+  Register them with `trackRelayed` before opening a stream, recheck revocation after registration, and defer unregistering on every exit.
+  Derive the connection context from that tracked request and close the connection when it ends; a context rooted at `context.Background()` outlives revocation.
+  Abort the mux stream explicitly too: a sender waiting for flow-control acknowledgements cannot observe a closed connection. Test both ends closing,
+  multiple connections per credential, other credentials staying usable, and revocation between authentication and registration.
+  Remote setup cancellation is a separate lifecycle problem: `stream.close` for an unknown id is ignored, so a node that completes `port.dial` or
+  `preview.open` after the caller canceled can still open a backend stream. Closing the client's WebSocket prevents further access, but does not prove
+  cleanup of that late backend; established-stream tests cannot establish that guarantee.
 - RPC `OnEvent` runs in the read loop: blocking there (e.g. writing received bytes directly to a slow WebSocket) stalls every RPC on that machine.
   Queue bytes per stream and write from a separate goroutine; bound queues through windows (sender waits for ack), not dropped data.
 - coder/websocket defaults to a 32 KB message read limit (`read limited at 32769 bytes`, peer gets `StatusMessageTooBig`). Forwarded connections need `SetReadLimit`,
