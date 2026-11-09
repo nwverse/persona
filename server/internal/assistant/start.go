@@ -213,13 +213,16 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 
 // startConversation starts a new conversation of the assistant's own (a scheduled task's, conversation_new's).
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
-	return s.start(ctx, StartParams{Text: p.Text, PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
+	return s.start(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
 		Origin: p.Origin, OriginRef: p.OriginRef})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
 // (feishu_message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
+	if p.Origin == "" || p.Origin == OriginUser {
+		p.Text = prompts.ProtectUserMessage(p.Text)
+	}
 	sess, err := s.start(ctx, p)
 	if err != nil {
 		return proto.Session{}, err
@@ -579,6 +582,20 @@ func (s *Service) appLang(ctx context.Context, lang string) i18n.Lang {
 // filled in (sendModel) and, the first one to a new main conversation started empty, what the old one left before
 // its text. A conversation the machine does not list (yet) that is not the main one keeps what it runs on.
 func (s *Service) SendParams(ctx context.Context, p SendParams) (map[string]any, error) {
+	if p.Params == nil {
+		p.Params = map[string]any{}
+	}
+	delete(p.Params, "source") // app input cannot claim an automated author
+	delete(p.Params, "message_source")
+	if text, ok := p.Params["text"].(string); ok {
+		p.Params["text"] = prompts.ProtectUserMessage(text)
+	}
+	return s.sendParams(ctx, p)
+}
+
+// sendParams also serves manager-generated notices, which must not be marked as
+// user-authored merely because they share the app's model-selection path.
+func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any, error) {
 	params := p.Params
 	if params == nil {
 		params = map[string]any{}

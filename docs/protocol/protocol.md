@@ -587,6 +587,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                                                       // recognized by the node, see "Matching pending messages"; old hubs / nodes omit it
  "wake":true,                                         // notice only: Claude was idle when a background task finished, and this notification started a new turn
  "injected":{"kind":"task_notice","state":"done",…},   // user text only: this is a message Persona sent to the model (task notification, scheduled task, wake-up…), not written by the user; added by the hub when sending, see "Messages Persona injects"
+ "source":{"kind":"conversation|patrol|followup|supervision","conversation_id":"…","title":"…"}, // optional input provenance, independent of role; id/title optional, see "Message source"
+ "from":"peer name",                                  // optional native peer sender; a display name, not necessarily a conversation id
  "compact":{"trigger":"manual|auto","pre_tokens":151467}, // notice only: the context was compacted here (Claude Code's compact_boundary); the App draws a divider and folds the following "已从压缩的上下文继续" ("continued from compacted context") and the idle-compaction note into it
  "task":{"kind":"shell|monitor|agent|workflow|task",     // notice only: a background task notification (command, Monitor event / end, subagent, workflow); text is a one-line summary
          "status":"completed|failed|killed|stopped|event|ended|waiting","title":"description or the command's first line",
@@ -3016,12 +3018,39 @@ The user's typed text
 Limits: comments up to 4000 characters, attached code up to 60 lines (extra lines are counted in `Truncated` but not included); the fence has one more backtick than the longest run in the code. Numbers follow the order of comments above the input, starting at 1.
 On reading back, web only recognizes blocks after the first block whose first line is `Comment N` / `Code comment N` / `Element comment N` (`splitQuotes`), so ordinary `> ` quotes are unaffected; editing a sent message puts comments back above the input.
 
+### Message source (#2125)
+
+`Item.source` is optional authorship metadata, independent of the runtime's `role`. New automated input keeps the model's existing user role and the legacy `injected` / `from` fields. Clients must not render any nonempty source kind as a user bubble, count it in user-only navigation or statistics, or match it to a user's pending send. Unknown kinds get a generic source label; they do not fall back to a user identity.
+
+```json
+{"kind":"conversation","conversation_id":"<sending conversation id>","title":"Research"}
+```
+
+| `source.kind` | Meaning | Optional fields |
+| --- | --- | --- |
+| `conversation` | Input from `conversation_send` or `conversation_new` | `conversation_id` is the sending session's stable id; `title` is its title at send time |
+| `patrol` | A repeating scheduled run, including daily routines and interval patrols | `title` is the scheduled task title; `conversation_id` is the originating conversation when recorded |
+| `followup` | A one-shot scheduled follow-up, wake, or usage-limit continuation | `title` and originating `conversation_id` when recorded |
+| `supervision` | A supervision dispatch | Existing `injected.level` and turn-folding behavior still apply |
+
+The manager persists explicit provenance in the native transcript with a leading context block, rendered by `shared/message_source.md`:
+
+```text
+<persona-context kind="message-source" title="">
+{"kind":"conversation","conversation_id":"<sending conversation id>","title":"Research"}
+</persona-context>
+```
+
+The original content follows the block. JSON is HTML-escaped when written so a title cannot close the block. This is metadata, not a selectable Context card: clients exclude `kind="message-source"` from Context groups. The block survives history reads, full-item reads, paging, subscription backlog and process restarts without depending on the 24-hour echo cache or a database migration. Queued relays retain their sender id/title in the existing persisted relay JSON; dispatch reconstructs the same source after restart. Scheduled runs receive a source whether they address an existing chat, reuse their own chat, or start a new one.
+
+For compatibility, prefer explicit `source`, then persisted source context, then existing `injected`: `followup.daily|interval` maps to `patrol`, other followup states to `followup`, and `system.supervise` to `supervision`. `from` still names a native peer and is not converted into a conversation id. With no metadata, only the complete canonical relay context (`assistant/relay.md`, matching sender and reply ids, recognized relay tool and numeric hop limits) supplies a conversation id/title; an emoji, title, or ordinary user sentence never does. Existing generated task templates remain the narrow fallback for old transcripts. A message with `client_msg_id` is never text-inferred. New user starts and app sends protect pasted source blocks or complete templates with an outer `message-source` block containing `{"author":"user"}`; this internal sentinel produces no source and prevents nested metadata or legacy recognition, even before the echo id arrives. Explicit source fields supplied by app input are removed.
+
 ## Messages injected by Persona
 
 The hub sends some model-facing messages into chats as "user input" (#2360, #2358). In the transcript they have `role:"user", kind:"text"`, just like the user's typed words,
-but aren't user-written: **clients don't draw them as user bubbles or show the instructions for the model inside them**. The text the model receives is unchanged (templates in `server/internal/prompts/`);
-recognition happens entirely when sending to clients: the hub recognizes the line by template (`prompts.ParseInjected`, tested against rendering) and adds `injected` to the item. Pagination (`/items`), pushes (`items` events and subscription backlog),
-and `/items/{iid}/full` all carry it. Recognition is by text, so old messages and those written by old nodes carry it too. A line the App sends with its own `client_msg_id` is never recognized as injected.
+but aren't user-written: **clients don't draw them as user bubbles or show the instructions for the model inside them**. The runtime role stays unchanged; generated content carries the source context above.
+The hub preserves explicit provenance and recognizes legacy generated lines by template (`prompts.ParseInjected`, tested against rendering), adding `injected` to the item. Pagination (`/items`), pushes (`items` events and subscription backlog),
+and `/items/{iid}/full` all carry the metadata. Old messages and those written by old nodes keep the narrow template fallback. A line the App sends with its own `client_msg_id` is never recognized as injected.
 
 ```jsonc
 "injected": {
@@ -3065,8 +3094,8 @@ and `/items/{iid}/full` all carry it. Recognition is by text, so old messages an
 - Anything unrecognized stays a user bubble (better to miss recognition than hide the user's words).
 - Shared fixtures: `spec/fixtures/injected/cases.json` (Go test `TestParseInjected` generates them from templates; `UPDATE_GOLDEN=1` rewrites them): `input.text` → `expected` (`null` means not recognized); all clients run their fallback recognition against these fixtures.
 
-Other "not user-written" messages already have their own shapes and aren't covered here: messages from another chat (`<persona-context title="来自对话「x」">`, "From chat 'x'"), background for resuming the old main chat (`<persona-context title="接上旧主对话">`, "Resume the old main chat")
-are gathered as "Context" by the tags above; background-task notifications use `kind:"notice"` + `task`; `/model`, compaction and similar notices use `kind:"notice"`.
+Other "not user-written" messages retain their own shapes: inter-chat input now additionally carries `source.kind="conversation"` as above; background for resuming the old main chat (`<persona-context title="接上旧主对话">`, "Resume the old main chat")
+is gathered as "Context" by the tags above; background-task notifications use `kind:"notice"` + `task`; `/model`, compaction and similar notices use `kind:"notice"`.
 
 
 

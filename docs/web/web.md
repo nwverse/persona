@@ -711,6 +711,24 @@ Only the latest two user turns are eligible, matching the latest-page request. O
 
 Fresh items replace matching ids; a changed transcript history or a confirmed empty transcript replaces stale content. A failed refresh keeps the last page and shows the existing chat status capsule with **Couldn't refresh** and **Reload**, localized in English, Simplified Chinese and Japanese. Reload retries both the main-conversation reference and its transcript without blanking the cached page.
 
+### Message sources (#2125)
+
+Relayed conversations, scheduled patrols, follow-ups and supervision use the optional `Item.source` contract in
+[the protocol](../protocol/protocol.md). Their model-facing role can remain `user`, but the chat renders a left-aligned
+neutral source block with an `@` title, never a user bubble. Consecutive messages from the same source share the title;
+a reply, user input or different source resets it. Long content folds to three lines with an accessible Expand / Collapse
+control. No group-chat header, member list or per-source avatar is added. Quiet supervision rounds retain their existing
+folded trace, now labeled with their source mention.
+
+The cache retains the source metadata. Unknown nonempty source kinds still use the source presentation. Old hubs fall back
+to injected metadata and complete canonical relay contexts; genuine app inputs and protected quoted templates are never
+reclassified. Source messages cannot settle an identical pending user message or become user-navigation ticks.
+
+Browser regression: run an isolated mock hub and Vite, then
+`node web/e2e/message-sources.mjs <web URL> --shots <directory>`. It checks the real transcript renderer, consecutive labels,
+fold toggles, one genuine user bubble, console errors and wide/narrow light/dark screenshots. `--cdp <CDP URL>` leaves the
+inspection pages in an existing browser. All transcript content is synthetic; this check does not test live delivery.
+
 ### Unified main-chat entry (#930)
 
 The same system as iOS ([unified-entry.md](../assistant/unified-entry.md)): the hub's chat activity is inserted into assistant chats (`displayLines` in `lib/feed.ts`: each item goes at the end of the turn when it happened,

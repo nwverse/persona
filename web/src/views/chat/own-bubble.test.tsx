@@ -36,7 +36,10 @@ describe("the user's own bubble", () => {
     else expect(html).not.toContain("bg-user-bubble");
   });
 
-  it("a relayed message is still a bubble, in the neutral gray", () => {
-    expect(render(u(1, relay))).toContain("bg-neutral-bubble");
+  it("a relayed message is a source block, never a user bubble", () => {
+    const html = render(u(1, relay));
+    expect(html).toContain('data-message-source="conversation"');
+    expect(html).not.toContain("data-user-bubble");
+    expect(html).not.toContain("bg-neutral-bubble");
   });
 });
