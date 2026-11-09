@@ -16,10 +16,10 @@ import (
 )
 
 // An extension's token may not send terminal control characters (docs/extensions/extensions.md "Hub API: scopes"):
-// what it sends an agent can be typed into the agent's terminal, where they are keys rather than text, and keys can do
-// what the extension was not granted (switch the permission mode). Newline, carriage return and tab are text there;
-// every other control character (C0, DEL, C1) is refused, in any chat, its extension's own included. The apps' and
-// devices' tokens are not held to it.
+// what it sends an agent can be typed into the agent's terminal, now or later in a prompt (a to-do, a knowledge-base
+// entry), where they are keys rather than text, and keys can do what the extension was not granted (switch the
+// permission mode). Newline, carriage return and tab are text there; every other control character (C0, DEL, C1) is
+// refused, in any chat, its extension's own included. The apps' and devices' tokens are not held to it.
 
 // codeTerminalControls answers a request of an extension's token that carries a terminal control character.
 const codeTerminalControls = "terminal_control_refused"
@@ -28,10 +28,10 @@ const codeTerminalControls = "terminal_control_refused"
 // with its attachments).
 const terminalTextMax = 32 << 20
 
-// withoutTerminalControls guards a route on which an extension's token can put text into a terminal: a request of
-// one whose body has a terminal control character in any string, key or value, of any of its JSON values is refused
-// and audited (refuseTerminalControls), and one whose body is not JSON is refused, as nothing can say what the route
-// would read in it. Other requests go on with the body as it came.
+// withoutTerminalControls guards a route on which an extension's token can put text into a terminal or keep it for a
+// prompt: a request of one whose body has a terminal control character in any string, key or value, of any of its
+// JSON values is refused and audited (refuseTerminalControls), and one whose body is not JSON is refused, as nothing
+// can say what the route would read in it. Other requests go on with the body as it came.
 func (h *Hub) withoutTerminalControls(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := principalOf(r.Context())
