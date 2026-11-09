@@ -8,6 +8,8 @@ type AgentTriage struct {
 
 func RenderAgentTriage(t AgentTriage) string { return render("agents/triage", t) }
 
+func RenderAgentToolLoop() string { return render("agents/tool_loop", nil) }
+
 // AgentTriageInput is the turn to triage (agents/triage_input).
 type AgentTriageInput struct {
 	Now     string // the user's local time, "2006-01-02 15:04 Mon"

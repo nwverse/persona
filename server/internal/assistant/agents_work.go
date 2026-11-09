@@ -34,6 +34,7 @@ type TriageSwitches struct {
 	AutoContinue bool `json:"auto_continue"` // "Continue" after a transient model error, and once a usage limit reset
 	Wake         bool `json:"wake"`          // wake agents whose wait should be over
 	Decide       bool `json:"decide"`        // cards for what the user is to decide
+	ToolLoop     bool `json:"tool_loop"`     // detect repeated tool calls while a turn runs
 	// ReplyReminder: push once when an agent the user looked at still waits on their answer (agents_reply.go,
 	// #5096). Rules only, no tokens: unset is on.
 	ReplyReminder *bool `json:"reply_reminder,omitempty"`
@@ -46,7 +47,7 @@ const triageSettingKey = "agents.triage"
 func set(b *bool) bool { return b != nil && *b }
 
 func switchesOf(c assistantwire.TriageConfig) TriageSwitches {
-	return TriageSwitches{Enabled: set(c.Enabled), AutoContinue: set(c.AutoContinue), Wake: set(c.Wake), Decide: set(c.Decide)}
+	return TriageSwitches{Enabled: set(c.Enabled), AutoContinue: set(c.AutoContinue), Wake: set(c.Wake), Decide: set(c.Decide), ToolLoop: set(c.ToolLoop)}
 }
 
 func maxRetries(c assistantwire.TriageConfig) int { return cmp0(c.MaxRetries, 3) }
@@ -146,14 +147,15 @@ type workBook struct {
 	cards      map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
 	loaded     bool
 	triaging   map[[2]string]bool
-	ciPolling  map[[2]string]bool      // bounded concurrent check reads
-	generation map[[2]string]uint64    // user activity invalidates in-flight triage
-	tried      map[[2]string]triedTurn // the turn a triage was last attempted on, and when
-	sent       map[[2]string]time.Time // when the manager itself last sent the session something
-	seen       map[[2]string]time.Time // the turn whose first look was recorded
-	started    map[[2]string]time.Time // local time of the latest turn-start event
-	viewed     map[[2]string]bool      // a view since that event
-	approved   map[[2]string]approval  // a risky next step the user said yes to, for the wait it ends
+	ciPolling  map[[2]string]bool           // bounded concurrent check reads
+	loops      map[[2]string]*toolLoopState // running-turn loop candidates and cards
+	generation map[[2]string]uint64         // user activity invalidates in-flight triage
+	tried      map[[2]string]triedTurn      // the turn a triage was last attempted on, and when
+	sent       map[[2]string]time.Time      // when the manager itself last sent the session something
+	seen       map[[2]string]time.Time      // the turn whose first look was recorded
+	started    map[[2]string]time.Time      // local time of the latest turn-start event
+	viewed     map[[2]string]bool           // a view since that event
+	approved   map[[2]string]approval       // a risky next step the user said yes to, for the wait it ends
 	// answering marks cards whose answer is being delivered to the agent: a repeated callback in the send window
 	// (a redelivered webhook, a second tap, phone and watch together) is the same answer, not a second one.
 	answering map[string]bool
@@ -178,6 +180,7 @@ func (b *workBook) init() {
 		b.cards = map[string]proto.Interaction{}
 		b.triaging = map[[2]string]bool{}
 		b.ciPolling = map[[2]string]bool{}
+		b.loops = map[[2]string]*toolLoopState{}
 		b.generation = map[[2]string]uint64{}
 		b.tried = map[[2]string]triedTurn{}
 		b.sent = map[[2]string]time.Time{}
@@ -270,6 +273,12 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.switches = &sw
+	if !sw.Enabled || !sw.ToolLoop {
+		for _, loop := range s.work.loops {
+			delete(s.work.cards, loop.cardID)
+		}
+		clear(s.work.loops)
+	}
 	var stale []db.SessionWork
 	for _, e := range s.work.entries {
 		off := !sw.Enabled || continues(e.Work) && !sw.AutoContinue ||

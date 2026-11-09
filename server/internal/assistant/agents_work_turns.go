@@ -71,6 +71,7 @@ func (s *Service) bindRetiredTurn(k [2]string, retiredAt time.Time) {
 // for it is withdrawn. How long the turn waited is recorded.
 func (s *Service) workStarted(ctx context.Context, machine, sid string, now time.Time) {
 	k := [2]string{machine, sid}
+	s.clearToolLoop(k, true)
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.started[k] = now

@@ -76,6 +76,7 @@ type TriageConfig struct {
 	AutoContinue *bool `json:"auto_continue,omitempty"`
 	Wake         *bool `json:"wake,omitempty"`
 	Decide       *bool `json:"decide,omitempty"`
+	ToolLoop     *bool `json:"tool_loop,omitempty"`
 	// MaxRetries: "Continue" sent for one run of transient errors before asking the user. Default 3.
 	MaxRetries int `json:"max_retries,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.

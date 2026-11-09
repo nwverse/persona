@@ -51,7 +51,7 @@ Triage belongs to the **manager** (currently just one: the assistant process `pe
 
 | Component | Responsibilities |
 | --- | --- |
-| Manager | Post-turn triage (rules + model `agent.triage`, through the hub's `app.call models.json`), automatic continuation, wakeups, cards and answers, four switches (settings `agents.triage`), tables `session_work` / `session_work_events`, statistics; labels for new Agents (`agent.title`), and launchers / models for new and resumed Agents ("Starting" below). |
+| Manager | Post-turn triage (rules + model `agent.triage`, through the hub's `app.call models.json`), tool-loop checks, automatic continuation, wakeups, cards and answers, triage switches (settings `agents.triage`), tables `session_work` / `session_work_events`, statistics; labels for new Agents (`agent.title`), and launchers / models for new and resumed Agents ("Starting" below). |
 | hub | Reports what happened: turn starts / ends (`session.turn_started` / `session.turn_ended`, already sent), a user views a session in the App (`session.seen`). Displays the manager's snapshot: session-list `work` (snapshot `work`), its cards (snapshot `interactions`, displayed, pushed, and expired like assistant questions, with answers returned through `manager.action`). Messages to Agents forward to the node through `device.call session.send`. |
 
 - **Session-list `work`**: the manager's snapshot reports each session's latest turn's work state (`work.turn_at` is when that turn ended). The hub displays it only if the session is still on that turn.
@@ -180,6 +180,10 @@ A GitHub extension may opt into machine-readable polling with the read tool `git
 - For authorization links (`link`), the auth relay goes first ([auth-relay.md](../operations/auth-relay.md)): when an extension's `auth_relay` contribution names the link and it was printed by the Agent's own command on one of your computers, the extension completes it with the account it is signed in with, the Agent is told to go on and no card goes up. Otherwise the card's first question contains the link and validity period (plus one line on why Persona didn't do it, when it tried), with options "Authorized, continue" / "Not now". Push as soon as triage finishes (15 seconds after the turn stops plus a second or two for the model), not after the 60-second "Completed" push delay.
 - Remove a card (without sending anything) when the Agent resumes work (you replied directly on the computer or in the App), a new turn starts, the session disappears, or 24 hours pass without an answer.
 
+## Repeated tool calls
+
+The optional `tool_loop` triage switch is off by default and requires the main switch. It can be set as an initial value in `manager.json` under `agents.triage` and is exposed in the triage settings API. While an agent is working, its node reports a candidate containing only the tool name, repetition count and start time. The manager asks the Session Triage model at most three times per turn, with a five-second timeout; an error, timeout or unrecognized answer leaves the agent running. At 30 repetitions it asks the user without another model call. Polling is excluded by the node. The question offers **Interrupt** and **Let it run**; the latter silences the current candidate. A new message, queued input or turn removes the card. If an interrupt request fails while the same candidate remains, the question reappears with a new id: a repeated delivery of the old answer cannot interrupt again, and the user can retry. Older clients can update other switches without resetting this one.
+
 ## Usage limits
 
 A subscription's 5-hour or weekly usage limit (#1710) is no failure to report and nothing for the user to fix: the turn waits for the limit to reset, then goes on.
@@ -224,7 +228,7 @@ The same applies to "Retry" on an App error card (work begins, invalidating queu
 ## Switches (requested 2026-11-05: all off by default)
 
 Triage calls a model after every stopped turn; continuation and wakeups also make the Agent run another turn on its own model. All consume the user's tokens. Therefore **everything defaults to off**.
-Users enable them under **Settings › Session Triage** (web, Android, iOS / Mac). Four switches are stored in settings `agents.triage` (read and written only by the manager):
+Users enable them under **Settings › Session Triage**. The switches are stored in settings `agents.triage` (read and written only by the manager); tool-loop detection is configured on the web:
 
 | Switch | Controls | Whose tokens it uses |
 | --- | --- | --- |
@@ -232,13 +236,14 @@ Users enable them under **Settings › Session Triage** (web, Android, iOS / Mac
 | `decide` Create decision cards | Turn user decisions into "Needs you" cards | No extra tokens |
 | `auto_continue` Continue automatically on errors | Automatically send continuation after transient model API errors, and once a subscription's usage limit resets | Agent's model (resumes the interrupted turn) |
 | `wake` Scheduled wakeups | Wake Agents waiting for deployment / CI / another Agent so they check for themselves | Agent's model (one turn per wakeup) |
+| `tool_loop` Detect tool loops | Offer to interrupt an agent repeating tool calls, excluding polling | Triage model (at most three checks per turn) |
 | `reply_reminder` Remind when seen, unanswered (#5096) | One push when an Agent asking the user has waited `reply_reminder_minutes` (default 30) since they looked ([agent-states.md](../protocol/agent-states.md) "Awaiting your reply") | None: rules only. **On by default**, independent of the main switch |
 
 - Subswitches work only when the main switch is on. Disabling a switch takes effect immediately: Persona-created cards are removed, and queued retries / wakeups are not sent.
-- `GET / PUT /api/v1/agents/triage` (`{enabled, auto_continue, wake, decide, reply_reminder, reply_reminder_minutes}`, forwarded by the hub to the manager); changes broadcast `{"type":"agents.triage"}`. A PUT without `reply_reminder` / `reply_reminder_minutes` (or with minutes 0) keeps their values (older apps don't know them); negative minutes go back to the default 30. While the saved switches cannot be read, such a PUT saves the reminder's defaults.
+- `GET / PUT /api/v1/agents/triage` (`{enabled, auto_continue, wake, decide, tool_loop, reply_reminder, reply_reminder_minutes}`, forwarded by the hub to the manager); changes broadcast `{"type":"agents.triage"}`. A PUT without `tool_loop`, `reply_reminder` or `reply_reminder_minutes` (or with minutes 0) keeps their values for older apps; negative minutes go back to the default 30. While the saved switches cannot be read, such a PUT saves their defaults.
 - A `GET` whose first read of the database fails answers `503` with an `error` in the request's language (Chinese, English or Japanese) saying why, instead of returning the defaults as if they were the saved switches (#4553). Failures are not cached: the next request reads again. Switches once read or saved stay cached in memory; `manager.json`'s initial values apply only when the database really has no setting. Triage itself still falls back to the defaults when its own read fails, and `PUT` saves as before.
 - `agents.triage` in the manager's `manager.json` (`docs/operations/config.md` ("manager.json"); in hub.json before 2026-11-06) now retains limits (`max_retries` default 3, `max_wakes` default 6, `settle_seconds` default 15);
-  its four switches are initial values only when settings have never been saved in the App (omitted means off). The manager reads this section itself and lays it over the hub's handshake reply (`assistantwire.Hello.Agents`); the hub no longer reads or sends it.
+  its triage switches are initial values only when settings have never been saved in the App (omitted means off). The manager reads this section itself and lays it over the hub's handshake reply (`assistantwire.Hello.Agents`); the hub no longer reads or sends it.
 
 ## Storage
 
@@ -291,7 +296,7 @@ Pre-launch baseline (evening of 2026-11-04, non-assistant sessions on the hub): 
 
 - Web (#1837): the list preview (`sessionPreview`: overview, Machines page, knowledge-base details, sidebar hover tooltip) switches to work state when the session is stopped and the hub has triaged it:
   "✓ Conclusion" for completed work, "What it is waiting for (wake in N minutes / retrying now)" for waits. Sessions the hub will wait for go into "Waiting" (`hubWaits`, `web/src/lib/work.ts`).
-  Four switches under **Settings › General › Session triage**, with a footer link to **Model settings › Session triage** to choose the model. Screenshots use a fake hub with `MOCK_WORK=1`.
+  The switches are under **Settings › General › Session triage**, with a footer link to **Model settings › Session triage** to choose the model. Screenshots use a fake hub with `MOCK_WORK=1`.
   A subscription usage limit (`turn_error_kind` `usage_limit`) is not shown as Interrupted: task cards, agent rows and the chat say "Usage limit · resumes <time>" when the CLI or the hub will continue it, and "Usage limit · resets <time>" when nothing will (the user's time zone; the date as well when that is another day). An older hub that does not send the fields keeps the interrupted text. Screenshots use `MOCK_USAGE_LIMIT=1`.
 - Android (#1837): the Agents list and knowledge-base "Agents working on this project" rows use the same preview (`Session.workLine`, `WorkLine.kt` in `core:domain`). Sessions the hub waits for go into "Waiting";
   **Settings › AI › Session triage** has the main switch, triage model (link to model settings), and three action switches.
