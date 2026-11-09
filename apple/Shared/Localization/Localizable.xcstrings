@@ -1,94 +1,71 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "Not available in this computer's terminal": {
+    "A check or start with it that works clears this.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not available in this computer's terminal"
+            "value": "A check or start with it that works clears this."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このコンピューターのターミナルでは使えません"
+            "value": "チェックか起動に一度成功すると、この表示は消えます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台电脑的终端里用不了"
+            "value": "用它检查或启动成功一次，这条提示就会消失。"
           }
         }
       }
     },
-    "Its key or sign-in was rejected": {
+    "A start with it that works clears this; otherwise it clears by itself after 6 hours.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Its key or sign-in was rejected"
+            "value": "A start with it that works clears this; otherwise it clears by itself after 6 hours."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "キーまたはサインインが拒否されました"
+            "value": "これで起動に一度成功すると、この表示は消えます。そうでなければ 6 時間後に自動で消えます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Key 或登录被拒绝了"
+            "value": "用它成功启动一次，这条提示就会消失；否则 6 小时后自动消失。"
           }
         }
       }
     },
-    "Its gateway can't use this model": {
+    "Define it in a startup file the terminal's shell reads (for bash, ~/.bashrc), then start again.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Its gateway can't use this model"
+            "value": "Define it in a startup file the terminal's shell reads (for bash, ~/.bashrc), then start again."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ゲートウェイがこのモデルを使えません"
+            "value": "ターミナルのシェルが読む起動ファイル（bash なら ~/.bashrc）で定義してから、もう一度起動してください。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "网关用不了这个模型"
-          }
-        }
-      }
-    },
-    "Its CLI is too old": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Its CLI is too old"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CLI のバージョンが古すぎます"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "命令行工具版本太旧"
+            "value": "在终端的 shell 会读到的启动文件里定义它（bash 是 ~/.bashrc），然后再启动一次。"
           }
         }
       }
@@ -139,71 +116,160 @@
         }
       }
     },
-    "Not Available in the Terminal": {
+    "Fix its key, gateway or CLI on that computer, or pick another launcher.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not Available in the Terminal"
+            "value": "Fix its key, gateway or CLI on that computer, or pick another launcher."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ターミナルでは使えません"
+            "value": "そのコンピューターでキー、ゲートウェイ、CLI を直すか、別のランチャーを選んでください。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "终端里用不了"
+            "value": "到那台电脑上修好它的 Key、网关或命令行工具，或者换一个启动器。"
           }
         }
       }
     },
-    "Unavailable on This Computer": {
-      "extractionState": "manual",
+    "Folded [Chat Layout]": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Unavailable on This Computer"
+            "value": "Folded"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このコンピューターでは使えません"
+            "value": "折りたたむ"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这台电脑上用不了"
+            "value": "折叠"
           }
         }
       }
     },
-    "Persona found “%@” in this computer's login shell, but the shell new terminal tabs run doesn't have it: another shell, a container, or a startup file that stops early. New agents start in those tabs.": {
-      "extractionState": "manual",
+    "How much of what Persona and its tasks say to each other shows before you tap Expand.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona found “%1$@” in this computer's login shell, but the shell new terminal tabs run doesn't have it: another shell, a container, or a startup file that stops early. New agents start in those tabs."
+            "value": "How much of what Persona and its tasks say to each other shows before you tap Expand."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona はこのコンピューターのログインシェルで「%1$@」を見つけましたが、新しいターミナルタブで動くシェルにはありません（別のシェル、コンテナ、途中で終わる起動ファイルなど）。新しい Agent はこれらのタブで起動します。"
+            "value": "Persona とタスクのやり取りを、「展開」をタップする前にどこまで表示するか。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Persona 是在这台电脑的登录 shell 里找到「%1$@」的，但新开的终端标签页运行的 shell 里没有它：可能是另一种 shell、在容器里，或者启动文件提前返回了。新的 Agent 就是在这些标签页里启动的。"
+            "value": "Persona 和项目之间的沟通，在点「展开」之前显示多少。"
+          }
+        }
+      }
+    },
+    "Interrupted [Chat Layout]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrupted"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中断"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已打断"
+          }
+        }
+      }
+    },
+    "Its CLI is too old": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Its CLI is too old"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLI のバージョンが古すぎます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "命令行工具版本太旧"
+          }
+        }
+      }
+    },
+    "Its gateway can't use this model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Its gateway can't use this model"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ゲートウェイがこのモデルを使えません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网关用不了这个模型"
+          }
+        }
+      }
+    },
+    "Its key or sign-in was rejected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Its key or sign-in was rejected"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キーまたはサインインが拒否されました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key 或登录被拒绝了"
           }
         }
       }
@@ -231,25 +297,158 @@
         }
       }
     },
-    "Define it in a startup file the terminal's shell reads (for bash, ~/.bashrc), then start again.": {
-      "extractionState": "manual",
+    "Lines Shown: %lld": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Define it in a startup file the terminal's shell reads (for bash, ~/.bashrc), then start again."
+            "value": "Lines Shown: %lld"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ターミナルのシェルが読む起動ファイル（bash なら ~/.bashrc）で定義してから、もう一度起動してください。"
+            "value": "表示する行数：%lld"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "在终端的 shell 会读到的启动文件里定义它（bash 是 ~/.bashrc），然后再启动一次。"
+            "value": "显示行数：%lld"
+          }
+        }
+      }
+    },
+    "Messages Between Persona and Tasks": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messages Between Persona and Tasks"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona とタスクのやり取り"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "项目沟通"
+          }
+        }
+      }
+    },
+    "New Conversation Layout": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Conversation Layout"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しい会話レイアウト"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新对话布局"
+          }
+        }
+      }
+    },
+    "Not Available in the Terminal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not Available in the Terminal"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルでは使えません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "终端里用不了"
+          }
+        }
+      }
+    },
+    "Not available in this computer's terminal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not available in this computer's terminal"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターのターミナルでは使えません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑的终端里用不了"
+          }
+        }
+      }
+    },
+    "Off": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オフ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关"
+          }
+        }
+      }
+    },
+    "On": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オン"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开"
           }
         }
       }
@@ -277,94 +476,91 @@
         }
       }
     },
-    "Fix its key, gateway or CLI on that computer, or pick another launcher.": {
+    "Persona found “%@” in this computer's login shell, but the shell new terminal tabs run doesn't have it: another shell, a container, or a startup file that stops early. New agents start in those tabs.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fix its key, gateway or CLI on that computer, or pick another launcher."
+            "value": "Persona found “%1$@” in this computer's login shell, but the shell new terminal tabs run doesn't have it: another shell, a container, or a startup file that stops early. New agents start in those tabs."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "そのコンピューターでキー、ゲートウェイ、CLI を直すか、別のランチャーを選んでください。"
+            "value": "Persona はこのコンピューターのログインシェルで「%1$@」を見つけましたが、新しいターミナルタブで動くシェルにはありません（別のシェル、コンテナ、途中で終わる起動ファイルなど）。新しい Agent はこれらのタブで起動します。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "到那台电脑上修好它的 Key、网关或命令行工具，或者换一个启动器。"
+            "value": "Persona 是在这台电脑的登录 shell 里找到「%1$@」的，但新开的终端标签页运行的 shell 里没有它：可能是另一种 shell、在容器里，或者启动文件提前返回了。新的 Agent 就是在这些标签页里启动的。"
           }
         }
       }
     },
-    "A start with it that works clears this; otherwise it clears by itself after 6 hours.": {
-      "extractionState": "manual",
+    "Persona's conversation shows who is talking to whom (“Persona → @task”), puts every message in a box, folds what Persona and its tasks say to each other, and adds a navigator on the right edge: slide along it to go to any message you sent. Turn it off to go back to the previous look.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A start with it that works clears this; otherwise it clears by itself after 6 hours."
+            "value": "Persona's conversation shows who is talking to whom (“Persona → @task”), puts every message in a box, folds what Persona and its tasks say to each other, and adds a navigator on the right edge: slide along it to go to any message you sent. Turn it off to go back to the previous look."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "これで起動に一度成功すると、この表示は消えます。そうでなければ 6 時間後に自動で消えます。"
+            "value": "Persona の会話で、誰が誰に話しているか（「Persona → @タスク」）を示し、すべてのメッセージを枠で囲み、Persona とタスクのやり取りを折りたたみ、右端にナビゲーターを加えます。右端に沿ってスライドすると、送ったどのメッセージにも移動できます。オフにすると以前の表示に戻ります。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用它成功启动一次，这条提示就会消失；否则 6 小时后自动消失。"
+            "value": "Persona 的对话会标明谁在跟谁说话（「Persona → @项目」），每条消息都有框，Persona 和项目之间的沟通默认折叠，右边缘还有导航：沿右边缘上下滑动，可以跳到你发过的任意一条消息。关掉就回到原来的样子。"
           }
         }
       }
     },
-    "A check or start with it that works clears this.": {
-      "extractionState": "manual",
+    "Photo [Chat Layout]": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A check or start with it that works clears this."
+            "value": "Photo"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "チェックか起動に一度成功すると、この表示は消えます。"
+            "value": "写真"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用它检查或启动成功一次，这条提示就会消失。"
+            "value": "图片"
           }
         }
       }
     },
-    "Try Anyway": {
-      "extractionState": "manual",
+    "Show %lld Lines": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Try Anyway"
+            "value": "Show %lld Lines"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "それでも使う"
+            "value": "%lld 行表示"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "仍然使用"
+            "value": "显示 %lld 行"
           }
         }
       }
@@ -388,6 +584,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "查看怎么修好"
+          }
+        }
+      }
+    },
+    "Supervision [Chat Layout]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supervision"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "監督・巡回"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "督办巡查"
           }
         }
       }
@@ -503,6 +721,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "读不到这台电脑的设置：%1$@"
+          }
+        }
+      }
+    },
+    "Try Anyway": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try Anyway"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "それでも使う"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仍然使用"
+          }
+        }
+      }
+    },
+    "Unavailable on This Computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable on This Computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターでは使えません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑上用不了"
           }
         }
       }
@@ -20564,6 +20828,709 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "两种形象都使用默认桌面图标。旧的备用图标会切回默认。"
+          }
+        }
+      }
+    },
+    "Waiting in the background": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting in the background"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "バックグラウンドで待機中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "后台等待中"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Running %lld agents [Subagent Grid]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Running %lld agent"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Running %lld agents"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "サブエージェント %lld 件が実行中"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld 个子 Agent 在运行"
+                }
+              }
+            }
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Ran %lld agents [Subagent Grid]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ran %lld agent"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ran %lld agents"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "サブエージェント %lld 件を実行"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "跑了 %lld 个子 Agent"
+                }
+              }
+            }
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%lld steps in all [Subagent Grid]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld step"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld steps"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "計 %lld ステップ"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "共 %lld 步"
+                }
+              }
+            }
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%lld subagents working [Work Line]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld subagent working"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld subagents working"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "サブエージェント %lld 件が作業中"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld 个子 Agent 在工作"
+                }
+              }
+            }
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%lld more [Work Line]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "+%lld more"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "+%lld more"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "ほか %lld 件"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "variations": {
+            "plural": {
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "还有 %lld 个"
+                }
+              }
+            }
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Plan [Plan Sheet]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plan"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プラン"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "计划"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "No plan yet [Plan Sheet]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No plan yet"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "まだプランはありません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有计划"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Shows the plan [Plan Sheet]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows the plan"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プランを表示します"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示计划"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "A branch and a checkout of its own: the agent changes code there, and this folder stays as it is. [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A branch and a checkout of its own: the agent changes code there, and this folder stays as it is."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "専用のブランチとチェックアウトを作ります。エージェントはそこでコードを変え、このフォルダはそのままです。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "给它单独开一个分支和检出：Agent 在那里改代码，这个文件夹不受影响。"
+          }
+        }
+      }
+    },
+    "Branch [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Branch"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブランチ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分支"
+          }
+        }
+      }
+    },
+    "Checks out to %@ [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checks out to %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "チェックアウト先：%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "检出到 %@"
+          }
+        }
+      }
+    },
+    "Couldn't create the worktree: %@ [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t create the worktree: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "worktree を作れませんでした：%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能建 worktree：%@"
+          }
+        }
+      }
+    },
+    "Couldn't remove the worktree: %@ [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t remove the worktree: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "worktree を削除できませんでした：%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能移除 worktree：%@"
+          }
+        }
+      }
+    },
+    "Delete the branch %@ too [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete the branch %@ too"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブランチ %@ も削除する"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时删除分支 %@"
+          }
+        }
+      }
+    },
+    "I understand these changes will be lost [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I understand these changes will be lost"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これらの変更が失われることを理解しています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "我知道这些改动会丢失"
+          }
+        }
+      }
+    },
+    "In a New Worktree [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In a New Worktree"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しい worktree で"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在新 worktree 里"
+          }
+        }
+      }
+    },
+    "Keep Worktree [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep Worktree"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "worktree を残す"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留 worktree"
+          }
+        }
+      }
+    },
+    "Remove [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "削除する"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除"
+          }
+        }
+      }
+    },
+    "This agent worked in a worktree Persona made [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This agent worked in a worktree Persona made"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このエージェントは Persona が作った worktree で作業していました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 Agent 在 Persona 建的 worktree 里干活"
+          }
+        }
+      }
+    },
+    "Worktree [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worktree"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worktree"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worktree"
+          }
+        }
+      }
+    },
+    "Worktree and branch removed [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worktree and branch removed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "worktree とブランチを削除しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除 worktree 和分支"
+          }
+        }
+      }
+    },
+    "Worktree removed [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Worktree removed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "worktree を削除しました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除 worktree"
+          }
+        }
+      }
+    },
+    "%lld files have uncommitted changes. Removing the worktree loses them. [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld file has uncommitted changes. Removing the worktree loses it."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld files have uncommitted changes. Removing the worktree loses them."
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コミットされていない変更が %lld ファイルあります。worktree を削除すると失われます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有 %lld 个文件的改动没提交，移除 worktree 会丢掉。"
+          }
+        }
+      }
+    },
+    "The branch has %lld commits that aren't on %@. Deleting the branch loses them. [Agent Worktree]": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The branch has %1$lld commit that isn’t on %2$@. Deleting the branch loses it."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The branch has %1$lld commits that aren’t on %2$@. Deleting the branch loses them."
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブランチに %2$@ にないコミットが %1$lld 件あります。ブランチを削除すると失われます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分支上有 %1$lld 个提交不在 %2$@ 上，删除分支会丢掉。"
           }
         }
       }
@@ -45369,24 +46336,24 @@
       },
       "extractionState" : "manual"
     },
-    "Fill this in on your iPhone to allow it" : {
+    "Fill this in on your iPhone or computer to allow it" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fill this in on your iPhone to allow it"
+            "value" : "Fill this in on your iPhone or computer to allow it"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iPhoneで入力してから許可してください"
+            "value" : "iPhoneかコンピュータで入力してから許可してください"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请在 iPhone 上填写后允许"
+            "value" : "请在 iPhone 或电脑上填写后允许"
           }
         }
       },
@@ -63654,29 +64621,6 @@
       },
       "extractionState" : "manual"
     },
-    "New Layout" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "New Layout"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新レイアウト"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新布局"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "New Link" : {
       "localizations" : {
         "en" : {
@@ -72220,29 +73164,6 @@
       },
       "extractionState" : "manual"
     },
-    "Old Layout" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Old Layout"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "旧レイアウト"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "旧布局"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Old main chat · until %@" : {
       "comment" : "Title of the archived main chat, with the day it was archived",
       "localizations" : {
@@ -77352,6 +78273,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona %@"
+          }
+        }
+      }
+    },
+    "Persona (Main Chat)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona (Main Chat)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona（メインチャット）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona（主对话）"
           }
         }
       }
@@ -98396,6 +99339,75 @@
       },
       "extractionState" : "manual"
     },
+    "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts with ultracode: every task runs as a multi-agent workflow, which uses a lot of quota"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ultracode オンで開始：すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开着 ultracode 开始：每个任务都编排多 Agent workflow，很费额度"
+          }
+        }
+      }
+    },
+    "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ultracode オフで開始。オンにすると、すべてのタスクをマルチエージェントの workflow で進め、使用量を大きく消費します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不开 ultracode 开始。开着的话，每个任务都编排多 Agent workflow，很费额度"
+          }
+        }
+      }
+    },
+    "Starts without ultracode: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts without ultracode: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ultracode オフで開始：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不开 ultracode 开始：%1$@"
+          }
+        }
+      }
+    },
     "Starts work on schedule, follows up on what it promised you, and notifies your phone when it's done. Say “Give me a morning briefing every day at 9” or “Remind me in an hour” in a chat to add one here." : {
       "localizations" : {
         "en" : {
@@ -113597,6 +114609,29 @@
       },
       "extractionState" : "manual"
     },
+    "To send it anyway, change the instructions or open Hand to AI again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To send it anyway, change the instructions or open Hand to AI again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "それでも送る場合は、依頼内容を変えるか、「AIに任せる」を開き直してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍要发送的话，改一下「要它做什么」，或重新打开「交给 AI」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "To use it for the main conversation or agents, pick it in Model Settings." : {
       "localizations" : {
         "zh-Hans" : {
@@ -115872,29 +116907,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "先启用这个扩展"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Turn on to go back to the four tabs at the bottom (Persona, Agents, Inbox, Settings). The new layout has “Assistant | Agents” at the top, with Inbox, scheduled tasks and Knowledge in the sidebar at the top left. This switch goes away after a few days." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Turn on to go back to the four tabs at the bottom (Persona, Agents, Inbox, Settings). The new layout has “Assistant | Agents” at the top, with Inbox, scheduled tasks and Knowledge in the sidebar at the top left. This switch goes away after a few days."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "オンにすると下部の4つのタブ（Persona、Agents、受信トレイ、設定）に戻ります。新レイアウトでは上部に「アシスタント | Agents」があり、受信トレイ、定期タスク、ナレッジは左上のサイドバーにあります。このスイッチは数日後になくなります。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "打开后回到底部四个标签（Persona、Agents、收件箱、设置）。新布局是顶部「助手 | Agents」，收件箱、定时任务、知识库在左上角的侧边栏里。过渡几天后会去掉这个开关。"
           }
         }
       },
@@ -131877,6 +132889,210 @@
           }
         }
       }
+    },
+    "Collapse [Folded Report]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "閉じる"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收起"
+          }
+        }
+      }
+    },
+    "Expand [Folded Report]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展開"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "展开"
+          }
+        }
+      }
+    },
+    "Shows the whole report [Folded Report]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows the whole report"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "レポート全体を表示します"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示完整报告"
+          }
+        }
+      }
+    },
+    "Send Now [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐ送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即发送"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Send the queued messages now? [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send the queued messages now?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信待ちのメッセージを今すぐ送りますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就发送排队的消息？"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送信待ちのメッセージを今すぐエージェントに送ります。実行中のコマンドはバックグラウンドで続き、書いている途中の返信はあなたのメッセージを含めてやり直します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就把排队的消息发给 Agent。它正在跑的命令会转到后台继续跑；正在写的回复会带上你的消息重新开始。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Sent to the agent now [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent to the agent now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今すぐエージェントに送りました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已立即发给 Agent"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Move Up [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Up"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上へ移動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上移"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Move Down [Queue Strip]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Down"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下へ移動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下移"
+          }
+        }
+      },
+      "extractionState": "manual"
     }
   },
   "version" : "1.0"

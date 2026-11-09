@@ -8,8 +8,7 @@ import XCTest
 ///
 /// Numbers only mean something from an optimized build (`SWIFT_OPTIMIZATION_LEVEL=-O`, whole module), which the script
 /// makes. The tests never assert a frame rate: a simulator's numbers vary from run to run; the report compares them.
-/// The layout follows `PERSONA_LAYOUT` like every UI test (`launchPersona()`); the script runs the shell, the
-/// iPhone's default, unless `PERF_LAYOUT=old`.
+/// Uses the iPhone's default Shell, without a layout override.
 class PerfTestCase: XCTestCase {
     var hub = ""
     var app: XCUIApplication!
@@ -17,7 +16,6 @@ class PerfTestCase: XCTestCase {
     /// Pairing resets the route arguments (`ComposerKeyboardTests`), so each suite pairs once with a bare launch first.
     nonisolated(unsafe) private static var pairedHubs: Set<String> = []
 
-    var shell: Bool { ProcessInfo.processInfo.environment["PERSONA_LAYOUT"] == "shell" }
     var iterations: Int { Int(ProcessInfo.processInfo.environment["PERSONA_PERF_ITERATIONS"] ?? "") ?? 5 }
     var pair: String { "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock" }
 

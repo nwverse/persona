@@ -1,0 +1,62 @@
+import UIKit
+import XCTest
+
+/// Supported navigation is selected by platform and width, never by a saved presentation choice.
+final class DefaultLayoutTests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    @MainActor private func launch(tab: String, retiredArgument: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo.on", "YES", "-openWelcome", "YES", "-dev.openChat", "", "-tab", tab,
+                               "-app.tab", tab == "dev" ? "chats" : tab, "-AppleLanguages", "(zh-Hans)",
+                               "-AppleLocale", "zh_CN", "-probes", "YES"]
+        if retiredArgument {
+            app.launchArguments += ["-" + ["ui.", "old", "Layout"].joined(), "YES"]
+        }
+        app.launchPinned()
+        return app
+    }
+
+    @MainActor private func element(_ id: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: id).firstMatch
+    }
+
+    @MainActor func testRetiredArgumentStillUsesCompactShell() {
+        let app = launch(tab: "assistant", retiredArgument: true)
+        XCTAssertTrue(element("shell-assistant", in: app).waitForExistence(timeout: 30))
+        XCTAssertTrue(element("shell-agents", in: app).exists)
+        XCTAssertFalse(app.tabBars.firstMatch.exists)
+        element("shell-agents", in: app).tap()
+        XCTAssertTrue(element("agents.grouping", in: app).waitForExistence(timeout: 20))
+    }
+
+    @MainActor func testAppearanceHasOnlySupportedChoices() {
+        let app = launch(tab: "settings")
+        let style = element("settings-style", in: app)
+        XCTAssertTrue(style.waitForExistence(timeout: 30))
+        for id in ["settings-persona", "settings-color", "settings-language", "settings-scheme"] {
+            XCTAssertTrue(element(id, in: app).exists, "Missing appearance choice: \(id)")
+        }
+        XCTAssertFalse(element("settings-layout", in: app).exists)
+        element("settings-color", in: app).tap()
+        XCTAssertTrue(element("color-style", in: app).waitForExistence(timeout: 15))
+    }
+
+    @MainActor func testRegularWidthKeepsSidebarNavigation() {
+        let app = launch(tab: "assistant", retiredArgument: true)
+        XCTAssertGreaterThan(app.frame.width, 700)
+        XCTAssertTrue(element("sidebar-main", in: app).waitForExistence(timeout: 30))
+        XCTAssertTrue(element("sidebar-inbox", in: app).exists)
+        XCTAssertTrue(element("sidebar-settings", in: app).exists)
+        XCTAssertFalse(element("shell-assistant", in: app).exists)
+        XCTAssertFalse(app.tabBars.buttons["收件箱"].exists)
+        XCTAssertFalse(app.tabBars.buttons["设置"].exists)
+        element("sidebar-settings", in: app).tap()
+        let close = element("settings-close", in: app)
+        XCTAssertTrue(close.waitForExistence(timeout: 20))
+        close.tap()
+        XCTAssertTrue(element("sidebar-main", in: app).waitForExistence(timeout: 15))
+    }
+}

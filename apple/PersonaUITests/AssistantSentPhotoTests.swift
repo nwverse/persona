@@ -56,22 +56,12 @@ final class AssistantSentPhotoTests: XCTestCase {
         _ = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "图片 1")).firstMatch.waitForExistence(timeout: 10)
         if allow.exists { allow.tap() }
         let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
-        if field.waitForExistence(timeout: 5) {
-            field.tap()
-            field.typeText("看看这张")
-            let send = app.buttons["发送"].firstMatch
-            XCTAssertTrue(send.waitForExistence(timeout: 5), "发送")
-            send.tap()
-        } else {
-            // The old layout in liquid glass: the composer is one element, its field and Send are not in the tree
-            // (#1006), and a tap where the field is does not focus it. No text, then (the app sends 「请看图片」 with
-            // it): Send by where it is, at the composer's trailing bottom corner.
-            let composer = app.otherElements.allElementsBoundByIndex.last {
-                $0.frame.minY > app.frame.height * 0.6 && $0.frame.width > app.frame.width * 0.8 && $0.frame.height > 60 && $0.frame.height < 200
-            }
-            guard let composer else { return XCTFail("the composer:\n\(app.debugDescription)") }
-            composer.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.78)).tap()
-        }
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no composer:\n\(app.debugDescription)")
+        field.tap()
+        field.typeText("看看这张")
+        let send = app.buttons["发送"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "Send")
+        send.tap()
 
         // At once, in the message being sent.
         XCTAssertTrue(sentPhoto(app).waitForExistence(timeout: 2), "the picture shows at once")

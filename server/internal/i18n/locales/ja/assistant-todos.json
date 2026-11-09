@@ -1,0 +1,10 @@
+{
+  "remind_subtitle": "ToDo リマインダー",
+  "remind_body": "時間になりました",
+  "remind_due": "期限 {when}",
+  "remind_overdue": "期限切れ {when}",
+  "remind_late": "{when} の予定でした",
+  "delete_card": "ToDo「{title}」を削除",
+  "complete_card": "タスク「{title}」を完了にする（エージェントは止まったあと閉じられます）",
+  "reopen_card": "タスク「{title}」を再開"
+}

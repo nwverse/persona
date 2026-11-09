@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -100,7 +102,7 @@ func (h *Hub) agentStartParams(ctx context.Context, m *Machine, params map[strin
 	err := errBusOffline
 	if owner := h.machineOwner(m.cfg.ID); h.waitManagerOf(ctx, owner) {
 		err = h.asstOf(owner).call(ctx, assistantwire.MethodAgentStartParams, assistantwire.AgentStartParams{MachineID: m.cfg.ID,
-			Params: params, NameFrom: nameFrom}, &res)
+			Params: params, NameFrom: nameFrom, Lang: string(h.contextLang(ctx))}, &res)
 	}
 	var re *rpc.Error
 	switch {
@@ -164,4 +166,49 @@ func (h *Hub) autoTabName(ctx context.Context, prompt string) string {
 		return ""
 	}
 	return res.Name
+}
+
+// startSettleWait is how long the hub watches a start the node answered before it ran (async) for how it went: longer
+// than a start may take on the node (node/claudeready.go startWait), within the time a failed one stays listed with its
+// error (node/starting.go startFailedFor). startSettlePoll is how often it looks.
+const (
+	startSettleWait = 10 * time.Minute
+	startSettlePoll = 250 * time.Millisecond
+)
+
+// modelUsedOnceStarted is modelUsed for a start the node answered before it ran (async, node/starting.go): the
+// launcher's model check (a launcher that fixes its own --model, an agent that takes none) and the agent coming up
+// happen after the answer. The model is told once the session is listed as started, and not when its start failed
+// (listed with its error) or it never showed in time.
+func (h *Hub) modelUsedOnceStarted(machine, sid, launcher, model string) {
+	for end := time.Now().Add(startSettleWait); time.Now().Before(end); time.Sleep(startSettlePoll) {
+		var s proto.Session
+		ok := false
+		if m := h.localMachine(machine); m != nil { // looked up each time: the machine may reconnect meanwhile
+			s, ok = m.session(sid)
+		}
+		switch {
+		case !ok || s.Starting:
+			continue // not listed yet, or still starting
+		case s.StartError != "":
+			return
+		}
+		h.modelUsed(h.machineOwner(machine), machine, launcher, model)
+		return
+	}
+}
+
+// modelUsed tells the manager of machine that model, picked in an app, ran there with launcher (models.used, #1644):
+// a start, a running session's switch or a message to an assistant conversation that went through with it. The
+// manager remembers an id the launcher's own /model list does not have and offers it there again. Best effort: a
+// manager that is away misses it, an older one ignores it.
+func (h *Hub) modelUsed(owner, machine, launcher, model string) {
+	model = strings.TrimSpace(model)
+	if launcher == "" || model == "" {
+		return
+	}
+	err := h.notifyBus(owner, assistantwire.EventModelUsed, assistantwire.ModelUsed{MachineID: machine, Launcher: launcher, Model: model})
+	if err != nil && !errors.Is(err, errBusOffline) {
+		h.logf("model used %s on %s: %v", launcher, machine, err)
+	}
 }

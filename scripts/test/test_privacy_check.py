@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -143,6 +144,68 @@ class BannedNameTests(unittest.TestCase):
 
     def test_the_pattern_does_not_spell_itself(self):
         self.assertIsNone(pc.BANNED_NAMES.search(pc.BANNED_NAMES.pattern))
+
+    def test_mixed_case_is_found_and_reported_as_written(self):
+        name = "oPeN" + "-" + "LaRk"
+        self.assertEqual(pc.problems("uses " + name + " today", []), [name])
+        self.assertEqual(pc.problems("x" + name.swapcase() + "s", []), [name.swapcase()])
+
+    def test_lines_whose_lowercase_shifts_or_folds_still_match(self):
+        # U+0130 lowers to two characters, so the lowercased copy no longer lines up with the line; U+017F and U+0131
+        # are what IGNORECASE also takes for s and i; U+212A lowers to k. All must find what IGNORECASE finds.
+        name = "open" + "_" + "lark"
+        for text in ["\u0130 " + name, "\u0130\u0130 " + name.upper() + " \u0130", "a\u017fter" + "gate",
+                     "extens\u0131ons" + "internal", "open" + "lar\u212a", "\u4e2d\u6587 " + name]:
+            with self.subTest(text=text):
+                self.assertEqual(pc.problems(text, []), [m.group(0) for m in pc.BANNED_NAMES.finditer(text)])
+                self.assertEqual(len(pc.problems(text, [])), 1)
+
+    all_gaps = None  # one sweep over every code point, shared by the two tests below
+
+    @classmethod
+    def lowercase_path_gaps(cls, fold_only):
+        """Characters on which the lowercase path and IGNORECASE disagree about an ASCII letter, apart from fold_only.
+        The path is sound when every character that lowers to one character is taken by IGNORECASE for exactly the
+        ASCII letter it lowers to (or for none when it lowers to no ASCII letter)."""
+        if cls.all_gaps is None:
+            letter_any_case = re.compile("[a-z]", re.IGNORECASE)
+            letter = re.compile("[a-z]")  # case-sensitive: what BANNED_NAMES_LOWER sees on the lowercased line
+            cls.all_gaps = []
+            for code in range(sys.maxunicode + 1):
+                char = chr(code)
+                low = char.lower()
+                if len(low) != 1:
+                    continue
+                if bool(letter_any_case.fullmatch(char)) != bool(letter.fullmatch(low)) or (
+                        letter.fullmatch(low) and not re.fullmatch(low, char, re.IGNORECASE)):
+                    cls.all_gaps.append(char)
+        return [hex(ord(char)) for char in cls.all_gaps if char not in fold_only]
+
+    def test_case_fold_only_lists_every_character_lower_does_not_cover(self):
+        self.assertEqual(self.lowercase_path_gaps(pc.CASE_FOLD_ONLY), [])
+
+    def test_the_gap_check_fails_when_a_fold_only_character_is_left_out(self):
+        # Negative control: without the table, or with one entry missing, the check above must catch it.
+        self.assertEqual(self.lowercase_path_gaps(()), ["0x131", "0x17f"])
+        for char in pc.CASE_FOLD_ONLY:
+            with self.subTest(left_out=hex(ord(char))):
+                self.assertEqual(self.lowercase_path_gaps([c for c in pc.CASE_FOLD_ONLY if c != char]), [hex(ord(char))])
+
+
+class AddressHintTests(unittest.TestCase):
+    def test_addresses_are_still_found(self):
+        short_ip = "10." + "1.2.3"  # one digit in every part: the smallest shape the hint must accept
+        for ip in (PRIVATE_IP, short_ip):
+            self.assertEqual(pc.problems("host " + ip + ".", []), [ip])
+        email = "ops@" + "corp-mail.io"  # split so the repository scan of this file does not flag it
+        for address in (email, "x9@" + "9-x.io", "a.%@" + "-x.io"):  # every class the hint takes on either side of @
+            self.assertEqual(pc.problems("mail " + address + " now", []), [address])
+        self.assertEqual(pc.problems("mail " + email + " now", [], emails=False), [])
+
+    def test_lines_without_the_hint_have_no_addresses(self):
+        for line in ["@Override", "a @ b.io", "v1.2", "1. 2. 3. 4", "x@ example", "end."]:
+            with self.subTest(line=line):
+                self.assertEqual(pc.problems(line, []), [])
 
 
 class LoopbackTests(unittest.TestCase):
@@ -839,6 +902,58 @@ class RangeAndPushTests(unittest.TestCase):
         result = self.scan("--range", "origin/master..HEAD")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("message:1: private value", result.stdout)
+
+    def test_range_reads_every_changed_file_and_message_of_several_commits(self):
+        (self.repo / "docs/sub dir").mkdir(parents=True)
+        self.commit("a.md", "one\nsecretbox two\n", message="first")
+        self.commit("docs/sub dir/b.md", "clean\n", message="second, tried on secretbox")
+        self.commit("fixed.md", "secretbox\n", message="third")
+        self.commit("fixed.md", "fixed\n", message="fourth")
+        self.commit("gone.md", "secretbox\n", message="fifth")
+        self.git("rm", "-q", "gone.md")
+        self.git("commit", "-q", "--no-verify", "-m", "sixth\n\nbody line on secretbox")
+        (self.repo / "bin.dat").write_bytes(b"\0secretbox\n")
+        self.commit("docs/sub dir/c.md", "x\n\nsecretbox at " + PRIVATE_IP + "\n", message="seventh")
+        self.git("add", "bin.dat")
+        self.git("commit", "-q", "--no-verify", "-m", "eighth")
+        self.commit("old.md", "an old note\nstill secretbox\n", message="ninth")
+        commits = {self.git("rev-parse", "HEAD~%d" % n).stdout.strip()[:9]: n for n in range(9)}
+        result = self.scan("--range", "origin/master..HEAD")
+        self.assertNotEqual(result.returncode, 0)
+        flagged = [(commits[c], line) for c, line in
+                   (re.match(r"commit (\w+) message:(\d+)", l).groups() for l in result.stdout.splitlines()
+                    if l.startswith("commit "))]
+        self.assertEqual(flagged, [(3, "3"), (7, "1")])  # the sixth and second commits, newest first
+        files = sorted(l for l in result.stdout.splitlines() if not l.startswith("commit "))
+        self.assertEqual(files, ["a.md:2: private value (9 chars) from private-words.txt",
+                                 "docs/sub dir/c.md:3: private IP",
+                                 "docs/sub dir/c.md:3: private value (9 chars) from private-words.txt",
+                                 "old.md:2: private value (9 chars) from private-words.txt"])
+        self.assertIn("6 hit(s)", result.stderr)
+
+    def test_range_reads_every_message_with_one_git_log(self):
+        self.commit("one.md", "1\n", message="first\n\nwith a body")
+        self.commit("two.md", "2\n", message="second")
+        base = self.git("rev-parse", "origin/master").stdout.strip()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        with patch.object(pc, "ROOT", str(self.repo)):
+            with patch.object(pc.subprocess, "run", wraps=subprocess.run) as run:
+                messages = pc.commit_messages(base, head)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(pc.commit_messages(head, head), [])
+        self.assertEqual(messages, [(head, "second\n"), (self.git("rev-parse", "HEAD~1").stdout.strip(), "first\n\nwith a body\n")])
+
+    def test_range_fails_closed_on_unexpected_git_log_output(self):
+        for output in (b"not-an-oid\0message\0", b"%s\0message" % (b"a" * 40), b"%s\0" % (b"a" * 40)):
+            with self.subTest(output=output), patch.object(pc, "git", return_value=output):
+                with self.assertRaises(ValueError):
+                    pc.commit_messages("base", "head")
+        with patch.object(pc, "commit_messages", side_effect=ValueError("broken log")), \
+                patch.object(pc, "term_sources", return_value=({}, set(), set())), \
+                patch.object(pc, "module_paths", return_value=None), patch.object(pc, "commit_range", return_value=("b", "h")), \
+                patch.object(pc, "git", return_value=b""), patch.object(sys, "argv", ["privacy_check", "--range", "b..h"]):
+            with self.assertRaisesRegex(SystemExit, "scan did not complete"):
+                pc.main()
 
     def test_range_wants_two_ends(self):
         self.assertNotEqual(self.scan("--range", "HEAD").returncode, 0)

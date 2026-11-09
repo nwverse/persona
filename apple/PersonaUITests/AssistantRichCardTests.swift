@@ -46,13 +46,13 @@ final class AssistantRichCardTests: XCTestCase {
         let scroll = app.scrollViews.firstMatch
         for _ in 0..<8 {
             let viewport = scroll.frame
-            let top = max(viewport.minY, app.buttons["persona-avatar"].frame.maxY)
+            let top = max(viewport.minY, app.buttons["shell-assistant"].frame.maxY)
             if button.exists, button.isHittable, button.frame.minY >= top, button.frame.maxY <= viewport.maxY { return }
             if button.exists, button.frame.minY >= viewport.maxY { scroll.swipeUp() }
             else { scroll.swipeDown() }
         }
         let viewport = scroll.frame
-        let top = max(viewport.minY, app.buttons["persona-avatar"].frame.maxY)
+        let top = max(viewport.minY, app.buttons["shell-assistant"].frame.maxY)
         XCTAssertTrue(button.exists && button.isHittable && button.frame.minY >= top && button.frame.maxY <= viewport.maxY,
                       "the HTML button stayed outside the unobstructed conversation viewport")
     }

@@ -43,24 +43,14 @@ final class MachinesPageTests: XCTestCase {
 
     @MainActor func testListThenMachineThenRange() throws {
         let app = launch(try hub())
-        if ProcessInfo.processInfo.environment["PERSONA_LAYOUT"] == "shell" {
-            // The shell (the iPhone's default): its drawer's Machines.
-            let drawer = app.buttons["assistant-sidebar-button"]
-            XCTAssertTrue(drawer.waitForExistence(timeout: 15), app.debugDescription)
-            drawer.tapCenter()
-            let item = app.buttons["sidebar-machines"]
-            XCTAssertTrue(item.waitForExistence(timeout: 5), app.debugDescription)
-            item.tap()
-        } else {
-            // The machine menu (top left of the Agents list) → Machines.
-            let menu = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组")).firstMatch
-            XCTAssertTrue(menu.waitForExistence(timeout: 15), app.debugDescription)
-            menu.tap()
-            XCTAssertFalse(app.buttons["机器监控"].exists, "the old name is gone")
-            let item = app.buttons["机器"]
-            XCTAssertTrue(item.waitForExistence(timeout: 5), app.debugDescription)
-            item.tap()
-        }
+        let drawer = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["assistant-sidebar-button", "work-sidebar-button"]))
+            .allElementsBoundByIndex.first(where: \.isHittable)
+        XCTAssertNotNil(drawer, "no visible drawer button:\n\(app.debugDescription)")
+        drawer?.tapCenter()
+        XCTAssertFalse(app.buttons["机器监控"].exists, "the old name is gone")
+        let item = app.buttons["sidebar-machines"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), app.debugDescription)
+        item.tap()
 
         let server = card(app, "服务器"), macBook = card(app, "MacBook")
         XCTAssertTrue(server.waitForExistence(timeout: 10), "no machines:\n\(app.debugDescription)")

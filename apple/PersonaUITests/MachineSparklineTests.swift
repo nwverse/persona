@@ -9,13 +9,13 @@ final class MachineSparklineTests: XCTestCase {
         }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-ui.oldLayout", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", ""]
         app.launchPinned()
         acceptIconAlert()
         app.terminate()
         for scheme in ["light", "dark"] {
             app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "settings", "-openMachines", "YES",
-                                   "-ui.oldLayout", "NO", "-ui.scheme", scheme]
+                                   "-ui.scheme", scheme]
             app.launchPinned()
             acceptIconAlert()
             let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "服务器、")).firstMatch

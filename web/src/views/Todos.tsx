@@ -6,6 +6,7 @@ import { launchAgent } from "../lib/new-agent";
 import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
 import { navigate } from "../lib/router";
 import { interactionAsk } from "../lib/inbox";
+import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { composing } from "../lib/send-history";
 import { useAgentSessions } from "../lib/sessions";
@@ -458,7 +459,7 @@ function steadyViews(prev: ReadonlyMap<string, TodoRowView>, next: ReadonlyMap<s
 
 // ── Project Section ──────────────────────────────────────────
 
-const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", done: "text-ink-3" };
+const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
 /** One project's open todos under a folding title with its Needs you / Working / Done (#2526). */
 const TodoProjectSection = memo(function TodoProjectSection({
@@ -528,6 +529,7 @@ export type TodoRowView = {
 const DOT_STATE: Record<TodoStatus, AgentState> = {
   needs_you: "needs_you",
   interrupted: "needs_you",
+  usage_limit: "idle",
   unread: "unread",
   working: "working",
   follow_up: "idle",
@@ -543,6 +545,12 @@ export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Int
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
   const view: TodoRowView = { status, dotState: DOT_STATE[status], age: ago(todo.updated_at || todo.created_at), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
+  const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
+  if (limit) {
+    view.urgentLine = true;
+    view.urgentText = limit;
+    return view;
+  }
   const urgentNow = taskNow(urgent.session, stateOf(urgent.session) === "working");
   const urgentIx = interactions.find((i) => i.machine_id === urgent.agent.machine_id && i.session_id === urgent.agent.session_id);
   // what it waits on, from its card (#4111): the question, the command; not its last words
@@ -802,6 +810,8 @@ function TodoDetail({
   const dotState =
     status === "needs_you" || status === "interrupted"
       ? "needs_you"
+      : status === "usage_limit"
+        ? "idle"
       : status === "unread"
         ? "unread"
         : status === "working"
