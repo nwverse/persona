@@ -86,10 +86,22 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
             },
             "description": "what done means: results you will check before you accept it (Chinese, one each), e.g. 「PR 合并到 master」「浅色 / 深色截图贴进 PR」「线上 hub 已部署并验证」; the agent is told them"
           },
+          "attachments": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string"
+            },
+            "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+          },
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,
             "description": "about how long the task should take, in minutes; a task with no progress for 1.5× that (at least 20 minutes) counts as stuck"
+          },
+          "project": {
+            "type": "string",
+            "description": "optional: the knowledge-base project it belongs to: the slug or name of an existing project, usually a long-term one for an area of the user's work (kb_list projects). Set it when the area is clear; never make up a near-duplicate of an existing project"
           },
           "todo_id": {
             "type": "string",
