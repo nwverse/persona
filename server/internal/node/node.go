@@ -93,6 +93,8 @@ type Node struct {
 	paths   map[string]string           // session id -> transcript path
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
+	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
+	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
 	agents  map[string]host.Agent // session id -> live agent
