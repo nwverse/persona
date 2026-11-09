@@ -875,28 +875,6 @@
         }
       }
     },
-    "Folded [Chat Layout]": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Folded"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "折りたたむ"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "折叠"
-          }
-        }
-      }
-    },
     "Forget": {
       "extractionState": "manual",
       "localizations": {
@@ -916,28 +894,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "忘记"
-          }
-        }
-      }
-    },
-    "How much of what Persona and its tasks say to each other shows before you tap Expand.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "How much of what Persona and its tasks say to each other shows before you tap Expand."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona とタスクのやり取りを、「展開」をタップする前にどこまで表示するか。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona 和项目之间的沟通，在点「展开」之前显示多少。"
           }
         }
       }
@@ -1079,50 +1035,6 @@
         }
       }
     },
-    "Lines Shown: %lld": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lines Shown: %lld"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "表示する行数：%lld"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "显示行数：%lld"
-          }
-        }
-      }
-    },
-    "Messages Between Persona and Tasks": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Messages Between Persona and Tasks"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona とタスクのやり取り"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "项目沟通"
-          }
-        }
-      }
-    },
     "Model ID": {
       "extractionState": "manual",
       "localizations": {
@@ -1165,28 +1077,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "在这台电脑上输入并跑起来过的模型 ID。向左滑动可以忘掉。"
-          }
-        }
-      }
-    },
-    "New Conversation Layout": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New Conversation Layout"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新しい会話レイアウト"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "新对话布局"
           }
         }
       }
@@ -1396,28 +1286,6 @@
         }
       }
     },
-    "Persona's conversation shows who is talking to whom (“Persona → @task”), puts every message in a box, folds what Persona and its tasks say to each other, and adds a navigator on the right edge: slide along it to go to any message you sent. Turn it off to go back to the previous look.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona's conversation shows who is talking to whom (“Persona → @task”), puts every message in a box, folds what Persona and its tasks say to each other, and adds a navigator on the right edge: slide along it to go to any message you sent. Turn it off to go back to the previous look."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona の会話で、誰が誰に話しているか（「Persona → @タスク」）を示し、すべてのメッセージを枠で囲み、Persona とタスクのやり取りを折りたたみ、右端にナビゲーターを加えます。右端に沿ってスライドすると、送ったどのメッセージにも移動できます。オフにすると以前の表示に戻ります。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Persona 的对话会标明谁在跟谁说话（「Persona → @项目」），每条消息都有框，Persona 和项目之间的沟通默认折叠，右边缘还有导航：沿右边缘上下滑动，可以跳到你发过的任意一条消息。关掉就回到原来的样子。"
-          }
-        }
-      }
-    },
     "Photo [Chat Layout]": {
       "localizations": {
         "en": {
@@ -1436,28 +1304,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "图片"
-          }
-        }
-      }
-    },
-    "Show %lld Lines": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show %lld Lines"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld 行表示"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "显示 %lld 行"
           }
         }
       }
@@ -46229,29 +46075,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "展开这 %1$lld 步"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Expand All" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Expand All"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "すべて展開"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部展开"
           }
         }
       },
