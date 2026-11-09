@@ -137,13 +137,6 @@ func cleanText(s string) string {
 // message ref is not cut but kept whole or not at all (proto.CleanMessageRef).
 func shortValue(s string) string { return cutRunes(strings.TrimSpace(cleanText(s)), sentValueMost) }
 
-func cutRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-	return s
-}
-
 // sentTarget is where a write went, from the arguments it was given, and the same in a few words. GitHub's comments
 // and reviews: the PR or issue (repo#number); mail: the recipients and the subject; any other connector's, an
 // extension's included: the fields connectors usually name their destination by (chat, reply_to…), and when none of

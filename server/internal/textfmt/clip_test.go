@@ -1,4 +1,4 @@
-package kb
+package textfmt
 
 import (
 	"strings"
@@ -6,7 +6,8 @@ import (
 	"unicode/utf8"
 )
 
-// clipReference is clip before its no-copy fast path, kept verbatim: the new clip must return exactly what it did.
+// clipReference and cutReference are Clip and Cut before their no-copy fast path, kept verbatim: the two must return
+// exactly what these did.
 func clipReference(s string, n int) string {
 	if r := []rune(s); len(r) > n {
 		return string(r[:n]) + "…"
@@ -14,7 +15,14 @@ func clipReference(s string, n int) string {
 	return s
 }
 
-func TestClipMatchesReference(t *testing.T) {
+func cutReference(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
+func TestClipAndCutMatchReference(t *testing.T) {
 	const n = 5
 	inputs := map[string]string{
 		"empty":                "",
@@ -42,8 +50,11 @@ func TestClipMatchesReference(t *testing.T) {
 	}
 	for name, s := range inputs {
 		for _, m := range []int{0, 1, n - 1, n, n + 1, len(s), utf8.RuneCountInString(s)} {
-			if got, want := clip(s, m), clipReference(s, m); got != want {
-				t.Errorf("%s: clip(%q, %d) = %q, want %q", name, s, m, got, want)
+			if got, want := Clip(s, m), clipReference(s, m); got != want {
+				t.Errorf("%s: Clip(%q, %d) = %q, want %q", name, s, m, got, want)
+			}
+			if got, want := Cut(s, m), cutReference(s, m); got != want {
+				t.Errorf("%s: Cut(%q, %d) = %q, want %q", name, s, m, got, want)
 			}
 		}
 	}
@@ -59,11 +70,11 @@ func TestClipAllocations(t *testing.T) {
 		s     string
 		limit float64
 	}{{"short", short, 0}, {"short invalid", invalid, 0}, {"long", long, 1}} {
-		if got, want := clip(c.s, 300), clipReference(c.s, 300); got != want {
-			t.Fatalf("%s: clip = %q, want %q", c.name, got, want)
+		if got, want := Clip(c.s, 300), clipReference(c.s, 300); got != want {
+			t.Fatalf("%s: Clip = %q, want %q", c.name, got, want)
 		}
-		if a := testing.AllocsPerRun(100, func() { clipSink = clip(c.s, 300) }); a > c.limit {
-			t.Errorf("%s: clip allocates %v times, want at most %v", c.name, a, c.limit)
+		if a := testing.AllocsPerRun(100, func() { clipSink = Clip(c.s, 300) }); a > c.limit {
+			t.Errorf("%s: Clip allocates %v times, want at most %v", c.name, a, c.limit)
 		}
 	}
 }
@@ -77,8 +88,11 @@ func FuzzClip(f *testing.F) {
 	f.Add("进度同\xe6\xad", 3)
 	f.Fuzz(func(t *testing.T, s string, n int) {
 		n = int(uint(n) % uint(2*(len(s)+1))) // n >= 0 and near the string's length, where the cut happens
-		if got, want := clip(s, n), clipReference(s, n); got != want {
-			t.Fatalf("clip(%q, %d) = %q, want %q", s, n, got, want)
+		if got, want := Clip(s, n), clipReference(s, n); got != want {
+			t.Fatalf("Clip(%q, %d) = %q, want %q", s, n, got, want)
+		}
+		if got, want := Cut(s, n), cutReference(s, n); got != want {
+			t.Fatalf("Cut(%q, %d) = %q, want %q", s, n, got, want)
 		}
 	})
 }
@@ -100,7 +114,7 @@ func BenchmarkClip(b *testing.B) {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				clipSink = clip(c.s, c.n)
+				clipSink = Clip(c.s, c.n)
 			}
 		})
 	}
