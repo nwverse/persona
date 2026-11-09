@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +58,9 @@ import persona.feature.agents.AgentsDependencies
 import persona.feature.agents.AgentsPreferencesSnapshot
 import persona.feature.agents.AgentsWiring
 import persona.feature.assistant.AssistantScreen
+import persona.feature.assistant.AssistantSidebarHost
+import persona.feature.assistant.AssistantSidebarContent
+import persona.feature.assistant.LocalAssistantSidebarHost
 import persona.feature.assistant.assistantEntries
 import persona.feature.chat.*
 import persona.feature.inbox.InboxItemPages
@@ -205,8 +209,7 @@ private fun PersonaRootContent(
 
 @Composable
 private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((Router) -> ResolvedRoute?)?>, shellServices: SettingsServices, shell: AppServices) {
-    // Where the selected hub's extensions draw (docs/extensions/extensions.md "UI slots"): the settings home, the settings tab's badge and
-    // machines' pages share one list, read while the hub is online.
+    // Extension page badges live on the sidebar's Settings entry, never on a third home tab.
     val extensionSlots = persona.feature.settings.rememberExtensionSlots(shellServices.extensions?.takeUnless { shellServices.demo }, session.connection.state)
     val services = remember(shellServices, extensionSlots) { shellServices.copy(extensionSlots = extensionSlots) }
     val slotsState = extensionSlots?.state?.collectAsStateWithLifecycle()?.value
@@ -234,9 +237,21 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val assistantStack = rememberNavBackStack(AssistantRoute,
         *listOfNotNull(saved.chats[AppTab.Persona]?.takeIf { !embeddedAssistant }).toTypedArray())
     val agentsStack = rememberNavBackStack(AgentsRoute, *listOfNotNull(saved.chats[AppTab.Agents]).toTypedArray())
-    val inboxStack = rememberNavBackStack(InboxRoute)
-    val settingsStack = rememberNavBackStack(SettingsRoute)
-    val stacks = mapOf(AppTab.Persona to assistantStack, AppTab.Agents to agentsStack, AppTab.Inbox to inboxStack, AppTab.Settings to settingsStack)
+    val stacks = mapOf(AppTab.Persona to assistantStack, AppTab.Agents to agentsStack)
+    val sidebar = remember { AssistantSidebarHost() }
+    val sidebarOperations = rememberCoroutineScope()
+    val sidebarState = rememberSaveableStateHolder()
+    var settingsOpened by rememberSaveable { mutableStateOf(false) }
+    val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    fun showAssistantHome() {
+        while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
+        selected = AppTab.Persona
+    }
+    fun sidebarDestination(key: NavKey) {
+        sidebar.opened.value = false
+        showAssistantHome()
+        if (assistantStack.last() != key) assistantStack.add(key)
+    }
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
     val assistant by session.assistant.assistant.collectAsStateWithLifecycle()
     val pending by session.interactions.pending.collectAsStateWithLifecycle()
@@ -324,6 +339,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     LaunchedEffect(sessions, assistant, openNavigation.value) {
         navigator.restoreChatTabs()
         openNavigation.value?.invoke(router)?.let {
+            settingsOpened = false
+            sidebar.opened.value = false
             selected = openResolved(it)
             it.pairingLink?.let { link -> MainActivity.pendingPairLink.value = link }
             openNavigation.value = null
@@ -373,7 +390,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         provisionalPages.clear()
     }
     // An extension enabled since the hub was last read draws its items as soon as the inbox shows.
-    LaunchedEffect(selected, extensionSlots) { if (selected == AppTab.Inbox) extensionSlots?.loadInboxItems() }
+    LaunchedEffect(selected, assistantStack.lastOrNull(), agentsStack.lastOrNull(), extensionSlots) {
+        if (stacks.getValue(selected).any { it == InboxRoute }) extensionSlots?.loadInboxItems()
+    }
     // The inbox's triage banner (#1773): "Configure" opens Settings › Models › "Message filtering", offered only when this device can read that
     // model use (a device that may only read and answer cannot, nor a hub without it). Asked once per hub when the
     // banner wants it; a yes is kept.
@@ -410,8 +429,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         needsYouCount(
             buildInboxList(inbox.records.map { it.item }, inbox.interactions, inbox.sessions, inbox.mutes), inbox.records)
     }
-    // Settings carries the extensions' nav page badges added up (a dot when they are words).
-    val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size, AppTab.Inbox to inboxNeeds, AppTab.Settings to slotBadge.count)
+    val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size)
     // "Needs you now" on the Persona home: the agents waiting (not Persona's own, not muted), then the inbox's "Needs you".
     val needsYou = remember(agentRequests, sessions, preferences.mutes, inbox.records) {
         persona.feature.assistant.needsYou(agentRequests, sessions, preferences.mutes,
@@ -430,12 +448,19 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val working = sessions.any { it.agentState == AgentState.Working }
         val ambience = when {
             !connected && connection != ConnectionState.Connecting && connection != ConnectionState.Updating -> Ambience.Alert
-            (badges[AppTab.Agents] ?: 0) + (badges[AppTab.Inbox] ?: 0) > 0 -> Ambience.NeedsYou
+            agentNeeds + inboxNeeds > 0 -> Ambience.NeedsYou
             working -> Ambience.Working
             else -> Ambience.Calm
         }
         val demoBadge = if (session.demo != null) stringResource(R.string.app_demo_badge) else null
-        val items = navigationItems(badges, demoBadge, settingsDot = slotBadge.dot)
+        val items = navigationItems(badges)
+        val extensionPages = slotsState?.navPages.orEmpty()
+        val sidebarPages = listOf(NavItem("machines", stringResource(R.string.app_machines), PhIcons.Desktop)) +
+            extensionPages.map { page ->
+                NavItem(extensionRailKey(page.extension, page.id), page.title.ifBlank { page.id }, extensionNavIcon(page.icon),
+                    badge = page.badge?.text?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+                    dot = page.badge?.text?.trim()?.let { it.isNotEmpty() && it.toIntOrNull() == null } == true)
+            }
         // The window decides the layout (WindowSizeClass and the fold posture), never the device model: split screen,
         // free-form windows, rotation and folding all just recompose this.
         val windowSize = LocalWindowInfo.current.containerSize
@@ -474,47 +499,24 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val paneHinges = adaptive.windowPosture.hingeList.filter { it.isVertical }.map { hinge ->
             PaneHinge((hinge.bounds.left - paneAreaLeft) / paneDensity, (hinge.bounds.right - paneAreaLeft) / paneDensity, hinge.isSeparating)
         }
-        val expandedState = rememberUpdatedState(expanded)
-        val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        val dockInsets = if (style == AppStyle.Glass) ChromeInsets(bottom = DockHeight + 10.dp + navigationInset, handlesNavigationBar = true)
-            else ChromeInsets(handlesNavigationBar = true)
-        val dock = rememberUpdatedState<@Composable (Modifier) -> Unit> { modifier ->
-            AppNavigation(items, selected.name, onSelect = { key -> navigator.selectTab(AppTab.valueOf(key)) }, modifier)
-        }
-        val rootKeys: Set<Any> = remember { listOf<NavKey>(AssistantRoute, AgentsRoute, InboxRoute, SettingsRoute).map { NavEntry(it) {}.contentKey }.toSet() }
-        // Root pages carry the dock themselves, so it moves with them in push and pop transitions and never shows
-        // over a conversation; pushed pages get neither the dock nor room for it. Every page samples its own content
-        // for glass, so a page never blurs what another page drew.
-        val chrome = remember(style, dockInsets) {
+        val rootKeys: Set<Any> = remember { listOf<NavKey>(AssistantRoute, AgentsRoute).map { NavEntry(it) {}.contentKey }.toSet() }
+        // Only primary roots carry the shared top switcher. Secondary pages keep their own Back control.
+        val chrome = remember(style, items, selected) {
             NavEntryDecorator<NavKey> { entry ->
                 val glass = remember { HazeState() }
-                // A web page shown over this page (the link card): glass must not sample its WebView, so the page goes
-                // opaque while it shows, and the dock makes way for the card's bottom (LocalWebSheets).
                 val webSheets = remember { mutableIntStateOf(0) }
-                val web = webSheets.intValue > 0
                 val level = LocalGlassLevel.current
+                val primary = entry.contentKey in rootKeys
                 CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
-                    LocalGlassLevel provides if (web) GlassLevel.Solid else level) {
-                    when {
-                        entry.contentKey !in rootKeys || expandedState.value -> entry.Content()
-                        style == AppStyle.Glass -> Box(Modifier.fillMaxSize()) {
-                            // Without the dock the page keeps no room for it (a conversation over the card would float
-                            // a dock's height above it).
-                            // The keyboard rises over the dock, so the dock's room counts as consumed: a page's imePadding()
-                            // then pads only the part of the keyboard above it, not the dock's height on top of it (#867).
-                            val insets = if (web) ChromeInsets() else dockInsets
-                            CompositionLocalProvider(LocalChromeInsets provides insets) {
-                                Box(Modifier.consumeWindowInsets(PaddingValues(bottom = insets.bottom))) { entry.Content() }
-                            }
-                            if (!web) dock.value(Modifier.align(Alignment.BottomCenter))
-                        }
-                        else -> Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
-                            // The page ends at the dock's top: its insets leave out what lies below it (the dock, which the
-                            // keyboard covers), so its imePadding() does not pad for the dock again (#867).
-                            Box(Modifier.weight(1f).fillMaxWidth().recalculateWindowInsets()) { CompositionLocalProvider(LocalChromeInsets provides dockInsets) { entry.Content() } }
-                            dock.value(Modifier)
-                        }
-                    }
+                    LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
+                    LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
+                    LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
+                        onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
+                            JPersonaButton(sidebar.personaState, stringResource(R.string.app_sidebar), {
+                                sidebar.opened.value = true
+                            })
+                        }) else null) {
+                    entry.Content()
                 }
             }
         }
@@ -523,12 +525,12 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 AssistantScreen(assistantNavigator, session.assistant, session.sender, session.assistant::startConversation,
                     pins, connectionLabel = connection.title(),
                     hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating, demo = session.demo != null,
-                    requestedSession = assistantRequest, onKnowledge = { navigator.navigate(KnowledgeRoute) },
+                    requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
                     needsYou = needsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line)) },
-                    onOpenInbox = { navigator.selectTab(AppTab.Inbox) },
+                    onOpenInbox = { sidebarDestination(InboxRoute) },
                     onTogglePin = { key -> session.preferences.togglePin(key.path) },
                     onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
-                    onTodos = { navigator.navigate(persona.core.navigation.TodosRoute) },
+                    onTodos = { sidebarDestination(persona.core.navigation.TodosRoute) },
                     todoCount = uncompletedTodosCount,
                     showTodos = todosSupported)
             }
@@ -587,10 +589,12 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         }
         // Tabs stay composed once visited: switching back shows the page as it was instead of rebuilding it (which
         // flashed empty and loading states). A hidden tab is measured but never placed or drawn, and cannot take back.
-        val visited = remember { mutableStateListOf<AppTab>() }
+        val visited = remember { mutableStateListOf(AppTab.Persona) }
         LaunchedEffect(selected) { if (selected !in visited) visited += selected }
         // The tab left behind stays composed: it must not keep the field's focus, the keyboard or a paste menu (#894).
         ReleaseTextInputOnChange(selected)
+        ReleaseTextInputOnChange(sidebar.opened.value)
+        ReleaseTextInputOnChange(settingsOpened)
         // Back on the first page of Agents, Inbox or Settings goes to Persona; back on the Persona home leaves the app
         // (2026-11-01, the user's call; it used to go back through the tabs shown before).
         BackHandler(selected != AppTab.Persona && stacks.getValue(selected).size <= 1) { navigator.selectTab(AppTab.Persona) }
@@ -600,34 +604,43 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val sideRoom = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current) > 0 ||
             sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
         CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalInboxItemPages provides inboxItemPages,
-            LocalInboxTriageSetup provides triageSetup) {
+            LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
+          JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = {
+                sidebarState.SaveableStateProvider("shared-sidebar") {
+                    AssistantSidebarContent(assistant, session.assistant, pins, sidebar.active, sidebarOperations, session.demo != null,
+                        onOpen = { key ->
+                            sidebar.opened.value = false
+                            selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
+                        },
+                        onAction = { action -> sidebar.opened.value = false; showAssistantHome(); sidebar.action = action },
+                        onSettings = {
+                            sidebar.opened.value = false
+                            settingsSheetStack.clear()
+                            settingsSheetStack.add(SettingsRoute)
+                            settingsOpened = true
+                        },
+                        onInbox = { sidebarDestination(InboxRoute) },
+                        onKnowledge = { sidebarDestination(KnowledgeRoute) },
+                        onTodos = { sidebarDestination(TodosRoute) }, todoCount = uncompletedTodosCount, showTodos = todosSupported,
+                        inboxCount = inboxNeeds, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
+                        pages = sidebarPages,
+                        onPage = { key ->
+                            if (key == "machines") sidebarDestination(MachinesRoute)
+                            else extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
+                                sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
+                            }
+                        },
+                        onTogglePin = { key -> session.preferences.togglePin(key.path) },
+                        onRetired = { key -> sidebar.retired = sidebar.retired + key })
+                }
+          }) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
             // One background for the window. Pages paint the same light at the same place (PageBackdrop), so in wide
             // windows the rail, the panes and the room between them read as one surface; cards are what separate them.
             // The strips beside a cutout or a side navigation bar show it too.
             if (wide || sideRoom) PageBackdrop()
             Row(Modifier.fillMaxSize().windowInsetsPadding(sides)) {
-              if (expanded) {
-                  // The extensions' own pages (nav_page) sit in the rail under the four tabs: one tap opens one beside
-                  // the settings list (#2951); on a phone they are at the top of Settings.
-                  val pages = slotsState?.navPages.orEmpty()
-                  val top = settingsStack.lastOrNull() as? ExtensionUiRoute
-                  val railKey = if (selected == AppTab.Settings && top != null && pages.any { it.extension == top.extensionId && it.id == top.uiId })
-                      extensionRailKey(top.extensionId, top.uiId) else selected.name
-                  AppNavigationRail(items, railKey, extra = pages.map { page ->
-                      NavItem(extensionRailKey(page.extension, page.id), page.title.ifBlank { page.id }, persona.feature.settings.extensionNavIcon(page.icon),
-                          badge = page.badge?.text?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
-                          dot = page.badge?.text?.trim()?.let { it.isNotEmpty() && it.toIntOrNull() == null } == true)
-                  }, onSelect = { key ->
-                      val page = pages.firstOrNull { extensionRailKey(it.extension, it.id) == key }
-                      if (page == null) navigator.selectTab(AppTab.valueOf(key))
-                      else {
-                          navigator.selectTab(AppTab.Settings)
-                          while (settingsStack.size > 1) settingsStack.removeAt(settingsStack.lastIndex)
-                          settingsStack.add(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
-                      }
-                  })
-              }
+              // The same top navigation and sidebar apply on phones, tablets and foldables.
               BoxWithConstraints(Modifier.weight(1f).fillMaxHeight().onGloballyPositioned { paneAreaLeft = it.positionInWindow().x }) {
                 AppTab.entries.forEach { tab ->
                     if (tab == selected || tab in visited) key(tab) {
@@ -637,7 +650,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         val detail = detailOf(stacks.getValue(tab))
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val listDetail = rememberShellListDetail(tab, directive, maxWidth, paneHinges, detailOpen = detail != null,
-                            store = paneStore, collapsible = tab == AppTab.Agents)
+                            store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
                         CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
                             persona.feature.settings.LocalExtensionPageVisible provides shown) {
                             NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
@@ -658,6 +671,31 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 }
               }
             }
+
+          }
+          }
+          BackHandler(sidebar.opened.value) { sidebar.opened.value = false }
+          if (settingsOpened) {
+              val settingsNavigator = remember(navigator, settingsSheetStack) {
+                  SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
+              }
+              JSettingsSheet(onDismiss = { settingsOpened = false }) {
+                  val settingsEntries = entryProvider<NavKey> {
+                      entry<SettingsRoute> { ShellSettings(services, settingsNavigator, shell, onClose = { settingsOpened = false }) }
+                      entry<SettingsPageRoute> { route ->
+                          if (route.page == SettingsPage.PhoneData && session.phone != null) PhoneToolsScreen(session.phone, settingsNavigator)
+                          else ShellSettings(services, settingsNavigator, shell, route.page.toInitialPage())
+                      }
+                      entry<PairingRoute> { ShellSettings(services, settingsNavigator, shell, "pair") }
+                      entry<PhoneToolsRoute> { session.phone?.let { PhoneToolsScreen(it, settingsNavigator) }
+                          ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), settingsNavigator) }
+                      assistantEntries(settingsNavigator)
+                      settingsDetailEntries(settingsNavigator, services)
+                  }
+                  NavDisplay(backStack = settingsSheetStack, onBack = settingsNavigator::back,
+                      entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator()),
+                      entryProvider = settingsEntries)
+              }
           }
         }
     }
@@ -702,26 +740,19 @@ private fun Modifier.unplaced(): Modifier = layout { measurable, constraints ->
     layout(placeable.width, placeable.height) {}
 }
 
-/** The four destinations, in the same order and with labels in every style; Persona and Agents read the same in every language. */
+/** The only primary destinations; all other entries live in the shared sidebar. */
 @Composable
-internal fun navigationItems(badges: Map<AppTab, Int>, demo: String?, settingsDot: Boolean = false): List<NavItem> {
-    fun item(tab: AppTab, label: String, icon: persona.core.designsystem.icons.PhIcon) =
-        NavItem(tab.name, label, icon, badge = badges[tab] ?: 0, badgeText = if (tab == AppTab.Settings) demo else null,
-            dot = tab == AppTab.Settings && settingsDot)
-    return listOf(
-        item(AppTab.Persona, "Persona", PhIcons.Sparkle),
-        item(AppTab.Agents, "Agents", PhIcons.SquaresFour),
-        item(AppTab.Inbox, stringResource(R.string.app_tab_inbox), PhIcons.Tray),
-        item(AppTab.Settings, stringResource(R.string.app_tab_settings), PhIcons.GearSix),
-    )
-}
+internal fun navigationItems(badges: Map<AppTab, Int>): List<NavItem> = listOf(
+    NavItem(AppTab.Persona.name, stringResource(R.string.app_tab_assistant), PhIcons.Sparkle, badges[AppTab.Persona] ?: 0),
+    NavItem(AppTab.Agents.name, stringResource(R.string.app_tab_agents), PhIcons.SquaresFour, badges[AppTab.Agents] ?: 0),
+)
 
 @Composable
-private fun ShellSettings(services: SettingsServices, navigator: Navigator, shell: AppServices, page: String = "settings") {
+private fun ShellSettings(services: SettingsServices, navigator: Navigator, shell: AppServices, page: String = "settings", onClose: (() -> Unit)? = null) {
     // Every settings page is its own destination, so a wide window shows it beside the list of settings.
     SettingsScreen(services, initialPage = page, onPhoneData = { navigator.navigate(PhoneToolsRoute) },
         onExitDemo = shell::exitDemo, onOpen = { navigator.navigate(SettingsPageRoute(it)) },
-        onBack = if (page == "settings") null else navigator::back, onNavigate = navigator::navigate)
+        onBack = if (page == "settings") null else navigator::back, onNavigate = navigator::navigate, onClose = onClose)
 }
 
 /** Inbox deep links wait for the item list, then become the page the inbox list would open. */

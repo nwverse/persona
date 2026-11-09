@@ -23,6 +23,29 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 | Extension modules | Terminal, files, machine monitoring, knowledge base, phone tools, voice chat (see "Voice chat"), the cross-app floating capsule (see "Cross-app floating capsule") and demo mode are wired into the App; entries are in the "Shell" section. In demo mode, pages without sample data show an explanation and do not connect to a real hub |
 | UI | Three interface styles: Glass (default), Brief and Board, switched in Settings › Interface style; the change applies immediately and is stored on the device. The same page has the theme color (Match interface style (default) / Match avatar / five built-in palettes) and light / dark (Match system (default) / Light / Dark); see "Appearance: theme color and light / dark". Design rules, components and the rules for writing pages are in [Android interface styles and design system](android-design.md) |
 
+## Unified home navigation
+
+The home has only **Assistant** and **Agents**, selected at the top, on phones, tablets and foldables (#2589).
+The avatar opens one shared left-side history drawer from either page; it pushes the full-size page aside rather than
+rising from the bottom. Settings opens from its bottom gear in a sheet, never a home tab. Root Close returns to the
+originating page; child Back pops only the settings sheet's secondary stack. Inbox, To-dos, Computers and extension `nav_page` destinations open under
+Assistant, following the iPhone sidebar mapping. Scheduled tasks and the knowledge base keep their existing Assistant
+entry points. Extension management remains in Settings and is distinct from extension-provided pages.
+
+In default Glass, Android-only **Back to home** and **Session info** remain in the selected Assistant tab's menu;
+**Launcher** is reached through Assistant settings in that menu. Other styles retain their existing More section.
+It has no native Health destination or archived-chat browser; this change does not invent either feature.
+Recent, pinned and automatic conversation history, pinning, archive actions and New conversation are retained.
+
+There is no old-layout selector or migration. Android previously had a fixed four-destination shell, not an equivalent
+of the retired Apple layout preference. The old Inbox/Settings tab enum values, their separate stacks, bottom dock,
+wide navigation rail, appearance-preview tabs and tab-only strings/tests are removed. Old saved shell positions containing
+those enum values are ignored as a whole, without rewriting or migrating them. Interface style, color, theme and Inbox
+chat-rendering preferences are independent of home navigation and remain available.
+
+Apple PR #1696 removed the old root-navigation switch; PR #2539 separately removed conversation-presentation settings.
+The latter is not a home-layout toggle and is not a reason to remove Android's Inbox rendering preference.
+
 ## Pairing pages (#2481)
 
 - **Manual entry**: an address typed without `://` gets a scheme before it is checked: `http://` when the host is this device or the local network (`localhost`, `*.local`, loopback and private addresses), `https://` otherwise. So `hub.local:18660` is tried over http, and `persona:18660` or `hub.example.com:443` over https. The rule after that is unchanged: http to a public host needs a fingerprint. This differs from the address editor in connection diagnostics ("Connection addresses" below), which always assumes https: that editor adds addresses to an existing pairing, while manual pairing is mostly for a hub on the same network. An address that still can't be read, or public http without a fingerprint, is reported under the address field and the form stays; nothing is sent. The reason goes away when the address changes, including when a pasted, scanned or opened link replaces it.
@@ -409,7 +432,7 @@ Modules are defined by `android/settings.gradle.kts`, and direct in-repository d
 
 | Module | Responsibility | Direct dependencies |
 | --- | --- | --- |
-| `:app` | App entry, four tabs, Hilt assembly, pairing lifecycle, scope bridging, system sharing and lock-screen test | `:core:contracts`, `:core:domain`, `:core:terminal`, `:core:navigation`, `:core:hub`, `:core:data`, `:core:chatlist`, `:core:designsystem`, `:core:demo`, `:feature:chat`, `:feature:agents`, `:feature:assistant`, `:feature:inbox`, `:feature:settings`, `:feature:terminal`, `:feature:machines`, `:feature:files`, `:feature:knowledge`, `:feature:voice`, `:platform:notify`, `:platform:phonetools`, `:platform:shortcuts`, `:platform:capsule` |
+| `:app` | App entry, two primary destinations and shared sidebar, Hilt assembly, pairing lifecycle, scope bridging, system sharing and lock-screen test | `:core:contracts`, `:core:domain`, `:core:terminal`, `:core:navigation`, `:core:hub`, `:core:data`, `:core:chatlist`, `:core:designsystem`, `:core:demo`, `:feature:chat`, `:feature:agents`, `:feature:assistant`, `:feature:inbox`, `:feature:settings`, `:feature:terminal`, `:feature:machines`, `:feature:files`, `:feature:knowledge`, `:feature:voice`, `:platform:notify`, `:platform:phonetools`, `:platform:shortcuts`, `:platform:capsule` |
 | `:core:chatlist` | Inverted chat list, freezing, return to latest, reading anchors and paging effects; currently mainly used by Agent / assistant chats | No in-repository module dependencies |
 | `:core:contracts` | Pure JVM: wire models, event decoding, HubScope, repository and transport interfaces | No in-repository module dependencies |
 | `:core:data` | Room items / outbox / drafts, DataStore / Tink credentials, scopes, caches and real repositories | `:core:contracts`, `:core:domain`, `:feature:inbox` |
