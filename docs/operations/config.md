@@ -427,6 +427,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 - `lark.cli` (optional): Lark's official open-platform CLI, lark-cli, as a second Lark source besides the Lark extension (gateway) (`docs/plans/plan-lark-cli.md`):
   `"lark": {"cli": {"bin": "lark-cli", "profile": ""}}`. `bin` is a command name or absolute path, default `lark-cli`; non-absolute paths are found in a login shell
   (global npm installs often live under nvm-like directories absent from systemd's PATH); `profile` is lark-cli's `--profile`, empty uses its default.
+  Optional `inbox_poll_seconds` (default 120, at least 60) and `inbox_page_limit` (search pages per Inbox round, default 5; the rest continue next round) tune the lark-cli Inbox (`docs/plans/plan-lark-cli.md`, L4).
   Application and user logins stay with lark-cli (`~/.lark-cli`), never in `manager.json`: run
   `lark-cli auth login --domain all` yourself on the assistant's machine (user permissions for all domains; without a browser add `--no-wait --json` and authorize via the link on the phone); after a week unused, sign in again.
   Its PATH contains `lark-cli` (with the configured `profile`), write operations go through the gate (`docs/assistant/assistant.md` ("Lark: lark-cli")), and L2 enables the built-in `larkcli` connector's status and read tools when this section is present.

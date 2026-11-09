@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
@@ -28,11 +29,38 @@ const expiryReminderDays = 7
 type Connector struct {
 	runner *adapter.Runner
 	now    func() time.Time
+
+	inboxMu          sync.Mutex
+	inboxThings      map[string]connector.InboxThing
+	inboxSeen        map[string]struct{}
+	inboxTopics      map[string]struct{}
+	inboxAllChats    map[string]struct{}
+	inboxState       persistedInboxState
+	inboxStateLoaded bool
+	inboxCollecting  bool
+	inboxStore       StateStore
+	inboxPrefer      string
+	gatewayAvailable func(context.Context) bool
+	inboxPoll        time.Duration
+	inboxPageLimit   int
 }
 
 // New creates the built-in connector from the configured CLI runner.
 func New(cfg adapter.Config) *Connector {
-	return &Connector{runner: adapter.New(cfg)}
+	c := &Connector{runner: adapter.New(cfg), inboxPoll: cfg.InboxPoll, inboxPageLimit: cfg.InboxPageLimit}
+	if c.inboxPoll <= 0 {
+		c.inboxPoll = inboxPollDefault
+	}
+	if c.inboxPoll < inboxPollMinimum {
+		c.inboxPoll = inboxPollMinimum
+	}
+	if c.inboxPageLimit <= 0 {
+		c.inboxPageLimit = inboxPageLimit
+	}
+	if c.inboxPageLimit > inboxPageLimitMax {
+		c.inboxPageLimit = inboxPageLimitMax
+	}
+	return c
 }
 
 // NewWithRunner is useful for unit tests and embedders that already constructed a
@@ -43,7 +71,7 @@ func (c *Connector) ID() string   { return ID }
 func (c *Connector) Name() string { return Name }
 
 func (c *Connector) Manifest() connector.Manifest {
-	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools}}
+	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapEvents, connector.CapInbox, connector.CapOptions}, Kinds: []string{"message"}}
 }
 
 func (c *Connector) Tools() []proto.Tool {

@@ -95,6 +95,7 @@ type Message struct {
 	ChatID      string          `json:"chat_id,omitempty"`
 	ChatName    string          `json:"chat_name,omitempty"`
 	ChatType    string          `json:"chat_type,omitempty"`
+	ChatMode    string          `json:"chat_mode,omitempty"`
 	ChatPartner json.RawMessage `json:"chat_partner,omitempty"`
 	Deleted     bool            `json:"deleted,omitempty"`
 	Updated     bool            `json:"updated,omitempty"`

@@ -3,6 +3,7 @@ package larkcli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,5 +107,191 @@ func TestReadToolsCallTheAdapter(t *testing.T) {
 	out, err = c.Call(context.Background(), "larkcli_search", json.RawMessage(`{"query":"example","kind":"messages"}`))
 	if err != nil || !strings.Contains(out, "om_example_search") {
 		t.Fatalf("search = %s, err = %v", out, err)
+	}
+}
+
+func inboxTestConnector(t *testing.T, scenario string) *Connector {
+	t.Helper()
+	c := testConnector(t, scenario)
+	c.SetInboxSource("cli", nil)
+	c.SetPollInterval(time.Minute)
+	return c
+}
+
+func inboxThings(t *testing.T, c *Connector) map[string]connector.InboxThing {
+	t.Helper()
+	items, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]connector.InboxThing{}
+	for _, item := range items {
+		out[item.Thread] = item
+	}
+	return out
+}
+
+func TestInboxPollKeepsRulesGroupsAndDetectsOwnReply(t *testing.T) {
+	c := inboxTestConnector(t, "inbox")
+	moved, err := c.Poll(context.Background())
+	if err != nil || !moved {
+		t.Fatalf("poll = moved=%v err=%v", moved, err)
+	}
+	items := inboxThings(t, c)
+	if len(items) != 3 {
+		t.Fatalf("items = %#v", items)
+	}
+	group := items["larkcli:chat:oc_example_group:thread:omt_topic_one"]
+	if group.Thread == "" || !strings.Contains(group.Context, "A second line") || group.Done != connector.DoneReplied {
+		t.Fatalf("group item = %+v", group)
+	}
+	if dm := items["larkcli:chat:oc_example_dm"]; dm.Tier != connector.TierAction || dm.Done != "" {
+		t.Fatalf("direct item = %+v", dm)
+	}
+	if topic := items["larkcli:chat:oc_example_group:thread:omt_topic_two"]; topic.Thread == "" {
+		t.Fatal("seeded topic reply was dropped")
+	}
+	if _, ok := items["larkcli:chat:oc_example_group:thread:omt_topic_three"]; ok {
+		t.Fatal("unmentioned topic and own-only message entered the Inbox")
+	}
+}
+
+func TestInboxCursorOverlapDedupAndPageCap(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "args.log")
+	t.Setenv("LARKCLI_FAKE_LOG", logPath)
+	c := inboxTestConnector(t, "inbox_pages")
+	c.inboxPageLimit = 1
+	if _, err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := inboxThings(t, c)
+	if len(first) != 1 {
+		t.Fatalf("first page items = %d", len(first))
+	}
+	state := c.inboxStateForTests()
+	if state.Cursor == "" {
+		t.Fatal("cursor did not advance")
+	}
+	if _, err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := inboxThings(t, c)
+	if len(second) != 1 {
+		t.Fatalf("overlap or capped page duplicated items: %#v", second)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(b), "+messages-search") < 3 { // bounded seed plus one page per round
+		t.Fatalf("search calls were not paged: %q", b)
+	}
+}
+
+func TestInboxCoexistsWithGateway(t *testing.T) {
+	c := inboxTestConnector(t, "inbox")
+	c.SetInboxSource("", func(context.Context) bool { return true })
+	moved, err := c.Poll(context.Background())
+	if err != nil || moved {
+		t.Fatalf("gateway-primary poll = moved=%v err=%v", moved, err)
+	}
+	items, _ := c.Collect(context.Background())
+	if len(items) != 0 {
+		t.Fatalf("CLI collected while gateway was primary: %+v", items)
+	}
+	c.SetInboxSource("cli", func(context.Context) bool { return true })
+	moved, err = c.Poll(context.Background())
+	if err != nil || !moved {
+		t.Fatalf("CLI-primary poll = moved=%v err=%v", moved, err)
+	}
+}
+
+func TestInboxReplyUsesBot(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "args.log")
+	t.Setenv("LARKCLI_FAKE_LOG", logPath)
+	c := inboxTestConnector(t, "inbox")
+	if err := c.Reply(context.Background(), connector.InboxReply{Thread: "larkcli:chat:oc_example_group:thread:omt_topic_one", Last: "om_example_mention_one", Text: "Received", ClientID: "reply-1"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "+messages-reply --message-id om_example_mention_one --text Received --idempotency-key reply-1 --reply-in-thread --as bot --format json") {
+		t.Fatalf("reply command = %q", b)
+	}
+}
+
+func TestInboxAllChatsOptionIsOptIn(t *testing.T) {
+	c := inboxTestConnector(t, "inbox")
+	if got := string(c.Options()); got != `{"inbox_all_chats":[]}` {
+		t.Fatalf("default options = %s", got)
+	}
+	if err := c.SetOptions(json.RawMessage(`{"inbox_all_chats":["oc_example_group"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(c.Options()); got != `{"inbox_all_chats":["oc_example_group"]}` {
+		t.Fatalf("options = %s", got)
+	}
+	if _, err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items := inboxThings(t, c)
+	if _, ok := items["larkcli:chat:oc_example_group:thread:omt_topic_three"]; !ok {
+		t.Fatalf("selected chat did not admit its ordinary message: %#v", items)
+	}
+	if err := c.SetOptions(json.RawMessage(`{"inbox_all_chats":[""]}`)); err == nil {
+		t.Fatal("empty chat id accepted")
+	}
+}
+
+func TestInboxWatchSignalsChanged(t *testing.T) {
+	c := inboxTestConnector(t, "inbox")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var scope connector.Scope
+	err := c.Watch(ctx, func(got connector.Scope) {
+		scope = got
+		cancel()
+	})
+	if err != nil || scope != connector.ScopeInbox {
+		t.Fatalf("watch = scope=%q err=%v", scope, err)
+	}
+}
+
+type inboxStateStore struct{ raw json.RawMessage }
+
+func (s *inboxStateStore) Setting(_ context.Context, _ string, out any) (bool, error) {
+	if len(s.raw) == 0 {
+		return false, nil
+	}
+	return true, json.Unmarshal(s.raw, out)
+}
+
+func (s *inboxStateStore) PutSetting(_ context.Context, _ string, value any) error {
+	b, err := json.Marshal(value)
+	s.raw = b
+	return err
+}
+
+func TestInboxCursorAndTopicsPersistInStore(t *testing.T) {
+	store := &inboxStateStore{}
+	c1 := inboxTestConnector(t, "inbox")
+	c1.SetStateStore(store)
+	if _, err := c1.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state := c1.inboxStateForTests()
+	if state.Cursor == "" || len(state.Topics) == 0 {
+		t.Fatalf("state was not saved: %+v", state)
+	}
+	c2 := inboxTestConnector(t, "inbox")
+	c2.SetStateStore(store)
+	if _, err := c2.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	loaded := c2.inboxStateForTests()
+	if loaded.Cursor == "" || len(loaded.Topics) == 0 || !loaded.TopicsSeeded {
+		t.Fatalf("state was not restored: %+v", loaded)
 	}
 }

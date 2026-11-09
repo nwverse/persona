@@ -39,10 +39,29 @@ case "${1:-}" in
 	  rate_limited) cat "$base/error_rate_limited.json"; exit 4 ;;
       nonzero) printf '%s\n' 'message-body-example' >&2; exit 17 ;;
     esac
-    case "${2:-}" in
-      +chat-list) cat "$base/chats.json" ;;
-      +chat-messages-list|+threads-messages-list) cat "$base/messages.json" ;;
-      +messages-search|+chat-search) cat "$base/search.json" ;;
+    case "$scenario:${2:-}" in
+      inbox:+messages-search)
+        case " $* " in
+          *" --sender "*) cat "$base/inbox_seed.json" ;;
+          *) cat "$base/inbox_search.json" ;;
+        esac
+        ;;
+      inbox_pages:+messages-search)
+        case " $* " in
+          *" --sender "*) cat "$base/inbox_seed.json" ;;
+          *" --page-token "*) cat "$base/inbox_page2.json" ;;
+          *) cat "$base/inbox_page1.json" ;;
+        esac
+        ;;
+      inbox:+chat-messages-list|inbox:+threads-messages-list|inbox_pages:+chat-messages-list|inbox_pages:+threads-messages-list)
+        cat "$base/inbox_context.json"
+        ;;
+      inbox:+messages-send|inbox:+messages-reply|inbox_pages:+messages-send|inbox_pages:+messages-reply)
+        cat "$base/send_result.json"
+        ;;
+      *:+chat-list) cat "$base/chats.json" ;;
+      *:+chat-messages-list|*:+threads-messages-list) cat "$base/messages.json" ;;
+      *:+messages-search|*:+chat-search) cat "$base/search.json" ;;
       *) cat "$base/search.json" ;;
     esac
     exit 0

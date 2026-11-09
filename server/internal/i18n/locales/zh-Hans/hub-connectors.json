@@ -12,5 +12,8 @@
   "permission_guide": "请让 Lark 应用管理员授予缺少的权限，然后重新登录",
   "rate_limited": "lark-cli 受到频率限制，请稍后再试",
   "error": "lark-cli 无法读取飞书",
-  "expiry_reminder": "登录还有 {count} 天过期，请在 hub 机器运行 lark-cli auth login"
+  "expiry_reminder": "登录还有 {count} 天过期，请在 hub 机器运行 lark-cli auth login",
+  "larkcli_message": "飞书消息",
+  "larkcli_direct_message": "飞书私聊消息",
+  "larkcli_mention": "飞书提及"
 }

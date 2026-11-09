@@ -23,6 +23,11 @@ type Config struct {
 	Bin     string
 	Profile string
 	Timeout time.Duration
+	// InboxPoll and InboxPageLimit are consumed by the built-in larkcli
+	// connector. Keeping them here lets tests and embedders construct the
+	// adapter and connector together without another configuration object.
+	InboxPoll      time.Duration
+	InboxPageLimit int
 	// Now is injectable for expiry tests; production uses time.Now.
 	Now func() time.Time
 }
@@ -63,6 +68,16 @@ func (r *Runner) Run(ctx context.Context, args ...string) ([]byte, error) {
 // output contract at the call site.
 func (r *Runner) RunJSON(ctx context.Context, args ...string) ([]byte, error) {
 	return r.Run(ctx, args...)
+}
+
+// RunAs executes a read or write command with an explicit lark-cli identity.
+// Reads in this adapter use user by default; Inbox replies deliberately use bot
+// because the default Lark app cannot send as the user.
+func (r *Runner) RunAs(ctx context.Context, identity string, args ...string) ([]byte, error) {
+	if identity == "" {
+		identity = "user"
+	}
+	return r.executeAs(ctx, args, outputJSON, identity)
 }
 
 func (r *Runner) now() time.Time {
@@ -263,6 +278,41 @@ func (r *Runner) Search(ctx context.Context, kind, query string) (json.RawMessag
 	}
 }
 
+// SendText sends a plain text message as the bot identity. The idempotency key
+// is optional and is passed through to lark-cli when supplied.
+func (r *Runner) SendText(ctx context.Context, chatID, text, idempotencyKey string) (json.RawMessage, error) {
+	if strings.TrimSpace(chatID) == "" {
+		return nil, errors.New("chat_id is required")
+	}
+	if text == "" {
+		return nil, errors.New("text is required")
+	}
+	args := []string{"im", "+messages-send", "--chat-id", chatID, "--text", text}
+	if idempotencyKey != "" {
+		args = append(args, "--idempotency-key", idempotencyKey)
+	}
+	return r.RunAs(ctx, "bot", args...)
+}
+
+// ReplyText replies to a known message as the bot identity. The caller may ask
+// for a topic reply; normal Inbox replies keep the source message's topic.
+func (r *Runner) ReplyText(ctx context.Context, messageID, text, idempotencyKey string, inThread bool) (json.RawMessage, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return nil, errors.New("message_id is required")
+	}
+	if text == "" {
+		return nil, errors.New("text is required")
+	}
+	args := []string{"im", "+messages-reply", "--message-id", messageID, "--text", text}
+	if idempotencyKey != "" {
+		args = append(args, "--idempotency-key", idempotencyKey)
+	}
+	if inThread {
+		args = append(args, "--reply-in-thread")
+	}
+	return r.RunAs(ctx, "bot", args...)
+}
+
 func (r *Runner) rawSearch(ctx context.Context, args []string) (json.RawMessage, error) {
 	out, err := r.execute(ctx, args, outputJSON)
 	if err != nil {
@@ -289,6 +339,14 @@ type commandResult struct {
 }
 
 func (r *Runner) execute(ctx context.Context, args []string, mode outputMode) ([]byte, error) {
+	identity := ""
+	if mode == outputJSON {
+		identity = "user"
+	}
+	return r.executeAs(ctx, args, mode, identity)
+}
+
+func (r *Runner) executeAs(ctx context.Context, args []string, mode outputMode, identity string) ([]byte, error) {
 	bin, err := r.binary(ctx)
 	if err != nil {
 		return nil, err
@@ -302,7 +360,10 @@ func (r *Runner) execute(ctx context.Context, args []string, mode outputMode) ([
 	case outputAuth:
 		argv = append(argv, "--json")
 	case outputJSON:
-		argv = append(argv, "--as", "user", "--format", "json")
+		if identity == "" {
+			identity = "user"
+		}
+		argv = append(argv, "--as", identity, "--format", "json")
 	}
 
 	timeout := r.cfg.Timeout

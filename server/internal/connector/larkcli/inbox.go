@@ -1,0 +1,782 @@
+package larkcli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
+	adapter "github.com/nwverse/persona/server/internal/larkcli"
+)
+
+const (
+	inboxPollDefault     = 2 * time.Minute
+	inboxPollMinimum     = time.Minute
+	inboxPageLimit       = 5
+	inboxPageLimitMax    = 40
+	inboxSeenLimit       = 4096
+	inboxTopicLimit      = 2048
+	inboxSeedPages       = 2
+	inboxInitialLookback = 2 * time.Minute
+)
+
+// StateStore is the small part of the manager's Postgres-backed settings store
+// needed by lark-cli Inbox state. It intentionally has the same method set as
+// extmgr.Store, so the connector never writes a file under ~/.persona.
+type StateStore interface {
+	Setting(context.Context, string, any) (bool, error)
+	PutSetting(context.Context, string, any) error
+}
+
+const inboxStateKey = "connector.larkcli.inbox"
+
+type persistedInboxState struct {
+	Cursor       string   `json:"cursor,omitempty"`
+	PageToken    string   `json:"page_token,omitempty"`
+	Topics       []string `json:"topics,omitempty"`
+	Seen         []string `json:"seen,omitempty"`
+	TopicsSeeded bool     `json:"topics_seeded,omitempty"`
+}
+
+type inboxGroup struct {
+	key       string
+	chatID    string
+	threadID  string
+	chatName  string
+	mentioned bool
+	messages  []adapter.Message
+	latest    adapter.Message
+	replied   bool
+}
+
+// SetStateStore attaches the manager's Postgres-backed settings store. Tests
+// may omit it; the bounded state then remains in memory for that connector
+// lifetime.
+func (c *Connector) SetStateStore(store StateStore) {
+	c.inboxMu.Lock()
+	c.inboxStore = store
+	c.inboxStateLoaded = false
+	c.inboxMu.Unlock()
+}
+
+// SetInboxSource configures coexistence with the Lark gateway. The callback is
+// evaluated at collection time because an extension can appear, disappear, or
+// lose its login after the connector is constructed.
+func (c *Connector) SetInboxSource(prefer string, gatewayAvailable func(context.Context) bool) {
+	c.inboxMu.Lock()
+	c.inboxPrefer = prefer
+	c.gatewayAvailable = gatewayAvailable
+	c.inboxMu.Unlock()
+}
+
+// SetPollInterval changes the Inbox poll period. Values below one minute are
+// clamped to the protocol's minimum; zero restores the two-minute default.
+func (c *Connector) SetPollInterval(interval time.Duration) {
+	c.inboxMu.Lock()
+	defer c.inboxMu.Unlock()
+	if interval <= 0 {
+		interval = inboxPollDefault
+	}
+	if interval < inboxPollMinimum {
+		interval = inboxPollMinimum
+	}
+	c.inboxPoll = interval
+}
+
+// Poll performs one bounded Inbox round. It is exported for focused connector
+// tests and for embedders that already own a scheduler.
+func (c *Connector) Poll(ctx context.Context) (bool, error) {
+	if c == nil || c.runner == nil {
+		return false, &adapter.Error{Kind: adapter.KindNotInstalled}
+	}
+	if !c.inboxShouldCollect(ctx) {
+		c.inboxMu.Lock()
+		c.inboxThings = map[string]connector.InboxThing{}
+		c.inboxCollecting = false
+		c.inboxMu.Unlock()
+		return false, nil
+	}
+	auth, err := c.runner.AuthStatus(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !auth.LoggedIn || auth.OpenID == "" {
+		// A signed-out CLI is represented by connector status; the background
+		// watcher waits and lets the user sign in instead of restarting noisily.
+		c.inboxMu.Lock()
+		c.inboxCollecting = false
+		c.inboxMu.Unlock()
+		return false, nil
+	}
+
+	c.inboxMu.Lock()
+	if err := c.loadInboxStateLocked(ctx); err != nil {
+		c.inboxMu.Unlock()
+		return false, err
+	}
+	state := c.inboxState
+	pageLimit := c.inboxPageLimit
+	if pageLimit <= 0 {
+		pageLimit = inboxPageLimit
+	}
+	if pageLimit > inboxPageLimitMax {
+		pageLimit = inboxPageLimitMax
+	}
+	start := state.Cursor
+	if start == "" {
+		start = c.currentTime().Add(-inboxInitialLookback).UTC().Format(time.RFC3339)
+	}
+	seeded := state.TopicsSeeded
+	topicsBefore := make(map[string]struct{}, len(c.inboxTopics))
+	for topic := range c.inboxTopics {
+		topicsBefore[topic] = struct{}{}
+	}
+	c.inboxMu.Unlock()
+
+	if !seeded {
+		// Seed the topic set from the user's own history. Search is bounded just
+		// like the live round; later rounds extend it whenever a user message or
+		// mention is observed.
+		if err := c.seedTopics(ctx, auth.OpenID, start, pageLimit); err != nil {
+			return false, err
+		}
+		c.inboxMu.Lock()
+		c.inboxState.TopicsSeeded = true
+		state = c.inboxState
+		topicsBefore = make(map[string]struct{}, len(c.inboxTopics))
+		for topic := range c.inboxTopics {
+			topicsBefore[topic] = struct{}{}
+		}
+		c.inboxMu.Unlock()
+	}
+
+	var found []adapter.Message
+	pageToken := state.PageToken
+	nextPageToken := ""
+	var newest time.Time
+	for pageNo := 0; pageNo < pageLimit; pageNo++ {
+		page, err := c.runner.SearchMessages(ctx, "", adapter.SearchOptions{
+			Start: start, PageToken: pageToken, Limit: 50,
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, message := range page.Messages {
+			if t := messageTime(message); !t.IsZero() && t.After(newest) {
+				newest = t
+			}
+			if message.MessageID != "" {
+				found = append(found, message)
+			}
+			c.noteTopic(message, auth.OpenID)
+		}
+		if !page.HasMore || page.PageToken == "" {
+			nextPageToken = ""
+			break
+		}
+		nextPageToken = page.PageToken
+		pageToken = page.PageToken
+	}
+
+	// Search results are normally newest first, but ordering is not part of
+	// the shortcut contract. Sort before applying the consecutive grouping rule.
+	sort.SliceStable(found, func(i, j int) bool {
+		ti, tj := messageTime(found[i]), messageTime(found[j])
+		if ti.Equal(tj) {
+			return found[i].MessageID < found[j].MessageID
+		}
+		return ti.Before(tj)
+	})
+
+	newMessages := c.dedupMessages(found)
+	groups := c.groupMessages(newMessages, auth.OpenID, topicsBefore)
+	changed := false
+	for _, group := range groups {
+		thing := c.thingForGroup(ctx, group, auth.OpenID)
+		if thing.Thread == "" {
+			continue
+		}
+		c.inboxMu.Lock()
+		previous, existed := c.inboxThings[thing.Thread]
+		if !existed || previous.Last != thing.Last || previous.Done != thing.Done || previous.Context != thing.Context {
+			changed = true
+		}
+		c.inboxThings[thing.Thread] = thing
+		c.inboxMu.Unlock()
+	}
+
+	c.inboxMu.Lock()
+	if !newest.IsZero() {
+		candidate := newest.Add(-time.Minute).UTC()
+		if previous, err := time.Parse(time.RFC3339Nano, state.Cursor); err == nil && previous.After(candidate) {
+			candidate = previous
+		}
+		state.Cursor = candidate.Format(time.RFC3339)
+	}
+	state.PageToken = nextPageToken
+	c.inboxState.Cursor = state.Cursor
+	c.inboxState.PageToken = state.PageToken
+	c.inboxState.TopicsSeeded = true
+	c.inboxCollecting = true
+	if err := c.saveInboxStateLocked(ctx); err != nil {
+		c.inboxMu.Unlock()
+		return changed, err
+	}
+	c.inboxMu.Unlock()
+	return changed, nil
+}
+
+// Watch owns the two-minute background poll and emits the protocol's inbox
+// change event only when a round produced a new or updated item.
+func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) error {
+	for {
+		moved, err := c.Poll(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		if moved && changed != nil {
+			changed(connector.ScopeInbox)
+		}
+		c.inboxMu.Lock()
+		wait := c.inboxPoll
+		if wait <= 0 {
+			wait = inboxPollDefault
+		}
+		c.inboxMu.Unlock()
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+// Collect is memory-only. Polling and persistence happen in Watch/Poll; this
+// method never invokes lark-cli, matching inbox.collect's protocol semantics.
+func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
+	c.inboxMu.Lock()
+	defer c.inboxMu.Unlock()
+	if !c.inboxCollecting {
+		return []connector.InboxThing{}, nil
+	}
+	out := make([]connector.InboxThing, 0, len(c.inboxThings))
+	for _, thing := range c.inboxThings {
+		out = append(out, thing)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].At.Equal(out[j].At) {
+			return out[i].Thread < out[j].Thread
+		}
+		return out[i].At.Before(out[j].At)
+	})
+	return out, nil
+}
+
+// Reply is the existing Inbox Send path: the user's tap is the confirmation,
+// and the CLI write itself is explicitly made as the bot identity decided in
+// the L4 plan. A message id lets us preserve a topic reply; a chat-only thing
+// falls back to messages-send.
+func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
+	if c == nil || c.runner == nil {
+		return &adapter.Error{Kind: adapter.KindNotInstalled}
+	}
+	chatID, ok := chatIDFromThread(r.Thread)
+	if !ok {
+		return fmt.Errorf("%s cannot be replied to", r.Thread)
+	}
+	var err error
+	if strings.TrimSpace(r.Last) != "" && strings.Contains(r.Thread, ":thread:") {
+		_, err = c.runner.ReplyText(ctx, r.Last, r.Text, r.ClientID, strings.Contains(r.Thread, ":thread:"))
+	} else {
+		_, err = c.runner.SendText(ctx, chatID, r.Text, r.ClientID)
+	}
+	if err != nil {
+		return err
+	}
+	c.inboxMu.Lock()
+	if c.inboxThings != nil {
+		if thing, exists := c.inboxThings[r.Thread]; exists {
+			thing.Done = connector.DoneReplied
+			c.inboxThings[r.Thread] = thing
+		}
+	}
+	c.inboxMu.Unlock()
+	return nil
+}
+
+func (c *Connector) inboxShouldCollect(ctx context.Context) bool {
+	c.inboxMu.Lock()
+	prefer, available := c.inboxPrefer, c.gatewayAvailable
+	c.inboxMu.Unlock()
+	if prefer == "cli" {
+		// An explicitly preferred CLI still gives the gateway a turn when its
+		// login has disappeared. This check is intentionally read-only; the
+		// actual poll reads the same status again before searching.
+		auth, err := c.runner.AuthStatus(ctx)
+		if err == nil && auth.LoggedIn {
+			return true
+		}
+		return available == nil || !available(ctx)
+	}
+	if available != nil && available(ctx) {
+		return false
+	}
+	return true
+}
+
+func (c *Connector) loadInboxStateLocked(ctx context.Context) error {
+	if c.inboxStateLoaded {
+		return nil
+	}
+	c.inboxStateLoaded = true
+	if c.inboxThings == nil {
+		c.inboxThings = map[string]connector.InboxThing{}
+	}
+	if c.inboxSeen == nil {
+		c.inboxSeen = map[string]struct{}{}
+	}
+	if c.inboxTopics == nil {
+		c.inboxTopics = map[string]struct{}{}
+	}
+	if c.inboxStore == nil {
+		return nil
+	}
+	var saved persistedInboxState
+	ok, err := c.inboxStore.Setting(ctx, inboxStateKey, &saved)
+	if err != nil {
+		c.inboxStateLoaded = false
+		return fmt.Errorf("lark-cli Inbox state: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	c.inboxState = saved
+	for _, id := range saved.Seen {
+		if id != "" {
+			c.inboxSeen[id] = struct{}{}
+		}
+	}
+	for _, topic := range saved.Topics {
+		if topic != "" {
+			c.inboxTopics[topic] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func (c *Connector) saveInboxStateLocked(ctx context.Context) error {
+	if c.inboxStore == nil {
+		return nil
+	}
+	state := persistedInboxState{Cursor: c.inboxState.Cursor, PageToken: c.inboxState.PageToken, TopicsSeeded: c.inboxState.TopicsSeeded}
+	for topic := range c.inboxTopics {
+		state.Topics = append(state.Topics, topic)
+	}
+	sort.Strings(state.Topics)
+	if len(state.Topics) > inboxTopicLimit {
+		for _, topic := range state.Topics[:len(state.Topics)-inboxTopicLimit] {
+			delete(c.inboxTopics, topic)
+		}
+		state.Topics = state.Topics[len(state.Topics)-inboxTopicLimit:]
+	}
+	for id := range c.inboxSeen {
+		state.Seen = append(state.Seen, id)
+	}
+	sort.Strings(state.Seen)
+	if len(state.Seen) > inboxSeenLimit {
+		state.Seen = state.Seen[len(state.Seen)-inboxSeenLimit:]
+	}
+	c.inboxState = state
+	if err := c.inboxStore.PutSetting(ctx, inboxStateKey, state); err != nil {
+		return fmt.Errorf("lark-cli Inbox state: %w", err)
+	}
+	return nil
+}
+
+func (c *Connector) seedTopics(ctx context.Context, me, start string, pageLimit int) error {
+	token := ""
+	for pageNo := 0; pageNo < minInt(pageLimit, inboxSeedPages); pageNo++ {
+		page, err := c.runner.SearchMessages(ctx, "", adapter.SearchOptions{Sender: me, Start: start, PageToken: token, Limit: 50})
+		if err != nil {
+			return err
+		}
+		for _, message := range page.Messages {
+			c.noteTopic(message, me)
+		}
+		if !page.HasMore || page.PageToken == "" {
+			break
+		}
+		token = page.PageToken
+	}
+	return nil
+}
+
+func (c *Connector) noteTopic(message adapter.Message, me string) {
+	topic := topicID(message)
+	if topic == "" {
+		return
+	}
+	if message.Sender.ID == me || messageMentions(message, me) {
+		c.inboxMu.Lock()
+		if c.inboxTopics == nil {
+			c.inboxTopics = map[string]struct{}{}
+		}
+		c.inboxTopics[topic] = struct{}{}
+		c.inboxMu.Unlock()
+	}
+}
+
+func (c *Connector) dedupMessages(messages []adapter.Message) []adapter.Message {
+	c.inboxMu.Lock()
+	defer c.inboxMu.Unlock()
+	if c.inboxSeen == nil {
+		c.inboxSeen = map[string]struct{}{}
+	}
+	out := make([]adapter.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.MessageID == "" {
+			continue
+		}
+		if _, ok := c.inboxSeen[message.MessageID]; ok {
+			continue
+		}
+		c.inboxSeen[message.MessageID] = struct{}{}
+		out = append(out, message)
+	}
+	// The persisted state is rebuilt from this bounded map on save. Remove
+	// arbitrary oldest-by-id entries only when necessary; IDs are opaque and
+	// boundedness matters more than their lexical order.
+	for len(c.inboxSeen) > inboxSeenLimit {
+		for id := range c.inboxSeen {
+			delete(c.inboxSeen, id)
+			break
+		}
+	}
+	return out
+}
+
+func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTopics map[string]struct{}) []*inboxGroup {
+	if len(messages) == 0 {
+		return nil
+	}
+	topics := make(map[string]struct{}, len(knownTopics))
+	for topic := range knownTopics {
+		topics[topic] = struct{}{}
+	}
+	c.inboxMu.Lock()
+	allChats := make(map[string]struct{}, len(c.inboxAllChats))
+	for chat := range c.inboxAllChats {
+		allChats[chat] = struct{}{}
+	}
+	c.inboxMu.Unlock()
+	var out []*inboxGroup
+	var current *inboxGroup
+	byKey := map[string]*inboxGroup{}
+	for _, message := range messages {
+		key := messageKey(message)
+		if key == "" {
+			continue
+		}
+		if message.Sender.ID == me {
+			if prior := byKey[key]; prior != nil {
+				prior.replied = true
+			}
+			if topic := topicID(message); topic != "" {
+				topics[topic] = struct{}{}
+			}
+			continue
+		}
+		keep := false
+		mentioned := messageMentions(message, me)
+		if mentioned {
+			if topic := topicID(message); topic != "" {
+				topics[topic] = struct{}{}
+			}
+		}
+		_, topicKnown := topics[topicID(message)]
+		_, allChat := allChats[message.ChatID]
+		switch {
+		case allChat:
+			keep = true
+		case mentioned:
+			keep = true
+		case message.ChatType == "p2p":
+			keep = true
+		case topicKnown:
+			keep = true
+		}
+		if !keep {
+			current = nil
+			continue
+		}
+		if current == nil || current.key != key {
+			current = &inboxGroup{key: key, chatID: message.ChatID, threadID: topicID(message), chatName: message.ChatName}
+			out = append(out, current)
+			byKey[key] = current
+		}
+		current.messages = append(current.messages, message)
+		current.latest = message
+		current.mentioned = current.mentioned || mentioned
+	}
+	return out
+}
+
+func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me string) connector.InboxThing {
+	if group == nil || len(group.messages) == 0 {
+		return connector.InboxThing{}
+	}
+	latest := group.latest
+	contextMessages := append([]adapter.Message(nil), group.messages...)
+	if page, err := c.runner.ListMessages(ctx, group.chatID, group.threadID, "", 40); err == nil && len(page.Messages) > 0 {
+		contextMessages = mergeMessages(page.Messages, group.messages)
+		for _, message := range page.Messages {
+			if messageKey(message) == group.key && message.Sender.ID == me && after(message, latest) {
+				group.replied = true
+			}
+		}
+	}
+	text := messageText(latest)
+	thread := "larkcli:chat:" + group.chatID
+	if group.threadID != "" {
+		thread += ":thread:" + group.threadID
+	}
+	kind := "message"
+	lang := i18n.From(ctx).Or(i18n.Default)
+	label := i18n.T(lang, "hub-connectors.larkcli_message")
+	tier := connector.TierFYI
+	if latest.ChatType == "p2p" {
+		label, tier = i18n.T(lang, "hub-connectors.larkcli_direct_message"), connector.TierAction
+	} else if group.mentioned {
+		label, tier = i18n.T(lang, "hub-connectors.larkcli_mention"), connector.TierAction
+	}
+	thing := connector.InboxThing{
+		Thread:   thread,
+		Kind:     kind,
+		Label:    label,
+		Title:    firstNonEmpty(group.chatName, group.chatID),
+		Sender:   latest.Sender.Name,
+		Preview:  firstLine(text),
+		Context:  contextText(contextMessages),
+		At:       messageTime(latest),
+		Last:     latest.MessageID,
+		ReplyTo:  latest.MessageID,
+		CanReply: latest.MessageID != "",
+		Tier:     tier,
+		Why:      i18n.T(lang, "assistant-inbox.by_rules"),
+		Tags:     []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: firstNonEmpty(group.chatName, latest.ChatID)}},
+	}
+	if thing.At.IsZero() {
+		thing.At = time.Now().UTC()
+	}
+	if group.replied {
+		thing.Done = connector.DoneReplied
+	}
+	return thing
+}
+
+func (c *Connector) inboxStateForTests() persistedInboxState {
+	c.inboxMu.Lock()
+	defer c.inboxMu.Unlock()
+	return c.inboxState
+}
+
+func topicID(message adapter.Message) string {
+	if message.ThreadID != "" {
+		return message.ThreadID
+	}
+	if message.RootID != "" {
+		return message.RootID
+	}
+	if message.ParentID != "" {
+		return message.ParentID
+	}
+	return ""
+}
+
+func chatIDFromThread(thread string) (string, bool) {
+	const prefix = "larkcli:chat:"
+	rest, ok := strings.CutPrefix(thread, prefix)
+	if !ok || rest == "" {
+		return "", false
+	}
+	if i := strings.Index(rest, ":thread:"); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest, rest != ""
+}
+
+func messageKey(message adapter.Message) string {
+	if message.ChatID == "" {
+		return ""
+	}
+	if topic := topicID(message); topic != "" {
+		return message.ChatID + "\x00" + topic
+	}
+	return message.ChatID
+}
+
+func messageMentions(message adapter.Message, me string) bool {
+	for _, mention := range message.Mentions {
+		id, key, name := strings.ToLower(strings.TrimSpace(mention.ID)), strings.ToLower(strings.TrimSpace(mention.Key)), strings.ToLower(strings.TrimSpace(mention.Name))
+		if me != "" && mention.ID == me || id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") {
+			return true
+		}
+	}
+	return false
+}
+
+func messageTime(message adapter.Message) time.Time {
+	value := strings.TrimSpace(message.CreateTime)
+	if value == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t.UTC()
+	}
+	if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
+		if len(value) >= 13 {
+			return time.UnixMilli(n).UTC()
+		}
+		return time.Unix(n, 0).UTC()
+	}
+	return time.Time{}
+}
+
+func after(message, previous adapter.Message) bool {
+	tm, tp := messageTime(message), messageTime(previous)
+	if tm.IsZero() || tp.IsZero() {
+		return message.MessageID > previous.MessageID
+	}
+	return tm.After(tp)
+}
+
+func messageText(message adapter.Message) string {
+	return rawText(message.Content)
+}
+
+func rawText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		var nested json.RawMessage
+		if json.Unmarshal([]byte(s), &nested) == nil {
+			return rawText(nested)
+		}
+		return s
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	var parts []string
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if text, ok := x["text"].(string); ok && strings.TrimSpace(text) != "" {
+				parts = append(parts, text)
+			}
+			for _, child := range x {
+				walk(child)
+			}
+		case []any:
+			for _, child := range x {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return strings.Join(parts, "\n")
+}
+
+func contextText(messages []adapter.Message) string {
+	var b strings.Builder
+	for _, message := range messages {
+		text := strings.TrimSpace(messageText(message))
+		if text == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		name := message.Sender.Name
+		if name == "" {
+			name = message.Sender.ID
+		}
+		if name != "" {
+			b.WriteString(name)
+			b.WriteString(": ")
+		}
+		b.WriteString(text)
+	}
+	return b.String()
+}
+
+func mergeMessages(primary, extra []adapter.Message) []adapter.Message {
+	seen := make(map[string]struct{}, len(primary)+len(extra))
+	out := make([]adapter.Message, 0, len(primary)+len(extra))
+	for _, list := range [][]adapter.Message{primary, extra} {
+		for _, message := range list {
+			if message.MessageID != "" {
+				if _, ok := seen[message.MessageID]; ok {
+					continue
+				}
+				seen[message.MessageID] = struct{}{}
+			}
+			out = append(out, message)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ti, tj := messageTime(out[i]), messageTime(out[j])
+		if ti.Equal(tj) {
+			return out[i].MessageID < out[j].MessageID
+		}
+		return ti.Before(tj)
+	})
+	return out
+}
+
+func firstLine(value string) string {
+	value = strings.TrimSpace(value)
+	if i := strings.IndexByte(value, '\n'); i >= 0 {
+		value = strings.TrimSpace(value[:i])
+	}
+	runes := []rune(value)
+	if len(runes) > 180 {
+		return string(runes[:180]) + "…"
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+var _ connector.Inbox = (*Connector)(nil)
+var _ connector.Events = (*Connector)(nil)

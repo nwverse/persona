@@ -12,5 +12,8 @@
   "permission_guide": "Ask the Lark app administrator to grant the missing permission, then sign in again",
   "rate_limited": "lark-cli is rate limited; try again later",
   "error": "lark-cli could not read Lark",
-  "expiry_reminder": "Login expires in {count} day(s); run lark-cli auth login on the hub machine"
+  "expiry_reminder": "Login expires in {count} day(s); run lark-cli auth login on the hub machine",
+  "larkcli_message": "Lark message",
+  "larkcli_direct_message": "Direct Lark message",
+  "larkcli_mention": "Lark mention"
 }

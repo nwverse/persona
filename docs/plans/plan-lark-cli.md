@@ -113,13 +113,15 @@ The "Needs" column: unread = Lark's unread / read position; feed = the conversat
 
 ```json
 "lark": {
-  "cli": { "bin": "lark-cli", "profile": "" },
+  "cli": { "bin": "lark-cli", "profile": "", "inbox_poll_seconds": 120, "inbox_page_limit": 5 },
   "prefer": ""
 }
 ```
 
 - `lark.cli.bin`: command name or absolute path, looked up on the login shell's PATH by default (npm global installs often live in the nvm directory). Without `lark.cli` it is not enabled.
 - `lark.cli.profile`: optional lark-cli profile (`--profile`); empty uses its default profile. Every call from the hub and the assistant passes it.
+- `lark.cli.inbox_poll_seconds`: optional Inbox poll interval; defaults to 120 seconds and is clamped to a minimum of 60 seconds.
+- `lark.cli.inbox_page_limit`: optional maximum `+messages-search` pages per Inbox round; remaining pages continue in later rounds (default 5).
 - `lark.prefer`: which source is primary when both are configured: unset (default, the Lark gateway) or `cli`; any other value is passed as-is to the extension that provides Lark (see "Shape").
 - App credentials do not go into `hub.json`: lark-cli uses the app bound in its own `config`.
 - **Enable every permission that can be enabled** (user decision 2026-11-03): log in with `lark-cli auth login --domain all` (user permissions for all domains; on machines without a browser add `--no-wait --json` to use Device Flow
@@ -167,7 +169,7 @@ Codex app-server approvals use the same `larkCheck`.
   Acceptance: the assistant can look up recent messages, documents and calendar; sending a message shows a confirmation card and nothing is sent after denial; hubs with the Lark gateway behave the same (existing goldens unchanged).
 - [x] **L2 Connector skeleton**: added the subprocess-only `internal/larkcli` adapter, version and auth/status checks, and the `larkcli` connector with Settings status plus `larkcli_chats`, `larkcli_messages`, and `larkcli_search` read tools.
 - [ ] **L3 Knowledge base**: `Archive` (conversations, messages, people, groups: search polling + backfill; attachments), `Items` (calendar, meetings, Minutes, document titles). Acceptance: the knowledge base has Lark conversations and people, in the same format as the Lark gateway source.
-- [ ] **L4 Inbox**: `Inbox`: @me, direct chats, replies in topics I take part in ("What the Inbox collects"); when coexisting with the Lark gateway, collect only from the primary source; replies go through `Actions`, the gate and the phone card.
+- [x] **L4 Inbox**: `Inbox`: @me, direct chats, replies in topics I take part in ("What the Inbox collects"); bounded `messages-search` polling, Postgres-backed cursor/topic state, grouping and reply detection; collection follows `lark.prefer` and falls back when the gateway is unavailable. Inbox replies use `messages-reply` / `messages-send` as the bot identity.
 - [ ] **L5 `/agent`**: recognize requests by search polling, reactions, context, replies; `/agent` in document comments is not done.
 - [ ] **L6 App**: the conversation page's messages, sending, replies, reactions and media wired to lark-cli (same JSON); the document reader uses markdown; unread, labels and Moments are hidden for this source.
 
