@@ -3120,7 +3120,8 @@ struct ChatView: View {
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
         if !hidesBack {
             ToolbarItem(placement: .cancellationAction) {
-                Button { back() } label: { Label("Back [Task Sheets 572cf4]", systemImage: Theme.Icon.back) }
+                // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
+                Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
