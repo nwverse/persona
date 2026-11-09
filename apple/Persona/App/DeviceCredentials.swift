@@ -236,7 +236,7 @@ struct DevicesView: View {
 
     @ViewBuilder private func revokeButton(_ t: APIClient.DeviceToken) -> some View {
         if t.id == current, model.hubSignOut == .group(model.hub?.group ?? "") {
-            ProgressView() // Revoke and Unpair signing this device out of the group's hubs
+            RowProgress() // Revoke and Unpair signing this device out of the group's hubs
         } else {
             Button(String(localized: "action.revoke", defaultValue: "Revoke"), role: .destructive) { revoking = t }
                 .buttonStyle(.borderless)

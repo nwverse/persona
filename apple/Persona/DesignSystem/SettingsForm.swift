@@ -47,11 +47,23 @@ extension View {
             HStack(spacing: Theme.Space.m) {
                 self
                 Spacer(minLength: 0)
-                ProgressView()
+                RowProgress()
             }
         } else {
             self
         }
+    }
+}
+
+/// The progress indicator a settings row shows while an action it started runs: on the Mac the small one, the height of
+/// the form's buttons and text.
+struct RowProgress: View {
+    var body: some View {
+        #if os(macOS)
+        ProgressView().controlSize(.small)
+        #else
+        ProgressView()
+        #endif
     }
 }
 

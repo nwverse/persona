@@ -141,7 +141,7 @@ struct HubsView: View {
                 Button("Rename… [Hubs View 5f6ecf]") { newName = model.registry.groupNames[g] ?? ""; renaming = g }
                     .lineLimit(1).formButton()
                     .accessibilityIdentifier("hubs.rename.\(g)")
-                if model.hubSignOut == .group(g) { ProgressView().controlSize(.small) }
+                if model.hubSignOut == .group(g) { RowProgress() }
                 Button(model.groupIDs.count > 1 ? String(localized: "Disconnect This Group…") : String(localized: "Disconnect and Forget Server…"), role: .destructive) { removingGroup = g }
                     .lineLimit(1).formButton()
                     .disabled(model.hubSignOut != nil)
@@ -249,7 +249,7 @@ struct HubsView: View {
                 Text(h.config.url.absoluteString).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
-            if signingOut { ProgressView() } // Disconnect This Hub
+            if signingOut { RowProgress() } // Disconnect This Hub
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("hubs.hub.\(h.id)")
