@@ -4819,6 +4819,7 @@ PREFS = {"input": True, "done": "long", "live_activity": True, "lock_details": F
          # quiet hours (#5806): never set until a client sets them; MOCK_QUIET_HOURS=1 starts with 23:00–07:00 on
          "quiet": {"enabled": True, "start": "23:00", "end": "07:00"} if os.environ.get("MOCK_QUIET_HOURS") else {"enabled": False, "start": "", "end": ""}}  # one device is enough
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
+DEVICES = []  # POST /api/v1/devices, newest last (GET /mock/devices): each one's id, kind and push `features` (#2433)
 # The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
 # (GET /mock/hello): the hub lists MCP elicitation cards in REST answers only when the two match (docs/protocol/protocol.md
 # "MCP elicitation").
@@ -13868,6 +13869,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/delegate": return self.send_json(*mock_delegate(q))
         if p == "/mock/reanswered": return self.send_json({"reanswered": REANSWERED})
         if p == "/mock/resolved": return self.send_json({"resolved": RESOLVED})
+        if p == "/mock/devices": return self.send_json({"devices": DEVICES})
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
@@ -14535,6 +14537,10 @@ class H(BaseHTTPRequestHandler):
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]
             return self.send_json({"ok": True, "restart_required": False})
+        if p == "/api/v1/devices":  # a push registration: kept without its token, key or grant
+            d = json.loads(self.last_body or b"{}")
+            DEVICES.append({k: d.get(k) for k in ("device_id", "kind", "features")})
+            return self.send_json({"ok": True, "push": {"route": "relay"}})
         if p == "/mock/frames":
             run = json.loads(self.last_body or b"{}")
             run["test"] = run.get("name") or FRAMES["label"]
