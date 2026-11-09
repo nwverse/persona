@@ -1,5 +1,6 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useManagerOffline } from "../ManagerParts";
+import { LinkManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
@@ -1199,7 +1200,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const commands = useMemo(() => (assistant ? [] : agentCommands(AGENT_COMMANDS, session)), [assistant, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
 
-  return (
+  const page = (
     <div className="flex h-full min-w-0 flex-col">
       {!readOnly && (
         <Header
@@ -1495,6 +1496,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       </Dialog>
     </div>
   );
+  // a link tapped in the chat opens what it opens as the chat's manager
+  return <LinkManager.Provider value={session?.manager}>{page}</LinkManager.Provider>;
 }
 
 /** Over the chat's top edge when the page keeps getting its items by asking for them, not by push (lib/stale-page.ts). */
