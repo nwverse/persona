@@ -2982,8 +2982,8 @@ The cases run in order, and each starts from the state the one before leaves. Wh
 When `personad-wechat` is beside personad, it registers as built-in extension `wechat` (#1352, `docs/extensions/wechat.md`), contributing connector `wechat` (only `status` and QR-code `login`,
 declared in `wechat/spec`) and channel `wechat` (`channel` extension point, #1466, [channels.md](channels.md)), with only `network: *.weixin.qq.com` permission.
 It must be built alongside the hub and runs with the connector switch. The first version combined `hub_api` + `events` (extension polling sessions and tracking the turn); since #1466 these use the hub's channel pipeline,
-so the extension no longer gets the hub token or subscribes to events.
-The program is the SDK's `ext.Serve` (`server/plugins/wechat/program.go`): it answers `channel.send` (each `ref` sent only once, `sentRefs`) and `channel.typing`, and hands incoming messages to the hub with `ext.Hub.ChannelReceive`.
+so the extension no longer gets the hub token or subscribes to events. A connector program acts as a channel: implement `channel.Transport` (`Send`, optional `Typing` / `Edit`), hand incoming messages to `serve.Init.Channel` (`Receive`);
+`connector/serve` forwards `channel.*` and sends only once per `ref`.
 
 ## Built-in extension: computer control (`cua`)
 
