@@ -40,7 +40,7 @@ struct MessageLiftTests {
     @Test func aMessageTallerThanTheScreenShowsThePartAroundThePressAndTheBarStaysOnScreen() {
         let message = CGRect(x: 16, y: -900, width: 358, height: 2400)
         let p = place(message, press: 1300)
-        #expect(p.preview.height == 700 - 16 - 8 - 62)
+        #expect(abs(p.preview.height - (700 - 16 - 8 - 62)) < 0.5) // CGFloat sums: not exactly equal
         #expect(abs(p.offset + p.preview.height / 2 - 1300) < 1, "the press is in the middle of what shows")
         #expect(p.bar.minY >= bounds.minY && p.bar.maxY <= bounds.maxY)
         #expect(p.preview.minY >= bounds.minY + 8)
