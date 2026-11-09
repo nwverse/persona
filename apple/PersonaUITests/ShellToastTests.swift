@@ -17,7 +17,7 @@ final class ShellToastTests: XCTestCase {
     /// Demo Mode in the shell; toasts `at` seconds after launch (`-showToasts`), time enough to read the page first.
     @MainActor private func launch(_ page: String, toasts: String, _ extra: [String] = []) {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-dev.openChat", "", "-showToasts", toasts]
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-dev.openChat", "", "-showToasts", toasts]
             + (page == "dev" ? ["-app.tab", "chats", "-tab", "dev", "-openAgentsFresh", "YES"] : ["-tab", "assistant", "-newAssistant", "YES"])
             + extra
         app.launchPinned()

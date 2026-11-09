@@ -253,14 +253,14 @@ describe("ProviderWizard from presets", () => {
     expect(post?.body).toEqual({ name: "jv_team", api_key: "sk-test-123456", preset: "example-gateway/team" });
   });
 
-  it("does not test a Responses preset's key, which the hub's test cannot reach", async () => {
+  it("tests a Responses preset using its configured protocol", async () => {
     await open();
     act(() => button("示例 Responses")!.click());
     type(keyInput(), "sk-test-123456");
     await waitAutoTest();
-    expect(keyTests()).toHaveLength(0);
-    expect(text()).toContain("Responses 协议的 Key 没法在这里测试");
-    expect(text()).not.toContain("重新测试");
+    expect(keyTests()).toHaveLength(1);
+    expect(keyTests()[0]!.body).toMatchObject({ preset: "example-gateway/api", api_key: "sk-test-123456" });
+    expect(text()).toContain("Key 能用");
     expect(button("保存")!.disabled).toBe(false);
   });
 
@@ -269,6 +269,22 @@ describe("ProviderWizard from presets", () => {
     act(() => button("自定义兼容网关")!.click());
     expect(text()).toContain("鉴权方式");
     expect(text()).toContain("地址");
+  });
+
+  it("lets a custom Responses provider test and discover using its selected protocol", async () => {
+    await open();
+    act(() => button("自定义兼容网关")!.click());
+    act(() => button("直接 API")!.click());
+    act(() => button("OpenAI Responses")!.click());
+    const inputs = [...document.body.querySelectorAll<HTMLInputElement>("input")];
+    type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
+    type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/prefix");
+    type(keyInput(), "sk-test-123456");
+    type(document.body.querySelector<HTMLInputElement>('input[aria-label="测试用的模型"]')!, "example-r");
+    await act(async () => button("测试连接")!.click());
+    await act(async () => button("获取模型列表")!.click());
+    expect(keyTests()[0]!.body).toMatchObject({ api: "responses", model: "example-r", base_url: "https://api.example.com/prefix" });
+    expect(calls.find((c) => c.path.endsWith("/launchers/discover"))?.body).toMatchObject({ api: "responses" });
   });
 
   it("leaves a Claude Code that already answers in place unless told otherwise", async () => {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestSourceValidatorManifestComposition(t *testing.T) {
-	manifest := `{"manifest_version":1,"id":"example","name":"Example","version":"1.0.0","runtime":{"mode":"deno","source":{"entry":"src/main.tsx","bundle":"bundle/main.mjs","sha256":"` + strings.Repeat("a", 64) + `"}}}`
+	manifest := `{"manifest_version":1,"id":"example","name":"Example","version":"1.0.0","engines":{"extension_protocol":1},"runtime":{"mode":"deno","source":{"entry":"src/main.tsx","bundle":"bundle/main.mjs","sha256":"` + strings.Repeat("a", 64) + `"}}}`
 	if err := ValidateJSON("Manifest", []byte(manifest)); err != nil {
 		t.Fatal(err)
 	}

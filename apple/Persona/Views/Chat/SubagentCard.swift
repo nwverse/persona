@@ -5,6 +5,9 @@ import SwiftUI
 /// (`SubagentCard`): set by the chat, each running or not as its own lines tell it (`Subagent.running(in:)`).
 extension EnvironmentValues {
     @Entry var subagentsByCall: [String: Subagent] = [:]
+    /// The chat the cards are in: a subagent's own conversation is `<session>@<agent>` on its machine, which its open
+    /// card follows (`SubagentRecentSteps`). Nil where there is no chat around the card.
+    @Entry var subagentParent: SessionKey? = nil
 }
 
 /// How a subagent is doing, as its card says it (#5602, the web's `AgentStatus`): by its call's result, a background
@@ -32,6 +35,57 @@ nonisolated enum SubagentCardStatus: Equatable, Sendable {
     /// What a background subagent reported: its last notice's detail (nil before it is over).
     static func report(_ call: String, tasks: TaskIndex) -> String? {
         tasks.notes[call]?.last(where: { $0.status != "event" })?.detail.flatMap { $0.isEmpty ? nil : $0 }
+    }
+}
+
+/// What an open card shows of a subagent's own conversation: its latest few tool calls, oldest first, each with its
+/// result once it is in (the web's `RecentSteps`).
+nonisolated enum SubagentRecent {
+    static let count = 3
+
+    static func calls(_ items: [Item], last n: Int = count) -> [ToolCall] {
+        var results: [String: Item] = [:]
+        for it in items where it.kind == .toolResult { if let id = it.toolUseID { results[id] = it } }
+        return items.filter { $0.kind == .toolUse }.suffix(n).map { ToolCall(use: $0, result: $0.toolUseID.flatMap { results[$0] }) }
+    }
+
+    /// The most calls a fold may hold for the card to open it (`foldToOpen`).
+    static let foldLimit = 40
+
+    /// The fold to open for the latest calls: the hub folds the work it replays (`fold_work`), and a subagent's run is
+    /// one stretch of work, so only calls made since the card subscribed are out. Its newest fold when fewer than
+    /// `count` calls follow it; not a long one (it is fetched whole for three rows: its next steps come in as they happen).
+    static func foldToOpen(_ items: [Item]) -> Item? {
+        guard let i = items.lastIndex(where: { $0.kind == .fold }), let tools = items[i].fold?.tools,
+              (1...foldLimit).contains(tools),
+              items[(i + 1)...].filter({ $0.kind == .toolUse }).count < count else { return nil }
+        return items[i]
+    }
+}
+
+/// A subagent's latest steps in its open card (#5602): it follows the subagent's own conversation while shown (the hub
+/// pushes what it writes), instead of what the card knew when it opened.
+struct SubagentRecentSteps: View {
+    @Environment(AppModel.self) private var model
+    var key: SessionKey
+    @State private var owner = UUID()
+
+    var body: some View {
+        let store = model.chat(key)
+        let calls = SubagentRecent.calls(store.items)
+        let fold = SubagentRecent.foldToOpen(store.items)
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            if calls.isEmpty {
+                if !store.loadedOnce { ProgressView().controlSize(.mini) }
+            } else {
+                ForEach(calls) { ToolCallRow(call: $0, autoExpand: false) }
+            }
+        }
+        .animation(Theme.Motion.state, value: calls.map(\.id))
+        .task(id: fold?.id) { if let fold { try? await model.unfold(key, fold) } }
+        .onAppear { model.subscribe(key, by: owner) }
+        .onDisappear { model.unsubscribe(key, by: owner) }
+        .accessibilityIdentifier("chat.subagent-steps")
     }
 }
 
@@ -66,8 +120,16 @@ struct SubagentCard: View {
     @Environment(\.openSubagent) private var openSubagent
     @Environment(\.openTools) private var openTools
     @Environment(\.chatPin) private var pin
+    @Environment(\.subagentParent) private var parent
     var call: ToolCall
-    @State private var openHere = false
+    @State private var openHere = Self.debugOpen
+
+    /// Screenshots: `-showSubagentDetails YES` opens every subagent card (its latest steps) without a tap.
+    #if DEBUG
+    static let debugOpen = UserDefaults.standard.bool(forKey: "showSubagentDetails")
+    #else
+    static let debugOpen = false
+    #endif
 
     /// An Agent / Task call: drawn as its subagent's card.
     nonisolated static func isAgent(_ call: ToolCall) -> Bool { call.name == "Agent" || call.name == "Task" }
@@ -170,6 +232,7 @@ struct SubagentCard: View {
                     ResultBlock(text: result.cutText, isError: result.isError ?? false, cut: result.fullSize.map { (result.id, $0) })
                 }
             }
+            if let agent, let parent { SubagentRecentSteps(key: ChatView.shownKey(parent, viewing: agent)) }
             if let open = openSubagent, let id = call.use.toolUseID {
                 Button { open(id) } label: {
                     Label("View Subagent", systemImage: Theme.Icon.open).font(Theme.Font.labelStrong).lineLimit(1)
@@ -181,5 +244,107 @@ struct SubagentCard: View {
         .padding(.leading, WorkCardSlice.textColumn)
         .padding(.trailing, WorkCardSlice.inset)
         .padding(.bottom, Theme.Space.m)
+    }
+}
+
+/// Subagents launched one after another (in parallel), as one line of a work line (#5602, the web's `AgentGrid`): "Running
+/// 3 agents" while any runs, "Ran 3 agents · 12 steps" after; their cards in a grid, two side by side where there is room
+/// (an iPad, a Mac), in the order they were launched. `alone`: the running ones under their folded work line.
+struct SubagentGrid: View {
+    @Environment(\.taskIndex) private var tasks
+    @Environment(\.subagentsByCall) private var agents
+    var calls: [ToolCall]
+    var first: Bool
+    var alone: Bool
+
+    private var running: Int {
+        calls.filter { c in SubagentCardStatus.of(c, tasks: tasks, agent: c.use.toolUseID.flatMap { agents[$0] }) == .running }.count
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.Size.subagentColumn), spacing: 0, alignment: .top)],
+                      alignment: .leading, spacing: 0) {
+                ForEach(calls, id: \.id) { SubagentCard(call: $0) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if alone {
+                if !WorkCardSlice.timeline { WorkCardSlice(top: true, bottom: true) }
+            } else {
+                WorkCardSlice(top: first, bottom: false)
+            }
+        }
+        .overlay(alignment: .top) { if !alone && !first { WorkCardSlice.separator } }
+        .accessibilityIdentifier("chat.subagent-grid")
+    }
+
+    private var header: some View {
+        let n = running
+        return HStack(spacing: Theme.Space.m) {
+            ZStack {
+                if WorkCardSlice.timeline { Circle().fill(Theme.pageBackground).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon) }
+                Circle().fill((n > 0 ? Theme.busy : Color.secondary).opacity(0.14)).scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                if n > 0 {
+                    ProgressView().controlSize(.mini).tint(Theme.busy)
+                } else {
+                    ThemedIcon(ToolPresentation.symbol("Agent"))
+                        .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xLarge)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(SubagentGridText.head(count: calls.count, running: n, steps: calls.compactMap { $0.use.toolUseID.flatMap { agents[$0]?.steps } }.reduce(0, +)))
+                .font(Theme.Font.label)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .contentTransition(.opacity)
+        }
+        .padding(.top, alone || WorkCardSlice.timeline ? Theme.Space.s : Theme.Space.m)
+        .padding(.horizontal, WorkCardSlice.inset)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// What a grid of subagents says over its cards.
+enum SubagentGridText {
+    static func head(count: Int, running: Int, steps: Int) -> String {
+        if running > 0 { return String(localized: "Running \(running) agents [Subagent Grid]") }
+        let ran = String(localized: "Ran \(count) agents [Subagent Grid]")
+        return steps > 0 ? ran + " · " + String(localized: "\(steps) steps in all [Subagent Grid]") : ran
+    }
+
+    /// The running work line's words while the agent waits on subagents it launched in the foreground (#5602, the
+    /// web's running bar): "2 subagents working — Running the tests… · 1 more"; `short`, the count alone.
+    static func working(count: Int, doing: [String], short: Bool) -> String {
+        let head = String(localized: "\(count) subagents working [Work Line]")
+        guard !short, let now = doing.first else { return head + (short ? "" : "…") }
+        let more = doing.count > 1 ? " · " + String(localized: "\(doing.count - 1) more [Work Line]") : ""
+        return head + " — " + now + "…" + more
+    }
+}
+
+/// The subagents the agent waits on (#5602, the web's `agentsWorking`, Claude Desktop's "2 agents working — …"): running
+/// ones it launched in the foreground whose calls have no result yet, and what they do, newest call first.
+nonisolated struct AgentsWorking: Equatable, Sendable {
+    var count: Int
+    var doing: [String]
+
+    /// Nil when there are none.
+    static func of(_ subagents: [Subagent], tasks: TaskIndex) -> AgentsWorking? {
+        let waiting = subagents.filter { a in
+            guard a.running, a.background != true, let id = a.toolUseID else { return false }
+            return !tasks.answered.contains(id) && !tasks.started.contains(id)
+        }
+        guard !waiting.isEmpty else { return nil }
+        var doing: [String] = []
+        for a in waiting.sorted(by: { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }) {
+            guard let t = a.lastTool else { continue }
+            let summary = t.summary?.trimmingCharacters(in: .whitespaces)
+            guard let what = summary?.isEmpty == false ? summary : t.name, !what.isEmpty else { continue }
+            if !doing.contains(what) { doing.append(what) }
+        }
+        return AgentsWorking(count: waiting.count, doing: doing)
     }
 }

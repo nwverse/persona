@@ -53,8 +53,8 @@ func (r *Regexp) Regexp() *regexp.Regexp {
 // String is the source text, as regexp.Regexp's String.
 func (r *Regexp) String() string { return r.src }
 
-// The methods of regexp.Regexp the server uses, unchanged (a gated pattern's MatchString and ReplaceAllStringFunc look
-// for its literals first).
+// The methods of regexp.Regexp the server uses, unchanged (a gated pattern's MatchString and its string replacements
+// look for its literals first).
 
 func (r *Regexp) MatchString(s string) bool {
 	rx := r.Regexp()
@@ -95,10 +95,18 @@ func (r *Regexp) FindAllSubmatchIndex(b []byte, n int) [][]int {
 	return r.Regexp().FindAllSubmatchIndex(b, n)
 }
 func (r *Regexp) ReplaceAllString(src, repl string) string {
-	return r.Regexp().ReplaceAllString(src, repl)
+	rx := r.Regexp()
+	if r.gate != nil && !r.gate.open(src) {
+		return src // what regexp gives back (as a copy) when nothing matches
+	}
+	return rx.ReplaceAllString(src, repl)
 }
 func (r *Regexp) ReplaceAllLiteralString(src, repl string) string {
-	return r.Regexp().ReplaceAllLiteralString(src, repl)
+	rx := r.Regexp()
+	if r.gate != nil && !r.gate.open(src) {
+		return src
+	}
+	return rx.ReplaceAllLiteralString(src, repl)
 }
 func (r *Regexp) ReplaceAllStringFunc(src string, repl func(string) string) string {
 	rx := r.Regexp()

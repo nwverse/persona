@@ -12,6 +12,7 @@ import { closePanel, getPanel, openPanel, type Panel } from "./panel";
 import { navigate, type Route } from "./router";
 import { canShowTerminal, readView, resolveView } from "./session-view";
 import { cycleGrouping, groupingLabel, setAllFolded, stepSidebarRow } from "./sidebar-api";
+import { focusWaitingCard } from "./card-keys";
 import { dispatchKey, registerShortcut } from "./shortcuts";
 import { getSession, getState } from "./store";
 
@@ -96,6 +97,8 @@ export function useShortcuts(ctx: ShortcutContext) {
         } else openPanel(to.open);
       }),
       registerShortcut("focus-input", () => focusInput(at.current.route)),
+      // the card then answers on its own keys (lib/card-keys.ts, Interactions.tsx)
+      registerShortcut("focus-card", () => focusWaitingCard()),
       registerShortcut("prev-tab", () => step(-1)),
       registerShortcut("next-tab", () => step(1)),
       registerShortcut("sidebar-grouping", () => {

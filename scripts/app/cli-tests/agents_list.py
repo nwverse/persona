@@ -45,7 +45,7 @@ def to_top(t):
 
 
 def list_menu(t):
-    """The list's ⋯ menu ("Group: ..." in the old layout's navigation bar), open."""
+    """Open the list's grouping menu, labeled "Group: ..." in the shell header."""
     t.settle()
     for _ in range(2):
         t.tap("the list menu", labelContains="分组：", trait="button")

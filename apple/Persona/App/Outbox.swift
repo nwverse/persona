@@ -25,8 +25,11 @@ extension AppModel {
 
     /// A message the hub already has, on screen as sent until its transcript copy arrives: a new Persona conversation's
     /// first one went with the start request, and the node shows no transcript until claude has written it (#511).
-    func showSent(_ key: SessionKey, text: String, images: [ImagePayload]) {
-        let msg = PendingMessage(text: text, images: images)
+    /// `id`: the message id the hub sent it under (an inbox hand-off's client id), which its transcript copy carries; no
+    /// bubble when that copy is in already (a retried hand-off the hub answered from its receipt).
+    func showSent(_ key: SessionKey, text: String, images: [ImagePayload], id: UUID = UUID()) {
+        guard !chat(key).items.contains(where: { PendingMessage.tied($0, to: id) == true }) else { return }
+        let msg = PendingMessage(id: id, text: text, images: images)
         chat(key).pending.append(msg)
         settleSend(key, msg.id, .sent)
     }

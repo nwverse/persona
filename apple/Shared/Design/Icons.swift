@@ -24,6 +24,8 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
+        /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
+        static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
         static let byState = "circle.grid.2x1"
         static let muted = "bell.slash.fill"
@@ -164,8 +166,6 @@ extension Theme {
         static let style = "paintpalette"
         /// Settings › Appearance › Theme Color.
         static let themeColor = "swatchpalette"
-        /// Settings › Appearance › Layout (the shell or the old tabs).
-        static let layout = "rectangle.topthird.inset.filled"
         /// Settings › Appearance › Light & Dark, and its Match System.
         static let colorScheme = "circle.lefthalf.filled"
         /// Settings › Appearance › Language: the interface language.
