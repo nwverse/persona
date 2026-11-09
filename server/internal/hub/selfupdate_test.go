@@ -254,6 +254,25 @@ func TestUpdateConfirmOrRollBack(t *testing.T) {
 	}
 }
 
+// A confirm that finds the marker claimed by the watchdog (update.Watch reached its deadline first) leaves the update
+// to it: nothing is recorded as updated and nobody is told, so the rollback the old version records stands alone.
+func TestUpdateConfirmLeavesAClaimedUpdateToTheWatchdog(t *testing.T) {
+	p := newPublisher(t, "v2-202611021700", 202611021700)
+	h, _, target, _ := updatingHub(t, p, "release")
+	h.build = update.Make("v2-202611021700", "release", "202611021700", p.srv.URL+"/dl")
+	told := 0
+	h.upd.notify = func(string, string) { told++ }
+	h.upd.edgeConfirmed = func() { told++ }
+	pending := update.Pending{FromBuild: 202611021500, ToBuild: 202611021700, Target: target, Prev: target + ".prev", Online: []string{"box"}, Auto: true}
+	update.Save(update.PendingPath(h.upd.dir), pending)
+	h.upd.boot()
+	os.Rename(update.PendingPath(h.upd.dir), update.PendingPath(h.upd.dir)+".watch") // the watchdog's claim
+	h.upd.confirm(context.Background(), pending)
+	if h.upd.view().Confirmed || len(h.upd.settings.History) != 0 || told != 0 {
+		t.Fatalf("confirmed an update the watchdog is undoing: history %+v, told %d", h.upd.settings.History, told)
+	}
+}
+
 // A build deployed straight from master during an update's checks clears the marker without calling it a failure.
 func TestUpdateDirectDeployIsNotARollback(t *testing.T) {
 	p := newPublisher(t, "v2-202611021700", 202611021700)

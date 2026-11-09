@@ -406,7 +406,12 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	_ = os.Remove(update.PendingPath(u.dir))
+	if err := os.Remove(update.PendingPath(u.dir)); errors.Is(err, os.ErrNotExist) {
+		// The watchdog claimed the marker at its deadline and is putting the old version back (update.Watch):
+		// recording this update as done would contradict the rollback the old version records.
+		u.h.logf("update: %s -> %s: the watchdog is already going back", p.FromVersion, p.ToVersion)
+		return
+	}
 	u.mu.Lock()
 	u.confirmed = true
 	u.mu.Unlock()

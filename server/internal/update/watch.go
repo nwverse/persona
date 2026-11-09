@@ -3,6 +3,8 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,7 +22,9 @@ type Health struct {
 // Watch is the watchdog `personad update-watch` runs: the old binary's code, started just before the hub runs the new
 // one. It waits until the hub answers as the new build with the update confirmed; by deadline it has not (the new
 // version hangs, or dies before it can roll back by itself), it restores the old binary, writes why, and restarts
-// the hub on it. Someone else finishing the update (the pending marker gone) ends it too.
+// the hub on it. Someone else finishing the update (the pending marker gone) ends it too, also while the last health
+// check was still out: before going back it claims the marker with a rename, and a confirm that finds the marker
+// claimed leaves the update to this watchdog (hub/selfupdate.go confirm).
 func Watch(ctx context.Context, client *http.Client, p Pending, pendingPath string, deadline time.Time, every time.Duration,
 	restore func() error, restart func() error) error {
 	for {
@@ -44,12 +48,20 @@ func Watch(ctx context.Context, client *http.Client, p Pending, pendingPath stri
 		case <-time.After(every):
 		}
 	}
+	claimed := pendingPath + ".watch"
+	if err := os.Rename(pendingPath, claimed); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // confirmed (or rolled back) while the last health check was out
+		}
+		return fmt.Errorf("claim the pending marker: %w", err)
+	}
 	if err := restore(); err != nil {
+		_ = os.Rename(claimed, pendingPath) // the update stays under way, as it was
 		return err
 	}
 	_ = Save(RolledBackPath(filepath.Dir(pendingPath)), RolledBack{FromVersion: p.FromVersion, ToVersion: p.ToVersion, ToBuild: p.ToBuild,
 		Started: p.Started, At: time.Now(), Reason: "新版本 3 分钟内没有起来并确认（看门狗回滚）", Auto: p.Auto})
-	_ = os.Remove(pendingPath)
+	_ = os.Remove(claimed)
 	return restart()
 }
 

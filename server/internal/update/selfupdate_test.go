@@ -274,6 +274,9 @@ func TestWatch(t *testing.T) {
 	if _, err := os.Stat(PendingPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("the pending marker stayed")
 	}
+	if left, _ := filepath.Glob(PendingPath(dir) + "*"); len(left) != 0 {
+		t.Fatalf("left %v behind", left)
+	}
 	if restored, restarted, _ := run(t, func(dir, pending string) { os.Remove(pending) }); restored || restarted {
 		t.Fatal("rolled back again what the new version already rolled back")
 	}
@@ -292,5 +295,69 @@ func TestWatchLeavesADirectDeploy(t *testing.T) {
 	if err := Watch(context.Background(), srv.Client(), p, PendingPath(dir), time.Now().Add(200*time.Millisecond), 50*time.Millisecond,
 		func() error { restored = true; return nil }, func() error { return nil }); err != nil || restored {
 		t.Fatalf("undid a direct deploy: %v %v", err, restored)
+	}
+}
+
+// The new version confirming while the last health check is still out is left alone: that check's answer (computed
+// just before the confirm, or a timeout under load) is older than the marker being gone.
+func TestWatchLeavesAnUpdateConfirmedAtTheDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		answer  func(w http.ResponseWriter, r *http.Request)
+	}{
+		{"answered", 5 * time.Second, func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]any{"build": 202611021700, "update": map[string]bool{"confirmed": false}})
+		}},
+		{"timed out", 50 * time.Millisecond, func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			pending := PendingPath(dir)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				os.Remove(pending) // the new version confirms (hub/selfupdate.go confirm)
+				tc.answer(w, r)
+			}))
+			defer srv.Close()
+			p := Pending{FromBuild: 202611021500, ToBuild: 202611021700, ToVersion: "v2", FromVersion: "v1", HealthURL: srv.URL}
+			if err := Save(pending, p); err != nil {
+				t.Fatal(err)
+			}
+			client := srv.Client()
+			client.Timeout = tc.timeout
+			restored, restarted := false, false
+			err := Watch(context.Background(), client, p, pending, time.Now(), 50*time.Millisecond,
+				func() error { restored = true; return nil }, func() error { restarted = true; return nil })
+			if err != nil || restored || restarted {
+				t.Fatalf("went back on a confirmed update: %v, restored %v, restarted %v", err, restored, restarted)
+			}
+			if _, err := os.Stat(RolledBackPath(dir)); !os.IsNotExist(err) {
+				t.Fatal("wrote down a rollback that did not happen")
+			}
+		})
+	}
+}
+
+// A restore that fails leaves the marker where it was, and no rollback is written down.
+func TestWatchKeepsTheMarkerWhenRestoreFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"build": 202611021700, "update": map[string]bool{"confirmed": false}})
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	p := Pending{FromBuild: 202611021500, ToBuild: 202611021700, HealthURL: srv.URL}
+	Save(PendingPath(dir), p)
+	restarted := false
+	err := Watch(context.Background(), srv.Client(), p, PendingPath(dir), time.Now(), 50*time.Millisecond,
+		func() error { return errors.New("disk full") }, func() error { restarted = true; return nil })
+	if err == nil || restarted {
+		t.Fatalf("a failed restore: %v, restarted %v", err, restarted)
+	}
+	var back Pending
+	if ok, _ := Load(PendingPath(dir), &back); !ok || back.ToBuild != p.ToBuild {
+		t.Fatal("the pending marker is gone after a failed restore")
+	}
+	if _, err := os.Stat(RolledBackPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("wrote down a rollback that did not happen")
 	}
 }
