@@ -497,10 +497,17 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 		}
 	}
 	// A launcher only the terminal cannot run says nothing of the main conversation, which runs in the login shell.
-	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && time.Since(h.CheckedAt) < healthStale && h.State != "" && h.Kind != errKindNotInTerminal {
-		if h.State == healthOK {
+	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && h.State != "" && h.Kind != errKindNotInTerminal {
+		switch {
+		case h.Kind == errKindUsageLimit:
+			// The subscription's limit, used up: it recovers on its own, and says nothing once it reset.
+			if h.unusable() {
+				ev = append(ev, readinessEvidence{at: h.CheckedAt, code: proto.TurnErrorRateLimited})
+			}
+		case time.Since(h.CheckedAt) >= healthStale:
+		case h.State == healthOK:
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, ok: true})
-		} else if missingCode(h.Error) == "" { // a start that found no claude is the claude step's
+		case missingCode(h.Error) == "": // a start that found no claude is the claude step's
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, text: h.Error})
 		}
 	}
@@ -738,9 +745,9 @@ const (
 // assistant launcher counts as not Claude Code) and whether it is there.
 func (s *Service) readinessLauncher(ctx context.Context, machine, launcher string) (string, int) {
 	// A managed launcher runs Claude Code through personad launch, and so does a direct API provider speaking Messages
-	// (its gateway, #2455); a Responses one cannot start Claude.
+	// (its gateway, #2455); other direct API protocols cannot start Claude.
 	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool {
-		return l.Name == launcher && !(l.Kind == "api" && l.API == "responses")
+		return l.Name == launcher && !(l.Kind == "api" && !messagesAPI(l.API))
 	}) {
 		return "", launcherThere
 	}

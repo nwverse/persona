@@ -2629,7 +2629,7 @@ struct ChatView: View {
                     } else {
                         if let s = session {
                             if !s.assistant { AgentMark(s, side: Theme.Size.markXS) } // its agent before its state (#6390)
-                            StatusDot(state: s.state, size: 7)
+                            StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
                         }
                         Text(compactPlace).lineLimit(1).truncationMode(.middle)
                     }
@@ -2680,15 +2680,17 @@ struct ChatView: View {
     }
 
     /// The folded header's sign of a loop / background tasks: a gear with the count, or the loop arrows (still: only
-    /// Needs You and the work spinner move). The same symbols and tints as the open header's pill (`ActivityChips`).
+    /// Needs You and the work spinner move). The same symbols and tints as the open header's pill (`ActivityChips`):
+    /// a clock, lighter, when all of it only waits (#6045).
     private var activityMark: some View {
         let bg = session?.background?.count ?? 0
+        let waiting = bg > 0 && session?.waitsInBackground == true
         return HStack(spacing: Theme.Space.xxs) {
-            ThemedIcon(bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
+            ThemedIcon(waiting ? Theme.Icon.backgroundWaiting : bg > 0 ? ActivityChips.backgroundSymbol : ActivityChips.loopSymbol)
                 .font(Theme.Font.labelHeavy)
             if bg > 0 { Text("\(bg)").font(Theme.Font.labelHeavy.monospacedDigit()) }
         }
-        .foregroundStyle(bg > 0 ? Theme.busy : Theme.loop)
+        .foregroundStyle(waiting ? StatusPalette.backgroundWaiting.dot : bg > 0 ? Theme.busy : Theme.loop)
         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellM)
         .contentShape(.rect)
     }
@@ -2875,15 +2877,15 @@ struct ChatView: View {
     /// shows the space's tabs (the selected one is this agent's; 2026-11-01 user request: it said it twice). Short of
     /// room the machine goes; the place always stays (cut short if it must), so the line keeps one shape whatever the state.
     private func devSubtitle(_ s: Session) -> some View {
-        TimelineView(.periodic(from: .now, by: 30)) { ctx in
-            let words = stateWords(s, now: ctx.date)
+        VisibleTimelineView(interval: 30) { now in
+            let words = stateWords(s, now: now)
             // Hosted (one agent's page, #3255) the line is status · machine · project: the tab's name would crowd the machine out.
             let tabShown = host != nil || !model.siblings(of: key).isEmpty
             let place = [s.spaceName, tabShown ? nil : s.slotLabel].compactMap { $0 }.joined(separator: " › ")
             let machine = model.namedMachine(s.machineRef)?.title ?? s.machineID
             HStack(spacing: Theme.Space.xs) {
                 AgentMark(s, side: Theme.Size.markXS) // its agent before its state (#6390); this line is an agent's only
-                StatusDot(state: s.state, size: 7)
+                StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
                 // Not ViewThatFits: that measured both lines again at every width of a window resize (#1337).
                 FirstFitting {
                     subtitleLine(s, words, [machine, place])
@@ -2903,7 +2905,7 @@ struct ChatView: View {
         }
         let tail = parts.map { " · " + $0 }.joined()
         return (Text(words).fontWeight(.semibold)
-            .foregroundStyle(s.state == .idle || s.state == .offline || s.state == .unknown ? Color.secondary : s.state.tone.text)
+            .foregroundStyle(s.state == .idle || s.state == .offline || s.state == .unknown ? Color.secondary : s.stateTone.text)
             + Text(tail).foregroundStyle(.secondary))
             .lineLimit(1) // FirstFitting picks by the ideal (one-line) width; the last one truncates
     }
@@ -2923,8 +2925,9 @@ struct ChatView: View {
 
     /// "Working 22 min" while a turn runs (minutes: the work line in the chat has the seconds), else the state's name.
     private func stateWords(_ s: Session, now: Date) -> String {
-        // Its turn ended and a workflow / background work keeps it going (#2935): 「工作中（后台）」, not the turn's time.
-        if s.isBackgroundWorking { return s.stateLabel }
+        // Its turn ended and a workflow / background work keeps it going (#2935): 「工作中（后台）」, not the turn's time;
+        // or all it runs only waits (#6045): 「后台等待中」.
+        if s.isBackgroundWorking || s.waitsInBackground { return s.stateLabel }
         guard s.state == .working, status.isActive, case .turn(let t)? = store.blocks.last, let start = t.startedAt else { return s.state.label }
         let m = Int(now.timeIntervalSince(start)) / 60
         if m < 1 { return s.state.label }
@@ -3107,7 +3110,7 @@ struct ChatView: View {
                 Spacer(minLength: 0)
             }
             if activity {
-                ActivityChips(loop: session?.loop, background: session?.background ?? []) { showActivity = true }
+                ActivityChips(loop: session?.loop, background: session?.background ?? [], waiting: session?.waitsInBackground == true) { showActivity = true }
             }
         }
     }
@@ -3944,6 +3947,8 @@ struct Composer: View, Equatable {
     @FocusState private var focused: Bool
     /// The 「+」 menu's Voice Chat where the page offers no call: why (docs/assistant/voice.md 1.3).
     @State private var voiceNote: VoiceUnavailableNote?
+    /// The model menu's "Other Model…" (#1644): a model ID typed by hand, through POST …/modes.
+    @State private var typingModel = false
 
     /// The voice call bound to this conversation, live or ended (docs/assistant/voice.md 6.2): the bar takes the box's place while
     /// it is on, and 「语音已结束 · 继续」 sits over the box after it ended by itself.
@@ -4223,7 +4228,7 @@ struct Composer: View, Equatable {
                     if !shellChat { quickCommands } // an agent's, as its composer offered them before the shell's
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
-                                     setsEffortOnly: setsEffortOnly)
+                                     setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil)
                 }
             } else if AppStyle.current.usesBeautifulUI {
                 // The BeautifulUI style's prompt bar; every other style keeps the original input line.
@@ -4235,9 +4240,15 @@ struct Composer: View, Equatable {
                                    + (VoicePlatform.current == .phone ? [PromptItems.voice] : []),
                                mentions: mentions,
                                commands: promptCommands,
-                               models: canPickModel ? PromptItems.claudeModels : [],
-                               modelID: PromptItems.claudeModelID(model.session(key)?.model),
-                               pickModel: { id in model.sendNow(key, text: "/model \(id)", images: []) }, // photos and quotes stay for the message
+                               models: canPickModel ? PromptItems.composerModels(running: model.session(key)?.model) : [],
+                               modelID: PromptItems.runningModelID(model.session(key)?.model),
+                               pickModel: { id in
+                                   switch PromptItems.modelPick(id, running: model.session(key)?.model) {
+                                   case .typeID: typingModel = true // #1644: through …/modes
+                                   case .keep: break
+                                   case .send(let text): model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
+                                   }
+                               },
                                onAttach: { source in
                                    // A PhotosPicker cannot present from inside the menu: these sheets hang off the composer.
                                    switch source.id {
@@ -4425,6 +4436,7 @@ struct Composer: View, Equatable {
             GlassesCaptureSheet { img in add(img) }
         }
         #endif
+        .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
             Task { await load(items) }
@@ -5575,7 +5587,7 @@ struct WorkLine: View, Equatable {
                 ToolRunTitle(isOpen: open, isRunning: live) {
                     // Whole words, never cut: the full summary, or a shorter one when the row is narrow.
                     if live {
-                        TimelineView(.periodic(from: .now, by: 1)) { ctx in summary(now: ctx.date) }
+                        VisibleTimelineView(interval: 1) { now in summary(now: now) }
                     } else {
                         summary(now: end ?? .now)
                     }
@@ -5607,7 +5619,7 @@ struct WorkLine: View, Equatable {
                         if live { ProgressView().controlSize(.mini).tint(Theme.busy) }
                         // Whole words, never cut: the full summary, or a shorter one when the row is narrow.
                         if live {
-                            TimelineView(.periodic(from: .now, by: 1)) { ctx in summary(now: ctx.date) }
+                            VisibleTimelineView(interval: 1) { now in summary(now: now) }
                         } else {
                             summary(now: end ?? .now)
                         }

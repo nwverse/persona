@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -195,5 +196,46 @@ func TestFeedSentAtBackfill(t *testing.T) {
 	var n int
 	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM assistant_feed WHERE sent_at IS NOT NULL`).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("backfilled %d, %v", n, err)
+	}
+}
+
+// TaskPlansByID reads several plans in one query: no ids ask nothing (a DB without a pool would panic on a query), an
+// unknown id is left out and a repeated one gives one row.
+func TestTaskPlansByID(t *testing.T) {
+	ctx := context.Background()
+	if rows, err := (&DB{}).TaskPlansByID(ctx, nil); err != nil || rows != nil {
+		t.Fatalf("no ids: %+v, %v", rows, err)
+	}
+	d := open(t)
+	prefix := fmt.Sprintf("plan_byid_%d", time.Now().UnixNano()) // task_plans is not truncated between tests
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	want := map[string]TaskPlanRow{}
+	for i := range 3 {
+		p := TaskPlanRow{ID: fmt.Sprintf("%s_%d", prefix, i), Conversation: prefix, Tasks: json.RawMessage(fmt.Sprintf(`[{"title": "Task %d"}]`, i)),
+			State: "open", CreatedAt: at, UpdatedAt: at.Add(time.Duration(i) * time.Second)}
+		if err := d.CreateTaskPlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+		want[p.ID] = p
+	}
+	ids := []string{prefix + "_2", prefix + "_nope", prefix + "_0", prefix + "_2"}
+	rows, err := d.TaskPlansByID(ctx, ids)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("TaskPlansByID = %+v, %v", rows, err)
+	}
+	for _, r := range rows {
+		w, ok := want[r.ID]
+		one, err := d.TaskPlan(ctx, r.ID)
+		if !ok || r.ID == prefix+"_1" || err != nil || r.Conversation != w.Conversation || string(r.Tasks) != string(w.Tasks) ||
+			r.State != w.State || !r.CreatedAt.Equal(w.CreatedAt) || !r.UpdatedAt.Equal(w.UpdatedAt) ||
+			string(one.Tasks) != string(r.Tasks) || !one.UpdatedAt.Equal(r.UpdatedAt) {
+			t.Fatalf("row %+v, want %+v (TaskPlan %+v, %v)", r, w, one, err)
+		}
+	}
+	if rows[0].ID == rows[1].ID {
+		t.Fatalf("a repeated id read twice: %+v", rows)
+	}
+	if rows, err := d.TaskPlansByID(ctx, []string{prefix + "_nope"}); err != nil || len(rows) != 0 {
+		t.Fatalf("unknown ids: %+v, %v", rows, err)
 	}
 }
