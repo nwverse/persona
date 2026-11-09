@@ -413,29 +413,23 @@ func TestHerdrCoreLiveStartsATab(t *testing.T) {
 	}
 
 	// The command goes into the shell and runs there.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if a, err := h.Agent(ctx, c1.Pane); err == nil && a.ForegroundCwd != "" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no shell came up")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitWithin(t, 10*time.Second, "a shell in the new tab", func() bool {
+		a, err := h.Agent(ctx, c1.Pane)
+		return err == nil && a.ForegroundCwd != ""
+	})
 	if err := h.Run(ctx, c1.Pane, "echo persona-$((40+2))"); err != nil {
 		t.Fatal(err)
 	}
-	for {
-		screen, _ := h.Read(ctx, c1.Pane, host.ReadOpts{Source: "visible"})
-		if strings.Contains(screen, "persona-42") {
-			break
+	var screen string
+	t.Cleanup(func() {
+		if t.Failed() && screen != "" {
+			t.Logf("the tab's screen: %q", screen)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("command did not run: %q", screen)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	})
+	waitWithin(t, 10*time.Second, "the command's output (persona-42)", func() bool {
+		screen, _ = h.Read(ctx, c1.Pane, host.ReadOpts{Source: "visible"})
+		return strings.Contains(screen, "persona-42")
+	})
 
 	// A new space for another folder, and renames, in the same document.
 	other := filepath.Join(dir, "other")
