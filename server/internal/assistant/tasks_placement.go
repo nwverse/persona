@@ -54,6 +54,13 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		t.Why = strings.TrimSpace(t.Why + " (" + note + ")")
 	}
 	if moved {
+		// Keep the machine the task was first placed on across repeated moves; each move refreshes the landing and the
+		// health-check reason. Names, not ids, go on the card/receipt (#2271).
+		if t.Reroute == nil {
+			t.Reroute = &PlanReroute{FromMachine: firstNonEmpty(m.Name, m.ID)}
+		}
+		t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
+		t.Reroute.Reason = note
 		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
 	}
 	return moved
@@ -63,6 +70,7 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
+	t.normalizeReadonlyPermission()
 	if err := t.normalizeMachinePolicy(); err != nil {
 		return "", "", err
 	}
@@ -104,13 +112,23 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
 	// (#2820, #1618); the tab is named from the title.
 	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.withTodoDecisions(ctx, t.TodoID, prompt))
+	// The user's attachments end it, copied here when this is not the assistant's computer (#2437): last, so the
+	// pictures' <attached_images> block ends the message as it does one sent straight to an agent.
+	if len(t.Attachments)+len(t.Mentioned) > 0 {
+		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
+	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
 	if t.Model != "" {
 		params["model"] = t.Model
 	}
-	if t.Permission != "" {
-		params["permission_mode"] = t.Permission
+	mode := t.Permission
+	if mode == "" {
+		mode = s.settings(ctx).DefaultPermissionMode
+		if mode == "" {
+			mode = "default"
+		}
 	}
+	params["permission_mode"] = mode
 	if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}
@@ -141,15 +159,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 
 // updatePlanTask keeps the machine, directory and why task i of started plan planID runs with now.
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
-	p, err := s.loadPlan(ctx, planID)
-	if err != nil || i >= len(p.Tasks) {
-		return
-	}
-	p.Tasks[i].Machine, p.Tasks[i].Cwd, p.Tasks[i].Why = t.Machine, t.Cwd, t.Why
-	p.Tasks[i].Launcher, p.Tasks[i].Model, p.Tasks[i].Effort = t.Launcher, t.Model, t.Effort
-	if _, err := s.movePlan(ctx, p, planStarted); err != nil {
+	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
+		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
+		pt.Reroute = t.Reroute
+		pt.Launcher, pt.Model, pt.Effort = t.Launcher, t.Model, t.Effort
+	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
-		return
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 }
