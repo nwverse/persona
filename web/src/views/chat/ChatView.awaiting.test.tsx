@@ -43,6 +43,7 @@ const flush = async () => {
 };
 const interrupts = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith("/sessions/hub/c1/interrupt"));
 const stopButton = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.interrupt")}"]`);
+const stopControl = () => host.querySelector(`button[aria-label="${t("chat-composer.interrupt")}"], button[aria-label="${t("chat-composer.stopping")}"]`);
 const esc = () => act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
 
 beforeEach(() => {
@@ -60,7 +61,7 @@ afterEach(() => {
 });
 
 describe("a message waiting for its turn to start (#2450)", () => {
-  it("can be interrupted: the composer shows Interrupt and Esc sends it", async () => {
+  it("can be interrupted: the composer shows Interrupt, Esc sends it, and the wait ends there", async () => {
     transcript.items = [{ id: "u1", seq: 1, role: "user", kind: "text", text: "Write a status line", ts: new Date().toISOString() }];
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
     await flush();
@@ -69,6 +70,8 @@ describe("a message waiting for its turn to start (#2450)", () => {
     await flush();
     expect(interrupts()).toHaveLength(1);
     expect(interrupts()[0][1]).toMatchObject({ method: "POST" });
+    // the hub took it: the wait ends now instead of running out, so no stop button (nor its "Stopping" form) stays
+    expect(stopControl()).toBeNull();
   });
 
   it("with nothing on its way, Esc sends nothing and there is no Interrupt", async () => {

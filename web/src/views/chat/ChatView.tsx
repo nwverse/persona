@@ -269,7 +269,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastSeg = segs[segs.length - 1];
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
   const turnFailure = session?.failure_reason ? { since: session.state_since } : undefined;
-  const awaiting = !readOnly && awaitingTurn(lastSeg, state, awaitNow, turnFailure);
+  // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
+  // once instead of after AWAIT_MS; a turn the hub reports later still shows through `state`
+  const [stoppedTurn, setStoppedTurn] = useState<string>();
+  const awaitedTurn = !readOnly && awaitingTurn(lastSeg, state, awaitNow, turnFailure) ? lastSeg?.user?.id : undefined;
+  const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn;
+  const awaitingNow = useRef<string | undefined>(undefined);
+  awaitingNow.current = awaiting ? awaitedTurn : undefined;
   const lastAnswered = Boolean(lastSeg?.steps.length || lastSeg?.answer);
   useEffect(() => {
     // draw again when the wait runs out, so a message nobody picks up stops looking worked on; once something answers
@@ -708,12 +714,14 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     if (stopInFlight.current || !sessionCan(getSession(mid, sid), "interrupt")) return;
     stopInFlight.current = true;
     setStopping(true);
+    const waited = awaitingNow.current;
     try {
       // the hub gives the computer 90 s: past that the link is dead, and a request that never ends must not hold the block
       const r = await apiOp<{ state?: string }>(`${sessionPath(mid, sid)}/interrupt`, { method: "POST", timeout: pastHub(90_000) });
       // a repeat after a gap can read as a success: the hub lost track of the first try, so nothing says it stopped
       if (r.state === "unknown") throw new Error(t("lib-new-agent.outcome_unknown"));
       toast(t("chat-chatview.interrupted"));
+      if (waited) setStoppedTurn(waited);
       stopTimer.current = window.setTimeout(stopDone, STOP_SETTLE_MS);
     } catch (e) {
       toast(t("chat-chatview.interrupt_failed", { error: errorText(e) }), "error");
