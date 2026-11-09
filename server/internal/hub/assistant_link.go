@@ -35,13 +35,10 @@ import (
 // (assistantwire.AssistantID), every other manager has its own (manager_state.go).
 type assistantState struct {
 	mu       sync.RWMutex
-	got      bool   // a snapshot came in
-	from     string // the manager it is of (ownership.go: its conversations are its)
-	partial  bool
+	got      bool // a snapshot came in
 	epoch    string
 	seq      uint64
 	sessions map[string]assistantwire.SessionView // by session id; replaced, never written into
-	tasks    []assistantwire.TaskView             // nil while its schedule could not be read; replaced, never written into
 	profile  *assistantwire.Profile               // its settings (assistant_profile.go); nil before it reported them
 
 	toolsMu sync.Mutex
@@ -296,8 +293,8 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 		a.mu.Unlock()
 		return assistantwire.SnapshotResult{}, assistantwire.ErrStaleSnapshot
 	}
-	old, oldProfile := a.sessions, a.profile
-	a.got, a.partial, a.epoch, a.seq, a.sessions, a.tasks, a.from = true, s.Partial, s.Epoch, s.Seq, views, s.Tasks, from
+	oldProfile := a.profile
+	a.got, a.epoch, a.seq, a.sessions = true, s.Epoch, s.Seq, views
 	if s.Profile != nil {
 		a.profile = s.Profile
 	}
@@ -309,7 +306,6 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 	// What the nodes keep listing (s.Profile.Keep) the manager tells them itself (internal/devices SetKeep).
 	// The session lists' decoration (its titles, todos, work, channels, inbox agents) and its own cards on the phone
 	// are the manager's (fleet.go there).
-	_ = old
 	h.takeTodoReport(from, s.Todos) // the task notices on the items (injected.go)
 	return assistantwire.SnapshotResult{OK: true, Seq: s.Seq}, nil
 }
