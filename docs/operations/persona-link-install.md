@@ -127,6 +127,6 @@ If you must copy it, right-click › Open, or run `xattr -dr com.apple.quarantin
 **"Link connected, but the hub cannot reach the local node"**: run `"/Applications/Persona Link.app/Contents/Helpers/persona-link" node status` to check whether the persistent node service is installed
 and loaded by launchd. Logs are in `~/.persona/node-attach.log`. If not installed, click **Install local node service** in the menu.
 
-**The menu-bar panel has the old square corners and thin border**: the app was built with an older script. Pull the latest code and run `install` again (see [lessons/macos.md](../lessons/macos.md), "Persona Link panel has the old appearance", for why).
+**The menu-bar panel has the old square corners and thin border**: the app was built with an older script. Pull the latest code and run `install` again (see [lessons/macos.md](../lessons/macos.md), "Persona Link's panel kept the old appearance" (#956), for why).
 
-**Read logs**: `tail -f ~/.persona/link.log`, or `"/Applications/Persona Link.app/Contents/Helpers/persona-link" logs -f`. On a computer that used the older Persona version, these files may still live under `~/.persona/` ([config.md](config.md), "Naming and compatibility").
+**Read logs**: `tail -f ~/.persona/link.log`, or `"/Applications/Persona Link.app/Contents/Helpers/persona-link" logs -f`. On a computer that used the older Persona version, these files may still live under `~/.persona/` ([config.md](config.md), "Naming and configuration").
