@@ -178,6 +178,12 @@ and a local session revision protect that boundary without changing the node pro
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Usage scans must wait for launcher state (#2220)
+
+- Transcript scans consume file offsets and reply deduplication IDs. Looking up launcher ownership before persisted session state is available permanently assigns those replies to the unknown launcher; later state loading cannot repair the consumed history.
+- Start the first full usage scan only after a successful state load, not merely after the load attempt finishes. On a failed load, preserve the hub's previous window rather than publishing unknown attribution: the meter waits until a later try on the same connection (`reloadState`) loads the state, or the connection ends. Cancellation must release the waiting meter.
+- Regressions use synthetic transcripts and a captured RPC writer, with historical and current replies in the first report; no real transcript directories or hub database are needed.
+
 ## One silent address must not take the whole dial (2026-11-08, #1181)
 
 A name with several addresses, dialed one at a time with one long timeout, fails as soon as the first address drops SYNs: the attempt sits until the
@@ -1354,3 +1360,7 @@ A connector that folds several notifications into one thread (GitHub CI failures
 A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
 
 When adding scalars beside an embedded session DTO, account for its custom JSON methods: Go promotes them and can silently hide sibling fields. Preserve the compatibility encoding and explicitly serialize the additional list fields.
+
+## Catalog recipes carry opaque tool argument keys (#2037)
+
+A catalog's recipe contains the upstream tool's argument object. Protocol field names are snake_case, but argument and input-schema keys belong to that tool and may be camelCase. Keep both opaque to the recursive wire-key check, while still validating their object shape and the surrounding recipe. Check original JSON before decoding optional limits or generated recipe types; otherwise mistyped fields and explicit zero values can disappear before semantic validation.
