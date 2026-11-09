@@ -31,6 +31,15 @@ import (
 var errNoAssistantMachine error = &rpc.Error{Code: proto.CodeNoMachine, Message: "assistant machine is not configured",
 	Data: json.RawMessage(`{"delivered":"none"}`)}
 
+// missingAssistantMachine distinguishes a computer awaiting confirmation from having no computer to use.
+func (s *Service) missingAssistantMachine(ctx context.Context) error {
+	if d, ok := s.pendingAssistantMachine(ctx); ok {
+		return apierr.OnMachine(&rpc.Error{Code: proto.CodeMachinePending, Message: errMachinePending.Error(),
+			Data: json.RawMessage(`{"delivered":"none"}`)}, d.Name)
+	}
+	return errNoAssistantMachine
+}
+
 // mainTitle is the main conversation's title on the lists the apps get: it has no title of its own
 // (conversation_rename refuses it, the apps show the persona there), so neither its first message (the node's title for
 // a transcript without one) nor a model's name nor a rename shows up as one (#1313).
@@ -185,6 +194,9 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	machine := p.MachineID
 	if machine == "" {
 		machine = s.settings(ctx).MachineID
+		if machine == "" {
+			return proto.Session{}, s.missingAssistantMachine(ctx)
+		}
 	}
 	if s.isWorkMachine(machine) {
 		return proto.Session{}, errWorkAssistant
@@ -195,7 +207,7 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	defer finishStart()
 	sess, err := s.startOn(ctx, machine, p, main)
 	if errors.Is(err, ErrNoDevice) && p.MachineID == "" {
-		return proto.Session{}, errNoAssistantMachine
+		return proto.Session{}, s.missingAssistantMachine(ctx)
 	}
 	if err != nil {
 		return sess, err
