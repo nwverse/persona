@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## A collapsed execution default is more than an open-state flag (#2602)
+
+The old Agent work line was called folded, but still previewed five tool/thinking steps and left every intermediate text visible. The assistant-only default-open change then exposed the full trace. Removing just that default does not implement a single replace-in-place text segment: grouping, stream-to-item handoff, preview rendering and manual history loading must agree. Keep a stable text-slot identity, put every tool kind and older text inside the same summary, and do not use text length or Markdown shape to exempt intermediate narration. Retain all plan updates for manual inspection even when the composer selects only the latest plan.
+
+External jump/search reveals use the expansion-memory API, not the summary button. When run overrides are separate from remembered history state, bridge those reveals into the live override and collapse both at completion. Test actual browser replacement, manual expansion, folded history and reload. A lazy collapse can retain its children during its closing animation; checking raw `textContent` then is not a visibility assertion. Use the latest-text slot and folded header state, or browser-visible locators.
+
 
 ## Report evidence is separate from report prose (#2554)
 
