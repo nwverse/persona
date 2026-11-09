@@ -31,7 +31,7 @@ final class ReplyBreaksUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", s)).firstMatch
     }
 
-    /// The step numbered 5 is not in the bold line's paragraph, and the last sentence is not in its bold line's.
+    /// The step numbered 5 is not in the bold line's paragraph, and the last sentence starts a line of its own.
     @MainActor private func checkLines(_ chat: String) {
         let step = text("附上出错时间前后")
         XCTAssertTrue(step.waitForExistence(timeout: 20), "the reply did not show:\n\(app.debugDescription)")
@@ -39,7 +39,9 @@ final class ReplyBreaksUITests: XCTestCase {
         sleep(1)
         shot(chat)
         XCTAssertFalse(step.label.contains("更快"), "step 5 joined the bold line: \(step.label)")
-        XCTAssertFalse(text("页面不再卡住").label.contains("怎么确认修好了"), "the sentence joined its bold line")
+        // The sentence is in its bold line's paragraph, on the next line: not after a space.
+        let sentence = text("页面不再卡住").label
+        XCTAssertFalse(sentence.contains("修好了 同样"), "the sentence joined its bold line: \(sentence)")
     }
 
     @MainActor func testAnAgentsChat() throws {
