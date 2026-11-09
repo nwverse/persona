@@ -22,6 +22,7 @@ import { codeHighlight, hasLanguageFence, HighlightWanted, useAskHighlight, useB
 import { useMath } from "./stream/math";
 import { useReplyMotion } from "./stream/motion";
 import { repairStreamingMarkdown } from "./stream/repair";
+import { remarkSoftBreaks, replyBreaks } from "./reply-breaks";
 import { useThrottledText } from "./stream/throttle";
 import { whenIdle } from "./stream/idle";
 import { createWordFadeState, rememberShown, remainingMs, shownBefore, type WordFadeState } from "./stream/wordFade";
@@ -519,7 +520,9 @@ function componentsFor(mid: string, cwd: string | undefined): Components {
 // (only the last is parsed again), what the growing end leaves open closed for the moment, its words fading in.
 // `fade`: a block that just arrived whole: its words fade in once, then it is rendered plain. Neither fades with
 // "Reply animation" off or reduced motion; once streaming ends it is plain Markdown again, without the fade's spans.
-export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean }) {
+// `lineBreaks`: a reply, read line by line as it was written (#2088, `reply-breaks.ts`): a single line break is one,
+// and steps numbered on from 5 right under a line of text are a list.
+export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade, lineBreaks }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean; lineBreaks?: boolean }) {
   const components = useMemo<Components>(() => (mid ? componentsFor(mid, cwd) : markdownComponents), [mid, cwd]);
   const text = useThrottledText(raw, Boolean(streaming));
   const motion = useReplyMotion();
@@ -532,7 +535,11 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const inBlock = codeHighlight.inBlock;
   const highlight = useHighlight(fenced && !inBlock);
   useAskHighlight(fenced && inBlock);
-  const md = useMemo(() => linkify(normalizeMath(streaming ? repairStreamingMarkdown(text) : text), { math: true }), [text, streaming]);
+  const md = useMemo(() => {
+    const lines = lineBreaks ? replyBreaks(text) : text;
+    return linkify(normalizeMath(streaming ? repairStreamingMarkdown(lines) : lines), { math: true });
+  }, [text, streaming, lineBreaks]);
+  const remarkPlugins = lineBreaks ? REMARK_LINES : REMARK;
   const wantsMath = useMemo(() => hasMath(md), [md]);
   const katex = useMath(wantsMath);
   const rehypePlugins = useMemo<PluggableList>(
@@ -546,20 +553,20 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
     () =>
       chunks || !markdownCache.on
         ? null
-        : cachedMarkdown(markdownKey(md, `${katex ? "katex" : ""}|${highlight ? "highlight" : ""}|${key}`, mid, cwd), { children: md, remarkPlugins: REMARK, rehypePlugins, components, urlTransform: markdownUrl }),
-    [chunks, md, katex, highlight, key, mid, cwd, rehypePlugins, components],
+        : cachedMarkdown(markdownKey(md, `${katex ? "katex" : ""}|${highlight ? "highlight" : ""}|${key}`, mid, cwd), { children: md, remarkPlugins, rehypePlugins, components, urlTransform: markdownUrl }),
+    [chunks, md, katex, highlight, key, mid, cwd, remarkPlugins, rehypePlugins, components],
   );
   return (
     <HighlightWanted.Provider value={fenced && inBlock}>
       <div className={`prose-j ${small ? "prose-sm" : ""} ${compact ? "prose-compact" : ""}`}>
         {chunks ? (
           chunks.map((c) => (
-            <StreamChunk key={c.start} start={c.start} content={c.content} remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl} fade={wordFade} plain={!streaming} wholeDocument={chunks.length === 1} />
+            <StreamChunk key={c.start} start={c.start} content={c.content} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl} fade={wordFade} plain={!streaming} wholeDocument={chunks.length === 1} />
           ))
         ) : tree ? (
           tree
         ) : (
-          <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl}>
+          <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl}>
             {md}
           </ReactMarkdown>
         )}
@@ -570,6 +577,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
 
 // remark-cjk-friendly: **bold** right next to full-width CJK punctuation is still emphasis (CommonMark's flanking rules miss it).
 const REMARK: PluggableList = [remarkGfm, remarkMath, remarkCjkFriendly];
+const REMARK_LINES: PluggableList = [...REMARK, remarkSoftBreaks];
 
 /**
  * The message's fade timeline: while it streams (a fresh one per stream), or for a block that arrived whole until its

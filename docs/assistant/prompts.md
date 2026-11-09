@@ -49,7 +49,7 @@ MCP tool descriptions and parameter explanations shown to models are also prompt
 | `inbox/handling/*.md` | Program messages to handling chats: new messages (`new_messages`), sent (`sent`), Agent started (`agent_started`), handed back (`handback`), rejected (`rejected`), user instruction (`instructed`), handled (`closed`) | `assistant/inbox_handle.go` |
 | `inbox/handoff.md`, `handoff_note.md` | Hand to AI with write-back: the `<persona-context>` naming the item before the user's words in the main chat, and the wrapper around a handling note told to a chat the item was handed to, whose head the hub recognizes to show the apps one line (`prompts.ParseInjected`; `docs/assistant/inbox.md`, "Item actions") | `assistant/inbox_handoff.go` |
 | `kb/compress.md`, `compress_input.md` | Chat compression + tagging | `kb/compress.go` |
-| `kb/project.md`, `project_input.md` | Rewrite project profiles | Same as above |
+| `kb/project.md`, `project_input.md` | Rewrite project profiles | `kb/project_refresh.go` |
 | `kb/items.md`, `items_input.md` | Tag documents / meetings / calendar events | `kb/items.go` |
 | `kb/recording.md`, `recording_input.md` | Summary, title, and tags for recording transcripts (purpose `kb.compress`) | `kb/recordings.go` |
 | `kb/known_projects.md` | "Known projects" list (names, aliases, one-liners), shared by compression and tagging | Same as above |
@@ -138,8 +138,9 @@ Descriptions live in iOS `apple/Persona/PhoneTools/*Tool.swift` (collected by `P
 - Template functions (`prompts.go`): `attr` (XML attribute escaping), `ctx` (body inside `<persona-context>` / `<persona-context>` blocks; see next rule), `output` (Agent answer in a voice `<agent_output>` data block: removes opening and closing tags for that block, `AgentOutput`), `join`, `indent`, `blank` (whitespace only), `first` (first n slice elements).
   Data preparation such as truncation (`clip`, `clipRunes`, `oneLine`) belongs in the caller; passed values are already ready to insert.
 - **Always pass other people's text inside blocks through `ctx`** (#3754). Quotes, forwarded messages, Inbox bodies, knowledge summaries, snapshot sections, and memory indexes may come from others (or paraphrase their words). A closing tag in the body can end the block early, turning subsequent text into the user's own words. `ctx` (`ContextBody`) removes closing tags once, then replaces `<` in the resulting text with `&lt;`; matching is case-insensitive and allows whitespace on either side of the slash and before `>` (readers recognize only literal `</persona-context>` / `</persona-context>`; this is a superset).
-- Parse all templates at package initialization (`template.Must`, `missingkey=error`): syntax errors crash startup and surface in tests first. Rendering errors (wrong field names) panic directly,
-  never handing a partial prompt to a model. `TestEveryTemplateIsUsed` catches unused templates.
+- A template is parsed the first time it is rendered, together with the templates it includes (`missingkey=error`), so a process holds only the prompts it writes (#2475). A syntax error panics at that render;
+  `Names()` parses every template, so the tests surface it first, and `TestEachTemplateParsesItsIncludes` checks that rendering any template on a fresh set parses everything it may include.
+  Rendering errors (wrong field names) panic directly, never handing a partial prompt to a model. `TestEveryTemplateIsUsed` catches unused templates.
 - To write literal `{{` in a prompt: `{{"{{"}}`.
 - Where user-facing output instructions say "use Chinese", replace that with a `Language` field (the language's own name, `English`, `日本語`; callers use `assistant.answerLanguage(hello.Locale)`, passing empty for zh-Hans),
   and `{{if .Language}}用{{.Language}}{{else}}用中文{{end}}` in the template ("use [Language]", otherwise "use Chinese"). Empty remains byte-for-byte identical to the original, leaving existing goldens unchanged; en / ja have separate `*.en.golden` / `*.ja.golden`
@@ -174,3 +175,13 @@ MCP tool goldens are in `hub/mcp_tools_golden_test.go` (three lists: assistant w
 system / user text, knowledge base in a temporary directory), so they also cover data conversion. The clock in the snapshot's "Now" line is replaced with a placeholder before comparison.
 On 2026-11-01, these goldens were generated from the original code before the move; after the move, identical inputs produced byte-for-byte identical output.
 When assistant business logic moved to `server/internal/assistant` on 2026-11-04 (`docs/assistant/assistant.md`, "Boundary with hub"), its prompt goldens moved unchanged to `assistant/testdata/prompts/`, without regeneration. After assistant settings, main chat, and chat creation moved there the same day, `assistant_claude_md.*` and `main_handoff*` goldens also moved unchanged to `assistant/testdata/prompts/` (`assistant/claude_md_test.go`), byte-for-byte identical. When Inbox moved to the manager the same day, `inbox_triage.*`, `inbox_draft.*`, `inbox_judge*`, `inbox_agent.*`, and `inbox_group.*` goldens moved unchanged to `assistant/testdata/prompts/` (`assistant/inbox_golden_test.go`), without regeneration and byte-for-byte identical. When translation followed, `translate_*` moved there unchanged too (`assistant/inbox_translate_test.go`), also byte-for-byte identical.
+
+## Behaviour checks
+
+Goldens pin the text a prompt renders to, not what a model decides on it. The judges that make one model call (the done judge in `assistant/done.go` today; delegation and triage to follow, #2586) also have written-out cases with the verdict the hub should end with:
+
+- `assistant/testdata/judge/task_done.json`: synthetic tasks (title, the prompt it was handed out with, `done_when`, the agents' last replies, whether delivery is judged) and the verdicts that pass, plus the delivery state where it matters. No real conversations: every case is made up and public.
+- `TestTaskDoneScenariosAreWellFormed` runs with the other tests and needs no model. It checks that the cases are consistent: decided-without-a-model cases really are, the others are not, and a model answering as a case expects leaves the hub with that verdict after its own rules (undelivered, the agent's delivery line, a PR named without a deploy).
+- `TestTaskDoneJudgeLive` asks a real model and prints one row per case. It runs only with `PERSONA_LIVE_AI='{"base_url":"…","api_key_file":"…","model":"…"}' go test -run TaskDoneJudgeLive -v ./internal/assistant`, never in CI. A case the model gets wrong fails.
+
+When you change `task_done.md`, `task_done_input.md`, the hub's rules after the model (`judgeTaskDoneWith`) or the model behind the done judge's purpose (`inbox.judge`), run the live check before and after, and put both tables in the PR. A real case the judge got wrong goes in as a new synthetic case, rewritten so it names no real person, project or message.
