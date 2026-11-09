@@ -46,6 +46,11 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - Manager items are in the database: manager or hub restarts reload `inbox_items`. Hub restarts launch the manager again, with a full round on connection.
 - Connected manager but stored items / mutes unreadable (database unresponsive): Inbox APIs return `503 inbox_unavailable`, submitted rounds are rejected (hub retains them for retry),
   and nothing is written, avoiding overwriting database state with incomplete memory. Retry reading on next use.
+- A pull to refresh whose collect call fails (the sources' side not started yet, the round not handed over): `POST /api/v1/inbox/refresh` answers `502 inbox_refresh_failed`
+  (`error` says in the request's language that the sources couldn't be read and the list wasn't updated, `detail` is the collect's error, `retryable: true`) instead of
+  `200` with the list as it was, which looked like a refresh that worked (#1849). The web shows its "Couldn't refresh" toast, Android its refresh-failed notice with Retry;
+  iOS / Mac keep the list and show the error only while the list is empty. A source that fails inside a round that ran is not this: that round answers `200` and names
+  the source in `triage.sources[].read_error`.
 - Readable store, but an item's row cannot be written during a collection round: what the round changed in that item (new items, new messages or mail, a mail's text, items filed as
   over, read elsewhere, settled, muted or superseded) is undone to what the row holds, and nothing is announced for it (`inbox_rollback.go`, #91), unless something else moved the item
   meanwhile (that move's own save writes the row). It comes back with the next round, because the sources hand in the same things again: connectors answer `inbox.collect` from their
@@ -452,7 +457,7 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
 
 - Hub background collection (`server/internal/extmgr/inbox.go`, delivering data to the manager for item composition): collect Lark chats 3 seconds after real-time Lark events; this round reads chats only. Every 2 minutes, also read document notifications,
   Moments, and other connectors (their events / setting changes also trigger this full round); mail every 3 minutes. Previously every Lark event read all of them (#674). Pull-to-refresh
-  (`POST /api/v1/inbox/refresh`) collects everything immediately. Changes write `inbox_items` and push `{"type":"inbox"}`, prompting App refetch; new plugin-connector items store / push only after triage ("AI triage").
+  (`POST /api/v1/inbox/refresh`) collects everything immediately (a failed collect answers `502 inbox_refresh_failed` instead of the list, see "Ownership" above). Changes write `inbox_items` and push `{"type":"inbox"}`, prompting App refetch; new plugin-connector items store / push only after triage ("AI triage").
 - **Done** is recorded only in Persona (`done_at`, `done_by=user`; ignored items use `dismissed`, see "Clean up all"; one replaced by the new thread rule uses `superseded`). It does not change Lark or mail read state. Done items remain listed for 3 days, reopenable at the bottom,
   and the manager holds them in memory for 8 days (meanwhile preventing old still-unread Lark messages from resurfacing); it loads only open items and those done within 8 days.
 - **History** (#2200): done rows stay in `inbox_items` for 90 days (`inboxKeepHistory`); the manager deletes older ones at load and from the collection rounds at most hourly.
