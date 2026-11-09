@@ -9,9 +9,6 @@ android {
     sourceSets.getByName("test").kotlin.srcDir("src/sharedTest/kotlin")
     sourceSets.getByName("androidTest").kotlin.srcDir("src/sharedTest/kotlin")
     testOptions.unitTests.isIncludeAndroidResources = true
-    testOptions.unitTests.all {
-        it.systemProperty("persona.repo.root", rootProject.projectDir.parentFile.absolutePath)
-    }
 }
 
 dependencies {

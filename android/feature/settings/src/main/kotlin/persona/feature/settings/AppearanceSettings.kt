@@ -110,13 +110,11 @@ private fun Modifier.option(selected: Boolean, onClick: () -> Unit): Modifier {
         .clickable(role = Role.RadioButton, onClick = onClick).semantics(mergeDescendants = true) { this.selected = selected }
 }
 
-/** The app's four tabs, as the shell shows them, for the previews' navigation. */
+/** The same two primary destinations as the shell, including in appearance previews. */
 @Composable
 private fun previewTabs() = listOf(
-    NavItem("Persona", "Persona", PhIcons.Sparkle),
+    NavItem("Persona", stringResource(R.string.settings_model_assistant), PhIcons.Sparkle),
     NavItem("Agents", "Agents", PhIcons.SquaresFour),
-    NavItem("Inbox", stringResource(R.string.settings_preview_tab_inbox), PhIcons.Tray),
-    NavItem("Settings", stringResource(R.string.settings_title), PhIcons.GearSix),
 )
 
 /** The sessions of the previewed space, as the list shows them (a finished, seen one has no state text). */
@@ -134,8 +132,7 @@ private val PreviewCounts = listOf(Status.NeedsYou to 1, Status.Working to 1)
 /**
  * The Agents tab at 0.3 of its size (320dp wide, near a phone's width), drawn with the style's own components
  * (docs/android/android-design.md 2.4): a computer, one of its spaces and its sessions on the page background (the board's
- * agent strips), and the app's navigation. Glass shows its ambient light; its dock is the opaque panel, there being
- * nothing here to refract.
+ * agent strips), and the same top navigation as the app. Glass shows its ambient light.
  */
 @Composable
 private fun StylePreview(style: AppStyle) {
@@ -148,7 +145,9 @@ private fun StylePreview(style: AppStyle) {
                     val palette = PersonaTheme.palette
                     Box(Modifier.fillMaxSize().background(palette.background).consumeWindowInsets(WindowInsets.navigationBars)) {
                         if (style == AppStyle.Glass) AmbientLight(Ambience.NeedsYou)
-                        Column(Modifier.fillMaxSize().padding(horizontal = pagePadding).padding(top = Tokens.Space.l)) {
+                        Column(Modifier.fillMaxSize()) {
+                            HomeNavigation(previewTabs(), "Agents", {}, leading = { PersonaFace(PersonaState.Idle) })
+                            Column(Modifier.fillMaxSize().padding(horizontal = pagePadding).padding(top = Tokens.Space.l)) {
                             Text("Agents", style = PersonaTheme.type.largeTitle, color = palette.ink, maxLines = 1)
                             AgentTreeHeader(
                                 "MacBook", folded = false, onToggle = {}, first = true, icon = PhIcons.Laptop, online = true,
@@ -161,8 +160,8 @@ private fun StylePreview(style: AppStyle) {
                                     preview = stringResource(row.preview), time = stringResource(row.time), statusText = row.status.localizedLabel.takeIf { row.status != Status.Idle },
                                 )
                             }
+                            }
                         }
-                        AppNavigation(previewTabs(), "Agents", {}, Modifier.align(Alignment.BottomCenter))
                     }
                 }
             }

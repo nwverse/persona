@@ -15,21 +15,21 @@ class SentNavigationTest {
         for (page in listOf("sent", "Sent", "connectors/sent")) {
             val route = Router().parse(RouteInput.DeepLink("persona://open?target=settings&page=$page"))!!
             assertEquals(sent, route.key)
-            assertEquals(AppTab.Settings, route.restore(stacks))
-            assertEquals(listOf(SettingsRoute, parent, sent), stacks.getValue(AppTab.Settings))
+            assertEquals(AppTab.Persona, route.restore(stacks))
+            assertEquals(listOf(AssistantRoute, SettingsRoute, parent, sent), stacks.getValue(AppTab.Persona))
         }
-        stacks.getValue(AppTab.Settings).removeAt(2)
-        assertEquals(parent, stacks.getValue(AppTab.Settings).last())
+        stacks.getValue(AppTab.Persona).removeAt(3)
+        assertEquals(parent, stacks.getValue(AppTab.Persona).last())
         Router().parse(RouteInput.Internal(sent))!!.restore(stacks)
-        assertEquals(listOf(SettingsRoute, parent, sent), stacks.getValue(AppTab.Settings))
+        assertEquals(listOf(AssistantRoute, SettingsRoute, parent, sent), stacks.getValue(AppTab.Persona))
     }
 
-    @Test fun legacySerializedSentKeyKeepsItsIdentityAndGetsAParent() {
+    @Test fun legacySerializedSentKeyKeepsItsIdentityAndGetsBothParents() {
         val restored = Json.decodeFromString(SettingsPageRoute.serializer(), """{"page":"Sent"}""")
-        val stack = mutableListOf<NavKey>(SettingsRoute, restored)
-        restoreConnectorParents(stack)
-        restoreConnectorParents(stack)
-        assertEquals(listOf(SettingsRoute, parent, sent), stack)
+        val stack = mutableListOf<NavKey>(AgentsRoute, restored)
+        restoreSecondaryParents(stack)
+        restoreSecondaryParents(stack)
+        assertEquals(listOf(AgentsRoute, SettingsRoute, parent, sent), stack)
         assertSame(restored, stack.last())
     }
 
@@ -37,9 +37,9 @@ class SentNavigationTest {
         for (key in listOf(SettingsPageRoute(SettingsPage.Mail), SettingsPageRoute(SettingsPage.Feishu),
             SettingsPageRoute(SettingsPage.PhoneData), SettingsPageRoute(SettingsPage.FeishuBot), ConnectorRoute("github", "work"),
             SettingsPageRoute(SettingsPage.Notifications))) {
-            val stack = mutableListOf<NavKey>(SettingsRoute, key)
+            val stack = mutableListOf<NavKey>(AssistantRoute, SettingsRoute, key)
             val before = stack.toList()
-            restoreConnectorParents(stack)
+            restoreSecondaryParents(stack)
             assertEquals(before, stack)
         }
     }
