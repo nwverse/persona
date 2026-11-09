@@ -157,6 +157,40 @@ function SendArrow({ ready, onClick, label, busy, kbd }: { ready: boolean; onCli
   );
 }
 
+function ToolLoopCard({ ix }: { ix: Interaction }) {
+  const [busy, setBusy] = useState(false);
+  const sending = useRef(false);
+  const keys = useCardKeys();
+  const q = ix.questions?.[0];
+  const options = q?.options;
+  if (!q || !options || options.length !== 2) return null;
+  const send = async (label: string) => {
+    if (sending.current) return;
+    sending.current = true;
+    setBusy(true);
+    try {
+      await resolve(ix, { answers: { [q.question]: label } });
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
+  };
+  return (
+    <Card
+      kicker={t("chat-interactions.tool_loop_kicker")}
+      title={q.question}
+      cardKeys={keys}
+      footer={options.map((option, i) => (
+        <Button key={i} tone={i === 0 ? "quiet" : "primary"} className="min-w-0 shrink" title={option.label} disabled={busy} onClick={() => void send(option.label)}>
+          <span className="truncate">{option.label}</span>
+        </Button>
+      ))}
+    >
+      {null}
+    </Card>
+  );
+}
+
 function QuestionCard({ ix }: { ix: Interaction }) {
   const qs = ix.questions ?? [];
   const [qi, setQi] = useState(0);
@@ -1001,7 +1035,8 @@ export function AnsweredCard({ card }: { card: Answered }) {
 
 export function InteractionCard({ ix }: { ix: Interaction }) {
   const canApprove = useStore(() => sessionCan(getSession(ix.machine_id, ix.session_id), "approve"));
-  const card = ix.kind === "question" ? <QuestionCard ix={ix} />
+  const card = ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
+    : ix.kind === "question" ? <QuestionCard ix={ix} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
