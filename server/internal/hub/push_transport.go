@@ -210,13 +210,12 @@ func (p *Pusher) sealFor(d Device, payload map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	maxPlain := relayproto.MaxSealed/4*3 - pushcrypto.MinSealed
 	stamped := make(map[string]any, len(payload)+1)
 	for k, v := range payload {
 		stamped[k] = v
 	}
 	stamped["iat"] = p.now().Unix()
-	plain, err := fitAlert(stamped, maxPlain)
+	plain, err := fitAlert(stamped, relayMaxPlain)
 	if err != nil {
 		return "", err
 	}
@@ -229,6 +228,9 @@ func (p *Pusher) sealFor(d Device, payload map[string]any) (string, error) {
 
 // apnsMaxAlert is APNs' limit for an alert push's body (bytes); a bigger one is refused with 413 PayloadTooLarge.
 const apnsMaxAlert = 4096
+
+// relayMaxPlain is the most JSON one sealed push carries (bytes): what seals to relayproto.MaxSealed base64 characters.
+const relayMaxPlain = relayproto.MaxSealed/4*3 - pushcrypto.MinSealed
 
 // fitAlert is payload as JSON of at most most bytes: its alert texts are shortened (1000 characters, then half that…)
 // until it fits; the full text is in the app. payload's "aps" is replaced in place by a shortened copy.
