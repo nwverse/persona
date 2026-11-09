@@ -331,8 +331,8 @@ func TestInboxFormsKeepTheLatestAnswer(t *testing.T) {
 	merge(i18n.En, "/api/v1/inbox", body) // back to the first answer
 }
 
-// The merge allocates about its output: 540,520 bytes for these 400 items (477,131 B), where decoding the answer and
-// encoding it again took 7.0 MB. An inbox GET whose items are kept adds the slot's map, 605,864 bytes in all, where
+// The merge allocates about its output: 530,152 bytes for these 400 items (477,131 B), where decoding the answer and
+// encoding it again took 7.0 MB. An inbox GET whose items are kept adds the slot's map, 605,368 bytes in all, where
 // localizing the whole answer before merging it took 13.2 MB in en. The bounds are those plus 3%. Run in a process of
 // its own (isolatedSessionAllocation): TotalAlloc counts every goroutine.
 func TestMergedListAllocation(t *testing.T) {
@@ -347,11 +347,11 @@ func TestMergedListAllocation(t *testing.T) {
 		limit int
 		merge func()
 	}{
-		{"writeMerged", 557_000, func() { writeMerged(discardWriter{}, "items", answers) }},
-		{"inbox en, kept", 624_000, func() {
+		{"writeMerged", 546_000, func() { writeMerged(discard(), "items", answers) }},
+		{"inbox en, kept", 623_500, func() {
 			local := []listAnswer{answers[0]}
 			local[0].localize = &inboxLocalize{forms: forms, slot: inboxSlot{route: "/api/v1/inbox", manager: "assistant", lang: i18n.En}}
-			writeMerged(discardWriter{}, "items", local)
+			writeMerged(discard(), "items", local)
 		}},
 	} {
 		c.merge()
@@ -363,12 +363,24 @@ func TestMergedListAllocation(t *testing.T) {
 	}
 }
 
-// discardWriter keeps nothing it is written: a recorder's growing body would be counted as the merge's.
-type discardWriter struct{}
+// discardWriter keeps nothing it is written but its header, one map as a response's: a recorder's growing body would
+// be counted as the merge's.
+type discardWriter struct{ header http.Header }
 
-func (discardWriter) Header() http.Header         { return http.Header{} }
+func discard() discardWriter                      { return discardWriter{header: http.Header{}} }
+func (d discardWriter) Header() http.Header       { return d.header }
 func (discardWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (discardWriter) WriteHeader(int)             {}
+
+func TestAppendJSONID(t *testing.T) {
+	for _, id := range []string{"", "assistant", "m-b", "m b~", "m<b", "a>b", "a&b", `a"b`, `a\b`, "a\nb", "a\x7fb", "a\x00b",
+		"\u00e9", "\u2028", "\xff", strings.Repeat("m", 100)} {
+		want, _ := json.Marshal(id)
+		if got := appendJSONID([]byte("x"), id); string(got) != "x"+string(want) {
+			t.Errorf("appendJSONID(%q) = %s, want x%s", id, got, want)
+		}
+	}
+}
 
 func FuzzWriteMerged(f *testing.F) {
 	for _, c := range mergeCases(f) {

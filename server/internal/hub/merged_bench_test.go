@@ -21,7 +21,7 @@ func BenchmarkWriteMerged(b *testing.B) {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				c.merge(discardWriter{}, "items", answers)
+				c.merge(discard(), "items", answers)
 			}
 		})
 	}
@@ -37,7 +37,7 @@ func BenchmarkMergedInbox(b *testing.B) {
 	}
 	header := http.Header{"Content-Type": {"application/json"}}
 	merge := func(forms *inboxForms, l i18n.Lang, body []byte) {
-		writeMerged(discardWriter{}, "items", []listAnswer{{id: "assistant", status: http.StatusOK, header: header, body: body,
+		writeMerged(discard(), "items", []listAnswer{{id: "assistant", status: http.StatusOK, header: header, body: body,
 			localize: &inboxLocalize{forms: forms, slot: inboxSlot{route: "/api/v1/inbox", manager: "assistant", lang: l}}}})
 	}
 	for _, l := range []i18n.Lang{i18n.En, i18n.ZhHans} {
@@ -45,7 +45,7 @@ func BenchmarkMergedInbox(b *testing.B) {
 			b.Run("legacy", func(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
-					legacyWriteMerged(discardWriter{}, "items", []listAnswer{{id: "assistant", status: http.StatusOK, header: header,
+					legacyWriteMerged(discard(), "items", []listAnswer{{id: "assistant", status: http.StatusOK, header: header,
 						body: i18n.InboxJSON(l, body)}})
 				}
 			})

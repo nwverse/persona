@@ -262,7 +262,8 @@ func writeScanned(w http.ResponseWriter, key string, answers []listAnswer) bool 
 			out = append(out, `":[`...)
 			first := true
 			for _, p := range parts {
-				idJSON, _ := json.Marshal(p.id)
+				var quoted [64]byte
+				idJSON := appendJSONID(quoted[:0], p.id)
 				for _, it := range p.items {
 					if !first {
 						out = append(out, ',')
@@ -305,6 +306,19 @@ func writeScanned(w http.ResponseWriter, key string, answers []listAnswer) bool 
 	w.WriteHeader(base.status)
 	_, _ = w.Write(out)
 	return true
+}
+
+// appendJSONID appends id as json.Marshal writes it, quoting it by hand when nothing in it is escaped.
+func appendJSONID(out []byte, id string) []byte {
+	for i := 0; i < len(id); i++ {
+		if c := id[i]; c < 0x20 || c > 0x7e || c == '"' || c == '\\' || c == '<' || c == '>' || c == '&' {
+			b, _ := json.Marshal(id)
+			return append(out, b...)
+		}
+	}
+	out = append(out, '"')
+	out = append(out, id...)
+	return append(out, '"')
 }
 
 // appendStamped appends item with "manager": id as json.Marshal writes stampManager's item in a list.
