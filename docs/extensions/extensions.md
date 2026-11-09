@@ -478,7 +478,11 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
   `cache_read_input_tokens`, `cache_creation_input_tokens`, `requests`); the manager logs one line per call with the extension, `label`, model and usage. Keep it in the extension's own report if the user should see it.
 - **A held connection**: when the connection is out of quota or busy (docs/assistant/model-config.md "Upstream rate limits") nothing is sent and the answer is `model_paused` with `{reason, until}`; try again after `until`.
 - **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension: the user sets one up in Settings › Model configuration),
-  `model_paused`, `model_failed` (the upstream refused or failed), `timeout`, `invalid_output`.
+  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection), `model_refused`, `timeout`, `invalid_output`.
+- **A declined input**: when the model declines to answer (the Messages API's `stop_reason: "refusal"`, a Responses API refusal part, a Chat Completions refusal, or a response stopped by a `content_filter`)
+  the answer is `model_refused` with `{stop_reason, usage}`; `usage` is what the declined call spent. Sending the same input again gets the same answer: split it into smaller pieces, drop
+  a part or report which input was declined. Match the code, never the message, which is for people and may change. Hubs older than this code answer `model_failed`
+  with the message `model.complete: ai: the model declined to answer`; an extension that supports them can keep that match as a fallback for `model_failed` only.
 - Internally the manager forwards it to the assistant as `models.extension_complete {extension, params}` (not callable by extensions), so the call is always the extension's own; the assistant lists the
   extensions with a purpose through `app.call plugins.models` (enabled, compatible, granted `models` itself).
 
@@ -698,7 +702,7 @@ Every step is recorded in `plugin_audit` (who, when, from which version to which
 Connectors are recorded in the same table (#5281), with the connector's id in the `plugin` column and a `connector_` prefix on the action, so they never read as the extension's own:
 `connector_login_start` (a sign-in started), `connector_signed_in` (`{account}`, the display name the status shows), `connector_logout`, `connector_enabled` (`{enabled}`) and
 `connector_feed` (`{feed, on}`) only when the value changes, `connector_options` (the connector's own settings changed; never their values), `connector_data_deleted`
-(`{chats, people, inbox}`), `connector_archive_deleted` (`{chats, people}`; both add `incomplete: true` when part of the deletion failed), `connector_auth_source`
+(`{chats, people, posts, items, inbox}`), `connector_archive_deleted` (`{chats, people, posts, items}`; both add `incomplete: true` when part of the deletion failed), `connector_auth_source`
 (`{source, machine}`, where GitHub's token comes from), `connector_recall` (`{row, action}`: a message the sent-as-user ledger has a row for was taken back, `docs/extensions/connectors.md` "Sent as the user"; only a recall that took it back), `connector_chat_rule_added` (`{row, chat}`: the user's "don't ask again in this chat" was made from a ledger row, `docs/extensions/connectors.md` "Sent as the user", Per-chat rules) and `connector_chat_rule_removed` (`{chat, row?}`: such a rule was dropped; never the row's words). This covers Settings › Connectors and binding or unbinding an extension channel, which signs its connector in or out.
 Who is `device:<id>` or `hub token`, and `assistant` for what the assistant changed through its app calls; what the user typed and the credential itself are never recorded.
 A record that cannot be written does not undo the action; the hub logs it. A program saving its own credential (`connector.secrets.save`, e.g. a refreshed session) is not recorded.
