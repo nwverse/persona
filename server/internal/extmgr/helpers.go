@@ -222,15 +222,3 @@ func byOwnDevice(ctx context.Context) bool {
 	p, ok := ctx.Value(principalKey{}).(principal)
 	return ok && p.Role == roleFull && p.ID != "" && !p.Paired
 }
-
-// remoteIP is the caller's address the hub saw.
-func remoteIP(r *http.Request) netip.Addr {
-	if a := principalOf(r.Context()).Remote; a.IsValid() {
-		return a
-	}
-	ap, err := netip.ParseAddrPort(r.RemoteAddr)
-	if err != nil {
-		return netip.Addr{}
-	}
-	return ap.Addr()
-}

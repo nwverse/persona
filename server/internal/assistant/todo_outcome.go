@@ -125,11 +125,6 @@ func (s *Service) goRecordTaskOutcome(t Todo, doneAt time.Time) {
 	}()
 }
 
-// waitTaskOutcomes returns once the outcome recordings started so far have finished: what checks that a completion
-// recorded no outcome needs not wait out a deadline. For tests only: the caller must know nothing else is finishing
-// a task meanwhile, as a WaitGroup's Add from zero must not race its Wait.
-func (s *Service) waitTaskOutcomes() { s.tasks.outcomeRuns.Wait() }
-
 // outcomeRecorded: the store already has decisions of this completion.
 func (s *Service) outcomeRecorded(ctx context.Context, todoID, key string) bool {
 	st := s.todoDB()

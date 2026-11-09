@@ -161,7 +161,7 @@ type tasksState struct {
 	// reusing: the todos a started plan took over (PlanTask.ReuseTodo) whose agent is not linked yet, so that a second
 	// plan cannot take the same todo in that gap (takeTodoForTask).
 	reusing map[string]bool
-	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome, waitTaskOutcomes).
+	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome; the tests wait on them).
 	outcomeRuns sync.WaitGroup
 	// todayLocks: a conversation's id -> the lock ensureToday holds from looking for the day's "Today" card to
 	// appending it, so that concurrent opens of a chat make one card, not one each.
