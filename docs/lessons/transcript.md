@@ -47,6 +47,11 @@ Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "
 - Parsing `<persona-context>` must not assume all attributes are present or in a fixed order (2026-11-03, #876). iOS once recognized it only when all three of `kind`, `title`, and `url` were present. Lark /agent contexts had no `url`, so the tag went unrecognized, leaving the whole prompt and large blank areas in the bubble.
   Truncating user messages for pagination must also avoid cutting through tags: a cut in the middle leaves an unclosed `<persona-context`, which every client displays as body text (`lightContexts` in `transcript/contexts.go` trims only the body of each block).
 
+- Whole-round supervision folding must cover the independent streaming-answer view as well as transcript rows (#2092).
+  Recaps can close a turn without ending its supervision round; only the next actual input does that. A queued genuine
+  input must not be absorbed into the quiet round. Preserve successful visibility evidence when overlapping raw pages
+  replace server folds, persist that client-side evidence and invalidate caches when adding the fields.
+
 ## A tail window may contain no words at all (2026-11-04, #1163)
 
 When listing offline sessions, the node reads only the last 384 KB of a transcript (`quickTail`) to get its title and last words. Claude Code now writes an entire `api-request-blob` on one transcript line, 300–500 KB per line;

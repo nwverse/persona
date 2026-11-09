@@ -3222,6 +3222,30 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_SUPERVISION=1: native quiet-round coverage, with synthetic audit and visible promotion receipts only.
+    if os.environ.get("MOCK_SUPERVISION") == "1":
+        TASK_FEED[ASK1] = []
+        _quiet = "检查示例任务的进展，不需要用户处理。"
+        _visible = "示例任务需要用户选择发布窗口。"
+        ITEMS[ASK1] = [
+            it("user", "text", 5, text="帮我检查示例任务的进展。", client_msg_id="mock-supervision-user-1"),
+            it("assistant", "text", 4.9, text="我会跟进，有需要你决定的事情再告诉你。"),
+            it("user", "text", 4.8, text=_quiet, injected={"kind": "system", "state": "supervise", "level": "triage", "line": "督办：检查示例任务"}),
+            it("assistant", "tool_use", 4.7, tool_use_id="mock-supervision-read", tool_name="Bash", tool_input={"command": "printf 'synthetic checks passed'", "description": "Inspect synthetic task checks"}),
+            it("user", "tool_result", 4.6, tool_use_id="mock-supervision-read", text="synthetic checks passed"),
+            it("assistant", "text", 4.5, text="示例任务的测试通过，无需你处理。"),
+            it("assistant", "tool_use", 4.4, tool_use_id="mock-supervision-finish", tool_name="mcp__persona__supervision_finish", tool_input={"visibility": "silent", "summary": "Synthetic checks passed"}),
+            it("user", "tool_result", 4.3, tool_use_id="mock-supervision-finish", text='{"visibility":"silent"}'),
+            it("assistant", "recap", 4.2, text="示例督办上下文已保存。"),
+            it("assistant", "text", 4.1, text="后台核对也完成了，继续静默跟进。"),
+            it("user", "text", 3, text="下一条真实输入仍在督办记录之外。", client_msg_id="mock-supervision-user-2", queued=True),
+            it("assistant", "text", 2.9, text="是的，这条消息正常显示。"),
+            it("user", "text", 2.8, text=_visible, injected={"kind": "system", "state": "supervise", "level": "user", "line": "督办：需要你决定"}),
+            it("assistant", "text", 2.7, text="需要你决定：示例任务今天发布，还是明天发布？"),
+        ]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _i
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
