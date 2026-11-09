@@ -430,10 +430,13 @@ struct NewChatView: View {
                         .background(.regularMaterial, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
                         .accessibilityIdentifier("newChat.error")
                 } else if let notReadyReason {
-                    // A grey button alone left the user checking every row for what was missing.
+                    // A grey button alone left the user checking every row for what was missing. On the error's card:
+                    // the form scrolls under this inset, and bare text mixed with the form's (#2677).
                     Label(notReadyReason, systemImage: Theme.Icon.info)
                         .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.Space.m)
+                        .background(.regularMaterial, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
                         .accessibilityIdentifier("newChat.notReady")
                 }
                 #if os(iOS) || os(visionOS)
