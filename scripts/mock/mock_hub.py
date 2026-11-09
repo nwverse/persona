@@ -3771,11 +3771,22 @@ if os.environ.get("MOCK_CODEX"):
 
 # MOCK_ASSISTANT_CARDS=1: Persona's main conversation waits on a tool approval (a hook's card) and a connector's send
 # the hub asks about itself (Hub.approve, connectors.go), both of its session as a hub serves them since #2558.
+# `long`: the same, but the approval's command is a long curl call, so the card opened on its raw parameters is taller
+# than the space above the input (the answer buttons must stay in view, #2017).
 if os.environ.get("MOCK_ASSISTANT_CARDS"):
+    _bash_command = "ls ~/notes"
+    if os.environ["MOCK_ASSISTANT_CARDS"] == "long":
+        _bash_command = "curl -X POST https://api.example.com/v1/reports/export -H 'Content-Type: application/json' -d '" + json.dumps(
+            {"format": "csv", "range": {"from": "2026-01-01", "to": "2026-12-31"},
+             "columns": ["id", "created_at", "owner", "status", "total", "currency", "region", "channel", "notes"],
+             "filters": [{"field": "status", "op": "in", "values": ["open", "paid", "refunded", "disputed"]},
+                         {"field": "region", "op": "in", "values": ["emea", "apac", "amer", "latam"]},
+                         {"field": "total", "op": "gte", "values": [100]}],
+             "sort": [{"field": "created_at", "dir": "desc"}], "deliver": {"mode": "email", "to": ["me@example.com"]}}) + "'"
     INTERACTIONS.append(
         {"id": "ix_assistant_bash", "machine_id": "server", "session_id": ASK1, "session_title": "今天要处理的事",
          "cwd": "/home/me/.persona/assistant", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
-         "tool_name": "Bash", "tool_input": {"command": "ls ~/notes"}, "summary": "ls ~/notes", "resumable": True})
+         "tool_name": "Bash", "tool_input": {"command": _bash_command}, "summary": _bash_command, "resumable": True})
     INTERACTIONS.append(
         {"id": "ix_assistant_send", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
          "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=14),
