@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
 )
 
@@ -116,6 +117,11 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if strings.TrimSpace(prompt) == "" {
 		return nil, refusal("codex_needs_prompt", "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", nil)
 	}
+	key := cwd + "\x00" + launcher
+	defer n.typing.lock("codex-start:" + key)()
+	if err := n.closeAbandonedCodex(ctx, key); err != nil {
+		return nil, err
+	}
 	if codexOnRemote(argv) {
 		// A launcher on an explicit app-server (--remote) sends no directory unless told one.
 		argv = append(argv, "-C", cwd)
@@ -160,7 +166,22 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	id, err := n.waitCodexThread(ctx, pane, cwd, prompt, began)
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
-		return nil, fmt.Errorf("%v\n%s", err, lastLines(screen, 12))
+		n.mu.Lock()
+		if n.codexAbandoned == nil {
+			n.codexAbandoned = map[string]codexAbandonedStart{}
+		}
+		n.codexAbandoned[key] = codexAbandonedStart{launch: launch, created: created, workspace: ws}
+		n.mu.Unlock()
+		cleanupErr := n.closeAbandonedCodex(ctx, key)
+		message := fmt.Sprintf("%v\n%s", err, lastLines(screen, 12))
+		if cleanupErr != nil {
+			return nil, &rpc.Error{Code: proto.CodeAgentStartStalled, Message: message + "\n" + cleanupErr.Error()}
+		}
+		var coded *rpc.Error
+		if errors.As(err, &coded) {
+			return nil, &rpc.Error{Code: coded.Code, Message: message, Data: coded.Data}
+		}
+		return nil, fmt.Errorf("%w\n%s", err, lastLines(screen, 12))
 	}
 	n.bindPane(pane, id)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
@@ -241,7 +262,11 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 			}
 		}
 	}
-	return "", fmt.Errorf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没认出它这次的会话（第一条消息还没进它的会话记录）：在电脑上看看那个标签", int(codexStartWait.Seconds()))
+	message := fmt.Sprintf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没认出它这次的会话（第一条消息还没进它的会话记录）", int(codexStartWait.Seconds()))
+	if agent, err := n.paneAgent(ctx, pane); err == nil && agent != nil && agent.Agent == "codex" {
+		return "", &rpc.Error{Code: proto.CodeAgentStartStalled, Message: message}
+	}
+	return "", errors.New(message)
 }
 
 // codexTrustRE is Codex's folder trust dialog with "trust and continue" selected (0.163: "› 1. Trust and continue";
