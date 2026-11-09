@@ -397,6 +397,19 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Validation: Playwright (`playwright-core` + cached Chrome for Testing), CDP `Emulation.setCPUThrottlingRate`, `long-animation-frame`, and `Page.startScreencast` frames. Playwright's bundled ffmpeg decodes only MJPEG; record JPEG frames, combining into a file before reading if no pipe.
   `recordVideo` produces no file on this machine (ffmpeg version mismatch errors, then silent after symlinking). Measuring dev Vite is meaningless: React dev expansion takes 700ms; production builds are what users see.
 
+## Skipping off-screen exchanges in a chat without browser scroll anchoring (2026-11-09, #2485)
+
+- `content-visibility: auto` on finished exchanges takes most of the layout and style cost of a long chat off sends and cold opens. With `overflow-anchor: none` (#1124), each exchange that is drawn for the first time above the view swaps its guessed height for its real one and moves the reader.
+  Correct this in the ResizeObserver that already pins rows (after layout, before paint): add up the height changes of exchanges whose top was above the view's top before the change, and add the total to `scrollTop`. An exchange the view's top cuts through counts too, so its end and everything under it stay in place.
+- A good guess matters less than the correction, but a bad one makes the scroll bar thumb jump. Counting the reply's lines at the bubble's width guessed 1.8 times the drawn height (median). Counting them at 2.5 times the bubble's characters to a line brought that to 1.25.
+- The browser's smooth `scrollTo` aims once. When rows above the target change height on the way, it lands off the row (rail jumps at 200 turns landed thousands of px away). Setting `scrollTop` to fix that cancels the smooth scroll, and calling `scrollTo` again each frame restarts its curve, so it never arrives (10 s instead of 1.5 s).
+  Drive the jump instead: read the target each frame and ease toward it (`glide.ts`, at Chromium's pace of √distance × 15 ms, at most 1.5 s), then hold the row while things settle.
+- A script that sets `scrollTop` while the chat still follows the end is pulled straight back, because a scroll from a script is not the reader leaving. Leave the end with a wheel first.
+- Paint containment clips overflow and outlines, and Chromium applies `overflow-clip-margin` to it. Fixed-position descendants are contained as well: the zoomed Mermaid diagram is `fixed inset-0` and not portaled, so exchanges holding `[aria-modal="true"]` are excluded.
+- With the exchanges skipped, a cold open still forced a layout of the whole chat before its first paint: each bubble reads its own height in a layout effect (`getComputedStyle` + `scrollHeight`) to decide whether it folds, and then `useFoldScroll` reads its scroll height for the fade.
+  A message that cannot pass 14 lines even in a bubble far narrower than any real one now skips the first read, and a block that is not folded skips the second. Skipping only the first moved the whole cost to the second read (in the profile `moreBelow` took what the bubble's effect had taken): after removing a forced layout, profile again, because the next read in the same commit pays for it.
+- Context that every row reads but only an open menu uses (why "Rewind to here" is off) belongs in a small store, read with `useSyncExternalStore` only while the menu is open. A set that every reader checks for its own id (fresh words) becomes a per-id subscription. With these, a send and a pushed item render the rows they touch instead of every exchange.
+
 ## Opening and refreshing chats stays at latest (2026-11-04, #1340)
 
 - Do not determine latest-following solely from distance to bottom at scroll-event time. Events caused by our `scrollTop = scrollHeight` arrive next frame;
