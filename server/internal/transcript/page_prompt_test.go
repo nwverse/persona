@@ -93,11 +93,25 @@ func TestPageTurnsKeepsUserQuestionsAcrossSupervisionAndCompaction(t *testing.T)
 				}
 				return out
 			}
-			if got := questions(latest); !reflect.DeepEqual(got, []string{"Question 2", "Question 3"}) || !more {
+			got := questions(latest)
+			if len(got) == 0 || got[len(got)-1] != "Question 3" || !more {
 				t.Fatalf("latest page questions=%v, has_more=%v", got, more)
 			}
-			older, more, _ := f.PageTurns(latest[0].Seq, 2, 2000)
-			all := append(older, latest...)
+			if window == 1<<20 && !reflect.DeepEqual(got, []string{"Question 2", "Question 3"}) {
+				t.Fatalf("full read's latest two questions=%v", got)
+			}
+			all := append([]proto.Item(nil), latest...)
+			for pages := 0; more; pages++ {
+				if pages >= 20 || len(all) == 0 {
+					t.Fatal("older history did not advance")
+				}
+				before := all[0].Seq
+				older, hasMore, _ := f.PageTurns(before, 2, 2000)
+				if hasMore && (len(older) == 0 || older[0].Seq >= before) {
+					t.Fatal("budgeted page has no advancing cursor")
+				}
+				all, more = append(older, all...), hasMore
+			}
 			if got := questions(FoldWork(all)); !reflect.DeepEqual(got, []string{"Question 1", "Question 2", "Question 3"}) || more {
 				t.Fatalf("folded complete history questions=%v, has_more=%v", got, more)
 			}
