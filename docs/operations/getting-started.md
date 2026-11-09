@@ -3,7 +3,7 @@
 This page is for people who don't write code and don't usually open a terminal. Follow it and you'll have Persona installed, your phone connected to it, a computer and a model hooked up, and your first message sent.
 Where a step still needs the terminal, and what isn't possible yet, is spelled out below.
 
-If you're comfortable with the command line and want to build and deploy it yourself, see [README](../../README.md) ("I want to develop").
+If you're comfortable with the command line and want to build and deploy it yourself, see [README](../../README.md#get-started) ("Get started").
 
 ## Persona has three parts
 

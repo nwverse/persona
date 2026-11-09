@@ -576,6 +576,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
+- **Switching pages under side bars** (2026-11-09, TestFlight: switching between Assistant and Agents stuttered on the outer screen): with bars on the side the two pages
+  cross-fade in place instead of sliding (`ShellPageSlide`); a drag between them fades with the finger. A page that moved sideways under iPhone Duo's vertical bars, however
+  it was moved (an offset, a render-only `transformEffect`, under a mask), made both pages' navigation controllers run a deferred transition and lay the page out twice on
+  every frame: about 27 ms a frame and 140 ms of hitches a second through a switch on the simulator, against 58 ms and 2.8 ms in place (an ordinary iPhone's numbers).
+  Horizontal bars keep the slide.
 - **Short outer screen** (about 678pt): on Persona's new-chat page, Needs you rows above the input shrink to the remaining space (see "Empty chat" under "New shell" above).
 - **Simulator verification**: iPhone Duo has only the iOS 27.1 runtime (which supports only it). Folding / unfolding / half-folding can only be switched in Xcode Device Hub,
   with no CLI. Screenshots must specify the display: `xcrun simctl io <udid> screenshot --display=1` (outer) / `--display=3` (inner, 2853×2007 in landscape);
@@ -723,6 +728,14 @@ In `LauncherPicker` a blocked row is gray with the line (`LauncherBlockLine`) an
 never picks it. The form says the line under the launcher row when the launcher that will run is blocked (Model Settings' default, or picked anyway); Start stays enabled. Run Agent Here picks a usable launcher first, lists blocked ones last in its menu under a section titled with the line (a picker menu drops an option's second line), and says it in its footer once picked.
 Both read the list with `AppModel.launchersForStart` (fresh, not the cache). Add Provider is offered only for a computer in the hub-level group (the wizard saves there).
 `StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Launcher health in New Agent").
+
+## Recent setups in New Agent (#2134)
+
+Every start from New Agent (the Codex and Claude Code paths, where the per-machine `launcher.` / `mode.` / `effort.` / `cwd.` keys are written) records its setup in `RecentSetupsStore` (`apple/Shared/RecentSetups.swift`, one `StateCache` file `recent-setups`): machine (`MachineRef.path`), folder, launcher (`""` follows Model Configuration), the model the start sent (`""` for the default), agent type, and Claude Code's mode and effort. Ids only, on this device; the rules (record, cards, a machine's model) are `spec/fixtures/recents/`, which `RecentSetupsTests` runs case by case.
+- The form's top section **Recent** (hidden when joining a space) shows at most three cards on the machines offered (`RecentSetupRow`, `Views/NewChat/RecentSetupCards.swift`): folder · machine, then launcher · model · mode · effort; Allow Everything in `Theme.cautionText` with its mark; an offline machine's card gray with Offline and not pickable. A card's context menu has Remove from Recent and Clear Recent Setups.
+- A tap fills every field and focuses First Message; it never starts. Another machine's card is applied once that machine's launchers and directories are in (`pendingFill`, after its saved defaults); the model is picked when `loadModels` moves to that launcher's list (`restoredModel`), before the list comes, so the efforts offered are the model's. A Codex card leaves the machine's Claude mode and effort as they were.
+- Picking a machine (on open or by its card) also restores the model of its latest setup with the launcher it restores (`RecentSetups.model`); none: the default. No new per-machine key: Siri's `newChat.machine`, `launcher.<m>`, `cwd.<m>` are unchanged.
+- UI flow: `RecentSetupsUITests` (`docs/operations/testing.md`, "Recent setups in New Agent").
 
 ## An agent's live reply (#1309)
 

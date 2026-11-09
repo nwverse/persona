@@ -107,7 +107,7 @@ It resolves from its own model configuration (`applyModel agent.new`: category c
 Agents is the one launcher purpose with no computer, so the result is then held to what the target computer has (#2640, `docs/server/launcher-health.md`, "A launcher the computer doesn't have"): a default it lacks gives way to `claude` (or its first launcher), a launcher picked for this run that it lacks is refused (400) with the ones it has.
 Label names (purpose `agent.title`) and session triage (`agent.triage`) also call models there.
 
-When the manager is disconnected, hub waits only if it has just started and the manager has never connected (at most until 60 seconds after startup). Once it has connected and is now absent, hub does not wait: the manager connects computers (`docs/server/machines.md`, “Who connects computers”),
+When the manager is disconnected, hub waits only if it has just started and the manager has never connected (at most until 60 seconds after startup). Once it has connected and is now absent, hub does not wait: the manager connects computers (`docs/server/machines.md`, “Who connects to computers”),
 so creating or resuming sessions is impossible without it and returns `503 assistant_offline` (previously hub could apply “Model Settings › Agents” itself and still start them). AI twin execution opens on the assistant side through `assistant.start`, so resolution already happens there; Agents opened from Lark bot cards also live on the assistant side (it owns channels).
 
 ## Main-chat runtime (#2455)
