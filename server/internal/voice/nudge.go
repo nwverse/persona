@@ -22,9 +22,9 @@ import (
 //   - a line the user typed, as it reaches the session (one typed while paused: as the woken session takes it);
 //   - what the extension hands the model (sendNow): anything but a heartbeat and the nudge itself.
 //
-// It is answered by any audio of the model's, a caption with words, a delegation or a function call. It is counted from
-// when the model could have spoken: not before its speech (by its computed play end) has played out, nor before its
-// session came up.
+// It is answered by any audio of the model's that goes to the app (not the rest of an answer cut off, which is dropped),
+// a caption with words, a delegation or a function call. It is counted from when the model could have spoken: not
+// before its speech (by its computed play end) has played out, nor before its session came up.
 //
 // No nudge while the upstream is paused, waking or reconnecting, or the call is over; while a card is asked or about to
 // be (the model waits for the user's answer); while something waits to be said (it goes, and is owed in its turn); when

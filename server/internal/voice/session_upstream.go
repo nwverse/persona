@@ -361,15 +361,15 @@ func (c *conversation) handle(gen int, e event) {
 	switch e.kind {
 	case evAudio:
 		now := time.Now()
-		c.modelActed(now) // before its caption of the user's line closes, if that is still open: this answers it
 		c.replyVoiced = true
 		if c.dropAudio && (now.Sub(c.lastAudio) > 1500*time.Millisecond || c.replyAfterCut(now)) {
 			c.dropAudio, c.cutAt = false, time.Time{} // a pause: this is the next answer
 		}
 		c.lastAudio = now
 		if c.dropAudio {
-			return
+			return // the rest of an answer cut off: the user never hears it, so it answers nothing (nudge.go)
 		}
+		c.modelActed(now) // before its caption of the user's line closes, if that is still open: this answers it
 		c.pace.played(now, len(e.audio), c.outRate)
 		c.closeUser()
 		select {

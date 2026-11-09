@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"context"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -429,6 +430,20 @@ func TestAnswerOwed(t *testing.T) {
 	c.owed = owedAnswer{}
 	if c.handedOver(&sentWords{}, now); !c.owed.at.IsZero() {
 		t.Errorf("owed by a session that is not up: %+v", c.owed)
+	}
+
+	// The rest of an answer the app cut off (interrupt) is dropped: the user never hears it, so it answers nothing.
+	// Audio that goes to the app does.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cut := &conversation{ctx: ctx, out: make(chan outFrame, 1), dropAudio: true, lastAudio: time.Now()}
+	cut.owe(time.Now(), owedTyped, false)
+	if cut.handle(0, event{kind: evAudio, audio: make([]byte, 320)}); cut.owed.at.IsZero() || !cut.modelAt.IsZero() {
+		t.Errorf("answered by audio that was dropped: %+v", cut.owed)
+	}
+	cut.dropAudio = false
+	if cut.handle(0, event{kind: evAudio, audio: make([]byte, 320)}); !cut.owed.at.IsZero() || cut.modelAt.IsZero() {
+		t.Errorf("not answered by audio the app got: %+v", cut.owed)
 	}
 
 	c.owe(now, owedTyped, false)
