@@ -60,7 +60,7 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
               "plan",
               "bypassPermissions"
             ],
-            "description": "permission mode; empty: the default"
+            "description": "permission mode; empty: the default for writable tasks. readonly=true always uses plan, overriding this field"
           },
           "ultracode": {
             "type": "boolean",
@@ -68,7 +68,7 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
           },
           "readonly": {
             "type": "boolean",
-            "description": "true when the task only reads (looks things up, reads code, writes nothing anywhere)"
+            "description": "true when the task only reads (looks things up, reads code, does not change project files). Forces permission=plan, including retries and card edits; a launcher that cannot honor plan mode is refused"
           },
           "user_requested": {
             "type": "boolean",
@@ -86,6 +86,14 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
             },
             "description": "what done means: results you will check before you accept it (Chinese, one each), e.g. 「PR 合并到 master」「浅色 / 深色截图贴进 PR」「线上 hub 已部署并验证」; the agent is told them"
           },
+          "attachments": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string"
+            },
+            "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+          },
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,
@@ -97,7 +105,7 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
           },
           "tier": {
             "type": "string",
-            "description": "Execution tier from the active model profile (strong, standard, fast, bulk, longread or a custom tier). Resolved at actual start. Explicit launcher/model/effort override its defaults."
+            "description": "An Agent preset: one of the tiers the snapshot's 模型档位 line lists for the profile in use, each with what it is for; pick the one whose description fits the work. Resolved when the task actually starts, with the profile in use then. Explicit launcher/model/effort override its values."
           },
           "effort": {
             "type": "string",
