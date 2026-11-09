@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -39,7 +40,7 @@ func (s *Service) placeTask(ctx context.Context, t *PlanTask) bool {
 	return true
 }
 
-// healthyPlace moves t off a machine where its launcher failed its health check, to one where it works
+// healthyPlace moves t off a machine where its launcher failed its health check, to one where it works and the directory exists
 // (launcher_health_check.go); its why says so. False: it stays.
 func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 	if t.MachinePolicy != machineFlexible {
@@ -49,10 +50,10 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 	if !ok {
 		return false
 	}
-	alt, note, moved := s.healthDetour(ctx, m, s.startLauncher(ctx, t.Launcher))
-	if note != "" && !strings.Contains(t.Why, note) {
-		t.Why = strings.TrimSpace(t.Why + " (" + note + ")")
-	}
+	alt, note, moved := s.healthDetour(ctx, m, s.startLauncher(ctx, t.Launcher), func(alt Device) bool {
+		return s.taskDirectoryExists(ctx, alt.ID, rehome(t.Cwd, m, alt))
+	})
+	t.noteWhy(note)
 	if moved {
 		// Keep the machine the task was first placed on across repeated moves; each move refreshes the landing and the
 		// health-check reason. Names, not ids, go on the card/receipt (#2271).
@@ -66,6 +67,45 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 	return moved
 }
 
+// noteWhy adds note to t's why (once), in brackets after the assistant's reason: the card shows it.
+func (t *PlanTask) noteWhy(note string) {
+	if note != "" && !strings.Contains(t.Why, note) {
+		t.Why = strings.TrimSpace(t.Why + " (" + note + ")")
+	}
+}
+
+// fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
+// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so.
+func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) error {
+	note, err := s.fitLauncher(ctx, m, own, params)
+	if err != nil || note == "" {
+		return err
+	}
+	t.Launcher, _ = params["launcher"].(string)
+	t.Model, _ = params["model"].(string)
+	t.Effort, _ = params["effort"].(string)
+	t.Tier = ""
+	t.noteWhy(note)
+	return nil
+}
+
+// taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or
+// unreadable paths (including a node too old to answer fs.stat) keep that machine out of the detour.
+func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var res struct {
+		Stats []struct {
+			Path string `json:"path"`
+			Kind string `json:"kind"`
+		} `json:"stats"`
+	}
+	if err := s.call(ctx, machine, "fs.stat", map[string]any{"paths": []string{dir}}, &res); err != nil {
+		return false
+	}
+	return len(res.Stats) == 1 && res.Stats[0].Path == dir && res.Stats[0].Kind == "dir"
+}
+
 // startTaskAgent starts the agent for t on its machine (another when its launcher does not work there: t says which)
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
@@ -75,11 +115,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		return "", "", err
 	}
 	params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
-	if err := s.applyStartTier(ctx, params); err != nil {
+	own, err := s.resolveStart(ctx, params)
+	if err != nil {
 		return "", "", err
 	}
-	if err := s.applyModel(ctx, "agent.new", params); err != nil {
-		return "", "", err
+	if t.defaulted || t.Launcher == "" {
+		own.launcher, t.defaulted = "", true // filled in from a default, by this try or an earlier one
 	}
 	t.Launcher, _ = params["launcher"].(string)
 	t.Model, _ = params["model"].(string)
@@ -91,6 +132,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	if !m.Reachable {
 		return "", "", machineOffline(m.Name)
+	}
+	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
+	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
+	// which is then about the launcher that will run.
+	if err := s.fitTaskLauncher(ctx, t, m, own, params); err != nil {
+		return "", "", err
 	}
 	if t.MachinePolicy == machineFixed {
 		// Only an actual terminal start can recheck a repaired terminal shell.
@@ -162,7 +209,7 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
 		pt.Reroute = t.Reroute
-		pt.Launcher, pt.Model, pt.Effort = t.Launcher, t.Model, t.Effort
+		pt.Launcher, pt.Model, pt.Effort, pt.Tier = t.Launcher, t.Model, t.Effort, t.Tier
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)
 	}

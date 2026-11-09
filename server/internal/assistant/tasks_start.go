@@ -71,9 +71,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				t.Error = err.Error()
 				continue
 			}
+			if t.Project != "" && todo.Project != t.Project {
+				if moved, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Project: &t.Project}); err != nil {
+					s.logf("task %s: project: %v", todo.ID, err)
+				} else {
+					todo = moved
+				}
+			}
 		} else {
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
-			todo, err = s.createTodo(ctx, title, t.Prompt, p.Conversation, p.ID)
+			todo, err = s.createTaskTodo(ctx, title, t.Prompt, p.Conversation, p.ID, t.Project)
 			if err != nil {
 				t.Error = err.Error()
 				continue
@@ -189,14 +196,14 @@ const taskFailTimeout = 30 * time.Second
 func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, retry bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
-	placed := t.Machine
+	placed, placedWhy := t.Machine, t.Why
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
-	if err != nil && ctx.Err() == nil {
+	if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
-		// failure counts against the launcher there. Only flexible tasks may retry on another healthy machine.
+		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		shouldRetry := transientStartErr(err)
 		if !shouldRetry && t.MachinePolicy == machineFlexible {
-			_, _, shouldRetry = s.healthDetour(ctx, Device{ID: t.Machine}, s.startLauncher(ctx, t.Launcher))
+			shouldRetry = s.healthyPlace(ctx, &t)
 		}
 		if shouldRetry {
 			s.logf("task %s: start: %v; retrying", t.TodoID, err)
@@ -207,7 +214,7 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 			}
 		}
 	}
-	if t.Machine != placed { // the card shows where it runs
+	if t.Machine != placed || t.Why != placedWhy { // the card shows where it runs, and on what (launcher_fit.go)
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
