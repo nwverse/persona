@@ -25,7 +25,7 @@ uses Persona. Registered app identities (bundle IDs, App Groups, keychain groups
 
 ### Workflow
 
-- **Every change goes issue → claim → branch → PR → merge after CI passes** ("Development workflow" below). Code, docs and config alike;
+- **Every change goes issue → claim → branch → PR → merge after local verification passes** ("Development workflow" below). Code, docs and config alike;
   never commit or push to `main` directly.
 - **TestFlight feedback**: issues from crash reports or testers' feedback get the `testflight` label (or a `[TestFlight]` title prefix),
   with a scrubbed body and a dedupe marker (`docs/operations/collaboration.md`, "TestFlight feedback").
@@ -107,9 +107,9 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
    (preferred over a rebase; never force-push). Giving up: comment `Abandon:` with how far you got.
 6. **Open one PR per issue**, in English, with `Fixes #N` / `Closes #N` (or `Refs #N` to link without closing) in the body.
    `.github/workflows/pr-needs-issue.yml` closes PRs that link no issue and reopens them once the link is added.
-7. **Merge after CI passes**: run the checks in "Build and verify", look at screenshots for UI changes, and require the PR's `CI required`
-   check to pass (`docs/operations/testing.md`, "Hosted CI"). It aggregates the path-selected platform workflows; do not require their
-   conditional job names individually. CI changes must be verified by a green hosted run of that PR, not just local checks.
+7. **Merge after local verification passes**: run the checks in "Build and verify" for every affected area, including workflow lint for
+   CI changes, and look at screenshots for UI changes. Opening or updating a PR does not run hosted CI. A scheduler dispatches full CI
+   on `main`; its failures are fixed separately and do not replace the PR's local verification (`docs/operations/testing.md`, "Hosted CI").
    Then `scripts/hooks/merge-pr.sh <number>` (scans the PR with this machine's private values, which CI does not have, then squash-merges
    and deletes the branch). Make sure the issue is closed.
 
@@ -117,7 +117,8 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
 
 - Portable CI: `scripts/ci/server.sh`, `scripts/ci/web.sh`, `scripts/ci/android.sh`, `scripts/ci/apple.sh`, `scripts/ci/scripts.sh`;
   runtime/SDK checks: `scripts/ci/runtimes.sh`. Same scripts locally and on hosted runners, no private config or signing secrets.
-  Dependencies, path filters, coverage and cost: `docs/operations/testing.md` ("Hosted CI"). Repository guards run on every PR.
+  Dependencies, optional path filters, coverage and cost: `docs/operations/testing.md` ("Hosted CI"). Manual dispatch defaults to all
+  platform checks; no hosted repository guards run automatically on PRs.
 - Server: `scripts/test/test-server.sh` (real Postgres on the hub machine); portable CI creates its own disposable Postgres 18 container.
   Deploy: `scripts/deploy/deploy.sh [machine id…]`.
 - iOS: `scripts/app/sim.sh [-openSession <machine>/<session>]` builds, installs on your simulator and pairs it. Before xcodegen / Xcode,
