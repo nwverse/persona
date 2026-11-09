@@ -68,6 +68,9 @@ type Chat struct {
 	// HistoryMode: how its older history was imported (WriteHistory): HistoryFull, every message; HistoryAnchor, only
 	// windows around the owner's messages, the gaps marked by an omission line. "": none imported.
 	HistoryMode string `json:"history_mode,omitempty"`
+	// Rule is the selection rule that decides a plain message of the chat (Selection.UsualRule), as last written; the
+	// retention ledger records only lines another rule decided (retention.go). "": none yet, or outside the selection.
+	Rule string `json:"rule,omitempty"`
 	// Oldest and BackfillDone were an earlier backfill's progress; kept so files that have them still read the same.
 	// History imports keep theirs under history/state/ (HistoryState).
 	Oldest       string `json:"oldest,omitempty"`
@@ -179,6 +182,7 @@ type Item struct {
 	Projects []string  `json:"projects,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Seen     time.Time `json:"seen"`
+	Signals  []string  `json:"signals,omitempty"` // kbwire.Signal*: why it concerns the owner, as the source told
 	Tagging
 }
 
@@ -189,7 +193,13 @@ type Store struct {
 	mu       sync.Mutex
 	metaMu   sync.Mutex // acquire before mu when both are needed (projectInput reads Log under metaMu)
 	applyMu  sync.Mutex
-	recMu    sync.Mutex // a recording's read-compare-write (recordings.go)
+
+	recMu             sync.Mutex                 // a recording's read-compare-write (recordings.go)
+	recFilesMu        sync.RWMutex               // acquire before metaMu for recording snapshots and recovery
+	recordingWrite    func(string, []byte) error // per-store candidate fault injection
+	recordingReadWait func()                     // per-store read-entry observation for concurrency tests
+	recordingRemove   func(string) error         // per-store commit fault injection
+
 	dedupeMu sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
 	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
@@ -212,6 +222,9 @@ func NewStore(dir string) (*Store, error) {
 		}
 	}
 	s := &Store{Dir: dir}
+	if err := s.recoverRecordings(); err != nil {
+		return nil, err
+	}
 	if err := s.recoverIngests(); err != nil {
 		return nil, err
 	}

@@ -1,5 +1,14 @@
 # Lessons: hub / node and networking
 
+## The first gh on PATH may not be the GitHub CLI (#2081)
+
+Some Linux hosts have an unrelated program named `gh` in `/usr/local/bin`, and `New` puts that directory ahead of
+most of the node's PATH. `exec.LookPath("gh")` then found it, `gh auth token` printed something that was not a
+token, and the GitHub page said the machine was not signed in although the GitHub CLI there was. A service's PATH
+also misses Homebrew on Linux (`/home/linuxbrew/.linuxbrew/bin`), where that CLI usually is. The node now asks each
+`gh` on PATH, then in Homebrew's Linux prefixes, for `--version` and runs the first that answers as the GitHub CLI
+(`server/internal/node/ghpath.go`). Check what a binary is before trusting its name on PATH.
+
 ## A credential bound to an id outlives the entry (#1869)
 
 Deleting a Link computer in admin removed its hub.json entry but left its credential and unused pairing codes valid: the link only failed while no entry had that id, so adding the id again, for any computer, let the old one back in. Now deleting a computer in admin, rejecting it, and a pending one expiring revoke what is bound to its id (`device_tokens.machine_id`, `pair_tokens.machine_id`), and so does adding a computer under an id not in use, from the admin console, an app or `personad hub pair --add`. An entry dropped another way (a manager's `drop_machines`, a hand edit of hub.json) is not revoked then, only when its id is added again through the hub; one written back into hub.json by hand is not covered at all. The revocation filters on the role it means, because a peer hub's credential binds its hub id in the same column.
@@ -411,6 +420,8 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 
 - To-do Agent linking and removal must lock rows in the same order (2026-11-05, #2660): acquire a session transaction lock, then lock the target and other active to-do parent rows by id, then update Agent rows, preventing concurrent link/removal deadlocks and duplicate active links. Auto-link first confirms the target isn't an existing row or dismissed marker, releases old active links, then inserts; `todo_agents_active` is an immediate unique index, so inserting before release raises 23505. Preserve soft unlink and roll back the whole transaction on unexpected conflicts. Regressions observe real lock waits and use `FOR UPDATE NOWAIT` to check order, not added sleeps or retries.
 
+- Workspace ownership transactions and publication need one ordering boundary (#1479). A store can commit A, return B first, then return A: serializing only the in-memory map still leaves two task lists and a stale automatic-routing index. Order link, unlink, rename and task deletion with their live publication. Release the write lock for session-list RPCs, then recheck the exact link before fanout; background automatic membership writes must also verify their still-current record before persisting. Test committed-store barriers and delayed session RPCs through HTTP handlers, including reload, failure/retry and preservation of manual/spawned links.
+
 - Extension-button notifications must check ordinary direct APNs, not just relay (2026-11-05, #2619): relay's encrypted envelope already had `mutable-content: 1`; direct delivery with only dynamic category/actions doesn't run the notification service extension on the App's first background receipt of a new category, preventing button registration before delivery. Add the field only when extension buttons exist and update `.apns` samples; plain, buttonless, and static interaction notifications stay unchanged. Check JSON actually sent to fake APNs; server success doesn't replace first-background-notification acceptance on iPhone.
 
 - When the hub calls a new node RPC, don't cache rejection forever (2026-11-04, #1742): the hub restarts first during deployment, while resident node (`node --attach`) waits until assistant chats are idle before replacing its binary via `exec` (same pid; `restarting on` in `node-attach.log` confirms replacement). At #1700 rollout, the hub's first cleanup preceded node replacement by 27 seconds; old node returned `unknown method session.retire` for every completed Agent, and the hub cached "don't ask again unless session changes". After node upgrade none of the backlog closed. Rejections of new methods need expiry (retry here after 10 minutes); log only the first occurrence / changed reason. Regression covers "rejected → node replaced → ask again later" end to end.
@@ -570,9 +581,15 @@ home volume (docs/operations/link.md "Without systemd").
   though a new link is up (`setLink` wakes the loop, `choosePath` still skips the path). With a container that stayed up 75 s or more before
   each restart, ten runs came back in min 2.2 / p50 2.4 / p90 2.5 / max 2.8 s (time from `docker restart` to the hub listing it online on a
   new link). A real flapping link (a laptop on a bad network) gets the same delays.
-- **No systemd, no remote node updates**: `can_deploy` is false ("The resident node is not managed by launchd/systemd…", `nodeupdate.New` looks
-  for `INVOCATION_ID` and `systemd-run`): the hub's Redeploy and its automatic node update after a hub update skip such a node. Upgrade it by
-  hand: put the hub's own node build (`~/.persona/bin/nodes/…-linux-amd64`, the same version) into the volume and kill the node process.
+- **No systemd: remote node updates need the supervisor to say so** (2026-11-08). `nodeupdate.New` recognized only systemd (`INVOCATION_ID`
+  plus `systemd-run`) and launchd (`XPC_SERVICE_NAME`), so the box showed `can_deploy` false ("The resident node is not managed by
+  launchd/systemd…") and Redeploy skipped it. What an update needs from a supervisor is only a restart when the node exits: the switch execs
+  the new program in place (same pid; the script's `wait -n` sees nothing), and the restart matters only after a crash or the watchdog's
+  rollback. The script now runs `personad node --attach --supervised` (docs/operations/link.md "Without systemd"); the watchdog then runs
+  detached in a session of its own, as on a Mac, so the script must restart only the pid it started. Don't fake `INVOCATION_ID` instead: the
+  node would then call `systemd-run`, which the box doesn't have. A personad from before the flag ignores whatever follows `--attach`, so the
+  script can pass it before the box runs a build that knows it; until then, upgrade by hand: put the hub's own node build (`~/.persona/bin/nodes/…-linux-amd64`,
+  the same version) into the volume and kill the node process.
 - **Some downloads only work over IPv6 from that network, and a default bridge has none**: the Claude Code installer's download host timed out
   over IPv4 from the NAS and its containers, while the npm registry worked (`npm install -g @anthropic-ai/claude-code` with
   `npm config set prefix ~/.local`). herdr's manifest (`herdr.dev/latest.json`) timed out repeatedly; the binary itself came from GitHub
@@ -588,6 +605,18 @@ home volume (docs/operations/link.md "Without systemd").
 - New network commands mustn't reuse the default 15-second read-only timeout: pull 60 seconds, full node operation 75, hub 90, client 100. Disable terminal credential prompts and bound pipe waits after cancellation. Test with local bare remotes and isolated Git config, not users' real repositories.
 - Git's "no upstream" used nonexistent SF Symbol `cloud.slash`; registration in the design system let `everyNameIsASymbol` catch it. The correct slashed-cloud symbol is `icloud.slash`. Don't exempt icon registration or validity checks.
 - Direct node RPC `handle` tests need even minimal fixtures to initialize `state: newState()`: dispatch reads session state before Git methods, so `home` alone panics first.
+
+### Stash positions change outside the node (#1480)
+
+A stash index is a reflog position, not an identity. Carry the full object ID from list to request and apply by
+that ID. Checking it before an unguarded `git stash drop` leaves the same deletion race: terminal Git does not
+share the node mutex. For files storage, own the common-directory stash reference lock while validating,
+applying a pop and rewriting the reflog/reference, with packed-reference coordination for final deletion.
+Refuse unsupported storage or reference hooks before applying content; Git before 2.45 echoes
+`--show-ref-format` back instead of naming the backend, and only has the files backend. Preserve foreign locks on refusal,
+keep conflicts retryable, preserve existing storage modes and honor repository sharing for new loose refs,
+and require refresh/reselection after stale identities. Test the real JSON dispatcher
+against disposable Git with an independent writer at the last read before removal.
 
 ## Cloudflare Tunnel push relay (2026-11-02)
 
@@ -664,6 +693,7 @@ home volume (docs/operations/link.md "Without systemd").
   Attachment filenames must hash the full raw ID, not sanitize or truncate it: punctuation, case and long suffixes can otherwise overwrite an earlier message's
   attachment even when receipts correctly keep both IDs. Put new files in a separate day subdirectory so hash-shaped legacy names stay intact, keep legacy
   links/files, and use separate anonymous filenames when no stable ID is supplied.
+- Recording uploads need an accepted read boundary across all three files (#1488). A final metadata error can otherwise leave rejected segments and rendered text searchable under the previous revision. Save a durable undo snapshot before replacing content, keep it authoritative for readers until commit, and restore on writable reopen before exposing the store. Cover both search APIs, detail, segments, reconciliation and summarization, including failed restoration and metadata ownership edits. Exclude the undo journal at the shared search eligibility boundary: searching only natural transcript text misses plaintext UUID/schema keys around its encoded contents, including ghost hits for a rejected first upload. Test every replacement before and after writing, actual subprocess exits, first uploads, legacy files and retry; an in-memory rollback or metadata-only assertion misses the defect. Keep snapshot locks outside the metadata lock and release them before read-capable observer callbacks.
 - Enforce retention at write entry points, not only daily cleanup: initial archive reads "latest 100 messages", which in quiet sessions can reach years back;
   after cleanup, 47 expired day files reappeared 6 seconds later (production 2026-11-02). All day-file writes (`Archive`, `Ingest`, `WriteHistory`) share
   `Engine.textCutoff()` (midnight of the earliest retained day); cleanup uses `Engine.Prune`, with the same retention days. New write paths use it too. `TestArchiveKeepsToTheTextRetention` checks "cleanup immediately after writing should delete 0 days".
@@ -675,6 +705,31 @@ home volume (docs/operations/link.md "Without systemd").
   newline as they are, and test it as a property (original lines an exact subsequence of the result, count included) plus a fuzz target. The fuzzer found within seconds that a
   sender name with a line break formatted into two physical lines no reader took for one message, so its duplicate was written again; `Line.Format` now folds line breaks in
   the sender. Day files have no message ids: duplicates are "same minute, sender and text", which is exactly the formatted line.
+- History import (#1239): a source's page `limit` is a hint (one real source answers limit+10 around a position, limit+5 paging back), so go on only from the cursor or
+  positions a page answers, and treat "the same cursor again" as stuck, or a chat is read forever. A paced answer is empty with `more` false too: read `pace` first, then
+  `unreadable`, and only then take it as the start (`HistoryPage.AtStart`).
+- Never retry a history read that timed out, and never cancel one in flight to stop: the source may have served it (and counted it against a limit that trips a circuit
+  breaker after a few failures). The driver's call context is detached from the run's (`context.WithoutCancel` plus its own timeout); every stop switch is checked before the
+  next call instead, and any timeout or unknown code stops everything until a person looks.
+- A slowness baseline must be per method: an image's first chunk legitimately takes 1–2 s where a page takes 0.3 s, so measured against pages every image looks slow. Count
+  the "three slow among the last twenty" window over all calls, though, or a burst of image calls hides slow pages.
+- Positional windows from a search: windows grow when a read finds an anchor the search missed, so persist the anchors and the ranges covered, not the windows; and every read
+  must add coverage (give the gap up when one adds nothing), or a deleted message at a window's edge is asked for forever. Count as covered only what was kept (the read
+  inside the windows as they are then): a review probe showed positions read and dropped outside one window, then inside another a later anchor widened, missing with no
+  omission line. Omission lines need the edge messages' times, so keep those too: after a restart nothing else knows them.
+- "Fall back for a year the search found nothing in" must not include years before the conversation existed: with a 10-year retention every empty year streamed a whole
+  chat below its windows. Learn when the conversation began (one page around position 0) and skip the years before it.
+- Pacing state is safety state: a rest, a `retry_after` pause, the multiplier and the very-slow watch kept only in memory are gone after a redeploy, and the next call goes
+  out after one ordinary interval. Persist them with the status and wait out what is left before the first call.
+- A write that downloads images inside it must be able to abort as a whole: written with placeholders after a stop cut the downloads short, the page's cursor moves on and
+  the images are lost for good (a later read only adds the same message again, with its image, as a duplicate line). `kb.ErrDownloadAborted` from the download aborts
+  `WriteHistory`, and the page is read again after the resume.
+- Every call to a fragile source goes through the same safety path, a tool's too: a list call made from a chat turn was cancelled with the turn and its timeout only made a
+  note, so the next call of the tool asked again. Detach its context, and stop the import on a timeout as the driver does.
+- `filepath.WalkDir` does not follow a link at its root: a backup of a data directory that is a link archived nothing, succeeded, and three runs later had pruned every real
+  backup. Resolve the root first, and fail a backup that kept no file.
+- Attachment days longer than `text_days` only keep files no line points to (the day file is pruned, and a message past the text retention is never written, so its image is
+  never downloaded): `Engine.AttachmentDaysFor` caps them at `text_days`.
 
 ## Port forwarding (docs/operations/ports.md)
 
@@ -900,6 +955,7 @@ and add that directory to image workflow PR paths.
 - `plugin.Digest` is what users consented to (stored in `plugins.granted`, compared on install / upgrade). New manifest fields (here `node`) enter digests as `omitempty` pointers:
   plugins lacking the field must produce byte-identical old digests, or every installed plugin appears to request more permissions after hub upgrade. `TestDigestWithoutNodeIsAsBefore` recomputes using the old structure and compares.
 - "More permissions" (`MorePermissions`) mustn't inspect only `Permissions` in `granted`: node permissions aren't there; compare old/new manifests (`NodeAdds`).
+- Top-level secrets are absent from the consent digest too (#1829). Compare secret names through the same helper in `MorePermissions` and `AddedIn`: otherwise the marketplace candidate permits an automatic upgrade that its own preview rejects as asking for more. Cover required and optional hub-only secrets, unchanged names, and the persisted once-per-version consent notice without changing existing digests.
 
 ## State surviving node connections can't belong to `Node` (2026-11-05, #1830)
 
@@ -1179,6 +1235,10 @@ A successful `git ls-files` can return no files when the requested directory con
 
 A verified download or unpacked binary is still temporary until its final rename succeeds. Register removal of the staging path immediately after creating it, so copy, verification and promotion failures share cleanup. Remove only that temporary file; keep the existing destination and valid input archive intact.
 
+## CSV numeric inference must precede lossy conversion (#1568)
+
+Compare the original CSV decimal with the exact decimal written by the 15-significant-digit XLSX serializer before choosing a numeric cell. Require integers (often identifiers) to match exactly, but round decimals and exponents to 15 significant digits first: tools print a float's shortest round-trip form with 16-17 digits, and turning those into text breaks sums and charts over a computed column. Float-to-float comparisons can hide rounding and underflow; counting all digits also rejects safe trailing zeros. Normalize decimal digits and scale with bounded exponents instead of expanding powers of ten. Verify generated worksheet values and cell types, including signed identifiers, decimal/exponent boundaries, and ordinary numeric controls.
+
 ## Spreadsheet text coercion requires finite values (#6352)
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
@@ -1288,3 +1348,13 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`, `isolatedSessionAllocation` in `hub/sessions_push_test.go`, #2050). Repeated garbage collection clears pools but does not stop unrelated goroutines; a synchronized allocation in another goroutine is still included in the measured callback's `TotalAlloc` delta. Rerun the whole test in the child, preserving its fixtures, functional assertions, collection cadence and allocation ceilings. Bound and reap the child, propagate its failures, and verify a child receipt rather than treating an early return as isolation. Check the source revision before attributing two failures to the same missing guard: a newer revision may already isolate one of them.
 - A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
 - Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
+
+## Transport source is not pane origin (#994)
+
+A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
+
+When adding scalars beside an embedded session DTO, account for its custom JSON methods: Go promotes them and can silently hide sibling fields. Preserve the compatibility encoding and explicitly serialize the additional list fields.
+
+## Catalog recipes carry opaque tool argument keys (#2037)
+
+A catalog's recipe contains the upstream tool's argument object. Protocol field names are snake_case, but argument and input-schema keys belong to that tool and may be camelCase. Keep both opaque to the recursive wire-key check, while still validating their object shape and the surrounding recipe. Check original JSON before decoding optional limits or generated recipe types; otherwise mistyped fields and explicit zero values can disappear before semantic validation.
