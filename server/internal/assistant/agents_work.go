@@ -188,15 +188,6 @@ func (b *workBook) init() {
 		b.answering = map[string]bool{}
 		b.writes = map[[2]string]*sync.Mutex{}
 	}
-	if b.generation == nil {
-		b.generation = map[[2]string]uint64{}
-	}
-	if b.started == nil {
-		b.started = map[[2]string]time.Time{}
-	}
-	if b.viewed == nil {
-		b.viewed = map[[2]string]bool{}
-	}
 }
 
 // approval is the user's "Do it once it's ready" on a risky wait's card: once the wait is over, the agent may take that step. It

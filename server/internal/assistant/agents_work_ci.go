@@ -86,9 +86,6 @@ func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply 
 func (s *Service) startCIPoll(ctx context.Context, key [2]string, now time.Time) {
 	s.work.mu.Lock()
 	s.work.init()
-	if s.work.ciPolling == nil {
-		s.work.ciPolling = map[[2]string]bool{}
-	}
 	if s.work.ciPolling[key] || len(s.work.ciPolling) >= 3 {
 		s.work.mu.Unlock()
 		return

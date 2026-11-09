@@ -3,12 +3,9 @@ package extmgr
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
@@ -24,7 +21,6 @@ import (
 const githubSnapshotTool = "github_ci_snapshot_v1"
 
 var githubSnapshotHead = lazyre.New(`^[0-9a-fA-F]{40,64}$`)
-var githubSnapshotRepo = lazyre.New(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 type githubSnapshotV1 struct {
 	Version   int    `json:"version"`
@@ -49,8 +45,7 @@ type githubSnapshotV1 struct {
 // githubExtensionChecks calls only the authorized connector's advertised read
 // tool and rejects prose, incomplete pages, mismatched targets and changed heads.
 func githubExtensionChecks(ctx context.Context, c connector.Connector, repo string, number int) (github.PRCheckSnapshot, time.Time, bool, error) {
-	owner, name, _ := strings.Cut(repo, "/")
-	if number <= 0 || !githubSnapshotRepo.MatchString(repo) || owner == "." || owner == ".." || name == "." || name == ".." {
+	if number <= 0 || !github.ValidRepo(repo) {
 		return github.PRCheckSnapshot{}, time.Time{}, false, nil
 	}
 	if _, ok := connector.As[connector.Accounts](c); !ok {
@@ -120,44 +115,20 @@ func parseGitHubSnapshot(text, repo string, number int) (github.PRCheckSnapshot,
 	}
 	result := github.PRCheckSnapshot{Head: snapshot.Head}
 	seenRuns, seenStatuses := map[int64]bool{}, map[string]bool{}
-	var identities []string
 	for _, check := range snapshot.CheckRuns {
 		if check.ID <= 0 || seenRuns[check.ID] || check.Name == "" || len(check.Name) > 500 {
 			return github.PRCheckSnapshot{}, false
 		}
 		seenRuns[check.ID] = true
-		identities = append(identities, fmt.Sprintf("run:%d:%q:%q:%q", check.ID, check.Name, check.Status, check.Conclusion))
-		result.Count++
-		if check.Status != "completed" || check.Conclusion == "" {
-			result.Pending = true
-			continue
-		}
-		switch check.Conclusion {
-		case "success", "neutral", "skipped":
-		case "failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale":
-			result.Failures = append(result.Failures, check.Name)
-		default:
-			result.Pending = true
-		}
+		result.AddRun(check.ID, check.Name, check.Status, check.Conclusion)
 	}
 	for _, status := range snapshot.Statuses {
 		if status.Context == "" || len(status.Context) > 500 || seenStatuses[status.Context] {
 			return github.PRCheckSnapshot{}, false
 		}
 		seenStatuses[status.Context] = true
-		identities = append(identities, fmt.Sprintf("status:%q:%q", status.Context, status.State))
-		result.Count++
-		switch status.State {
-		case "success":
-		case "failure", "error":
-			result.Failures = append(result.Failures, status.Context)
-		default:
-			result.Pending = true
-		}
+		result.AddStatus(status.Context, status.State)
 	}
-	sort.Strings(result.Failures)
-	sort.Strings(identities)
-	fingerprint := sha256.Sum256([]byte(snapshot.Head + "\x00" + strings.Join(identities, "\x00")))
-	result.Fingerprint = fmt.Sprintf("%x", fingerprint)
+	result.Finish()
 	return result, true
 }

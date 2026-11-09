@@ -20,6 +20,50 @@ type PRCheckSnapshot struct {
 	Pending     bool
 	Failures    []string
 	Count       int
+	identities  []string
+}
+
+// AddRun and AddStatus collect the same check semantics from either source.
+// Callers validate their own input and completeness before adding it.
+func (s *PRCheckSnapshot) AddRun(id int64, name, status, conclusion string) {
+	s.identities = append(s.identities, fmt.Sprintf("run:%d:%q:%q:%q", id, name, status, conclusion))
+	s.Count++
+	if name == "" || status != "completed" || conclusion == "" {
+		s.Pending = true
+		return
+	}
+	switch conclusion {
+	case "success", "neutral", "skipped":
+	case "failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale":
+		s.Failures = append(s.Failures, name)
+	default:
+		s.Pending = true
+	}
+}
+
+func (s *PRCheckSnapshot) AddStatus(context, state string) {
+	s.identities = append(s.identities, fmt.Sprintf("status:%q:%q", context, state))
+	s.Count++
+	if context == "" {
+		s.Pending = true
+		return
+	}
+	switch state {
+	case "success":
+	case "failure", "error":
+		s.Failures = append(s.Failures, context)
+	default:
+		s.Pending = true
+	}
+}
+
+// Finish seals a snapshot with a stable identity for its head and checks.
+func (s *PRCheckSnapshot) Finish() {
+	sort.Strings(s.Failures)
+	sort.Strings(s.identities)
+	hash := sha256.Sum256([]byte(s.Head + "\x00" + strings.Join(s.identities, "\x00")))
+	s.Fingerprint = fmt.Sprintf("%x", hash)
+	s.identities = nil
 }
 
 // PRChecks reads every page without retrieving job logs. It refuses an incomplete
@@ -57,7 +101,6 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 		return result, err
 	}
 	result.Head = head
-	var identities []string
 	ref := url.PathEscape(head)
 	// GitHub caps the check-runs endpoint at 1000 results. Refuse a larger
 	// set instead of silently omitting checks.
@@ -87,19 +130,7 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 				return PRCheckSnapshot{}, fmt.Errorf("inconsistent check runs")
 			}
 			seenRuns[run.ID] = true
-			identities = append(identities, fmt.Sprintf("run:%d:%q:%q:%q", run.ID, run.Name, run.Status, run.Conclusion))
-			result.Count++
-			if run.Name == "" || run.Status != "completed" || run.Conclusion == "" {
-				result.Pending = true
-				continue
-			}
-			switch run.Conclusion {
-			case "success", "neutral", "skipped":
-			case "failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale":
-				result.Failures = append(result.Failures, run.Name)
-			default:
-				result.Pending = true
-			}
+			result.AddRun(run.ID, run.Name, run.Status, run.Conclusion)
 		}
 		if result.Count > response.Total {
 			return PRCheckSnapshot{}, fmt.Errorf("inconsistent check runs")
@@ -134,20 +165,8 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 				return PRCheckSnapshot{}, fmt.Errorf("inconsistent commit statuses")
 			}
 			seenStatuses[status.Context] = true
-			identities = append(identities, fmt.Sprintf("status:%q:%q", status.Context, status.State))
 			statusCount++
-			result.Count++
-			if status.Context == "" {
-				result.Pending = true
-				continue
-			}
-			switch status.State {
-			case "success":
-			case "failure", "error":
-				result.Failures = append(result.Failures, status.Context)
-			default:
-				result.Pending = true
-			}
+			result.AddStatus(status.Context, status.State)
 		}
 		if statusCount > response.Total {
 			return PRCheckSnapshot{}, fmt.Errorf("inconsistent commit statuses")
@@ -169,10 +188,7 @@ func (c *Connector) PRChecks(ctx context.Context, repo string, number int) (PRCh
 	if current != head {
 		return PRCheckSnapshot{}, fmt.Errorf("PR head changed")
 	}
-	sort.Strings(result.Failures)
-	sort.Strings(identities)
-	fingerprint := sha256.Sum256([]byte(head + "\x00" + strings.Join(identities, "\x00")))
-	result.Fingerprint = fmt.Sprintf("%x", fingerprint)
+	result.Finish()
 	return result, nil
 }
 
