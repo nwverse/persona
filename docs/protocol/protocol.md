@@ -142,7 +142,9 @@ This shows the structure; actual parameter values are each URL-encoded, and orde
 | `hub` | hub UUID |
 | `fp` | SHA-256(SubjectPublicKeyInfo DER), base64url without padding, 43 characters; not a hash of the whole certificate |
 | `tls` | TLS listen port, decimal |
-| `alt` | Full HTTPS URL, repeatable; currently at most two, picked in candidate order, excluding `lan` |
+| `alt` | Full HTTPS URL, repeatable; at most two, excluding `lan`. When both literal address families are available, the first IPv6 and first IPv4 candidates, IPv6 first; otherwise the first two eligible candidates in candidate order |
+
+Hostnames (`name` candidates) do not count as either address family because their DNS records may not support both. They remain eligible in the fallback order when one or both literal families are absent. Reserving an explicit IPv4 candidate alongside IPv6 lets IPv4-only clients attempt pairing even when earlier candidates are IPv6 addresses or an IPv6-only hostname. This selection applies to both app and computer pairing codes.
 
 When TLS is off the QR code omits `fp` / `tls`; with no suitable candidate it omits `alt`. The API response still has the matching fields (empty string, 0 or empty array). Renewing a certificate with the same key does not change `fp`; changing the key requires restarting the hub and re-pairing devices through a trusted path. There is no `fp_next` yet.
 
