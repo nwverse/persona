@@ -94,7 +94,7 @@ struct RebuildTests {
         for count in 1...items.count {
             let prefix = Array(items.prefix(count))
             let built = ChatStore.rebuild(prefix, settled: settled)
-            let fullRows = ChatStore.buildRows(prefix)
+            let fullRows = ChatStore.buildRows(ChatStore.picturesAfterTheirText(prefix))
             #expect(built.rows == fullRows, "\(count) items: rows")
             #expect(built.blocks == ChatBlock.build(fullRows), "\(count) items: blocks")
             settled = built.settled

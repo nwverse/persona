@@ -362,7 +362,7 @@ struct ChatSupervisionTests {
         let built = turns(items)
         #expect(built.map { $0.users.map(\.id) } == [["u1#0"], ["u3#1", "u3#0", "u3#2"], ["u5#0"]])
         #expect(built[1].users.compactMap(\.userInput).map(\.text).contains(Self.raw))
-        #expect(!built[1].process.contains(where: \.isUserInput))
+        #expect(!built[1].process.contains { $0.isUserInput })
     }
 
     @Test func imageOnlyQueuedInputAfterSupervisionOpensANewTurn() {
