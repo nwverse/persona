@@ -69,6 +69,16 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
   newest transcript owner, not only whether the round is still running.
 
+## Refusal fallback is session state, not a model setting (#2203)
+
+A `system/model_refusal_fallback` row with session scope can explain a model-route 404 several turns later. Preserve
+its original models, category, scope and raw record; do not infer a configuration mistake from the synthetic error's
+`<synthetic>` model. Quick metadata tails can lose the fallback row, so reconstruct active state through the existing
+incremental scan and clear it on evidence of a model change. A non-session fallback must not leak into the next turn.
+Tests need the system row followed by a real-shaped synthetic assistant error, plus a later turn, a model change and
+an out-of-window record. A new error code alone does not change old clients' error buttons: document that client work
+and the item-cache version bump separately.
+
 ## A tail window may contain no words at all (2026-11-04, #1163)
 
 When listing offline sessions, the node reads only the last 384 KB of a transcript (`quickTail`) to get its title and last words. Claude Code now writes an entire `api-request-blob` on one transcript line, 300–500 KB per line;
