@@ -53,19 +53,27 @@ type sentSession struct {
 // encodeSessions encodes each session of list (the same bytes json.Marshal gives) into one buffer, each raw a slice
 // of it: one allocation for the list rather than a copy of every session and then a clone of its bytes, what a push
 // spent most of its memory on. The raws share the buffer and are only read from then on.
-func encodeSessions(list []proto.Session) []sentSession { return encodeRows(list, false, "") }
+func encodeSessions(list []proto.Session) []sentSession { return encodeRows(list, false, "", 0) }
 
 // encodeStamped is encodeSessions of list as stamped with manager (stamped), without the copy of the list: a session
 // that names another manager is copied alone, into one scratch session, to be encoded.
 func encodeStamped(list []proto.Session, manager string) []sentSession {
-	return encodeRows(list, true, manager)
+	return encodeRows(list, true, manager, 0)
 }
 
-func encodeRows(list []proto.Session, stamp bool, manager string) []sentSession {
+// encodeRows writes the rows into one buffer of size bytes, or (0) one sized from the first row.
+func encodeRows(list []proto.Session, stamp bool, manager string, size int) []sentSession {
 	var w rowWriter
+	if size > 0 {
+		w.b = make([]byte, 0, size)
+	}
 	spans := make([]rowSpan, len(list))
 	for i := range list {
-		spans[i] = w.add(&list[i], stamp, manager, len(list)-i-1)
+		more := len(list) - i - 1
+		if size > 0 {
+			more = 0 // sized already
+		}
+		spans[i] = w.add(&list[i], stamp, manager, more)
 	}
 	out := make([]sentSession, 0, len(list))
 	for i, sp := range spans {
@@ -147,7 +155,9 @@ type keptRow struct {
 // hold the rest of a list's buffer.
 func (m *Machine) encodeKept(list []proto.Session, owner string, raws map[string]string) []sentSession {
 	if raws == nil {
-		return encodeStamped(list, owner)
+		out := encodeRows(list, true, owner, m.rowsSize(len(list)))
+		m.noteRows(out)
+		return out
 	}
 	m.rowsMu.Lock()
 	defer m.rowsMu.Unlock()
@@ -179,6 +189,7 @@ func (m *Machine) encodeKept(list []proto.Session, owner string, raws map[string
 		}
 		out = append(out, sent)
 	}
+	m.noteRows(out)
 	if len(m.rows) > len(raws)+len(raws)/4+8 { // sessions the lists no longer name: their rows go
 		for id := range m.rows {
 			if _, listed := raws[id]; !listed {
@@ -187,6 +198,29 @@ func (m *Machine) encodeKept(list []proto.Session, owner string, raws map[string
 		}
 	}
 	return out
+}
+
+// rowsSize is room for n rows of the length encodeKept's rows had on average last time, and a little more for these
+// to differ: a list encoded whole again (no raws) goes into one buffer of about its size, not one sized from its first
+// row with a quarter more to spare. 0 (sized from the first row) before any.
+func (m *Machine) rowsSize(n int) int {
+	size := int(m.rowLen.Load()) * n
+	if size == 0 {
+		return 0
+	}
+	return size + size/16 + 1<<10
+}
+
+// noteRows keeps the average length of out's rows, for the next list encoded whole to be sized from (rowsSize).
+func (m *Machine) noteRows(out []sentSession) {
+	if len(out) == 0 {
+		return
+	}
+	size := 0
+	for _, s := range out {
+		size += len(s.raw)
+	}
+	m.rowLen.Store(int64(size / len(out)))
 }
 
 // sessionsMessage is the whole-list message (the same bytes as marshalling the sessions themselves). Put together
