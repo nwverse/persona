@@ -641,6 +641,9 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 		ps.h.extTokens.revoke(id, why)
 	}
 	ps.forgetEgress(id) // the same for its proxy credential (extension_sandbox.go)
+	if ps.h != nil {
+		ps.h.forgetImages(id) // and the pictures it served (extension_images.go)
+	}
 	if old != nil {
 		ps.removeAgentSources(old)
 		for _, c := range old.conns {
@@ -776,7 +779,7 @@ func (hp *hubExtension) closeIdle() {
 	}
 }
 
-// serveExtensionHTTP hands one request to the plugin's HTTP side, counted by route (extension_metrics.go).
+// serveExtensionHTTP hands one request to the plugin's HTTP side, counted by route (extension_metrics_relay.go).
 func (hp *hubExtension) serveExtensionHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Del("Cache-Control") // set by the hub's auth for its own answers: the plugin's own goes instead
 	if hp.stats == nil {
