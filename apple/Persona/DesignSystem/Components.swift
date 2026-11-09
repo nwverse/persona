@@ -3,25 +3,37 @@ import SwiftUI
 
 /// Agent state dot (docs/protocol/agent-states.md): needs you breathes — the one dot that moves, and not with Reduce Motion;
 /// working has a still ring around it (its spinner is in the work and tool rows); finished-unseen solid green, seen
-/// muted gray.
+/// muted gray. Waiting in the background (#6045): a clock in Working's amber, lighter.
 struct StatusDot: View {
     var state: AgentState
     var size: CGFloat = 9
+    /// It only waits in the background (`Session.waitsInBackground`).
+    var waiting = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The needs-you ring: one breath every `breath` seconds, out to `1 + breathScale` times the dot as it fades.
-    static let breath: TimeInterval = 1.0
-    static let breathScale: CGFloat = 1.2
+    static let breath = Theme.Motion.needsYouBreathDuration
+    static let breathScale = Theme.Motion.needsYouBreathScale
     static let ringWidth = Theme.Size.lineMedium
-    static let ringOpacity = 0.6
+    static let ringOpacity = Theme.Motion.needsYouRingOpacity
+
+    nonisolated static func showsBreathingRing(state: AgentState, reduceMotion: Bool) -> Bool {
+        state == .needsYou && !reduceMotion
+    }
 
     var body: some View {
         Group {
-            if state == .working {
+            if state == .working, waiting {
+                // As wide as the working ring around a dot.
+                Theme.Icon.image(Theme.Icon.backgroundWaiting) // resizable: an Image, not ThemedIcon
+                    .resizable().scaledToFit()
+                    .frame(width: size * 1.7, height: size * 1.7)
+                    .foregroundStyle(StatusPalette.backgroundWaiting.dot)
+            } else if state == .working {
                 StrokeShapeView(shape: Circle().scale(1.7), style: state.color.opacity(0.45),
                                 strokeStyle: StrokeStyle(lineWidth: 1.5 * 1.7), isAntialiased: true,
                                 background: Circle().fill(state.color))
-            } else if state == .needsYou, !reduceMotion {
+            } else if Self.showsBreathingRing(state: state, reduceMotion: reduceMotion) {
                 Circle().fill(state.color)
                     .overlay {
                         #if os(macOS)
@@ -30,16 +42,11 @@ struct StatusDot: View {
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                         #else
-                        // The clock drives the ring; a repeating state animation leaked into row layout changes.
-                        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-                            let p = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.breath) / Self.breath
-                            let eased = 1 - (1 - p) * (1 - p)
-                            Circle()
-                                .stroke(state.color.opacity(Self.ringOpacity), lineWidth: Self.ringWidth)
-                                .scaleEffect(1 + Self.breathScale * eased)
-                                .opacity(1 - eased)
+                        VisibleWork { eligible in
+                            BreathingRing(color: state.color.opacity(Self.ringOpacity), eligible: eligible)
                         }
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                         #endif
                     }
             } else {
@@ -47,7 +54,7 @@ struct StatusDot: View {
             }
         }
         .frame(width: size, height: size)
-        .accessibilityLabel(state.label)
+        .accessibilityLabel(state == .working && waiting ? String(localized: "Waiting in the background") : state.label)
     }
 }
 
@@ -82,13 +89,25 @@ struct SessionAvatar: View {
     }
 }
 
+/// The BeautifulUI style's mark for an agent's state, its task badge (docs/protocol/agent-states.md): Needs You a red badge with "!", working the
+/// turning ring, Unread the green check, seen an empty ring; offline and unknown a gray dot. Still, apart from the
+/// working ring: the red badge says Needs You without the breathing dot's 30 fps redraw. Waiting in the background
+/// (#6045): a clock in Working's amber, lighter.
 struct AgentStateBadge: View {
     var state: AgentState
+    /// It only waits in the background (`Session.waitsInBackground`).
+    var waiting = false
     private static let attention = BUIGlyph("M12 6v8M12 18.5v.01")
 
     var body: some View {
         switch state {
         case .needsYou: badge(Theme.needsYou, Self.attention)
+        case .working where waiting:
+            Theme.Icon.image(Theme.Icon.backgroundWaiting) // resizable: an Image, not ThemedIcon
+                .resizable().scaledToFit()
+                .frame(width: Theme.Size.badge, height: Theme.Size.badge)
+                .foregroundStyle(StatusPalette.backgroundWaiting.dot)
+                .accessibilityLabel(String(localized: "Waiting in the background"))
         case .working: BUISpinner(size: Theme.Size.badge, lineWidth: Theme.Size.rule)
         case .unread: badge(Theme.positive, .check)
         case .idle: Circle().strokeBorder(Theme.cardStroke, lineWidth: Theme.Size.rule).frame(width: Theme.Size.badge, height: Theme.Size.badge)
@@ -101,6 +120,28 @@ struct AgentStateBadge: View {
             .overlay { BUIIcon(glyph, size: 13, lineWidth: 3.5).foregroundStyle(.white) }
             .frame(width: Theme.Size.badge, height: Theme.Size.badge)
             .accessibilityHidden(true)
+    }
+}
+
+/// A row's name and the chips that go with it: side by side; at the accessibility text sizes the chips on a line under
+/// the name. A `Chip` never gives up width, and beside one a narrow phone left the name a character or none (#1796).
+struct NameWithChips<Name: View, Chips: View>: View {
+    @ViewBuilder var name: Name
+    @ViewBuilder var chips: Chips
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                name
+                HStack(spacing: Theme.Space.sm) { chips }
+            }
+        } else {
+            HStack(spacing: Theme.Space.sm) {
+                name
+                chips
+            }
+        }
     }
 }
 
@@ -422,6 +463,9 @@ struct CloseAgentSheet: View {
     @State private var closing = false
     @State private var failure: String?
     @State private var height: CGFloat = 380
+    /// The worktree Persona made that it works in (#6115), and what to do with it once it is closed.
+    @State private var worktree: WorktreeStatus?
+    @State private var cleanup = AgentWorktree.Cleanup()
 
     private var name: String {
         let n = session.agentName ?? session.title
@@ -478,6 +522,13 @@ struct CloseAgentSheet: View {
             .padding(.horizontal, Theme.Space.xl)
             .padding(.top, Theme.Space.xl)
 
+            if let worktree {
+                WorktreeCleanupSection(status: worktree, cleanup: $cleanup, home: model.machine(session.machineRef)?.home)
+                    .padding(.horizontal, Theme.Space.xl)
+                    .padding(.top, Theme.Space.m)
+                    .disabled(closing)
+            }
+
             if let failure {
                 Text(failure)
                     .font(Theme.Font.secondary)
@@ -496,6 +547,8 @@ struct CloseAgentSheet: View {
                         if await model.close(session.key) {
                             onClosed(session.key)
                             dismiss()
+                            // Once it is gone: the node refuses a worktree an agent still works in.
+                            if let worktree { await model.cleanUpWorktree(session.machineRef, worktree, cleanup) }
                         } else {
                             failure = model.toast?.message ?? String(localized: "Couldn't stop. The agent and its tab were kept; try again.")
                             closing = false
@@ -511,7 +564,8 @@ struct CloseAgentSheet: View {
                 .themedButton(prominent: true)
                 .tint(Theme.danger)
                 .keyboardShortcut(.defaultAction)
-                .disabled(closing)
+                .disabled(closing || !AgentWorktree.ready(worktree, cleanup))
+                .accessibilityIdentifier("agent.close.confirm")
                 Button { dismiss() } label: {
                     Text("Cancel").lineLimit(1).font(Theme.Font.heading).scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
                 }
@@ -529,6 +583,8 @@ struct CloseAgentSheet: View {
         .presentationDetents([.height(height)])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(closing)
+        .task { worktree = await model.ourWorktree(session) }
+        .animation(Theme.Motion.layout, value: worktree)
     }
 
     private func fact(_ symbol: String, _ text: String) -> some View {
@@ -542,14 +598,19 @@ struct CloseAgentSheet: View {
 
 /// Asks before Delete Chat: says that it only leaves the lists (every app's), and that the record on the computer stays and
 /// brings it back once used again. Delete runs it; a failure shows as the toast and the conversation stays.
+/// When the agent worked in a worktree Persona made (#6115), its computer is asked first and the question is a sheet that
+/// also offers to keep or remove the worktree (`DeleteAgentSheet`).
 struct DeleteSessionConfirmation: ViewModifier {
     @Environment(AppModel.self) private var model
     @Binding var session: Session?
     var onDeleted: (SessionKey) -> Void = { _ in }
+    /// What is shown for `session`: the alert, or the sheet with its worktree; nil while its computer is asked.
+    @State private var alerting: Session?
+    @State private var withWorktree: DeleteAgentSheet.Request?
 
     func body(content: Content) -> some View {
-        content.alert("Delete This Chat?", isPresented: Binding(get: { session != nil }, set: { if !$0 { session = nil } }),
-                      presenting: session) { s in
+        content.alert("Delete This Chat?", isPresented: Binding(get: { alerting != nil }, set: { if !$0 { alerting = nil; session = nil } }),
+                      presenting: alerting) { s in
             Button("Delete", role: .destructive) {
                 Task { if await model.deleteSession(s.key) { onDeleted(s.key) } }
             }
@@ -558,6 +619,89 @@ struct DeleteSessionConfirmation: ViewModifier {
             Text(DeleteSessionText.message(title: s.displayTitle, machine: model.machine(s.machineRef)?.title,
                                            resume: s.canTerminal ? s.resumeCommand : nil))
         }
+        .sheet(item: $withWorktree, onDismiss: { session = nil }) { r in
+            DeleteAgentSheet(session: r.session, worktree: r.worktree, onDeleted: onDeleted)
+        }
+        .task(id: session?.key) {
+            guard let s = session else { return }
+            // A short wait at most: an unanswered computer leaves the plain question.
+            let wt = await model.ourWorktree(s, timeout: 4)
+            guard !Task.isCancelled, session?.key == s.key else { return }
+            if let wt { withWorktree = .init(session: s, worktree: wt) } else { alerting = s }
+        }
+    }
+}
+
+/// Delete Chat for an agent that worked in a worktree Persona made: the question, the worktree's keep / remove, Delete.
+struct DeleteAgentSheet: View {
+    struct Request: Identifiable {
+        var session: Session
+        var worktree: WorktreeStatus
+        var id: SessionKey { session.key }
+    }
+
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    var session: Session
+    var worktree: WorktreeStatus
+    var onDeleted: (SessionKey) -> Void
+    @State private var cleanup = AgentWorktree.Cleanup()
+    @State private var deleting = false
+    @State private var height: CGFloat = 360
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            Text("Delete This Chat?").font(Theme.Font.title)
+            Text(DeleteSessionText.message(title: session.displayTitle, machine: model.machine(session.machineRef)?.title,
+                                           resume: session.canTerminal ? session.resumeCommand : nil))
+                .font(Theme.Font.secondary)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            WorktreeCleanupSection(status: worktree, cleanup: $cleanup, home: model.machine(session.machineRef)?.home)
+                .disabled(deleting)
+            VStack(spacing: Theme.Space.m) {
+                Button(role: .destructive) {
+                    deleting = true
+                    Haptics.tap()
+                    Task {
+                        if await model.deleteSession(session.key) {
+                            onDeleted(session.key)
+                            dismiss()
+                            await model.cleanUpWorktree(session.machineRef, worktree, cleanup)
+                        } else {
+                            deleting = false
+                        }
+                    }
+                } label: {
+                    Group {
+                        if deleting { ProgressView().tint(Theme.onSolid) } else { Text("Delete").lineLimit(1) }
+                    }
+                    .font(Theme.Font.heading)
+                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                }
+                .themedButton(prominent: true)
+                .tint(Theme.danger)
+                .keyboardShortcut(.defaultAction)
+                .disabled(deleting || !AgentWorktree.ready(worktree, cleanup))
+                .accessibilityIdentifier("chat.delete.confirm")
+                Button { dismiss() } label: {
+                    Text("Cancel").lineLimit(1).font(Theme.Font.heading).scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                }
+                .themedButton()
+                .keyboardShortcut(.cancelAction)
+                .disabled(deleting)
+            }
+            .controlSize(.large)
+            .padding(.top, Theme.Space.s)
+        }
+        .padding(.horizontal, Theme.Space.xl)
+        .padding(.top, Theme.Space.xxl)
+        .padding(.bottom, Theme.Space.m)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height = $0 }
+        .presentationDetents([.height(height)])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(deleting)
     }
 }
 

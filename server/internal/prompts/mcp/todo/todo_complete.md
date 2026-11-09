@@ -1,0 +1,14 @@
+Mark one of the user's Persona to-dos done, when the user says it is done (or asks you to close it). The user's own to-do is closed at once. A task's, or one agents work on, is confirmed on the phone first, because closing it also closes its agents once they are idle; if the user declines, nothing changes.
+
+```json
+{
+  "type": "object",
+  "required": ["id"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "the to-do's id (todo_…), as todo_list gives it"
+    }
+  }
+}
+```

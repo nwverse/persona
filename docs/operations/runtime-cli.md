@@ -235,7 +235,7 @@ scripts/app/personactl.py screenshot shot.jpg        # the window as the App dra
 ## UI tests written with the CLI
 
 `scripts/app/cli-tests/` holds UI tests written with the Runtime CLI (decided by the user on 2026-11-03: the ones that are faster than XCUITest with equivalent assertions are migrated; the original XCUITest cases stay for comparison for now).
-`clitest.py` is a small framework: it launches the App once (like XCUITest's `launchPinned()`: old layout, pinned style), and before each case resets the mock, forgets the list's saved layout and swaps in a new view tree;
+`clitest.py` is a small framework: it launches the App once (like XCUITest's `launchPinned()`: default navigation, pinned style), and before each case resets the mock, forgets the list's saved layout and swaps in a new view tree;
 the App itself remembers what was marked read, so when counts don't match it restarts once (like XCUITest cold-launching for every case).
 
 ```sh

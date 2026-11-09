@@ -1,8 +1,7 @@
 import XCTest
 
-/// Switching models in the effort chip (#3119): in the old layout's mode bar the effort chip also lists Claude Code's models; picking
-/// one posts `…/modes {"model": …}`. Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB), which logs the requests at
-/// /mock/modes. With PERSONA_SHOTS set it writes the open menu there (PERSONA_SHOTS_APPEARANCE names the appearance).
+/// The Shell composer changes a Claude pane's model by sending a /model command, not by writing its mode settings.
+/// The mock hub records the exact destination and payload at /mock/sent_to.
 final class ModelSwitchChipTests: XCTestCase {
     private var hub = ""
     private let idle = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
@@ -18,60 +17,64 @@ final class ModelSwitchChipTests: XCTestCase {
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
         let env = ProcessInfo.processInfo.environment
-        let a = XCTAttachment(screenshot: app.screenshot())
-        a.name = name
-        a.lifetime = .keepAlways
-        add(a)
-        guard let dir = env["PERSONA_SHOTS"] else { return }
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        guard let directory = env["PERSONA_SHOTS"] else { return }
         let appearance = env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
-        try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/model-chip-\(appearance)-\(name).png"))
+        try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(directory)/model-chip-\(appearance)-\(name).png"))
     }
 
     @MainActor private func open(_ session: String) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "YES", "-openSession", session]
+        app.launchArguments = ["-pairURL", pair, "-openSession", session]
         app.launchPinned()
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "no composer:\n\(app.debugDescription)")
+        field.tapCenter()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "no keyboard")
         return app
     }
 
-    private func modesLog() throws -> [[String: String]] {
-        let data = try Data(contentsOf: URL(string: hub + "/mock/modes")!)
-        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        return (obj?["modes"] as? [[String: Any]] ?? []).map { $0.compactMapValues { $0 as? String } }
+    private func sends() async throws -> [[String: String]] {
+        let (data, _) = try await URLSession.shared.data(from: URL(string: hub + "/mock/sent_to")!)
+        let value = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (value?["sent"] as? [[String: Any]] ?? []).map { $0.compactMapValues { $0 as? String } }
     }
 
-    @MainActor func testTheEffortChipSwitchesTheModel() throws {
-        let app = open(idle)
-        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "思考强度与模型")).firstMatch
-        XCTAssertTrue(chip.waitForExistence(timeout: 20), "no effort chip with the model:\n\(app.debugDescription)")
-        sleep(1)
-        chip.tap()
+    @MainActor private func checkModelCommand(_ session: String, name: String) async throws {
+        let app = open(session)
+        defer { app.terminate() }
+        let before = try await sends().count
+        let menu = app.buttons["shell-composer-modes"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 20), "no composer model menu:\n\(app.debugDescription)")
+        menu.tap()
         let sonnet = app.buttons["Sonnet"].firstMatch
-        XCTAssertTrue(sonnet.waitForExistence(timeout: 5), "the chip's menu lists no models:\n\(app.debugDescription)")
-        XCTAssertTrue(app.buttons["高"].exists, "the effort levels are gone from the chip")
-        try shot(app, "open")
+        XCTAssertTrue(sonnet.waitForExistence(timeout: 5), "the menu lists no models")
+        XCTAssertTrue(sonnet.isEnabled, "the Shell command picker must remain available")
+        XCTAssertTrue(app.buttons["高"].exists, "the effort levels are gone from the menu")
+        try shot(app, name)
         sonnet.tap()
-        let id = "a1f3c2d4-0000-4000-8000-000000000006"
-        var log: [[String: String]] = []
-        for _ in 0..<75 where !log.contains(where: { $0["model"] == "sonnet" }) {
-            Thread.sleep(forTimeInterval: 0.2)
-            log = try modesLog().filter { $0["session_id"] == id }
+
+        let parts = session.split(separator: "/").map(String.init)
+        let expected = ["machine_id": parts[0], "session_id": parts[1], "text": "/model sonnet"]
+        var received: [[String: String]] = []
+        for _ in 0..<75 {
+            received = Array(try await sends().dropFirst(before))
+            if received.contains(where: { record in expected.allSatisfy { record[$0.key] == $0.value } }) { break }
+            try await Task.sleep(for: .milliseconds(200))
         }
-        XCTAssertEqual(log.last, ["session_id": id, "model": "sonnet"], "no modes {model: sonnet}, or more than the model was sent: \(log)")
-        app.terminate()
+        XCTAssertTrue(received.contains(where: { record in expected.allSatisfy { record[$0.key] == $0.value } }),
+                      "the model command did not reach its conversation: \(received)")
     }
 
-    @MainActor func testAWorkingAgentWaitsToSwitch() throws {
-        let app = open(working)
-        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "思考强度与模型")).firstMatch
-        XCTAssertTrue(chip.waitForExistence(timeout: 20), "no effort chip with the model:\n\(app.debugDescription)")
-        sleep(1)
-        chip.tap()
-        let sonnet = app.buttons["Sonnet"].firstMatch
-        XCTAssertTrue(sonnet.waitForExistence(timeout: 5), "the chip's menu lists no models")
-        XCTAssertFalse(sonnet.isEnabled, "a working agent's model can be picked")
-        try shot(app, "working")
-        app.terminate()
+    @MainActor func testTheComposersModelMenuSendsTheModelCommand() async throws {
+        try await checkModelCommand(idle, name: "idle")
+    }
+
+    @MainActor func testAWorkingAgentUsesTheModelCommand() async throws {
+        try await checkModelCommand(working, name: "working")
     }
 }

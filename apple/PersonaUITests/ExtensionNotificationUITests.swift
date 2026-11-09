@@ -31,7 +31,7 @@ final class ExtensionNotificationUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + (try hub).addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-showTestNotification", sample, "-ui.oldLayout", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-showTestNotification", sample]
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = app.alerts.buttons.matching(NSPredicate(format: "label IN %@", ["允许", "Allow"])).firstMatch

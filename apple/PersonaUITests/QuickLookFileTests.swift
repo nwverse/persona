@@ -3,7 +3,7 @@ import XCTest
 /// Office and RTF files open in QuickLook inside the file page, and the Files tab shows their thumbnails (#1293).
 ///   PORT=18785 MOCK_AGENTS=1 MOCK_OFFICE=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18785 xcodebuild test … -only-testing:PersonaUITests/QuickLookFileTests
-/// Both layouts (TEST_RUNNER_PERSONA_LAYOUT=shell) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class QuickLookFileTests: XCTestCase {
     private var app: XCUIApplication!
 

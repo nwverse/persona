@@ -90,7 +90,7 @@ import SwiftUI
     }
 
     /// A header pushed far off screen in one pass (a work line's cached steps all laid out at once) leaves the lazy list:
-    /// it reports no more, and nothing put it back (old layout + BeautifulUI, 2026-11-04: the header gone, the steps
+    /// it reports no more, and nothing put it back (BeautifulUI, 2026-11-04: the header gone, the steps
     /// from the sixth on). Until it reports, the list moves by what the content grew: all that opens is newer than it.
     private func watch() {
         Task { @MainActor [weak self] in

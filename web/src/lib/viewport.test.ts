@@ -25,9 +25,13 @@ describe("keyboardVars", () => {
 });
 
 describe("enterSends", () => {
-  it("sends on Enter with a precise pointer, never with Shift", () => {
+  it("sends on Enter with a precise pointer, never with Shift; Mod+Alt+Enter is the card shortcut's, not a send", () => {
     expect(enterSends({ key: "Enter", shiftKey: false }, true)).toBe(true);
     expect(enterSends({ key: "Enter", shiftKey: true }, true)).toBe(false);
+    // Alt alone keeps sending as it always did; the shortcut carries Mod with it
+    expect(enterSends({ key: "Enter", shiftKey: false, altKey: true }, true)).toBe(true);
+    expect(enterSends({ key: "Enter", shiftKey: false, altKey: true, ctrlKey: true }, true)).toBe(false);
+    expect(enterSends({ key: "Enter", shiftKey: false, altKey: true, metaKey: true }, true)).toBe(false);
     expect(enterSends({ key: "a", shiftKey: false }, true)).toBe(false);
   });
 

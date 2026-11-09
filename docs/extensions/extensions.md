@@ -306,6 +306,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
 | `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}/decisions` |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`); deleting to-dos, decisions, completion checks and retries still require full access |
+| `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
 
@@ -401,6 +402,41 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
 
 ```json
 {"permissions":{"hub":["kb.read","kb.write","models"]}}
+```
+
+### Assistant conversations (#1288)
+
+An extension that learns from what the user tells the assistant (how they judge, what they prefer, how they work) reads those
+conversations over its process connection instead of a copy of the transcripts: it declares `assistant.read` in `permissions.hub`,
+and the hub checks the grant the user gave, as for `kb.read` (the legacy `hub_api` full access counts too). Read-only: nothing here
+sends, renames, archives or changes a conversation. The manager, which owns the conversations, answers both methods.
+
+| Method | Parameters | Returns | Scope |
+| --- | --- | --- | --- |
+| `assistant.conversations` | `{since, until?, include_archived?, limit?, offset?}` | `{items: [{id, title, main?, archived?, origin, started?, updated}], total, next_offset?}` | `assistant.read` |
+| `assistant.messages` | `{id, since?, until?, after_seq?, limit?}` | `{messages: [{seq, at, role, text, truncated?}], next_seq?}` | `assistant.read` |
+
+The schema is `schema/extension/assistant.schema.json`; the Go SDK has them as `ext.Hub.AssistantConversations` and `AssistantMessages`.
+
+- **Which conversations**: only the assistant's own space. The health space's (docs/assistant/health.md "Isolation") and guest
+  conversations are never listed or read (`not_found`), nor are other agents' sessions (those are `agents.read`'s).
+  `assistant.conversations` lists the ones last active at or after `since`, newest first, 50 a page (at most 200); with `until`, one
+  known to have started at or after it is left out (`started` is set when the manager knows when it began). `origin` says who opened it
+  (`user`, `channel`, `inbox`, `task`, `spawned`, `lark_agent`, `extension`; what the hub cannot tell is `user`), `title` is empty while
+  it has none, `main` marks the main conversation.
+- **Only words**: `assistant.messages` gives the user's messages (`role: user`) and the assistant's replies (`role: assistant`) in time
+  order. Tool calls and results, thinking, notices and images are left out; so are the messages Persona typed into the conversation for
+  the model (task notices, scheduled runs, wake-ups, follow-ups: `prompts.ParseInjected`), messages from other sessions and messages that
+  are only a slash command. The user's text comes without context blocks and system reminders (`transcript.StripInjected`), the
+  assistant's view cards as their text. `truncated` marks a message cut for pages.
+- **Paging**: by `seq`. `limit` is 200 by default, at most 500. One call reads at most 8 of the node's pages (4,000 transcript items):
+  a stretch of tool work can end a call with no messages and `next_seq` set. Pass `next_seq` as `after_seq` until it is absent.
+  `since` / `until` (RFC 3339) bound the messages' times.
+- **Errors**: `permission_denied` (`{scope: "assistant.read"}`), `invalid_params` (params are strict), `not_found`, `assistant_offline`,
+  `machine_offline` (the assistant's computer is not connected or not set up).
+
+```json
+{"permissions":{"hub":["kb.read","assistant.read"]}}
 ```
 
 ### Sent as the user: `sent.record` (#5278)
@@ -748,6 +784,7 @@ CLI: `personad extension contributions <id>` (list), `personad extension contrib
 
 Only used on the hub machine: it reads the master token and the `listen` port from hub.json in the state directory (default `~/.persona`, see "Naming and compatibility"; the port defaults to 18660 if unset, overridden by the env var `PERSONA_LISTEN`, the old name `PERSONA_LISTEN` is also accepted), and calls "The hub's API" via `127.0.0.1`.
 If there is no hub.json on this machine it errors out; it does not connect anywhere else. `personad ext …` and `personad plugin …` (the name before #1844) are the same command. `help` prints usage to stdout; with no subcommand, usage is printed to stderr as an error with exit code 1; `contributions` / `contribution` are only listed together when a subcommand is mistyped.
+An option the command does not take, a missing argument or an extra one is refused with exit code 1 before anything is sent to the hub (a mistyped `--keep-data` does not delete the data).
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
 
 ```text
@@ -763,7 +800,7 @@ personad extension auth <id> [login|logout]          The extension's sign-in: st
 personad extension contributions <id>                Each contribution and its switch
 personad extension contribution <id> <point>/<cid> on|off   Turn a single contribution on or off (for a connector, this is the connector's switch)
 personad extension config <id> key=value …           Values that parse as JSON are taken as JSON, otherwise as text; key= deletes the entry
-personad extension secret <id> <name> [--delete]     The value is read from stdin (not echoed in a terminal; first line from a pipe), never as a command-line argument
+personad extension secret <id> <name> [--delete]     The value is read from stdin (not echoed in a terminal; first line from a pipe), never as a command-line argument; an empty one is refused (--delete removes it)
 personad extension uninstall <id> [--keep-data] [--cascade] [--members]   --members: also uninstall a bundle's members
 personad extension market list                       Registered marketplaces: id, name, extension count, signing, address (the official one is marked "官方" (official))
 personad extension market add <spec> [--token | --token-from=<marketplace id>]
@@ -788,7 +825,7 @@ personad extension pack [<dir>] [--platforms linux-amd64,…] [--out <dir>] [--s
 ## Extension marketplace
 
 A repository or website publishes an **index** `persona-extensions.json` that declares all the extensions it offers. Once the hub registers this marketplace, the app, web, admin UI and command line can all browse, search,
-install, upgrade and uninstall its extensions. Only one official marketplace is preset (see "Official marketplace" below); every other marketplace is registered by the user. Code is in `server/internal/extension/market.go` (index, download, verification) and `server/internal/extmgr/extension_market.go` (registration, catalog, endpoints).
+install, upgrade and uninstall its extensions. Only one official marketplace is preset (see "Official marketplace" below); every other marketplace is registered by the user. Code is in `server/internal/extension/market.go` (index, download, verification) and `server/internal/extmgr/extension_market*.go` (registration, catalog, endpoints).
 
 **Marketplace address**:
 
@@ -873,7 +910,7 @@ Older hubs have none of this: they preview synchronously as before and wait for 
 - **Pinned signature**: every official alias uses the compiled-in key, including manual re-registration and cached catalogs. Unknown saved owner pins remain unchanged and isolated; there is no trust endpoint. Release integration fixes the official key id at `3cce0f471911a1cf` without rotating it for embedded signatures. A shipped update can explicitly list recognized retired official pins in `extension.Official.PreviousSigningKeys`: only exact matches are replaced, across all official aliases. Removed markets stay removed, unsigned registrations and unknown pins are not migrated, and a failed write leaves loading retryable. The retained old envelope or legacy detached payload cannot authorize installation until a complete new envelope verifies against the new pin.
 - **Order**: the official marketplace comes first in `markets` and in the catalog, the rest by registration time (all ordering is done on the hub; all three clients show the hub's order). The web (settings and `/admin`) and Android show an **Official** badge based on `official: true`; iOS / macOS do not yet (separate task).
 - **Name** (#5017): the official marketplace is always displayed as **Official extensions** (Japanese: 公式拡張機能, the shipped Japanese label), not the index's `name` (which names the publisher).
-  The hub fills `markets[].name` and the catalog's `market_name` in the owner's interface language (`marketName`, `extension_market.go`); when the web, Android, iOS / macOS see `official: true`, they localize it again,
+  The hub fills `markets[].name` and the catalog's `market_name` in the owner's interface language (`marketName`, `extension_market_catalog.go`); when the web, Android, iOS / macOS see `official: true`, they localize it again,
   so it also works with old hubs. Only display changes: spec, index, signature, and market id remain unchanged; `personad extension market list` uses this name too.
   In iOS / macOS Settings › Extensions, Extension marketplace is above installed extensions (also above extension cards on Mac).
 - Users' own marketplaces, such as ones on a company network, stay as they are.
@@ -1027,6 +1064,16 @@ Open retries keep the original request ID and complete request payload. While it
 - Global `fetch` uses a bounded broker over the **existing registered egress**. Deno's proxy-aware client still requires destination permissions, so proxy environment variables or a custom client alone are insufficient. Every target and redirect uses the registration's granted network rules; guest identity cannot select another registration. Registration replacement, settings changes and revocation cancel pending HTTP and tunnels. Input, output, bodies and pending queues are bounded. Source-only listeners also cap idle/pre-header sockets and header bytes; revocation closes sockets even before they submit a request.
 - Config, secrets, scoped tokens, grants, idle reclamation, timeout strikes and selective shutdown remain manager/`host.Proc` responsibilities. Full hub access, command-line tools, agent-runtime sockets, remote process sockets and source-runtime node programs are not supported by this stage. Existing executable node programs remain unchanged; no source program silently falls back to an unsandboxed node.
 - CLI source `test` verifies the package but refuses to label a bare engine launch as runtime acceptance. Actual-engine/namespace tests are separate from full resource acceptance; tests requiring unavailable enforcement explicitly report unavailable rather than passing via a developer bypass.
+
+### Finite source-page snapshot loading (#1184)
+
+Use `useLoadEffect(effect, dependencies)` from `@persona/extension/ui` for finite initial or navigation loads. It accepts the same abort-aware effect/cleanup forms as `useEffect`; ordinary subscriptions and long-lived effects stay on `useEffect` and are not awaited for a snapshot.
+
+The official `componentPage` factory advertises `snapshotReadiness: 1`. For an owner-bound snapshot-only HTTP session, the manager supplies `transport: "snapshot"` and waits within the existing deadline for those finite loads and their synchronous state updates. It selects this from the session's legacy transport, not from `ui_version`. Native stream sessions and old factories without the readiness contract retain immediate loading snapshots and asynchronous deltas. A caller must not turn all effects into finite loads or increase budgets to hide a nonterminating effect.
+
+Canonical `initialize` replies advertise `ui_page_cancellation: 1` for component pages. The host negotiates cancellation only for page mount/event/resume requests; SDK `rpc.cancel` targets that request's scoped `AbortSignal`, not service namespaces or a later invocation with another identity. Request cancellation, visibility and allocation-generation fences are rechecked after snapshot flushing. A canceled or suspended page cannot return a late success, and ambiguous callback receipts cannot authorize a replayed write. This does not promise preemption of arbitrary JavaScript or global serialization across independent allocations.
+
+These are SDK/manager lifecycle contracts, not new pages, permissions, source release defaults or production isolation acceptance. An installed package must include the matching official SDK and be rebuilt; native JSON remains the only UI content sent to clients.
 
 ### Opt-in exact JSON integer request params (#1201)
 
@@ -1915,7 +1962,7 @@ Extensions may still draw an older app differently (`ui_version`), for example a
 
 Extension content **outside the app**: Home Screen widgets, Lock Screen and Apple Watch complications (the `ui` slot `widget`), actions in Shortcuts and Siri (extension point `shortcuts`),
 and buttons on extension notifications. Extensions still do not run code in the app: widgets draw a subset of declarative View, while button and shortcut actions go back to the extension.
-Server implementation: `server/internal/extmgr/extension_system.go` (widgets, shortcuts, device widgets) and `FitWidget` in `server/internal/extension/ui.go`;
+Server implementation: `server/internal/extmgr/extension_system.go` (widgets, shortcuts, device widgets) and `FitWidget` in `server/internal/extension/ui_widget.go`;
 schema in `schema/extension/` (`WidgetFamily`, `WidgetPlace`, `WidgetAnswer`, `DeviceWidget`, `ShortcutItem`, `ShortcutResult`, `NotifyAction`, `ExtensionNotification`),
 with types generated for all four clients. **#1147 adds Apple system surface wiring**, with build, visual, signing and device acceptance kept separate (see "Apple system surface boundaries" below); Android Home Screen widgets (Glance) can use the same endpoints later, not in this round.
 
@@ -2318,7 +2365,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   An action returning `open_url: persona://inbox/<this item>/source` (view in chat, `InboxSourceLink`; only this drawn item allowed) switches to the original body (Lark chat positioned at the event's first message),
   with "Back to <page title>" returning to the extension page (same `ExtensionViewModel`, preserving state and entered text); other `open_url`s and links follow extension-page rules through page `openURL`
   (Lark docs in the reader, Mac adjacent panel). Code `Persona/Views/Inbox/InboxItemSlot.swift` (`InboxItemSlots`, `InboxItemSlotModel`, `InboxExtensionItemPage`),
-  unit test `InboxItemSlotTests`; screenshots: add `MOCK_INBOX_ITEM_UI=1` to mock (extension `example-chat`), `-ui.oldLayout YES -tab mail -openInboxItem lark:f1:100`
+  unit test `InboxItemSlotTests`; screenshots: add `MOCK_INBOX_ITEM_UI=1` to mock (extension `example-chat`), `-tab mail -openInboxItem lark:f1:100`
   (`lark:f3:300` is the group chat / extension-error item).
 - Extension marketplace (#1328, "Extension marketplace"): when `GET /api/v1/extensions` returns `markets: true`, the list starts with **Extension Market**. The catalog has search (waits 0.3 seconds before querying),
   marketplace filter chips (`FilterChip`, only with more than one marketplace), extension names, versions, descriptions, tags and status (available / upgradable / installed / reason unavailable),
@@ -2495,7 +2542,7 @@ and built-in programs use the thin forwarding layer `server/internal/extension/s
 | Package | Contents |
 | --- | --- |
 | `wire` | Generated types: manifest, protocol frames/error codes, `initialize`, `UIParams`, View/components, `ActionResult`… (do not edit manually) |
-| `ext` | Runtime: `ext.Main(ext.Program{…})` speaks the protocol over stdin/stdout (`initialize`, `ping`, `manifest`, `not_initialized` / `wrong_protocol` / `unknown_method` / `no_contribution`), dispatches calls by namespace to `Namespaces`; `UI` routes `ui.render` / `ui.action` by contribution id (empty action result redraws); `HTTP` serves on the hub-supplied socket (`/health` answered by SDK); `Hub.Call` / `Notify` / `Badge` / `Invalidate`; `Env()` accepts three sets of env names; `Init.Info()` accepts `extension` and legacy `plugin`; errors use `*ext.Error{Code, Message}`; system placements ("System-level placements"): widgets are `Page`s with `placement: widget`, identified by `UIRequest.Widget()` / `Family()`; `Shortcuts` routes `shortcut.run` by contribution id (`ShortcutRequest` has `Values`, returns `wire.ShortcutResult{Text, View}`) |
+| `ext` | Runtime: `ext.Main(ext.Program{…})` speaks the protocol over stdin/stdout (`initialize`, `ping`, `manifest`, `not_initialized` / `wrong_protocol` / `unknown_method` / `no_contribution`), dispatches calls by namespace to `Namespaces`; `UI` routes `ui.render` / `ui.action` by contribution id (empty action result redraws); `HTTP` serves on the hub-supplied socket (`/health` answered by SDK; when the hub closes stdin or sends SIGTERM, `Main` stops accepting connections and waits up to 5 seconds for the requests in flight before it returns); `Hub.Call` / `Notify` / `Badge` / `Invalidate`; `Env()` accepts three sets of env names; `Init.Info()` accepts `extension` and legacy `plugin`; errors use `*ext.Error{Code, Message}`; system placements ("System-level placements"): widgets are `Page`s with `placement: widget`, identified by `UIRequest.Widget()` / `Family()`; `Shortcuts` routes `shortcut.run` by contribution id (`ShortcutRequest` has `Values`, returns `wire.ShortcutResult{Text, View}`) |
 | `exttest` | Conformance checks in the extension's own `go test`: `exttest.Check(t, manifest, exttest.Serve(t, program))` (or `exttest.Program(t, path)` for a built program): handshake, error codes, snake_case, every `ui` contribution rendered in its slot (widgets once per `families` entry) with View checks (`schema/extension`, plus https, item/character counts and card limits), every shortcut called once through `shortcut.run` (empty values; may reject with text, not `unknown_method` / `no_contribution`), exit after stdin closes. `personad extension test` uses the hub's stricter checks (same as install/render validation) |
 
 ```go

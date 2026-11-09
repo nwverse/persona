@@ -243,7 +243,7 @@
   },
   {
     "name": "schedule_followup",
-    "description": "Wake yourself up later: at the given time Persona sends `prompt` into this conversation (or a new one) as if the user wrote it, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"remind me…\", \"check again in an hour\", meeting prep 10 minutes before a meeting, watching something until it changes. `at` is RFC 3339 (2026-10-27T09:50:00+08:00) or relative (\"30m\", \"2h\", \"1d\"). For something to do again and again (a patrol every 30 minutes) pass `every` (\"30m\", \"2h\", at least 5m) once: Persona repeats it by itself and the user sees, edits and stops it in the app; never schedule the next run from inside a run. Which model and permission mode a task runs with is the user's choice in the app.",
+    "description": "Wake yourself up later: at the given time Persona sends `prompt` into this conversation (or a new one) as if the user wrote it, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"remind me…\", \"check again in an hour\", meeting prep 10 minutes before a meeting, watching something until it changes. `at` is RFC 3339 (2026-10-27T09:50:00+08:00) or relative (\"30m\", \"2h\", \"1d\"). For something to do again and again (a patrol every 30 minutes) pass `every` (\"30m\", \"2h\", at least 5m) once: Persona repeats it by itself and the user sees, edits and stops it in the app; never schedule the next run from inside a run. An `every` task can take `until`, an instant after which the task stops (RFC 3339 or 30m / 2h / 1d, the same forms as `at`, not a bare clock time and not a condition to watch for): after that instant Persona turns it off and records a skipped run instead of running. A one-off ignores `until`. Omit it to keep an existing task's end time; null clears it. Which model and permission mode a task runs with is the user's choice in the app.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -277,13 +277,20 @@
             "asked"
           ],
           "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something (it then runs in its own conversation, not this one). Omit to keep an existing task's"
+        },
+        "until": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "optional end time (RFC 3339 or 30m / 2h / 1d). After it, Persona turns the task off and records a skipped run instead of running. Omit to keep an existing task's end time; null clears it. Ignored for a one-off."
         }
       }
     }
   },
   {
     "name": "schedule_routine",
-    "description": "Set up a recurring routine: every day (or on some weekdays) at a time, Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"每天 9 点给我早报\", \"每周五下午起草周报\". For one-off reminders use schedule_followup. Pass `id` (from list_followups) to change an existing routine: only the fields you give change; `enabled: false` pauses it. Times are in the user's time zone.",
+    "description": "Set up a recurring routine: every day (or on some weekdays) at a time, Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"每天 9 点给我早报\", \"每周五下午起草周报\". For one-off reminders use schedule_followup. Pass `id` (from list_followups) to change an existing routine: only the fields you give change; `enabled: false` pauses it. A routine can take `until`, an instant after which it stops (RFC 3339 or 30m / 2h / 1d, not a bare clock time): Persona then turns it off and records a skipped run instead of running. Omit `until` to keep an existing routine's end time; null clears it. Times are in the user's time zone.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -322,6 +329,13 @@
             "asked"
           ],
           "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something (it then runs in its own conversation). Omit to keep an existing task's"
+        },
+        "until": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "optional end time (RFC 3339 or 30m / 2h / 1d). After it, Persona turns the task off and records a skipped run instead of running. Omit to keep an existing task's end time; null clears it. Ignored for a one-off."
         }
       }
     }
@@ -343,7 +357,7 @@
   },
   {
     "name": "list_followups",
-    "description": "List every scheduled task (with ids): follow-ups that have not run yet, repeating ones, daily routines.",
+    "description": "List every scheduled task (with ids): follow-ups that have not run yet, repeating ones, daily routines. A repeating task with an end time shows that time.",
     "input_schema": {
       "type": "object",
       "properties": {}
@@ -362,6 +376,54 @@
           "type": "string"
         }
       }
+    }
+  },
+  {
+    "name": "list_places",
+    "description": "The user's saved places (home, the office, …) with their coordinates and reminder radius, as the user set them in Settings › Assistant › Saved Places or as you saved them with save_place. Read them before a reminder by place; never take a place's coordinates from memory.",
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "save_place",
+    "description": "Save a place to the user's saved places, or change the saved place of the same name. Only for a place the user just confirmed in this conversation (their current location while they are there, or a phone_location_search result they picked); the user sees and edits it in Settings › Assistant › Saved Places.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "name",
+        "latitude",
+        "longitude"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "What the user calls it, e.g. 家 or 公司 (at most 40 characters)"
+        },
+        "address": {
+          "type": "string",
+          "description": "The address, as phone_location_search gave it"
+        },
+        "latitude": {
+          "type": "number"
+        },
+        "longitude": {
+          "type": "number"
+        },
+        "radius_meters": {
+          "type": "integer",
+          "description": "The reminder circle, 100–2000; leave it out for 150"
+        }
+      }
+    }
+  },
+  {
+    "name": "machines_list",
+    "description": "List the user's computers and their observed connection state, system information, resource availability, working agents, failing launchers and node version status. Use this before choosing where to start work. Resource samples older than 30 seconds are not current. Null values have an accompanying reason; do not infer missing facts or rank computers from incomplete data.",
+    "input_schema": {
+      "type": "object",
+      "properties": {}
     }
   },
   {
@@ -495,7 +557,7 @@
   },
   {
     "name": "agent_start",
-    "description": "Start a new Claude Code agent in the terminal engine (herdr or Orca) of one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so.\n\nWhen the work needs a branch and checkout of its own (work in parallel with what is already open in that repository), give `worktree.branch`: Persona makes the worktree through the machine's engine first (herdr's or Orca's own, so it is listed there and in the app, under the workspace `cwd` is in) and starts the agent in it. Do not tell the agent to run `git worktree add` itself: a worktree made that way is invisible to Orca and to the app. An existing local branch is checked out; a new one starts at the HEAD of the workspace `cwd` is in. A branch already checked out elsewhere is refused.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier, so leave it off for small or quick work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, or an older Claude Code, refuses the start. Whether it is really on shows as `ultracode=on` in agents_list once Claude Code confirms it.",
+    "description": "Start a new Claude Code agent in the terminal engine (herdr or Orca) of one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list for current machine resources and availability before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so.\n\nWhen the work needs a branch and checkout of its own (work in parallel with what is already open in that repository), give `worktree.branch`: Persona makes the worktree through the machine's engine first (herdr's or Orca's own, so it is listed there and in the app, under the workspace `cwd` is in) and starts the agent in it. Do not tell the agent to run `git worktree add` itself: a worktree made that way is invisible to Orca and to the app. An existing local branch is checked out; a new one starts at the HEAD of the workspace `cwd` is in. A branch already checked out elsewhere is refused.\n\nGive `ultracode: true` for a large task: one that spans many files or needs checking from several angles (design, tests, review). Claude Code then runs every substantial step as a multi-agent workflow: slower and costlier, so leave it off for small or quick work. Do not write the word \"ultracode\" into the prompt instead. Claude Code agents only (2.1.284 or later): any other agent, or an older Claude Code, refuses the start. Whether it is really on shows as `ultracode=on` in agents_list once Claude Code confirms it.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -545,7 +607,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Explicit model override; omit to use the tier or purpose default."
+          "description": "Explicit model override: a model id the agent takes (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest). Omit to use the tier or purpose default."
         }
       }
     }
@@ -1033,7 +1095,7 @@
   },
   {
     "name": "secret_run",
-    "description": "Run commands on one of the user's computers that need a password only the user knows, typically its sudo password. Never ask for a password in the conversation, in ask_user or anywhere else: call this instead. The user gets a card on their iPhone showing the computer, your purpose and every command verbatim, types the password there and taps Run; that computer's node then runs exactly those commands in order, each as the user with /bin/sh -c in the home directory and PATH=/usr/bin:/bin:/usr/sbin:/sbin (give other tools by their absolute path). Only a command that runs sudo with -S gets the password, as a line on its stdin; every other command gets an empty stdin. Write sudo as `sudo -S -k -p '' …`, one sudo per command and never after a pipe (sudo would read the pipe; run a pipeline as root with `sudo -S -k -p '' sh -c '…'`); a sudo without -S is refused. Where a sudoers rule says NOPASSWD, sudo does not read stdin and the command it runs gets the password instead, so do not give such a command anything that reads stdin. Commands are printable ASCII only (letters, digits, punctuation, spaces), so the card shows exactly what runs. The first command that fails stops the run. Never write a command that prints, stores or sends the password. You never see the password: the result is JSON with status (ran, failed, declined, expired or refused), the computer, a message and, for ran and failed, each command's exit_code, timed_out and output (stdout and stderr, clipped to its end); when a command's output held the password, none of it comes back (output_withheld: true). A command stopped at the timeout may still be running as root: check its state before asking again. declined, expired and refused mean nothing ran: tell the user, and ask again only if they want to. Windows computers cannot run it.",
+    "description": "Run commands on one of the user's computers that need a password only the user knows, typically its sudo password. Never ask for a password in the conversation, in ask_user or anywhere else: call this instead. The user gets a card in the Persona app (iPhone, Mac, Vision Pro, Android or the web) showing the computer, your purpose and every command verbatim, types the password there and taps Run; that computer's node then runs exactly those commands in order, each as the user with /bin/sh -c in the home directory and PATH=/usr/bin:/bin:/usr/sbin:/sbin (give other tools by their absolute path). Only a command that runs sudo with -S gets the password, as a line on its stdin; every other command gets an empty stdin. Write sudo as `sudo -S -k -p '' …`, one sudo per command and never after a pipe (sudo would read the pipe; run a pipeline as root with `sudo -S -k -p '' sh -c '…'`); a sudo without -S is refused. Where a sudoers rule says NOPASSWD, sudo does not read stdin and the command it runs gets the password instead, so do not give such a command anything that reads stdin. Commands are printable ASCII only (letters, digits, punctuation, spaces), so the card shows exactly what runs. The first command that fails stops the run. Never write a command that prints, stores or sends the password. You never see the password: the result is JSON with status (ran, failed, declined, expired or refused), the computer, a message and, for ran and failed, each command's exit_code, timed_out and output (stdout and stderr, clipped to its end); when a command's output held the password, none of it comes back (output_withheld: true). A command stopped at the timeout may still be running as root: check its state before asking again. declined, expired and refused mean nothing ran: tell the user, and ask again only if they want to. Windows computers cannot run it.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1279,7 +1341,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each started task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task whose launcher failed its last health check on its machine moves to a machine where it works; its why says so. From the main conversation you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.",
+    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1312,7 +1374,15 @@
               },
               "machine": {
                 "type": "string",
-                "description": "machine id"
+                "description": "machine id; fixed target by default"
+              },
+              "machine_policy": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "flexible"
+                ],
+                "description": "fixed (default): keep this machine through preview, dispatch and retries; fail there if unavailable. flexible: explicitly permit health-based placement on another computer, only for work that is portable"
               },
               "cwd": {
                 "type": "string",
@@ -1324,7 +1394,7 @@
               },
               "model": {
                 "type": "string",
-                "description": "model; empty: the launcher's default"
+                "description": "model id (an alias such as opus, or a gateway's own id; letters, digits and . _ - / : @ [ ] only, or a leading ~ as in ~vendor/model-latest); empty: the launcher's default"
               },
               "permission": {
                 "type": "string",
@@ -1453,6 +1523,189 @@
         "recommend": {
           "type": "string",
           "description": "needs_user: the option you recommend, in a line; the user's \"OK\" takes it and it goes to the task's agent"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_list",
+    "description": "List the user's Persona to-dos (the To-dos page in the app, not Feishu tasks): open ones by default, earliest due first (those without a due date last), each with its id, title, state, priority, due date, reminder and the agents on it, and the first line of its notes. Times are in the user's time zone. Filter by state, by due date (due_before / due_after: a day or a moment), overdue ones only, with or without agents, or a word in the title or notes. Use it before changing a to-do, to find its id; ask with todo_get for one in full.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "done",
+            "all"
+          ],
+          "description": "which to-dos: open (default), done, or all"
+        },
+        "due_before": {
+          "type": "string",
+          "description": "only those due by then: a day (2026-11-15, through its end) or a moment (2026-11-15 18:00, RFC 3339); leaves out those without a due date"
+        },
+        "due_after": {
+          "type": "string",
+          "description": "only those due from then on: a day or a moment; leaves out those without a due date"
+        },
+        "overdue": {
+          "type": "boolean",
+          "description": "only open ones whose due date has passed"
+        },
+        "with_agents": {
+          "type": "boolean",
+          "description": "true: only those agents work on (tasks); false: only the user's own"
+        },
+        "query": {
+          "type": "string",
+          "description": "words to find in the title or notes"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "at most this many (default 50, at most 200)"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_get",
+    "description": "One of the user's Persona to-dos in full: its title, state, priority, due date, reminder (and whether it was pushed), when it was made and changed, the conversation and plan it came from when it is a task, its notes, the agents that work or worked on it, and the decisions in force on it.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_create",
+    "description": "Add a to-do to the user's Persona to-dos, when the user asks you to note something to do or to remind them of it (or agrees to your suggestion): it shows on the To-dos page of the app, sorted by its due date, and with remind set the phone is pushed about it at that time. It is the user's own to-do, with no agent on it: work for an agent is task_plan. Done at once, nothing to confirm. An open to-do with the same title and due date is not made twice: you get that one back. Write the title as the thing to do (short, the user's language); put links, amounts and details in notes. Read due dates and times in the user's time zone; when only the day is known, give the day.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "what is to be done, in a line"
+        },
+        "notes": {
+          "type": "string",
+          "description": "details: where it came from, links, amounts, what to bring"
+        },
+        "due": {
+          "type": "string",
+          "description": "when it is due: a day (2026-11-15) when only the day is known, else a moment (2026-11-15 18:00 in the user's time zone, or RFC 3339 with its offset); 2h / 3d from now also work"
+        },
+        "remind": {
+          "type": "string",
+          "description": "when to push the phone about it: a moment (2026-11-14 09:00 in the user's time zone, or RFC 3339), or 30m / 2h / 1d from now; not in the past. Leave it out unless the user asked for a reminder or the deadline is close and matters"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "high",
+            "normal",
+            "low"
+          ],
+          "description": "normal when left out"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_update",
+    "description": "Change one of the user's Persona to-dos: its title, notes, due date, reminder or priority. Only what you give changes; \"\" clears notes, due or remind. A new reminder time is pushed again even when the old one already was. Done at once, nothing to confirm, also for a task's to-do. To mark it done or open it again use todo_complete / todo_reopen.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        },
+        "title": {
+          "type": "string",
+          "description": "the new title"
+        },
+        "notes": {
+          "type": "string",
+          "description": "the new notes (they replace the old ones: keep what should stay); \"\" clears them"
+        },
+        "due": {
+          "type": "string",
+          "description": "the new due date: a day (2026-11-15) or a moment (2026-11-15 18:00 in the user's time zone, RFC 3339); \"\" clears it"
+        },
+        "remind": {
+          "type": "string",
+          "description": "the new reminder: a moment (2026-11-14 09:00, RFC 3339) or 30m / 2h / 1d from now, not in the past; \"\" clears it"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "high",
+            "normal",
+            "low"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_complete",
+    "description": "Mark one of the user's Persona to-dos done, when the user says it is done (or asks you to close it). The user's own to-do is closed at once. A task's, or one agents work on, is confirmed on the phone first, because closing it also closes its agents once they are idle; if the user declines, nothing changes.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_reopen",
+    "description": "Open a done Persona to-do again, when the user says it is not done after all. The user's own to-do is reopened at once; a task's, or one agents worked on, is confirmed on the phone first.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
+    "name": "todo_delete",
+    "description": "Delete one of the user's Persona to-dos for good (its notes, links to agents and decisions go with it), only when the user asks for it to be deleted; one that is finished is completed instead (todo_complete). Every delete is confirmed on the phone first; if the user declines, writes instead, or does not answer, nothing is deleted. The agents that worked on it are left as they are.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the to-do's id (todo_…), as todo_list gives it"
         }
       }
     }

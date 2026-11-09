@@ -2,7 +2,7 @@ import UIKit
 import XCTest
 
 /// Claude Code's ultracode switch on the phone (#1307): the switch under the thinking effort in the composer's model menu
-/// and in the old layout's effort chip, the workflow mark after the effort and beside an agent row's title, the line
+/// and the workflow mark after the effort and beside an agent row's title, the line
 /// after a resume turned it off, the node's reason, and New Agent's switch (off each time, grayed where Claude Code is
 /// too old). Against scripts/mock/mock_hub.py with `MOCK_ULTRACODE=1` (`TEST_RUNNER_PERSONA_ULTRACODE_HUB`; GET
 /// /mock/ultracode lists the requests, `?reset=1` puts the states back). With PERSONA_SHOTS set the screenshots are
@@ -41,10 +41,10 @@ final class UltracodeUITests: XCTestCase {
 
     // MARK: Helpers
 
-    @MainActor private func launch(_ args: [String], shell: Bool = true) {
+    @MainActor private func launch(_ args: [String]) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", shell ? "NO" : "YES", "-dev.openChat", "",
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "",
                                "-newChat.machine", "macbook", "-launcher.macbook", ""] + args
         app.launchPinned()
     }
@@ -224,17 +224,6 @@ final class UltracodeUITests: XCTestCase {
         XCTAssertFalse(try requests(review).contains { $0["ultracode"] != nil }, "dismissing switched it")
     }
 
-    /// The old layout's effort chip: the mark after the label, and the switch in its menu.
-    @MainActor func testTheEffortChipInTheOldLayout() throws {
-        launch(["-openSession", widget], shell: false)
-        let chip = see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "思考强度")).firstMatch, "the effort chip", timeout: 20)
-        XCTAssertTrue(chip.label.hasSuffix("ultracode 开"), "the chip does not say it: \(chip.label)")
-        shot("old-chip-on")
-        chip.tap()
-        _ = switchInMenu()
-        shot("old-menu-on")
-    }
-
     /// A Codex thread at "ultra" carries the same mark; it has no switch.
     @MainActor func testCodexUltraHasTheMarkNoSwitch() throws {
         launch(["-openSession", orders])
@@ -271,7 +260,7 @@ final class UltracodeUITests: XCTestCase {
 
     /// New Agent: off each time, sent only when turned on; grayed with why where Claude Code is too old.
     @MainActor func testNewAgentStartsOff() throws {
-        launch(["-tab", "dev", "-showNewChat", "YES", "-newChat.machine", "macbook"], shell: false)
+        launch(["-tab", "dev", "-showNewChat", "YES", "-newChat.machine", "macbook"])
         see(app.navigationBars["新对话"], "New Agent", timeout: 20)
         let toggle = app.switches["newChat.ultracode"]
         for _ in 0..<6 where !(toggle.exists && toggle.isHittable) { app.swipeUp() }
@@ -285,7 +274,7 @@ final class UltracodeUITests: XCTestCase {
 
     @MainActor func testNewAgentGraysAnOldClaudeCode() throws {
         // Mac Studio's Claude Code is 2.1.250.
-        launch(["-tab", "dev", "-showNewChat", "YES", "-newChat.machine", "studio", "-launcher.studio", ""], shell: false)
+        launch(["-tab", "dev", "-showNewChat", "YES", "-newChat.machine", "studio", "-launcher.studio", ""])
         see(app.navigationBars["新对话"], "New Agent", timeout: 20)
         let toggle = app.switches["newChat.ultracode"]
         for _ in 0..<6 where !(toggle.exists && toggle.isHittable) { app.swipeUp() }

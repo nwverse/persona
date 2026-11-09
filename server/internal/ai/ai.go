@@ -1,4 +1,4 @@
-// Package ai calls an Anthropic-compatible Messages API, or an OpenAI-compatible Responses API, for small structured
+// Package ai calls Messages, Responses or Chat Completions APIs for small structured
 // tasks in the app (e.g. turning a pasted blob into a mail account). The key is read from its key file at call time
 // and never stored by Persona.
 package ai
@@ -94,7 +94,7 @@ type Message struct {
 type Request struct {
 	System    string
 	Messages  []Message
-	MaxTokens int // the Messages API's max_tokens; the Responses API is sent none (some relays reject it)
+	MaxTokens int // output limit for Messages and Chat Completions; Responses is sent none (some relays reject it)
 }
 
 // Usage is what one request spent, as the upstream counted it (zero where it did not say).
@@ -152,15 +152,27 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 	}
 	var reply Reply
 	var answered bool
-	if c.cfg.API == "responses" {
+	switch c.cfg.API {
+	case "responses":
 		reply, answered, err = c.respond(ctx, hc, key, r)
-	} else {
+	case "chat":
+		reply, answered, err = c.chatCompletions(ctx, hc, key, r)
+	default:
 		reply, answered, err = c.messages(ctx, hc, key, r)
 	}
 	if reply.Model == "" {
 		reply.Model = c.cfg.Model
 	}
 	return reply, g.done(probe, answered, err)
+}
+
+// apiEndpoint preserves deployment prefixes and accepts bases with or without /v1.
+func apiEndpoint(base, path string) string {
+	base = strings.TrimRight(base, "/")
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base + "/" + path
 }
 
 // messages calls the Messages API; answered is whether the upstream said 200, Truncated whether the reply stopped at
@@ -171,7 +183,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	body, _ := json.Marshal(map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns})
-	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}
@@ -231,7 +243,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		req["reasoning"] = map[string]any{"effort": c.cfg.ReasoningEffort}
 	}
 	body, _ := json.Marshal(req)
-	hreq, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/responses", bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
 	if err != nil {
 		return reply, false, err
 	}
