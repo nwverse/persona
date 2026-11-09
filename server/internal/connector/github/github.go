@@ -93,10 +93,14 @@ type Connector struct {
 	token  string
 	status connector.Status
 	poke   chan struct{}
-	// rateLow: under a tenth of the hour's requests are left (X-RateLimit-Remaining); only notifications are polled
-	// until rateReset.
+	// rateLow: under a tenth of the hour's core requests are left (X-RateLimit-Remaining); only notifications are
+	// polled until rateReset.
 	rateLow   bool
 	rateReset time.Time
+	// searchLow: under a tenth of the search API's requests for this minute are left (its own quota); the archive
+	// (Changes) waits until searchReset.
+	searchLow   bool
+	searchReset time.Time
 
 	inbox inboxState   // inbox.go
 	opts  InboxOptions // rules.go
@@ -117,7 +121,9 @@ type Connector struct {
 	pending   *devicePending
 }
 
-// noteRate records how many requests GitHub still allows this hour.
+// noteRate records how many requests GitHub still allows, per quota (X-RateLimit-Resource): the hour's core requests
+// (an answer without the header counts as core) or the search API's minute. Other quotas (graphql, code_search, ...)
+// are not tracked.
 func (c *Connector) noteRate(h http.Header) {
 	left, err1 := strconv.Atoi(h.Get("X-RateLimit-Remaining"))
 	limit, err2 := strconv.Atoi(h.Get("X-RateLimit-Limit"))
@@ -125,9 +131,15 @@ func (c *Connector) noteRate(h http.Header) {
 		return
 	}
 	reset, _ := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64)
+	low, until := left*10 < limit, time.Unix(reset, 0)
 	c.mu.Lock()
-	c.rateLow, c.rateReset = left*10 < limit, time.Unix(reset, 0)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	switch h.Get("X-RateLimit-Resource") {
+	case "", "core":
+		c.rateLow, c.rateReset = low, until
+	case "search":
+		c.searchLow, c.searchReset = low, until
+	}
 }
 
 // ratesLow says whether to save requests (only notifications are polled).
@@ -135,6 +147,13 @@ func (c *Connector) ratesLow() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.rateLow && time.Now().Before(c.rateReset)
+}
+
+// searchQuotaLow says whether the search API's minute is nearly used up.
+func (c *Connector) searchQuotaLow() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.searchLow && time.Now().Before(c.searchReset)
 }
 
 // New is the connector for cfg, reading the token of machine (its display name) through fetch.

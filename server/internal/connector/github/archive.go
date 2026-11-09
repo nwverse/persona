@@ -29,9 +29,10 @@ type archiveCursor struct {
 	Threads map[string]time.Time `json:"threads,omitempty"`
 }
 
-// Changes reads the threads updated since the cursor, oldest first, with the messages not archived yet.
+// Changes reads the threads updated since the cursor, oldest first, with the messages not archived yet. It waits while
+// either the hour's core quota or the search API's minute runs low.
 func (c *Connector) Changes(ctx context.Context, cursor string, limit int) ([]connector.ChatBatch, string, bool, error) {
-	if !c.signedIn() || c.ratesLow() {
+	if !c.signedIn() || c.ratesLow() || c.searchQuotaLow() {
 		return nil, cursor, false, nil
 	}
 	var cur archiveCursor
