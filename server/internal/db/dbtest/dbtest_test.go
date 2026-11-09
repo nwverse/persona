@@ -50,7 +50,15 @@ func TestOwnDatabases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close(ctx)
+	// Closed after the drops below: cleanups run last first, and a defer would close it before any of them.
+	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	dropAfter := func(name string) {
+		t.Cleanup(func() {
+			if _, err := admin.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`); err != nil {
+				t.Errorf("drop %s: %v", name, err)
+			}
+		})
+	}
 	exists := func(u string) bool {
 		pu, _ := url.Parse(u)
 		var n int
@@ -80,7 +88,7 @@ func TestOwnDatabases(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+other+`"`) })
+	dropAfter(other)
 	runURL, done, err := Own(ctx, base)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +116,7 @@ func TestOwnDatabases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+databaseOf(copied)+`"`) })
+	dropAfter(databaseOf(copied))
 	if c, err = pgx.Connect(ctx, copied); err != nil {
 		t.Fatal(err)
 	}
