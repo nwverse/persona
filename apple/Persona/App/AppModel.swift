@@ -2576,7 +2576,23 @@ final class AppModel {
 
     /// Where Settings is (its pages), here and not in SettingsView's state: picking a style or a persona in Settings › Appearance
     /// rebuilds the whole tree (`look`), and the rebuilt settings stay on that page.
-    var settingsPath = NavigationPath()
+    var settingsPath = NavigationPath() {
+        didSet {
+            // A retained legacy top-level route still opens under Connectors, with a real parent for Back.
+            if settingsPath == NavigationPath([SettingsPage.sent]) { settingsPath = SettingsPage.sentPath }
+        }
+    }
+
+    /// Shared by native deep links and settings links supplied by channels.
+    func openSentRecords() {
+        settingsPath = SettingsPage.sentPath
+        #if os(macOS)
+        MacShellState.shared.go(.settings, self)
+        #else
+        selectedTab = .settings
+        if tabRouter != nil { shellSettings = true }
+        #endif
+    }
     /// The space's other agent a chat page switched to in its header (`ChatView.switchTo`), by the session it opened
     /// with: the page built again for that path goes to it. Cleared back at the list.
     var chatSwitched: [SessionKey: SessionKey] = [:]
