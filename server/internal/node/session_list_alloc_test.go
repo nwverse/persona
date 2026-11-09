@@ -1,0 +1,139 @@
+package node
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+var updateGolden = flag.Bool("update", false, "rewrite the golden files in testdata")
+
+// listT0 is when the fixtures' sessions were last used, give or take a few minutes: fixed, so their lists are too.
+var listT0 = time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+
+// listID is the fixtures' session id number i.
+func listID(i int) string { return fmt.Sprintf("0e000000-0000-4000-8000-%012d", i) }
+
+// listNode is a node with one connected runtime and nothing else to list: no engine, no running Claude, no Codex.
+func listNode(tb testing.TB) (*Node, *runtimeConn) {
+	tb.Helper()
+	n, _ := testNode(tb)
+	n.runtimes = newRuntimeRegistry()
+	n.cdirs = newClaudeDirs()
+	n.cdirs.scan = func() map[int]procEnv { return nil }
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	n.modes = map[string]sessionModes{}
+	return n, n.runtimes.add(nil)
+}
+
+// runtimeListNode is a node whose list is rows sessions of one runtime, the fleet soak's machines (10 x 50 sessions,
+// one item and a busy toggle per machine every 2 s): rows tie on UpdatedAt in sevens, and none is filtered out.
+func runtimeListNode(tb testing.TB, rows int) *Node {
+	tb.Helper()
+	n, h := listNode(tb)
+	list := make([]proto.Session, rows)
+	for i := range list {
+		list[i] = proto.Session{SessionID: listID(i), Agent: "pi", Status: proto.StatusIdle, Title: fmt.Sprintf("task %d", i),
+			Cwd: fmt.Sprintf("/work/p%d", i%5), UpdatedAt: listT0.Add(time.Duration(i%7) * time.Minute), Rev: int64(1000 + i)}
+	}
+	n.runtimes.setSessions(h, list)
+	return n
+}
+
+// BenchmarkSessionList is one session list of a node whose runtime lists 50 or 300 sessions (sessionList, as each poll,
+// notify and sessions.list builds it).
+func BenchmarkSessionList(b *testing.B) {
+	for _, rows := range []int{50, 300} {
+		b.Run(fmt.Sprint(rows), func(b *testing.B) {
+			n := runtimeListNode(b, rows)
+			if got := len(n.sessionList(context.Background(), false)); got != rows {
+				b.Fatalf("listed %d sessions, want %d", got, rows)
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				n.sessionList(context.Background(), false)
+			}
+		})
+	}
+}
+
+// keepFixture is a node whose list has every row the keep pass and the sort treat apart: rows tied on UpdatedAt from
+// live panes, a runtime and a transcript; a blocked directory's rows, one of them kept and one the assistant's; a Codex
+// parent dropped there whose subagents still take its project; one row outside the directory the scoped list allows; a
+// session listed by two runtimes. scoped: the node lists only /work.
+func keepFixture(t *testing.T, scoped bool) *Node {
+	t.Helper()
+	n, h := listNode(t)
+	n.cdirs.blocked = []string{"/work/blocked"}
+	if scoped {
+		n.sessionScope = &nodeSessionScope{dir: "/work", claude: filepath.Join(n.home, ".claude"), codex: filepath.Join(n.home, ".codex")}
+	}
+	at := func(m int) time.Time { return listT0.Add(time.Duration(m) * time.Minute) }
+	for i := 3; i >= 1; i-- { // live panes with no transcript yet: tied at zero
+		n.agents[listID(i)] = host.Agent{Agent: "claude", AgentStatus: proto.StatusWorking, Cwd: "/work/repo", PaneID: fmt.Sprintf("p%d", i)}
+	}
+	n.runtimes.setSessions(h, []proto.Session{
+		{SessionID: listID(10), Agent: "pi", Status: proto.StatusIdle, Title: "tied a", Cwd: "/work/app", UpdatedAt: at(5), Rev: 10},
+		{SessionID: listID(11), Agent: "pi", Status: proto.StatusWorking, Title: "tied b", Cwd: "/work/app", UpdatedAt: at(5), Rev: 11},
+		{SessionID: listID(12), Agent: "pi", Status: proto.StatusIdle, Title: "blocked", Cwd: "/work/blocked/x", UpdatedAt: at(9)},
+		{SessionID: listID(13), Agent: "pi", Status: proto.StatusIdle, Title: "kept", Cwd: "/work/blocked/kept", UpdatedAt: at(1)},
+		{SessionID: listID(14), Agent: "codex", SourceKind: "codex", Status: proto.StatusDone, Title: "parent", Cwd: "/work/blocked/parent",
+			RepoRoot: "/work/repo", SpaceID: "codex-project:/work/repo", SpaceKind: "project", SpaceName: "repo", UpdatedAt: at(2)},
+		{SessionID: listID(15), Agent: "codex", SourceKind: "codex", IsSubagent: true, ParentSessionID: listID(14), Status: proto.StatusDone,
+			Title: "child", Cwd: "/work/app", UpdatedAt: at(3)},
+		{SessionID: listID(16), Agent: "codex", SourceKind: "codex", IsSubagent: true, ParentSessionID: listID(15), Status: proto.StatusDone,
+			Title: "grandchild", Cwd: "/work/app", UpdatedAt: at(3)},
+		{SessionID: listID(17), Agent: "pi", Status: proto.StatusIdle, Title: "elsewhere", Cwd: "/elsewhere/y", UpdatedAt: at(7)},
+		{SessionID: listID(18), Agent: "pi", Status: proto.StatusIdle, Title: "never used", Cwd: "/work/app"},
+		{SessionID: listID(19), Agent: "pi", Status: proto.StatusOffline, Title: "listed twice, offline here", Cwd: "/work/app", UpdatedAt: at(4)},
+	})
+	other := n.runtimes.add(nil) // the one running 19 answers for it
+	n.runtimes.setSessions(other, []proto.Session{
+		{SessionID: listID(19), Agent: "pi", Status: proto.StatusWorking, Title: "listed twice, running here", Cwd: "/work/app", UpdatedAt: at(6)},
+	})
+	n.procs[listID(20)] = &assistantProc{id: listID(20), cwd: "/work/blocked/assistant", lastActive: at(8)}
+	writeTranscript(t, n.home, "/work/app", listID(30), at(5), `{"type":"custom-title","customTitle":"transcript, tied"}`)
+	n.setKept([]string{listID(13), listID(30)})
+	return n
+}
+
+// The keep pass (scope, blocked directories and their exceptions, the Codex hierarchy resolved over the whole list
+// first) and the stable sort give the very list, row for row and field for field, that main's sessionList gave
+// (testdata/session_list_keep.json, written before the list was built in one slice).
+func TestSessionListKeepPassGolden(t *testing.T) {
+	var got bytes.Buffer
+	for _, scoped := range []bool{false, true} {
+		n := keepFixture(t, scoped)
+		fmt.Fprintf(&got, "scoped=%v\n", scoped)
+		for _, s := range n.sessionList(context.Background(), false) {
+			b, err := json.Marshal(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fmt.Fprintf(&got, "%s\n", strings.ReplaceAll(string(b), n.home, "<home>"))
+		}
+	}
+	path := filepath.Join("testdata", "session_list_keep.json")
+	if *updateGolden {
+		if err := os.WriteFile(path, got.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), want) {
+		t.Errorf("the list differs from %s (go test -run %s -update rewrites it; read the diff first):\n%s", path, t.Name(), got.String())
+	}
+}
