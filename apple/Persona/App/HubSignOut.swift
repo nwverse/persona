@@ -80,8 +80,9 @@ extension AppModel {
     }
 
     /// Revokes this device's credential at one hub (`current` of GET /auth/tokens), and before it the watch's
-    /// answer-only one made there. true: the hub holds neither any more. `traded`: this device had traded the pairing
-    /// token for its own credential there (`PairedHub.deviceID`).
+    /// answer-only one made there. true: the hub holds neither any more, except after a 401 (below), where the watch's
+    /// credential can no longer be looked up or revoked and is left as it is. `traded`: this device had traded the
+    /// pairing token for its own credential there (`PairedHub.deviceID`).
     nonisolated static func signOut(at api: APIClient, watch: String?, traded: Bool, timeout: TimeInterval) async -> Bool {
         let current: String
         do {
