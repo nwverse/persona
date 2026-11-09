@@ -94,8 +94,8 @@ func searchable(rel string) bool {
 		return false
 	case len(parts) == 3 && parts[0] == KindChat && parts[2] == retentionFile:
 		return false
-	case len(parts) == 3 && parts[0] == KindRecording && parts[2] == recordingJournal:
-		return false
+	case len(parts) == 3 && parts[0] == KindRecording && (parts[2] == recordingJournal || parts[2] == "minutes.json"):
+		return false // minutes.md has the minutes' text
 	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == "handles.json":
 		return false
 	case len(parts) == 3 && parts[0] == KindProject && parts[2] == "moments-judged.json":
@@ -140,7 +140,7 @@ func shown(kind, rel string) bool {
 		day, ok := strings.CutPrefix(rest, "messages/")
 		return kind == KindChat && ok && strings.HasSuffix(day, ".md") && !strings.Contains(day, "/")
 	case KindRecording:
-		return rest == "summary.md" || rest == "transcript.md" || rest == "meta.json"
+		return rest == "summary.md" || rest == "minutes.md" || rest == "transcript.md" || rest == "meta.json"
 	case KindDoc, KindMeeting, KindEvent:
 		return true // entryOf already keeps only <kind>/<id>.json
 	}
@@ -386,7 +386,7 @@ func (e *Engine) searchFiles() *searchOrder {
 func sortHits(h []Found) []Found {
 	rank := func(f Found) int {
 		switch {
-		case strings.HasSuffix(f.Path, "/summary.md"):
+		case strings.HasSuffix(f.Path, "/summary.md"), strings.HasSuffix(f.Path, "/minutes.md"):
 			return 0
 		case strings.HasSuffix(f.Path, "/log.md"):
 			return 1
@@ -528,7 +528,7 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 			}
 		}
 	case KindRecording:
-		for _, f := range []string{"summary.md", "transcript.md", "meta.json"} {
+		for _, f := range []string{"summary.md", "minutes.md", "transcript.md", "meta.json"} {
 			look(e.Store.path(kind, id, f), false)
 		}
 	case KindDoc, KindMeeting, KindEvent:

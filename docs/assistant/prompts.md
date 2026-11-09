@@ -52,6 +52,7 @@ MCP tool descriptions and parameter explanations shown to models are also prompt
 | `kb/project.md`, `project_input.md` | Rewrite project profiles | `kb/project_refresh.go` |
 | `kb/items.md`, `items_input.md` | Tag documents / meetings / calendar events | `kb/items.go` |
 | `kb/recording.md`, `recording_input.md` | Summary, title, and tags for recording transcripts (purpose `kb.compress`) | `kb/recordings.go` |
+| `kb/minutes.md`, `minutes_input.md`, `minutes_meeting.md`, `minutes_merge.md`, `minutes_merge_input.md` | Meeting minutes of a recording: the whole transcript or one part's notes, then merging the parts of a long one (purpose `kb.compress`; `docs/assistant/meeting-minutes.md`) | `kb/minutes.go` |
 | `kb/known_projects.md` | "Known projects" list (names, aliases, one-liners), shared by compression and tagging | Same as above |
 | `kb/dedupe.md`, `dedupe_input.md`, `dedupe_side.md` | Determine whether two projects are the same (project deduplication) | `kb/dedupe.go` |
 | `kb/moments_link.md`, `moments_link_input.md` | Identify keyword-search Moments posts that discuss this project | `kb/moments_link.go` |

@@ -401,6 +401,9 @@ func (c *Client) JSONMax(ctx context.Context, system, user string, maxTokens int
 	}
 }
 
+// ErrNoObject: the reply holds no JSON object at all.
+var ErrNoObject = errors.New("ai: no JSON object in reply")
+
 // ErrTruncated: the reply stopped at max_tokens before the answer was complete, even with the room doubled.
 var ErrTruncated = errors.New("ai: reply cut off at max_tokens")
 
@@ -423,7 +426,7 @@ func (e *RefusalError) Unwrap() error { return ErrRefused }
 func FirstObject(s string) (string, error) {
 	start := strings.IndexByte(s, '{')
 	if start < 0 {
-		return "", errors.New("ai: no JSON object in reply")
+		return "", ErrNoObject
 	}
 	depth, inStr, esc := 0, false, false
 	for i := start; i < len(s); i++ {
