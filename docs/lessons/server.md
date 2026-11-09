@@ -1402,6 +1402,12 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A stored file's own name must not become a second way to fetch it: the built-in copy answers `assets/<name>.gz` with a 404, as the plain site did.
 - `check_bundle_privacy.py` reads printable strings, and gzip turns a file's strings into noise: scan the plain web copy before precompressing it, or the scan of the binaries silently stops covering the web client.
 
+## Fixed heap: a lazy value evaluated as an argument, a whole set built for one member (2026-11-09, #2475)
+
+- A value made on first use is made anyway when it is passed as an argument to a call that may not need it: `writeIfMissing(p, prompts.RenderKBReadme())` parsed every prompt template on each manager start for a README that was already there. Pass the function (`writeIfMissing(p, prompts.RenderKBReadme)`) and call it after the check; a `heap?gc=1` profile of an idle process shows such frames.
+- A catalog or template set built whole on first use holds every member once any is needed: the deployment, inbox and computer indexes compiled every template of theirs (624 regexps, 2.9 MB live for the three) the first time they translated a text, and one prompt render parsed all 139 templates (1.56 MB). Keep each member's source and build it on first use (`i18n.templatePattern`, `prompts.templateSet` parsing a template with the ones its tree includes), and keep a test that builds every member, so a broken one still fails there (`TestEveryTemplateCompiles`, `Names()`).
+- A receive buffer sized for a worst case that cannot happen is kept for the life of a watch: the kernel never sends a netlink datagram over 32 KiB, so `netaddr` uses 64 KiB and retries a truncated dump with the old 1 MiB.
+
 ## Transport source is not pane origin (#994)
 
 A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
