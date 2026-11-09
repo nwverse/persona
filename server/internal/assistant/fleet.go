@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"errors"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -68,11 +68,13 @@ type fleetBook struct {
 	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
 	// decorated and told (publishList), so the lists reach the hub in the order they were made.
 	sentMu sync.Mutex
-	sent   map[string]string
+	sent   map[string][]byte
 	// shown: the list last told the hub for each machine, decorated (the reminders of agents awaiting a reply read it
 	// instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
+	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
+	asks asksMemo
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
@@ -266,6 +268,11 @@ func turnError(sess proto.Session) (text, kind string) {
 	if sess.State != proto.StateUnread && sess.State != proto.StateIdle {
 		return "", ""
 	}
+	return latestTurnError(sess)
+}
+
+// latestTurnError is turnError whatever sess's state now: the node's word, else its last words when they are the error.
+func latestTurnError(sess proto.Session) (text, kind string) {
 	if text := strings.TrimSpace(sess.TurnError); text != "" {
 		return text, sess.TurnErrorKind
 	}
@@ -276,7 +283,7 @@ func turnError(sess proto.Session) (text, kind string) {
 }
 
 // rateLimited: a turn error that says the requests came too fast or used up a limit.
-var rateLimited = regexp.MustCompile(`(?i)\b429\b|rate[ _-]?limit|too many requests|usage limit`)
+var rateLimited = lazyre.New(`(?i)\b429\b|rate[ _-]?limit|too many requests|usage limit`)
 
 // turnErrorCode is what a turn's model API error says is wrong, for a card that says what to fix (Session.TurnErrorCode,
 // docs/assistant/onboarding.md 5.2); "" when it does not say.
@@ -289,6 +296,8 @@ func turnErrorCode(text string) string {
 		return proto.TurnErrorModelRoute
 	}
 	switch classifyLauncherError(t) { // the launcher health checks' classes (launcher_health.go)
+	case errKindUsageLimit:
+		return proto.TurnErrorRateLimited
 	case errKindAuth:
 		return proto.TurnErrorAuthFailed
 	case errKindModelRoute:

@@ -9,7 +9,7 @@ final class PhoneDataTests: XCTestCase {
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-dev.openChat", "", "-ui.oldLayout", "NO"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-dev.openChat", ""]
         app.launchPinned()
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "这台 iPhone")).firstMatch
         for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }

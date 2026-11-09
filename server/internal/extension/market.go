@@ -14,12 +14,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Extension markets (docs/extensions/extensions.md "Extension market") publish persona-extensions.json
@@ -49,7 +50,7 @@ type MarketSpec struct {
 	Owner, Repo, Ref string
 }
 
-var githubName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+var githubName = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 
 // ParseMarket reads github:owner/repo[@ref], or an https URL: of the index itself (ending in .json) or of the
 // directory it is in (persona-extensions.json is added).

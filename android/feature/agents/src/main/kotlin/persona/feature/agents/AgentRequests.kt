@@ -19,6 +19,7 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.*
 import persona.feature.chat.SecretRunActions
 import persona.feature.chat.SecretRunSummary
+import persona.feature.chat.rememberTransientSecret
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
@@ -33,7 +34,10 @@ internal fun RequestCard(
     /** False when the session's source does not let the phone approve (a Codex thread not joined live). */
     approvable: Boolean = true,
 ) {
-    val enabled = online && !readOnly && approvable && !request.expired(now) && !RequestDeliveries.locks(delivery)
+    val expired = request.expired(now)
+    val enabled = online && !readOnly && approvable && !expired && !RequestDeliveries.locks(delivery)
+    // A password card's password (#1581): only in this card, emptied once it expires or an answer's delivery is unknown.
+    var password by rememberTransientSecret(request.id, clearWhen = expired || delivery == RequestDelivery.Unknown)
     val question = request.quickQuestion()
     val source = listOfNotNull(machine, space ?: request.cwd?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }).joinToString(" / ")
     val answer: (AnswerAction) -> Unit = { onAnswer(request, it, AnswerDraft(), false) }
@@ -87,8 +91,11 @@ internal fun RequestCard(
         },
         actions = if (readOnly) null else ({
             when (request.kind) {
-                // Only the iPhone fills in a password card (#1137): here it can only be declined.
-                "permission" -> if (request.isSecretRun) SecretRunActions(enabled) { answer(AnswerAction.Deny) }
+                // A password card (#1137, #1581), as in the chat: its password, Decline and Run.
+                "permission" -> if (request.isSecretRun) SecretRunActions(password, { password = it }, enabled, canDecline = enabled,
+                    canRun = enabled && AnswerBuilder.build(request, AnswerAction.Allow, AnswerDraft(password = password)).allowed,
+                    onDecline = { password = ""; answer(AnswerAction.Deny) },
+                    onRun = { onAnswer(request, AnswerAction.Allow, AnswerDraft(password = password), false); password = "" })
                 else DecisionButtons(
                     // A card with fields to fill in cannot be allowed here yet (#4987).
                     primary = JAction(stringResource(R.string.agents_request_allow), enabled = enabled && !request.needsFieldValues, onClick = { answer(AnswerAction.Allow) }),

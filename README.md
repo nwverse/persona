@@ -28,6 +28,12 @@ English · [简体中文](README.zh-CN.md)
 
 <p align="center"><sub>Demo mode with made-up data.</sub></p>
 
+## Video tour
+
+https://github.com/user-attachments/assets/1c16db32-72e3-4d74-8cbf-1976d27b0b78
+
+<sub>[HD video and subtitles](https://github.com/nwverse/persona/releases/tag/promo-v1).</sub>
+
 ## Features
 
 - **A SuperAgent, one entry for everything.** Ask in one chat. Persona pulls in your context, breaks the work down and hands it to Agents. [Assistant](docs/assistant/assistant.md)
@@ -38,12 +44,6 @@ English · [简体中文](README.zh-CN.md)
 - **Your phone's data, in reach.** Contacts, calendar, reminders, photos, health and location become tools, and writes are confirmed on your phone. [Phone tools](docs/apple/phone-tools.md)
 - **Connectors and channels.** Bring in Lark, mail, GitHub, iMessage, Telegram and WeChat; talk to Persona from the app, Lark, WeChat or by voice. [Connectors](docs/extensions/connectors.md) · [Channels](docs/extensions/channels.md)
 - **Every screen.** iPhone, Apple Watch, Mac, Vision Pro, Android and the web, in English, Chinese and Japanese. [Clients](docs/apple/ios.md)
-
-## Video tour
-
-https://github.com/user-attachments/assets/44eeb361-9f4b-480a-9f00-9fa7d2f8546c
-
-<sub>[HD video and subtitles](https://github.com/nwverse/persona/releases/tag/promo-v1).</sub>
 
 ## How it works
 

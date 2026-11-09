@@ -4,7 +4,7 @@ import { getSession, getState } from "../../lib/store";
 import { agentStatus, subagentFor } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
-import { exchangeSteps, isLoopTick, isOwnMessage, type Segment, type Step, type UserMessage } from "../../lib/turns";
+import { exchangeSteps, isLoopTick, isOwnMessage, supervisionTool, type Segment, type Step, type UserMessage } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import { foldsHoldingCalls, planSteps, thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
@@ -188,17 +188,25 @@ export const SegmentView = memo(function SegmentView({
   mid,
   sid,
   streaming,
+  batchedWords,
   expandFold,
   beforeWords,
+  trace,
 }: {
   seg: Segment;
   live: boolean;
   mid: string;
   sid: string;
   streaming?: string;
+  /** The live words are an agent's as Claude shows them (docs/integrations/claude-integration.md "Live replies"): a batch
+   *  of lines at a time, and still while a tool runs. The live work row stays under them; the headless assistant's
+   *  words stream as they are written and stand for it. */
+  batchedWords?: boolean;
   expandFold: (f: Item) => Promise<void>;
   /** Drawn between the work and the agent's last words (the wakes chip, #3783); above the work while it is live. */
   beforeWords?: ReactNode;
+  /** An opened supervision round shows its original input instead of the injected hint. */
+  trace?: boolean;
 }) {
   const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS } = useChatContext();
   const steps = useMemo(() => planSteps(exchangeSteps(seg)), [seg]);
@@ -206,11 +214,11 @@ export const SegmentView = memo(function SegmentView({
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {
     const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live);
-    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls };
-  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls]);
+    return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace };
+  }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls, trace]);
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, agentStatus: p.agentStatus, workflowCard: (s) => workflowCalls.known.has(s.use.tool_use_id ?? "") }),
-    [steps, live, turnStart, p.agentStatus, workflowCalls],
+    () => workBlocks(steps, { live, turnStart, agentStatus: p.agentStatus, workflowCard: (s) => workflowCalls.known.has(s.use.tool_use_id ?? ""), keepTool: seg.supervision ? (s) => Boolean(supervisionTool(s.use.tool_name)) : undefined }),
+    [steps, live, turnStart, p.agentStatus, workflowCalls, seg.supervision],
   );
   useCallSeeker(scope, nodes);
   useWorkflowFolds(steps, workflowCalls.startedAt, expandFold);
@@ -219,23 +227,45 @@ export const SegmentView = memo(function SegmentView({
   // a finished exchange's last words (the run of them at its end) come after those pictures
   let cut = nodes.length;
   for (let n = nodes[cut - 1]; !live && n?.kind === "step" && n.step.kind === "text"; n = nodes[cut - 1]) cut--;
-  const working = live && streaming === undefined && !nodes.some((n) => n.kind === "group" && n.live);
+  const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
+  const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
   return (
     <section className="flex flex-col gap-3" data-segment>
-      {seg.user && (seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
+      {trace && seg.user?.rawInput ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
       {/* while the agent works, its live work stays at the bottom */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
-      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows */}
-      {working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />}
+      {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows, under an
+          agent's live words while they are there (batchedWords) */}
+      {streaming === undefined && liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(cut)} p={p} fade />
       {streaming !== undefined && <Answer streaming={streaming} mid={mid} sid={sid} />}
+      {streaming !== undefined && liveRow}
     </section>
   );
 });
+
+function RawInjectedInput({ items, mid, sid }: { items: Item[]; mid: string; sid: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1" data-supervision-input>
+      <span className="text-[length:var(--chat-secondary)] text-ink-3">{t("chat-lines.supervision_input")}</span>
+      {items.map((item) => item.kind === "image" ? <Thumb key={item.id} item={item} mid={mid} sid={sid} /> : <RawInjectedText key={item.id} item={item} mid={mid} sid={sid} />)}
+    </div>
+  );
+}
+
+function RawInjectedText({ item, mid, sid }: { item: Item; mid: string; sid: string }) {
+  const full = useFullText(item, mid, sid);
+  return (
+    <div data-items={item.id}>
+      <pre className="rounded-card bg-inset p-3 text-[length:var(--chat-secondary)] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{full.text}</pre>
+      {full.more}
+    </div>
+  );
+}
 
 /** After a fold failed to come, the next try waits this long, doubling up to WORKFLOW_FOLD_RETRY_MAX_MS. */
 const WORKFLOW_FOLD_RETRY_MS = 5000;

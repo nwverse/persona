@@ -64,7 +64,7 @@ final class ShellInboxAgentTests: XCTestCase {
     /// Demo Mode on Assistant's empty chat; the inbox from the drawer, an agent's row from its Needs You.
     @MainActor private func openAgentFromInbox() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-newAssistant", "YES", "-tab", "assistant",
+        app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES", "-tab", "assistant",
                                "-dev.openChat", "", "-probes", "YES"]
         app.launchPinned()
         finger = ShellFinger(app)

@@ -195,6 +195,7 @@ func TestAppHandlersBodyLimitTooLarge(t *testing.T) {
 		{"POST", "/api/v1/machines/m1/panes", "", 4 << 10},
 		{"POST", "/api/v1/machines/m1/panes/close", "", 4 << 10},
 		{"POST", "/api/v1/phone/runtime-cli", "", 1 << 20},
+		{"PUT", "/api/v1/looks/current", "", 4 << 10},
 	} {
 		name := c.method + " " + c.path
 		if c.opID != "" {

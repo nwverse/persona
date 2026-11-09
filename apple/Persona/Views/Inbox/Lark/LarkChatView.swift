@@ -236,9 +236,12 @@ struct LarkChatView: View {
         // A fallback: changes arrive as pushes (below). It polls only while the chat's page is in front.
         .tabActiveTask {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                guard !Task.isCancelled else { return }
                 await refreshDisplay()
+                guard !Task.isCancelled else { return }
                 await refreshLatest()
+                guard !Task.isCancelled else { return }
                 askReceiptsAgain()
             }
         }
@@ -1400,7 +1403,9 @@ struct LarkChatView: View {
         guard let api = chatAPI else { return }
         let prompt = String(localized: "Read the recent messages in my Lark chat “\(conversation.name)” (Lark gateway feedId \(conversation.id)), summarize the key points, list what I need to reply to or handle, and suggest replies.")
         do {
-            let s = try await api.startConversation(prompt: prompt)
+            let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature)) { op in
+                try await api.startConversation(prompt: prompt, opID: op)
+            }
             model.began(s, text: prompt)
             model.assistantCurrent = s.key
             model.selectedTab = .assistant

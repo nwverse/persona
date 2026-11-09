@@ -170,9 +170,10 @@ final class MachinePagesTests: XCTestCase {
     /// shows in the button, All Machines clears it.
     @MainActor func testAgentsMachineMenu() throws {
         launch(["-tab", "dev"])
-        let menu = see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分组：")).firstMatch, "the machine menu", timeout: 15)
+        let menu = see(app.buttons["shell-agents"].firstMatch, "the machine menu", timeout: 15)
         // From the defaults, whatever an earlier run left (the menu's choices are remembered).
-        if menu.label.contains("当前机器") { menu.tap(); see(button("全部机器"), "全部机器").tap() }
+        let previousFilter = app.buttons["agents.machineFilter"].firstMatch
+        if previousFilter.exists { previousFilter.tap() }
         menu.tap()
         see(button("按机器"), "按机器").tap()
         see(app.staticTexts["服务器"], "a machine section")
@@ -181,13 +182,14 @@ final class MachinePagesTests: XCTestCase {
 
         menu.tap()
         see(button("Mac Studio"), "machine filter item").tap()
-        let filtered = see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "当前机器：Mac Studio")).firstMatch, "filter shown")
+        let filtered = see(app.buttons["agents.machineFilter"].firstMatch, "filter shown")
+        XCTAssertEqual(filtered.label, "只看 Mac Studio")
         // MacBook's rows are gone (its question stays in Needs You: those cards are for every machine).
         XCTAssertFalse(text("给天气 App 加主屏幕小组件").exists, "MacBook's agents are filtered out")
         shot("agents-filter-studio")
         filtered.tap()
-        see(button("全部机器"), "全部机器").tap()
-        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "分组：")).firstMatch, "filter cleared")
+        XCTAssertTrue(filtered.waitForNonExistence(timeout: 5), "filter was not cleared")
+        see(app.buttons["shell-agents"].firstMatch, "filter cleared")
     }
 
     /// A project page's machine name opens the machine's projects; there a project opens its page, the info button

@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -36,13 +36,16 @@ const (
 	failedLogs = 3     // jobs whose log is read
 )
 
-var repoName = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var repoName = lazyre.New(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 // validRepo is "owner/name" and nothing that changes the API path ("..").
 func validRepo(r string) bool {
 	owner, name, _ := strings.Cut(r, "/")
 	return repoName.MatchString(r) && owner != "." && owner != ".." && name != "." && name != ".."
 }
+
+// ValidRepo reports whether r is a safe GitHub owner/name pair.
+func ValidRepo(r string) bool { return validRepo(r) }
 
 func (c *Connector) Call(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	var a struct {

@@ -6,13 +6,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -375,8 +375,8 @@ type codexConfig struct {
 }
 
 var (
-	tomlProfileTable = regexp.MustCompile(`^\s*\[\s*profiles\.(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*\]`)
-	tomlDottedKey    = regexp.MustCompile(`^\s*"?profiles"?\s*\.`)
+	tomlProfileTable = lazyre.New(`^\s*\[\s*profiles\.(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*\]`)
+	tomlDottedKey    = lazyre.New(`^\s*"?profiles"?\s*\.`)
 )
 
 // codexSandboxConfig reads the top-level sandbox_mode and profile and each [profiles.<name>]'s sandbox_mode; ok false

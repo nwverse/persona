@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BATCH,
+  componentFrames,
   ErrorReporter,
   MAX_AGE_MS,
   MAX_QUEUE,
@@ -11,6 +12,7 @@ import {
   parseStack,
   pathPattern,
   QUEUE_KEY,
+  reportFreeze,
   scrubText,
   urlPath,
   type ReporterDeps,
@@ -96,6 +98,20 @@ describe("parseStack", () => {
   it("gives nothing for no stack", () => {
     expect(parseStack(undefined, ORIGIN)).toEqual([]);
     expect(parseStack("just text", ORIGIN)).toEqual([]);
+  });
+});
+
+describe("componentFrames", () => {
+  it("reads a production component stack, innermost last, keeping components that have no position by name", () => {
+    // as React 19's production build writes ErrorInfo.componentStack: minified names, a position only where it has one
+    const stack = ["", `    at Bq (${ORIGIN}/assets/App-abc.js:14:28)`, "    at div (<anonymous>)", "    at Xr (<anonymous>)", `    at PageBoundary (${ORIGIN}/assets/App-abc.js:9:20)`].join("\n");
+    expect(componentFrames(stack, ORIGIN)).toEqual([
+      { function: "PageBoundary", file: "/assets/App-abc.js", line: 9, column: 20, in_app: true },
+      { function: "Xr" },
+      { function: "div" },
+      { function: "Bq", file: "/assets/App-abc.js", line: 14, column: 28, in_app: true },
+    ]);
+    expect(componentFrames(undefined, ORIGIN)).toEqual([]);
   });
 });
 
@@ -223,6 +239,113 @@ describe("ErrorReporter", () => {
     expect(sent).toHaveLength(0);
     // the error whose message throws is left out; the send that threw keeps the rest for later
     expect(r.pending().map((p) => p.message)).toEqual(["Error: a", "Error: a string"]);
+  });
+});
+
+describe("a frozen page", () => {
+  const hit = {
+    durationMs: 5234.4,
+    mechanism: "long-animation-frame",
+    frames: [
+      { file: `${ORIGIN}/assets/index-abc.js?token=t0k`, function: "render", in_app: false },
+      { file: "data:text/javascript,secret", function: "secret", in_app: false },
+      { file: "https://user:s3cret@hub.example/assets/x.js?token=abc", function: "render2", in_app: false },
+      { file: "https://cdn.example/lib.js?x=1", function: "me@example.com", in_app: true },
+    ],
+  };
+
+  it("queues one anr warning with the breadcrumbs already kept, paths only", () => {
+    const { r } = setup();
+    setReporterForTest(r);
+    r.setFeatures(["error_reports"]);
+    navigationCrumb("session");
+    expect(reportFreeze(hit)).toBe(true);
+    setReporterForTest(null);
+    const [rep] = r.pending();
+    expect(rep).toMatchObject({
+      source: "web",
+      kind: "anr",
+      level: "warning",
+      message: "Main thread blocked for 5234ms",
+      tags: { mechanism: "long-animation-frame" },
+      exceptions: [{ type: "ANR", value: "Main thread blocked for 5234ms" }],
+    });
+    expect(rep.previous_launch).toBeUndefined();
+    expect(rep.exceptions?.[0].frames).toEqual([
+      { file: "/assets/index-abc.js", module: "/assets/index-abc.js", function: "render", in_app: true },
+      { file: "/assets/x.js", module: "/assets/x.js", function: "render2", in_app: true },
+      { file: "/lib.js", module: "/lib.js", in_app: false },
+    ]);
+    expect(rep.breadcrumbs).toEqual([{ time: "2026-11-06T09:00:00.000Z", category: "navigation", message: "session", level: "info" }]);
+    expect(JSON.stringify(rep)).not.toContain("token");
+    expect(JSON.stringify(rep)).not.toContain("secret");
+    expect(JSON.stringify(rep)).not.toContain("example.com");
+    expect(JSON.stringify(rep)).not.toContain("cdn.example");
+    expect(JSON.stringify(rep)).not.toContain("s3cret");
+  });
+
+  it("sends nothing under 5 seconds, or once the feature is off", () => {
+    const { r, sent, runTimers } = setup();
+    r.setFeatures(["error_reports"]);
+    expect(r.captureFreeze({ ...hit, durationMs: 4_999 })).toBe(false);
+    expect(r.captureFreeze({ ...hit, mechanism: "not-a-real-one" })).toBe(true);
+    expect(r.pending()[0].tags).toBeUndefined();
+    r.setFeatures(["terminal_stream"]);
+    expect(r.captureFreeze(hit)).toBe(false);
+    expect(r.pending()).toHaveLength(0);
+    return runTimers().then(() => expect(sent).toHaveLength(0));
+  });
+
+  it("keeps a third-party /assets/ path out of the app, and an inline script's name", () => {
+    const { r } = setup();
+    r.setFeatures(["error_reports"]);
+    expect(r.captureFreeze({
+      durationMs: 5_000,
+      mechanism: "longtask",
+      startedAt: Date.parse("2026-11-06T09:00:05.000Z"),
+      frames: [
+        { file: "/assets/vendor.js", module: "/assets/vendor.js", function: "vendor", in_app: false },
+        { file: "https://hub.example/?token=s3cret", function: "onClick", in_app: false },
+      ],
+    })).toBe(true);
+    const [rep] = r.pending();
+    expect(rep.time).toBe("2026-11-06T09:00:05.000Z");
+    expect(rep.exceptions?.[0].frames).toEqual([
+      { file: "/assets/vendor.js", module: "/assets/vendor.js", function: "vendor", in_app: false },
+      { file: "/", module: "/", function: "onClick", in_app: true },
+    ]);
+    expect(JSON.stringify(rep)).not.toContain("s3cret");
+  });
+
+  it("tells the watch when a queued freeze is dropped, and not when it was sent", async () => {
+    const dropped = setup({}, [{ ok: true, enabled: false }]);
+    let drops = 0;
+    dropped.r.setFreezeDropListener(() => drops++);
+    dropped.r.setFeatures(["error_reports"]);
+    dropped.r.captureFreeze(hit);
+    await dropped.runTimers();
+    expect(drops).toBe(1);
+    expect(dropped.r.pending()).toHaveLength(0);
+
+    const sent = setup({}, [{ ok: true, enabled: true }]);
+    let sentDrops = 0;
+    sent.r.setFreezeDropListener(() => sentDrops++);
+    sent.r.setFeatures(["error_reports"]);
+    sent.r.captureFreeze(hit);
+    await sent.runTimers();
+    expect(sentDrops).toBe(0);
+    expect(sent.r.pending()).toHaveLength(0);
+  });
+
+  it("keeps the same freeze once within 5 seconds", () => {
+    const { r, tick } = setup();
+    r.setFeatures(["error_reports"]);
+    expect(r.captureFreeze(hit)).toBe(true);
+    expect(r.captureFreeze(hit)).toBe(true);
+    expect(r.pending()).toHaveLength(1);
+    tick(6_000);
+    expect(r.captureFreeze({ ...hit, durationMs: 8_000 })).toBe(true);
+    expect(r.pending()).toHaveLength(2);
   });
 });
 

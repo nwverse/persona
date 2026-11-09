@@ -116,3 +116,12 @@ func errExists(name string) error {
 	data, _ := json.Marshal(map[string]any{"name": name})
 	return &rpc.Error{Code: proto.CodeExists, Message: fmt.Sprintf("%s already exists", name), Data: data}
 }
+
+// renameIfFree is renameExcl where the system has no such rename: a check just before (a file appearing in between
+// would be replaced).
+func renameIfFree(from, to string) error {
+	if _, err := os.Lstat(to); err == nil {
+		return &os.LinkError{Op: "rename", Old: from, New: to, Err: os.ErrExist}
+	}
+	return os.Rename(from, to)
+}

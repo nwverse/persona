@@ -1,8 +1,9 @@
 // The page's own errors, sent to the hub's error reports (docs/protocol/protocol.md "Error reports", docs/web/web.md "Error reports").
-// Captured: uncaught errors, unhandled rejections and what the page boundaries catch. Sent only while the hub's hello
-// `features` has `error_reports`; kept in localStorage until a 2xx (at most 50, at most 7 days); dropped as soon as a
-// hello says the feature is off. Nothing the user wrote goes in: an error's name, message and stack (with URLs cut to
-// their path), and breadcrumbs of code-chosen text (a route's name, a failed request's method, path pattern and status).
+// Captured: uncaught errors, unhandled rejections, what the page boundaries catch, and a main thread blocked for 5 seconds
+// or more (one anr warning per page load, lib/freeze-watch.ts). Sent only while the hub's hello `features` has
+// `error_reports`; kept in localStorage until a 2xx (at most 50, at most 7 days); dropped as soon as a hello says the
+// feature is off. Nothing the user wrote goes in: an error's name, message and stack (with URLs cut to their path), a
+// freeze's script paths, and breadcrumbs of code-chosen text (a route's name, a failed request's method, path pattern and status).
 // Reporting never throws and never reports itself.
 
 import type { ErrorBreadcrumb, ErrorException, ErrorFrame, ErrorLevel, ErrorReport } from "./extension-wire";
@@ -15,6 +16,8 @@ export const BATCH = 20;
 export const MAX_BREADCRUMBS = 30;
 export const FLUSH_DELAY_MS = 2_000;
 export const DEDUPE_MS = 5_000;
+/** A main-thread block of this long, or longer, is one anr warning (lib/freeze-watch.ts). */
+export const FREEZE_MS = 5_000;
 const MAX_MESSAGE = 1024;
 const MAX_FRAMES = 50;
 
@@ -97,6 +100,48 @@ export function parseStack(stack: string | undefined, origin = pageOrigin()): Er
   return frames.reverse();
 }
 
+/** A React component stack (ErrorInfo.componentStack) as frames, innermost last: one per component, with its file and
+ *  position where the stack has them; a component or host element React gives no position (`at div (<anonymous>)`)
+ *  keeps its name. */
+export function componentFrames(stack: string | null | undefined, origin = pageOrigin()): ErrorFrame[] {
+  if (!stack) return [];
+  const frames: ErrorFrame[] = [];
+  for (const line of stack.split("\n")) {
+    if (!line.trim()) continue;
+    const [frame] = parseStack(line, origin);
+    const name = frame ? undefined : /^\s*(?:at )?([^\s@(]+)/.exec(line)?.[1];
+    if (frame) frames.push(frame);
+    else if (name) frames.push({ function: truncate(name, 200) });
+    if (frames.length >= MAX_FRAMES) break;
+  }
+  return frames.reverse();
+}
+
+/** A script URL as one frame of a freeze report: the path only. No host, query, fragment, element id or name, and no
+ *  `data:`, `blob:` or `javascript:` URL. `fn` is kept only when it is a function name. */
+export function scriptFrame(url: string, origin: string, fn?: string): ErrorFrame | null {
+  const raw = url.trim();
+  if (!raw || raw.startsWith("//") || /^(?:data|blob|javascript):/i.test(raw)) return null;
+  if (!raw.startsWith("/") && !/^https?:\/\//i.test(raw)) return null;
+  const { file, inApp } = frameFile(raw, origin);
+  // "/" is the document itself: an inline script's sourceURL. It carries no host or query.
+  if (!file.startsWith("/") || file.startsWith("//") || file.includes("@") || file.includes("://") || /[?#]/.test(file)) return null;
+  const frame: ErrorFrame = { file, module: file, in_app: inApp || sameOriginDocument(raw, origin, file) };
+  const name = (fn ?? "").trim();
+  if (/^[$A-Za-z_][\w$.]*$/.test(name)) frame.function = truncate(name, 200);
+  return frame;
+}
+
+/** An inline script whose URL is the document (`https://host/` → `/`) is this page's own code. */
+function sameOriginDocument(raw: string, origin: string, file: string): boolean {
+  if (file !== "/" || !origin) return false;
+  try {
+    return new URL(raw, origin).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 function pageOrigin(): string {
   try {
     return typeof location === "undefined" ? "" : location.origin;
@@ -152,6 +197,9 @@ export class ErrorReporter {
   private busy = false;
   private sending = false;
   private timer: unknown = null;
+  /** The freeze still in the queue. Cleared once a 2xx takes it; a drop tells the watch to try again. */
+  private freezeId: string | null = null;
+  private onFreezeDropped: (() => void) | null = null;
 
   constructor(deps: ReporterDeps) {
     this.deps = deps;
@@ -178,11 +226,12 @@ export class ErrorReporter {
     });
   }
 
-  /** Reports an error (anything thrown). Never throws; an error while reporting is not reported. */
-  capture(error: unknown, opts: { level?: ErrorLevel; mechanism?: string } = {}) {
+  /** Reports an error (anything thrown). Never throws; an error while reporting is not reported. `componentStack`:
+   *  where in the component tree a boundary caught it (React's ErrorInfo). */
+  capture(error: unknown, opts: { level?: ErrorLevel; mechanism?: string; componentStack?: string | null } = {}) {
     if (this.busy || this.gate === "off") return;
     this.guard(() => {
-      const report = this.build(error, opts.level ?? "error", opts.mechanism);
+      const report = this.build(error, opts.level ?? "error", opts.mechanism, opts.componentStack);
       if (!report) return;
       const key = `${report.message}|${topFrame(report)}`;
       const now = this.deps.now();
@@ -194,6 +243,55 @@ export class ErrorReporter {
       this.save();
       this.schedule(FLUSH_DELAY_MS);
     });
+  }
+
+  /** One frozen page: the main thread blocked for FREEZE_MS or more. `kind: "anr"`, `level: "warning"`, with the
+   *  breadcrumbs already kept. Frames are script paths only (scriptFrame again, so a full URL cannot ride along).
+   *  `false` when the feature is off or it is under the threshold, so the caller can report a later freeze. */
+  captureFreeze(hit: { durationMs: number; mechanism: string; frames: ErrorFrame[]; startedAt?: number }): boolean {
+    if (this.busy || this.gate === "off") return false;
+    if (!Number.isFinite(hit.durationMs) || hit.durationMs < FREEZE_MS) return false;
+    let queued = false;
+    this.guard(() => {
+      if (this.gate === "off") return;
+      const text = truncate(`Main thread blocked for ${Math.round(hit.durationMs)}ms`, MAX_MESSAGE);
+      const frames = cleanFreezeFrames(hit.frames, this.deps.origin);
+      const exception: ErrorException = { type: "ANR", value: text };
+      if (frames.length) exception.frames = frames;
+      const when = typeof hit.startedAt === "number" && Number.isFinite(hit.startedAt) ? hit.startedAt : this.deps.now();
+      const report: ErrorReport = {
+        id: this.deps.uuid(),
+        source: "web",
+        kind: "anr",
+        level: "warning",
+        time: new Date(when).toISOString(),
+        ...this.deps.platform,
+        message: text,
+        exceptions: [exception],
+      };
+      if (this.crumbs.length) report.breadcrumbs = this.crumbs.slice();
+      if (hit.mechanism === "long-animation-frame" || hit.mechanism === "longtask") report.tags = { mechanism: hit.mechanism };
+      const key = `anr|${text}|${topFrame(report)}`;
+      const now = this.deps.now();
+      for (const [k, at] of this.recent) if (now - at > DEDUPE_MS) this.recent.delete(k);
+      if (this.recent.has(key)) {
+        queued = true;
+        return;
+      }
+      this.recent.set(key, now);
+      this.queue.push({ report });
+      this.freezeId = report.id;
+      this.trim();
+      this.save();
+      this.schedule(FLUSH_DELAY_MS);
+      queued = true;
+    });
+    return queued;
+  }
+
+  /** The queued freeze was deleted (the feature turned off) and was not delivered. The watch may try again. */
+  setFreezeDropListener(fn: (() => void) | null) {
+    this.onFreezeDropped = fn;
   }
 
   /** Sends what is kept, BATCH at a time, while the feature is on. */
@@ -219,6 +317,7 @@ export class ErrorReporter {
         const done = res.ok || (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429);
         if (!done) break; // network or 5xx: kept for the next hello or report
         const sent = new Set(batch.map((s) => s.report.id));
+        if (this.freezeId && sent.has(this.freezeId)) this.freezeId = null;
         this.queue = this.queue.filter((s) => !sent.has(s.report.id));
         this.save();
       }
@@ -233,8 +332,17 @@ export class ErrorReporter {
   }
 
   private off() {
+    const dropped = this.freezeId;
+    this.freezeId = null;
     this.gate = "off";
     this.queue = [];
+    if (dropped) {
+      try {
+        this.onFreezeDropped?.();
+      } catch {
+        // the watch must not break reporting
+      }
+    }
     if (this.timer !== null) this.deps.clearTimer(this.timer);
     this.timer = null;
     try {
@@ -265,7 +373,7 @@ export class ErrorReporter {
     }
   }
 
-  private build(error: unknown, level: ErrorLevel, mechanism?: string): ErrorReport | null {
+  private build(error: unknown, level: ErrorLevel, mechanism?: string, componentStack?: string | null): ErrorReport | null {
     let type: string;
     let value: string;
     let frames: ErrorFrame[] = [];
@@ -282,6 +390,10 @@ export class ErrorReporter {
     value = truncate(scrubText(value), MAX_MESSAGE);
     const exception: ErrorException = { type, value };
     if (frames.length) exception.frames = frames;
+    const exceptions = [exception];
+    // where a boundary caught it, as the outer exception: the error stays the innermost cause the hub fingerprints by
+    const components = componentFrames(componentStack, this.deps.origin);
+    if (components.length) exceptions.unshift({ type: "ComponentStack", value: `caught by ${mechanism ?? "a boundary"}`, frames: components });
     const report: ErrorReport = {
       id: this.deps.uuid(),
       source: "web",
@@ -290,7 +402,7 @@ export class ErrorReporter {
       time: new Date(this.deps.now()).toISOString(),
       ...this.deps.platform,
       message: truncate(`${type}: ${value}`, MAX_MESSAGE),
-      exceptions: [exception],
+      exceptions,
     };
     if (this.crumbs.length) report.breadcrumbs = this.crumbs.slice();
     if (mechanism) report.tags = { mechanism };
@@ -334,6 +446,22 @@ function topFrame(r: ErrorReport): string {
   return f ? `${f.file}:${f.line}:${f.column}` : "";
 }
 
+/** Freeze frames, scrubbed again: a path only, at most MAX_FRAMES, innermost last as given.
+ *  A path is not resolved against the page origin: `/assets/vendor.js` from another host must stay `in_app` false. */
+function cleanFreezeFrames(frames: ErrorFrame[], origin: string): ErrorFrame[] {
+  const out: ErrorFrame[] = [];
+  for (const f of frames) {
+    if (typeof f.file !== "string") continue;
+    const pathOnly = f.file.startsWith("/") && !f.file.startsWith("//");
+    const frame = scriptFrame(f.file, pathOnly ? "" : origin, f.function);
+    if (!frame) continue;
+    if (pathOnly) frame.in_app = f.in_app === true;
+    out.push(frame);
+    if (out.length >= MAX_FRAMES) break;
+  }
+  return out;
+}
+
 function safeString(v: unknown): string {
   try {
     return String(v);
@@ -359,13 +487,24 @@ export function requestCrumb(method: string, path: string, status: number) {
   reporter.breadcrumb("http", `${method.toUpperCase()} ${pattern} ${status || "network"}`, status >= 500 || status === 0 ? "error" : "warning");
 }
 
-/** What an error boundary caught. A chunk that would not load (a redeployed hub) is a warning, a render crash fatal. */
-export function reportBoundary(error: unknown, boundary: string, chunk: boolean) {
-  reporter?.capture(error, { level: chunk ? "warning" : "fatal", mechanism: boundary });
+/** What an error boundary caught, with its component stack. A chunk that would not load (a redeployed hub) is a
+ *  warning, a render crash fatal. */
+export function reportBoundary(error: unknown, boundary: string, chunk: boolean, componentStack?: string | null) {
+  reporter?.capture(error, { level: chunk ? "warning" : "fatal", mechanism: boundary, componentStack });
 }
 
 export function reportError(error: unknown, mechanism?: string) {
   reporter?.capture(error, { mechanism });
+}
+
+/** A frozen page, through the page's reporter. `false` when reporting is off or nothing was queued. */
+export function reportFreeze(hit: { durationMs: number; mechanism: string; frames: ErrorFrame[]; startedAt?: number }): boolean {
+  return reporter?.captureFreeze(hit) ?? false;
+}
+
+/** The queued freeze was dropped because the feature turned off. */
+export function setFreezeDropListener(fn: (() => void) | null) {
+  reporter?.setFreezeDropListener(fn);
 }
 
 /** Starts reporting for this page: the window's error events, and the hub's features from the store. */

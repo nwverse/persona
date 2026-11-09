@@ -19,6 +19,7 @@
   "cmd_terminal_chat": "Terminal ⇄ chat",
   "cmd_right_panel": "Show or hide the right panel",
   "cmd_focus_input": "Focus the input",
+  "cmd_focus_card": "Focus the waiting card",
   "cmd_prev_tab": "Previous tab on this computer",
   "cmd_next_tab": "Next tab on this computer",
   "cmd_sidebar_grouping": "Change sidebar grouping",

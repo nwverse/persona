@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
 )
@@ -25,9 +25,9 @@ import (
 var (
 	// statusLineRE: a spinner at column 0, the verb, "…" (or "..."), and the rest. Claude's own output starts with
 	// "⏺", tool results and tips are indented, and what the user wrote starts with "❯" or ">": none of those match.
-	statusLineRE = regexp.MustCompile(`^(\S) +([^\s….(][^….(]*?)(?:…|\.\.\.)\s*(.*)$`)
-	durationRE   = regexp.MustCompile(`^(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?$`)
-	tokensRE     = regexp.MustCompile(`^([↓↑])\s*([\d.,]+)\s*([kKmM]?)\s*tokens?$`)
+	statusLineRE = lazyre.New(`^(\S) +([^\s….(][^….(]*?)(?:…|\.\.\.)\s*(.*)$`)
+	durationRE   = lazyre.New(`^(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?$`)
+	tokensRE     = lazyre.New(`^([↓↑])\s*([\d.,]+)\s*([kKmM]?)\s*tokens?$`)
 )
 
 // notSpinner are the column-0 marks Claude draws that are not a spinner: its replies, the prompt, quotes, tool output.

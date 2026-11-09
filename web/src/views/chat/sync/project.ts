@@ -5,7 +5,8 @@ import type { Message, View } from "./fake-hub";
 
 const text = (el: Element) => (el.textContent ?? "").replace(/\s+/g, " ").trim();
 
-/** `sent`: the words of the case's sends on this device; a failed one's words go back into the composer. */
+/** `sent`: the words of the case's sends on this device. One that failed stays in the chat as a failed bubble (#1122);
+ *  its words back in the composer would be the message a second time, so the box counts as a copy. */
 export function project(root: HTMLElement, sent: string[]): Required<Pick<View, "messages" | "cards" | "live">> {
   const messages: Message[] = [];
   let live: string | null = null;
@@ -19,8 +20,8 @@ export function project(root: HTMLElement, sent: string[]): Required<Pick<View, 
     const words = el.querySelector("[data-bubble-text]");
     messages.push({ from: "user", text: words ? text(words) : "", state: state === "failed" ? "failed" : state ? "pending" : "shown" });
   }
-  // the words of a send that failed, back in the box (ChatView: a failure puts them back)
-  const box = root.querySelector<HTMLTextAreaElement>("[data-chat-dock] textarea")?.value ?? "";
+  // the words of a send back in the box (a send that never went puts them back; ChatView keeps a failed one in the chat)
+  const box = root.querySelector<HTMLTextAreaElement>("[data-chat-dock] textarea, [data-new-conversation] textarea")?.value ?? "";
   for (const words of sent) if (box.includes(words)) messages.push({ from: "user", text: words, state: "failed" });
   const cards: Record<string, "open" | "answering" | "answered"> = {};
   for (const el of root.querySelectorAll<HTMLElement>("[data-answered]")) cards[el.dataset.answered!] = "answered";

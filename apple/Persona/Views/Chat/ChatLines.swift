@@ -171,12 +171,29 @@ struct ChatLines {
         for line in lines {
             out.append(line)
             if case .work(let id, let items, let live, _, _) = line.content, !isOpen(id) {
-                for case .step(.call(let c)) in items where showsFolded(c, live) { out.append(.agentOut(group: id, call: c)) }
+                // Subagents launched one after another stay out together; any other call that stays out (a listed
+                // workflow run's) on its own.
+                var run: [ToolCall] = []
+                func flush() {
+                    let shown = run.filter { showsFolded($0, live) }
+                    if shown.count > 1 {
+                        out.append(.agents(group: id, calls: shown, first: true, alone: true))
+                    } else if let c = shown.first {
+                        out.append(.agentOut(group: id, call: c))
+                    }
+                    run = []
+                }
+                for item in items {
+                    if case .step(.call(let c)) = item, SubagentCard.isAgent(c) { run.append(c); continue }
+                    flush()
+                    if case .step(.call(let c)) = item, showsFolded(c, live) { out.append(.agentOut(group: id, call: c)) }
+                }
+                flush()
             }
             if case .work(let id, let items, _, _, _) = line.content, isOpen(id), !items.isEmpty {
                 // The BeautifulUI style folds runs of tool calls into a line of chips; the others list every step.
-                out += chipRuns ? runLines(group: id, items: items)
-                    : items.enumerated().map { .workStep(group: id, item: $0.element, first: $0.offset == 0) }
+                out += Self.gridAgents(chipRuns ? runLines(group: id, items: items)
+                    : items.enumerated().map { .workStep(group: id, item: $0.element, first: $0.offset == 0) })
                 out.append(.workEnd(group: id, count: items.reduce(0) { n, item in
                     if case .step(.folded(let f)) = item { n + (f.fold.map { $0.tools + $0.thoughts } ?? 1) } else { n + 1 }
                 }, files: chipRuns ? Self.changedFiles(items) : [])) // the BeautifulUI style shows them
@@ -186,6 +203,43 @@ struct ChatLines {
     }
 
     func isOpen(_ work: String) -> Bool { openWork.contains(work) != openAll }
+
+    /// The subagents a work line launched one after another (in parallel), each run in the order they were launched.
+    static func agentRuns(_ items: [WorkItem]) -> [[ToolCall]] {
+        var out: [[ToolCall]] = []
+        var run: [ToolCall] = []
+        for item in items {
+            if case .step(.call(let c)) = item, SubagentCard.isAgent(c) { run.append(c); continue }
+            if !run.isEmpty { out.append(run); run = [] }
+        }
+        if !run.isEmpty { out.append(run) }
+        return out
+    }
+
+    /// An open work line's subagents launched one after another share one line, their cards in a grid under "Running
+    /// 3 agents" (#5602, as the web); one alone stays a step of its own.
+    static func gridAgents(_ steps: [ChatLine]) -> [ChatLine] {
+        var out: [ChatLine] = []
+        var run: [(group: String, call: ToolCall, first: Bool, line: ChatLine)] = []
+        func flush() {
+            if run.count > 1 {
+                out.append(.agents(group: run[0].group, calls: run.map(\.call), first: run[0].first, alone: false))
+            } else {
+                out += run.map(\.line)
+            }
+            run = []
+        }
+        for line in steps {
+            if case .workStep(let group, .step(.call(let c)), let first) = line.content, SubagentCard.isAgent(c) {
+                run.append((group, c, first, line))
+                continue
+            }
+            flush()
+            out.append(line)
+        }
+        flush()
+        return out
+    }
 
     /// The files a work line's edits and writes changed, in the order first touched, with the lines added and removed
     /// (the counts its diffs show, `ToolDiffMemo`). Failed edits changed nothing and are left out.
@@ -261,7 +315,8 @@ struct ChatLines {
             }
             if !inStretch { stretch = c.id }
             inStretch = true
-            if foldsIntoRun(c) {
+            // A subagent's card is a line of its own (or in a grid), a plan's line has its bar under it.
+            if foldsIntoRun(c), !SubagentCard.isAgent(c), ToolPresentation.baseName(c.name) != "TodoWrite" {
                 if run.isEmpty { runStart = n }
                 run.append(c)
                 continue

@@ -10,13 +10,14 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"regexp"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -124,8 +125,8 @@ func (p *assistantProc) startRefusal(err error) error {
 // zshNotFound and bashNotFound find the command a shell could not find: zsh's "zsh:1: command not found: x", bash's
 // "bash: x: command not found" (also "bash: line 1: x: command not found").
 var (
-	zshNotFound  = regexp.MustCompile(`command not found: (\S+)`)
-	bashNotFound = regexp.MustCompile(`([^\s:]+): command not found`)
+	zshNotFound  = lazyre.New(`command not found: (\S+)`)
+	bashNotFound = lazyre.New(`([^\s:]+): command not found`)
 )
 
 // missingFrom is what the start of launcher was missing by the lines it printed: proto.CodeClaudeMissing,
@@ -142,15 +143,19 @@ func missingFrom(launcher string, lines []string, notFound bool) string {
 	}
 	code, other := "", false
 	for _, l := range lines {
-		m := zshNotFound.FindStringSubmatch(l)
-		if m == nil {
-			m = bashNotFound.FindStringSubmatch(l)
+		word := ""
+		if m, ok := parseShellMiss(l); ok { // any shell's whole line (shellmiss.go): dash, ksh and fish too
+			word = m.Word
+		} else if m := zshNotFound.FindStringSubmatch(l); m != nil {
+			word = m[1]
+		} else if m := bashNotFound.FindStringSubmatch(l); m != nil {
+			word = m[1]
 		}
 		switch {
-		case m == nil:
-		case m[1] == "claude":
+		case word == "":
+		case filepath.Base(word) == "claude":
 			code = proto.CodeClaudeMissing
-		case launcher != "" && m[1] == launcher:
+		case launcher != "" && word == launcher:
 			code = proto.CodeLauncherMissing
 		default:
 			other = true
@@ -435,4 +440,4 @@ func watchAssistantStderr(logger *log.Logger, p *assistantProc, stderr io.ReadCl
 }
 
 // ansiRe: terminal color and style sequences (an interactive zsh's prompt plugins print them on stderr).
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var ansiRe = lazyre.New(`\x1b\[[0-9;?]*[ -/]*[@-~]`)

@@ -141,7 +141,8 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(ctx, launcher, "claude", cwd)
-	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Model: execution.Model, Plugins: n.claudeLoadsPlugins(ctx)}
+	spec := claudeLaunch{Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: execution.Model,
+		Plugins: n.claudeLoadsPlugins(ctx)}
 	// herdr told it is Claude (hostherdr.go): a launcher that wraps another binary is otherwise not seen as one. The
 	// node's directory in front, the assistant's environment left out (agentenv.go).
 	shells := paneShells(ctx)
@@ -163,7 +164,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, fmt.Errorf("run launcher: %w", err)
 	}
 
-	a, err := n.waitReady(ctx, pane)
+	a, err := n.waitReady(ctx, pane, n.probeFor(ctx, id, launcher, shells))
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		// Close the tab: a claude that comes up after we gave up would sit there unbound, and a retry opens another.
@@ -175,6 +176,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			_ = org.Close(cctx, created.Pane, space, created.SlotID)
 			cancel()
+		}
+		if rpcCode(err) != "" { // the tab's shell said why (shellmiss.go): its tail would only repeat the command
+			return nil, err
 		}
 		return nil, fmt.Errorf("%v\n%s", err, lastLines(screen, 12))
 	}

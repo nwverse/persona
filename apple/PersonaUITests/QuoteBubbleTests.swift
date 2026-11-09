@@ -4,7 +4,7 @@ import XCTest
 /// several quotes stack. Sent, the bubble opens with the quote, and a tap on it goes back to the quoted message.
 ///   PORT=18797 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/QuoteBubbleTests
-/// Both layouts (TEST_RUNNER_PERSONA_LAYOUT=shell) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class QuoteBubbleTests: XCTestCase {
     private var app: XCUIApplication!
     private let answer = "PR #42 看完了"

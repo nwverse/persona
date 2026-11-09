@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -126,7 +126,7 @@ func launcherView(l storedLauncher) LauncherView {
 		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source}
 }
 
-var managedLauncherName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+var managedLauncherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 
 // reservedLauncherNames are taken by claude itself and the /api/v1/launchers/<word> routes.
 var reservedLauncherNames = []string{"claude", "presets", "test", "discover", "import", "health"}
