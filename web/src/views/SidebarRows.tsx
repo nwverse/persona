@@ -34,7 +34,7 @@ import { PagedSessionList } from "./agents/PagedSessionList";
 import { runtimeIdentity } from "../lib/runtime-list";
 import { heldSeen } from "../lib/seen-outbox";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
-import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, useGoingIds, type HideDeps } from "../lib/agents";
+import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, useGoingIds } from "../lib/agents";
 import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section } from "./SidebarParts";
 
 // Persona's main conversation: the column's first and strongest entry (the app's mark, always in ink, #2004), with the
@@ -185,7 +185,7 @@ const SOURCE_ICON = { terminal: { name: "run", tone: "text-source-terminal" }, d
 /** Where the agent was opened (#2526), as a mark: a terminal or a desktop app's window in its own color, Lark's mark for a
  *  Lark group (a click opens its Feishu topic). Nothing for other sources. Its name is the tooltip and what a screen reader
  *  reads. At the row's end, so the title starts where an unmarked one does (#3043). */
-export function SourceTag({ s, className }: { s: Session; className?: string }) {
+function SourceTag({ s, className }: { s: Session; className?: string }) {
   const source = sessionSource(s);
   if (!source) return null;
   const label = sourceName(source);
@@ -423,14 +423,14 @@ function agentViewItems(page: MenuPage, setPage: (p: MenuPage) => void, p: Agent
 
 
 // Row actions (⋯ and right click): pin, move to a custom section, remove a section, remove from the list.
-export function agentRowItems(s: AgentSession, p: AgentPrefs, deps: HideDeps = personalHideDeps): MenuItem[] {
+function agentRowItems(s: AgentSession, p: AgentPrefs): MenuItem[] {
   const pinned = p.pins.includes(s.id);
   const cur = p.assign[s.id];
   return [
     { key: "pin", label: pinned ? t("sidebar.unpin") : t("sidebar.pin"), icon: "pin", onSelect: () => updateAgentPrefs((x) => togglePin(x, s.id)) },
     ...p.sections.map((sec, i) => ({ key: `sec:${sec.id}`, label: t("sidebar.move_to_group", { name: sec.name }), divider: i === 0, checked: cur === sec.id, onSelect: () => updateAgentPrefs((x) => assignSection(x, s.id, cur === sec.id ? null : sec.id)) })),
     ...(cur ? [{ key: "unsec", label: t("sidebar.remove_from_group"), onSelect: () => updateAgentPrefs((x) => assignSection(x, s.id, null)) }] : []),
-    { key: "hide", label: t("lib-agents.remove"), icon: "archive", divider: true, onSelect: () => void removeAgentSession(s, deps) },
+    { key: "hide", label: t("lib-agents.remove"), icon: "archive", divider: true, onSelect: () => void removeAgentSession(s, personalHideDeps) },
   ];
 }
 
