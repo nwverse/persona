@@ -2528,15 +2528,19 @@ struct ChatView: View {
                 setFollow { $0.touched() } // nothing changes until the finger lets go
             }
         }
-        return list
-        .environment(menu)
-        .environment(\.chatPin, pin)
+        // Two statements, not one chain: as one, Xcode 26.0 timed out type-checking it.
+        let shared = list
+            .environment(menu)
+            .environment(\.chatPin, pin)
         #if os(iOS)
-        .background {
+        let pinned = shared.background {
             FullPageEnvironmentReader(page: fullPage)
             FullPageAnchor { [fullPage] in fullPage.setAnchor($0) }
         }
+        #else
+        let pinned = shared
         #endif
+        return pinned
         .onAppear {
             pin.letGo = { [position = $position] in position.wrappedValue = ScrollPosition(idType: String.self) }
             pin.onRising = { [rising = $pinRising] in rising.wrappedValue = $0 }
