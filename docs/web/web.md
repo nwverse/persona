@@ -1278,7 +1278,7 @@ Conventions (languages, fallback, glossary) are in [i18n.md](../protocol/i18n.md
   Sources and terms are in the file header comments and `THIRD_PARTY_NOTICES.md`; agents whose terms are unclear get the first character rather than a drawn mark. Check: `scripts/test/web_agent_marks_e2e.py` (mock hub with `MOCK_AGENT_MARKS=1`).
 - Button text is always one line (`whitespace-nowrap`); when it doesn't fit, use an icon + `title`.
 - Source marks: where a sidebar agent was opened is an icon at its row's end, not a word (`SourceTag` in `Sidebar.tsx`, `sessionSource` in `lib/agent-groups.ts`).
-  A pane of a terminal engine (herdr, the Herdr App's and Orca's terminals) is a bare prompt (`run`: chevron and underscore, no frame) in `--source-terminal`; a desktop app's own chat
+  A pane of a terminal engine (herdr, the Herdr App's, Orca's and Tern's terminals) is a bare prompt (`run`: chevron and underscore, no frame) in `--source-terminal`; a desktop app's own chat
   (a Codex App thread, `space_kind: codex_app`; a Paseo agent, `host: paseo`; an Orca native chat, the `orca` runtime) is a framed window (`appWindow`) in
   `--source-desktop`; a Lark group (botmux) is Lark's own mark (`BrandMark`), a link to its topic when the row has one. Other runtimes and history no
   host lists get none. Each mark is `role=img` with its name as `aria-label` and `title` (`lib-agent-groups.source_*`), and the row's own tooltip names

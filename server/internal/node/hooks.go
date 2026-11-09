@@ -519,9 +519,16 @@ func (n *Node) notifyHookEvent(in hookInput, stopSig string, reportOnly bool) {
 	_ = n.peer.Notify("hook.event", hookEventParams(in, stopSig, reportOnly))
 }
 
-// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca pane only where the set enables Orca).
+// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca or Tern pane only where the set enables
+// that host: both name the pane in every terminal of theirs, driven or not).
 func paneKindOK(n *Node, pane string) bool {
-	return host.ParsePane(pane).Kind != host.Orca || n.hostEnabled(proto.EngineOrca)
+	switch host.ParsePane(pane).Kind {
+	case host.Orca:
+		return n.hostEnabled(proto.EngineOrca)
+	case host.Tern:
+		return n.hostEnabled(proto.EngineTern)
+	}
+	return true
 }
 
 // hookEventParams is hook.event's params for what a hook saw.

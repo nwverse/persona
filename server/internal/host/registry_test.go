@@ -34,6 +34,7 @@ func TestPaneRefStoredForm(t *testing.T) {
 		{"orca:tab1:leaf2", PaneRef{"orca", "tab1:leaf2"}},
 		{"tmux:%3", PaneRef{Herdr, "tmux:%3"}}, // not a known host kind
 		{"orca:a:b", PaneRef{Orca, "a:b"}},
+		{"tern:42", PaneRef{Tern, "42"}},
 		// An Orca pane key without the prefix is not an Orca pane: unprefixed means herdr.
 		{"0b0e2c1a-0000-4000-8000-000000000001:0b0e2c1a-0000-4000-8000-000000000002",
 			PaneRef{Herdr, "0b0e2c1a-0000-4000-8000-000000000001:0b0e2c1a-0000-4000-8000-000000000002"}},

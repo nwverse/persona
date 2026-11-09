@@ -21,6 +21,7 @@ const (
 	HerdrCorePaneEnv  = "HC_TERMINAL_ID"  // herdr-core (Herdr App)
 	OrcaPaneEnv       = "ORCA_PANE_KEY"   // Orca
 	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE" // older Orca
+	TernPaneEnv       = "TERN_PANE"       // Tern
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
@@ -34,7 +35,7 @@ const HomeFlag = "--persona-home"
 
 // HookPane is the pane a hook runs in, from its environment, as a stored PaneRef: herdr's HERDR_PANE_ID as it always
 // was, else herdr-core's HC_TERMINAL_ID ("herdr-core:t7"), else Orca's ORCA_PANE_KEY (or its older ORCA_AGENT_PANE:
-// "orca:<tabId>:<leafId>"); "" in none.
+// "orca:<tabId>:<leafId>"), else Tern's TERN_PANE ("tern:<block>"); "" in none.
 func HookPane(getenv func(string) string) string {
 	if p := getenv(HerdrPaneEnv); p != "" {
 		return p
@@ -46,6 +47,9 @@ func HookPane(getenv func(string) string) string {
 		if k := getenv(v); k != "" {
 			return host.PaneRef{Kind: host.Orca, ID: k}.String()
 		}
+	}
+	if b := getenv(TernPaneEnv); b != "" {
+		return host.PaneRef{Kind: host.Tern, ID: b}.String()
 	}
 	return ""
 }
