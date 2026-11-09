@@ -3,7 +3,7 @@
 Persona's extension foundation (#1101): the open-source repository holds only general capabilities and **extension points**. Anything that only makes sense for one company or one service is built as an extension: install it and you have it; without it, everything still runs.
 The skeleton follows VS Code (manifest + `contributes` + on-demand activation + separate process), permissions follow Chrome (declared explicitly, shown at install time), and from WordPress we borrow only event notifications, not filters.
 Design trade-offs, the step plan and what is not done yet are in `docs/plans/plan-extensions.md`. Code: manifest, schema subset, permissions and registry in `server/internal/extension`, process host in `extension/host`,
-the program side is the official SDK `sdk/go/ext` (the built-in WeChat program uses it as is, `ext.Serve` in `server/plugins/wechat`; `extension/serve` wraps it for the conformance kit), conformance tests in `extension/conformance`; the wiring lives in the manager (see "Who owns what" below): `server/internal/extmgr/extensions.go`, `extension_routes.go`, `extension_cli.go`, and the admin UI endpoints in `admin_extensions.go`.
+the program side is the official SDK `sdk/go/ext` (the built-in WeChat program uses it as is, `ext.Serve` in `server/plugins/wechat`; `extension/serve` wraps it for the conformance kit and tests), conformance tests in `extension/conformance`; the wiring lives in the manager (see "Who owns what" below): `server/internal/extmgr/extensions.go`, `extension_routes.go`, `extension_cli.go`, and the admin UI endpoints in `admin_extensions.go`.
 
 Extensions come from three places; the App and the API show them as one list:
 
@@ -2651,7 +2651,7 @@ Program-to-hub calls and events follow the same pattern (`connector.secrets.load
 **Error codes**: `not_initialized`, `unknown_method`, `wrong_protocol`, `no_capability`, `no_contribution` (missing contribution), `permission_denied`, `timeout` (generated locally by the hub).
 Other errors have only `message`, a human-readable sentence without secrets or message bodies. Changing field semantics or removing fields increments the protocol version; adding optional fields does not.
 
-Use the official SDK for extensions ("Writing extensions: SDK, templates and command line" below); the built-in programs do too (`server/plugins/wechat`). `connector/serve`'s runner, which also accepts the standalone handshake, is left only for the connector conformance kit and tests.
+Use the official SDK for extensions ("Writing extensions: SDK, templates and command line" below); the built-in WeChat program does too (`server/plugins/wechat`). `connector/serve`'s runner, which also accepts the standalone handshake, is left only for the connector conformance kit and tests.
 
 ## Programs running on computers (`node` section, #1830)
 
@@ -2734,7 +2734,7 @@ extension repos copy a versioned snapshot (the main repo is private, and their C
 ### Go: `sdk/go`
 
 Module `github.com/nwverse/persona/sdk/go`, standard library only. The hub uses it too (`server/go.mod` replaces with the same code, Docker builds copy `sdk/go/`),
-and built-in programs use the thin forwarding layer `server/internal/extension/serve` (converts to hub `InitializeParams` and `rpc.Error`).
+and the built-in WeChat program uses `ext` directly (`server/plugins/wechat`); the conformance kit and the hub's tests run programs through the thin wrapper `server/internal/extension/serve` (converts to hub `InitializeParams` and `rpc.Error`).
 
 | Package | Contents |
 | --- | --- |
@@ -2982,8 +2982,8 @@ The cases run in order, and each starts from the state the one before leaves. Wh
 When `personad-wechat` is beside personad, it registers as built-in extension `wechat` (#1352, `docs/extensions/wechat.md`), contributing connector `wechat` (only `status` and QR-code `login`,
 declared in `wechat/spec`) and channel `wechat` (`channel` extension point, #1466, [channels.md](channels.md)), with only `network: *.weixin.qq.com` permission.
 It must be built alongside the hub and runs with the connector switch. The first version combined `hub_api` + `events` (extension polling sessions and tracking the turn); since #1466 these use the hub's channel pipeline,
-so the extension no longer gets the hub token or subscribes to events. A connector program acts as a channel: implement `channel.Transport` (`Send`, optional `Typing` / `Edit`), hand incoming messages to `serve.Init.Channel` (`Receive`);
-`connector/serve` forwards `channel.*` and sends only once per `ref`.
+so the extension no longer gets the hub token or subscribes to events.
+The program is the SDK's `ext.Serve` (`server/plugins/wechat/program.go`): it answers `channel.send` (each `ref` sent only once, `sentRefs`) and `channel.typing`, and hands incoming messages to the hub with `ext.Hub.ChannelReceive`.
 
 ## Built-in extension: computer control (`cua`)
 

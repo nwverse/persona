@@ -10,8 +10,8 @@
 //
 // A program answers two openings: init and the bare method names (connector protocol 2 on its own), and the plugin
 // protocol's initialize with the same methods in the connector namespace (connector.status, …; docs/extensions/extensions.md).
-// The extension manager runs connector programs as plugins (connector/proc with a Link). connector/proc still opens a
-// program it starts itself (Config.Path) with init, as its tests and the conformance kit do, so both openings stay.
+// The extension manager runs connector programs as plugins (connector/proc with a Link). Only connector/proc's own tests
+// still start a program with init (Config.Path), and the conformance kit checks both openings, so both stay.
 package serve
 
 import (
