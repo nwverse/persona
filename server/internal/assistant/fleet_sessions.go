@@ -181,6 +181,8 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	r.mu.RUnlock()
 	lang := s.lang(context.Background())
 	dir := m.assistantCwd() // once, not a path.Join for each row
+	asks := s.fleet.asks.reader(machine, complete)
+	defer asks.done()
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
@@ -224,7 +226,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			}
 		}
 		s.decorateWork(machine, &list[i], asking)
-		decorateAwaits(&list[i])
+		decorateAwaits(&list[i], asks)
 	}
 	s.decorateTodos(machine, list)
 	for i := range list {

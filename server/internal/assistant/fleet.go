@@ -73,6 +73,8 @@ type fleetBook struct {
 	// instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
+	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
+	asks asksMemo
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
