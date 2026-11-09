@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -17,10 +18,13 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
@@ -29,6 +33,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import persona.core.contracts.Machine
+import persona.core.contracts.ServerEvent
 import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.PersonaTheme
@@ -84,6 +89,17 @@ class PairingFlowTest {
         rule.onNodeWithText(text(R.string.settings_pairing_manual_invalid)).assertExists()
         rule.onNodeWithText(text(R.string.settings_pairing_failed_title)).assertDoesNotExist()
         rule.onAllNodesWithText("InvalidCode", substring = true).assertCountEquals(0)
+    }
+
+    @Test fun theKeyboardsActionKeysMoveThroughTheForm() {
+        show { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, skipWelcome = true) }
+        fillManual("127.0.0.1:18760")
+        fields()[0].performImeAction()
+        fields()[1].assertIsFocused()
+        fields()[1].performImeAction()
+        rule.waitForIdle()
+        rule.onAllNodesWithText(text(R.string.settings_pairing_confirm)).onFirst().assertExists()
+        rule.onAllNodesWithText("http://127.0.0.1:18760").onFirst().assertExists()
     }
 
     @Test fun theFailurePageShowsNoErrorChainAndCountsRetries() {
@@ -149,6 +165,26 @@ class PairingFlowTest {
         firstChecklist { ready++ }
         back()
         assertEquals(1, ready)
+        assertFalse(rule.activity.isFinishing)
+    }
+
+    @Test fun settingsPairingStartsAtTheConnectChoices() {
+        val services = SettingsServices(
+            pairing = FakePairing(paired = true),
+            connection = object : HubConnection {
+                override val state = MutableStateFlow(ConnectionState.Online)
+                override val events = MutableSharedFlow<ServerEvent>()
+                override fun reconnect() = Unit
+                override fun send(message: JsonObject) = false
+            },
+            sessions = sessions,
+            updates = object : AppUpdates { override suspend fun check(): AppUpdate? = null },
+        )
+        show { SettingsScreen(services, initialPage = "pair") }
+        rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertExists()
+        rule.onNodeWithText(text(R.string.settings_pairing_welcome_title)).assertDoesNotExist()
+        back()
+        rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertDoesNotExist()
         assertFalse(rule.activity.isFinishing)
     }
 }

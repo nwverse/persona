@@ -22,8 +22,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -88,6 +92,7 @@ fun PairingScreen(
     var addressError by remember { mutableStateOf<Int?>(null) }
     // Connecting failures in a row for the same input, so "Try again" visibly did something.
     var tries by remember { mutableIntStateOf(0) }
+    val code = remember { FocusRequester() }
     fun recordAttempt(request: PairingRequest?, error: Throwable?) {
         attempt = pairingAttempt(request, error, progress.lastOrNull()?.stage,
             progress.lastOrNull { it.candidates.isNotEmpty() }?.candidates.orEmpty())
@@ -314,10 +319,13 @@ fun PairingScreen(
                                 if (PairingInput.isLink(value)) accept(value)
                             }, label = stringResource(R.string.settings_pairing_address_label), modifier = Modifier.fillMaxWidth(),
                                 supportingText = addressError?.let { stringResource(it) }, isError = addressError != null,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), singleLine = true)
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(onNext = { code.requestFocus() }), singleLine = true)
                             JTextField(token, { token = it; metadata = metadata?.copy(token = it) }, label = stringResource(R.string.settings_pairing_code_label),
-                                visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                visualTransformation = PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go),
+                                keyboardActions = KeyboardActions(onGo = { next() }),
+                                modifier = Modifier.fillMaxWidth().focusRequester(code), singleLine = true)
                             if (address.startsWith("http://")) SettingsCaption(stringResource(R.string.settings_pairing_http_warning))
                         }
                     }
