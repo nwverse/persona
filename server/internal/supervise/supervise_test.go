@@ -436,7 +436,7 @@ func TestLoopback(t *testing.T) {
 			t.Errorf("%q: %s, want %s", listen, got, want)
 		}
 	}
-	for _, listen := range []string{":", "10.0.0.1:", "[::]:"} {
+	for _, listen := range []string{":", "192.0.2.1:", "[::]:"} {
 		if got := loopback(listen); got != "http://127.0.0.1:18660" {
 			t.Errorf("%q: %s, want the default address", listen, got)
 		}
