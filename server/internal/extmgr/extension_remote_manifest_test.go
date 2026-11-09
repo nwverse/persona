@@ -97,18 +97,15 @@ func TestRemoteManifestLeavesNoConnectionOpen(t *testing.T) {
 	// The slack covers the runtime's own goroutines coming and going; a leak is two per call here plus the server's one.
 	const slack = 5
 	var conns, g, f int
-	for deadline := time.Now().Add(2 * time.Second); ; {
+	// Logged on success and on a timeout alike: the counts are what a failure needs.
+	t.Cleanup(func() {
+		t.Logf("after %d manifest reads: %d server connections open, goroutines %d -> %d, descriptors %d -> %d",
+			calls, conns, goroutines, g, fds, f)
+	})
+	eventually(t, 2*time.Second, "the server connections, goroutines and descriptors to settle", func() bool {
 		conns, g, f = openConns(), runtime.NumGoroutine(), openFDs()
-		if conns == 0 && g <= goroutines+slack && f <= fds+slack {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("after %d manifest reads: %d server connections still open, goroutines %d -> %d, descriptors %d -> %d",
-				calls, conns, goroutines, g, fds, f)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Logf("after %d manifest reads: goroutines %d -> %d, descriptors %d -> %d", calls, goroutines, g, fds, f)
+		return conns == 0 && g <= goroutines+slack && f <= fds+slack
+	})
 }
 
 // openFDs is how many descriptors this process holds open; 0 where /proc/self/fd does not list them (not Linux).
