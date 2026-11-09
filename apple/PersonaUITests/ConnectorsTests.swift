@@ -40,8 +40,8 @@ final class ConnectorsTests: XCTestCase {
         shot("list-github")
         github.tap()
         XCTAssertTrue(app.staticTexts["alice"].waitForExistence(timeout: 10), "GitHub page shows no account:\n\(app.debugDescription)")
-        XCTAssertTrue(app.staticTexts["已连接"].exists)
-        // A LabeledContent row reads as one element, Sign In and its value together.
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "已连接")).firstMatch.waitForExistence(timeout: 10),
+                      "GitHub must show a connected state, optionally followed by its manager name")
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "来自 MacBook 的 gh 登录")).firstMatch.exists)
         shot("github")
         // GitHub's inbox options (docs/assistant/inbox.md「连接器：GitHub」): the CI choice and the muted repositories.

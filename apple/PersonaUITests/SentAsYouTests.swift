@@ -335,14 +335,15 @@ final class SentAsYouTests: XCTestCase {
         guard env["PERSONA_SHOTS"] != nil else { throw XCTSkip("set PERSONA_SHOTS for the screenshots") }
         for look in ["light", "dark"] {
             let app = launch(hub, ["-tab", "settings", "-openConnectors", "YES", "-ui.scheme", look])
+            let ok = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons.firstMatch
+            if ok.waitForExistence(timeout: 3) { ok.tap() }
+            app.activate()
             XCTAssertTrue(any(app, "connectors-list").waitForExistence(timeout: 20))
             let entry = app.buttons["connectors.sent"]
             reveal(app, entry, swipes: 12)
             XCTAssertTrue(entry.isHittable)
-            let ok = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons.firstMatch
-            if ok.waitForExistence(timeout: 3) { ok.tap() }
             shot(app, "ios-connectors-entry-\(look)")
-            entry.tap()
+            entry.tapCenter()
             XCTAssertTrue(app.buttons["sent.row.70"].waitForExistence(timeout: 20), "no rows (\(look)):\n\(app.debugDescription)")
             XCTAssertTrue(app.buttons["sent.filter.all"].waitForExistence(timeout: 5), "no chips (\(look))")
             shot(app, "ios-sent-as-you-\(look)")
