@@ -1,5 +1,17 @@
 # Lessons: Android
 
+## Inbox writes must not wait behind full-list reads (#2545)
+
+A grouped conversation swipe used the explicit bulk-cleanup path, so each success emitted its own Undo notice (deliberately exempt
+from feedback deduplication). Use silent completion for row gestures and a stable inline retry for failed writes; retain Undo for explicit
+bulk cleanup. A failure of the subsequent read must not turn an accepted write into a failed action. Keep writes independent of the
+full-refresh lock, bound concurrent requests, serialize overlapping item targets, and conflate invalidations and ambiguous responses.
+Record local write generations so a list captured before a write cannot resurrect its rows. A different incoming message version must
+still win over both a write response and rollback. Persist confirmed results with their manager identity, never speculative marks.
+Test delayed reads, delayed writes, new messages during writes, pairing replacement, duplicate manager IDs and cache-only restoration.
+Virtual-clock request timings prove ordering and request counts, not phone frame times or production latency. Run filesystem-backed
+restoration waits with a real timeout: a virtual timeout can fire before the IO dispatcher gets a turn.
+
 ## Host-owned lifecycle controls need real application wiring (#2397)
 
 A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
