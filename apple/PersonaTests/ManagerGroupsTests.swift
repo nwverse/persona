@@ -33,7 +33,7 @@ struct ManagerGroupsTests {
     """#
 
     private static func detail(_ id: String, enabled: Bool = true) -> String {
-        #"{"id":"\#(id)","name":"\#(id)","kind":"connectors","status":"running","enabled":\#(enabled),"auto_upgrade":true,"# +
+        #"{"id":"\#(id)","name":"\#(id)","kind":"connectors","status":"running","source":"installed","origin":"market:m1/\#(id)","enabled":\#(enabled),"auto_upgrade":true,"# +
             #""contributes":{"connectors":["\#(id)"]},"form":{"fields":[{"name":"base_url","type":"string"}]},"config":{},"# +
             #""secrets":[{"name":"api_key","title":"API Key","set":false}],"permissions":[],"# +
             #""contributions":[{"point":"connectors","id":"\#(id)","title":"\#(id)","enabled":true,"can_disable":true}]}"#

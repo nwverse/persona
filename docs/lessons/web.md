@@ -1,5 +1,6 @@
 # Lessons: web UI and interactions
 
+
 ## Extension lifecycle controls use manager metadata, not configuration (#2355)
 
 - `source: installed` does not grant a full-rights web client owner-only management of local or attached installations. Market lifecycle actions follow the manager-owned `origin` and the existing endpoint policy; a manifest field or arbitrary URL cannot grant that capability. Keep unavailable controls visible with a reason rather than inventing an API request.
@@ -47,6 +48,10 @@
 - The navigation rail may linger after activity, but a hover card must leave in its mouse-leave handler. Connect rail/card hit zones with the card wrapper's padding rather than a grace timeout; clicking or selecting card text must not bubble into the rail's pointer-capture gesture. Keep captured drags and keyboard selections distinct from pointer-owned previews.
 - The current viewport input is not an interactive preview (#2298). Without a preview, every mark stays at the short tick width and height; current-position emphasis uses color only. Generate bell-shaped shoulders only for hover, keyboard selection or captured dragging, and check equal idle geometry after scrolling and pointer exit in the actual browser.
 - An interactive preview can appear under a stationary pointer while keyboard selection moves. Entering that card must retain the selected identity/window, not recenter it on the viewport owner. Browser tests must move outside both hit zones before checking idle fade, and measure actual exit-to-removal time rather than waiting for the old delay to expire.
+
+## Full-history positions are not a tail-window count (#2338)
+
+The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. If a richer independent navigation API is being developed elsewhere, keep the temporary adapter narrow and document its migration boundary rather than taking over that task.
 
 ## Render-count tests must separate store pushes from live clocks (#1989)
 
@@ -198,6 +203,11 @@ An auth status push rerenders the sign-in group and replaces inline completion c
 - Acknowledgements advance the saved baseline without replacing current text. On leave, compare against the last admitted snapshot too: typing back to the original baseline while A is pending still needs a restoring write. Deduplicate an unchanged pending snapshot, let rejection release the queue for retry, and fence retired callbacks from newer editors.
 - Regress the actual settings component through the real API with deferred, abort-aware synthetic fetches. Assert authoritative stored notes, remounted drafts, rejection/retry, empty overrides versus hub fallback, and owner isolation; response-only mocks hide dispatch-time credential lookup.
 
+## Whole-document knowledge settings keep their owner and original identity (#2217)
+
+A settings editor must wait for the loaded document, preserve history, optional rule fields, nulls and tied priority levels, and target the selected manager on every read, picker request and write. Retire old responses when the credential, manager or picker changes. Chat and document `read` without `store` have different fallthrough rules; null document days does not schedule default pruning. Display names and sanitized KB filenames are not item identities: read the original source/id in document metadata. An observed change can fence a dirty draft, but a whole-document PUT without a revision precondition cannot promise atomic conflict prevention.
+
+
 ## Panel identity for workspaces without sessions (2026-11-04, #1646)
 
 - **File and Git panel keys must include the directory**: without an Agent, `sid` is empty, so two empty workspace cards on one machine share the same `mid/sid` key. Open files or a commit in A, then the same panel type from B, and React retains A's preview or Git subview, leaking state across directories. Generate stable keys from machine, session, and directory. Regression tests must cover same machine, empty sid, different cwd, not just static card HTML.
@@ -348,6 +358,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - `SessionRow` is `memo`ized (#3026): unchanged sessions retain object identity after pushes (`lib/sessions-delta.ts`), so only the changed session's row rerenders. Functions must be stable (`useGo`, `onRowMenu` use `useCallback`);
   pass `prefix` as a string, not JSX; compare routes by `routePath`. Adding a freshly created prop per render (inline arrow, object, element) rerenders the whole list on every push again (/agents under mock: 580 renders in 20 seconds vs 100).
   Rows calculating "N minutes ago" from `Date.now()` (offline row suffix, detail row) no longer update on other sessions' pushes; age-displaying rows use their own `useNow(60_000)` to rerender every minute.
+- **`memo` on a row holds only if a refetch keeps unchanged objects** (#2294): a push or poll that reads JSON again gives every row a new prop, so `memo` alone still draws the whole list. Keep the old object of each item that reads the same (`sameValue` in `lib/stable-lines.ts`; `lib/lark-reuse.ts`, `LarkChatsStore.refresh`, `BoardModel.refresh`), keep the array itself when nothing changed, and notify no one for a patch that changes nothing. A label the row derives from the clock (`shortTime`, `clock`) is then worked out by the list and passed as a string, or a kept row still says 10:00 after midnight; where the list itself skips the render (an unchanged page) or rows sit in other components (threads, dialogs), the rows read a context that changes with the day (`Today` in `LarkThread.tsx`).
 - A roughly 280 px sidebar wraps four filter pills (dots and counts) with `px-2 gap-1`; tighten to `px-[7px] gap-0.5`.
 - Reference-line labels on charts ("N cores" on load) get crossed by data lines when drawn underneath. Draw after the lines, with a page-background outline (`paint-order: stroke`).
 - Machine details has three monitoring cells per row; at 390 width a subtitle gets about 94 px, while "56.5 GB / 64.0 GB" takes 92 px (2026-11-06, #3637). Headless Chrome at 390 just fits and hides truncation in screenshots; 15 px narrower (desktop scrollbar), or a slightly wider font, cuts the total. Measure natural text width (`Range.getBoundingClientRect`) against cell `clientWidth`, not just 390-wide screenshots. Show a shared unit once (`usedOfTotal`, "56.5 / 64.0 GB", 74 px).

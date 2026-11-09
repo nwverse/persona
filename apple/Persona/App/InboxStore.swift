@@ -251,6 +251,14 @@ final class InboxStore {
         }
     }
 
+    /// A rule's tier shown on the items it reaches before the hub answers, and put back as they were when it fails
+    /// (InboxPolicyModel): items are matched by `InboxItem.key`, ones that left the list meanwhile stay out.
+    func showRuleChange(_ changed: [InboxItem]) {
+        guard !changed.isEmpty else { return }
+        let byKey = Dictionary(changed.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        items = items.map { byKey[$0.key] ?? $0 }
+    }
+
     /// Items whose reply is being sent from the list, by `InboxItem.key` (the row shows a spinner, a second tap does nothing).
     private(set) var sending: Set<String> = []
 
