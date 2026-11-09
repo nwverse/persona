@@ -1,6 +1,6 @@
 # App Intents (Siri / Shortcuts)
 
-`apple/Persona/Intents/` holds 9 intents that drive the hub without opening the app; only saying yes to an agent needs the phone unlocked (Approve First Pending, below). This doc covers these 4: Ask Claude, status, approve the first pending item, open a session.
+`apple/Persona/Intents/` holds 9 intents that drive the hub without opening the app; of the background intents, only Approve First Pending needs the phone unlocked (below). This doc covers these 4: Ask Claude, status, approve the first pending item, open a session.
 The other 5 (Ask Persona, have an Agent do it, personal Agent unread, open a personal Agent, new to-do) are in `docs/apple/siri.md`; the two intents behind the Control Center controls live in `apple/LiveActivity/`, also covered in `docs/apple/siri.md`.
 They do not need the app in the foreground and do not use WebSocket: each call reads `Keychain.serverConfig` fresh and talks to the hub's REST API directly through `APIClient`.
 

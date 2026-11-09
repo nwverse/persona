@@ -1425,3 +1425,13 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 
 - **What went wrong**: the Persona chat's avatar menu nests "Launcher" › each launcher › its models. The models are read a moment after the bar comes up. An `.id` on the innermost menu (built from the list) was not enough: the "Launcher" menu around it had none, kept the launchers' submenus it was built with before the lists came in, and the claude submenu showed only Default and "Other Model…" for as long as the app ran, although the state had all ten models. Whether a run saw it depended on when the outer menu happened to be built first, so a passing UI test proved little.
 - **Now**: every level of a nested `Menu` whose items come from state that loads or changes gets an `.id` built from that state (`AssistantTopBar.launcherMenuID` on "Launcher", the list and pick on each launcher). When a menu's items look stale, log the state first: if it is right, the menu was not built again.
+
+## App Intents that say yes to an agent need `.requiresAuthentication` (2026-11-09, #1878)
+
+- An App Intent without `authenticationPolicy` gets `.alwaysAllowed`. Siri runs it on a locked phone, and the hub
+  credentials (`kSecAttrAccessibleAfterFirstUnlock`) are readable then, so Approve First Pending allowed permissions and
+  approved plans while nobody had unlocked the phone; the notification and Live Activity buttons for the same card asked first.
+- An intent that allows, approves or instructs an agent declares `.requiresAuthentication`, as notification actions use
+  `.authenticationRequired`, and a test pins it (`IntentsTests.approvingFromSiriNeedsUnlock`,
+  `FleetIntentsTests.sayingYesNeedsUnlock`). The policy covers the whole intent, so its other replies wait for the unlock too.
+- An entry that never shows the plan in full approves plans in `acceptEdits`, never `bypassPermissions`.
