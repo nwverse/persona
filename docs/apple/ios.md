@@ -219,7 +219,7 @@ Chat page:
   A file types `@path ` (relative to the session's folder) with the caret after it; a folder types `@dir/` and keeps browsing; a session takes the token out and adds its
   quote over the box (`PromptItems.quote`, sent as `<persona-context>` like any quote). The + menu's Mention a File or Session types `@` at the caret (the web's @
   button beside +; the iOS row has no room for another button). A new conversation has no files or folder: it offers sessions, and what a typed absolute or `~/` path
-  lists on the assistant's machine, as the web's does. Workspaces in Persona's conversations are not offered yet. Logic in `Views/Chat/MentionMenu.swift`
+  lists on the assistant's machine, as the web's does. Workspaces in Persona's conversations are not offered yet (#2599). Logic in `Views/Chat/MentionMenu.swift`
   (`MentionToken`, `MentionRows`, `PersonaTests/MentionMenuTests`); `-openMentionMenu YES` (or a draft such as `@Sources/`) screenshots;
   `PersonaUITests/MentionMenuTests` against the mock hub (the weather agent's files and folder).
 - **iPad regular width (also open Duo) shares `ShellComposerBar`** (#2779): outside new shell (`RootView.usesShell` compact-only),
