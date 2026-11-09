@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -177,26 +178,45 @@ func safeToolName(name string) bool {
 	return true
 }
 
+var (
+	loopWaitCommand = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:do[\t ]+)?(?:sleep|wait)(?:[\t ]|$)`)
+	loopTailCommand = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:sudo[\t ]+)?tail(?:[\t ]|$)`)
+	loopLogCommand  = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:journalctl|docker[\t ]+logs|kubectl[\t ]+logs)(?:[\t ]|$)`)
+	loopCICommand   = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+(?:pr[\t ]+checks|run[\t ]+(?:watch|view|list))(?:[\t ]|$)`)
+	loopCIView      = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+pr[\t ]+view(?:[\t ]|$)`)
+	loopCIApi       = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+api(?:[\t ]|$)`)
+)
+
 func pollingTool(name string, input json.RawMessage) bool {
 	n := strings.ToLower(name)
-	for _, word := range []string{"sleep", "wait", "monitor", "bashoutput", "taskoutput", "check_run", "check_suite", "check_status", "ci_status", "pipeline_status"} {
-		if strings.Contains(n, word) {
-			return true
-		}
+	if i := strings.LastIndex(n, "__"); i >= 0 {
+		n = n[i+2:]
 	}
-	var in any
-	if json.Unmarshal(input, &in) != nil {
+	switch n {
+	case "sleep", "wait", "monitor", "schedulewakeup", "bashoutput", "taskoutput", "get_ci_status", "get_check_runs", "get_check_suites", "get_pipeline_status":
+		return true
+	case "bash", "functions.bash", "shell", "exec_command":
+	default:
 		return false
 	}
-	b, _ := json.Marshal(in)
-	s := strings.ToLower(string(b))
-	// These checks describe wait and status reads, not arbitrary mentions in descriptions.
-	for _, word := range []string{"gh pr checks", "gh run watch", "gh run view", "gh run list", "statuscheckrollup", "check-runs", "check-suites", "pipeline status", "tail -", "tail ", ".log", "/log/", "/logs/", "journalctl", "docker logs", "kubectl logs", "sleep ", "wait ", "until ", "while "} {
-		if strings.Contains(s, word) {
-			return true
+	var in struct{ Command, Cmd string }
+	var command string
+	if json.Unmarshal(input, &in) == nil {
+		command = in.Command
+		if command == "" {
+			command = in.Cmd
 		}
+	} else {
+		_ = json.Unmarshal(input, &command)
 	}
-	return false
+	command = strings.ToLower(command)
+	if loopWaitCommand.MatchString(command) || loopLogCommand.MatchString(command) || loopCICommand.MatchString(command) {
+		return true
+	}
+	if loopTailCommand.MatchString(command) && (strings.Contains(command, ".log") || strings.Contains(command, "/log/") || strings.Contains(command, "/logs/") || strings.Contains(command, "syslog")) {
+		return true
+	}
+	return loopCIView.MatchString(command) && strings.Contains(command, "statuscheckrollup") || loopCIApi.MatchString(command) && (strings.Contains(command, "check-runs") || strings.Contains(command, "check-suites"))
 }
 
 func (d *LoopDetector) call(id, name string, input json.RawMessage, at time.Time) {
@@ -280,12 +300,13 @@ func (d *LoopDetector) add(c loopCall) {
 		if count < minCount {
 			continue
 		}
-		start := d.history[len(d.history)-count].at
+		first := d.history[len(d.history)-count]
+		start, tool := first.at, first.tool
 		if d.candidate != nil && d.period == period && d.candidate.Since.Before(start) {
-			start = d.candidate.Since
+			start, tool = d.candidate.Since, d.candidate.Tool
 			count = d.candidate.Count + 1
 		}
-		d.candidate = &proto.ToolLoop{Tool: c.tool, Count: count, Since: start}
+		d.candidate = &proto.ToolLoop{Tool: tool, Count: count, Since: start}
 		d.period = period
 		return
 	}

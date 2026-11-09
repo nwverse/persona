@@ -78,7 +78,7 @@ func TestToolLoopCeilingAndReset(t *testing.T) {
 
 func TestToolLoopPollingAndPrivateData(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for _, command := range []string{"gh pr checks 42", "gh run view 1", "tail -n 10 server.log", "sleep 1", "while true; do check; done"} {
+	for _, command := range []string{"gh pr checks 42", "gh run view 1", "tail -n 10 server.log", "sleep 1", "while true; do sleep 1; done", "journalctl -f", "docker logs job", "gh api repos/demo/repo/check-runs"} {
 		var d LoopDetector
 		for i := 0; i < 5; i++ {
 			loopClaude(&d, i, "Bash", map[string]any{"command": command}, "same", start.Add(time.Duration(i)*time.Second))
@@ -94,6 +94,32 @@ func TestToolLoopPollingAndPrivateData(t *testing.T) {
 	b, _ := json.Marshal(d.Candidate())
 	if string(b) != `{"tool":"Read","count":4,"since":"2026-01-01T00:00:00Z"}` {
 		t.Fatalf("summary = %s", b)
+	}
+}
+
+func TestToolLoopOrdinaryCallsAreNotPolling(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		tool  string
+		input any
+	}{
+		{"Edit", map[string]any{"file_path": "app.log", "old_string": "wait for it", "new_string": "while true"}},
+		{"Write", map[string]any{"file_path": "/var/log/service.log", "content": "wait while processing"}},
+		{"Read", map[string]any{"file_path": "/logs/example.log"}},
+		{"Grep", map[string]any{"pattern": "sleep while wait", "path": "server.log"}},
+		{"Bash", map[string]any{"command": "echo wait while sleep app.log"}},
+		{"Bash", map[string]any{"command": "tail -n 10 main.go"}},
+		{"Bash", map[string]any{"command": "go test ./...", "description": "wait for CI and inspect server.log"}},
+	} {
+		t.Run(tc.tool+fmt.Sprint(tc.input), func(t *testing.T) {
+			var d LoopDetector
+			for i := 0; i < 4; i++ {
+				loopClaude(&d, i, tc.tool, tc.input, "same", start.Add(time.Duration(i)*time.Second))
+			}
+			if got := d.Candidate(); got == nil || got.Count != 4 {
+				t.Fatalf("ordinary call classified as polling: %+v", got)
+			}
+		})
 	}
 }
 
@@ -172,7 +198,7 @@ func TestToolLoopRotationSinceStaysStable(t *testing.T) {
 		for i := 0; i < 120; i++ {
 			loopClaude(&d, i, names[i%len(names)], map[string]any{"path": "a"}, "ok", start.Add(time.Duration(i)*time.Second))
 			if i+1 >= 3*len(names) {
-				if got := d.Candidate(); got == nil || got.Count != i+1 || !got.Since.Equal(start) {
+				if got := d.Candidate(); got == nil || got.Count != i+1 || got.Tool != names[0] || !got.Since.Equal(start) {
 					t.Fatalf("rotation %v step %d: %+v", names, i, got)
 				}
 			}
