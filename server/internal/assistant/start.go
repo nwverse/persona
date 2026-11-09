@@ -121,7 +121,7 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 // the main chat's) applied, then the node's assistant.send (headless: no herdr tab, streamed tokens, any launcher per message).
 func (s *Service) startOn(ctx context.Context, machine string, p StartParams, main bool) (proto.Session, error) {
 	if p.Space != "" && p.Space != SpaceHealth {
-		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
+		return proto.Session{}, limitStartPreSend(ctx, badRequest(fmt.Errorf("space %q: health or none", p.Space)))
 	}
 	if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
@@ -134,7 +134,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		cwd, err = s.prepareSpace(ctx, machine, p.Space)
 	}
 	if err != nil {
-		return proto.Session{}, err
+		return proto.Session{}, limitStartPreSend(ctx, err)
 	}
 	params := map[string]any{"cwd": cwd, "launcher": p.Launcher, "text": p.Text, "images": p.Images, "permission_mode": p.PermissionMode,
 		"effort": p.Effort, "is_main": main}
@@ -147,14 +147,27 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		purpose = "assistant"
 	}
 	if err := s.applyModel(ctx, purpose, params); err != nil {
-		return proto.Session{}, err
+		return proto.Session{}, limitStartPreSend(ctx, err)
 	}
 	used, _ := params["launcher"].(string)
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
+	if signals, ok := ctx.Value(limitStartKey{}).(limitStartSignals); ok {
+		if err := limitSendReady(ctx, signals.ownerDone, signals.workerStop); err != nil {
+			return proto.Session{}, err
+		}
+	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
-	s.startRefused(ctx, machine, used, err) // Claude Code or the launcher missing: the readiness's claude step
+	if ctx.Value(limitStartKey{}) != nil {
+		go func(startErr error) {
+			noticeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			s.startRefused(noticeCtx, machine, used, startErr)
+		}(err)
+	} else {
+		s.startRefused(ctx, machine, used, err) // Claude Code or the launcher missing: the readiness's claude step
+	}
 	if err != nil {
 		if d, ok := s.device(ctx, machine); ok {
 			err = apierr.OnMachine(err, d.Name) // claude_missing on a sample user's MacBook (docs/assistant/onboarding.md 4.6)
@@ -187,14 +200,22 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 		machine = s.settings(ctx).MachineID
 	}
 	if s.isWorkMachine(machine) {
-		return proto.Session{}, errWorkAssistant
+		return proto.Session{}, limitStartPreSend(ctx, errWorkAssistant)
 	}
 	// MCP discovery can arrive before assistant.send returns its session ID. Keep the
 	// manager's authorization until the resulting conversation's origin is recorded.
 	finishStart := s.beginAssistantStart(machine)
-	defer finishStart()
+	releaseHere := true
+	defer func() {
+		if releaseHere {
+			finishStart()
+		}
+	}()
 	sess, err := s.startOn(ctx, machine, p, main)
 	if errors.Is(err, ErrNoDevice) && p.MachineID == "" {
+		if errors.Is(err, errLimitRetryNotSent) {
+			return proto.Session{}, limitPreSendError{cause: errNoAssistantMachine}
+		}
 		return proto.Session{}, errNoAssistantMachine
 	}
 	if err != nil {
@@ -207,7 +228,36 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 		}
 	}
 	sess.Origin, sess.OriginRef = firstNonEmpty(p.Origin, OriginUser), p.OriginRef
-	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef)
+	if ctx.Value(limitStartKey{}) != nil {
+		// Origin retries do not grant authorization; the bootstrap grant still expires after five seconds.
+		releaseHere = false
+		s.sched.mu.Lock()
+		parent := s.sched.limitArmCtx
+		s.sched.mu.Unlock()
+		if parent == nil {
+			parent = context.Background()
+		}
+		metadataCtx, cancel := context.WithTimeout(parent, 2*time.Minute)
+		done := make(chan struct{})
+		go func() {
+			defer cancel()
+			defer close(done)
+			s.retryStartedOrigin(metadataCtx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef)
+		}()
+		go func() {
+			defer finishStart()
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-done:
+			case <-timer.C:
+				s.logf("assistant: retry origin registration timed out")
+			case <-parent.Done():
+			}
+		}()
+	} else {
+		s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef)
+	}
 	return sess, nil
 }
 
