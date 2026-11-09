@@ -261,6 +261,9 @@ const lastUnified = 419
 // split). So a database migrated before the split runs nothing again, and the few early migrations that are in both
 // sets (they made tables for both sides; migrations_test.go bothSets lists them) run once per part on a database the
 // hub and the default manager share.
+//
+// The rows are read once, under the lock: no migration writes schema_migrations, so they change only by what this
+// records itself. A database that is up to date costs a few reads and no write (docs/server/server.md "Migrations").
 func (d *DB) migrateFrom(ctx context.Context, fsys fs.FS) error {
 	// Serialize concurrent hubs, managers (and tests) on one advisory lock.
 	conn, err := d.pool.Acquire(ctx)
@@ -275,26 +278,54 @@ func (d *DB) migrateFrom(ctx context.Context, fsys fs.FS) error {
 	if err := splitSchemaMigrations(ctx, conn); err != nil {
 		return err
 	}
-
+	recs, err := readSchemaRecords(ctx, conn)
+	if err != nil {
+		return err
+	}
 	for _, r := range renumbered {
+		if !recs.named(r.from) {
+			continue // renumberMigration would change no row
+		}
 		if err := renumberMigration(ctx, conn, r.from, r.to); err != nil {
 			return fmt.Errorf("renumber migration %s: %w", r.from, err)
+		}
+		if recs, err = readSchemaRecords(ctx, conn); err != nil {
+			return err
 		}
 	}
 	for _, sd := range setDirs {
 		if d.sets&sd.set == 0 {
 			continue
 		}
-		if err := migrateSet(ctx, conn, fsys, sd.part); err != nil {
+		if err := migrateSet(ctx, conn, fsys, sd.part, recs); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// schemaMigrationsSplit says whether schema_migrations is already as splitSchemaMigrations' statements leave it: a
+// table in the schema CREATE TABLE makes it in, with a part column, without schema_migrations_pkey, and with a
+// relation named schema_migrations_version_part next to it. Each condition is what one statement's IF [NOT] EXISTS
+// looks at.
+const schemaMigrationsSplit = `SELECT coalesce((
+	SELECT c.relkind = 'r' AND n.nspname = current_schema()
+		AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'part' AND a.attnum > 0 AND NOT a.attisdropped)
+		AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = c.oid AND k.conname = 'schema_migrations_pkey')
+		AND EXISTS (SELECT 1 FROM pg_class i WHERE i.relnamespace = c.relnamespace AND i.relname = 'schema_migrations_version_part')
+	FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = to_regclass('schema_migrations')), false)`
+
 // splitSchemaMigrations makes schema_migrations, or gives one from before the split its part column: the rows it has
-// keep part NULL, and a version may have a row for each part.
+// keep part NULL, and a version may have a row for each part. A table that is so already is left alone: an ALTER TABLE
+// that changes nothing still takes an ACCESS EXCLUSIVE lock and a transaction id, on every start.
 func splitSchemaMigrations(ctx context.Context, conn *pgxpool.Conn) error {
+	var split bool
+	if err := conn.QueryRow(ctx, schemaMigrationsSplit).Scan(&split); err != nil {
+		return fmt.Errorf("schema_migrations: %w", err)
+	}
+	if split {
+		return nil
+	}
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS schema_migrations (
 			version int NOT NULL, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(), part text)`,
@@ -309,8 +340,55 @@ func splitSchemaMigrations(ctx context.Context, conn *pgxpool.Conn) error {
 	return nil
 }
 
-// migrateSet applies the migrations in migrations/<part> that part has not.
-func migrateSet(ctx context.Context, conn *pgxpool.Conn, fsys fs.FS, part string) error {
+// schemaRecord is a schema_migrations row of some version: part is NULL on the rows from before the split.
+type schemaRecord struct {
+	name string
+	part pgtype.Text
+}
+
+// schemaRecords are schema_migrations' rows by version.
+type schemaRecords map[int][]schemaRecord
+
+func readSchemaRecords(ctx context.Context, conn *pgxpool.Conn) (schemaRecords, error) {
+	rows, err := conn.Query(ctx, `SELECT version, name, part FROM schema_migrations`)
+	if err != nil {
+		return nil, err
+	}
+	recs := schemaRecords{}
+	var version int
+	var r schemaRecord
+	_, err = pgx.ForEachRow(rows, []any{&version, &r.name, &r.part}, func() error {
+		recs[version] = append(recs[version], r)
+		return nil
+	})
+	return recs, err
+}
+
+// named says whether a row records the file name.
+func (recs schemaRecords) named(name string) bool {
+	for _, rs := range recs {
+		for _, r := range rs {
+			if r.name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// done says whether part has migration name (numbered version) applied: a row of that part, or a NULL-part one from up
+// to lastUnified or of the same file (migrateFrom).
+func (recs schemaRecords) done(version int, name, part string) bool {
+	for _, r := range recs[version] {
+		if r.part.Valid && r.part.String == part || !r.part.Valid && (version <= lastUnified || r.name == name) {
+			return true
+		}
+	}
+	return false
+}
+
+// migrateSet applies the migrations in migrations/<part> that part has not (recs), adding each to recs as it records it.
+func migrateSet(ctx context.Context, conn *pgxpool.Conn, fsys fs.FS, part string, recs schemaRecords) error {
 	dir := "migrations/" + part
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
@@ -323,12 +401,7 @@ func migrateSet(ctx context.Context, conn *pgxpool.Conn, fsys fs.FS, part string
 		if err != nil {
 			return err
 		}
-		var done bool
-		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations
-			WHERE version = $1 AND (part = $2 OR part IS NULL AND (version <= $3 OR name = $4)))`, version, part, lastUnified, name).Scan(&done); err != nil {
-			return err
-		}
-		if done {
+		if recs.done(version, name, part) {
 			continue
 		}
 		sql, err := fs.ReadFile(fsys, dir+"/"+name)
@@ -345,6 +418,7 @@ func migrateSet(ctx context.Context, conn *pgxpool.Conn, fsys fs.FS, part string
 		if err != nil {
 			return fmt.Errorf("migration %s/%s: %w", part, name, err)
 		}
+		recs[version] = append(recs[version], schemaRecord{name: name, part: pgtype.Text{String: part, Valid: true}})
 	}
 	return nil
 }

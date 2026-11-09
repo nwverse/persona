@@ -295,6 +295,42 @@ func unifiedMigrate(t *testing.T, url string, until int) {
 	}
 }
 
+// A record of a migration under the number it had before a merge renumbered it is moved to the new number, or only
+// dropped when that is recorded too; either way the migration that has the old number now runs.
+func TestMigrateRenumbered(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		sql  string
+	}{
+		{"the old number only", `UPDATE schema_migrations SET version = 428, name = '0428_todo_source.sql' WHERE name = '0429_todo_source.sql'`},
+		{"both numbers", `INSERT INTO schema_migrations (version, name, part) VALUES (428, '0428_todo_source.sql', 'manager')`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			url := freshDatabase(t)
+			d, err := Open(ctx, url, ManagerSet)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := records(t, d)
+			// 0428_manager_moved took the old number after this database recorded 0428_todo_source under it.
+			for _, q := range []string{`DELETE FROM schema_migrations WHERE name = '0428_manager_moved.sql'`, c.sql} {
+				if _, err := d.pool.Exec(ctx, q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d.Close()
+			if d, err = Open(ctx, url, ManagerSet); err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if got := records(t, d); !slices.Equal(got, want) {
+				t.Fatalf("records %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 // A database migrated before the split (the hub and its default manager on one) runs nothing again, whichever side
 // opens it first; one left at an older state gets the rest of both sets; and a binary from before the split still
 // reads and adds records.
