@@ -78,6 +78,9 @@ func (e *Engine) ForgetSource(source string) (Forgotten, error) {
 	if err := e.Store.forgetHistory(source); err != nil {
 		return out, err
 	}
+	if err := e.Store.forgetSelect(source); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 

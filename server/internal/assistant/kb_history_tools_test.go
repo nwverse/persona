@@ -3,12 +3,14 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -41,8 +43,20 @@ func runHistoryTool(t *testing.T, s *Service, name, args string) string {
 	return b.String()
 }
 
-// The tools: listing makes the plan (nothing approved, nothing run), set changes modes, resume approves and clears a
-// stop (slow keeps the slowest pace two hours), stop writes STOP, status says where it is.
+// storedSelection is the selection the assistant keeps now.
+func storedSelection(t *testing.T, s *Service) *kb.Selection {
+	t.Helper()
+	sel, err := s.kbSelection(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sel
+}
+
+// The tools: listing makes the plan (nothing approved, nothing run) grouped by what the selection reads; set changes
+// the selection's per-item settings by id or exact name, all or nothing; resume approves with what is read then and
+// clears a stop (slow keeps the slowest pace two hours); a change that reads more takes the approval back, one that
+// reads less does not; stop writes STOP, status says where it is.
 func TestHistoryTools(t *testing.T) {
 	f := false
 	cfg := &assistantwire.KBHistory{Enabled: true, Sources: []assistantwire.KBHistorySource{{Name: "chat", NeedsSearchIndex: &f}}}
@@ -53,7 +67,9 @@ func TestHistoryTools(t *testing.T) {
 
 	out := runHistoryTool(t, s, "kb_history_plan", `{}`)
 	for _, want := range []string{"Direct One", "Group One", "Muted One", "d1", i18n.T(l, "assistant-kb_history.plan_not_approved"),
-		i18n.T(l, "assistant-kb_history.group_full", i18n.Args{"count": 1, "messages": 1200})} {
+		i18n.T(l, "assistant-kb_history.group_whole", i18n.Args{"count": 1, "messages": 1200}),
+		i18n.T(l, "assistant-kb_history.group_personal", i18n.Args{"count": 2, "messages": 90500}),
+		i18n.T(l, "assistant-kb_history.plan_back_rules")} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("plan lacks %q:\n%s", want, out)
 		}
@@ -66,18 +82,37 @@ func TestHistoryTools(t *testing.T) {
 		t.Fatalf("listing read %d pages", n)
 	}
 
-	out = runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"id":"m1","mode":"full"},{"id":"g1","mode":"off"},{"id":"nope","mode":"full"}]}`)
-	if !strings.Contains(out, "nope") {
+	// By id and by exact name; the setting is the selection's, keyed by the chat's id.
+	out = runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"chat":"m1","read":true,"store":true},{"chat":"Group One","read":false}]}`)
+	if out != i18n.T(l, "assistant-kb_history.set_done", i18n.Args{"count": 2}) {
 		t.Fatalf("set: %s", out)
 	}
-	p, _, _ = loadHistoryPlan(data, "chat")
-	if p.chat("m1").effective() != "full" || p.chat("g1").effective() != "off" {
-		t.Fatalf("modes %+v", p.Chats)
+	sel := storedSelection(t, s)
+	if it := sel.Item("chat", kb.ItemChat, "m1"); it == nil || !it.Read || !it.Store || it.Name != "Muted One" {
+		t.Fatalf("m1 %+v", it)
 	}
-	runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"id":"g1","mode":null}]}`)
-	p, _, _ = loadHistoryPlan(data, "chat")
-	if p.chat("g1").Mode != nil {
-		t.Fatalf("back to the default: %+v", p.chat("g1"))
+	if it := sel.Item("chat", kb.ItemChat, "g1"); it == nil || it.Read {
+		t.Fatalf("g1 %+v", it)
+	}
+	out = runHistoryTool(t, s, "kb_history_plan", `{"source":"chat"}`)
+	if !strings.Contains(out, i18n.T(l, "assistant-kb_history.group_none", i18n.Args{"count": 1, "messages": 90000})) ||
+		!strings.Contains(out, i18n.T(l, "assistant-kb_history.item_none")) {
+		t.Fatalf("plan after set:\n%s", out)
+	}
+	// One change that names no chat, or is not valid, and nothing changes.
+	for _, bad := range []string{`[{"chat":"d1","read":false},{"chat":"nope","read":true}]`, `[{"chat":"d1","read":false},{"chat":"One","read":true}]`,
+		`[{"chat":"d1","read":false,"store":true}]`, `[{"chat":"d1"}]`} {
+		out = runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":`+bad+`}`)
+		if sel := storedSelection(t, s); sel.Item("chat", kb.ItemChat, "d1") != nil || len(sel.Items) != 2 {
+			t.Fatalf("%s changed the selection: %+v (%s)", bad, sel.Items, out)
+		}
+	}
+	if !strings.Contains(runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"chat":"One","read":true}]}`), "Muted One (m1)") {
+		t.Fatal("no close names offered")
+	}
+	runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"chat":"g1","reset":true}]}`)
+	if storedSelection(t, s).Item("chat", kb.ItemChat, "g1") != nil {
+		t.Fatal("reset kept the setting")
 	}
 
 	out = runHistoryTool(t, s, "kb_history_stop", `{"reason":"checking the group Secret Name"}`)
@@ -106,8 +141,8 @@ func TestHistoryTools(t *testing.T) {
 		t.Fatal("STOP stayed")
 	}
 	p, _, _ = loadHistoryPlan(data, "chat")
-	if p.ApprovedAt == nil {
-		t.Fatal("not approved")
+	if p.ApprovedAt == nil || len(p.Approved) != 3 || !p.Approved["m1"].Whole || p.Approved["g1"].Whole || p.ApprovedUnlisted == nil {
+		t.Fatalf("approval %+v", p)
 	}
 	// The two slow hours start with the first call, not with the approval.
 	if st := readHistoryStatus(data)["chat"]; !st.SlowPending || !st.SlowUntil.IsZero() {
@@ -124,14 +159,38 @@ func TestHistoryTools(t *testing.T) {
 		}
 	}
 
-	// A refresh that adds chats to import takes the approval back.
+	// Reading less keeps the approval: a chat not read, a shorter back_days.
+	out = runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"chat":"d1","read":false}],"back_days":30}`)
+	if p, _, _ = loadHistoryPlan(data, "chat"); p.ApprovedAt == nil || strings.Contains(out, i18n.T(l, "assistant-kb_history.set_revoked")) {
+		t.Fatalf("narrowed: %s", out)
+	}
+	if b := storedSelection(t, s).History["chat"].BackDays; b == nil || *b != 30 {
+		t.Fatalf("back_days %v", b)
+	}
+	// Reading more takes it back: a group read whole, back_days lifted.
+	for _, change := range []string{`"set":[{"chat":"g1","read":true,"store":true}]`, `"back_days":null`} {
+		runHistoryTool(t, s, "kb_history_resume", `{"source":"chat"}`)
+		out = runHistoryTool(t, s, "kb_history_plan", `{"source":"chat",`+change+`}`)
+		if p, _, _ = loadHistoryPlan(data, "chat"); p.ApprovedAt != nil || !strings.Contains(out, i18n.T(l, "assistant-kb_history.set_revoked")) {
+			t.Fatalf("%s kept the approval: %s", change, out)
+		}
+	}
+
+	// A refresh that adds a chat to read takes the approval back; a renamed chat keeps its setting by id and the
+	// setting shows the new name.
+	runHistoryTool(t, s, "kb_history_resume", `{"source":"chat"}`)
+	renamed := slices.Clone(chats)
+	renamed[2].Name = "Muted Renamed"
 	fh.answerApp(AppConnectors, assistantwire.ConnectorsHistoryChats, func(json.RawMessage) (any, error) {
-		return assistantwire.HistoryChatsResult{Chats: append(chats, connectorwire.HistoryChat{ID: "d2", Name: "Direct Two", Kind: "dm"})}, nil
+		return assistantwire.HistoryChatsResult{Chats: append(renamed, connectorwire.HistoryChat{ID: "d2", Name: "Direct Two", Kind: "dm"})}, nil
 	})
 	out = runHistoryTool(t, s, "kb_history_plan", `{"source":"chat"}`)
 	p, _, _ = loadHistoryPlan(data, "chat")
 	if p.ApprovedAt != nil || !strings.Contains(out, i18n.T(l, "assistant-kb_history.plan_changed", i18n.Args{"count": 1})) {
 		t.Fatalf("approval after new chats: %s", out)
+	}
+	if it := storedSelection(t, s).Item("chat", kb.ItemChat, "m1"); it == nil || it.Name != "Muted Renamed" || !it.Store {
+		t.Fatalf("renamed m1 %+v", it)
 	}
 
 	// A list call that times out stops the whole import like the driver's own calls: STOP, a push, and the next
@@ -153,6 +212,23 @@ func TestHistoryTools(t *testing.T) {
 	// Unknown source.
 	if out := runHistoryTool(t, s, "kb_history_resume", `{"source":"other"}`); !strings.Contains(out, "other") {
 		t.Fatalf("unknown source: %s", out)
+	}
+}
+
+// A name two chats have is refused with their ids, and nothing changes.
+func TestHistoryToolsAmbiguousName(t *testing.T) {
+	f := false
+	cfg := &assistantwire.KBHistory{Enabled: true, Sources: []assistantwire.KBHistorySource{{Name: "chat", NeedsSearchIndex: &f}}}
+	s, _, _ := historyToolService(t, cfg, []connectorwire.HistoryChat{{ID: "g1", Name: "Team", Kind: "group"}, {ID: "g2", Name: "Team", Kind: "group"}})
+	l := s.lang(context.Background())
+	runHistoryTool(t, s, "kb_history_plan", `{}`)
+	out := runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"chat":"Team","read":false}]}`)
+	if out != i18n.T(l, "assistant-kb_history.set_ambiguous", i18n.Args{"chat": "Team", "count": 2, "ids": "g1, g2"}) || len(storedSelection(t, s).Items) != 0 {
+		t.Fatalf("ambiguous: %s", out)
+	}
+	if out := runHistoryTool(t, s, "kb_history_plan", `{"source":"chat","set":[{"chat":"g2","read":false}]}`); !strings.Contains(out, "1") ||
+		storedSelection(t, s).Item("chat", kb.ItemChat, "g2") == nil {
+		t.Fatalf("by id: %s", out)
 	}
 }
 
@@ -229,5 +305,43 @@ func TestHistoryConfigFromManagerJSON(t *testing.T) {
 	}
 	if p := historyPaceFor(two.Sources[0]); p.Interval != (assistantwire.KBRange{6, 16}) || p.Rest != (assistantwire.KBRange{4, 20}) {
 		t.Fatalf("slow factor %+v", p)
+	}
+}
+
+// While the selection cannot be read (and never was since a restart), the tools neither list by it, approve by it nor
+// change it: they say to try again, and the plan and the document stay as they are.
+func TestHistoryToolsWaitForTheSelection(t *testing.T) {
+	f := false
+	cfg := &assistantwire.KBHistory{Enabled: true, Sources: []assistantwire.KBHistorySource{{Name: "chat", NeedsSearchIndex: &f}}}
+	fh := newFakeHub()
+	fh.hello.KB = &KBSettings{History: cfg}
+	fh.answerApp(AppConnectors, assistantwire.ConnectorsArchives, func(json.RawMessage) (any, error) {
+		return assistantwire.Archives{Archives: []assistantwire.ArchiveSource{{ID: "chat", History: true}}}, nil
+	})
+	fh.answerApp(AppConnectors, assistantwire.ConnectorsHistoryChats, func(json.RawMessage) (any, error) {
+		return assistantwire.HistoryChatsResult{Chats: []connectorwire.HistoryChat{{ID: "g1", Name: "Group One", Kind: "group"}}}, nil
+	})
+	st := newKBStore()
+	s := kbServiceOn(t, fh, st, t.TempDir(), nil)
+	data := kbEng(t, s).Store.Dir
+	l := s.lang(context.Background())
+	runHistoryTool(t, s, "kb_history_plan", `{}`)
+	st.mu.Lock()
+	st.down = true
+	st.mu.Unlock()
+	s.kb.selection.cur.Store(nil)
+	s.kb.selection.failedAt.Store(0)
+	want := i18n.T(l, "assistant-kb_history.selection_unavailable")
+	for _, call := range [][2]string{{"kb_history_resume", `{"source":"chat"}`}, {"kb_history_plan", `{"source":"chat"}`},
+		{"kb_history_plan", `{"source":"chat","set":[{"chat":"g1","read":true,"store":true}]}`}} {
+		if out := runHistoryTool(t, s, call[0], call[1]); out != want {
+			t.Fatalf("%s %s: %s", call[0], call[1], out)
+		}
+	}
+	if p, ok, _ := loadHistoryPlan(data, "chat"); !ok || p.ApprovedAt != nil {
+		t.Fatalf("plan %+v", p)
+	}
+	if ok, _ := st.memStore.Setting(context.Background(), kbSelectionKey, &json.RawMessage{}); ok {
+		t.Fatal("the selection was stored")
 	}
 }

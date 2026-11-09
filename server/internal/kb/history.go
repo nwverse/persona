@@ -53,6 +53,9 @@ type HistoryState struct {
 	Filter *AnchorFilterState `json:"filter,omitempty"`
 	// Positions: an anchor import that reads windows by position around anchors a source's search found.
 	Positions *PositionState `json:"positions,omitempty"`
+	// Plan is what the read covers (the selection's ReadPlan, its days bounded by the source's back_days): the
+	// narrowest plan it ran under, so a finished read is taken up again only when the selection asks for more.
+	Plan *ReadPlan `json:"plan,omitempty"`
 }
 
 // PositionState is how far an anchor import by position got, for a source whose positions are consecutive numbers
@@ -77,10 +80,12 @@ type PositionState struct {
 	Probed bool      `json:"probed,omitempty"`
 }
 
-// PositionAnchor is one anchor of a chat: its position and time.
+// PositionAnchor is one anchor of a chat: its position and time, and whether the owner sent it (the mine rule's
+// context is read around it) or it only mentions the owner (only the message itself is kept).
 type PositionAnchor struct {
-	Pos int64     `json:"pos"`
-	At  time.Time `json:"at,omitzero"`
+	Pos  int64     `json:"pos"`
+	At   time.Time `json:"at,omitzero"`
+	Mine bool      `json:"mine,omitempty"`
 }
 
 // SearchIndexed says the knowledge base keeps a persistent search index (#1273). Until it does, search reads every
@@ -168,9 +173,17 @@ var ErrDownloadAborted = errors.New("history: the download was aborted")
 // HistoryWrite is how WriteHistory writes one batch.
 type HistoryWrite struct {
 	Mode string // HistoryFull or HistoryAnchor, recorded as the chat's HistoryMode ("": left as it is)
-	// Download saves an image (nil: none are). Only images are downloaded, and only within the source's attachment
-	// days (Engine.AttachmentDaysFor); other attachments become a placeholder naming their kind.
+	// Download saves an image (nil: none are). Only images are downloaded, and only within the message's attachment
+	// days (the selection's decision, else Engine.AttachmentDaysFor); other attachments become a placeholder naming
+	// their kind.
 	Download DownloadFunc
+	// Chat is the chat's facts for the selection (nil: its source, id and kind as the chat has them, no flags). A
+	// chat already filed with a kind the selection does not decide about (ChatFacts.Selected) keeps that kind, as
+	// daily ingestion goes by it: everything is written, for text_days.
+	Chat *ChatFacts
+	// NearMine says a message is within the mine rule's context of one of the owner's (the caller reads the windows
+	// around them; nil: none is).
+	NearMine func(SourceMessage) bool
 }
 
 // TypeOmitted is the type of an omission line (OmissionLine) among the messages an anchor import writes.
@@ -188,10 +201,13 @@ func OmissionLine(at time.Time, n int) SourceMessage {
 }
 
 // WriteHistory writes imported messages of a chat into its day files (MergeMessages), returning how many lines were
-// new. msgs may come in any order and may repeat what is there (duplicates are dropped); messages before the text
-// retention are skipped. c names the chat: by ID, or by Source and SourceID, with Kind and Name used when the chat is
-// new. The chat is read again under chatMu and only Messages, Mine, People and HistoryMode change: never Pending,
-// Cursor or LastAt, which the live archive and compression go by. c gets the chat as written.
+// new. msgs may come in any order and may repeat what is there (duplicates are dropped). With a selection
+// (Engine.Selection) only what it stores is written (Selection.Evaluate, with opt.NearMine for the mine rule's
+// context), each line recorded with its rule in the chat's retention ledger; a message past its rule's days (without
+// a selection: the text retention) is skipped. Omission lines have the chat's usual rule. c names the chat: by ID,
+// or by Source and SourceID, with Kind and Name used when the chat is new. The chat is read again under chatMu and
+// only Messages, Mine, People, HistoryMode and Rule change: never Pending, Cursor or LastAt, which the live archive
+// and compression go by. c gets the chat as written.
 func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage, opt HistoryWrite) (added int, err error) {
 	if e.Store.ReadOnly() {
 		return 0, ErrReadOnly
@@ -208,13 +224,42 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 	}
 	// Whether the chat can be written at all, before anything is downloaded into its directory.
 	source := c.Source
+	facts := ChatFacts{ID: c.SourceID, Kind: c.Kind}
+	outside := false // a chat already filed with a kind the selection does not decide about, as daily ingestion has it
 	if stored, ok := e.Store.Chat(id); ok {
 		source = stored.Source
+		facts.ID, facts.Kind = stored.SourceID, stored.Kind
+		outside = stored.Kind != "" && !facts.Selected()
 	} else if source == "" {
 		return 0, fmt.Errorf("history: %s is a new chat without its source", id)
 	}
 	probe := &Chat{ID: id, Source: source}
-	cut := e.textCutoff()
+	sel, ret := e.selection(), e.Retention()
+	facts.Source = source
+	if opt.Chat != nil && !outside {
+		facts = *opt.Chat
+		facts.Source = source
+	}
+	selecting := sel != nil && facts.Selected()
+	usual := ""
+	if selecting {
+		if !sel.ReadChat(ret, facts).Read {
+			return 0, nil
+		}
+		usual = sel.UsualRule(ret, facts)
+	}
+	decide := func(m SourceMessage) Decision {
+		switch {
+		case !selecting:
+			return Decision{Store: true, Days: or(e.TextDays, 365), AttachmentDays: e.AttachmentDaysFor(source)}
+		case m.Type == TypeOmitted:
+			text, att := sel.LineDays(ret, source, facts.ID, usual)
+			return Decision{Store: true, Rule: usual, Days: text, AttachmentDays: att}
+		}
+		mf := MessageFactsOf(m)
+		mf.NearMine = opt.NearMine != nil && opt.NearMine(m)
+		return sel.Evaluate(ret, facts, mf)
+	}
 	var aborted error
 	download := opt.Download
 	if download != nil {
@@ -229,7 +274,7 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 			return err
 		}
 	}
-	var lines []Line
+	var lines []ingestLine
 	var kept []SourceMessage
 	for _, m := range msgs {
 		if ctx.Err() != nil {
@@ -238,18 +283,19 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 		if aborted != nil {
 			return 0, aborted
 		}
-		if m.At.Before(cut) {
+		d := decide(m)
+		if !d.Store || m.At.Before(e.CutoffFor(d.Days)) {
 			continue
 		}
 		var l Line
 		if m.Type == TypeOmitted {
 			l = Line{At: m.At, Sender: omissionSender, Text: strings.TrimSpace(m.Text)}
 		} else {
-			l = e.buildLine(ctx, download, probe, m, true)
+			l = e.buildLine(ctx, download, probe, m, true, d.AttachmentDays)
 			kept = append(kept, m)
 		}
 		if l.Text != "" {
-			lines = append(lines, l)
+			lines = append(lines, ingestLine{Line: l, rule: d.Rule})
 		}
 	}
 	if aborted != nil {
@@ -272,7 +318,7 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 		}
 		cur = &Chat{ID: id, Source: c.Source, SourceID: c.SourceID, Kind: c.Kind, Name: c.Name, Created: time.Now().UTC()}
 	}
-	if added, err = e.Store.MergeMessages(cur, lines); err != nil {
+	if added, err = e.Store.mergeMessages(cur, lines, selecting, usual); err != nil {
 		return added, err
 	}
 	for _, m := range kept {
@@ -282,6 +328,9 @@ func (e *Engine) WriteHistory(ctx context.Context, c *Chat, msgs []SourceMessage
 	cur.Messages += added
 	if opt.Mode != "" {
 		cur.HistoryMode = opt.Mode
+	}
+	if selecting {
+		cur.Rule = usual
 	}
 	if err := e.Store.PutChat(cur); err != nil {
 		return added, err

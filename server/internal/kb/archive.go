@@ -69,6 +69,11 @@ type Engine struct {
 	// TextDays: older messages are not written at all (365). Prune deletes such days, and anything that wrote them
 	// again (a chat's first page, a mailbox's first read, imported history) would bring them back after every prune.
 	TextDays int
+	// Selection is the selection document (selection.go) that decides what daily ingestion, the history import and
+	// pruning keep, read each time it is needed (nil result: Defaults; KeepEverything when the document cannot be
+	// read now, under which nothing is pruned). A nil func means no selection at all: everything is kept for
+	// TextDays, as before it.
+	Selection func() *Selection
 
 	// failed: attachment downloads that failed this run (logged once per chat); atomic, as a history import
 	// (WriteHistory) may download while the archive runs.
@@ -110,9 +115,30 @@ func or(n, d int) int {
 func (e *Engine) TextCutoff() time.Time { return e.textCutoff() }
 
 // textCutoff is TextCutoff.
-func (e *Engine) textCutoff() time.Time {
+func (e *Engine) textCutoff() time.Time { return e.CutoffFor(e.TextDays) }
+
+// Retention is the engine's retention settings, which the selection's null days fall back to.
+func (e *Engine) Retention() Retention {
+	return Retention{TextDays: e.TextDays, AttachmentDays: e.AttachmentDays, AttachmentDaysBySource: e.AttachmentDaysBySource}
+}
+
+// selection is the document in force: nil when the engine has none (Selection nil), Defaults when it returns nil.
+func (e *Engine) selection() *Selection {
+	if e.Selection == nil {
+		return nil
+	}
+	if s := e.Selection(); s != nil {
+		return s
+	}
+	d := Defaults()
+	return &d
+}
+
+// CutoffFor is the start of the oldest day a line kept days days still has (in the archive's zone): a message
+// before it is not written (TextCutoff is CutoffFor of TextDays).
+func (e *Engine) CutoffFor(days int) time.Time {
 	zone := e.Store.Zone()
-	d := time.Now().AddDate(0, 0, -or(e.TextDays, 365)).In(zone)
+	d := time.Now().AddDate(0, 0, -or(days, or(e.TextDays, 365))).In(zone)
 	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, zone)
 }
 
@@ -129,8 +155,15 @@ func (e *Engine) AttachmentDaysFor(source string) int {
 }
 
 // Prune deletes message days past TextDays and attachment days past each chat's AttachmentDaysFor: the same days
-// textCutoff and line stop writing.
+// textCutoff and line stop writing. With a selection, each line's days are its deciding rule's (PruneSelected); a
+// selection that cannot be read now (Selection.Stopgap) prunes nothing: the next round tries again.
 func (e *Engine) Prune(now time.Time) int {
+	if sel := e.selection(); sel != nil {
+		if sel.Stopgap() {
+			return 0
+		}
+		return e.Store.PruneSelected(now, sel, e.Retention())
+	}
 	return e.Store.PruneBySource(now, or(e.TextDays, 365), e.AttachmentDaysFor)
 }
 
@@ -292,12 +325,13 @@ type DownloadFunc func(ctx context.Context, media, dst string) error
 // line turns a message into an archive line; images and files are saved under attachments/<day>/ while the message
 // is within its source's attachment days (AttachmentDaysFor). download nil: none are.
 func (e *Engine) line(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage) Line {
-	return e.buildLine(ctx, download, c, m, false)
+	return e.buildLine(ctx, download, c, m, false, e.AttachmentDaysFor(c.Source))
 }
 
-// buildLine is line; history (WriteHistory) downloads images only, writes a placeholder naming the kind of any other
-// attachment, and notes no documents (imported history is archive only: nothing for the model to tag).
-func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage, history bool) Line {
+// buildLine is line with the message's attachment days (the selection's decision, else AttachmentDaysFor); history
+// (WriteHistory) downloads images only, writes a placeholder naming the kind of any other attachment, and notes no
+// documents (imported history is archive only: nothing for the model to tag).
+func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, m SourceMessage, history bool, attDays int) Line {
 	sender := m.SenderName
 	if m.Mine {
 		sender = "我" // i18n-ignore: archive data
@@ -310,7 +344,7 @@ func (e *Engine) buildLine(ctx context.Context, download DownloadFunc, c *Chat, 
 		return Line{}
 	}
 	day := m.At.In(e.Store.Zone()).Format("2006-01-02")
-	recent := time.Since(m.At) <= time.Duration(e.AttachmentDaysFor(c.Source))*24*time.Hour
+	recent := time.Since(m.At) <= time.Duration(attDays)*24*time.Hour
 	if history {
 		if !isImage(m.Type) && len(m.Media) == 0 && text == "" {
 			if p := mediaPlaceholder(m.Type); p != attachmentPlaceholder {

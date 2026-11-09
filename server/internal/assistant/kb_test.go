@@ -28,6 +28,7 @@ type kbStore struct {
 	mu      sync.Mutex
 	rows    map[string]string // "kind/id" → name
 	down    bool
+	reads   int // Setting calls
 	deleted []string
 }
 
@@ -36,6 +37,7 @@ func newKBStore() *kbStore { return &kbStore{memStore: &memStore{}, rows: map[st
 func (k *kbStore) Setting(ctx context.Context, key string, out any) (bool, error) {
 	k.mu.Lock()
 	down := k.down
+	k.reads++
 	k.mu.Unlock()
 	if down {
 		return false, errors.New("database down")

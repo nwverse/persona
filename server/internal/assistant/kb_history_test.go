@@ -210,6 +210,35 @@ type historyTest struct {
 	cfg     *assistantwire.KBHistory
 	data    string
 	notices []string
+	sel     atomic.Pointer[kb.Selection] // the engine's selection (the defaults to begin with)
+}
+
+// selection changes the engine's selection (a new copy, as the manager does).
+func (ht *historyTest) selection(f func(*kb.Selection)) {
+	ht.t.Helper()
+	next := ht.sel.Load().Clone()
+	f(&next)
+	if err := next.Validate(); err != nil {
+		ht.t.Fatal(err)
+	}
+	ht.sel.Store(&next)
+}
+
+// item gives a chat of the test source a per-item setting: "full" stores it all, "anchor" only what the personal rules
+// keep, "off" reads nothing of it.
+func (ht *historyTest) item(id, mode string) {
+	ht.t.Helper()
+	it := kb.SelectionItem{Source: testSource, Kind: kb.ItemChat, ID: id}
+	switch mode {
+	case "full":
+		it.Read, it.Store = true, true
+	case "anchor":
+		it.Read = true
+	case "off":
+	default:
+		ht.t.Fatalf("mode %q", mode)
+	}
+	ht.selection(func(s *kb.Selection) { s.SetItem(it) })
 }
 
 const testSource = "chat"
@@ -243,27 +272,40 @@ func newHistoryTest(t *testing.T, src *fakeHistory) *historyTest {
 		},
 		calls:    &sync.Mutex{},
 		instance: "test-1", indexed: func() bool { return false }, running: &running, timeout: time.Minute}
+	def := kb.Defaults()
+	ht.sel.Store(&def)
+	ht.e.Selection = ht.sel.Load
 	return ht
 }
 
-// plan lists the chats and approves the plan (what kb_history_plan and kb_history_resume do).
+// plan lists the chats, gives the ones in modes their per-item setting (ht.item) and approves the plan (what
+// kb_history_plan and kb_history_resume do).
 func (ht *historyTest) plan(approve bool, modes map[string]string) *historyPlan {
 	ht.t.Helper()
-	p := &historyPlan{Source: testSource, Defaults: map[string]string{}}
+	p, ok, err := loadHistoryPlan(ht.data, testSource)
+	if err != nil || !ok {
+		p = &historyPlan{Source: testSource}
+	}
 	p.regenerate(ht.src.chats, ht.clock.Now())
 	for id, m := range modes {
-		if err := p.set(id, m); err != nil {
-			ht.t.Fatal(err)
-		}
+		ht.item(id, m)
 	}
 	if approve {
-		now := ht.clock.Now()
-		p.ApprovedAt = &now
+		ht.approve(p)
+	} else {
+		p.revoke()
 	}
 	if err := saveHistoryPlan(ht.data, p); err != nil {
 		ht.t.Fatal(err)
 	}
 	return p
+}
+
+// approve approves p as the selection reads it now.
+func (ht *historyTest) approve(p *historyPlan) {
+	ht.t.Helper()
+	sel, ret := historySelection(ht.e)
+	p.approve(sel, ret, ht.clock.Now())
 }
 
 func (ht *historyTest) run() {
@@ -328,11 +370,13 @@ func recentStart(n int, step time.Duration) time.Time {
 
 // ---- plans ----
 
-// A plan's rules come from the defaults by kind; regenerating keeps the owner's modes, takes new names and kinds,
-// adds new chats with the defaults, and the effective mode is the owner's over the rule.
-func TestHistoryPlanRegenerateKeepsModes(t *testing.T) {
+// A plan lists the source's chats; what is read of each is the selection's: with the defaults direct messages whole,
+// every other chat only around the owner's messages and mentions (the personal rules rank above the kind rules), and
+// a per-item setting over both. Regenerating takes new names, kinds, flags and estimates and keeps chats the list no
+// longer has.
+func TestHistoryPlanByTheSelection(t *testing.T) {
 	now := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
-	p := &historyPlan{Source: "x", Defaults: map[string]string{}}
+	p := &historyPlan{Source: "x"}
 	p.regenerate([]connectorwire.HistoryChat{
 		{ID: "d", Name: "D", Kind: "dm", Estimate: 120},
 		{ID: "g", Name: "G", Kind: "group", Estimate: 9000},
@@ -340,54 +384,46 @@ func TestHistoryPlanRegenerateKeepsModes(t *testing.T) {
 		{ID: "o", Name: "O", Kind: "official"},
 		{ID: "b", Name: "B", Kind: "dm", Bot: true},
 		{ID: "s", Name: "S", Kind: "system"},
+		{ID: "w", Name: "W", Kind: "made-up"},
 	}, now)
-	want := map[string]string{"d": "full", "g": "anchor", "m": "off", "o": "off", "b": "off", "s": "off"}
-	for id, mode := range want {
-		if c := p.chat(id); c == nil || c.Rule != mode || c.effective() != mode || c.Mode != nil {
-			t.Fatalf("%s: %+v", id, c)
+	sel, ret := kb.Defaults(), kb.Retention{TextDays: 365}
+	read := func(id string) string {
+		switch need := historyNeed(&sel, ret, "x", *p.chat(id)); {
+		case need.Whole:
+			return "whole"
+		case need.Read:
+			return "personal"
+		}
+		return "none"
+	}
+	want := map[string]string{"d": "whole", "g": "personal", "m": "personal", "o": "personal", "b": "personal", "s": "personal", "w": "personal"}
+	for id, r := range want {
+		if got := read(id); got != r {
+			t.Fatalf("%s: %s, want %s", id, got, r)
 		}
 	}
-	if err := p.set("m", "full"); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.set("g", "off"); err != nil {
-		t.Fatal(err)
-	}
-	if p.set("g", "everything") == nil || p.set("nope", "full") == nil {
-		t.Fatal("a bad mode or chat was taken")
-	}
-	added := p.regenerate([]connectorwire.HistoryChat{
-		{ID: "m", Name: "M renamed", Kind: "group", Muted: true, Estimate: 5},
+	sel.SetItem(kb.SelectionItem{Source: "x", Kind: kb.ItemChat, ID: "m", Read: true, Store: true})
+	sel.SetItem(kb.SelectionItem{Source: "x", Kind: kb.ItemChat, ID: "d", Read: false})
+	p.regenerate([]connectorwire.HistoryChat{
+		{ID: "m", Name: "M renamed", Kind: "group", Muted: true, Collapsed: true, Estimate: 5},
 		{ID: "g", Name: "G", Kind: "group", Estimate: 9100},
 		{ID: "n", Name: "N", Kind: "dm"},
-		{ID: "n2", Name: "N2", Kind: "official"},
 	}, now.Add(time.Hour))
-	if added != 1 {
-		t.Fatalf("%d new chats to import", added)
+	if m := p.chat("m"); m.Name != "M renamed" || m.Estimate != 5 || !m.Collapsed || read("m") != "whole" {
+		t.Fatalf("m %+v %s", m, read("m"))
 	}
-	m := p.chat("m")
-	if m.Name != "M renamed" || m.Estimate != 5 || m.Rule != "off" || m.effective() != "full" {
-		t.Fatalf("m %+v", m)
+	if read("d") != "none" || read("n") != "whole" || p.chat("g").Estimate != 9100 || len(p.Chats) != 8 {
+		t.Fatalf("d %s n %s chats %d", read("d"), read("n"), len(p.Chats))
 	}
-	if g := p.chat("g"); g.effective() != "off" || g.Estimate != 9100 {
-		t.Fatalf("g %+v", g)
+	g := p.grouped(&sel, ret)
+	if len(g.whole) != 2 || g.whole[0].ID != "m" || len(g.none) != 1 || len(g.personal) != 5 || g.personal[0].ID != "g" { // m (5) before n (0)
+		t.Fatalf("groups %+v", g)
 	}
-	if n := p.chat("n"); n == nil || n.effective() != "full" {
-		t.Fatalf("n %+v", n)
-	}
-	if d := p.chat("d"); d == nil || d.effective() != "full" { // not in the new list: kept as it was
-		t.Fatalf("d %+v", d)
-	}
-	if err := p.set("m", "null"); err != nil || p.chat("m").effective() != "off" {
-		t.Fatalf("back to the rule: %v", err)
-	}
-	g := p.grouped()
-	if len(g["full"]) != 2 || g["full"][0].ID != "d" || len(g["off"]) != 6 { // d (120) before n (0)
-		var ids []string
-		for _, c := range g["full"] {
-			ids = append(ids, c.ID)
-		}
-		t.Fatalf("full %v", ids)
+	// back_days bounds how far back the import goes, whatever the rule's days.
+	sel.History = map[string]kb.HistorySelection{"x": {BackDays: new(int)}}
+	*sel.History["x"].BackDays = 30
+	if need := historyNeed(&sel, ret, "x", *p.chat("g")); need.Days != 30 {
+		t.Fatalf("back days: %+v", need)
 	}
 }
 
@@ -507,29 +543,33 @@ func TestHistoryFullDownloadsImages(t *testing.T) {
 
 // ---- anchors, read backwards ----
 
-// A source that cannot search: anchor chats are read backwards through the filter: 50 on each side of the owner's
-// messages, windows merged, the gaps marked.
+// A source that cannot search: a group the selection reads only personally is read backwards through the filter:
+// the mine rule's context (50) on each side of the owner's messages, windows merged, a mention kept on its own (it
+// splits its gap), the gaps marked.
 func TestHistoryAnchorStreaming(t *testing.T) {
 	const n = 400
 	src := &fakeHistory{chats: []connectorwire.HistoryChat{{ID: "g", Name: "Group", Kind: "group", Estimate: n}},
 		convs: map[string][]kb.SourceMessage{"g": historyConv("g", n, recentStart(n, time.Hour), time.Hour, 100, 160, 330)}}
-	src.convs["g"][200].Mentioned = true
+	src.convs["g"][250].Mentioned = true
 	ht := newHistoryTest(t, src)
 	ht.plan(true, nil)
 	ht.run()
-	want := append(span(50, 250), span(280, 380)...)
+	want := append(append(span(50, 210), 250), span(280, 380)...)
 	if got := ht.kept("g"); !slices.Equal(got, want) {
 		t.Fatalf("kept %v", got)
 	}
 	text := ht.text("g")
-	for _, line := range []string{"[……此处省略 19 条]", "[……此处省略 29 条]", "[……此处省略 50 条]"} { // i18n-ignore: archive data
+	for _, line := range []string{"[……此处省略 19 条]", "[……此处省略 29 条]", "[……此处省略 39 条]", "[……此处省略 50 条]"} { // i18n-ignore: archive data
 		if strings.Count(text, line) != 1 {
 			t.Fatalf("want %q once in:\n%s", line, text)
 		}
 	}
 	st := ht.state("g")
-	if st.State != kb.HistoryDone || st.Mode != kb.HistoryAnchor || st.Read != n || st.Filter == nil || st.Filter.Windows != 2 {
+	if st.State != kb.HistoryDone || st.Mode != kb.HistoryAnchor || st.Read != n || st.Filter == nil || st.Filter.Windows != 2 || st.Filter.Kept != 1 {
 		t.Fatalf("state %+v filter %+v", st, st.Filter)
+	}
+	if st.Plan == nil || st.Plan.Whole || !st.Plan.Mine || !st.Plan.Mentions {
+		t.Fatalf("plan %+v", st.Plan)
 	}
 }
 
@@ -555,21 +595,24 @@ func TestHistoryPositionalWindows(t *testing.T) {
 	start := recentStart(n, 10*time.Minute)
 	msgs := historyConv("g", n, start, 10*time.Minute, 100, 160, 600)
 	src := positionalSource("g", msgs, 100, 160, 600)
-	src.convs["g"][640].Mentioned = true // not found by the search, but read in a window: an anchor too
+	src.convs["g"][640].Mentioned = true // not found by the search, read in a window: kept, but no window of its own
+	// A hit that only mentions the owner: the message alone is read and kept.
+	m := msgs[800]
+	src.anchors[m.At.Year()] = append(src.anchors[m.At.Year()], connectorwire.HistoryAnchor{Chat: "g", Position: m.Position, At: m.At, Mention: true})
 	ht := newHistoryTest(t, src)
 	ht.plan(true, nil)
 	ht.run()
-	want := append(span(50, 210), span(550, 690)...)
+	want := append(append(span(50, 210), span(550, 650)...), 800)
 	if got := ht.kept("g"); !slices.Equal(got, want) {
 		t.Fatalf("kept %v", got)
 	}
 	text := ht.text("g")
-	for _, line := range []string{"[……此处省略 339 条]", "[……此处省略 50 条]"} { // i18n-ignore: archive data
+	for _, line := range []string{"[……此处省略 339 条]", "[……此处省略 149 条]", "[……此处省略 50 条]"} { // i18n-ignore: archive data
 		if strings.Count(text, line) != 1 {
 			t.Fatalf("want %q once in:\n%s", line, text)
 		}
 	}
-	if strings.Count(text, "省略") != 2 { // i18n-ignore: archive data
+	if strings.Count(text, "省略") != 3 { // i18n-ignore: archive data
 		t.Fatalf("omission lines:\n%s", text)
 	}
 	// Every position was asked for at most once: the pages read overlap only where a source answers more.
@@ -647,14 +690,14 @@ func TestHistoryUnreadableChatKeepsTheHits(t *testing.T) {
 	// The search found a chat the plan does not list: it is added, the approval taken back and the owner told;
 	// nothing of it is read before the owner approves the plan with it.
 	p, _, _ := loadHistoryPlan(ht.data, testSource)
-	if c := p.chat("gone"); c == nil || c.Kind != historyUnlisted || c.effective() != kb.HistoryAnchor || p.ApprovedAt != nil {
+	sel, ret := historySelection(ht.e)
+	if c := p.chat("gone"); c == nil || c.Kind != historyUnlisted || !historyNeed(sel, ret, testSource, *c).Personal || p.ApprovedAt != nil {
 		t.Fatalf("plan %+v", p)
 	}
 	if src.count("page") != 0 || len(ht.notices) != 1 || !strings.Contains(ht.notices[0], "plan_changed") {
 		t.Fatalf("read before approval: %v, notices %v", src.calls, ht.notices)
 	}
-	now := ht.clock.Now()
-	p.ApprovedAt = &now
+	ht.approve(p)
 	if err := saveHistoryPlan(ht.data, p); err != nil {
 		t.Fatal(err)
 	}
@@ -1179,16 +1222,15 @@ func TestHistoryLogHasNoContent(t *testing.T) {
 	}
 }
 
-// Changing a chat to off while the import runs takes effect at its next page; switching modes starts over without
-// archiving anything twice.
+// A per-item read: false while the import runs takes effect at its next page (a narrower selection needs no new
+// approval); reading it again, only personally, goes on from where the whole read was without archiving anything
+// twice.
 func TestHistoryModeChangeMidway(t *testing.T) {
 	src := &fakeHistory{chats: []connectorwire.HistoryChat{{ID: "a", Kind: "dm"}}, convs: map[string][]kb.SourceMessage{"a": historyConv("a", 300, recentStart(300, time.Hour), time.Hour, 20)}}
 	ht := newHistoryTest(t, src)
 	src.hook = func(n int, q connectorwire.HistoryQuery) (connectorwire.HistoryPage, error, bool) {
 		if n == 2 {
-			p, _, _ := loadHistoryPlan(ht.data, testSource)
-			_ = p.set("a", historyOff)
-			_ = saveHistoryPlan(ht.data, p)
+			ht.item("a", "off")
 		}
 		return connectorwire.HistoryPage{}, nil, false
 	}

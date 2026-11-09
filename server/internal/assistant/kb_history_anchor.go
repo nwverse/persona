@@ -13,17 +13,20 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// Anchor mode for a source that can search (history_anchors), whose positions are consecutive numbers:
+// A personal read (only what the mentions and mine rules keep) from a source that can search (history_anchors), whose
+// positions are consecutive numbers:
 //
 //  1. The owner's messages (sent and mentioned) are gathered for the whole account, one calendar year at a time from
-//     this year back to the text retention, into history/anchors-<source>.json, then grouped by chat. A chat the plan
-//     does not list (often one the account left) is added to it, by its anchors.
-//  2. In each anchor chat, the window of 50 positions on each side of every anchor is read: around the anchor first,
-//     then before or after what was read until the window is covered. Windows that overlap or touch merge, and what
-//     was read already is never asked for again. A message read that is the owner's or mentions the owner becomes an
-//     anchor too (a search can miss one). Once every window is read, each gap between two windows gets one omission
-//     line with the number of positions it leaves out, and so does the gap below the oldest window; above the
-//     newest none is written, since the newer messages may be the live archive's.
+//     this year back as far as a personal read goes (the source's back_days, else the personal rules' days), into
+//     history/anchors-<source>.json, then grouped by chat. A chat the plan does not list (often one the account left)
+//     is added to it, by its anchors; the selection judges it as a group.
+//  2. In each chat, the window around every anchor is read: the mine rule's context on each side of the owner's own
+//     messages, the message alone for one that only mentions the owner. Around the anchor first, then before or after
+//     what was read until the window is covered. Windows that overlap or touch merge, and what was read already is
+//     never asked for again. A message read that is the owner's or mentions the owner becomes an anchor too (a
+//     search can miss one). Once every window is read, each gap between two windows gets one omission line with the
+//     number of positions it leaves out, and so does the gap below the oldest window; above the newest none is
+//     written, since the newer messages may be the live archive's.
 //  3. A year the search found nothing in is taken as not covered by it (an index may not reach that far back): there,
 //     anchor chats are read backwards through kb.AnchorFilter instead, that year only, and only the years since the
 //     conversation began (one page around position 0 says when, unless the windows reached it).
@@ -43,11 +46,42 @@ type historyAnchorYear struct {
 
 // historyAnchorsCache is anchors-<source>.json.
 type historyAnchorsCache struct {
-	Source    string                        `json:"source"`
-	Years     []historyAnchorYear           `json:"years"`
-	Anchors   []connectorwire.HistoryAnchor `json:"anchors,omitempty"`
-	Done      bool                          `json:"done,omitempty"`
-	UpdatedAt time.Time                     `json:"updated_at"`
+	Source  string                        `json:"source"`
+	Years   []historyAnchorYear           `json:"years"`
+	Anchors []connectorwire.HistoryAnchor `json:"anchors,omitempty"`
+	Done    bool                          `json:"done,omitempty"`
+	// Since is how far back the years go; a selection that goes further back adds the years before it.
+	Since     time.Time `json:"since,omitzero"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// since is how far back the gathered years go.
+func (c *historyAnchorsCache) since() time.Time {
+	if !c.Since.IsZero() || len(c.Years) == 0 {
+		return c.Since
+	}
+	return c.Years[len(c.Years)-1].Since
+}
+
+// reach makes the years go back to cut: the years missing are added, and one that was cut short is gathered again
+// from the start (its anchors found twice count once).
+func (c *historyAnchorsCache) reach(now, cut time.Time, zone *time.Location) {
+	if len(c.Years) > 0 && !cut.Before(c.since()) {
+		return
+	}
+	for _, y := range historyYears(now, cut, zone) {
+		i := slices.IndexFunc(c.Years, func(x historyAnchorYear) bool { return x.Year == y.Year })
+		switch {
+		case i < 0:
+			c.Years = append(c.Years, y)
+			c.Done = false
+		case y.Since.Before(c.Years[i].Since):
+			c.Years[i].Since, c.Years[i].Cursor, c.Years[i].Done = y.Since, "", false
+			c.Done = false
+		}
+	}
+	sort.SliceStable(c.Years, func(i, j int) bool { return c.Years[i].Year > c.Years[j].Year })
+	c.Since = cut.UTC()
 }
 
 func historyAnchorsPath(data, source string) string {
@@ -99,8 +133,9 @@ func historyYears(now, cut time.Time, zone *time.Location) []historyAnchorYear {
 	return out
 }
 
-// gatherAnchors gathers the source's anchors once (going on where it stopped), when the plan imports a chat by
-// anchors that is not finished yet; then adds the chats the plan does not list.
+// gatherAnchors gathers the source's anchors once (going on where it stopped, and further back when the selection
+// goes further), when the selection reads a chat of the plan personally that is not finished yet, or would read a
+// chat the search finds outside the list; then adds the chats the plan does not list.
 func (d *historyDriver) gatherAnchors(ctx context.Context) error {
 	p, ok, err := loadHistoryPlan(d.data, d.source)
 	if err != nil || !ok {
@@ -110,24 +145,29 @@ func (d *historyDriver) gatherAnchors(ctx context.Context) error {
 	if err != nil {
 		return halt(true, "anchors_unreadable")
 	}
-	need := !cache.Done && p.wantsUnlisted()
-	for _, c := range p.importing() {
-		if c.effective() == kb.HistoryAnchor && !historyChatDone(d.data, kb.ChatID(c.filing(d.source), c.ID), kb.HistoryAnchor) {
+	e, err := d.eng(ctx)
+	if err != nil {
+		return halt(false, "kb_unavailable")
+	}
+	sel, ret := historySelection(e)
+	days, need := 0, false
+	if u := historyNeed(sel, ret, d.source, historyPlanChat{Kind: historyUnlisted}); u.Read {
+		days, need = u.Days, !cache.Done
+	}
+	for _, r := range p.reading(sel, ret) {
+		if r.need.Whole {
+			continue
+		}
+		days = max(days, r.need.Days)
+		if !historyChatDone(d.data, kb.ChatID(r.chat.filing(d.source), r.chat.ID), r.need) {
 			need = true
-			break
 		}
 	}
-	if !need {
+	if !need || days == 0 {
 		return nil
 	}
+	cache.reach(d.now(), e.CutoffFor(days), e.Store.Zone())
 	if !cache.Done {
-		e, err := d.eng(ctx)
-		if err != nil {
-			return halt(false, "kb_unavailable")
-		}
-		if len(cache.Years) == 0 {
-			cache.Years = historyYears(d.now(), e.TextCutoff(), e.Store.Zone())
-		}
 		for i := range cache.Years {
 			if err := d.gatherYear(ctx, cache, &cache.Years[i]); err != nil {
 				return err
@@ -138,7 +178,7 @@ func (d *historyDriver) gatherAnchors(ctx context.Context) error {
 			return err
 		}
 	}
-	return d.addUnlisted(cache)
+	return d.addUnlisted(ctx, cache)
 }
 
 // gatherYear pages through one year's anchors.
@@ -213,53 +253,63 @@ func (d *historyDriver) gatherYear(ctx context.Context, cache *historyAnchorsCac
 	return nil
 }
 
-// addUnlisted adds the chats anchors were found in that the plan does not list. Ones that would be imported (their
-// default is not off) take the plan's approval back, as new chats in a refreshed list do: the run ends, the owner is
-// told, and nothing of them is read until the owner approves the plan with them in it.
-func (d *historyDriver) addUnlisted(cache *historyAnchorsCache) error {
+// addUnlisted adds the chats anchors were found in that the plan does not list. Ones the selection reads take the
+// plan's approval back, as new chats in a refreshed list do (the approval's fingerprint does not have them): the run
+// ends at the next call, the owner is told, and nothing of them is read until the owner approves the plan again.
+func (d *historyDriver) addUnlisted(ctx context.Context, cache *historyAnchorsCache) error {
 	p, ok, err := loadHistoryPlan(d.data, d.source)
 	if err != nil || !ok {
 		return halt(false, "plan_gone")
 	}
-	changed, importing := false, 0
+	changed := false
 	for _, a := range cache.Anchors {
 		filed := a.Source
 		if filed == d.source {
 			filed = ""
 		}
-		if p.addUnlisted(a.Chat, filed) {
-			changed = true
-			if p.chat(a.Chat).effective() != historyOff {
-				importing++
-			}
-		}
+		changed = p.addUnlisted(a.Chat, filed) || changed
 	}
 	if !changed {
 		return nil
 	}
-	if importing > 0 {
-		p.ApprovedAt = nil
-	}
 	if err := saveHistoryPlan(d.data, p); err != nil {
 		return halt(true, "plan_save_failed", "class", errClass(err))
 	}
-	if importing > 0 {
-		return halt(false, "plan_changed", "count", strconv.Itoa(importing))
-	}
-	return nil
+	return d.gate(ctx)
 }
 
-// initPositions starts a chat's anchor import from the anchors gathered: by position, or (positions that are not
-// numbers) through the filter. Nothing to read at all: done.
-func (d *historyDriver) initPositions(w historyWork, st *kb.HistoryState) {
+// historyAnchorKind is whether an anchor the search found is read around (the owner's own message: Mine) and whether
+// it is wanted at all, for what the chat needs. A hit that says neither is taken as the owner's.
+func historyAnchorKind(a connectorwire.HistoryAnchor, need kb.ReadPlan) (mine, ok bool) {
+	own := a.Mine || !a.Mention
+	switch {
+	case own && need.Mine:
+		return true, true
+	case a.Mention && need.Mentions:
+		return false, true
+	}
+	return false, false
+}
+
+// initPositions starts a chat's personal read from the anchors gathered (within the chat's days): by position, or
+// (positions that are not numbers) through the filter. Nothing to read at all: done.
+func (d *historyDriver) initPositions(e *kb.Engine, w historyWork, st *kb.HistoryState) {
 	cache, err := loadHistoryAnchors(d.data, d.source)
 	if err != nil {
 		cache = &historyAnchorsCache{}
 	}
-	ps := &kb.PositionState{Fallback: cache.uncovered()}
-	seen := map[int64]bool{}
+	cut := e.CutoffFor(w.need.Days)
+	ps := &kb.PositionState{Fallback: slices.DeleteFunc(cache.uncovered(), func(y int) bool {
+		_, end := historyYearBounds(y, e.Store.Zone())
+		return !end.After(cut)
+	})}
+	at := map[int64]int{}
 	for _, a := range cache.Anchors {
 		if a.Chat != w.chat.ID {
+			continue
+		}
+		mine, ok := historyAnchorKind(a, w.need)
+		if !ok || !a.At.IsZero() && a.At.Before(cut) {
 			continue
 		}
 		p, err := strconv.ParseInt(a.Position, 10, 64)
@@ -267,10 +317,12 @@ func (d *historyDriver) initPositions(w historyWork, st *kb.HistoryState) {
 			st.Filter = &kb.AnchorFilterState{} // not numbers: read backwards through the filter
 			return
 		}
-		if !seen[p] {
-			seen[p] = true
-			ps.Anchors = append(ps.Anchors, kb.PositionAnchor{Pos: p, At: a.At})
+		if i, ok := at[p]; ok {
+			ps.Anchors[i].Mine = ps.Anchors[i].Mine || mine
+			continue
 		}
+		at[p] = len(ps.Anchors)
+		ps.Anchors = append(ps.Anchors, kb.PositionAnchor{Pos: p, At: a.At, Mine: mine})
 	}
 	sort.Slice(ps.Anchors, func(i, j int) bool { return ps.Anchors[i].Pos < ps.Anchors[j].Pos })
 	st.Positions = ps
@@ -282,11 +334,21 @@ func (d *historyDriver) initPositions(w historyWork, st *kb.HistoryState) {
 // historyWindow is a merged window of positions, inclusive.
 type historyWindow struct{ lo, hi int64 }
 
-// historyWindows are the anchors' windows (AnchorSpan on each side), merged where they overlap or touch, oldest first.
-func historyWindows(anchors []kb.PositionAnchor) []historyWindow {
+// historySpan is how far a window reaches on each side of an anchor: span (the mine rule's context) around the
+// owner's own message, none around one that only mentions the owner.
+func historySpan(a kb.PositionAnchor, span int) int64 {
+	if a.Mine {
+		return int64(span)
+	}
+	return 0
+}
+
+// historyWindows are the anchors' windows (historySpan on each side), merged where they overlap or touch, oldest first.
+func historyWindows(anchors []kb.PositionAnchor, span int) []historyWindow {
 	var out []historyWindow
 	for _, a := range anchors { // sorted by position
-		w := historyWindow{max(0, a.Pos-kb.AnchorSpan), a.Pos + kb.AnchorSpan}
+		r := historySpan(a, span)
+		w := historyWindow{max(0, a.Pos-r), a.Pos + r}
 		if n := len(out); n > 0 && w.lo <= out[n-1].hi+1 {
 			out[n-1].hi = max(out[n-1].hi, w.hi)
 			continue
@@ -350,14 +412,16 @@ func (d *historyDriver) stepPositional(ctx context.Context, e *kb.Engine, w hist
 	if ps.WindowsDone {
 		return d.stepFallback(ctx, e, w, st)
 	}
-	windows := historyWindows(ps.Anchors)
+	sel, _ := historySelection(e)
+	span := sel.MineContext()
+	windows := historyWindows(ps.Anchors, span)
 	var a, b int64
 	found := false
 	for i := len(windows) - 1; i >= 0 && !found; i-- {
 		a, b, found = historyGap(ps.Have, windows[i])
 	}
 	if !found {
-		if err := d.markGaps(ctx, e, w, ps); err != nil {
+		if err := d.markGaps(ctx, e, w, ps, span); err != nil {
 			return false, err
 		}
 		ps.WindowsDone = true
@@ -396,8 +460,14 @@ func (d *historyDriver) stepPositional(ctx context.Context, e *kb.Engine, w hist
 		}
 		parsed, pos = append(parsed, m), append(pos, p)
 		lo, hi = min(lo, p), max(hi, p)
-		if historyAnchor(m) && !slices.ContainsFunc(ps.Anchors, func(x kb.PositionAnchor) bool { return x.Pos == p }) {
-			ps.Anchors = append(ps.Anchors, kb.PositionAnchor{Pos: p, At: m.At})
+		mine := w.need.Mine && m.Mine
+		if !mine && !(w.need.Mentions && historyMention(m)) {
+			continue
+		}
+		if i := slices.IndexFunc(ps.Anchors, func(x kb.PositionAnchor) bool { return x.Pos == p }); i >= 0 {
+			ps.Anchors[i].Mine = ps.Anchors[i].Mine || mine
+		} else {
+			ps.Anchors = append(ps.Anchors, kb.PositionAnchor{Pos: p, At: m.At, Mine: mine})
 		}
 	}
 	sort.Slice(ps.Anchors, func(i, j int) bool { return ps.Anchors[i].Pos < ps.Anchors[j].Pos })
@@ -408,7 +478,7 @@ func (d *historyDriver) stepPositional(ctx context.Context, e *kb.Engine, w hist
 	}
 	// Covered is what was kept: the page's positions inside the windows as they are now (with the anchors it brought).
 	// A position read outside them is not, so a window an anchor found later widens over it is read there again.
-	windows = historyWindows(ps.Anchors)
+	windows = historyWindows(ps.Anchors, span)
 	if hi >= 0 {
 		for _, w := range windows {
 			ps.Have = historyCover(ps.Have, max(lo, w.lo), min(hi, w.hi))
@@ -431,13 +501,28 @@ func (d *historyDriver) stepPositional(ctx context.Context, e *kb.Engine, w hist
 	}
 	edges := map[int64]bool{}
 	for _, x := range ps.Anchors {
-		edges[x.Pos-kb.AnchorSpan], edges[x.Pos+kb.AnchorSpan] = true, true
+		r := historySpan(x, span)
+		edges[x.Pos-r], edges[x.Pos+r] = true, true
 	}
+	cut := e.CutoffFor(w.need.Days)
 	var kept []kb.SourceMessage
+	near := map[string]bool{}
 	for i := range parsed {
 		p := pos[i]
 		if !slices.ContainsFunc(windows, func(w historyWindow) bool { return p >= w.lo && p <= w.hi }) {
 			continue
+		}
+		if m := parsed[i]; !m.At.IsZero() && m.At.Before(cut) {
+			continue
+		}
+		// A mention the search found is one, should the page not say so itself. Who sent a message is the page's
+		// word alone: a hit that says neither mine nor mention is read around as the owner's, but its window (near)
+		// is all that gives it, never the owner as its sender.
+		if j := slices.IndexFunc(ps.Anchors, func(x kb.PositionAnchor) bool { return x.Pos == p }); j >= 0 && !ps.Anchors[j].Mine && !parsed[i].Mine && !historyMention(parsed[i]) {
+			parsed[i].Mentioned = true
+		}
+		if slices.ContainsFunc(ps.Anchors, func(x kb.PositionAnchor) bool { return x.Mine && p >= x.Pos-int64(span) && p <= x.Pos+int64(span) }) {
+			near[historyKey(parsed[i])] = true
 		}
 		kept = append(kept, parsed[i])
 		if edges[p] {
@@ -447,7 +532,7 @@ func (d *historyDriver) stepPositional(ctx context.Context, e *kb.Engine, w hist
 			ps.Edges[p] = parsed[i].At
 		}
 	}
-	added, err := d.write(ctx, e, w, kept, kb.HistoryAnchor)
+	added, err := d.write(ctx, e, w, kept, near)
 	if err != nil {
 		return false, err
 	}
@@ -465,11 +550,11 @@ func (d *historyDriver) stepPositional(ctx context.Context, e *kb.Engine, w hist
 
 // markGaps writes the omission lines between the chat's windows and below the oldest, counted from the positions
 // they leave out. Nothing when nothing of the chat was kept (no chat is made out of omission lines).
-func (d *historyDriver) markGaps(ctx context.Context, e *kb.Engine, w historyWork, ps *kb.PositionState) error {
+func (d *historyDriver) markGaps(ctx context.Context, e *kb.Engine, w historyWork, ps *kb.PositionState, span int) error {
 	if _, ok := e.Store.Chat(w.id); !ok {
 		return nil
 	}
-	windows := historyWindows(ps.Anchors)
+	windows := historyWindows(ps.Anchors, span)
 	var lines []kb.SourceMessage
 	for i := 1; i < len(windows); i++ {
 		if n := windows[i].lo - windows[i-1].hi - 1; n > 0 {
@@ -485,7 +570,7 @@ func (d *historyDriver) markGaps(ctx context.Context, e *kb.Engine, w historyWor
 			lines = append(lines, kb.OmissionLine(at.Truncate(time.Minute).Add(-time.Second), int(windows[0].lo)))
 		}
 	}
-	_, err := d.write(ctx, e, w, lines, kb.HistoryAnchor)
+	_, err := d.write(ctx, e, w, lines, nil)
 	return err
 }
 
@@ -531,7 +616,7 @@ func (d *historyDriver) keepAnchorHits(ctx context.Context, e *kb.Engine, w hist
 	}
 	saved := d.info.Media
 	d.info.Media = false // the chat cannot be read: nor can its images
-	_, err = d.write(ctx, e, w, msgs, kb.HistoryAnchor)
+	_, err = d.write(ctx, e, w, msgs, nil)
 	d.info.Media = saved
 	return err
 }
@@ -625,7 +710,7 @@ func (d *historyDriver) stepFallback(ctx context.Context, e *kb.Engine, w histor
 		return done, err
 	}
 	msgs := page.Messages
-	cut := e.TextCutoff()
+	cut := e.CutoffFor(w.need.Days)
 	var in []kb.SourceMessage
 	older := false
 	for _, m := range msgs {
@@ -641,20 +726,19 @@ func (d *historyDriver) stepFallback(ctx context.Context, e *kb.Engine, w histor
 		_, done, err := d.outcome(ctx, e, w, st, c, historyChatError, "cursor_stuck", nil)
 		return done, err
 	}
-	f := kb.NewAnchorFilter(historyAnchor, 0, st.Filter)
-	out := f.Push(in)
+	sel, _ := historySelection(e)
+	yearDone := older || atStart
+	out, near := d.pick(w, sel.MineContext(), st, in, yearDone)
 	switch {
-	case older || atStart: // the year is read; the next one starts from this page again (or nothing is older)
-		out = append(out, f.Flush()...)
+	case yearDone: // the year is read; the next one starts from this page again (or nothing is older)
 		ps.Year, st.Filter = 0, nil
 		if atStart {
 			ps.Fallback, st.Cursor = nil, ""
 		}
 	default:
-		fs := f.State()
-		st.Filter, st.Cursor = &fs, page.Older
+		st.Cursor = page.Older
 	}
-	added, err := d.write(ctx, e, w, out, kb.HistoryAnchor)
+	added, err := d.write(ctx, e, w, out, near)
 	if err != nil {
 		return false, err
 	}

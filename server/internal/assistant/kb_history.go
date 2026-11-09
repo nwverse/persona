@@ -260,9 +260,10 @@ func (b busHistory) Media(ctx context.Context, id, ref string) (connector.Media,
 
 // ---- choosing what runs ----
 
-// historyBlock is why a configured source does not run now ("" it can). info is what the hub says the connector
-// offers (nil: not asked yet, so whether its anchors are still to gather is not known).
-func (d *historyDriver) historyBlock(src assistantwire.KBHistorySource, info *assistantwire.ArchiveSource) (string, *historyPlan) {
+// historyBlock is why a configured source does not run now ("" it can), as the selection sel reads now: "widened"
+// when it reads more than the owner approved (the caller takes the approval back). info is what the hub says the
+// connector offers (nil: not asked yet, so whether its anchors are still to gather is not known).
+func (d *historyDriver) historyBlock(src assistantwire.KBHistorySource, info *assistantwire.ArchiveSource, sel *kb.Selection, ret kb.Retention) (string, *historyPlan) {
 	if src.SearchIndexNeeded() && !d.indexed() {
 		return "needs_search_index", nil
 	}
@@ -274,22 +275,29 @@ func (d *historyDriver) historyBlock(src assistantwire.KBHistorySource, info *as
 		return "no_plan", nil
 	case p.ApprovedAt == nil:
 		return "not_approved", p
+	case sel.Stopgap(): // what the selection reads is not known now: it waits, the approval kept
+		return "selection_unavailable", p
 	}
-	if d.finished(src.Name, p, info) {
+	if n, unlisted := p.widened(sel, ret); n > 0 || unlisted {
+		return "widened", p
+	}
+	if d.finished(src.Name, p, info, sel, ret) {
 		return "done", p
 	}
 	return "", p
 }
 
-// finished: every chat the plan imports is done, in error or unreadable, in the mode it has now; and for a source
-// that can search, its anchors are gathered (they may add chats) unless the plan takes no chat by anchors.
-func (d *historyDriver) finished(source string, p *historyPlan, info *assistantwire.ArchiveSource) bool {
-	for _, c := range p.importing() {
-		if !historyChatDone(d.data, kb.ChatID(c.filing(source), c.ID), c.effective()) {
+// finished: every chat the selection reads is done, in error or unreadable, for what it reads now; and for a source
+// that can search, its anchors are gathered (they may add chats) unless no chat is read by them.
+func (d *historyDriver) finished(source string, p *historyPlan, info *assistantwire.ArchiveSource, sel *kb.Selection, ret kb.Retention) bool {
+	personal := false
+	for _, r := range p.reading(sel, ret) {
+		if !historyChatDone(d.data, kb.ChatID(r.chat.filing(source), r.chat.ID), r.need) {
 			return false
 		}
+		personal = personal || !r.need.Whole
 	}
-	if info != nil && info.HistoryAnchors && p.wantsUnlisted() {
+	if info != nil && info.HistoryAnchors && (personal || historyWantsUnlisted(sel, ret, source)) {
 		if cache, err := loadHistoryAnchors(d.data, source); err != nil || !cache.Done {
 			return false
 		}
@@ -297,12 +305,35 @@ func (d *historyDriver) finished(source string, p *historyPlan, info *assistantw
 	return true
 }
 
-// historyChatDone: the chat's import is over in this mode (its state file read as it is, without opening the
-// knowledge base).
-func historyChatDone(data, chatID, mode string) bool {
+// historyChatDone: the chat's import is over for need (its state file read as it is, without opening the knowledge
+// base): finished under a plan that covers it.
+func historyChatDone(data, chatID string, need kb.ReadPlan) bool {
 	var hs kb.HistoryState
 	ok, err := readJSONFile(historyStatePathFor(data, chatID), &hs)
-	return err == nil && ok && hs.Finished() && hs.Mode == mode
+	return err == nil && ok && hs.Finished() && historyCovers(hs.Plan, need)
+}
+
+// historyCovers: a read under plan covers need (nil plan: a state from before plans were kept, covering nothing).
+func historyCovers(plan *kb.ReadPlan, need kb.ReadPlan) bool {
+	return plan != nil && !need.Wider(*plan)
+}
+
+// revokeWidened takes the approval of the source's plan back when the selection now reads more than was approved,
+// saying how many chats that is (0: nothing taken back).
+func (d *historyDriver) revokeWidened(source string, sel *kb.Selection, ret kb.Retention) (int, error) {
+	p, ok, err := loadHistoryPlan(d.data, source)
+	if err != nil || !ok {
+		return 0, err
+	}
+	n, unlisted := p.widened(sel, ret)
+	if n == 0 && !unlisted {
+		return 0, nil
+	}
+	p.revoke()
+	if err := saveHistoryPlan(d.data, p); err != nil {
+		return 0, err
+	}
+	return max(n, 1), nil
 }
 
 // runOnce runs the sources that can run now, one after another under one lock and one backup, until none can.
@@ -314,10 +345,30 @@ func (d *historyDriver) runOnce(ctx context.Context) error {
 	if _, stopped := readHistoryStop(d.data); stopped {
 		return nil
 	}
-	// Approved plans first (no call at all otherwise), then what the connectors offer, then what is left to do.
+	e, err := d.eng(ctx)
+	if err != nil {
+		return err
+	}
+	d.zone = e.Store.Zone()
+	sel, ret := historySelection(e)
+	// Approved plans first (no call at all otherwise), then what the connectors offer, then what is left to do. A plan
+	// the selection now reads more of than was approved loses its approval, and the owner is told.
 	var approved []assistantwire.KBHistorySource
 	for _, src := range cfg.Sources {
-		if why, _ := d.historyBlock(src, nil); why == "" || why == "done" {
+		why, _ := d.historyBlock(src, nil, sel, ret)
+		if why == "widened" {
+			d.source = src.Name
+			if n, err := d.revokeWidened(src.Name, sel, ret); err == nil && n > 0 {
+				h := halt(false, "plan_changed", "count", strconv.Itoa(n))
+				d.log(historyLogLine{Event: "end", historyReason: h.why})
+				if d.notify != nil {
+					d.notify(ctx, src.Name, h.why)
+				}
+			}
+			d.source = ""
+			continue
+		}
+		if why == "" || why == "done" {
 			approved = append(approved, src)
 		}
 	}
@@ -341,16 +392,12 @@ func (d *historyDriver) runOnce(ctx context.Context) error {
 			d.setStatus(src.Name, func(st *historySourceStatus) { st.State = "unavailable" })
 			continue
 		}
-		if why, _ := d.historyBlock(src, &info); why == "" {
+		if why, _ := d.historyBlock(src, &info, sel, ret); why == "" {
 			runnable = append(runnable, src)
 		}
 	}
 	if len(runnable) == 0 {
 		return nil
-	}
-	e, err := d.eng(ctx)
-	if err != nil {
-		return err
 	}
 	d.zone = e.Store.Zone()
 	if d.key, err = historyLogKey(d.data); err != nil {
@@ -382,7 +429,8 @@ func (d *historyDriver) runOnce(ctx context.Context) error {
 	d.log(historyLogLine{Event: "backup", Result: "ok", historyReason: reason("backup", "file", filepath.Base(path))})
 	for _, src := range runnable {
 		info := infos[src.Name]
-		if why, _ := d.historyBlock(src, &info); why != "" { // the plan changed while another source ran
+		sel, ret := historySelection(e)
+		if why, _ := d.historyBlock(src, &info, sel, ret); why != "" { // the plan or the selection changed while another source ran
 			continue
 		}
 		err := d.runSource(ctx, src, info)
@@ -439,10 +487,11 @@ func (d *historyDriver) stopAll(ctx context.Context, why historyReason) {
 
 // ---- one source ----
 
-// historyWork is a chat the run imports.
+// historyWork is a chat the run imports, with what the selection reads of it (as of the step).
 type historyWork struct {
 	chat historyPlanChat
 	id   string // the knowledge-base chat id
+	need kb.ReadPlan
 }
 
 func (d *historyDriver) runSource(ctx context.Context, src assistantwire.KBHistorySource, info assistantwire.ArchiveSource) error {
@@ -483,10 +532,15 @@ func (d *historyDriver) runSource(ctx context.Context, src assistantwire.KBHisto
 	if err != nil || p == nil {
 		return halt(false, "plan_gone")
 	}
+	e, err := d.eng(ctx)
+	if err != nil {
+		return halt(false, "kb_unavailable")
+	}
+	sel, ret := historySelection(e)
 	var work []historyWork
-	for _, c := range p.importing() {
-		w := historyWork{chat: c, id: kb.ChatID(c.filing(src.Name), c.ID)}
-		if d.chatFinished(w) {
+	for _, r := range p.reading(sel, ret) {
+		w := historyWork{chat: r.chat, id: kb.ChatID(r.chat.filing(src.Name), r.chat.ID), need: r.need}
+		if historyChatDone(d.data, w.id, w.need) {
 			continue
 		}
 		work = append(work, w)
@@ -498,13 +552,14 @@ func (d *historyDriver) runSource(ctx context.Context, src assistantwire.KBHisto
 		pages := d.pacer.switchPages()
 		gone := false
 		for n := 0; n < pages && !gone; n++ {
-			mode, ok := d.planMode(w.chat.ID)
-			if !ok || mode == historyOff {
+			// What is read comes from the selection as it is now: the owner may change it while the import runs.
+			c, need, ok := d.chatNeed(ctx, w.chat.ID)
+			if !ok || !need.Read {
 				gone = true
 				break
 			}
-			w.chat.Mode = &mode
-			done, err := d.step(ctx, w, mode)
+			w.chat, w.need = c, need
+			done, err := d.step(ctx, w)
 			if err != nil {
 				return err
 			}
@@ -521,28 +576,26 @@ func (d *historyDriver) runSource(ctx context.Context, src assistantwire.KBHisto
 	return nil
 }
 
-// planMode is a chat's effective mode as the plan says now (the owner may change it while the import runs).
-func (d *historyDriver) planMode(id string) (string, bool) {
+// chatNeed is the plan's chat and what the selection reads of it now; false when the plan no longer has it.
+func (d *historyDriver) chatNeed(ctx context.Context, id string) (historyPlanChat, kb.ReadPlan, bool) {
 	p, ok, err := loadHistoryPlan(d.data, d.source)
 	if err != nil || !ok {
-		return "", false
+		return historyPlanChat{}, kb.ReadPlan{}, false
 	}
 	c := p.chat(id)
-	if c == nil {
-		return "", false
+	e, err := d.eng(ctx)
+	if c == nil || err != nil {
+		return historyPlanChat{}, kb.ReadPlan{}, false
 	}
-	return c.effective(), true
-}
-
-func (d *historyDriver) chatFinished(w historyWork) bool {
-	return historyChatDone(d.data, w.id, w.chat.effective())
+	sel, ret := historySelection(e)
+	return *c, historyNeed(sel, ret, d.source, *c), true
 }
 
 // ---- around every call ----
 
 // gate is what is checked before every call and during every wait: the run ends when the process does, when STOP is
 // there, when kb.history no longer enables the source, when the knowledge base is not writable, or when the plan is
-// no longer approved.
+// no longer approved, the selection reading more than was approved among the reasons (the approval is taken back).
 func (d *historyDriver) gate(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -557,11 +610,21 @@ func (d *historyDriver) gate(ctx context.Context) error {
 	if _, ok := cfg.Source(d.source); !ok {
 		return halt(false, "not_listed")
 	}
-	if _, err := d.eng(ctx); err != nil {
+	e, err := d.eng(ctx)
+	if err != nil {
 		return halt(false, "kb_unavailable")
 	}
 	if p, ok, err := loadHistoryPlan(d.data, d.source); err != nil || !ok || p.ApprovedAt == nil {
 		return halt(false, "not_approved")
+	}
+	sel, ret := historySelection(e)
+	if sel.Stopgap() { // the document does not read now: the approval is kept, and the next round tries again
+		return halt(false, "selection_unavailable")
+	}
+	if n, err := d.revokeWidened(d.source, sel, ret); err != nil {
+		return halt(true, "plan_save_failed", "class", errClass(err))
+	} else if n > 0 {
+		return halt(false, "plan_changed", "count", strconv.Itoa(n))
 	}
 	return d.beat(false)
 }

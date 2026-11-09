@@ -16,23 +16,26 @@ import (
 )
 
 // One step of a chat's import: one call (and the image downloads of the page it answered), its messages written,
-// its state saved. A chat's mode decides how:
+// its state saved. What the selection reads of the chat (historyWork.need, kb.Selection.ReadChat) decides how:
 //
-//   - full: every message, read backwards from the newest page, going on only from the cursor each page answers (a
+//   - whole: every message, read backwards from the newest page, going on only from the cursor each page answers (a
 //     limit is a hint: sources answer more or fewer), until the start of the conversation (AtStart, position 0) or
-//     the text retention.
-//   - anchor, from a source that cannot search: the same read, through kb.AnchorFilter (the owner's messages and
-//     mentions, 50 on each side).
-//   - anchor, from a source that can: windows by position around the anchors its search found
+//     as far back as the chat's days go (the source's back_days, else the deciding rule's).
+//   - personal (only what the mentions and mine rules keep), from a source that cannot search: the same read,
+//     through kb.AnchorFilter around the owner's messages (the mine rule's context on each side), and the messages
+//     that mention the owner on their own.
+//   - personal, from a source that can: windows by position around the anchors its search found
 //     (kb_history_anchor.go).
+//
+// Either way WriteHistory judges every message again by the selection: the read only bounds what it is handed.
 
-// step makes the chat's next call in mode; done: the chat needs none any more.
-func (d *historyDriver) step(ctx context.Context, w historyWork, mode string) (bool, error) {
+// step makes the chat's next call; done: the chat needs none any more.
+func (d *historyDriver) step(ctx context.Context, w historyWork) (bool, error) {
 	e, err := d.eng(ctx)
 	if err != nil {
 		return false, halt(false, "kb_unavailable")
 	}
-	st, err := d.loadState(e, w, mode)
+	st, err := d.loadState(e, w)
 	if err != nil {
 		return false, halt(true, "state_unreadable", "chat", historyHash(d.key, w.chat.filing(d.source), w.chat.ID))
 	}
@@ -40,11 +43,11 @@ func (d *historyDriver) step(ctx context.Context, w historyWork, mode string) (b
 		return true, nil
 	}
 	switch {
-	case mode == kb.HistoryFull:
-		return d.stepBackwards(ctx, e, w, &st, false)
+	case w.need.Whole:
+		return d.stepBackwards(ctx, e, w, &st)
 	case d.info.HistoryAnchors:
 		if st.Positions == nil && st.Filter == nil {
-			d.initPositions(w, &st)
+			d.initPositions(e, w, &st)
 			if err := d.saveState(e, w, &st); err != nil {
 				return false, err
 			}
@@ -56,18 +59,24 @@ func (d *historyDriver) step(ctx context.Context, w historyWork, mode string) (b
 			return d.stepPositional(ctx, e, w, &st)
 		}
 	}
-	return d.stepBackwards(ctx, e, w, &st, true)
+	return d.stepBackwards(ctx, e, w, &st)
 }
 
-// loadState is the chat's state in mode: a new one when there is none or it was another mode (the owner changed it:
-// it starts over; what was written stays, and a page read twice adds nothing).
-func (d *historyDriver) loadState(e *kb.Engine, w historyWork, mode string) (kb.HistoryState, error) {
+// loadState is the chat's state for what it reads now: a new one when there is none, or when the selection reads more
+// of the chat than the state's read covers (it starts over; what was written stays, and a page read twice adds
+// nothing). A read that goes on under a narrower selection covers only that from then on (State.Plan).
+func (d *historyDriver) loadState(e *kb.Engine, w historyWork) (kb.HistoryState, error) {
 	st, ok, err := e.Store.HistoryState(w.id)
 	if err != nil {
 		return kb.HistoryState{}, err
 	}
-	if !ok || st.Mode != mode {
+	mode := historyMode(w.need)
+	if !ok || !historyCovers(st.Plan, w.need) {
 		st = kb.HistoryState{Source: w.chat.filing(d.source), Mode: mode, State: kb.HistoryRunning, Read: st.Read, Written: st.Written}
+	}
+	if !st.Finished() {
+		need := w.need
+		st.Plan, st.Mode = &need, mode
 	}
 	if st.State == kb.HistoryPaused {
 		st.State = kb.HistoryRunning
@@ -92,8 +101,85 @@ func (d *historyDriver) kbChat(w historyWork) *kb.Chat {
 	return &kb.Chat{Source: w.chat.filing(d.source), SourceID: w.chat.ID, Kind: kind, Name: w.chat.Name}
 }
 
-// historyAnchor picks an anchor: the owner's own message, or one that mentions the owner.
-func historyAnchor(m kb.SourceMessage) bool { return m.Mine || m.Mentioned }
+// historyMine picks the owner's own messages: the anchors the mine rule's context is read around.
+func historyMine(m kb.SourceMessage) bool { return m.Mine }
+
+// historyMention: the message mentions the owner (by name, or an @all: the selection decides whether that counts).
+func historyMention(m kb.SourceMessage) bool { return m.Mentioned || m.MentionedAll }
+
+// historyKey tells messages apart within a read: the source's id, else where and when it is and what it says.
+func historyKey(m kb.SourceMessage) string {
+	if m.ID != "" {
+		return m.ID
+	}
+	return m.Position + "\x00" + m.At.UTC().Format(time.RFC3339Nano) + "\x00" + m.SenderID + "\x00" + m.Text
+}
+
+// pick is what a backward read hands to WriteHistory of msgs (oldest first, within the chat's days), and which of
+// them are within the mine rule's context of one of the owner's (near, for HistoryWrite.NearMine). flush: the read
+// reached its end.
+//
+//   - whole: every message. When the mine rule reads context, the filter around the owner's messages runs too, so the
+//     lines around them keep the mine rule's days: those it brings from newer pages are handed again, and
+//     WriteHistory notes the rule on the line already there.
+//   - personal: kb.AnchorFilter (its state kept between pages in st.Filter) keeps the owner's messages with the mine
+//     rule's context on each side, and the messages that mention the owner on their own, marking each gap with an
+//     omission line.
+//
+// Every message a window keeps counts as near: one that also mentions the owner may then be kept as long as the
+// longer of both rules, never shorter than either. One kept on its own (a mention outside every window) is not
+// near, as daily ingestion would judge it.
+func (d *historyDriver) pick(w historyWork, span int, st *kb.HistoryState, msgs []kb.SourceMessage, flush bool) ([]kb.SourceMessage, map[string]bool) {
+	whole := w.need.Whole
+	var out []kb.SourceMessage
+	near := map[string]bool{}
+	in := map[string]bool{}
+	add := func(m kb.SourceMessage) {
+		if m.Type == kb.TypeOmitted {
+			if !whole { // a whole read leaves nothing out
+				out = append(out, m)
+			}
+			return
+		}
+		if k := historyKey(m); !in[k] {
+			in[k] = true
+			out = append(out, m)
+		}
+	}
+	if whole {
+		for _, m := range msgs {
+			add(m)
+		}
+	}
+	f := kb.NewAnchorFilter(nil, span, st.Filter)
+	if span == 0 {
+		f.Span = -1 // the owner's messages alone
+	}
+	if w.need.Mine || whole { // a whole read plan does not say Mine: the mine rule is on when span > 0
+		f.Anchor = historyMine
+	}
+	lone := map[string]bool{}
+	if w.need.Mentions && !whole {
+		f.Keep = historyMention
+		f.Kept = func(m kb.SourceMessage) { lone[historyKey(m)] = true }
+	}
+	if whole && (f.Anchor == nil || span == 0) || f.Anchor == nil && f.Keep == nil {
+		return out, near
+	}
+	got := f.Push(msgs)
+	if flush {
+		got = append(got, f.Flush()...)
+	}
+	fs := f.State()
+	st.Filter = &fs
+	for _, m := range got {
+		if k := historyKey(m); m.Type != kb.TypeOmitted && f.Anchor != nil && !lone[k] {
+			near[k] = true
+		}
+		add(m)
+	}
+	return out, near
+}
 
 // page reads one page of the chat (one call).
 func (d *historyDriver) page(ctx context.Context, w historyWork, q connectorwire.HistoryQuery) (connectorwire.HistoryPage, historyCall, error) {
@@ -222,15 +308,19 @@ func (d *historyDriver) pauseWait(code string) time.Duration {
 // download was cut short (a stop, a pause that ran out, the import turned off), nothing of the page is written: the
 // caller returns the halt without saving its state, so the page is read again on resume and its images with it (the
 // ones already saved are not downloaded twice).
-func (d *historyDriver) write(ctx context.Context, e *kb.Engine, w historyWork, msgs []kb.SourceMessage, mode string) (int, error) {
+func (d *historyDriver) write(ctx context.Context, e *kb.Engine, w historyWork, msgs []kb.SourceMessage, near map[string]bool) (int, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
-	var dl kb.DownloadFunc
+	facts := w.chat.facts(d.source)
+	opt := kb.HistoryWrite{Mode: historyMode(w.need), Chat: &facts}
 	if d.info.Media {
-		dl = d.download(ctx, w)
+		opt.Download = d.download(ctx, w)
 	}
-	added, err := e.WriteHistory(ctx, d.kbChat(w), msgs, kb.HistoryWrite{Mode: mode, Download: dl})
+	if len(near) > 0 {
+		opt.NearMine = func(m kb.SourceMessage) bool { return near[historyKey(m)] }
+	}
+	added, err := e.WriteHistory(ctx, d.kbChat(w), msgs, opt)
 	if errors.Is(err, kb.ErrDownloadAborted) {
 		if h := d.takeHalt(); h != nil {
 			return 0, h
@@ -250,33 +340,23 @@ func (d *historyDriver) takeHalt() error {
 	return h
 }
 
-// stepBackwards reads the chat's next page backwards: every message (full), or through the anchor filter.
-func (d *historyDriver) stepBackwards(ctx context.Context, e *kb.Engine, w historyWork, st *kb.HistoryState, anchor bool) (bool, error) {
+// stepBackwards reads the chat's next page backwards: every message (whole), or what the personal rules keep (pick).
+func (d *historyDriver) stepBackwards(ctx context.Context, e *kb.Engine, w historyWork, st *kb.HistoryState) (bool, error) {
 	page, c, callErr := d.page(ctx, w, connectorwire.HistoryQuery{Before: st.Cursor})
 	if handled, done, err := d.answered(ctx, e, w, st, page, c, callErr, nil); handled {
 		return done, err
 	}
 	msgs := page.Messages
-	cut := e.TextCutoff()
+	cut := e.CutoffFor(w.need.Days)
 	reached := page.AtStart() || page.Older == "" || historyAtZero(msgs) || historyBefore(msgs, cut)
 	if !reached && page.Older == st.Cursor {
 		// The source answered the same cursor: going on would read the same page forever.
 		_, done, err := d.outcome(ctx, e, w, st, c, historyChatError, "cursor_stuck", nil)
 		return done, err
 	}
-	out := msgs
-	mode := kb.HistoryFull
-	if anchor {
-		mode = kb.HistoryAnchor
-		f := kb.NewAnchorFilter(historyAnchor, 0, st.Filter)
-		out = f.Push(historyFrom(msgs, cut))
-		if reached {
-			out = append(out, f.Flush()...)
-		}
-		fs := f.State()
-		st.Filter = &fs
-	}
-	added, err := d.write(ctx, e, w, out, mode)
+	sel, _ := historySelection(e)
+	out, near := d.pick(w, sel.MineContext(), st, historyFrom(msgs, cut), reached)
+	added, err := d.write(ctx, e, w, out, near)
 	if err != nil {
 		return false, err
 	}

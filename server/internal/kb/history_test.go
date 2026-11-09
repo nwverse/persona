@@ -745,3 +745,93 @@ func TestHistoryStateNeedsSource(t *testing.T) {
 		t.Fatal("a state without its source was written")
 	}
 }
+
+// Keep keeps the messages it picks on their own (a mention of the owner), each splitting the gap it falls in, and a
+// negative span keeps an anchor alone; worked out directly and compared over random conversations and page sizes, with
+// and without a resume from the saved state after every page.
+func TestAnchorFilterKeepsMentionsAlone(t *testing.T) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	mention := func(m SourceMessage) bool { return m.Mentioned }
+	for i := 0; i < 200; i++ {
+		n, span := 1+r.Intn(300), r.Intn(20)-3 // a negative span: anchors alone
+		msgs := conversation(n)
+		for j := r.Intn(6); j > 0; j-- {
+			msgs[r.Intn(n)].Mine = true
+		}
+		for j := r.Intn(6); j > 0; j-- {
+			msgs[r.Intn(n)].Mentioned = true
+		}
+		width := max(span, 0)
+		if span == 0 {
+			width = AnchorSpan
+		}
+		keep := make([]bool, n)
+		any := false
+		for k, m := range msgs {
+			switch {
+			case m.Mine:
+				for j := max(0, k-width); j <= min(n-1, k+width); j++ {
+					keep[j] = true
+				}
+				any = true
+			case m.Mentioned:
+				keep[k], any = true, true
+			}
+		}
+		var kept []int
+		var gaps [][2]int
+		for k := 0; any && k < n; {
+			if keep[k] {
+				kept = append(kept, k)
+				k++
+				continue
+			}
+			j := k
+			for j < n && !keep[j] {
+				j++
+			}
+			gaps = append(gaps, [2]int{j - k, k})
+			k = j
+		}
+		for _, resume := range []bool{false, true} {
+			f := NewAnchorFilter(mine, span, nil)
+			f.Keep = mention
+			var out []SourceMessage
+			for end := n; end > 0; {
+				start := max(0, end-1-r.Intn(16))
+				out = append(out, f.Push(msgs[start:end])...)
+				end = start
+				if resume {
+					raw, _ := json.Marshal(f.State())
+					var st AnchorFilterState
+					if err := json.Unmarshal(raw, &st); err != nil {
+						t.Fatal(err)
+					}
+					f = NewAnchorFilter(mine, span, &st)
+					f.Keep = mention
+				}
+			}
+			out = append(out, f.Flush()...)
+			var gotKept []int
+			var gotGaps [][2]int
+			for _, m := range out {
+				if m.Type == TypeOmitted {
+					var c int
+					if _, err := fmt.Sscanf(strings.TrimPrefix(m.Text, "[……此处省略 "), "%d", &c); err != nil { // i18n-ignore: archive data
+						t.Fatalf("omission line %q", m.Text)
+					}
+					gotGaps = append(gotGaps, [2]int{c, int(m.At.Sub(msgs[0].At) / time.Minute)})
+					continue
+				}
+				var idx int
+				fmt.Sscan(m.Position, &idx)
+				gotKept = append(gotKept, idx)
+			}
+			slices.Sort(gotKept)
+			slices.SortFunc(gotGaps, func(a, b [2]int) int { return a[1] - b[1] })
+			if !slices.Equal(gotKept, kept) || !slices.Equal(gotGaps, gaps) {
+				t.Fatalf("n=%d span=%d resume=%v:\nkept %v\nwant %v\ngaps %v\nwant %v", n, span, resume, gotKept, kept, gotGaps, gaps)
+			}
+		}
+	}
+}

@@ -355,7 +355,9 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   `interval_seconds`, `batch_calls`, `rest_minutes`, `long_rest_every_hours` and `long_rest_minutes` (`[0, 0]`: none), `quiet_periods_per_day` and `quiet_hours`,
   `switch_chat_pages`, `image_interval_seconds`, and `slow_factor` (≥ 1: every interval and rest multiplied by it, e.g. `2` after a stop the import caused). A range that
   does not read (most below least, a negative number or bound) or a negative `slow_factor` is an error in `manager.json` like any other (a running manager keeps what it last read). Changing `kb.history`
-  never reopens the knowledge base: the import reads it again before every call, so `enabled: false` stops it before its next call,
+  never reopens the knowledge base: the import reads it again before every call, so `enabled: false` stops it before its next call.
+  `kb.history` keeps only the switch and the pacing: which chats are read, how much of each and how far back (`history.<source>.back_days`) are the knowledge base's
+  selection, which the manager keeps in its settings table, not here,
   `ai` (model for compression and tagging, same fields as `ai`; defaults to `inbox.triage_ai`, then `ai`), `extra_dirs` (note directories you maintain on the manager's machine, the hub machine for the built-in manager,
   e.g. a git repo of facts / lessons: `kb_search` also searches Markdown in these directories (read-only, skips dot directories such as `.git`), and the assistant's CLAUDE.md mentions them; `~/` is that machine's home).
   With `enabled: true, read_only: true`, the manager serves existing local archives without collection, model calls,
@@ -363,6 +365,12 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   A missing archive returns empty lists without creating files. Recording sync writes return `403 kb_read_only`, never a deletion acknowledgement.
   Archives containing symbolic links, non-regular files, unreadable files or malformed entity metadata are unavailable rather than reported as empty.
   `enabled: false` still disables reads. Restart the manager to enter read-only mode so no earlier automatic round remains in flight.
+- **Selection** (what the knowledge base brings in from chats and documents and for how many days, daily ingestion and the history import alike;
+  `docs/assistant/knowledge.md` "Selection"): not in `manager.json` but in the manager's settings table (key `kb.selection`), edited through
+  `GET` / `PUT /api/v1/kb/selection` (the whole document, validated; a read-only device gets 403) and `GET /api/v1/kb/selection/candidates?source=<connector id>`
+  (a source's chats, for a per-item picker), or per chat with `kb_history_plan`; an app settings page is a follow-up. No document saved means the defaults: mentions of you, your own messages with 50 on each side, and direct messages,
+  every rule's `days` null (`kb.text_days`) and attachments as `attachment_days` / `attachment_days_by_source` say. Turning a rule off only stops writing new lines;
+  what is stored is pruned by days alone, and shorter days apply only once you set them.
   The knowledge base belongs to the manager, which reads the whole section here (`ai` included: it is the default of its `kb.*` model purposes);
   an assistant run elsewhere (`assistant.external`) reads the `manager.json` on its own machine, and its `extra_dirs` are paths there (`docs/assistant/knowledge.md` ("Who owns what")).
 - `agents.triage`: triage after a round stops ([agent-work.md](../assistant/agent-work.md) ("Switches")). Switches are under **Settings › Session Triage** in the App (stored in the manager's settings, all off by default),

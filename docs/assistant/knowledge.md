@@ -82,6 +82,7 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     attachments/YYYY-MM-DD/ # Images, files; deleted after 30 days (per source: kb.attachment_days_by_source)
     summary.md              # Compressed context (AI-maintained, rolling updates)
     .receipts.json          # Live-ingestion source/chat message IDs and original times (bookkeeping, not searched)
+    retention.json          # Retention ledger: the selection rule of each line another rule than the chat's usual one decided (not searched)
     .ingest.json            # Pending live-ingestion recovery intent, removed after completion
   people/<person id>/       # One directory per person: Lark lark-<userId>, mail mail-<address>
     meta.json               # Name, chats, linked projects, tags
@@ -100,6 +101,7 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     summary.md              # Model summary after transcription completes
   recordings/.deleted.json  # Deleted recording UUIDs (tombstones); late uploads within retention return 410
   cursors/<connector>.json  # A connector's archive cursor (bookkeeping, not searched)
+  select/<chat id>.json     # The selection's mine-rule context of a chat between daily batches (not searched)
   history/                  # The history import's bookkeeping ("History import" below; not searched)
     state/<chat id>.json    # A chat's progress
     plan-<source>.json      # Which chats of a source to import and how
@@ -181,7 +183,8 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
      and their comments are not read. A full page older than a year marks the tab `done`; subsequent rounds only read its head pages for new posts. The feed is popularity-ranked, not strictly chronological,
      so stop only when the **whole page** is old; mixed pages continue normally. Clean archives older than `max_days` once daily.
 6. **Cleanup**: once daily, delete `messages/*.md` older than 365 days and `attachments/*` older than 30 days (days configured in the `kb` section of the manager's `manager.json`;
-   attachments by each chat's source when `kb.attachment_days_by_source` names it, `Engine.AttachmentDaysFor`).
+   attachments by each chat's source when `kb.attachment_days_by_source` names it, `Engine.AttachmentDaysFor`). With the selection, each line is kept its own rule's days
+   ("Selection" below, `Store.PruneSelected`); with every `days` null that removes exactly the same files.
    Messages outside text retention are never written: initial chat archives, initial email ingestion and imported history all stop at midnight on the earliest retained day (`kb.Engine.textCutoff`,
    using the same `text_days` as cleanup's `Engine.Prune`),
    otherwise another initially archived chat writes expired daily files again after cleanup (observed in production 2026-11-02: 47 returned 6 seconds after deletion).
@@ -233,6 +236,78 @@ owner's flags `muted`, `collapsed` and `done` (`kbwire.SourceChat` on every `arc
 `mine`, `mentioned` (the owner by name) and `mentioned_all` (an @all, which counts only with the mentions rule's `include_all`), daily batches and history pages alike; a document's `signals` (`mentions`, `comment_mentions`, `authored`, `viewed`; `kbwire.Item.Signals`, kept with the item as the source last reported them). A connector that does
 not report one never matches its rule.
 
+### Selection (#1523)
+
+`server/internal/kb/selection.go` is the selection document (`kb.Selection`: `messages`, `docs`, `items`, `history`, the JSON of #1523) and its evaluator, pure and
+table-tested (`selection_test.go` covers every example of the issue). `kb.Defaults()` is what a missing document means; `Validate` / `ParseSelection` refuse
+unknown fields and rule names, an `order` that does not hold every rule exactly once, `days` / `attachment_days` / `back_days` outside 1…36500 (null is fine),
+`context` outside 0…200, `include_all` or `context` on another rule, and items without a source, a kind (`chat` / `doc`) or an id, twice, or stored without being read.
+The manager hands the document to the engine (`Engine.Selection`); an engine without one keeps everything as before.
+
+- **Storage and API** (`server/internal/assistant/kb_selection.go`): the manager keeps the document in its settings table under `kb.selection` (as the workflow
+  board's switch), so every client and process agrees; today it is edited through `PUT` below and `kb_history_plan`, and an app settings page (the
+  priority as a sortable list, a per-item picker) is left for a follow-up issue. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
+  `PUT /api/v1/kb/selection` takes the whole document, validated as above (400 with what is wrong; 403 from a read-only device), stores it, puts it in force at once
+  and tells the apps (`kb_selection` event); `GET /api/v1/kb/selection/candidates?source=<connector id>` lists the source's chats (`connectors.history_chats`: id,
+  name, kind, flags, estimate, the `source` a per-item setting names, the setting itself, and what the selection reads of it: `whole`, `personal` or `none`). While the
+  history import runs or is stopped, the candidates come from its plan's list instead (`cached: true`), so the paced import is never interleaved with another call.
+  Listing refreshes the names of per-item settings by their ids, so a renamed chat keeps its setting and shows its new name. The engine reads the document through
+  a cache refreshed on every PUT and every five minutes; a read that fails keeps the document read before for another minute before the database is asked again.
+  A document that cannot be read and never was (no database, an outage at start) never means the defaults, which would drop what a chat sends: until it reads,
+  `kb.KeepEverything` stands in (every rule on, null days, how everything was kept before the selection). It is a stopgap (`Selection.Stopgap`): nothing is
+  pruned under it (a line kept longer than `text_days` must not go because the document did not read), the history import waits with its approval kept
+  (`selection_unavailable`), and `kb_history_plan` / `kb_history_resume` refuse to list, change or approve until it reads.
+- **Kinds outside the selection**: a chat whose kind is none of dm, group, bot, official, system (mail, an issue, a pull request, or none) is not decided by the
+  selection: daily ingestion writes everything for `text_days` and notes no rule. The history import goes by the kind the chat is already filed with, so it
+  writes such a chat the same way, and pruning keeps every line of it no ledger entry names for `text_days`. A chat the import finds by search alone, not
+  filed yet, is judged as a group. A bot chat is one of kind `bot`: a batch's chat has no `bot` flag, so daily ingestion sees a dm with a bot as a dm, while a
+  `history.chats` entry's `bot: true` makes the import judge it by the `bot` rule; a connector should report bot chats with kind `bot` in both.
+- **Priority** (the default `messages.order`; a per-item setting always comes first):
+
+  | Priority | Rule | Matches |
+  | --- | --- | --- |
+  | 0 (not movable) | per-item setting | every message of that chat |
+  | 1 | `mentions` | a message that mentions the owner (an @all too with `include_all`) |
+  | 1 | `mine` | a message the owner sent, and the `context` messages before and after it |
+  | 2 | `dm` | a direct chat with a person |
+  | 3 | `group` | a group that is not muted, collapsed or done |
+  | 4 | `bot` | a chat with a bot, an app, an AI agent |
+  | 5 | `official` | an official or service account, a system account |
+  | 6 | `muted` | a muted chat |
+  | 7 | `collapsed` | a folded chat |
+  | 8 | `done` | a chat marked done |
+
+  With the defaults (`mentions`, `mine`, `dm` on, the others off) daily ingestion keeps direct messages, the owner's own messages with 50 on each side, and
+  mentions of the owner; a plain message in a group is no longer written. Documents: `mentions` and `comment_mentions`, then `authored`, then `viewed`, all on.
+
+- **Evaluation** (`Evaluate`): a per-item setting first (`read: false` stores nothing; `read, store` everything, with the item's days or else the rule that would
+  otherwise decide; `read` alone only what `mentions` and `mine` keep), then the levels of `messages.order`: the first level with a matching rule decides, stored when
+  one of its matching rules is on (days: the most of theirs), not stored when all are off; no match is not stored. `Decision.Rule` names what decided (a rule,
+  `a+b` for a level's union, `item`). Days null are `kb.text_days`; attachment days null are the source's (`attachment_days_by_source`, else `attachment_days`),
+  never more than the line's text days. Chat rules match `kind` and the flags; a chat of a kind no rule knows (mail, issues, pull requests) or of none is outside the
+  selection and archived as before. `ReadChat` is the read plan (not read / whole / only around the owner's messages and mentions, and how far back);
+  `ReadPlan.Wider` says a changed plan reads more. `EvaluateDoc` does the same for documents by their signals.
+- **Daily ingestion** (`Engine.Ingest`): every batch goes through the evaluator; only what it stores is written, with its rule's days (a line past them is not
+  written). For `mine.context` each chat keeps the last N messages in `select/<chat id>.json` (whole while not stored, the id alone once stored; no identity hints)
+  and how many of the next still follow one of the owner's, saved after the commit, so a restart or a replayed batch loses and doubles nothing. Context messages
+  stored when the owner's message comes go in at their time, not at the end of the day file.
+- **History writes** (`Engine.WriteHistory`): the same evaluator, with the chat's flags (`HistoryWrite.Chat`) and the import's windows around the owner's messages
+  (`HistoryWrite.NearMine`); each message is kept its own rule's days (`Engine.CutoffFor`). Omission lines have the chat's usual rule.
+- **Retention ledger** (`retention.go`): a day file holds lines of different rules, so `chats/<id>/retention.json` records the rule (by name, not days: a rule's
+  days changed later apply to what is stored) of every line another rule decided than the ledger's own, the chat's usual rule when the ledger began
+  (`Selection.UsualRule`, also kept as the chat's `rule`). Lines are keyed by their day and a hash of minute, sender and text (attachments folded as
+  `MergeMessages` compares them); identical lines of different rules get the union; a timezone change moves the entries with their lines. Lines written before
+  the ledger, and every line of a chat without one, have the chat's rule (none: `text_days`). Live ingestion writes the ledger inside its recovery intent;
+  history writes it before the day files.
+- **Pruning** (`Store.PruneSelected`): a day file goes when every line in it is past its days, stays when none is, and is otherwise rewritten without the lines
+  that are, every other row byte for byte and in its order (headers, blank rows, hand-written rows, which always stay). A property test over thousands of random
+  files and a fuzz target check it, as for merging. Attachments go with the last line that links them (the most attachment days of those lines); a file no line
+  links keeps the source's attachment days. Only the days that may differ are read: with every `days` null nothing is read and exactly what the old pruning
+  removed goes (`TestPruneSelectedDefaultsPruneAsBefore` over random chats of every kind, with and without a ledger).
+- **Safety**: the selection never deletes or rewrites what is stored because a rule was turned off. An off rule only stops new writes; its lines keep `text_days`.
+  A per-item `read: false` stops future reads only. Shorter days apply only once the user sets them. A ledger that does not read holds up no write, and that
+  chat's lines are kept the most days any rule has.
+
 ### History import
 
 A chat source that can read a conversation backwards hands its older history to the knowledge base page by page: the live archive only reads forward from each connector's cursor,
@@ -249,20 +324,22 @@ so a chat's messages from before it began come in through this separate, read-on
   the boundary with the live archive and a page read twice after a restart add nothing. A property test over thousands of
   random files and a fuzz target check that no existing line changes or goes missing.
 - **Archive only**: imported lines are searchable and counted in `messages`, and their senders are noted as people, but they add nothing to `pending` (no compression, tagging
-  or project linking), never move the live archive's `cursor` or `last_at`, note no documents and reach neither the Inbox nor reminders. Messages past `text_days` are skipped.
-  `meta.json` records `history_mode` (`full` / `anchor`).
+  or project linking), never move the live archive's `cursor` or `last_at`, note no documents and reach neither the Inbox nor reminders. Messages past their rule's days
+  (without a selection, `text_days`) are skipped ("Selection" above).
+  `meta.json` records `history_mode` (`full` for a whole read, `anchor` for a personal one).
 - **Attachments**: only images are downloaded, and only within the source's attachment days; video, files and voice become `[视频]`, `[文件]`, `[语音]` ("video", "file",
   "voice"), anything else `[附件]`. A rich-text post's media are its inline images, but a post can embed a video or a file: a reference whose file type is no picture keeps the
   placeholder for its kind, and the driver also refuses anything the source hands back that is not `image/*`. A source whose history comes with its images needs
   `kb.attachment_days_by_source` set first, or old images are neither downloaded nor kept. Attachment days never go past `text_days` (`Engine.AttachmentDaysFor`): an
   attachment belongs to its line, a message past the text retention is never written, and its day file is deleted, so a longer attachment retention would only keep files no
   line points to. Set `text_days` as long as the attachments you want (for example 3650 days for both on imported chats).
-- **Anchor mode** (`AnchorFilter`): for a group read backwards, keep each anchor (the owner's own message, a mention of the owner; the caller decides) with the 50 messages on
-  either side; overlapping windows merge, everything else is counted and dropped. Each gap next to a kept window becomes one line `[……此处省略 N 条]` ("N messages left out
+- **Personal reads** (`AnchorFilter`): for a chat read backwards, keep each anchor (the owner's own message; the caller decides) with `Span` messages on either side (the
+  `mine` rule's `context`; a negative span keeps the anchor alone), and each message `Keep` picks (one that mentions the owner) on its own, splitting the gap it falls
+  in; overlapping windows merge, everything else is counted and dropped. Each gap next to a kept window becomes one line `[……此处省略 N 条]` ("N messages left out
   here", sender `·`). The design first said a line before and after every window; one line per gap says the same without two lines for one gap between close windows. The line
   is stamped with the oldest message it stands for, not the window's edge: that time is in the gap, so the line sorts between the two windows in the day files (written in the
   same batch after the older window), and it lands on the right day when a gap spans days. The filter holds at most 50 messages, and its state is saved with the chat's
-  progress, so an import resumes mid-window. Sources that can search for anchors build the windows by position instead and write the gaps with `OmissionLine` ("Modes" below).
+  progress, so an import resumes mid-window. Sources that can search for anchors build the windows by position instead and write the gaps with `OmissionLine` ("What is read" below).
 - **Progress** (`Store.HistoryState` / `PutHistoryState`): one `history/state/<chat id>.json` per chat (mode, cursor, read and written counts, state `running` / `done` /
   `paused` / `error` / `unreadable`, last error, the anchor filter's state, the position windows read), written atomically after every page; a crash between writing a page and
   saving its state rereads the page, which adds nothing. A temporary failure (pacing) is `paused`, a chat the source refuses `error`, and a conversation the account left or
@@ -276,8 +353,8 @@ The driver runs in its own goroutine (`kbHistoryLoop`, never inside the knowledg
 
 1. the knowledge base is on, open and writable (not `read_only`), and the manager is connected and not a mesh member's standby;
 2. `kb.history.enabled` is `true` in `manager.json` and `kb.history.sources` lists the source (a missing section is off);
-3. the owner approved the source's plan in the assistant chat (`kb_history_resume` records `approved_at`). Listing or changing a plan never starts anything; a refresh that
-   adds chats to import takes the approval back;
+3. the owner approved the source's plan in the assistant chat (`kb_history_resume` records `approved_at` and what the selection reads of every chat then). Listing
+   a plan or changing the selection never starts anything; a change that reads more than was approved takes the approval back ("Plans");
 4. there is no `history/STOP`;
 5. the source does not wait for the search index: `needs_search_index` (default `true`) holds a source back while `kb.SearchIndexed` is false. Search reads every archived line
    today, which a benchmark showed is too slow at millions of lines; the persistent index (#1273) flips that one constant. A source with modest history sets
@@ -294,43 +371,58 @@ and goes on from each chat's state and at the pace it had (a rest or pause under
   "source": "<connector id>",
   "generated_at": "2026-11-08T10:00:00Z",
   "approved_at": "2026-11-08T10:05:00Z",
-  "defaults": { "dm": "full", "group": "anchor", "muted": "off", "official": "off", "bot": "off", "system": "off", "unlisted": "anchor" },
   "chats": [
-    { "id": "<chat id>", "name": "<name>", "kind": "dm", "muted": false, "estimate": 12000, "rule": "full", "mode": null },
-    { "id": "<chat id>", "name": "<name>", "kind": "group", "muted": true, "estimate": 80000, "rule": "off", "mode": "anchor" }
-  ]
+    { "id": "<chat id>", "name": "<name>", "kind": "dm", "estimate": 12000 },
+    { "id": "<chat id>", "name": "<name>", "kind": "group", "muted": true, "estimate": 80000 }
+  ],
+  "approved": { "<chat id>": { "read": true, "whole": true, "days": 365 } },
+  "approved_unlisted": { "read": true, "personal": true, "mine": true, "mentions": true, "days": 365 }
 }
 ```
 
-`rule` comes from `defaults` by what the chat is (official, system and bot chats first, then muted ones, then direct messages and groups); `mode` is the owner's (`null`: the
-rule); the effective mode is `mode ?? rule`. Regenerating from the source's list (`connectors.history_chats`) updates names, kinds, mutes, estimates and rules and keeps every
-`mode`; new chats get the defaults; a chat not in the list is never imported. `defaults` may be edited by hand and survive regeneration. A chat a searchable source found the
-owner's messages in that the list does not have (often one the account left) is added as `unlisted` (anchor by default); like new chats in a refreshed list, one that would
-be imported takes the approval back: the run ends, the owner gets a push, and nothing of it is read until the plan is approved with it in it. The file may also be edited
-directly.
+The plan is the source's candidate list (`connectors.history_chats`: names, kinds, flags, estimates, refreshed by `kb_history_plan`; a chat not in the list is
+never imported) and the approval. **What is read of each chat is the selection's** ("Selection" above), per-item settings included, the same rules as daily
+ingestion: `Selection.ReadChat` says not read, whole, or personal (only what `mentions` and `mine` keep), and how far back: the most days of the rules that can
+store its messages, bounded by the source's `history.<source>.back_days` when set. A chat a searchable source found the owner's messages in that the list does not
+have (often one the account left) is added as `unlisted` and judged as a group, as is a kind the source made up.
 
-#### Modes
+Approving (`kb_history_resume`) records `approved`, the read plan of every chat that is read, and `approved_unlisted`, that of a chat outside the list: a
+fingerprint of what the owner saw. Before every call the driver compares what the selection reads now: a chat read more (one that was not read, a whole chat that
+was read personally, a kind of personal message not looked for, a larger `mine` context, further back: `ReadPlan.Wider`), a new chat in a refreshed list that is read, or an unlisted chat
+added by the search takes the approval back; the run ends and the owner gets a push, and nothing more is read until the plan is approved again. A change that
+reads less needs no approval and applies from the next page.
 
-- **full**: read backwards from the newest page with `connectors.history` (`before` = the cursor the last page answered), until the start of the conversation
-  (`HistoryPage.AtStart`, a message at position 0, or no older cursor) or the text retention. A source answering the same cursor again is a chat `error` (`cursor_stuck`).
-- **anchor**, from a source that cannot search: the same backward read through `AnchorFilter` (the owner's messages and mentions, `mine` / `mentioned`).
-- **anchor**, from a source with `history_anchors`, whose positions are consecutive numbers:
-  1. The owner's messages are gathered for the whole account, one calendar year at a time from this year back to the text retention (`connectors.history_anchors`, paged),
-     into `history/anchors-<source>.json` (resumable; identity hints never written), then grouped by chat.
-  2. In each anchor chat, the windows of 50 positions on each side of every anchor are read: around the anchor first (`around`), then `before` or `after` until covered.
-     Windows that overlap or touch merge, and positions already kept are never asked for again (the state keeps the ranges covered). A message read that is the owner's or
-     mentions the owner becomes an anchor too, since a search can miss one. Covered means kept: a position a page returned outside every window is not covered, so when a
-     later anchor widens a window over it, it is read again there (otherwise it would be missing with no omission line for it).
+#### What is read
+
+- **whole**: read backwards from the newest page with `connectors.history` (`before` = the cursor the last page answered), until the start of the conversation
+  (`HistoryPage.AtStart`, a message at position 0, or no older cursor) or as far back as the chat's days go. A source answering the same cursor again is a chat
+  `error` (`cursor_stuck`). When the `mine` rule reads context, the filter around the owner's messages runs too, so those lines keep the `mine` rule's days.
+- **personal**, from a source that cannot search: the same backward read through `AnchorFilter`: the owner's messages with the `mine` rule's `context` on each
+  side, and messages that mention the owner (`mentioned`, `mentioned_all`) on their own. For such chats the import pages through the whole conversation to find
+  them; the plan shows the estimate so the owner can exclude big chats per item.
+- **personal**, from a source with `history_anchors`, whose positions are consecutive numbers:
+  1. The owner's messages are gathered for the whole account, one calendar year at a time from this year back as far as a personal read goes
+     (`connectors.history_anchors`, paged), into `history/anchors-<source>.json` (resumable; identity hints never written; a selection that goes further back
+     later adds the years before), then grouped by chat.
+  2. In each chat, the window around every anchor is read: `context` positions on each side of the owner's own message, the message alone for one that only
+     mentions the owner. Around the anchor first (`around`), then `before` or `after` until covered. Windows that overlap or touch merge, and positions already
+     kept are never asked for again (the state keeps the ranges covered). A message read that is the owner's or mentions the owner becomes an anchor too, since a
+     search can miss one. Covered means kept: a position a page returned outside every window is not covered, so when a later anchor widens a window over it, it
+     is read again there (otherwise it would be missing with no omission line for it).
   3. Once every window is read, each gap between two windows gets one omission line with the number of positions it leaves out, stamped with the older window's newest
      message (its time is all that is known of the gap); the gap below the oldest window gets one stamped a minute before it. None is written above the newest window: those
      messages may be in the live archive.
-  4. A year whose search found nothing is taken as not covered (an index may not reach back that far): in that year only, every anchor chat is read backwards through
+  4. A year whose search found nothing is taken as not covered (an index may not reach back that far): in that year only, the chat is read backwards through
      `AnchorFilter`, starting below the oldest window already read in a newer year when there is one. Years before the conversation began are skipped: unless a window
      reached position 0, one page `around` position 0 says when it began. Without it, a long `text_days` would make every empty year stream the whole chat below its
-     windows, the cost anchor mode is there to avoid.
+     windows, the cost a personal read is there to avoid.
   5. A chat that cannot be read any more (`unreadable`, or the code `not_found`) keeps only the search hits' own messages (`HistoryAnchor.message`).
   A chat whose positions are not numbers is read backwards through the filter.
-- **off**: skipped.
+- **not read**: never asked for.
+
+Either way `WriteHistory` judges every message again by the selection; the read only bounds what it is handed. A chat's state records the read plan it ran under
+(`history/state/<chat id>.json` `plan`, the narrowest one it went on under): a finished chat is read again only when the selection reads more of it, and a read
+under way starts over when the selection widens it (what was written stays; a page read twice adds nothing).
 
 #### Pacing
 
@@ -411,10 +503,10 @@ start. Then only the newest three are kept: the oldest by the time in the name a
 
 | Tool | What it does |
 | --- | --- |
-| `kb_history_plan` | Without `set`: refreshes the plan from the source's list (not while the import runs, is stopped, or is in a rest or pause) and lists it grouped full / anchor / off, largest first, compact for a phone, with ids. The list call is treated as the driver's: the chat turn ending does not cancel it, and a timeout, a closed connection or an unknown code stops the whole import (STOP, a push). With `{"source", "set": [{"id", "mode": "full" \| "anchor" \| "off" \| null}]}`: changes modes (the approval stays) |
+| `kb_history_plan` | Without `set` or `back_days`: refreshes the plan from the source's list (not while the import runs, is stopped, or is in a rest or pause) and lists it by what the selection reads (whole / only the owner's messages and mentions / not read), largest first, compact for a phone, with ids and per-item settings. The list call is treated as the driver's: the chat turn ending does not cancel it, and a timeout, a closed connection or an unknown code stops the whole import (STOP, a push). With `{"source", "set": [{"chat": "<id or exact name>", "read", "store", "days"} \| {"chat", "reset": true}], "back_days": <days or null>}`: changes the selection's per-item settings and the source's `back_days`, all or nothing (a name two chats share is refused with their ids, one no chat has gets close names); a change that reads more takes the approval back |
 | `kb_history_status` | Per source: state, approval, chats done / to go / paused / in error / unreadable with messages read and written, calls and messages in the last hour, last slowdown, pause and stop, last call |
 | `kb_history_stop` | Writes `STOP` (with a reason) and logs it |
-| `kb_history_resume` | `{"source", "slow"}`: approves the plan, removes `STOP`, and with `slow` holds the slowest pace for the first two hours |
+| `kb_history_resume` | `{"source", "slow"}`: approves the plan as the selection reads it now (the fingerprint), removes `STOP`, and with `slow` holds the slowest pace for the first two hours |
 
 The flow the tool descriptions ask for: list the plan, show it, apply the owner's exceptions, show the result, and call `kb_history_resume` only when the owner says to start.
 Replies go through `server/internal/i18n/locales/*/assistant-kb_history.json`; with `kb.history` off the tools say so and ask no connector anything. In the health space only

@@ -1173,6 +1173,7 @@ Server → client:
 | `machines` | `machines` (also after a rename: the whole list, with the new `name`) |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
+| `kb_selection` | —: the knowledge base's selection was saved (`PUT /api/v1/kb/selection`, or a per-item change from the assistant); clients re-read `GET /api/v1/kb/selection` |
 | `todos` | —: pushed whenever to-dos or links change; clients re-fetch `GET /api/v1/todos` |
 | `extension_operation` | `operation` (`ExtensionOperation`): an extension install, upgrade or uninstall moved to the next step, or the download progressed (at most one per second); only sent to connections that declared `extension_operations`, not in the event log; see "Extension install, upgrade and uninstall progress" above |
 | `extension_auth` | `extension`, `auth` (`ExtensionAuth`): an extension's sign-in state changed (sign-in finished, signed out, expired, the extension sent `auth.changed`), see [extensions.md](../extensions/extensions.md) "Sign-in (auth)" |
@@ -2719,6 +2720,9 @@ The knowledge base belongs to a manager (the assistant). The hub forwards these 
 | GET | `/api/v1/kb-search?q=&messages=0` | `{hits}`; includes messages by default, `messages=0` excludes them |
 | GET | `/api/v1/kb/chats/{id}/context` | What the knowledge base knows about a chat: `{chat_id, chat_name, kind, summary, projects:[{name, summary}]}` (top three projects); read-only, used by the extension's `/agent`; 404 if the chat does not exist ([knowledge.md](../assistant/knowledge.md)) |
 | GET | `/api/v1/kb/chats/{id}/days/{day}` | All messages of a chat on one day: `{day, messages, prev, next}` (`prev` / `next` are the nearest earlier / later days with messages); 404 if none |
+| GET | `/api/v1/kb/selection` | The selection document: what chats and documents bring into the knowledge base and for how many days (the defaults when none was saved; [knowledge.md](../assistant/knowledge.md) "Selection") |
+| PUT | `/api/v1/kb/selection` | The whole document, validated: `400` says what is wrong (unknown rule names, an `order` without every rule exactly once, days outside 1–36500, `context` outside 0–200, items without a source, kind or id), `403` from a read-only device; returns the stored document and sends a `kb_selection` event |
+| GET | `/api/v1/kb/selection/candidates?source=` | A connector's chats for the per-item picker: `{source, cached?, listed_at, chats:[{id, name, kind, source, bot?, muted?, collapsed?, done?, estimate?, item, read, days?}]}`; `read` is `whole`, `personal` or `none`; `cached` when the history import runs or is stopped and the list comes from its plan; `404` when the connector offers no history |
 
 ### Recording sync (#3235)
 

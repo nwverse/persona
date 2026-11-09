@@ -13,20 +13,32 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// The assistant's tools for the history import (docs/assistant/knowledge.md "History import"): list and change a
-// source's plan, see how far it got, stop it, approve and resume it. Listing a plan never starts anything: only
-// kb_history_resume does, when the owner says to start.
+// The assistant's tools for the history import (docs/assistant/knowledge.md "History import"): list a source's plan
+// by what the selection reads of each chat and change the selection's per-item settings, see how far it got, stop it,
+// approve and resume it. Listing a plan never starts anything: only kb_history_resume does, when the owner says to
+// start.
 
 // historyListed is how many chats each group of a listed plan shows (the rest are counted).
 const (
-	historyListedFull   = 30
-	historyListedAnchor = 30
-	historyListedOff    = 20
+	historyListedWhole    = 30
+	historyListedPersonal = 30
+	historyListedNone     = 20
+	historyCloseNames     = 8 // names offered for one that matches no chat
 )
+
+// historySetArg is one change kb_history_plan makes to the selection's per-item settings.
+type historySetArg struct {
+	Chat  string `json:"chat"` // an id, or a chat's exact name
+	Read  *bool  `json:"read"`
+	Store bool   `json:"store"`
+	Days  *int   `json:"days"`
+	Reset bool   `json:"reset"` // remove the per-item setting: the rules decide again
+}
 
 func (s *Service) toolKBHistory(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	l := s.lang(ctx)
@@ -44,7 +56,7 @@ func (s *Service) toolKBHistory(ctx context.Context, name string, args json.RawM
 	case "kb_history_status":
 		var a struct{ Source string }
 		_ = json.Unmarshal(args, &a)
-		return s.historyStatusText(ctx, l, data, cfg, a.Source), nil
+		return s.historyStatusText(ctx, l, e, cfg, a.Source), nil
 	case "kb_history_stop":
 		var a struct{ Reason string }
 		_ = json.Unmarshal(args, &a)
@@ -62,11 +74,9 @@ func (s *Service) toolKBHistory(ctx context.Context, name string, args json.RawM
 	switch name {
 	case "kb_history_plan":
 		var a struct {
-			Source string `json:"source"`
-			Set    []struct {
-				ID   string  `json:"id"`
-				Mode *string `json:"mode"`
-			} `json:"set"`
+			Source   string          `json:"source"`
+			Set      []historySetArg `json:"set"`
+			BackDays json.RawMessage `json:"back_days"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			return "", err
@@ -75,26 +85,18 @@ func (s *Service) toolKBHistory(ctx context.Context, name string, args json.RawM
 		if msg != "" {
 			return msg, nil
 		}
-		if len(a.Set) > 0 {
+		if len(a.Set) > 0 || len(a.BackDays) > 0 {
 			if len(sources) != 1 {
 				return i18n.T(l, "assistant-kb_history.set_needs_source"), nil
 			}
-			changes := map[string]string{}
-			for _, c := range a.Set {
-				mode := ""
-				if c.Mode != nil {
-					mode = *c.Mode
-				}
-				changes[c.ID] = mode
-			}
-			return s.historySetModes(ctx, l, data, sources[0], changes)
+			return s.historySetItems(ctx, l, e, sources[0], a.Set, a.BackDays)
 		}
 		var b strings.Builder
 		for i, src := range sources {
 			if i > 0 {
 				b.WriteString("\n")
 			}
-			b.WriteString(s.historyPlanText(ctx, l, data, src))
+			b.WriteString(s.historyPlanText(ctx, l, e, src))
 		}
 		return b.String(), nil
 	case "kb_history_resume":
@@ -110,7 +112,7 @@ func (s *Service) toolKBHistory(ctx context.Context, name string, args json.RawM
 		if msg != "" {
 			return msg, nil
 		}
-		return s.historyResume(ctx, l, data, sources[0], a.Slow)
+		return s.historyResume(ctx, l, e, sources[0], a.Slow)
 	}
 	return "", fmt.Errorf("no tool %q", name)
 }
@@ -143,18 +145,24 @@ func (s *Service) historyBusyElsewhere(data string) bool {
 	return ok && time.Since(lease.Heartbeat) < historyLeaseStale
 }
 
-// historyPlanText refreshes the source's plan from its list (unless the import runs or is stopped) and lists it.
-func (s *Service) historyPlanText(ctx context.Context, l i18n.Lang, data string, src assistantwire.KBHistorySource) string {
+// historyPlanText refreshes the source's plan from its list (unless the import runs or is stopped) and lists it by
+// what the selection reads of each chat. An approval the selection now reads more than is taken back.
+func (s *Service) historyPlanText(ctx context.Context, l i18n.Lang, e *kb.Engine, src assistantwire.KBHistorySource) string {
+	data := e.Store.Dir
+	if sel, _ := historySelection(e); sel.Stopgap() { // what it reads is not known now: nothing is listed or taken back
+		return i18n.T(l, "assistant-kb_history.selection_unavailable")
+	}
 	var notes []string
 	p, ok, err := loadHistoryPlan(data, src.Name)
 	if err != nil {
 		return i18n.T(l, "assistant-kb_history.plan_unreadable", i18n.Args{"source": src.Name})
 	}
 	if !ok {
-		p = &historyPlan{Source: src.Name, Defaults: map[string]string{}}
+		p = &historyPlan{Source: src.Name}
 	}
 	_, stopped := readHistoryStop(data)
 	status := readHistoryStatus(data)[src.Name]
+	refreshed := false
 	switch {
 	case stopped:
 		notes = append(notes, i18n.T(l, "assistant-kb_history.refresh_stopped"))
@@ -163,7 +171,7 @@ func (s *Service) historyPlanText(ctx context.Context, l i18n.Lang, data string,
 	case status.Pace != nil && status.Pace.NotBefore.After(time.Now()): // a rest or a pause the source asked for
 		notes = append(notes, i18n.T(l, "assistant-kb_history.refresh_waiting", i18n.Args{"at": status.Pace.NotBefore.In(s.location(ctx)).Format("2006-01-02 15:04")}))
 	default:
-		added, err := s.historyRefresh(ctx, data, src.Name, p)
+		err := s.historyRefresh(ctx, data, src.Name, p)
 		var stop *historyHalt
 		switch {
 		case errors.Is(err, errHistoryUnavailable):
@@ -172,14 +180,20 @@ func (s *Service) historyPlanText(ctx context.Context, l i18n.Lang, data string,
 			notes = append(notes, i18n.T(l, "assistant-kb_history.refresh_stopped_now", i18n.Args{"reason": historyReasonText(l, stop.why)}))
 		case err != nil:
 			notes = append(notes, i18n.T(l, "assistant-kb_history.refresh_failed", i18n.Args{"code": historyErrCode(err)}))
-		case added > 0 && p.ApprovedAt != nil:
-			p.ApprovedAt = nil // new chats to import: the owner sees them before anything runs
-			notes = append(notes, i18n.T(l, "assistant-kb_history.plan_changed", i18n.Args{"count": added}))
+		default:
+			refreshed = true
 		}
-		if err == nil {
-			if err := saveHistoryPlan(data, p); err != nil {
-				return i18n.T(l, "assistant-kb_history.plan_unreadable", i18n.Args{"source": src.Name})
-			}
+	}
+	sel, ret := historySelection(e)
+	revoked := false
+	if n, unlisted := p.widened(sel, ret); n > 0 || unlisted {
+		p.revoke() // more to read than the owner saw: the owner sees it before anything runs
+		notes = append(notes, i18n.T(l, "assistant-kb_history.plan_changed", i18n.Args{"count": max(n, 1)}))
+		revoked = true
+	}
+	if refreshed || revoked {
+		if err := saveHistoryPlan(data, p); err != nil {
+			return i18n.T(l, "assistant-kb_history.plan_unreadable", i18n.Args{"source": src.Name})
 		}
 	}
 	if len(p.Chats) == 0 && p.GeneratedAt.IsZero() {
@@ -196,74 +210,99 @@ func (s *Service) historyPlanText(ctx context.Context, l i18n.Lang, data string,
 		b.WriteString(i18n.T(l, "assistant-kb_history.plan_not_approved"))
 	}
 	b.WriteString("\n")
+	if back := sel.BackDays(src.Name); back > 0 {
+		b.WriteString(i18n.T(l, "assistant-kb_history.plan_back_days", i18n.Args{"days": back}) + "\n")
+	} else {
+		b.WriteString(i18n.T(l, "assistant-kb_history.plan_back_rules") + "\n")
+	}
 	for _, n := range notes {
 		b.WriteString(n + "\n")
 	}
-	groups := p.grouped()
-	for _, g := range []struct {
-		mode, key string
-		most      int
-	}{{kb.HistoryFull, "group_full", historyListedFull}, {kb.HistoryAnchor, "group_anchor", historyListedAnchor}, {historyOff, "group_off", historyListedOff}} {
-		list := groups[g.mode]
+	g := p.grouped(sel, ret)
+	for _, group := range []struct {
+		list []historyPlanChat
+		key  string
+		most int
+	}{{g.whole, "group_whole", historyListedWhole}, {g.personal, "group_personal", historyListedPersonal}, {g.none, "group_none", historyListedNone}} {
 		total := 0
-		for _, c := range list {
+		for _, c := range group.list {
 			total += c.Estimate
 		}
-		b.WriteString("\n" + i18n.T(l, "assistant-kb_history."+g.key, i18n.Args{"count": len(list), "messages": total}) + "\n")
-		for i, c := range list {
-			if i == g.most {
-				b.WriteString(i18n.T(l, "assistant-kb_history.more", i18n.Args{"count": len(list) - g.most}) + "\n")
+		b.WriteString("\n" + i18n.T(l, "assistant-kb_history."+group.key, i18n.Args{"count": len(group.list), "messages": total}) + "\n")
+		for i, c := range group.list {
+			if i == group.most {
+				b.WriteString(i18n.T(l, "assistant-kb_history.more", i18n.Args{"count": len(group.list) - group.most}) + "\n")
 				break
 			}
-			b.WriteString(historyChatLine(l, c) + "\n")
+			b.WriteString(historyChatLine(l, c, sel.Item(c.filing(src.Name), kb.ItemChat, c.ID)) + "\n")
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func historyChatLine(l i18n.Lang, c historyPlanChat) string {
+// historyChatLine is one chat of a listed plan, with its per-item setting when it has one.
+func historyChatLine(l i18n.Lang, c historyPlanChat, it *kb.SelectionItem) string {
 	kind := i18n.T(l, "assistant-kb_history.kind_other")
 	switch c.Kind {
 	case "dm", "group", "bot", "official", "system", historyUnlisted:
 		kind = i18n.T(l, "assistant-kb_history.kind_"+c.Kind)
 	}
-	if c.Muted {
-		kind += i18n.T(l, "assistant-kb_history.muted")
+	for _, f := range []struct {
+		on  bool
+		key string
+	}{{c.Bot && c.Kind != "bot", "flag_bot"}, {c.Muted, "muted"}, {c.Collapsed, "flag_collapsed"}, {c.Done, "flag_done"}} {
+		if f.on {
+			kind += i18n.T(l, "assistant-kb_history."+f.key)
+		}
 	}
 	name := c.Name
 	if name == "" {
 		name = "?"
 	}
-	key := "assistant-kb_history.chat_line"
-	if c.Mode != nil {
-		key = "assistant-kb_history.chat_line_set"
+	if it == nil {
+		return i18n.T(l, "assistant-kb_history.chat_line", i18n.Args{"name": name, "kind": kind, "estimate": c.Estimate, "id": c.ID})
 	}
-	return i18n.T(l, key, i18n.Args{"name": name, "kind": kind, "estimate": c.Estimate, "id": c.ID})
+	return i18n.T(l, "assistant-kb_history.chat_line_set", i18n.Args{"name": name, "kind": kind, "estimate": c.Estimate, "id": c.ID,
+		"setting": historyItemText(l, *it)})
+}
+
+// historyItemText says what a per-item setting does.
+func historyItemText(l i18n.Lang, it kb.SelectionItem) string {
+	switch {
+	case !it.Read:
+		return i18n.T(l, "assistant-kb_history.item_none")
+	case !it.Store:
+		return i18n.T(l, "assistant-kb_history.item_personal")
+	case it.Days != nil:
+		return i18n.T(l, "assistant-kb_history.item_whole_days", i18n.Args{"days": *it.Days})
+	}
+	return i18n.T(l, "assistant-kb_history.item_whole")
 }
 
 var errHistoryUnavailable = errors.New("the connector does not offer its history now")
 
-// historyRefresh lays the source's list over p: one call, logged, never while another is in flight, and treated as the
-// driver treats its own: the chat turn ending does not cancel it (only its own timeout does), and a timeout, a closed
-// connection or a code it does not know stops the whole import (STOP, a push; the error is a *historyHalt) so that
-// nothing, not even the next kb_history_plan, asks again until a person looked.
-func (s *Service) historyRefresh(ctx context.Context, data, source string, p *historyPlan) (int, error) {
+// historyListChats asks the source for its chats (connectors.history_chats): one call, logged, never while another is
+// in flight, and treated as the driver treats its own: the chat turn or request ending does not cancel it (only its
+// own timeout does), and a timeout, a closed connection or a code it does not know stops the whole import (STOP, a
+// push; the error is a *historyHalt) so that nothing, not even the next kb_history_plan, asks again until a person
+// looked.
+func (s *Service) historyListChats(ctx context.Context, data, source string) ([]connectorwire.HistoryChat, error) {
 	d := s.historyDriver(data)
 	d.source = source
 	list, err := d.src.Archives(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	available := false
 	for _, a := range list {
 		available = available || a.ID == source && a.History
 	}
 	if !available {
-		return 0, errHistoryUnavailable
+		return nil, errHistoryUnavailable
 	}
 	key, err := historyLogKey(data)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	d.key, d.zone = key, s.location(ctx)
 	d.calls.Lock()
@@ -291,16 +330,67 @@ func (s *Service) historyRefresh(ctx context.Context, data, source string, p *hi
 		if o, code := classify(err); o == historyStopIt {
 			why := historyCall{method: "history_chats"}.stopWhy(code)
 			d.stopAll(context.WithoutCancel(ctx), why)
-			return 0, haltWhy(true, why)
+			return nil, haltWhy(true, why)
 		}
-		return 0, err
+		return nil, err
 	}
-	p.Source = source
-	return p.regenerate(chats, time.Now()), nil
+	return chats, nil
 }
 
-// historySetModes changes chats' modes in a source's plan (the approval stays: the owner asked for it).
-func (s *Service) historySetModes(ctx context.Context, l i18n.Lang, data string, src assistantwire.KBHistorySource, changes map[string]string) (string, error) {
+// historyRefresh lays the source's list over p (historyListChats), and takes the names it lists into the selection's
+// per-item settings.
+func (s *Service) historyRefresh(ctx context.Context, data, source string, p *historyPlan) error {
+	chats, err := s.historyListChats(ctx, data, source)
+	if err != nil {
+		return err
+	}
+	p.Source = source
+	p.regenerate(chats, time.Now())
+	s.refreshSelectionNames(ctx, source, chats)
+	return nil
+}
+
+// historyResolve finds the plan's chat a kb_history_plan change names: by id, else by its exact name. A name two chats
+// have, or one no chat has, is a message instead (with the ids to choose from, or names close to it).
+func historyResolve(l i18n.Lang, p *historyPlan, name string) (*historyPlanChat, string) {
+	if c := p.chat(name); c != nil {
+		return c, ""
+	}
+	var same []historyPlanChat
+	for _, c := range p.Chats {
+		if c.Name == name {
+			same = append(same, c)
+		}
+	}
+	switch len(same) {
+	case 1:
+		return &same[0], ""
+	case 0:
+		var close []string
+		low := strings.ToLower(strings.TrimSpace(name))
+		for _, c := range p.Chats {
+			if low != "" && c.Name != "" && strings.Contains(strings.ToLower(c.Name), low) && len(close) < historyCloseNames {
+				close = append(close, c.Name+" ("+c.ID+")")
+			}
+		}
+		if len(close) == 0 {
+			return nil, i18n.T(l, "assistant-kb_history.set_unknown", i18n.Args{"chat": name})
+		}
+		return nil, i18n.T(l, "assistant-kb_history.set_unknown_close", i18n.Args{"chat": name, "candidates": strings.Join(close, ", ")})
+	}
+	ids := make([]string, len(same))
+	for i, c := range same {
+		ids[i] = c.ID
+	}
+	return nil, i18n.T(l, "assistant-kb_history.set_ambiguous", i18n.Args{"chat": name, "count": len(same), "ids": strings.Join(ids, ", ")})
+}
+
+// historySetItems changes the selection's per-item settings of the plan's chats, and the source's back_days: all of
+// them or, when one names no chat (or two) or is not valid, none. A change that reads more than the owner approved
+// takes the approval back.
+func (s *Service) historySetItems(ctx context.Context, l i18n.Lang, e *kb.Engine, src assistantwire.KBHistorySource, set []historySetArg,
+	backRaw json.RawMessage) (string, error) {
+	data := e.Store.Dir
 	p, ok, err := loadHistoryPlan(data, src.Name)
 	if err != nil {
 		return "", err
@@ -308,26 +398,74 @@ func (s *Service) historySetModes(ctx context.Context, l i18n.Lang, data string,
 	if !ok {
 		return i18n.T(l, "assistant-kb_history.no_plan", i18n.Args{"source": src.Name}), nil
 	}
-	n := 0
-	var unknown []string
-	for id, mode := range changes {
-		if err := p.set(id, mode); err != nil {
-			if p.chat(id) == nil {
-				unknown = append(unknown, id)
+	type change struct {
+		chat historyPlanChat
+		arg  historySetArg
+	}
+	var changes []change
+	for _, a := range set {
+		c, msg := historyResolve(l, p, a.Chat)
+		if msg != "" {
+			return msg, nil
+		}
+		if !a.Reset && (a.Read == nil || !*a.Read && a.Store) {
+			return i18n.T(l, "assistant-kb_history.set_invalid", i18n.Args{"chat": a.Chat}), nil
+		}
+		changes = append(changes, change{chat: *c, arg: a})
+	}
+	backSet, back := false, (*int)(nil)
+	if len(backRaw) > 0 {
+		if err := json.Unmarshal(backRaw, &back); err != nil {
+			return i18n.T(l, "assistant-kb_history.back_days_invalid"), nil
+		}
+		backSet = true
+	}
+	_, err = s.updateKBSelection(ctx, func(sel *kb.Selection) (bool, error) {
+		for _, c := range changes {
+			filing := c.chat.filing(src.Name)
+			if c.arg.Reset {
+				sel.RemoveItem(filing, kb.ItemChat, c.chat.ID)
 				continue
 			}
+			sel.SetItem(kb.SelectionItem{Source: filing, Kind: kb.ItemChat, ID: c.chat.ID, Name: c.chat.Name, Read: *c.arg.Read,
+				Store: c.arg.Store, Days: c.arg.Days})
+		}
+		if backSet {
+			if sel.History == nil {
+				sel.History = map[string]kb.HistorySelection{}
+			}
+			sel.History[src.Name] = kb.HistorySelection{BackDays: back}
+		}
+		return true, sel.Validate()
+	})
+	if errors.Is(err, kb.ErrSelection) {
+		return i18n.T(l, "assistant-kb_history.set_refused", i18n.Args{"detail": err.Error()}), nil
+	}
+	if err != nil { // the stored document does not read (or write) now: nothing changed
+		s.logf("kb history: the selection was not changed: %v", err)
+		return i18n.T(l, "assistant-kb_history.selection_unavailable"), nil
+	}
+	out := []string{}
+	if len(changes) > 0 {
+		out = append(out, i18n.T(l, "assistant-kb_history.set_done", i18n.Args{"count": len(changes)}))
+	}
+	if backSet {
+		if back != nil {
+			out = append(out, i18n.T(l, "assistant-kb_history.plan_back_days", i18n.Args{"days": *back}))
+		} else {
+			out = append(out, i18n.T(l, "assistant-kb_history.plan_back_rules"))
+		}
+	}
+	// The engine reads the stored document: what it reads now decides whether the approval still holds.
+	sel, ret := historySelection(e)
+	if n, unlisted := p.widened(sel, ret); !sel.Stopgap() && (n > 0 || unlisted) {
+		p.revoke()
+		if err := saveHistoryPlan(data, p); err != nil {
 			return "", err
 		}
-		n++
+		out = append(out, i18n.T(l, "assistant-kb_history.set_revoked"))
 	}
-	if err := saveHistoryPlan(data, p); err != nil {
-		return "", err
-	}
-	out := i18n.T(l, "assistant-kb_history.set_done", i18n.Args{"count": n})
-	if len(unknown) > 0 {
-		out += "\n" + i18n.T(l, "assistant-kb_history.set_unknown", i18n.Args{"ids": strings.Join(unknown, ", ")})
-	}
-	return out, nil
+	return strings.Join(out, "\n"), nil
 }
 
 // historyStop writes STOP: the import stops before its next call (the one in flight finishes).
@@ -352,8 +490,10 @@ func (s *Service) historyStop(ctx context.Context, l i18n.Lang, data, words stri
 	return i18n.T(l, "assistant-kb_history.stop_done"), nil
 }
 
-// historyResume approves the source's plan, removes STOP and, with slow, keeps the slowest pace for two hours.
-func (s *Service) historyResume(ctx context.Context, l i18n.Lang, data string, src assistantwire.KBHistorySource, slow bool) (string, error) {
+// historyResume approves the source's plan as the selection reads it now, removes STOP and, with slow, keeps the
+// slowest pace for two hours.
+func (s *Service) historyResume(ctx context.Context, l i18n.Lang, e *kb.Engine, src assistantwire.KBHistorySource, slow bool) (string, error) {
+	data := e.Store.Dir
 	p, ok, err := loadHistoryPlan(data, src.Name)
 	if err != nil {
 		return "", err
@@ -361,8 +501,12 @@ func (s *Service) historyResume(ctx context.Context, l i18n.Lang, data string, s
 	if !ok || len(p.Chats) == 0 {
 		return i18n.T(l, "assistant-kb_history.resume_no_plan", i18n.Args{"source": src.Name}), nil
 	}
+	sel, ret := historySelection(e)
+	if sel.Stopgap() { // an approval records what the selection reads: not known now
+		return i18n.T(l, "assistant-kb_history.selection_unavailable"), nil
+	}
 	now := time.Now().UTC()
-	p.ApprovedAt = &now
+	p.approve(sel, ret, now)
 	if err := saveHistoryPlan(data, p); err != nil {
 		return "", err
 	}
@@ -394,7 +538,9 @@ func (s *Service) historyResume(ctx context.Context, l i18n.Lang, data string, s
 }
 
 // historyStatusText is each configured source's state, progress, pace and last events.
-func (s *Service) historyStatusText(ctx context.Context, l i18n.Lang, data string, cfg *assistantwire.KBHistory, only string) string {
+func (s *Service) historyStatusText(ctx context.Context, l i18n.Lang, e *kb.Engine, cfg *assistantwire.KBHistory, only string) string {
+	data := e.Store.Dir
+	sel, ret := historySelection(e)
 	switch {
 	case cfg == nil:
 		return i18n.T(l, "assistant-kb_history.off")
@@ -423,11 +569,13 @@ func (s *Service) historyStatusText(ctx context.Context, l i18n.Lang, data strin
 		}
 		st := statuses[src.Name]
 		d := &historyDriver{data: data, indexed: func() bool { return historySearchIndexed }}
-		why, p := d.historyBlock(src, nil)
+		why, p := d.historyBlock(src, nil, sel, ret)
 		state := st.State
 		switch why {
-		case "needs_search_index", "no_plan", "not_approved", "plan_unreadable":
+		case "needs_search_index", "no_plan", "not_approved", "plan_unreadable", "selection_unavailable":
 			state = why
+		case "widened": // reads more than approved: it waits for the owner (the next round takes the approval back)
+			state = "not_approved"
 		case "done":
 			state = "done"
 		}
@@ -440,12 +588,12 @@ func (s *Service) historyStatusText(ctx context.Context, l i18n.Lang, data strin
 			b.WriteString(i18n.T(l, "assistant-kb_history.needs_index") + "\n")
 		}
 		if p != nil {
-			if p.ApprovedAt != nil {
+			if p.ApprovedAt != nil && why != "widened" {
 				b.WriteString(i18n.T(l, "assistant-kb_history.plan_approved", i18n.Args{"at": at(*p.ApprovedAt)}) + "\n")
 			} else {
 				b.WriteString(i18n.T(l, "assistant-kb_history.plan_not_approved") + "\n")
 			}
-			b.WriteString(historyProgress(l, data, src.Name, p) + "\n")
+			b.WriteString(historyProgress(l, data, src.Name, p, sel, ret) + "\n")
 		}
 		if sp := speed[src.Name]; sp.calls > 0 {
 			b.WriteString(i18n.T(l, "assistant-kb_history.status_speed", i18n.Args{"calls": sp.calls, "messages": sp.messages}) + "\n")
@@ -481,17 +629,19 @@ func (s *Service) historyStatusText(ctx context.Context, l i18n.Lang, data strin
 func historyStateKey(state string) string {
 	switch state {
 	case "running", "resting", "quiet", "paused", "stopped", "done", "idle", "unavailable", "needs_search_index", "no_plan",
-		"not_approved", "plan_unreadable":
+		"not_approved", "plan_unreadable", "selection_unavailable":
 		return state
 	}
 	return "idle"
 }
 
-// historyProgress counts the plan's chats by state, with what was read and written, and names a few in error.
-func historyProgress(l i18n.Lang, data, source string, p *historyPlan) string {
+// historyProgress counts the chats the selection reads by state, with what was read and written, and names a few in
+// error.
+func historyProgress(l i18n.Lang, data, source string, p *historyPlan, sel *kb.Selection, ret kb.Retention) string {
 	var done, todo, paused, failed, unreadable, read, written int
 	var errs []string
-	for _, c := range p.importing() {
+	for _, r := range p.reading(sel, ret) {
+		c := r.chat
 		var hs kb.HistoryState
 		ok, _ := readJSONFile(historyStatePathFor(data, kb.ChatID(c.filing(source), c.ID)), &hs)
 		if ok {
@@ -499,7 +649,7 @@ func historyProgress(l i18n.Lang, data, source string, p *historyPlan) string {
 			written += hs.Written
 		}
 		switch {
-		case !ok || hs.Mode != c.effective():
+		case !ok || hs.Finished() && !historyCovers(hs.Plan, r.need):
 			todo++
 		case hs.State == kb.HistoryDone:
 			done++

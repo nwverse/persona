@@ -26,7 +26,7 @@ import (
 // The history import's files, all under the knowledge base's history/ directory (search, lists and cleanup never look
 // there; docs/assistant/knowledge.md "History import"):
 //
-//	history/plan-<source>.json     which chats to import and how (kb_history_plan; kb_history_plan.go)
+//	history/plan-<source>.json     the chats a source lists and the approval (kb_history_plan; kb_history_plan.go)
 //	history/state/<chat id>.json   how far each chat got (kb.Store.HistoryState)
 //	history/anchors-<source>.json  the owner's messages a searchable source found, by year (kb_history_anchor.go)
 //	history/status.json            each source's state, last call, slowdown, pause and stop, for kb_history_status

@@ -147,7 +147,9 @@ are still dispatched to connectors by the hub (the manager asks through `app.cal
   connector decides what counts) and `mentioned_all` (an @all / @everyone, reported apart so the selection's
   `include_all` can decide), on `Changes` batches as on history pages; a document (`kbwire.Item`) has `signals`, the ones it can tell of `mentions`,
   `comment_mentions`, `authored` and `viewed`. All of them are optional: a connector that cannot tell one leaves it out,
-  and its chats or documents never match that rule.
+  and its chats or documents never match that rule. Per-item settings are keyed by the stable chat id `HistoryChats`
+  lists (`GET /api/v1/kb/selection/candidates` shows that list), and the history import reads what the selection says,
+  so a connector has nothing of its own to decide about which chats are imported.
 - `Chats`: for sources like Lark with per-conversation cursors and attachments, provide `kb.Source` directly; archiving, compression and tagging stay unchanged. Older history is imported separately (`docs/assistant/knowledge.md`, "History import").
 - `History` (capability `history`, requires `archive`): a conversation's older history, which `Changes` never reaches.
   `HistoryChats` lists the conversations that can be imported (kind dm / group / bot / official / system, the
