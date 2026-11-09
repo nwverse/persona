@@ -198,7 +198,9 @@ func (s *Service) laterHandled(ctx context.Context, id string, now time.Time) (b
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if i = slices.IndexFunc(b.asks, func(a laterAsk) bool { return a.ID == id }); i < 0 {
-		return false, nil // another press took it out meanwhile
+		// Taken out meanwhile: by another press, or, for a question whose to-do this press just closed, by a look at the
+		// queue that found the to-do ended. The latter is this press's doing.
+		return isAskTodo(todo), nil
 	}
 	gone := b.asks[i]
 	b.asks = slices.Delete(slices.Clone(b.asks), i, i+1)
