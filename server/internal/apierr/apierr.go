@@ -148,6 +148,8 @@ func Call(w http.ResponseWriter, err error) {
 		switch code {
 		case "internal", "node_unreachable", "timeout":
 			status = http.StatusBadGateway
+		case "terminal_not_ready": // the node's new tab would not take the start command; nothing ran (node/typedstart.go)
+			status = http.StatusServiceUnavailable
 		default:
 			status = http.StatusConflict
 		}
@@ -206,6 +208,7 @@ var rpcFailureKeys = map[string]string{
 	"dialog_open":        "rpc-errors.dialog_open",
 	"prompt_changed":     "rpc-errors.prompt_changed",
 	"attach_busy":        "rpc-errors.attach_busy",
+	"terminal_not_ready": "rpc-errors.terminal_not_ready",
 	"node_outdated":      "rpc-errors.node_outdated",
 	"assistant_in_doubt": "rpc-errors.in_doubt",
 	// queued messages sent now (#6088)

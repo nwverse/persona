@@ -160,23 +160,16 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// Give the fresh shell a moment to load ~/.zshrc; typed input is buffered either way.
 	time.Sleep(300 * time.Millisecond)
 	n.beginUltracodeProcess(id, resume != "", true, time.Now())
-	if err := launch.Run(ctx, created.Pane, cmd); err != nil {
-		return nil, fmt.Errorf("run launcher: %w", err)
+	done, err := n.runAgentCommand(ctx, launch, created, ws, cmd, shells...) // typedstart.go
+	if err != nil {
+		return nil, err
 	}
-
 	a, err := n.waitReady(ctx, pane)
+	done()
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		// Close the tab: a claude that comes up after we gave up would sit there unbound, and a retry opens another.
-		if org, ok := launch.(host.Organizer); ok && adoptedPane(ctx) == nil { // a pane the user picked stays
-			space := ws
-			if space == "" {
-				space = created.SpaceID
-			}
-			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			_ = org.Close(cctx, created.Pane, space, created.SlotID)
-			cancel()
-		}
+		n.closeNewTab(ctx, launch, created, ws)
 		return nil, fmt.Errorf("%v\n%s", err, lastLines(screen, 12))
 	}
 	n.bindPane(pane, id)
