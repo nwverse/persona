@@ -1,0 +1,9 @@
+{
+  "notes_asked": "{when} に「{conversation}」で質問しましたが、時間内に回答がなかったため、ここであなたの判断を待っています。",
+  "notes_question": "質問：{question}",
+  "notes_options": "選択肢：",
+  "notes_options_multi": "選択肢（複数選択可）：",
+  "notes_option": "- {label}",
+  "notes_option_described": "- {label}：{description}",
+  "notes_how": "この ToDo に判断を記録すると（またはそのトピックで返信すると）、その会話に送られ、ToDo は閉じられます。判断を記録せずに閉じると、質問は取り下げられたことが会話に伝わります。"
+}

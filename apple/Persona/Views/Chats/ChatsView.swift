@@ -18,7 +18,7 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
     var aggregate: SessionListCounts? = nil
     var bounded = false
 
-    var state: AgentState { sessions.map(\.state).min { $0.priority < $1.priority } ?? .idle }
+    var state: AgentState { sessions.map(\.countedState).min { $0.priority < $1.priority } ?? .idle }
     var updatedAt: Date { sessions.compactMap(\.updatedAt).max() ?? .distantPast }
     /// The same from the rows' times while the Agents list follows them (`AgentsFeed.time`): the list's structure
     /// does not change for time passing, so its agents' `updatedAt` may be older (docs/apple/ios-state.md「第 3 步」).
@@ -31,7 +31,10 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
     /// Nothing going on: every agent quiet and none waiting on a /loop or background work.
     var isQuiet: Bool { sessions.allSatisfy { $0.isQuiet && !$0.isWaiting } }
 
-    func count(_ s: AgentState) -> Int { bounded ? aggregate?.state[s.rawValue] ?? 0 : sessions.filter { $0.state == s }.count }
+    /// Its agents in a state as counted (`Session.countedState`: Waiting in the Background is not Working).
+    func count(_ s: AgentState) -> Int { bounded ? aggregate?.state[s.rawValue] ?? 0 : sessions.filter { $0.countedState == s }.count }
+    /// Its agents that only wait in the background (#6045): counted apart, with a clock (`StateCounts`).
+    var waitingInBackground: Int { sessions.filter(\.waitsInBackground).count }
 
     static func build(_ sessions: [Session]) -> [SpaceGroup] {
         var groups: [String: SpaceGroup] = [:]
@@ -135,6 +138,8 @@ enum AgentSort: String, CaseIterable, Identifiable {
 /// The quick filters over the Agents list (the bar under the search field): one tap, stacked on the machine menu.
 nonisolated enum AgentFilter: String, CaseIterable, Identifiable, Sendable {
     case all, needsYou, unread, working
+    /// Working, but only waiting on background commands (#6045): its own chip, as on the web.
+    case backgroundWaiting
     /// Where the agent was opened (#2526): a botmux session (Lark Group) or a herdr pane (Terminal).
     case feishu, terminal
     var id: String { rawValue }
@@ -144,18 +149,23 @@ nonisolated enum AgentFilter: String, CaseIterable, Identifiable, Sendable {
         case .needsYou: StateName.needsYou.text
         case .unread: StateName.unread.text
         case .working: StateName.working.text
+        case .backgroundWaiting: String(localized: "Waiting in the background")
         case .feishu: SessionSource.feishu.label
         case .terminal: SessionSource.terminal.label
         }
     }
     var state: AgentState? {
         switch self {
-        case .all, .feishu, .terminal: nil
+        case .all, .feishu, .terminal, .backgroundWaiting: nil
         case .needsYou: .needsYou
         case .unread: .unread
         case .working: .working
         }
     }
+    /// The chip's colors: the state's, or Waiting in the Background's lighter amber.
+    @MainActor var tone: StatusTone? { self == .backgroundWaiting ? StatusPalette.backgroundWaiting : state?.tone }
+    /// A mark in place of the chip's dot: Waiting in the Background's clock.
+    var symbol: String? { self == .backgroundWaiting ? Theme.Icon.backgroundWaiting : nil }
     var source: SessionSource? {
         switch self {
         case .feishu: .feishu
@@ -167,8 +177,10 @@ nonisolated enum AgentFilter: String, CaseIterable, Identifiable, Sendable {
     /// Muted); one that needs you still is, the same as the list's order (`AgentListOrder.rank`).
     func matches(_ s: Session, muted: Bool = false) -> Bool {
         if let source { return s.source == source }
+        if self == .backgroundWaiting { return s.waitsInBackground && !muted }
         guard let state else { return true }
-        return s.state == state && (state == .needsYou || !muted)
+        // One that only waits in the background is not Working (#6045).
+        return s.countedState == state && (state == .needsYou || !muted)
     }
 }
 
@@ -325,7 +337,7 @@ struct ChatsView: View {
                 }
                 .onChange(of: model.openChat, initial: true) { _, key in
                     // Not before the list is on screen: a push into a stack whose root has not appeared yet built the
-                    // chat three times (the old layout's launch onto a chat, `-openSession` / a notification: items
+                    // chat three times (a TabView launch onto a chat, `-openSession` / a notification: items
                     // read three times, `-openUploadDemo` uploading twice, #2061). The list's appearing opens it.
                     if rootShown { takeOpenChat() }
                 }
@@ -527,6 +539,8 @@ struct ChatsView: View {
 
 /// The Agents list itself: what follows the hub's pushes (`ChatsView` holds the navigation and the toolbar).
 private struct AgentsList: View {
+    /// iPhone Duo's bars down the side: the shell's bar is the side rail, and the list needs no room for it at its top.
+    @Environment(\.shellRailEdge) private var railEdge
     #if os(macOS)
     static let emptyMessage = String(localized: "Start an agent on any of your computers, then follow it live and take over here.")
     #else
@@ -817,8 +831,17 @@ private struct AgentsList: View {
             if widthClass != .regular {
                 Section {
                     #if os(iOS) || os(visionOS)
-                    // The room for the shell's bar and the search field above the filters (`AgentsHeader`).
-                    AgentsHeaderRow(header: header, query: $query, begin: beginSearch) {
+                    if ownsTop {
+                        // The room for the shell's bar and the search field above the filters (`AgentsHeader`).
+                        AgentsHeaderRow(header: header, query: $query, begin: beginSearch) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                filterBar(base)
+                                machineFilterChip
+                            }
+                        }
+                    } else {
+                        // iPhone Duo open: the split's sidebar column reads compact, but the page is regular and its
+                        // search is the system's drawer (`AgentsSystemSearch`): the filters alone, no second field (#1971).
                         VStack(alignment: .leading, spacing: 0) {
                             filterBar(base)
                             machineFilterChip
@@ -912,7 +935,7 @@ private struct AgentsList: View {
                     } label: {
                         if compact {
                             HStack(spacing: CompactList.gap) {
-                                Image(systemName: Theme.Icon.success).font(CompactList.metaStrong).scaledFrame(width: CompactList.mark)
+                                ThemedIcon(Theme.Icon.success).font(CompactList.metaStrong).scaledFrame(width: CompactList.mark)
                                 Text(StateName.markAllSeen()).font(CompactList.title).lineLimit(1)
                                 Spacer()
                                 Text(StateName.count(.unread, unreadShown.count)).font(CompactList.meta).foregroundStyle(.secondary).lineLimit(1)
@@ -1019,7 +1042,7 @@ private struct AgentsList: View {
 
     private func styledAgentList<Content: View>(_ list: Content, base: [Session], interactions: [Interaction]) -> some View {
         list
-        .modifier(AgentsListStyle(capsules: capsules, room: ownsTop && shell != nil && !compactTop, ownsTop: ownsTop))
+        .modifier(AgentsListStyle(capsules: capsules, room: ownsTop && shell != nil && railEdge == nil && !compactTop, ownsTop: ownsTop))
         #if os(iOS) || os(visionOS)
         // Between the two layouts, slid with the field (`AgentsHeader.compact`); the page's color behind it.
         .modifier(ListShift(progress: ownsTop && header.up ? 1 : 0, compact: ownsTop && header.compact,
@@ -1445,7 +1468,7 @@ private struct AgentsList: View {
 
     /// The ⋯ on a space's or a repository's header.
     private var headerMenuLabel: some View {
-        Image(systemName: compact ? Theme.Icon.more : Theme.Icon.moreMenu)
+        ThemedIcon(compact ? Theme.Icon.more : Theme.Icon.moreMenu)
             .font(compact ? CompactList.metaStrong : Theme.Font.body)
             .foregroundStyle(.secondary)
             .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
@@ -1708,6 +1731,7 @@ private struct AgentsList: View {
         ("needs", StateName.needsYou.text, StatusPalette.needsYou), ("unread", StateName.unread.text, StatusPalette.unread),
         ("awaiting", StateName.awaitsReply.text, StatusPalette.awaitingReply),
         ("working", StateName.working.text, StatusPalette.working),
+        ("background", String(localized: "Waiting in the background"), StatusPalette.backgroundWaiting),
         ("waiting", StateName.waiting.text, StatusTone(dot: Theme.loop, text: Theme.loop)),
         ("muted", String(localized: "Muted [Chats View b66705]"), StatusPalette.idle), ("idle", StateName.seen.text, StatusPalette.idle),
     ]
@@ -1741,7 +1765,8 @@ private struct AgentsList: View {
                     }
                 } header: {
                     FoldButton(title: b.title, folded: isFolded(id), detail: String(localized: "\(stateSectionCount(b.key, loaded: rows.count)) [Chats View cb60bd]")) { toggleFold(id) } label: {
-                        SectionHeader(title: b.title, count: stateSectionCount(b.key, loaded: rows.count), tone: b.tint)
+                        SectionHeader(title: b.title, count: stateSectionCount(b.key, loaded: rows.count), tone: b.tint,
+                                      symbol: b.key == "background" ? Theme.Icon.backgroundWaiting : nil)
                     }
                     .modifier(FoldAnchor(id: id, reader: feed.reader))
                 }
@@ -1782,7 +1807,7 @@ private struct AgentsList: View {
                                 Button {
                                     openFromList(TodoDetailRoute(id: todoID))
                                 } label: {
-                                    Image(systemName: Theme.Icon.disclosure)
+                                    ThemedIcon(Theme.Icon.disclosure)
                                         .font(compact ? CompactList.metaStrong : Theme.Font.body)
                                         .foregroundStyle(.secondary)
                                         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
@@ -1849,7 +1874,7 @@ private struct AgentsList: View {
             withAnimation(Theme.Motion.standard) { _ = expandedIdle.insert(key) }
         } label: {
             HStack(spacing: compact ? CompactList.gap : Theme.Space.s) {
-                Image(systemName: Theme.Icon.expand)
+                ThemedIcon(Theme.Icon.expand)
                     .font(compact ? CompactList.metaStrong : Theme.Font.secondaryMedium)
                     .scaledFrame(width: compact ? CompactList.mark : Theme.Size.iconS)
                 Text("Show All \(count)").font(compact ? CompactList.title : Theme.Font.secondaryMedium).lineLimit(1)
@@ -2053,7 +2078,7 @@ private struct AgentsList: View {
                             .padding(.leading, nested(level))
                         // Capsules draws its own chevron; List and Persona' own rows get the one a link would show. Where the
                         // row ends in its ⋯ (`rowMenus`), that is its end.
-                        if !capsules && !Self.rowMenus { Image(systemName: Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary) }
+                        if !capsules && !Self.rowMenus { ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(.tertiary) }
                     }
                     .contentShape(.rect)
                 }
@@ -2666,11 +2691,15 @@ struct QuickFilterBar: View, Equatable {
     @ViewBuilder private func plainChips(padding: CGFloat) -> some View {
         ForEach(shown) { f in
             let on = f == selection
-            let tone = f.state?.tone
+            let tone = f.tone
             let tint = tone?.text ?? Theme.accent
             Button { if !on { choose(f) } } label: {
                 HStack(spacing: Theme.Space.sm) {
-                    if let tone { Circle().fill(tone.dot).scaledFrame(width: Theme.Size.dotS, height: Theme.Size.dotS) }
+                    if let symbol = f.symbol, let tone {
+                        ThemedIcon(symbol).font(Theme.Font.label).foregroundStyle(tone.dot)
+                    } else if let tone {
+                        Circle().fill(tone.dot).scaledFrame(width: Theme.Size.dotS, height: Theme.Size.dotS)
+                    }
                     Text(f.title)
                     if let n = counts[f] {
                         Text("\(n)").monospacedDigit().foregroundStyle(on ? tint : Color.secondary)
@@ -2698,7 +2727,7 @@ struct QuickFilterBar: View, Equatable {
     @ViewBuilder private var chips: some View {
         ForEach(shown) { f in
             let on = f == selection
-            BUIFilterChip(f.title, dot: f.state?.tone.dot, count: counts[f], isActive: on) { if !on { choose(f) } }
+            BUIFilterChip(f.title, dot: f.tone?.dot, count: counts[f], isActive: on) { if !on { choose(f) } }
                 .accessibilityIdentifier("agents.filter." + f.rawValue)
                 .accessibilityLabel(counts[f].map { "\(f.title) \($0)" } ?? f.title)
         }
@@ -2733,7 +2762,7 @@ struct FoldButton<Content: View>: View {
 struct FoldChevron: View {
     var folded: Bool
     var body: some View {
-        Image(systemName: Theme.Icon.expand)
+        ThemedIcon(Theme.Icon.expand)
             .font(Theme.Font.labelHeavy)
             .foregroundStyle(.tertiary)
             .rotationEffect(.degrees(folded ? -90 : 0))
@@ -2748,10 +2777,13 @@ struct SectionHeader: View {
     var count: Int?
     /// The count's color: a state's tone, or StatusPalette.idle for a plain count.
     var tone: StatusTone
+    /// A mark before the title in the tone's color: Waiting in the Background's clock (#6045).
+    var symbol: String? = nil
     @Environment(\.compactList) private var compact
 
     var body: some View {
         HStack(spacing: Theme.Space.sm) {
+            if let symbol { ThemedIcon(symbol).foregroundStyle(tone.dot).accessibilityHidden(true) }
             if compact {
                 // Color.primary: a section header dims hierarchical styles a level (docs/lessons/ios.md).
                 Text(title).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
@@ -2780,10 +2812,10 @@ struct SpaceHeader: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("SpaceHeader")
         #endif
-        HStack(spacing: Theme.Space.s) {
+        CountsHeading {
             // Compact List's titles are big enough to tell a repository from a space: no mark (it cut a short name, "weat…").
             if let symbol, !compact {
-                Image(systemName: symbol).font(Theme.Font.label).foregroundStyle(Color.secondary)
+                ThemedIcon(symbol).font(Theme.Font.label).foregroundStyle(Color.secondary)
             }
             if compact {
                 // Compact List: the space is the title over its rows (Color.primary: a header dims `.primary` a level).
@@ -2792,13 +2824,14 @@ struct SpaceHeader: View {
                 Text(group.name).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).textCase(nil).lineLimit(1)
             }
             let small = compact ? CompactList.meta : Theme.Font.label
-            if pinned { Image(systemName: Theme.Icon.pinned).font(small).foregroundStyle(Theme.accent).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
-            if muted { Image(systemName: Theme.Icon.muted).font(small).foregroundStyle(Color.secondary).accessibilityLabel("Muted [Chats View b66705]") }
+            if pinned { ThemedIcon(Theme.Icon.pinned).font(small).foregroundStyle(Theme.accent).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
+            if muted { ThemedIcon(Theme.Icon.muted).font(small).foregroundStyle(Color.secondary).accessibilityLabel("Muted [Chats View b66705]") }
             if showMachine, let machine {
                 Text(machine.title).font(small).foregroundStyle(Color.secondary).textCase(nil).lineLimit(1)
             }
-            Spacer(minLength: 4)
+        } counts: {
             StateCounts(group: group).opacity(muted ? 0.6 : 1)
+        } trailing: {
             FoldChevron(folded: folded)
         }
         .contentShape(.rect)
@@ -2817,8 +2850,10 @@ struct StateCounts: View {
 
     /// "3 need you, 12 working, 35 unread, 4 idle" for VoiceOver (and the UI tests).
     static func spoken(_ group: SpaceGroup) -> String {
-        let idle = group.count(.idle) + group.count(.unknown)
+        let waiting = group.waitingInBackground
+        let idle = group.count(.idle) + group.count(.unknown) - waiting
         return ([AgentState.needsYou, .working, .unread].compactMap { st in group.count(st) > 0 ? String(localized: "\(group.count(st)) \(st.label)") : nil }
+            + (waiting > 0 ? ["\(waiting) \(String(localized: "Waiting in the background"))"] : [])
             + (idle > 0 ? [String(localized: "\(idle) idle")] : [])).joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
     }
 
@@ -2840,8 +2875,21 @@ struct StateCounts: View {
                     .accessibilityLabel("\(n) \(st.label)")
                 }
             }
+            // Waiting in the Background (#6045): its clock and a number, after Working's.
+            let waiting = group.waitingInBackground
+            if waiting > 0 {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(Theme.Icon.backgroundWaiting).font(Theme.Font.caption).imageScale(.small)
+                        .foregroundStyle(StatusPalette.backgroundWaiting.dot)
+                    Text("\(waiting)").font((compact ? CompactList.metaStrong : Theme.Font.labelHeavy).monospacedDigit())
+                        .foregroundStyle(Color.secondary)
+                        .contentTransition(.numericText(value: Double(waiting)))
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(waiting) \(String(localized: "Waiting in the background"))")
+            }
             // Idle as a gray dot and a number like the others: "4 idle" wrapped to two lines in a busy header.
-            let idle = group.count(.idle) + group.count(.unknown)
+            let idle = group.count(.idle) + group.count(.unknown) - waiting
             if idle > 0 {
                 HStack(spacing: Theme.Space.xs) {
                     Circle().fill(Color.secondary.opacity(0.45)).scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
@@ -2854,6 +2902,66 @@ struct StateCounts: View {
         }
         .lineLimit(1)
         .fixedSize()
+    }
+}
+
+/// A heading's name and its agents' state counts: side by side; at the accessibility text sizes the counts on a line of
+/// their own under the name. `StateCounts` never gives up width, and beside them a narrow phone left the name none at all
+/// (#1658). `trailing` (the fold chevron) stays on the name's line.
+struct CountsHeading<Name: View, Counts: View, Trailing: View>: View {
+    var spacing: CGFloat = Theme.Space.s
+    @ViewBuilder var name: Name
+    @ViewBuilder var counts: Counts
+    @ViewBuilder var trailing: Trailing
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(spacing: spacing) {
+                    name
+                    Spacer(minLength: Theme.Space.xs)
+                    trailing
+                }
+                counts
+            }
+        } else {
+            HStack(spacing: spacing) {
+                name
+                Spacer(minLength: Theme.Space.xs)
+                counts
+                trailing
+            }
+        }
+    }
+}
+
+extension CountsHeading where Trailing == EmptyView {
+    init(spacing: CGFloat = Theme.Space.s, @ViewBuilder name: () -> Name, @ViewBuilder counts: () -> Counts) {
+        self.init(spacing: spacing, name: name, counts: counts, trailing: { EmptyView() })
+    }
+}
+
+/// An agent row's words and its time (with the source under it): the time at the row's end; at the accessibility text
+/// sizes under the words, where beside them it left the title a character or two (#1658). Outside `SlotRow`, whose
+/// equality is its stored values.
+struct TimeBesideOrUnder<Words: View, Time: View>: View {
+    @ViewBuilder var words: Words
+    @ViewBuilder var time: Time
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                words
+                time
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                words
+                time
+            }
+        }
     }
 }
 
@@ -2940,7 +3048,7 @@ nonisolated struct SlotRow: View, Equatable {
                         shape: taskShape(), isOpen: session.leadWorkflow != nil,
                         accessory: surface == .none || more ? .none : .disclosure, titleLines: 2, subtitleLines: 1) {
                     // The badge's column is 24 pt: only the badge goes there (#3004); the source tag is under the time (#3043).
-                    if dot { AgentStateBadge(state: session.state).padding(.leading, indented ? Theme.Space.l : 0) }
+                    if dot { AgentStateBadge(state: session.state, waiting: session.waitsInBackground).padding(.leading, indented ? Theme.Space.l : 0) }
                 } trailing: {
                     HStack(alignment: .top, spacing: Theme.Space.s) {
                         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
@@ -2954,8 +3062,12 @@ nonisolated struct SlotRow: View, Equatable {
                                 let tone = StatusPalette.awaitingReply
                                 BUIPill(session.stateLabel(muted: muted), tone: .custom(ink: tone.text, fill: tone.tint))
                             }
+                            if waitingWord {
+                                let tone = StatusPalette.backgroundWaiting
+                                BUIPill(session.stateLabel, tone: .custom(ink: tone.text, fill: tone.tint))
+                            }
                             if muted {
-                                Image(systemName: Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
+                                ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
                             }
                         }
                         if more { moreRoom }
@@ -2963,8 +3075,15 @@ nonisolated struct SlotRow: View, Equatable {
                 } detail: {
                     if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                 }
-                // The badge's column holds the state alone (#3004): the agent's mark leads the title (#6390).
-                .titleLeading(session.assistant ? nil : { AgentMark(session) })
+                // The badge's column holds the state alone (#3004): the agent's mark leads the title (#6390), with
+                // ultracode's mark after it while that is on (#1307; the library's row has no slot after the title).
+                .titleLeading(session.assistant ? nil : {
+                    HStack(spacing: Theme.Space.xs) {
+                        AgentMark(session)
+                        if ultracodeMark { UltracodeMark().transition(.opacity) }
+                    }
+                    .animation(UltracodeMark.motion, value: ultracodeMark)
+                })
                 // Over the room left for it at the row's end (inside the row's inset), centered on the row's height.
                 .overlay(alignment: .trailing) { if more { AgentRowMoreButton(session: session).padding(.trailing, TaskRowInset.horizontal) } }
             } else {
@@ -2973,19 +3092,22 @@ nonisolated struct SlotRow: View, Equatable {
                     if dot {
                         HStack(spacing: Theme.Space.s) {
                             if !session.assistant { AgentMark(session) }
-                            StatusDot(state: session.state, size: 9)
+                            StatusDot(state: session.state, size: 9, waiting: session.waitsInBackground)
                         }
                         .padding(.top, Theme.Space.xs)
                     }
                     // The words on the left, the time with its source under it on the right (#3043): the title
-                    // starts at the row's edge, and the tag takes no room from it nor pushes the preview down.
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                    // starts at the row's edge, and the tag takes no room from it nor pushes the preview down. At the
+                    // accessibility text sizes the time goes under the words (`TimeBesideOrUnder`, #1658).
+                    TimeBesideOrUnder {
                         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                            Text(session.displayTitle)
+                            // Ultracode's mark right after the title's last word while it is on (#1307).
+                            UltracodeMark.after(session.displayTitle, on: ultracodeMark)
                                 .font(session.state == .unread ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .animation(UltracodeMark.motion, value: ultracodeMark)
                             if let last = session.listPreview(muted: muted) {
                                 Text(last).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
                             }
@@ -2996,20 +3118,21 @@ nonisolated struct SlotRow: View, Equatable {
                                 if let todo = session.todo {
                                     ViewThatFits(in: .horizontal) {
                                         Chip(text: todo.title, symbol: Theme.Icon.todo, look: .outline)
-                                        Image(systemName: Theme.Icon.todo)
+                                        ThemedIcon(Theme.Icon.todo)
                                             .font(Theme.Font.caption)
                                             .foregroundStyle(.secondary)
                                             .help(todo.title)
                                     }
                                 }
                                 if muted {
-                                    Image(systemName: Theme.Icon.muted).font(Theme.Font.label).accessibilityLabel("Notifications muted")
+                                    ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).accessibilityLabel("Notifications muted")
                                 }
                             }
                             .font(Theme.Font.caption)
                             .foregroundStyle(.secondary)
                             .padding(.top, 1)
                         }
+                    } time: {
                         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
                             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
                                 AgentTimeText(time: time, fallback: session.updatedAt, font: Theme.Font.label)
@@ -3028,6 +3151,9 @@ nonisolated struct SlotRow: View, Equatable {
         }
         .opacity(muted ? 0.8 : 1) // quieter than live agents, never fainter than the idle spaces below
     }
+
+    /// Claude Code's ultracode is on (#1307): its mark beside the title; not on an offline row.
+    private var ultracodeMark: Bool { Ultracode.rowMark(session) }
 
     /// Where the ⋯ goes: drawn over the row (centered on its height, as tall as it is), so the room is a column of its
     /// width at the end (a finger's, `AgentRowMoreButton`), which the time and the pills stay clear of.
@@ -3049,6 +3175,9 @@ nonisolated struct SlotRow: View, Equatable {
     /// Awaiting Reply spelled out (#5096), as Needs You is: a seen agent's gray dot does not say it waits on the user.
     /// Not for a muted one (it folds with the idle ones), nor where the section already says it.
     private var awaitingWord: Bool { session.awaitsYourReply(muted: muted) && !hideState }
+    /// Waiting in the Background spelled out (#6045): its clock alone is a small mark. Not where the section
+    /// already says it waits.
+    private var waitingWord: Bool { session.waitsInBackground && !hideState }
 
     /// Persona' own row's line: "Needs You · Claude · app › tests · MacBook": the end gives way when the line is short.
     /// Something typed or quoted in its composer and not sent (#4578), as Telegram's and Signal's lists say.
@@ -3062,6 +3191,7 @@ nonisolated struct SlotRow: View, Equatable {
         if awaitingWord {
             parts.append(Text(session.stateLabel(muted: muted)).fontWeight(.semibold).foregroundStyle(StatusPalette.awaitingReply.text))
         }
+        if waitingWord { parts.append(Text(session.stateLabel).fontWeight(.semibold).foregroundStyle(StatusPalette.backgroundWaiting.text)) }
         if hasDraft { parts.append(Text("Draft").fontWeight(.semibold).foregroundStyle(Theme.needsYou)) }
         parts.append(Text(pane?.name ?? session.sourceSubtitle ?? session.agentLabel))
         if pane?.launcher == true { parts.append(Text("Started It").fontWeight(.semibold)) }
@@ -3115,8 +3245,8 @@ struct AgentTimeText: View {
         let at = time?.updatedAt ?? fallback
         // No time: nothing, not an empty line the source label under it would sit below (#3043).
         if let at, at.isMeaningful {
-            TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                Text(Fmt.relative(at, now: ctx.date)).font(font).foregroundStyle(.secondary).lineLimit(1)
+            VisibleTimelineView(interval: 30) { now in
+                Text(Fmt.relative(at, now: now)).font(font).foregroundStyle(.secondary).lineLimit(1)
             }
             .fixedSize()
         }
@@ -3148,7 +3278,11 @@ nonisolated struct CompactSlotRow: View, Equatable {
             // The agent's mark before its state (#6390).
             if !session.assistant { AgentMark(session) }
             Group {
-                if AppStyle.current.usesBeautifulUI { AgentStateBadge(state: session.state).scaleEffect(0.8) } else { StatusDot(state: session.state, size: Theme.Size.dot) }
+                if AppStyle.current.usesBeautifulUI {
+                    AgentStateBadge(state: session.state, waiting: session.waitsInBackground).scaleEffect(0.8)
+                } else {
+                    StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground)
+                }
             }
             .scaledFrame(width: CompactList.mark)
             HStack(alignment: .firstTextBaseline, spacing: CompactList.gap) {
@@ -3156,6 +3290,8 @@ nonisolated struct CompactSlotRow: View, Equatable {
                     .font(session.state == .unread ? CompactList.titleUnread : CompactList.title)
                     .lineLimit(1)
                     .layoutPriority(1)
+                // Claude Code's ultracode on (#1307): its mark right after the title, never cut.
+                if Ultracode.rowMark(session) { UltracodeMark(font: CompactList.meta).fixedSize().transition(.opacity) }
                 // The starter mark stays whole: the line's other words give way to the title.
                 if pane?.launcher == true { Text("Started It").font(CompactList.metaStrong).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
                 if let place, !place.isEmpty {
@@ -3165,16 +3301,17 @@ nonisolated struct CompactSlotRow: View, Equatable {
                 if let todo = session.todo {
                     ViewThatFits(in: .horizontal) {
                         Text(todo.title).font(CompactList.meta).foregroundStyle(Theme.accent).lineLimit(1)
-                        Image(systemName: Theme.Icon.todo).font(CompactList.meta).foregroundStyle(Theme.accent).help(todo.title)
+                        ThemedIcon(Theme.Icon.todo).font(CompactList.meta).foregroundStyle(Theme.accent).help(todo.title)
                     }
                 }
             }
+            .animation(UltracodeMark.motion, value: Ultracode.rowMark(session))
             Spacer(minLength: Theme.Space.xs)
             // Awaiting Reply in words (#5096): the dot is a seen agent's gray.
             if session.awaitsYourReply(muted: muted) && !hideState {
                 Text(session.stateLabel(muted: muted)).font(CompactList.metaStrong).foregroundStyle(StatusPalette.awaitingReply.text).lineLimit(1).fixedSize()
             }
-            if muted { Image(systemName: Theme.Icon.muted).font(CompactList.meta).foregroundStyle(.secondary).accessibilityLabel("Notifications muted") }
+            if muted { ThemedIcon(Theme.Icon.muted).font(CompactList.meta).foregroundStyle(.secondary).accessibilityLabel("Notifications muted") }
             AgentTimeText(time: time, fallback: session.updatedAt, font: CompactList.meta.monospacedDigit())
             #if os(macOS)
             if pendingCount { CountBadge(count: session.pendingInteractions, look: .tone(StatusPalette.needsYou)) }
@@ -3216,7 +3353,7 @@ struct AgentRowMoreButton: View {
             Menu {
                 AgentRowMenu(session, model: model, actions: actions).equatable()
             } label: {
-                Image(systemName: Theme.Icon.more)
+                ThemedIcon(Theme.Icon.more)
                     .font(compact ? CompactList.metaStrong : Theme.Font.labelStrong)
                     .foregroundStyle(.secondary)
                     .scaledFrame(width: compact ? Theme.Size.wellXS : Theme.Size.well, height: compact ? Theme.Size.iconXS : Theme.Size.well)
@@ -3247,7 +3384,7 @@ struct IdleFoldRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.idleFold)
+            ThemedIcon(Theme.Icon.idleFold)
                 .foregroundStyle(.secondary)
             Text("\(sessions.count) more idle")
                 .font(Theme.Font.secondaryMedium)
@@ -3281,7 +3418,7 @@ struct QuietSpaceRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
-            Image(systemName: repo ? Theme.Icon.folder : Theme.Icon.space).foregroundStyle(.secondary)
+            ThemedIcon(repo ? Theme.Icon.folder : Theme.Icon.space).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(group.name).font(Theme.Font.heading).lineLimit(1)
                 Text([showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
@@ -3377,12 +3514,12 @@ struct QuietSpaceCardHead: View {
                             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
                          status: .pending(step: 0)),
                 shape: .list(first: true, last: !open), accessory: .none, titleLines: 1, subtitleLines: 1) {
-            Image(systemName: repo ? Theme.Icon.folder : Theme.Icon.space).font(Theme.Font.body).foregroundStyle(.secondary)
+            ThemedIcon(repo ? Theme.Icon.folder : Theme.Icon.space).font(Theme.Font.body).foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon)
         } trailing: {
             HStack(spacing: Theme.Space.s) {
                 Text(Fmt.relative(group.updatedAt(feed))).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(open ? 90 : 0))
             }
         } detail: {
@@ -3506,8 +3643,8 @@ struct MachineSectionHeader: View {
     @Environment(\.compactList) private var compact
 
     var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            Image(systemName: machine.symbol).foregroundStyle(machine.online ? Theme.accent : .secondary)
+        CountsHeading {
+            ThemedIcon(machine.symbol).foregroundStyle(machine.online ? Theme.accent : .secondary)
             if compact {
                 Text(machine.title).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
             } else {
@@ -3516,7 +3653,7 @@ struct MachineSectionHeader: View {
             if !machine.online {
                 Text("Offline [Machine Entity be1b4f]").font(Theme.Font.labelStrong).foregroundStyle(.secondary).textCase(nil)
             }
-            Spacer(minLength: 4)
+        } counts: {
             StateCounts(group: group)
         }
     }
@@ -3834,6 +3971,8 @@ private struct SearchCloseProbe: UIViewRepresentable {
 /// options (Group By, Display, Machines…).
 struct AgentsTopBar: View, Equatable {
     @Environment(AppModel.self) private var model
+    /// iPhone Duo's bars down the side: the bar is the side rail there (`ShellSideRail`).
+    @Environment(\.shellRailEdge) private var railEdge
     let shell: ShellState
     var menuActions: AgentsListMenu.Actions
     var newSession: () -> Void // sets the page's state: the same each time
@@ -3847,13 +3986,36 @@ struct AgentsTopBar: View, Equatable {
         let _ = PerfTrace.body("AgentsTopBar")
         #endif
         @Bindable var model = model
+        #if os(iOS) || os(visionOS)
+        if let railEdge {
+            ShellSideRail(edge: railEdge) {
+                ShellPersonaButton(id: "work-sidebar-button") { shell.drawer.open() }
+                ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "agents-new", action: newSession)
+            } switcher: {
+                ShellSwitch(tab: $model.selectedTab, axis: .vertical) { EmptyView() } workMenu: {
+                    AgentsListMenu(actions: menuActions, inline: true)
+                }
+            }
+            .shellTopBarScaled()
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("agents-top-bar")
+            .modifier(ShellBarAtRest(page: 1)) // ShellMovingBar stands in while the strip slides
+        } else {
+            row($model.selectedTab)
+        }
+        #else
+        row($model.selectedTab)
+        #endif
+    }
+
+    private func row(_ tab: Binding<AppTab>) -> some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ShellPersonaButton(id: "work-sidebar-button") { shell.drawer.open() }
             Spacer(minLength: 0)
             ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Session [Chats View 58e21b]"), id: "agents-new", action: newSession)
         }
         .overlay(alignment: .top) {
-            ShellSwitch(tab: $model.selectedTab) { EmptyView() } workMenu: {
+            ShellSwitch(tab: tab) { EmptyView() } workMenu: {
                 AgentsListMenu(actions: menuActions, inline: true)
             }
         }

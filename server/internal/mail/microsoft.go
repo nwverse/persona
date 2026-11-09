@@ -10,9 +10,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Outlook "Sign in with Microsoft" (docs/extensions/mail.md "Connecting Outlook"): the same flow as Google's. The app opens
@@ -37,8 +38,8 @@ var (
 	microsoftAuthURL  = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
 	microsoftTokenURL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
-	clientIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$`)
-	aadCode         = regexp.MustCompile(`AADSTS\d+`)
+	clientIDPattern = lazyre.New(`^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$`)
+	aadCode         = lazyre.New(`AADSTS\d+`)
 )
 
 // outlookServers are Microsoft's IMAP and SMTP endpoints for every Outlook / Microsoft 365 mailbox.

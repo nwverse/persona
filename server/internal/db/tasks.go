@@ -54,6 +54,20 @@ func (d *DB) TaskPlan(ctx context.Context, id string) (*TaskPlanRow, error) {
 	return &p, nil
 }
 
+// TaskPlansByID reads the plans with ids in one query (a feed names many), in no particular order: an id with no plan
+// is left out, a repeated one read once. No ids: none, without asking.
+func (d *DB) TaskPlansByID(ctx context.Context, ids []string) ([]TaskPlanRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := d.pool.Query(ctx, `SELECT id, conversation, tasks, state, created_at, updated_at FROM task_plans
+		WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	return scanTaskPlans(rows)
+}
+
 // TaskPlans lists a conversation's plans, oldest first.
 func (d *DB) TaskPlans(ctx context.Context, conversation string) ([]TaskPlanRow, error) {
 	rows, err := d.pool.Query(ctx, `SELECT id, conversation, tasks, state, created_at, updated_at FROM task_plans
@@ -61,6 +75,10 @@ func (d *DB) TaskPlans(ctx context.Context, conversation string) ([]TaskPlanRow,
 	if err != nil {
 		return nil, err
 	}
+	return scanTaskPlans(rows)
+}
+
+func scanTaskPlans(rows pgx.Rows) ([]TaskPlanRow, error) {
 	defer rows.Close()
 	var out []TaskPlanRow
 	for rows.Next() {

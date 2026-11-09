@@ -4,11 +4,13 @@ import UIKit
 import UIKit.UIGestureRecognizerSubclass
 #endif
 
-/// WeChat-style message actions: long-press a message and a dark bar with Copy / Select Text / Quote / Share (and Edit for your
-/// own messages) appears right where you pressed — no lifted preview first. Tapping anywhere or scrolling closes it.
+/// Message actions: long-press a message and it is lifted over the dimmed chat with the bar of Copy / Select Text / Quote /
+/// Share (and Edit for your own messages) next to it, as Telegram does (#603, `MessageLift`). Tapping outside closes it.
 @Observable
 final class MessageMenu {
     var selected: String?
+    /// The pressed message, drawn again over the dimmed chat (`MessageLiftLayer`).
+    var lift: MessageLift?
     /// Where the press landed, in the message row's coordinates (`MessageMenu.row`), where the bar is placed.
     var anchor: CGPoint = .zero
     /// Text shown in the "select text" sheet.
@@ -80,7 +82,12 @@ final class MessageMenu {
     }
 
     func close() {
-        if selected != nil { withAnimation(.easeOut(duration: 0.15)) { selected = nil } }
+        if selected != nil || lift != nil {
+            withAnimation(Theme.Motion.conceal) {
+                selected = nil
+                lift = nil
+            }
+        }
     }
 }
 
@@ -152,7 +159,7 @@ final class LeftDragRecognizer: UIPanGestureRecognizer {
 
     // It waits for no one but the scroll views. The message's long press (the action bar) is a child's gesture, which
     // SwiftUI makes this one wait for, and the navigation stack's back pans (the edge, and on iOS 26 anywhere in the
-    // content) are around it in the old layout: now and then the drag lost those races and never started. A drag
+    // content) are around it in a navigation stack: now and then the drag lost those races and never started. A drag
     // that goes left has moved past the press's allowance and is not a way back, so they never both happen.
     private static func standsAside(_ other: UIGestureRecognizer) -> Bool {
         other is UILongPressGestureRecognizer || (other is UIPanGestureRecognizer && !(other.view is UIScrollView))
@@ -227,8 +234,11 @@ struct LongPressAt: UIGestureRecognizerRepresentable {
 #endif
 
 extension View {
-    /// The pressable part of a message (the bubble / the text).
-    func messageLongPress(id: String) -> some View { modifier(MessageLongPress(id: id)) }
+    /// The pressable part of a message (the bubble / the text). preview: the same part again, lifted over the dimmed chat
+    /// when pressed; card: it is words on the page with nothing around them (an answer), lifted on a card of its own.
+    func messageLongPress<P: View>(id: String, card: Bool = false, @ViewBuilder preview: @escaping () -> P) -> some View {
+        modifier(MessageLongPress(id: id, card: card, preview: preview))
+    }
     /// The whole row of a message: hosts the action bar above the press point and lifts the row above its neighbours.
     /// pending: your message not in the transcript yet (`PendingBubble`, #6427): Copy, Select Text and Share only, no
     /// quote (it may never reach the agent) and no Edit (a waiting one would still go out besides the edited one).
@@ -253,21 +263,48 @@ private struct ClosesMessageBar: ViewModifier {
     }
 }
 
-private struct MessageLongPress: ViewModifier {
+private struct MessageLongPress<P: View>: ViewModifier {
     @Environment(MessageMenu.self) private var menu: MessageMenu?
+    @Environment(\.messageBar) private var bar
+    @Environment(\.openFile) private var openFile
+    @Environment(\.loadImage) private var loadImage
+    @Environment(\.rowMemoScope) private var memoScope
     let id: String
+    let card: Bool
+    let preview: () -> P
+    /// Where the part is, kept without drawing anything again (it changes on every scrolled frame).
+    @State private var place = LiftPlace()
 
     func body(content: Content) -> some View {
         if let menu {
             content
+                .onGeometryChange(for: LiftPlace.Frames.self) { g in
+                    LiftPlace.Frames(global: g.frame(in: .global), row: g.frame(in: .named(MessageMenu.row)))
+                } action: { place.frames = $0 }
                 .gesture(LongPressAt(changed: menu.pressChanged) { p in
                     Haptics.tap()
                     menu.anchor = p
-                    withAnimation(.snappy(duration: 0.2)) { menu.selected = id }
+                    lift(menu)
                 })
-                .opacity(menu.selected == id ? 0.75 : 1)
+                // The screenshot switches (`showMenu`, `showRewind`) pick a message without a press.
+                .onChange(of: menu.selected == id) { _, on in if on, menu.lift?.bar.id != id { lift(menu) } }
         } else {
             content
+        }
+    }
+
+    private func lift(_ menu: MessageMenu) {
+        guard let bar else { return }
+        let f = place.frames
+        let press = CGPoint(x: menu.anchor.x - f.row.minX, y: menu.anchor.y - f.row.minY)
+        let shown = preview()
+            .environment(\.openFile, openFile)
+            .environment(\.loadImage, loadImage)
+            .environment(\.rowMemoScope, memoScope)
+            .environment(\.chatPin, nil) // what opens in the copy does not move the chat under it
+        withAnimation(Theme.Motion.state) {
+            menu.selected = id
+            menu.lift = MessageLift(bar: bar, frame: f.global, press: press, preview: AnyView(shown), card: card)
         }
     }
 }
@@ -302,27 +339,8 @@ private struct MessageActionBarHost: ViewModifier {
     func body(content: Content) -> some View {
         if let menu {
             swipeable(content, menu)
+                .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending))
                 .coordinateSpace(.named(MessageMenu.row))
-                .overlay(alignment: .topLeading) {
-                    if menu.selected == id {
-                        GeometryReader { geo in
-                            let frame = geo.frame(in: .global)
-                            // The bar may stick out of a narrow bubble, but not out of the chat.
-                            let inArea = geo.frame(in: .named(MessageMenu.area))
-                            let areaWidth = max(menu.areaWidth, inArea.maxX)
-                            let count = MessageActionBar.count(id: id, isUser: isUser, menu: menu, pending: pending)
-                            // Six actions are wider than a small phone: they share what the chat has.
-                            let width = min(MessageActionBar.width(count: count), max(menu.areaWidth, inArea.maxX) - 16)
-                            let x = min(max(inArea.minX + menu.anchor.x, width / 2 + 8), areaWidth - width / 2 - 8) - inArea.minX
-                            // Above the finger; below it when that would go under the navigation bar.
-                            let above = frame.minY + menu.anchor.y - MessageActionBar.height - 16 > 140
-                            let y = menu.anchor.y + (above ? -(MessageActionBar.height / 2 + 16) : MessageActionBar.height / 2 + 24)
-                            MessageActionBar(id: id, text: text, isUser: isUser, date: date, menu: menu, pending: pending, itemWidth: MessageActionBar.itemWidth(width, count: count))
-                                .position(x: x, y: y)
-                                .transition(.scale(scale: 0.85).combined(with: .opacity))
-                        }
-                    }
-                }
                 .zIndex(menu.selected == id ? 1 : 0)
         } else {
             content.contextMenu { CopyButton(text: text) }
@@ -338,7 +356,7 @@ private struct MessageActionBarHost: ViewModifier {
                 .overlay(alignment: .trailing) {
                     if drag < 0 {
                         let progress = min(1, -drag / MessageSwipe.threshold)
-                        Image(systemName: Theme.Icon.reply)
+                        ThemedIcon(Theme.Icon.reply)
                             .font(Theme.Font.labelStrong)
                             .foregroundStyle(armed ? Color.white : Color.secondary)
                             .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
@@ -411,7 +429,7 @@ struct MessageActionBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            action(String(localized: "Copy [Message Menu 63d90d]"), "doc.on.doc") {
+            action(String(localized: "Copy [Message Menu 63d90d]"), Theme.Icon.copy) {
                 UIPasteboard.general.string = text
                 Haptics.success()
             }
@@ -422,7 +440,7 @@ struct MessageActionBar: View {
             if !pending {
                 action(String(localized: "Quote"), "quote.opening") { menu.quote?(text, id, isUser, nil) }
             }
-            action(String(localized: "Share"), "square.and.arrow.up") {
+            action(String(localized: "Share"), Theme.Icon.share) {
                 menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
             }
             if isUser && !pending {
@@ -437,9 +455,10 @@ struct MessageActionBar: View {
         }
         .padding(.horizontal, Theme.Space.sm)
         .frame(height: Self.height)
-        .background(Color(white: 0.17), in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        .background(Theme.Lift.bar, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        // Its edge over the dimmed chat.
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-        .environment(\.colorScheme, .dark)
     }
 
     private func action(_ title: String, _ symbol: String, perform: @escaping () -> Void) -> some View {
@@ -453,10 +472,10 @@ struct MessageActionBar: View {
     private func label(_ title: String, _ symbol: String) -> some View {
         VStack(spacing: Theme.Space.xs) {
             // Symbols differ in height: a fixed box keeps every label on one line.
-            Image(systemName: symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
+            ThemedIcon(symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
             Text(title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(.primary)
         .frame(width: itemWidth, height: Self.height)
         .contentShape(.rect)
     }

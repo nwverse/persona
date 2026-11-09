@@ -1,0 +1,21 @@
+[
+  {"line": "ExecStart=/opt/p/bin/persona-hub run", "program": "/opt/p/bin/persona-hub"},
+  {"line": "ExecStart=\"/opt/my p/bin/persona-hub\" run", "program": "/opt/my p/bin/persona-hub"},
+  {"line": "ExecStart=\"/opt/a\\\"b/persona-hub\" run", "program": "/opt/a\"b/persona-hub"},
+  {"line": "ExecStart='/opt/my p/persona-hub' run", "program": "/opt/my p/persona-hub"},
+  {"line": "ExecStart=-/opt/p/persona-hub run", "program": "/opt/p/persona-hub"},
+  {"line": "ExecStart=@/opt/p/persona-hub persona-hub run", "program": "/opt/p/persona-hub"},
+  {"line": "ExecStart=+/opt/p/persona-hub run", "program": "/opt/p/persona-hub"},
+  {"line": "ExecStart=\"/opt/50%%/$$x/persona-hub\" run", "program": "/opt/50%/$x/persona-hub"},
+  {"line": "ExecStart=\"/opt/100%%h/persona-hub\" run", "program": "/opt/100%h/persona-hub"},
+  {"line": "ExecStart=%h/.persona/bin/persona-hub run", "program": "<home>/.persona/bin/persona-hub"},
+  {"line": "ExecStart=\"%h/.persona/bin/persona-manager\" node", "program": "<home>/.persona/bin/persona-manager"},
+  {"line": "ExecStart = /opt/p/persona-hub run", "program": "/opt/p/persona-hub"},
+  {"line": "  ExecStart\t=\t'%h/.persona/bin/persona-hub' run", "program": "<home>/.persona/bin/persona-hub"},
+  {"line": "ExecStart=~/.persona/bin/persona-hub run", "program": "", "why": "systemd does not expand ~: the unit cannot start"},
+  {"line": "ExecStart=persona-hub run", "program": "", "why": "a bare name, looked up in PATH by systemd: not followed"},
+  {"line": "ExecStart=/bin/sh -c '/opt/p/persona-hub run'", "program": "/bin/sh", "why": "a wrapper runs the shell"},
+  {"line": "ExecStartPre=/opt/p/persona-hub check", "program": ""},
+  {"line": "#ExecStart=/opt/p/persona-hub run", "program": ""},
+  {"line": "ExecStart=", "program": ""}
+]

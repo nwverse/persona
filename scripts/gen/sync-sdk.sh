@@ -14,7 +14,7 @@ commit=$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)
 dirty=$(git -C "$here" status --porcelain -- sdk 2>/dev/null | head -1)
 mkdir -p "$dest/sdk"
 if [ "$what" = all ] || [ "$what" = go ]; then
-  rm -rf "$dest/sdk/go"
+  rm -rf "${dest:?}/sdk/go"
   mkdir -p "$dest/sdk/go"
   for d in wire ext exttest; do
     mkdir -p "$dest/sdk/go/$d"
@@ -23,7 +23,7 @@ if [ "$what" = all ] || [ "$what" = go ]; then
   cp "$here/sdk/go/go.mod" "$dest/sdk/go/go.mod"
 fi
 if [ "$what" = all ] || [ "$what" = ts ]; then
-  rm -rf "$dest/sdk/ts"
+  rm -rf "${dest:?}/sdk/ts"
   mkdir -p "$dest/sdk/ts"
   # Keep the declared development commands usable; never copy installed dependencies or build output.
   cp -R "$here/sdk/ts/src" "$here/sdk/ts/scripts" "$here/sdk/ts/typechecks" "$dest/sdk/ts/"

@@ -11,11 +11,11 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A git repository as a market (docs/extensions/extensions.md "Extension market"): the hub keeps a shallow clone in its data directory and
@@ -25,8 +25,8 @@ import (
 const gitFor = 3 * time.Minute
 
 var (
-	scpLike = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~][A-Za-z0-9._/~-]*$`)
-	gitRef  = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
+	scpLike = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~][A-Za-z0-9._/~-]*$`)
+	gitRef  = lazyre.New(`^[A-Za-z0-9._/-]{1,200}$`)
 )
 
 // parseGit reads git:<url>[#ref], or a bare git@host:path / ssh:// URL.

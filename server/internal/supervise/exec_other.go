@@ -7,9 +7,9 @@ import (
 	"os/exec"
 )
 
-// execHub runs `self hub run` and waits for it: there is no exec in place here.
-func execHub(self string, env []string) error {
-	cmd := exec.Command(self, "hub", "run")
+// execHub runs `bin args…` and waits for it: there is no exec in place here.
+func execHub(bin string, args, env []string) error {
+	cmd := exec.Command(bin, args...)
 	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = env, os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

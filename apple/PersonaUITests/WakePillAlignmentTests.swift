@@ -10,7 +10,7 @@ final class WakePillAlignmentTests: XCTestCase {
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "-ui.oldLayout", "NO", "-openChatsFresh", "YES"]
+        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "-openChatsFresh", "YES"]
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
@@ -57,8 +57,7 @@ final class WakePillAlignmentTests: XCTestCase {
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "-ui.oldLayout", "NO",
-                               "-openChatsFresh", "YES", "-openSession", "macbook/a1f3c2d4-0000-4000-8000-00000000000b"]
+        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",                                "-openChatsFresh", "YES", "-openSession", "macbook/a1f3c2d4-0000-4000-8000-00000000000b"]
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch

@@ -8,11 +8,11 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -206,7 +206,7 @@ func lastCompactSummary(r io.Reader) (summary string, at int) {
 }
 
 // anyContextRe is every block Persona put before a message (the snapshot, an earlier handoff, a relay's note).
-var anyContextRe = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `[^>]*>.*?</` + compat.ContextPattern() + `>\s*`)
+var anyContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `[^>]*>.*?</` + compat.ContextPattern() + `>\s*`)
 
 // recentTurns are the text of the user's and the assistant's messages after line `after`, the newest last, within
 // handoffTurns messages and handoffRecentMax characters.

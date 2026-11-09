@@ -12,7 +12,6 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -29,6 +28,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 	wechat "github.com/nwverse/persona/server/internal/wechat/spec"
 )
@@ -75,11 +75,13 @@ type ExtensionView struct {
 	NeedsSetup  []string            `json:"needs_setup,omitempty"`
 	Warnings    []string            `json:"warnings,omitempty"`
 
-	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, its newer version and what
+	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, why that switch does not apply
+	// now ("disabled": the extension is switched off; the switch is kept for when it is on), its newer version and what
 	// happened last with an upgrade.
-	AutoUpgrade *bool                 `json:"auto_upgrade,omitempty"`
-	Upgrade     *ExtensionUpgrade     `json:"upgrade,omitempty"`
-	UpgradeNote *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
+	AutoUpgrade       *bool                 `json:"auto_upgrade,omitempty"`
+	AutoUpgradePaused string                `json:"auto_upgrade_paused,omitempty"`
+	Upgrade           *ExtensionUpgrade     `json:"upgrade,omitempty"`
+	UpgradeNote       *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
 	// Nodes: its program on each computer it is switched on for (extension_nodes.go), for a plugin with one.
 	Nodes []ExtensionNodeView `json:"nodes,omitempty"`
 	// Sandbox: an installed extension's sandbox and its connections through the egress proxy (extension_sandbox.go).
@@ -88,6 +90,22 @@ type ExtensionView struct {
 	// (manifest.tools).
 	Auth  *ExtensionAuth      `json:"auth,omitempty"`
 	Tools []ExtensionToolView `json:"tools,omitempty"`
+	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
+	// is connected.
+	Attached *ExtensionAttached `json:"attached,omitempty"`
+}
+
+// ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
+type ExtensionAttached struct {
+	Online bool `json:"online"`
+	// Since is when it came online or went offline (none while it is switched off or nothing needs it), in the user's
+	// zone.
+	Since time.Time `json:"since,omitzero"`
+	// Error is why it is offline, also while its status is still starting.
+	Error string `json:"error,omitempty"`
+	// Version is the version the program says it is, when that is not the approved Version: it is not used until
+	// that version is approved.
+	Version string `json:"version,omitempty"`
 }
 
 // ExtensionToolView is one of an extension's command-line programs: Reused when it is the machine's own copy.
@@ -105,7 +123,7 @@ const (
 	extensionIncompatible = "incompatible"
 )
 
-var extensionIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+var extensionIDPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // hubPlugin is one plugin as the hub runs it now.
 type hubExtension struct {
@@ -327,6 +345,25 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		}
 	}
 	v.Error = i18n.ExtensionStatusText(l, v.Error)
+	if p.Record.Remote != nil {
+		v.Attached = &ExtensionAttached{}
+		if hp != nil && hp.proc != nil && v.Status != host.StateStopped { // stopped: nothing needs it, so not connected
+			link := hp.proc.Link()
+			v.Attached.Online, v.Attached.Since = link.Online, link.Since
+			if !link.Since.IsZero() {
+				v.Attached.Since = link.Since.In(ps.h.userLocation()) // `extension list` prints it as it comes
+			}
+			if !link.Online {
+				v.Attached.Error = i18n.ExtensionStatusText(l, link.Why)
+			}
+			if link.Said != "" && link.Said != p.Record.Version {
+				v.Attached.Version = link.Said
+				if v.Status == host.StateError {
+					v.Error = i18n.T(l, "extension-status.attached_version", i18n.Args{"current": link.Said, "approved": p.Record.Version, "id": p.Record.ID})
+				}
+			}
+		}
+	}
 	if p.Record.Enabled && ps.h != nil && ps.h.hubJSONWaitsForTriageModel(ctx, p) { // runs, but its inbox waits
 		v.Status, v.NeedsSetup = extensionNeedsSetup, append(v.NeedsSetup, needsTriageModelSetup(ps.h.contextLang(ctx)))
 	}
@@ -409,7 +446,7 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	reg.Reserve("looks", extension.RetiredLookIDs...)
 	// No agent_sources id is reserved: the hub has no personal agents source of its own (extension_agents.go).
 	if path := siblingProgram(wechat.Program); path != "" {
-		if err := reg.AddBuiltin(wechatManifest(h, path), filepath.Dir(path), true); err != nil {
+		if err := h.addWeChatBuiltin(reg, path); err != nil {
 			h.logf("plugin wechat: %v", err)
 		}
 	}
@@ -850,6 +887,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		s.RPCSocket, s.Socket = r.RPCSocket, r.HTTPSocket
 		s.RPC, s.HTTP = r.RPCSocket != "", r.HTTPSocket != ""
 		hp.socket = r.HTTPSocket
+		s.Attached = true
 	} else {
 		if rt.IsDeno() {
 			if err := ps.sourceSpec(ctx, p, &s); err != nil {
@@ -993,6 +1031,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
 			return ps.extensionKBCall(ctx, id, method, params)
+		case "assistant.conversations", "assistant.messages": // assistant.read (extension_assistant_read.go)
+			return ps.extensionAssistantCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
 		case connector.MethodSentRecord:
