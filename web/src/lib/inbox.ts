@@ -837,13 +837,14 @@ interface InboxState {
   moving: string[];
   /** Done items older than the list's few days, from the hub's history (GET /api/v1/inbox/done, #2200), newest first. */
   history: InboxItem[];
-  /** Whether a manager has more history to give (or hasn't been asked yet). */
-  historyMore: boolean;
+  /** The managers ("" for the only one) with more history to give, or not asked yet. */
+  historyMore: string[];
   historyLoading: boolean;
-  historyError: string;
+  /** Why a manager's last page didn't come, by manager ("" for the only one); an offline one has none (it is asked again later). */
+  historyError: Record<string, string>;
 }
 
-const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [], history: [], historyMore: true, historyLoading: false, historyError: "" };
+const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {} };
 let state: InboxState = EMPTY;
 const listeners = new Set<() => void>();
 /** Unsent reply edits and accepted generations, by item (itemKey); send clears them and a failure restores its text. */
@@ -1072,7 +1073,7 @@ const historyNext = new Map<string, DoneCursor | null>();
 export async function loadOlderDone(managers: (string | undefined)[]): Promise<void> {
   const asks = managers.filter((m) => historyNext.get(m ?? "") !== null);
   if (state.historyLoading || !asks.length) return;
-  set({ historyLoading: true, historyError: "" });
+  set({ historyLoading: true });
   const pages = await Promise.allSettled(asks.map(async (m) => {
     const cur = historyNext.get(m ?? "");
     const q = new URLSearchParams({ sources: "all", limit: "100" });
@@ -1093,13 +1094,20 @@ export async function loadOlderDone(managers: (string | undefined)[]): Promise<v
     }
   }));
   const got = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
-  const failed = pages.find((p): p is PromiseRejectedResult => p.status === "rejected");
+  const errors: Record<string, string> = { ...state.historyError };
+  pages.forEach((p, i) => {
+    const m = asks[i] ?? "";
+    // a manager offline (503) or gone (404) is asked again next time, without a word: its Done is what the list has
+    const quiet = p.status === "rejected" && p.reason instanceof ApiError && (p.reason.status === 503 || p.reason.status === 404);
+    if (p.status === "rejected" && !quiet) errors[m] = errorText(p.reason);
+    else delete errors[m];
+  });
   const seen = new Set(state.history.map(itemKey));
   set({
     history: [...state.history, ...got.filter((it) => !seen.has(itemKey(it)))],
-    historyMore: managers.some((m) => historyNext.get(m ?? "") !== null),
+    historyMore: managers.map((m) => m ?? "").filter((m) => historyNext.get(m) !== null),
     historyLoading: false,
-    historyError: failed ? errorText(failed.reason) : "",
+    historyError: errors,
   });
 }
 

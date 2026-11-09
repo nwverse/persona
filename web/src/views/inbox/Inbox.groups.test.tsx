@@ -18,7 +18,7 @@ vi.mock("../../lib/api", async (orig) => {
     api: (path: string, init?: { method?: string; json?: { items?: { id: string }[] } }) => {
       calls.list.push({ path, json: init?.json });
       if (path.startsWith("/inbox?")) return Promise.resolve({ items: calls.items });
-      if (path.startsWith("/inbox/done?")) return calls.historyStatus === 200 ? Promise.resolve({ items: calls.history }) : Promise.reject(new m.ApiError(calls.historyStatus, "not found"));
+      if (path.startsWith("/inbox/done?")) return calls.historyStatus === 200 ? Promise.resolve({ items: calls.history }) : Promise.reject(new m.ApiError(calls.historyStatus, "not found", { error: "not found" }));
       if (path === "/mail/accounts") return Promise.resolve({ accounts: [{ id: "acc1", email: "me@example.com" }] });
       if (path === "/inbox/bulk") {
         const ids = new Set((init?.json?.items ?? []).map((x) => x.id));

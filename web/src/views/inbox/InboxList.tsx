@@ -178,7 +178,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   // Done's history from the hub (the list holds only the last few days): a first page once the list is in, so Done's
   // groups and counts are there before it opens; more on "Show older"
   useEffect(() => {
-    if (ready && !history.length && historyMore) void loadOlderDone(historyManagers);
+    if (ready && !history.length && historyMore.length) void loadOlderDone(historyManagers);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
   const jumpTo = (group: string, key: string) => {
@@ -328,6 +328,8 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
         )}
 
         {layout.map(({ manager, group, tiers, done, doneGroups: dg }) => {
+          const more = historyMore.includes(group);
+          const moreError = historyError[group] ?? "";
           const isSelected = (it: InboxItem) => !!selected && sameItem(it, selected);
           const row = (it: InboxItem, off = false) => (
             <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} pick={picking && !off ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} off={off && picking} />
@@ -367,17 +369,17 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                 );
               })}
               {ready && done.length > 0 && (
-                <Section k="done" title={t("inbox-inboxlist.done")} count={historyMore ? { text: `${done.length}+`, label: `${done.length}+` } : sectionCount(done.length, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}
+                <Section k="done" title={t("inbox-inboxlist.done")} count={more ? { text: `${done.length}+`, label: `${done.length}+` } : sectionCount(done.length, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}
                   menu={dg.length > 1 ? [
-                    ...dg.map((g, i) => ({ key: `jump:${g.key}`, label: g.title, hint: i === dg.length - 1 && historyMore ? `${g.items.length}+` : String(g.items.length), onSelect: () => jumpTo(group, g.key) })),
+                    ...dg.map((g, i) => ({ key: `jump:${g.key}`, label: g.title, hint: i === dg.length - 1 && more ? `${g.items.length}+` : String(g.items.length), onSelect: () => jumpTo(group, g.key) })),
                     { key: "fold-all", label: t("inbox-inboxlist.fold_all"), divider: true, onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, false)) },
                     { key: "unfold-all", label: t("inbox-inboxlist.unfold_all"), onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, true)) },
                   ] : undefined}>
-                  {dg.length > 1 ? dg.map((g, i) => groupOf("done", g, g.items.map((it) => row(it, true)), { more: i === dg.length - 1 && historyMore })) : done.map((it) => row(it, true))}
-                  {historyMore && history.length > 0 && (
+                  {dg.length > 1 ? dg.map((g, i) => groupOf("done", g, g.items.map((it) => row(it, true)), { more: i === dg.length - 1 && more })) : done.map((it) => row(it, true))}
+                  {more && history.length > 0 && (
                     <div className="flex items-center gap-2 px-1 pt-1">
                       <Button tone="quiet" busy={historyLoading} onClick={() => void loadOlderDone(historyManagers)}>{historyLoading ? t("inbox-inboxlist.loading_older") : t("inbox-inboxlist.load_older")}</Button>
-                      {historyError && <span className="min-w-0 truncate text-[11.5px] text-red">{t("inbox-inboxlist.older_failed", { error: historyError })}</span>}
+                      {moreError && <span className="min-w-0 truncate text-[11.5px] text-red" title={moreError}>{t("inbox-inboxlist.older_failed", { error: moreError })}</span>}
                     </div>
                   )}
                 </Section>
