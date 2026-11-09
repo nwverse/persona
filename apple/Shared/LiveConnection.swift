@@ -55,10 +55,12 @@ nonisolated enum ServerEvent: Sendable {
     case fleet(FleetState)
     /// The hub updating itself: checking, downloading, waiting for idle, restarting… (docs/operations/hub-update.md).
     case hubUpdate(HubUpdateStatus)
-    /// An extension install / upgrade / removal moved on (#3307): the whole operation as it stands.
-    case extensionOperation(ExtensionOperation)
+    /// An extension install / upgrade / removal moved on (#3307): the whole operation as it stands. `manager`: the
+    /// manager whose extension it is, as the event says (nil: the hub's own assistant, docs/assistant/managers.md
+    /// "Clients"); the same for the two below.
+    case extensionOperation(ExtensionOperation, manager: String?)
     /// An extension's sign-in changed (#4507): signed in, out, expired; nil, it no longer signs in.
-    case extensionAuth(extension: String, ExtensionAuth?)
+    case extensionAuth(extension: String, ExtensionAuth?, manager: String?)
     /// The desktop apps connected to the hub now (sent on connect and whenever one comes or goes).
     case desktops([DesktopDevice])
     /// Tasks from an assistant conversation (docs/assistant/unified-entry.md): the todos changed (pull them), a conversation's
@@ -79,7 +81,7 @@ nonisolated enum ServerEvent: Sendable {
     /// docs/protocol/protocol.md「文件自动刷新」).
     case fsChanged(machineID: String, cwd: String, dirs: [String], git: Bool)
     /// A plugin changed the badge on one of its main-navigation entries (docs/extensions/extensions.md「UI 插槽」 badges): nil clears it.
-    case pluginBadge(plugin: String, id: String, badge: ExtensionBadge?)
+    case pluginBadge(plugin: String, id: String, badge: ExtensionBadge?, manager: String?)
     /// An extension's data changed (`ui.invalidate`, docs/extensions/extensions.md「ui.invalidate」): its interface `id` (nil: all of
     /// them) is drawn again where it is shown.
     case extensionInvalidate(extension: String, id: String?)
@@ -166,11 +168,14 @@ nonisolated enum ServerEvent: Sendable {
         var answers: JSONValue?
         /// interaction_reanswered's.
         var resolution: JSONValue?
+        /// The manager a manager's own message is from, when not the hub's own assistant (docs/protocol/protocol.md
+        /// "Messages to the App"); raw, so another event's `manager` of another shape cannot break the envelope.
+        var manager: JSONValue?
 
         enum CodingKeys: String, CodingKey {
             case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
-            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution
+            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
             case answeredBy = "answered_by"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
@@ -204,8 +209,8 @@ nonisolated enum ServerEvent: Sendable {
                                              channel: e.channel, build: e.build, protocolVersion: e.protocolVersion,
                                              minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) }))
         case "hub_update": return e.update.map { .hubUpdate($0) }
-        case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0) }
-        case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value) }
+        case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0, manager: e.manager?.string) }
+        case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value, manager: e.manager?.string) }
         case "machines": return e.machines.map { .machines($0) }
         case "sessions":
             guard let m = e.machineID else { return nil }
@@ -224,7 +229,7 @@ nonisolated enum ServerEvent: Sendable {
         case "delta":
             guard let key else { return nil }
             return .delta(key, text: e.text ?? "")
-        case "interaction": return e.interaction.map { .interaction($0) }
+        case "interaction": return e.interaction.map { .interaction(Elicitation.withFieldOrder($0, from: data)) }
         case "interaction_resolved":
             guard let id = e.id else { return nil }
             let assistant = e.answeredBy?.string == AssistantAnswer.assistant
@@ -283,7 +288,7 @@ nonisolated enum ServerEvent: Sendable {
             // An invalidate comes as extension_ui only (an older app would take a plugin_ui for a badge).
             if e.invalidate == true, let ext = e.extensionID ?? e.plugin { return .extensionInvalidate(extension: ext, id: e.id) }
             guard let plugin = e.extensionID ?? e.plugin, let id = e.id else { return nil }
-            return .pluginBadge(plugin: plugin, id: id, badge: e.badge.flatMap { $0.text.isEmpty ? nil : $0 })
+            return .pluginBadge(plugin: plugin, id: id, badge: e.badge.flatMap { $0.text.isEmpty ? nil : $0 }, manager: e.manager?.string)
         case "fs_changed":
             guard let m = e.machineID, let cwd = e.cwd, !cwd.isEmpty else { return nil }
             return .fsChanged(machineID: m, cwd: cwd, dirs: e.dirs ?? [], git: e.git ?? false)
@@ -816,9 +821,20 @@ final class LiveConnection {
 
     /// client_hello (docs/protocol/protocol.md, docs/protocol/i18n.md「协议」): this connection's interface language, so the hub's
     /// notices and errors on it, and the user's language for what it produces later, match the app. The naming
-    /// contract is also advertised here; older hubs ignore unknown fields and keep their existing defaults.
+    /// contract and MCP forms and links are advertised here (`helloFeatures`), with the platform and version this app's
+    /// requests carry (`X-Persona-Client`): the hub lists those cards in a REST answer only to a client whose hello
+    /// matches it. Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
-        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": [HubNaming.feature]])
+        let client = RequestClientMetadata.current
+        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
+              "platform": client.platform, "version": client.version])
+    }
+
+    /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
+    /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
+        let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : [])
     }
 
     func send(_ object: [String: Any]) {

@@ -1,5 +1,17 @@
 # Lessons: Android
 
+## Inbox writes must not wait behind full-list reads (#2545)
+
+A grouped conversation swipe used the explicit bulk-cleanup path, so each success emitted its own Undo notice (deliberately exempt
+from feedback deduplication). Use silent completion for row gestures and a stable inline retry for failed writes; retain Undo for explicit
+bulk cleanup. A failure of the subsequent read must not turn an accepted write into a failed action. Keep writes independent of the
+full-refresh lock, bound concurrent requests, serialize overlapping item targets, and conflate invalidations and ambiguous responses.
+Record local write generations so a list captured before a write cannot resurrect its rows. A different incoming message version must
+still win over both a write response and rollback. Persist confirmed results with their manager identity, never speculative marks.
+Test delayed reads, delayed writes, new messages during writes, pairing replacement, duplicate manager IDs and cache-only restoration.
+Virtual-clock request timings prove ordering and request counts, not phone frame times or production latency. Run filesystem-backed
+restoration waits with a real timeout: a virtual timeout can fire before the IO dispatcher gets a turn.
+
 ## Host-owned lifecycle controls need real application wiring (#2397)
 
 A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
@@ -134,6 +146,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Tests of `OkHttpHubConnection.events` wait for events, not time (2026-11-08, #1254). `events` is hot, and the connection's forwarding coroutine hands each event over after the socket's loop queued it, on its own schedule. Await the subscription (`onSubscription`) before the hub sends. Skip the first socket's hello: it can still reach a subscriber that subscribed after Online. Wait for `onReady` to know the connection handled a socket's hello: a socket that did not resume dropped earlier sockets' queued events by then, while a resumed one calls `onReady` too and keeps forwarding them. Online stays up through a restart's grace, and `lastHello` is set before earlier sockets' events stop being forwarded. Watch a subscriber that never blocks to see which event is being handed over, and end with one more event rather than a delay to show nothing else came (`HubSlowSubscriberTest`).
 
 - Internationalization cleanup (#2453): localized Compose components do not prove that background feedback is localized. Fixed-language fallbacks such as `OperationFeedback.message` and `PendingStatus.label` can leak Chinese through view models, state objects and snackbars. Remove the old APIs and resolve `UiText` with the current page's resources. In contrast, pure JVM `CoreText.shown` already uses the translator injected by the App; `joinToString` alone is not evidence of missing translations. Exempt only the design system's developer catalog, not all of `src/debug`, and test that ordinary debug Kotlin, XML and similarly named directories still fail the check. Robolectric Native renders Chinese and Japanese glyphs but is not simulator acceptance; assert that light and dark screenshots differ.
+
+- A settings hierarchy migration has two compatibility surfaces (#2521): serialized `NavKey` values and standalone `rememberSaveable` page strings. Keep both old values readable and restore the new parent without replacing the leaf's identity. Exercise cold/warm external intents and Back, not only a DEBUG direct-open alias. A loaded ledger can put its introduction after dozens of rows: use the visible filter/list as the emulator readiness marker, not an off-screen footer.
 
 - Settings-entry migration screenshots must not just hand-build identically named `JRow`s (2026-11-05, #2196). Old channel screenshots drew "Extensions → Channels" themselves and could not detect misplaced entries after Settings changed. Render the real `SettingsScreen` with minimal fake services and navigation callbacks; check separate sections, ordering, click targets, two-column selection, missing capabilities, and demo mode. When removing the "Meet Persona" entry, first find the actual label (Android's `Persona` under Assistant); do not delete the main chat or the profile page still used by top bars / launchers. Open and inspect Robolectric Native images, explicitly stating that they are not emulator screenshots. After cleaning wrapper imports, rebuild after automatically merging the latest `main`: another PR may make a retained page use a dependency previously used only by the wrapper (#2192's main-chat migration callback reused `LocalAssistantHost`). No textual Git conflict does not mean dependencies remain complete.
 
