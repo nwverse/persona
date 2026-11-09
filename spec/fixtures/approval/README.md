@@ -9,8 +9,8 @@
 | 对话页 | `bypassPermissions` 或 `acceptEdits` | 保留两种，全部放行须读过全文，意见非空时两种都禁用 | 进入 App 需要解锁；没有额外生物识别要求 |
 | 通知 | `acceptEdits` | 只允许 `acceptEdits`，批准前解锁 | 当前拒绝无需解锁，打回要求解锁；统一后两者都不要求 |
 | 锁屏实时活动 | `acceptEdits` | 只允许 `acceptEdits`，批准前解锁 | 拒绝无需解锁；计划没有直接打回按钮，点查看进 App |
-| 手表 | `bypassPermissions` | 只允许 `acceptEdits`，批准要求认证 | 当前代码未声明动作级认证；统一表将拒绝设为无需额外认证 |
-| Siri／快捷入口 | `bypassPermissions` | 只允许 `acceptEdits`，批准要求认证 | 这个快捷入口只批准最早的待处理项，没有拒绝动作 |
+| 手表 | `acceptEdits` | 只允许 `acceptEdits`，批准要求认证 | 当前代码未声明动作级认证；统一表将拒绝设为无需额外认证 |
+| Siri／快捷入口 | `acceptEdits` | 只允许 `acceptEdits`，批准要求认证 | 这个快捷入口只批准最早的待处理项，没有拒绝动作 |
 
 依据：`docs/archive/redesign/README.md` 2.3、4.2，`docs/archive/redesign/ux.md` 3.4、5.3，`docs/archive/redesign/android.md` 5.8；当前值来自表后规则清单中的 iOS 源码和单测。
 
