@@ -571,6 +571,13 @@ If the header grows, elements below it (App.tsx connection-status pill) cannot a
 - **Measure these frames with 2× CPU throttling first**: unthrottled, longest frames with fade on / off both lie at 50–100 ms, obscured by other processes; 2× gives stable differences. Restart mock hub before each measurement group; `/mock/say` appends replies to the same ever-growing segment.
 - **`useSyncExternalStore` updates are always synchronous**, even within `startTransition`. To redraw answers in a transition after a lazy-loaded plugin arrives, use `useState` + subscription. Plugins are functions: `useState(plugin)` / `setState(plugin)` calls them as initializer / updater, so use `() => plugin`.
 
+## A lazy rehype plugin re-renders every reply; keep finished trees by content (#2465)
+
+- **Whole-reply plugins make their arrival a full re-render**: rehype-highlight ran as a plugin of each reply, so when its chunk arrived every reply with a fenced block re-rendered and was parsed again from scratch, off-screen ones included (about 2,600 component renders while scrolling right after opening a 200-turn chat). Work that only a part of a block needs belongs in that part's component, which can then take it up near the viewport only (`CodeBlock`, `stream/highlight.ts`).
+- **rehype-highlight builds its lowlight inside the plugin**: `createLowlight(common)` runs every time a processor is made, that is once per block per draw; a shared instance cost 156 ms for all 325 blocks of the same history against about 1.7 s through the plugin.
+- **react-markdown's `Markdown()` is a plain function** (no hooks: create processor, parse, `runSync`, to JSX), so its result can be kept and drawn again. The key must hold everything the tree is made from: the text, the remark plugin list, each rehype plugin that runs, and whatever the components close over (machine, directory); a new input to the tree joins the key, or a kept tree is drawn stale. Components built in a `useMemo` per mount make a kept tree's component types differ from a fresh one's; share them per key instead.
+- **Count with a `<Profiler>` per block and a probe on a hook the reply calls** (`highlight-lazy.test.tsx`): a Profiler's `onRender` fires for any commit in its subtree, so it tells which blocks updated, not whether the reply itself rendered again.
+
 ## Cleanup warnings after successful uninstall (#4757)
 
 - Success responses may include warnings requiring user action; do not discard them behind an "Uninstalled" toast. Keep all directory-cleanup notices in the result dialog until confirmation, then close and refresh. Short-lived toasts lack the space and duration for this.
