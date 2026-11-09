@@ -9835,6 +9835,72 @@ def wire_state():
 def wire_reset():
     with WIRE_LOCK:
         WIRE.update(rules=[], held=[], log=[])
+
+
+# MOCK_SYNC_CASE=<file>#<name> (or just <name>): the mock plays that shared chat sync case for the case's one chat
+# (spec/fixtures/sync, #2766): scripts/mock/sync_case.py holds the case's hub state, answers the chat's reads and the
+# apps' sockets from it, holds their writes until the case replies, and plays the next step on POST /mock/case/step
+# (GET /mock/case: where it is, what each device asked). An app paired with `token=mock-<device>` is that device.
+CASE = None
+if os.environ.get("MOCK_SYNC_CASE"):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import sync_case
+    CASE = sync_case.CaseHub(sync_case.load(os.environ["MOCK_SYNC_CASE"]))
+
+
+def case_json(h, obj, status=200):
+    """The case's own answer, as the hub's: nothing of the mock's (managers, faults) added to it."""
+    data = json.dumps(obj, ensure_ascii=False).encode()
+    h.send_response(status)
+    h.send_header("Content-Type", "application/json; charset=utf-8")
+    h.send_header("Content-Length", str(len(data)))
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(data)
+
+
+def case_route(h, method, p, q, body):
+    """A request the case answers (True), or one left to the rest of the mock (False)."""
+    global CASE
+    if p == "/api/v1/ws":
+        sync_case.serve_socket(h, CASE)
+        return True
+    if p == "/mock/case" and method == "GET":
+        case_json(h, CASE.state())
+        return True
+    if p == "/mock/case/load" and method == "POST":  # another case in the same mock (its sockets closed first)
+        try:
+            case = sync_case.load(json.loads(body or b"{}").get("case", ""))
+        except (ValueError, KeyError, OSError) as e:
+            case_json(h, {"error": str(e)}, 400)
+            return True
+        CASE.close()
+        CASE = sync_case.CaseHub(case)
+        case_json(h, CASE.state())
+        return True
+    if p == "/mock/case/step" and method == "POST":
+        try:
+            case_json(h, CASE.step())
+        except sync_case.CaseError as e:
+            case_json(h, {"error": str(e)}, 409)
+        return True
+    device = CASE.device_of(h.headers.get("Authorization", "").removeprefix("Bearer ").strip())
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError:
+        data = {}
+    r = CASE.handle(device, method, p, q, h.headers, data if isinstance(data, dict) else {})
+    if r is None:
+        return False
+    if r is sync_case.CUT:  # the connection broke: no answer at all
+        h.close_connection = True
+        try:
+            h.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        return True
+    case_json(h, r[1], r[0])
+    return True
 # /mock/paging?on=1: pages of history as the hub cuts them (node.go PageTurns): the latest page and the backlog of a
 # first subscribe hold the last 2 whole turns, an older page `turns` more; otherwise the whole history comes at once.
 # ChatFollowTests' cold start at a saved place far up needs it (#597). /mock/reset turns it off.
@@ -13699,6 +13765,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
         if self.token_refused(): return
+        if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
@@ -14580,6 +14647,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
