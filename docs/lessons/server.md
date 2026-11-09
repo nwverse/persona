@@ -1453,3 +1453,11 @@ When decorating a large session list, reserve the timestamp snapshot by the smal
 A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.
 
 After activating matching native and downloadable packages, reapply an enabled runtime node policy through its existing settings route so managers recheck the new pointer. A filesystem pointer change has no consumer watcher. Check the current policy first so an intervening disable is respected; a failed recheck must not produce a completed publication receipt.
+
+
+## Release status reporting is opt-in (#2671)
+
+A source validation result and a deployment result are different facts. Keep release
+logs and receipts regardless of whether GitHub accepts commit statuses. Default both
+release workers to no status writes; explicit opt-in retains all three transitions,
+including errors. Never fabricate a success to remove an old failing status.
