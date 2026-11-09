@@ -198,7 +198,7 @@ type modelsState struct {
 func (s *Service) modelRecord(ctx context.Context, id string) (modelRecord, error) {
 	var r modelRecord
 	if st := s.store(); st != nil {
-		_, err := st.Setting(ctx, modelRecordKey(id), &r)
+		_, err := memoSetting(ctx, st, modelRecordKey(id), &r)
 		return r, err
 	}
 	return r, nil
@@ -898,7 +898,8 @@ func (s *Service) triageInUse(ctx context.Context, id string, effective ModelBin
 
 func (s *Service) modelConfigRoutes() {
 	s.handle("GET /api/v1/model-config", func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+		// Every purpose resolves against the same provider list and records: each key is read once (read-only).
+		ctx := withSettingsMemo(r.Context())
 		providers := s.modelProviders(ctx)
 		purposes := []ModelPurpose{}
 		for _, id := range modelConfigIDs {
@@ -921,8 +922,10 @@ func (s *Service) modelConfigRoutes() {
 		apierr.WriteJSON(w, map[string]any{"purposes": purposes, "providers": providers})
 	})
 	detail := func(w http.ResponseWriter, r *http.Request) {
-		providers := s.modelProviders(r.Context())
-		p, err := s.modelPurpose(r.Context(), r.PathValue("id"), providers)
+		// Read-only, also after update's write: a memo of its own, made after the write.
+		ctx := withSettingsMemo(r.Context())
+		providers := s.modelProviders(ctx)
+		p, err := s.modelPurpose(ctx, r.PathValue("id"), providers)
 		if err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, errModelPurposeNotFound) {
