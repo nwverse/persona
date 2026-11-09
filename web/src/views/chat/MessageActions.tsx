@@ -17,7 +17,7 @@ import { Button, copyText, cx, Dialog, Menu, toast, type MenuItem } from "../../
 import { Icon, type IconName } from "../../ui/icons";
 import type { RewindRestore } from "../../lib/rewind";
 import { isNoHover } from "../../ui/media-query";
-import { useChatActions, type ChatActions, type LiveValue, type RewindRun } from "./chat-actions";
+import { useChatActions, type ChatActions } from "./chat-actions";
 
 
 function pointAnchor(x: number, y: number): HTMLElement {
@@ -77,10 +77,12 @@ export function moreActions(itemId: string | undefined, fork: ((itemId: string) 
   return [{ key: "fork", label: t("chat-messageactions.fork"), icon: "fork", onSelect: () => fork(itemId) }];
 }
 
+type Rewind = NonNullable<ChatActions["rewind"]>;
+
 /** "Rewind to here" (#2436) on a message of yours: "Conversation only" / "Code and conversation", the second asking again (it puts files back too). Off
  *  with the reason as its hint while the session cannot ("Claude only", "Working"…). Each choice waits for the node inside the
  *  menu (it drives Claude's own /rewind, up to a minute) and shows the failure there. */
-export function rewindActions(messageId: string | undefined, text: string, rewind: { block: string; run: RewindRun } | undefined): Action[] {
+export function rewindActions(messageId: string | undefined, text: string, rewind: { block: string; run: Rewind["run"] } | undefined): Action[] {
   if (!messageId || !rewind || !text.trim()) return [];
   const go = (restore: RewindRestore) => () => rewind.run(messageId, text, restore);
   return [
@@ -103,7 +105,7 @@ const NO_STORE = () => () => {};
 
 /** `live`'s value while `open` (a menu that shows it), `closed` otherwise: a closed menu does not render again when it
  *  changes (why "Rewind to here" is off changes each time the session starts or stops working). */
-function useWhileOpen<T>(live: LiveValue<T> | undefined, open: boolean, closed: T): T {
+function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: string): string {
   const on = open ? live : undefined;
   const get = on ? on.get : () => closed;
   return useSyncExternalStore(on ? on.subscribe : NO_STORE, get, get);
