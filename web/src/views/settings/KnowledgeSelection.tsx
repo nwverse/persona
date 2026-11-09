@@ -131,7 +131,7 @@ export function KnowledgeSelectionEditor({ manager, owner }: { manager: string; 
               <Toggle label={text("store")} on={item.store} disabled={!item.read} onChange={(on) => edit((s) => { s.items![index].store = on; })} />
               <Days label={text("days")} value={item.days} onChange={(n) => edit((s) => { s.items![index].days = n; })} />
             </div>
-            <p className="mt-2 text-[11.5px] leading-relaxed text-ink-3">{text(!item.read ? "not_read" : item.store ? "store_all" : item.kind === "chat" ? "chat_personal" : "doc_rules")}</p>
+            <p className="mt-2 text-[11.5px] leading-relaxed text-ink-3">{text(!item.read ? "not_read" : item.store ? item.kind === "doc" ? "store_all_doc" : "store_all" : item.kind === "chat" ? "chat_personal" : "doc_rules")}</p>
           </div>)}
           <div className="flex flex-wrap gap-2 px-4 py-3">
             <Button onClick={() => setPicker(picker === "chat" ? null : "chat")}>{text("add_chat")}</Button>

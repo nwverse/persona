@@ -132,6 +132,10 @@ try {
     await page.getByRole("button", { name: s.add_doc, exact: true }).click();
     await page.getByRole("button", { name: s.add, exact: true }).click();
     await page.getByText("original/token:exact", { exact: false }).waitFor();
+    await page.locator('[data-selection-item]').first().getByRole("switch", { name: s.store, exact: true }).click();
+    await page.locator('[data-selection-item]').last().getByRole("switch", { name: s.store, exact: true }).click();
+    await page.getByText(s.store_all, { exact: true }).waitFor();
+    await page.getByText(s.store_all_doc, { exact: true }).waitFor();
     await dm().fill("30");
     await page.locator('[data-selection-rule="messages/mentions"]').getByRole("button", { name: s.split, exact: true }).click();
     await page.locator('[data-selection-rule="messages/mentions"]').getByRole("button", { name: s.join, exact: true }).click();
@@ -141,6 +145,8 @@ try {
     const expected = fixture(); expected.messages.rules.dm.days = 30; expected.messages.order[0] = ["mine", "mentions"];
     expected.items.push({ source: "example-chat", kind: "chat", id: "chat/two", name: "Project notes", read: true, store: false, days: null });
     expected.items.push({ source: "example-docs", kind: "doc", id: "original/token:exact", name: "Project notes", read: true, store: false, days: null });
+    expected.items[0].store = true;
+    expected.items.at(-1).store = true;
     assert.deepEqual(run.writes.map((w) => w.body), [expected]);
     await page.locator('[data-settings-group="knowledge-items"]').scrollIntoViewIfNeeded(); await x.shot("items");
     await page.locator('[data-settings-group="knowledge-docs"]').scrollIntoViewIfNeeded(); await x.shot("document-rules");

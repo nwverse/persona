@@ -128,6 +128,17 @@ it("uses original document metadata rather than the KB filename and preserves di
   await click("save");
   expect(saved[0].items?.[1]).toEqual({ source: "example-docs", kind: "doc", id: "source/token:exact", name: "Same name", read: true, store: false, days: null });
 });
+it("distinguishes blank Store-all document retention from the chat text-retention fallback", async () => {
+  const selection = fixture();
+  selection.items![0].store = true;
+  selection.items!.push({ source: "example-docs", kind: "doc", id: "document-token", name: "Example document", read: true, store: true, days: null });
+  vi.stubGlobal("fetch", vi.fn(async () => response(selection)));
+  await render();
+  const items = host.querySelectorAll('[data-selection-item]');
+  expect(items[0].textContent).toContain(label("store_all"));
+  expect(items[1].textContent).toContain("Blank days follows document rules and creates no default deletion deadline.");
+  expect(items[1].textContent).not.toContain(label("store_all"));
+});
 it("refuses a document with missing stable source identity", async () => {
   await render(); await click("add_doc");
   const row = [...host.querySelectorAll("div")].find((e) => e.textContent === "Legacy documentlegacy-fileAdd")!;
