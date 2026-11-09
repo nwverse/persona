@@ -2870,11 +2870,20 @@ Like the other knowledge base endpoints, the hub forwards them as-is to the mana
   "language": "zh-CN",                        // BCP 47
   "device": "phone",                          // phone | watch: the device that recorded
   "title": "",                                // optional, name given by the user
+  "kind": "note",                             // optional: "meeting" or "note" (default "note"); a meeting gets minutes ([meeting-minutes.md](../assistant/meeting-minutes.md))
+  "calendar": {"title": "", "attendees": [], "location": ""},  // optional hint from the device's own calendar; no event id
   "bookmarks": [{"at": 120.5, "label": ""}],  // at: seconds from the start
   "segments": [{"start": 0, "end": 4.2, "text": "…"}],  // seconds from the start
   "complete": false                           // true only when recording has ended and transcription is fully done; send the parts available before that
 }
 ```
+
+Minutes for a meeting recording ([meeting-minutes.md](../assistant/meeting-minutes.md)):
+
+- `kind` and `calendar` are optional and travel with the full-state upload, so a later upload replaces them. Unknown `kind` is `400`. A client sending neither is unchanged.
+- `GET /api/v1/kb/recordings/{id}` adds to `detail.meta`: `kind`, `calendar` (when sent), `meeting` (`{kind, id, name}` of an overlapping `meetings` or `events` item, when matched) and `minutes_state` (`pending`, `ready`, `failed`; absent for a note). When `minutes_state` is `ready`, `detail.minutes` is `{title, when, where?, attendees?, points:[{text, at, who?}], decisions:[{text, at}], actions:[{who?, what, by?, at}], open:[{text, at}]}`, with `at` in seconds from the start, the same clock as `segments[].start`. Absent sections and unknown names are omitted, never filled in.
+- `detail.summary` stays the short summary either way. `kb_get` returns `detail.minutes` too, and `kb_search` matches the minutes text.
+- `POST /api/v1/recordings/{id}/minutes` regenerates a meeting's minutes: `202 {"state":"pending"}`, `409` when the transcript is not `complete`, `404` when the recording does not exist. It does not change the transcript or the revision.
 
 - Response `200 {"id","revision","status"}`: `stored` was written (a replay of the same revision also overwrites); `stale` the stored revision is higher, nothing written; `expired` the start time is before the retention window, not stored.
 - `410`, `code: recording_deleted`: this recording was deleted (the tombstone stays until the retention window ends); the phone should stop sending it.
