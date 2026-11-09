@@ -66,6 +66,9 @@ var (
 	repairDeadline = 45 * time.Minute
 	// healthCheckTimeout bounds one check (the node's own is 90 seconds).
 	healthCheckTimeout = 100 * time.Second
+	// healthRecheckThrottle: how long a failing launcher keeps the on-demand probe's answer instead of probing again,
+	// so a burst of starts does not turn into a burst of probes.
+	healthRecheckThrottle = 30 * time.Second
 )
 
 const defaultHealthInterval = 30 * time.Minute
@@ -135,8 +138,18 @@ type healthBook struct {
 	checking map[string]bool            // machines being checked now
 	// The app's starts answered at once (launcher_health_starts.go): those seen starting, by machine and session, and
 	// the failed ones already counted, when (kept with the records: healthStore.Counted).
-	starting map[[2]string]startWatch
-	counted  map[[2]string]time.Time
+	starting  map[[2]string]startWatch
+	counted   map[[2]string]time.Time
+	recheck   map[string]*healthRecheck // on-demand probes in flight, by healthKey
+	recheckAt map[string]time.Time      // last on-demand probe, by healthKey
+}
+
+// healthRecheck is an on-demand launcher probe one start is running and concurrent starts wait for.
+type healthRecheck struct {
+	done    chan struct{}
+	res     healthResult
+	got     bool
+	waiters int // starts that joined this probe instead of starting their own
 }
 
 func healthKey(machine, launcher string) string { return machine + "/" + launcher }
@@ -171,6 +184,9 @@ func (s *Service) healthLoadLocked(ctx context.Context) {
 	b.recs, b.repairs = map[string]*LauncherHealth{}, map[string]*machineRepair{}
 	if b.online == nil {
 		b.online, b.checking = map[string]bool{}, map[string]bool{}
+	}
+	if b.recheck == nil {
+		b.recheck, b.recheckAt = map[string]*healthRecheck{}, map[string]time.Time{}
 	}
 	var stored healthStore
 	if st := s.store(); st != nil {
