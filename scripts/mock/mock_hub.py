@@ -14543,7 +14543,7 @@ class H(BaseHTTPRequestHandler):
         if not stem: stem, dot, ext = ext, "", ""
         path = "/tmp/%s-%s%s%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"), dot, ext)
         if video: FILES[path] = b"".join(body)  # downloadable again, like a node's temp file (#981)
-        UPLOADS.append({"name": name, "size": n, "path": path})
+        UPLOADS.append({"name": name, "size": n, "path": path, "machine": urlparse(self.path).path.split("/")[4]})
         return self.send_json({"path": path, "name": path.rsplit("/", 1)[1], "size": n})
 
     def do_POST(self):
