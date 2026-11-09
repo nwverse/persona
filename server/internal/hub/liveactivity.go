@@ -742,11 +742,8 @@ func liveActivityPayloadIn(l i18n.Lang, event string, st FleetState, now time.Ti
 	return map[string]any{"aps": aps}
 }
 
-// startPayload is a push-to-start; quiet drops its alert (the phone is muted while a desktop is online, or in its quiet hours).
-func startPayload(st FleetState, now time.Time, quiet bool) map[string]any {
-	return startPayloadIn(i18n.Default, st, now, quiet)
-}
-
+// startPayloadIn is a push-to-start written in l; quiet drops its alert (the phone is muted while a desktop is online,
+// or in its quiet hours).
 func startPayloadIn(l i18n.Lang, st FleetState, now time.Time, quiet bool) map[string]any {
 	p := liveActivityPayloadIn(l, "start", st, now)
 	if quiet {

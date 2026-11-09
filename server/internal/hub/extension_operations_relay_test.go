@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -24,7 +25,7 @@ func TestExtensionOperationRelay(t *testing.T) {
 		return h.events.seq
 	}
 	before := seq()
-	if err := h.relayBroadcast(json.RawMessage(`{"type":"extension_operation","operation":{"id":"op1"}}`)); err != nil {
+	if err := h.relayBroadcastFrom(assistantwire.AssistantID, json.RawMessage(`{"type":"extension_operation","operation":{"id":"op1"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	if len(knows.out) != 1 || len(old.out) != 0 {
@@ -33,7 +34,7 @@ func TestExtensionOperationRelay(t *testing.T) {
 	if seq() != before {
 		t.Fatal("it went into the event log")
 	}
-	if err := h.relayBroadcast(json.RawMessage(`{"type":"extension_upgrade","extension":"x"}`)); err != nil {
+	if err := h.relayBroadcastFrom(assistantwire.AssistantID, json.RawMessage(`{"type":"extension_upgrade","extension":"x"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if len(old.out) != 1 {
@@ -73,7 +74,7 @@ func TestExtensionOperationCarriesNoEventSeq(t *testing.T) {
 	h := newTestHub(t)
 	app := &client{hub: h, out: make(chan []byte, 4), urlFeatures: map[string]bool{extensionOperationsFeature: true}}
 	h.clients[app] = struct{}{}
-	if err := h.relayBroadcast(json.RawMessage(`{"event_seq":999999,"type":"extension_operation","operation":{"event_seq":5,"id":"op1"}}`)); err != nil {
+	if err := h.relayBroadcastFrom(assistantwire.AssistantID, json.RawMessage(`{"event_seq":999999,"type":"extension_operation","operation":{"event_seq":5,"id":"op1"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	if len(app.out) != 1 {

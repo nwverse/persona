@@ -28,8 +28,9 @@ import (
 // Small helpers shared by this package's handlers.
 
 var (
-	clip    = textfmt.Clip
-	oneLine = textfmt.OneLine
+	clip          = textfmt.Clip
+	oneLine       = textfmt.OneLine
+	firstNonEmpty = textfmt.FirstNonEmpty
 )
 
 func writeJSON(w http.ResponseWriter, v any) { apierr.WriteJSON(w, v) }
@@ -49,9 +50,7 @@ func writeCode(w http.ResponseWriter, status int, code, msg string, extra map[st
 	for k, v := range extra {
 		body[k] = v
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	apierr.WriteBody(w, status, body)
 }
 
 // readAdminJSON reads an admin page's JSON body into v (an empty body leaves v as it is).
@@ -88,13 +87,6 @@ func randomToken() string {
 func hashToken(tok string) string {
 	sum := sha256.Sum256([]byte(tok))
 	return hex.EncodeToString(sum[:])
-}
-
-func clipRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
 }
 
 func mcpTool(name string) proto.Tool {
@@ -221,16 +213,4 @@ func principalFrom(r *http.Request) principal {
 func byOwnDevice(ctx context.Context) bool {
 	p, ok := ctx.Value(principalKey{}).(principal)
 	return ok && p.Role == roleFull && p.ID != "" && !p.Paired
-}
-
-// remoteIP is the caller's address the hub saw.
-func remoteIP(r *http.Request) netip.Addr {
-	if a := principalOf(r.Context()).Remote; a.IsValid() {
-		return a
-	}
-	ap, err := netip.ParseAddrPort(r.RemoteAddr)
-	if err != nil {
-		return netip.Addr{}
-	}
-	return ap.Addr()
 }

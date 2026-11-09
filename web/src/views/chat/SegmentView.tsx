@@ -1,12 +1,12 @@
-import { Fragment, memo, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, Fragment, memo, type ReactNode, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock } from "../../lib/format";
 import { getSession, getState } from "../../lib/store";
 import { agentStatus, subagentFor } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
-import { exchangeSteps, isLoopTick, isOwnMessage, supervisionTool, type Segment, type Step, type UserMessage } from "../../lib/turns";
+import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Segment, type UserMessage } from "../../lib/turns";
 import type { Item } from "../../lib/types";
-import { foldsHoldingCalls, planSteps, thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
+import { thinkingDurations, workBlocks, type ToolStep, type WorkNode } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { channelOf, useChannels } from "../../lib/channels";
 import { splitQuotes } from "../../lib/drafts";
@@ -27,6 +27,7 @@ import { PathText } from "../../ui/PathLinks";
 import { Thumb } from "./Steps";
 import { useFoldScroll } from "./fold-scroll";
 import { useChatContext } from "./chat-context";
+import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
 import { useCallSeeker } from "./jump";
@@ -38,10 +39,25 @@ export const BUBBLE_MAX_LINES = 14;
 const CHARS_PER_LINE = 30;
 /** A folded message: ten lines high, scrolling inside (the chat scrolls on at its top and end). */
 const FOLDED = "max-h-[10lh] overflow-y-auto";
+/** Characters to a line of a bubble narrower than any drawn (a phone's holds about 17 wide ones): a message within
+ *  BUBBLE_MAX_LINES even there is short in any bubble, and is not measured. */
+const NARROWEST_CHARS = 10;
 
 /** How many lines a message takes in its bubble, by its text (the bubble measures itself once drawn). */
 export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
   return text.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil([...l].length / perLine)), 0);
+}
+
+/** A finished exchange's height in px before it is first drawn (content-visibility, docs/web/web.md "Long chats"), by
+ *  its text the way bubbleLines counts it: its bubble (folded past BUBBLE_MAX_LINES), its words at 2.5 times the
+ *  bubble's characters to a line (the column is wider, and Markdown's short and blank lines take less than a line), a
+ *  row for each other block. Once drawn it keeps its own height. */
+export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[]): number {
+  const line = 24, gap = 12, row = 28;
+  const lines = user ? bubbleLines(user.text) : 0;
+  let h = user ? (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0) : 0;
+  for (const n of nodes) h += n.kind === "step" && n.step.kind === "text" ? bubbleLines(n.step.item.text ?? "", CHARS_PER_LINE * 2.5) * line : row;
+  return Math.round(h + gap * Math.max(0, nodes.length + (user ? 1 : 0) - 1));
 }
 
 /** `sendState`: a message not in the transcript yet (a sending bubble, the outbox's), marked for the sync scenarios
@@ -94,6 +110,11 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || open) return;
+    // short however narrow: no layout read (opening a long chat read every bubble's, each a forced layout)
+    if (bubbleLines(text, NARROWEST_CHARS) <= BUBBLE_MAX_LINES) {
+      setLong(false);
+      return;
+    }
     // its full height in lines (a fold's scrollHeight is all of it)
     const line = parseFloat(getComputedStyle(el).lineHeight) || 24;
     setLong(el.scrollHeight / line > BUBBLE_MAX_LINES + 0.5);
@@ -187,6 +208,14 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade }: 
   );
 });
 
+/** Freshness reaches only the single visible persisted text, not every paragraph hidden in its execution summary: it
+ *  reads its own id (fresh-words.ts), so a new reply renders these words, not every exchange. */
+const LatestAnswer = memo(function LatestAnswer({ item, streaming, mid, sid }: { item?: Item; streaming?: string; mid: string; sid: string }) {
+  const persisted = streaming === undefined ? item?.id : undefined;
+  const fresh = useFreshWords(mid, sid, persisted);
+  return <Answer item={item} streaming={streaming} mid={mid} sid={sid} fade={persisted ? fresh : undefined} />;
+});
+
 export const SegmentView = memo(function SegmentView({
   seg,
   live,
@@ -197,6 +226,7 @@ export const SegmentView = memo(function SegmentView({
   expandFold,
   beforeWords,
   trace,
+  offscreen,
 }: {
   seg: Segment;
   live: boolean;
@@ -212,33 +242,45 @@ export const SegmentView = memo(function SegmentView({
   beforeWords?: ReactNode;
   /** An opened supervision round shows its original input instead of the injected hint. */
   trace?: boolean;
+  /** A finished exchange before the last two: off screen it is not drawn (the `seg-cv` class), and the chat watches its
+   *  height through this (ChatView `watchSegment`, returning the unwatch) to keep the view still when it changes. */
+  offscreen?: (section: HTMLElement) => () => void;
 }) {
   const { subagents, scope, workflowCalls = NO_WORKFLOW_CALLS, lineStyle } = useChatContext();
-  const steps = useMemo(() => planSteps(exchangeSteps(seg)), [seg]);
+  const steps = useMemo(() => exchangeSteps(seg), [seg]);
   const turnStart = seg.user?.ts ?? seg.start;
   const thinking = useMemo(() => thinkingDurations(steps, turnStart), [steps, turnStart]);
   const p = useMemo<WorkProps>(() => {
     const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live);
     return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live };
   }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
+  const identity = segmentIdentity(seg);
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, agentStatus: p.agentStatus, workflowCard: (s) => workflowCalls.known.has(s.use.tool_use_id ?? ""), keepTool: seg.supervision ? (s) => Boolean(supervisionTool(s.use.tool_name)) : undefined }),
-    [steps, live, turnStart, p.agentStatus, workflowCalls, seg.supervision],
+    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
+    [steps, live, turnStart, streaming !== undefined, identity],
   );
   useCallSeeker(scope, nodes);
-  useWorkflowFolds(steps, workflowCalls.startedAt, expandFold);
   // the pictures the agent looked at this turn, between its work and its last words
   const images = useMemo(() => turnImages(seg, getState().machines.find((m) => m.id === mid)?.name), [seg, mid]);
-  // a finished exchange's last words (the run of them at its end) come after those pictures
+  // The text slot is fixed during the run and after completion. Streamed text replaces persisted narration.
   let cut = nodes.length;
-  for (let n = nodes[cut - 1]; !live && n?.kind === "step" && n.step.kind === "text"; n = nodes[cut - 1]) cut--;
+  const tail = nodes[cut - 1];
+  if (tail?.kind === "step" && tail.step.kind === "text") cut--;
+  const latest = nodes.at(-1);
+  const latestItem = latest?.kind === "step" && latest.step.kind === "text" ? latest.step.item : undefined;
   const working = live && (streaming === undefined || batchedWords) && !nodes.some((n) => n.kind === "group" && n.live);
   const liveRow = working && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
   const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
+  const box = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    return offscreen && el ? offscreen(el) : undefined;
+  }, [offscreen]);
+  const guess = useMemo(() => (offscreen ? ({ "--seg-est": `${segmentHeight(seg.user, nodes)}px` } as CSSProperties) : undefined), [offscreen, seg.user, nodes]);
   return (
-    <section className="flex flex-col gap-3" data-segment>
+    <section ref={box} className={offscreen ? "seg-cv flex flex-col gap-3" : "flex flex-col gap-3"} style={guess} data-segment>
       {trace && seg.user?.rawInput ? <RawInjectedInput items={seg.user.rawInput} mid={mid} sid={sid} /> : seg.user && (seg.user.source ? <SourceMessage msg={seg.user} mid={mid} sid={sid} /> : seg.user.injected ? <InjectedHint msg={seg.user} sid={sid} /> : seg.user.parts ? <MergedBubble msg={seg.user} mid={mid} sid={sid} /> : seg.user.from ? <PeerMessage msg={seg.user} /> : isLoopTick(seg.user) ? <LoopTick msg={seg.user} /> : <UserBubble msg={seg.user} mid={mid} sid={sid} />)}
-      {/* while the agent works, its live work stays at the bottom */}
+      {/* Work stays collapsed above the single latest-text slot. */}
       {live && <Fragment key="before-words">{beforeWords}</Fragment>}
       <WorkNodes nodes={nodes.slice(0, cut)} p={p} live={live} fade />
       {/* working with no run of steps going (its words just came, or nothing yet): the live group still shows, under an
@@ -246,9 +288,8 @@ export const SegmentView = memo(function SegmentView({
       {streaming === undefined && liveRow}
       {imageStrip}
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
-      <WorkNodes nodes={nodes.slice(cut)} p={p} fade />
-      {streaming !== undefined && <Answer streaming={streaming} mid={mid} sid={sid} />}
       {streaming !== undefined && liveRow}
+      {(latestItem || streaming !== undefined) && <div key="latest-text" data-latest-text><LatestAnswer item={latestItem} streaming={streaming} mid={mid} sid={sid} /></div>}
     </section>
   );
 });
@@ -270,35 +311,4 @@ function RawInjectedText({ item, mid, sid }: { item: Item; mid: string; sid: str
       {full.more}
     </div>
   );
-}
-
-/** After a fold failed to come, the next try waits this long, doubling up to WORKFLOW_FOLD_RETRY_MAX_MS. */
-const WORKFLOW_FOLD_RETRY_MS = 5000;
-const WORKFLOW_FOLD_RETRY_MAX_MS = 60_000;
-
-/** A workflow run's call the hub folded into this exchange's work (the page counted back from the end, #3434): its steps
- *  are fetched, so the run's card comes out of the fold and stays in the open. Kept by this exchange as drawn now, not
- *  for the page: a transcript loaded again (another chat and back, a rewrite) mounts it afresh and brings the same fold
- *  back, which is fetched again. A fold that came is gone from the steps; one that failed is asked for again later. */
-function useWorkflowFolds(steps: Step[], calls: ReadonlyMap<string, number>, expandFold: (f: Item) => Promise<void>) {
-  const folds = useMemo(() => foldsHoldingCalls(steps, calls), [steps, calls]);
-  // asked for (on its way, or come: one that came back empty stays among the steps and is not asked for again)
-  const asked = useRef(new Set<string>());
-  const wait = useRef(WORKFLOW_FOLD_RETRY_MS);
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    for (const f of folds) {
-      if (asked.current.has(f.id)) continue;
-      asked.current.add(f.id);
-      expandFold(f).then(
-        () => void (wait.current = WORKFLOW_FOLD_RETRY_MS),
-        () => {
-          asked.current.delete(f.id);
-          const ms = wait.current;
-          wait.current = Math.min(ms * 2, WORKFLOW_FOLD_RETRY_MAX_MS);
-          window.setTimeout(() => setRetry((n) => n + 1), ms);
-        },
-      );
-    }
-  }, [folds, expandFold, retry]);
 }

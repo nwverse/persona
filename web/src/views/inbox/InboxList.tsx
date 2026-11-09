@@ -444,7 +444,7 @@ function Section({ k, title, count, open, onToggle, action, menu, children }: { 
   );
   return (
     <section className="mt-4" data-section={k}>
-      <div className="flex items-center gap-2 px-1 pb-1.5">
+      <div className="flex items-center gap-2 px-1 pb-1">
         {onToggle ? (
           <button type="button" onClick={onToggle} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
             {head}
@@ -466,7 +466,9 @@ function Section({ k, title, count, open, onToggle, action, menu, children }: { 
         )}
         {menu && jump.anchor && <Menu anchor={jump.anchor} onClose={jump.close} align="right" width={220} items={menu} />}
       </div>
-      <Collapse open={open} unclipped>
+      {/* the clip pulled out by 2px with 2px of padding inside: the cards stay put and the selected one's 1.5px ring
+          (and the cards' shadow) is not cut at the sides; the top 2px stays while closed, so the header keeps its 6px */}
+      <Collapse open={open} unclipped className="-mx-0.5" clipClassName="px-0.5 pt-0.5">
         <div inert={!open} className="flex flex-col gap-1.5 pb-0.5">{children}</div>
       </Collapse>
     </section>
@@ -490,7 +492,7 @@ function GroupTick({ state }: { state: "none" | "some" | "all" }) {
 function Group({ id, title, count, more, open, onToggle, pick, children }: { id: string; title: string; count: number; more?: boolean; open: boolean; onToggle: (open: boolean) => void; pick?: { state: "none" | "some" | "all"; picked: number; run: () => void }; children: React.ReactNode }) {
   return (
     <div data-group={id}>
-      <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-canvas/95 px-2 pt-2 pb-1 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-canvas/95 px-2 pt-2 pb-0.5 backdrop-blur-sm">
         {pick && (
           <button type="button" role="checkbox" aria-checked={pick.state === "all" ? true : pick.state === "some" ? "mixed" : false} aria-label={t("inbox-inboxlist.pick_group", { name: title })} onClick={pick.run} className="touch-hit flex shrink-0 items-center">
             <GroupTick state={pick.state} />
@@ -503,7 +505,9 @@ function Group({ id, title, count, more, open, onToggle, pick, children }: { id:
         </button>
         {pick && pick.picked > 0 && <span className="shrink-0 text-[11.5px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
       </div>
-      <Collapse open={open}>
+      {/* the same 2px of room as the section's (#2703), so a selected card's ring isn't cut inside a group; the header's
+          bottom padding gives up those 2px to keep its 4px */}
+      <Collapse open={open} className="-mx-0.5" clipClassName="px-0.5 pt-0.5">
         <div inert={!open} className="flex flex-col gap-1.5 pb-1">{children}</div>
       </Collapse>
     </div>

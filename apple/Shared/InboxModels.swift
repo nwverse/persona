@@ -604,6 +604,8 @@ nonisolated struct InboxMute: Codable, Identifiable, Hashable, Sendable {
     var value: String
     var name: String
     var createdAt: Date?
+    /// Whose mute it is (several managers: each keeps its own, and the Muted list stamps it); nil: the default's.
+    var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, source, tag, value, name
@@ -660,6 +662,8 @@ nonisolated struct InboxPolicy: Decodable, Identifiable, Hashable, Sendable {
     var twin: Twin
     var createdAt: Date?
     var updatedAt: Date?
+    /// Whose rule it is (several managers: each keeps its own, and the Rules list stamps it); nil: the default's.
+    var manager: String?
 
     enum CodingKeys: String, CodingKey {
         case id, source, tag, value, name, tier, twin

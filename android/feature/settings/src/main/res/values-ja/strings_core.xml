@@ -96,6 +96,12 @@
     <string name="settings_notify_live_about">既定でオンです。Android 16以降では、ロック画面とステータスバーのチップに状態の件数を表示します。オフのときやシステムが対応していないときは、通常の常駐通知を表示します。</string>
     <string name="settings_notify_lock_details">ロック画面に詳細を表示</string>
     <string name="settings_notify_lock_details_about">オフにすると、常駐通知にエージェント名やリクエストの内容を表示しません。</string>
+    <string name="settings_notify_quiet">おやすみ時間</string>
+    <string name="settings_notify_quiet_off">オフ：いつでも通知します</string>
+    <string name="settings_notify_quiet_start">開始</string>
+    <string name="settings_notify_quiet_end">終了</string>
+    <string name="settings_notify_quiet_footer">この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。このスマートフォンのタイムゾーンで判断します。</string>
+    <string name="settings_notify_quiet_footer_zone">この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。現在は設定した場所の%1$sで判断します。ここで変更すると、このスマートフォンのタイムゾーンで判断します。</string>
     <string name="settings_reading">読み込み中</string>
     <string name="settings_retry_read">再読み込み</string>
     <string name="settings_saving">保存中…</string>
@@ -227,7 +233,7 @@
     <string name="settings_ready_autostart">自動起動</string>
     <string name="settings_ready_autostart_detail">アプリの起動管理でPersonaの自動起動を許可してください。スキップすると、スマートフォンの再起動後にPersonaを手動で開く必要があることがあります。システムでは確認できないため、設定後に確認してください。</string>
     <string name="settings_ready_vendor">%1$s %2$sのバックグラウンド設定</string>
-    <string name="settings_ready_vendor_detail">%1$sシステムはこれらのスイッチを確認できないため、設定後に「完了」をタップしてください。スキップすると通知を受け取れないことがあります。</string>
+    <string name="settings_ready_vendor_detail">%1$sシステムはこれらのスイッチを確認できないため、設定後に「完了にする」をタップしてください。スキップすると通知を受け取れないことがあります。</string>
     <string name="settings_ready_task_lock">最近のタスクでロック</string>
     <string name="settings_ready_task_lock_detail">最近のタスクを開き、Personaのカードを長押しするかメニューを開いて「ロック」を選んでください。スキップすると、一括消去で接続が閉じることがあります。</string>
     <string name="settings_ready_local_network">ローカルネットワーク</string>
@@ -324,7 +330,7 @@
     <string name="settings_ready_open">設定を開く</string>
     <string name="settings_ready_open_failed">システムの設定を開けません。スマートフォンの設定からPersonaのアプリ情報を開いてください。</string>
     <string name="settings_ready_undo_confirm">確認を取り消し</string>
-    <string name="settings_ready_mark_done">完了</string>
+    <string name="settings_ready_mark_done">完了にする</string>
     <string name="settings_ready_unskip">スキップを解除</string>
     <string name="settings_ready_skip">スキップ</string>
     <string name="settings_ready_no_machines">マシンの情報はまだありません</string>
