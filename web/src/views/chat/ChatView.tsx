@@ -331,6 +331,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // waits for its row, because the node would start an Agent for an id nobody has. A lookup that found nothing leaves
   // `session` a stand-in (useRuntimeSession), which is no row either. Retries are refused along with sends.
   const noRow = !session || detail.missing;
+  // the hub could not say what this chat is (an older hub without the cached row, or a session it no longer has): the
+  // notice above the chat says so, and an opening line under it would claim the chat started
+  const noDetails = !readOnly && Boolean(detail.error) && (detail.missing || !session);
   const gone = detail.missing && !isMain;
   const refusedNoRow = noRow && !isMain;
   const unknownGate = useRef({ isMain, gone: detail.missing });
@@ -1137,7 +1140,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       )}
       {banner}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
-      {archivedHere ? <ArchivedNotice session={archivedHere} /> : !readOnly && detail.error && (detail.missing || !session) && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
+      {archivedHere ? <ArchivedNotice session={archivedHere} /> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
       {session && !panel && panes.length > 1 && <PaneTabs sessions={panes} current={sid} onSelect={(s) => navigate(paneRoute(s), true)} />}
 
       {/* the page's middle: the chat and (once shown) the terminal stacked in one box; without a terminal to show it adds no box */}
@@ -1161,8 +1164,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 <Loading label={t("chat-chatview.loading_earlier")} />
               </div>
             )}
-            {/* also over a chat whose first page came back empty (#2450): it reads as loaded and empty, not as still loading */}
-            {((!tr.hasMore && !tr.loading && (tr.items.length > 0 || (!tr.error && !starting && !session?.start_error))) || opening) && <div className="text-center text-[11.5px] text-ink-3">{session?.cwd && !assistant ? t("chat-chatview.started_in", { path: shortPath(session.cwd) }) : t("chat-chatview.chat_start")}</div>}
+            {/* also over a chat whose first page came back empty (#2450): it reads as loaded and empty, not as still loading;
+                not under a notice that the chat's details are missing */}
+            {((!tr.hasMore && !tr.loading && (tr.items.length > 0 || (!tr.error && !starting && !session?.start_error && !noDetails))) || opening) && <div className="text-center text-[11.5px] text-ink-3">{session?.cwd && !assistant ? t("chat-chatview.started_in", { path: shortPath(session.cwd) }) : t("chat-chatview.chat_start")}</div>}
             {opening && <DayLine date={startOfDay(Date.now())} />}
             {tr.loading && !tr.items.length && !opening && (
               <div className="flex justify-center py-16">

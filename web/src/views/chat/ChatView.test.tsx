@@ -13,6 +13,8 @@ const captured = vi.hoisted(() => ({
   items: [] as Item[],
   error: "",
   loading: false,
+  /** Set: the hub could not say what this chat is (useRuntimeSession's notice, no row). */
+  noDetails: "",
 }));
 
 vi.mock("./Composer", async (importOriginal) => ({
@@ -31,6 +33,16 @@ vi.mock("../../lib/store", async (importOriginal) => {
     ...store,
     getSession: () => captured.session,
     useStore: <T,>(select: (s: ReturnType<typeof store.getState>) => T) => select({ ...store.getState(), sessions: { hub: [captured.session] } }),
+  };
+});
+vi.mock("../../lib/runtime-session", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../lib/runtime-session")>();
+  return {
+    ...real,
+    useRuntimeSession: (...args: Parameters<typeof real.useRuntimeSession>) => {
+      const found = real.useRuntimeSession(...args);
+      return captured.noDetails ? { session: undefined, detail: { loading: false, error: captured.noDetails, missing: false, legacy: true }, retry: () => {} } : found;
+    },
   };
 });
 vi.mock("../../lib/panel", async (importOriginal) => ({
@@ -194,6 +206,18 @@ describe("ChatView opening line over an empty chat (#2450)", () => {
       expect(markup()).not.toContain(opening);
     } finally {
       delete captured.session.start_error;
+    }
+  });
+
+  it("stays away under the notice that the hub has no details for the chat", () => {
+    captured.noDetails = t("runtime-session.metadata_unavailable");
+    try {
+      const html = markup();
+      expect(html).toContain("role=\"alert\"");
+      expect(html).not.toContain(t("chat-chatview.chat_start"));
+      expect(html).not.toContain(opening);
+    } finally {
+      captured.noDetails = "";
     }
   });
 });
