@@ -2,6 +2,21 @@
 
 Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "Lessons" in `CLAUDE.md`; see the index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+## Visible supervision replies do not exempt tool execution from folding (#2705)
+
+A promoted supervision round must expose its input and final reply, not pull visibility tools out of the work
+summary. `task_review` and `supervision_finish` were extracted by tool name even on failure: a trace with two ordinary
+calls, compaction, a review and a failed finish displayed a two-tool summary plus two uncollapsible rows. Compaction
+was already inside the same turn; the display extraction, not the turn boundary or failure icon, caused the leak.
+Keep every call and compaction step in one summary, including subagent and workflow calls. Manual expansion is the
+only path that exposes those rows, during execution, after completion and after serialized-history reload.
+A compaction after the latest assistant text is not necessarily idle: that text can be narration, with later calls
+still running or already failed. Keep the divider in the work summary unless the turn is stopped and nothing but
+compaction notices follows its answer.
+The generic screenshot mock folds tool calls without production's `fold.supervision_user` evidence. An accepted
+review hidden in such a fold falsely makes the entire synthetic round quiet. Emit the same retained evidence as
+production when testing this case; do not disable folding or force-open the UI to make the screenshot pass.
+
 ## Display provenance is not a model role (#2130)
 
 Persona's `conversation_send` relay is model input with role `user`, not the user's own words. Its existing `from`
@@ -64,8 +79,8 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   Recaps can close a turn without ending its supervision round; only the next actual input does that. A queued genuine
   input must not be absorbed into the quiet round. Preserve successful visibility evidence when overlapping raw pages
   replace server folds, persist that client-side evidence and invalidate caches when adding the fields. Structure-only
-  chat diagnostics must also handle the new line kinds without logging the input or answer. Automatic live-work
-  expansion belongs inside an opened supervision trace; it must never open the quiet round itself. Keep the pending
+  chat diagnostics must also handle the new line kinds without logging the input or answer. Opening a supervision
+  trace does not automatically open its nested work summary; rule 2 requires manual inspection for both. Keep the pending
   stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
   newest transcript owner, not only whether the round is still running.
 
@@ -140,3 +155,12 @@ A view that fetches once per id cannot recover when the store puts the same id b
   id whose `projects/…/<id>.jsonl` never appears. (The pid file has no transcript path; node derives it from the session id —
   `transcriptPath` in `node/transcript_files.go` looks for `<config dir>/projects/*/<id>.jsonl`.) Check the node's own environment
   for the child flag first (`/proc/<pid>/environ`, on macOS `KERN_PROCARGS2`), then the pane shell's.
+
+## A session's cwd follows `cd` (#2368, Claude Code 2.1.319)
+
+- Claude Code writes the Bash tool's current directory into every transcript line's `cwd`, and into every hook input's `cwd`, once the model `cd`s (there is a `CwdChanged` hook too). The transcript file stays in `~/.claude/projects/<encoded start directory>/`, and its first lines carry the start directory.
+- So "a session's latest `cwd`" is where its shell is now, not where the session is. A Persona conversation whose Lark `/agent` turn `cd`'d into `~/.persona/assistant/.claude/skills/<skill>` was listed there: the hub's exact directory check said `assistant: false`, the conversation lost its origin and title and showed under Agents. A health conversation that `cd`s into `reports/` or `/tmp` would have left the health space, with its cards on the lock screen.
+- Codex rollouts record `cwd` only in `session_meta`; a later `turn_context` directory does not move it.
+- Decide placement (assistant, space, health redaction) by where the session started: the node's start record, else the transcript's first `cwd` (`quickMeta.start`), else its own project directory's name (a first prompt bigger than the 256 KB head read hides the first line). Agents keep reporting their latest directory: their git place walks up to `.git`, so a `cd` into a subfolder keeps the repository. Except an assistant or health directory itself: an agent started in the home directory that `cd`s into one is listed where it started, or the hub, going by the exact directory, takes it for one of their conversations at rest.
+- Hiding and confirming may count a directory inside a health space (`identity.InHealthSpace`); classifying must not (`SpaceOf`, `IsAssistantDirOf` stay exact): a pane-less Claude the user runs in a subfolder of the assistant directory is theirs.
+- Reproduce with Stop, not the 20-minute reap: Stop kills `claude -p`, and the conversation is listed from its transcript at once.

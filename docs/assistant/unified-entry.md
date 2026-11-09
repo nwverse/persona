@@ -165,7 +165,7 @@ When enabled, tasks dispatched from the main chat (`task_plan`; also `agent_star
   Agents page, main-chat task cards, dock, question cards, and live snapshots remain normal.
 - **The main chat speaks instead**: on completion / interruption (`taskTurnEnded`), failed start (`startPlanTask`), or waiting for the user (hub emits `interaction.raised`), the assistant injects a notice into the main chat
   (`prompts/assistant/task_notice.md`: "🔔 任务「xx」做完了（电脑）"—task "xx" finished (computer)—plus the Agent's last text or question, and an explanation that this is a task notice and the assistant decides how to tell the user).
-  The main chat replies accordingly, with its reply pushed to the phone normally. This notice is not rendered as a user bubble: hub adds `injected` when delivering it; clients show only a line such as "Task ‘xx’ finished" (`docs/protocol/protocol.md`, "Persona-injected messages").
+  The main chat replies accordingly, with its reply pushed to the phone normally. This notice is not rendered as a user bubble: hub adds `injected` when delivering it; clients show only a line such as "Task ‘xx’ finished" (`docs/protocol/protocol.md`, "Messages injected by Persona").
 - **Coalescing**: wait 15 seconds after a task's first change (`quietNoticeDelay`), retaining only the latest change in that interval and noting "It also waited for the user during this period."
   If the user has answered before a waiting notice is sent, skip it. While the main chat is running, queue the notice between chat turns (the same queue as `conversation_send`, showing "Notice for task ‘xx’" above the input), then inject it after the current turn ends.
   If the queue already has a notice for this task, replace it in place instead of adding another. Implementation: `server/internal/assistant/quiet.go`.
@@ -338,7 +338,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
 | 2 ✅ | hub: migrations (`todos.origin` / `plan_id`, `task_plans`, `assistant_feed`), `task_plan` tool and prompts, start / dismiss plan APIs, feed APIs and pushes, completion / answer / routing hooks, tasks in snapshots |
 | 3 ✅ | iOS: models and `FakeHub`, feed merging, plan cards, task cards, dock, question cards, receipts, `@` and routing, task-details sheet, task board |
 | 4 ✅ | Instant result cards, main-chat Today card, day sections and collapsing, `tasks.trust` Settings page (message-card task links are separate work) |
-| 5 | Web ✅ (`docs/web/web.md`, "Unified main-chat entry point"); Watch ✅ (questions carry `task_title`, displaying "Task · xx" in Needs you; working / waiting counts already exist in Live Activities and Watch and include task Agents); Android ✅ (`docs/android/android.md`, "Unified main-chat entry point") |
+| 5 | Web ✅ (`docs/web/web.md`, "Unified main-chat entry (#930)"); Watch ✅ (questions carry `task_title`, displaying "Task · xx" in Needs you; working / waiting counts already exist in Live Activities and Watch and include task Agents); Android ✅ (`docs/android/android.md`, "Unified main-chat entry (#930)") |
 
 ## Decisions (2026-11-03)
 

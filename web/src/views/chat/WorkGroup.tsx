@@ -10,7 +10,8 @@ import type { Step } from "../../lib/turns";
 import { Collapse, cx, Spinner, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ActionRow } from "./ActionRow";
-import { FreshWords, LiveClockContext, useChatContext } from "./chat-context";
+import { LiveClockContext, useChatContext } from "./chat-context";
+import { useFreshWords } from "./fresh-words";
 import { inOpenedFold, openFoldRange, useExpanded, useLiveOverride } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { nodeItemIds } from "../../lib/chat-search";
@@ -153,7 +154,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p
 });
 
 /** Nodes in order; tool calls next to each other sit together without a gap, like cindy's tool segments. `fade`: the
- *  agent's words among them that just came in fade in (FreshWords); not inside a group. */
+ *  agent's words among them that just came in fade in (fresh-words.ts); not inside a group. */
 export function WorkNodes({ nodes, p, live, fade }: { nodes: WorkNode[]; p: WorkProps; live?: boolean; fade?: boolean }) {
   const runs: (WorkNode | ToolStep[] | AgentRun)[] = [];
   for (const n of nodes) {
@@ -221,11 +222,11 @@ function AgentGrid({ agents, p }: { agents: ToolStep[]; p: WorkProps }) {
   );
 }
 
-/** Words that fade in if they just came in: the only reader of FreshWords, so a new reply renders these, not the chat.
- *  Memo: a streamed delta re-renders the segment, not these; FreshWords still reaches them through the context. */
+/** Words that fade in if they just came in: each reads its own id in fresh-words.ts, so a new reply renders its own
+ *  words, not the chat's. Memo: a streamed delta re-renders the segment, not these. */
 const FreshAnswer = memo(function FreshAnswer({ item, mid, sid }: { item: Item; mid: string; sid: string }) {
-  const fresh = useContext(FreshWords);
-  return <Answer item={item} mid={mid} sid={sid} fade={fresh?.has(item.id)} />;
+  const fade = useFreshWords(mid, sid, item.id);
+  return <Answer item={item} mid={mid} sid={sid} fade={fade} />;
 });
 
 /** A step on its own: in the open, or inside an open group. Memo: its props stay the same objects while the reply

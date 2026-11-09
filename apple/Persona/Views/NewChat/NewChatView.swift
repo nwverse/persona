@@ -84,6 +84,15 @@ struct NewChatView: View {
     @State private var showCamera = false
     @State private var showFiles = false
     @FocusState private var promptFocused: Bool
+    /// Bumped by a card (#2134): First Message is scrolled to and focused.
+    @State private var promptRequests = 0
+    private static let promptRow = "newChat.firstMessage"
+    /// The recent setup last tapped (#2134): marked while the form still holds what it filled in.
+    @State private var pickedRecent: RecentSetup?
+    /// A tapped card whose machine's launchers and directories are not in yet: filled in with them (`loadMachine`).
+    @State private var pendingFill: RecentSetupCard.Fill?
+    /// A model to pick once `loadModels` moves to its launcher's list, which starts each launcher over from the default.
+    @State private var restoredModel: RestoredModel?
     #if DEBUG
     @State private var debugLaunchers = false
     @State private var debugAttached = false
@@ -209,6 +218,8 @@ struct NewChatView: View {
 
     var body: some View {
         NavigationStack {
+            // Only to bring First Message on screen for a card (#2134); the form inside keeps its indentation.
+            ScrollViewReader { proxy in
             Form {
                 if let preset {
                     Section {
@@ -218,6 +229,17 @@ struct NewChatView: View {
                         Text(String(localized: "workspace.joinHelp", defaultValue: "Opens a new tab in the selected workspace."))
                     }
                 } else {
+                if !recentCards.isEmpty {
+                    Section {
+                        ForEach(Array(recentCards.enumerated()), id: \.element.card.setup) { i, c in
+                            RecentSetupRow(card: c.card, machine: c.machine, picked: showsPicked(c.card.setup),
+                                           pick: { pickRecent(c.card) },
+                                           remove: { recents.remove(c.card.setup) },
+                                           clear: { recents.clear() })
+                                .accessibilityIdentifier("newChat.recent.\(i)")
+                        }
+                    } header: { Text("Recent") }
+                }
                 Section {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: Theme.Space.m) {
@@ -350,6 +372,7 @@ struct NewChatView: View {
                     promptField
                         .focused($promptFocused)
                         .accessibilityIdentifier("newChat.prompt")
+                        .id(Self.promptRow)
                     // A Codex launcher takes no attachments: no menu, only those picked before to take out (#2321).
                     NewAgentAttachmentRows(attachments: attachments, adds: !codex, photos: { showPhotos = true },
                                            camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
@@ -499,6 +522,15 @@ struct NewChatView: View {
             }
             #endif
             .interactiveDismissDisabled(starting)
+            // A list makes only the rows on screen: First Message is scrolled into view before it can take the focus.
+            .onChange(of: promptRequests) { _, _ in
+                withAnimation(Theme.Motion.layout) { proxy.scrollTo(Self.promptRow, anchor: .center) }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    promptFocused = true
+                }
+            }
+            }
         }
         .sheet(item: $childSource) { source in
             NewWorktreeSheet(group: SpaceGroup(id: source.key, machineID: source.machineID, spaceID: source.sourceID, group: source.group,
@@ -535,6 +567,79 @@ struct NewChatView: View {
     /// The remembered machine belongs to another hub than the one the todo is on.
     private var machineOutsideGroup: Bool { onlyGroup.map { machine?.group != $0 } ?? false }
 
+    /// The setups that started an Agent here before (#2134), one store for the app.
+    private var recents: RecentSetupsStore { .shared }
+
+    /// The Recent section: setups on the machines offered here (this hub's for a todo), at most three.
+    private var recentCards: [(card: RecentSetupCard, machine: Machine)] {
+        let shown = machinesShown
+        return recents.cards(shown.map { .init(id: $0.ref.path, online: $0.online) }).compactMap { c in
+            shown.first { $0.ref.path == c.setup.machine }.map { (RecentSetupCard(setup: c.setup, online: c.online), $0) }
+        }
+    }
+
+    /// A card's setup in every field and the first message focused; it never starts (Start stays the user's).
+    private func pickRecent(_ card: RecentSetupCard) {
+        guard let fill = card.fill, model.machine(MachineRef(path: fill.machine))?.online == true else { return }
+        Haptics.tap()
+        pickedRecent = card.setup
+        if fill.machine == machineID, defaultsFor == machineID {
+            apply(fill)
+        } else {
+            // Another machine (or this one still loading): filled in once its launchers and directories are in.
+            pendingFill = fill
+            machineID = fill.machine
+        }
+        promptRequests += 1
+    }
+
+    /// A card's choices, on its machine with its launchers in: a launcher it no longer has is replaced as a saved one
+    /// would be, and the model goes only with the launcher it was picked for.
+    private func apply(_ fill: RecentSetupCard.Fill) {
+        pendingFill = nil
+        pickedWorkspace = nil
+        cwd = fill.cwd
+        launcher = fill.launcher
+        if let m = fill.mode { mode = m }
+        if let e = fill.effort { effort = e }
+        if !launchers.contains(where: { $0.name == launcher }), !(unifiedModels && launcher.isEmpty) {
+            launcher = unifiedModels ? "" : LauncherChoices.initial(saved: nil, in: launchers)
+        }
+        restore(model: launcher == fill.launcher ? fill.model : "")
+    }
+
+    /// Picks a model for the launcher that will run: now when its list is the one on screen, else once `loadModels`
+    /// moves to it (moving to another launcher's list starts over from the default).
+    private func restore(model id: String) {
+        let key = LauncherModelsModel.key(ref, runLauncher)
+        if modelList.key == key {
+            pickedModel = id
+            restoredModel = nil
+        } else {
+            restoredModel = RestoredModel(key: key, id: id)
+        }
+    }
+
+    /// The card tapped last, while every field still holds what it filled in.
+    private func showsPicked(_ s: RecentSetup) -> Bool {
+        guard pickedRecent == s, pendingFill == nil, machineID == s.machine, cwd == s.cwd, launcher == s.launcher,
+              (restoredModel?.id ?? pickedModel) == s.model else { return false }
+        return s.agentType != "claude" || (mode == s.mode && effort == s.effort)
+    }
+
+    /// The setup a start records (#2134): the fields as they are, the model the start sends ("" for the default).
+    private func recentSetup(agent: String) -> RecentSetup {
+        let claude = agent == "claude"
+        return RecentSetup(machine: machineID, cwd: cwd, launcher: launcher, model: sentModel ?? "", agentType: agent,
+                           mode: claude ? mode : "", effort: claude ? effort : "", at: "")
+    }
+
+    private func record(_ setup: RecentSetup) {
+        var s = setup
+        s.at = RecentSetups.at(.now)
+        recents.record(s)
+    }
+
     /// Remember the last machine, but fall back to the first online one (machines may arrive after the sheet opens).
     private func pickDefaultMachine() {
         if machine == nil || machine?.online == false || machine?.isPending == true || machineOutsideGroup,
@@ -547,6 +652,7 @@ struct NewChatView: View {
         let selected = m.ref.path == machineID
         return Button {
             Haptics.tap()
+            pendingFill = nil
             machineID = m.ref.path
         } label: {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -622,7 +728,8 @@ struct NewChatView: View {
             guard current() else { return }
             launchers = ls
             recent = dirs.recent ?? []
-            if defaultsFor != machineID {
+            let firstLoad = defaultsFor != machineID
+            if firstLoad {
                 defaultsFor = machineID
                 let saved = UserDefaults.standard.string(forKey: "launcher.\(machineID)")
                 mode = UserDefaults.standard.string(forKey: "mode.\(machineID)") ?? ""
@@ -635,6 +742,13 @@ struct NewChatView: View {
             }
             if !ls.contains(where: { $0.name == launcher }), !(unifiedModels && launcher.isEmpty) {
                 launcher = unifiedModels ? "" : LauncherChoices.initial(saved: nil, in: ls)
+            }
+            // A card tapped for this machine wins over its saved defaults (#2134); without one, the model is the one its
+            // latest recent setup with this launcher started (none: the default).
+            if let fill = pendingFill, fill.machine == machineID {
+                apply(fill)
+            } else if firstLoad {
+                restore(model: recents.model(machine: machineID, launcher: launcher))
             }
         } catch {
             guard current(), !error.isCancellation else { return }
@@ -653,6 +767,7 @@ struct NewChatView: View {
         launcher = ""
         mode = ""
         effort = ""
+        restoredModel = nil
         defaultsFor = ""
         loading = false
         error = nil
@@ -742,9 +857,15 @@ struct NewChatView: View {
         let key = LauncherModelsModel.key(ref, runLauncher)
         if !refresh, modelList.key == key, modelList.list != nil || modelList.loading { return }
         if modelList.key != key { pickedModel = "" }
+        // A recent setup's model, or the machine's (#2134): picked before the list comes, so the efforts offered are its.
+        if let r = restoredModel, r.key == key {
+            pickedModel = r.id
+            restoredModel = nil
+        }
         modelList.select(ref, launcher: runLauncher)
         // Only once this machine's launchers are in: before that `launcher` is still the last machine's.
         guard defaultsFor == machineID, launchers.contains(where: { $0.name == runLauncher }), machine?.online == true else { return }
+        restoredModel = nil // one left was for a launcher no longer picked
         await modelList.load(ref, launcher: runLauncher, refresh: refresh)
     }
 
@@ -773,6 +894,7 @@ struct NewChatView: View {
         starting = true
         error = nil
         defer { starting = false }
+        let setup = recentSetup(agent: codex ? "codex" : startAgent)
         // In a worktree of its own (#6115): made first; a failure says why, and nothing starts.
         var dir = cwd
         if inWorktree, targetPreset == nil, repo?.path.isEmpty == false {
@@ -797,6 +919,7 @@ struct NewChatView: View {
                                                   nameHint: nameHint ?? (p.isEmpty ? nil : p), todoID: todoID))
                 UserDefaults.standard.set(launcher, forKey: "launcher.\(machineID)")
                 UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
+                record(setup)
                 Haptics.success()
                 model.adopt(s)
                 onStarted(s)
@@ -815,6 +938,7 @@ struct NewChatView: View {
             }
             UserDefaults.standard.set(mode, forKey: "mode.\(machineID)")
             UserDefaults.standard.set(cwd, forKey: "cwd.\(machineID)")
+            record(setup)
             Haptics.success()
             model.adopt(s)
             // The photos and the uploaded files' paths go with it (#2321).
@@ -837,6 +961,12 @@ struct NewChatView: View {
 
     /// The start asks for ultracode: offered, not blocked, switched on.
     private var sendsUltracode: Bool { ultracodeShown && ultracodeBlocked == nil && ultracode }
+
+    /// A model to pick for one launcher's list ("path|launcher", `LauncherModelsModel.key`).
+    private struct RestoredModel: Equatable {
+        var key: String
+        var id: String
+    }
 }
 
 /// New Agent's launchers. One grayed out on this computer (`Launcher.block`, #1643) stays listed with why; choosing it

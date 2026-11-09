@@ -778,12 +778,3 @@ var (
 	contextBlockRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
 	contextOpenRe  = lazyre.New(`<` + compat.ContextPattern() + `\b`)
 )
-
-func firstNonEmpty(s ...string) string {
-	for _, x := range s {
-		if strings.TrimSpace(x) != "" {
-			return x
-		}
-	}
-	return ""
-}

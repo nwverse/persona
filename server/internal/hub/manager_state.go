@@ -42,7 +42,7 @@ func (h *Hub) assistantOf(id string) *assistantState {
 	}
 	a := s.by[id]
 	if a == nil {
-		a = &assistantState{from: id}
+		a = &assistantState{}
 		s.by[id] = a
 	}
 	return a
