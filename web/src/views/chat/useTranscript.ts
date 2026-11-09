@@ -25,6 +25,8 @@ export interface Transcript {
   /** Identity of the currently loaded history, independent of how many earlier pages are visible. */
   history?: string;
   loading: boolean;
+  /** The hub's first page came or failed: until then a cached page says nothing about what went in since. */
+  firstRead: boolean;
   error: string;
   hasMore: boolean;
   loadingEarlier: boolean;
@@ -62,7 +64,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [initial] = useState(() => cachedPage(mid, sid, opts.cache));
   const [items, setItems] = useState<Item[]>(initial?.items ?? []);
   const [loading, setLoading] = useState(!initial);
-  const [firstRead, setFirstRead] = useState(false); // the hub's first page came or failed: a cached page says nothing about what went in since
+  const [firstRead, setFirstRead] = useState(false);
   const [error, setError] = useState("");
   const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
