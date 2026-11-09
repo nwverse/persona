@@ -336,9 +336,17 @@ describe("sending in order, and with no row yet", () => {
     expect(bodies).toEqual([]);
   });
 
-  it("lets the assistant's own conversation send before its row is here", async () => {
+  it("lets only the main conversation send before its row is here", async () => {
     captured.session = undefined;
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant />));
+    await flush();
+    expect(captured.composer).toMatchObject({ disabled: false, blocked: { label: expect.any(String) } });
+    let refused: boolean | undefined;
+    await act(async () => void (refused = await captured.onSend!({ text: "too early", images: [] })));
+    expect(refused).toBe(false);
+    expect(bodies).toEqual([]);
+
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant mainCache={{ scope: "test" }} />));
     await flush();
     expect(captured.composer?.blocked).toBeUndefined();
     let sending!: Promise<boolean>;

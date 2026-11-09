@@ -291,13 +291,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
-  // No row for this chat yet is not "you may not write": the box takes typing and says it is connecting. Only an assistant
-  // conversation may already send (the hub passes those on without a listed row, and the node knows its own); an agent's
-  // waits for its row (sessionCan's rule). One the hub looked up and has no row for stops too, except the main one.
-  const connecting = !session;
-  const sendsUnlisted = isMain || Boolean(assistant && !detail.missing);
-  const sendsUnlistedNow = useRef(sendsUnlisted);
-  sendsUnlistedNow.current = sendsUnlisted;
+  // No row for this chat yet is not "you may not write": the box takes typing and says it is connecting. Only the main
+  // conversation may already send; every other chat waits for its row, because the node would start an Agent for an id
+  // nobody has. A lookup that found nothing leaves `session` a stand-in (useRuntimeSession), which is no row either.
+  const connecting = !session || detail.missing;
+  const unknownGate = useRef({ isMain, gone: detail.missing });
+  unknownGate.current = { isMain, gone: detail.missing };
   const connectingBlock = useMemo(() => ({ label: t("chat-chatview.connecting") }), []);
   // A Persona conversation without a title yet is "New chat", as All chats and the sidebar call it, not its folder's name (#1697)
   const named = session ?? archivedHere;
@@ -327,7 +326,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const claimed = useRef(new Set<string>());
   useEffect(() => {
     // what a reload interrupted, once the transcript can tell what went in
-    if (!readOnly && !tr.loading) restoreOutbox(mid, sid, pending.map((p) => p.id));
+    // (not before this chat is known: a restored bubble's Retry posts without passing through deliver)
+    if (!readOnly && !tr.loading && (!connecting || isMain)) restoreOutbox(mid, sid, pending.map((p) => p.id));
     const users = [...segs.slice(-4).flatMap((seg) => (seg.user && !seg.user.injected ? [seg.user] : [])), ...taggedSeen(tr.items)];
     users.forEach((user) => acknowledgeLaunch(mid, sid, user));
     settleOutbox(mid, sid, users);
@@ -342,7 +342,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - p.at < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segs, tr.loading]);
+  }, [segs, tr.loading, connecting]);
 
   // seen: on open, when the page comes back to the front, and whenever a turn ends while it is on screen (lib/store.ts
   // viewSession); a subagent's transcript is not an agent of its own
@@ -562,7 +562,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         return false;
       }
       const row = getSession(mid, sid);
-      if (row ? !sessionCan(row, "send") : !sendsUnlistedNow.current) {
+      if (row && !unknownGate.current.gone ? !sessionCan(row, "send") : !unknownGate.current.isMain) {
         toast(sourceSubtitle(session) || t("chat-chatview.session_unavailable"), "error");
         return false;
       }
@@ -1226,7 +1226,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           working={state === "working"}
           needsYou={state === "needs_you"}
           onSend={send}
-          disabled={Boolean(offlineLine) || (Boolean(session) && !sessionCan(session, "send"))}
+          disabled={Boolean(offlineLine) || (!connecting && !sessionCan(session, "send"))}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
           onStop={sessionCan(session, "interrupt") ? interrupt : undefined}
           commands={commands}
@@ -1234,7 +1234,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           mention={mention}
           autoFocus
           onFocusChange={setTyping}
-          blocked={gate.blocked ?? (connecting && !sendsUnlisted ? connectingBlock : undefined)}
+          blocked={gate.blocked ?? (connecting && !isMain ? connectingBlock : undefined)}
           footer={footer}
         />
         </div>
