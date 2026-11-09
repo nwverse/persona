@@ -12949,6 +12949,29 @@
         }
       }
     },
+    "A hub is being disconnected. Pair again when it's done." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A hub is being disconnected. Pair again when it's done."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブを切断しています。完了してから再ペアリングしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在断开 hub，完成后再重新配对。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "A hub you add joins an existing group automatically when it's linked with a hub in it; otherwise it forms its own group. Everything shows in one list, labeled with the group it comes from." : {
       "localizations" : {
         "en" : {
@@ -37777,6 +37800,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没登录上：%1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Couldn't sign out of %@. Revoke this device in Settings › Devices on another device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't sign out of %1$@. Revoke this device in Settings › Devices on another device."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ のサインアウトに失敗しました。別のデバイスの「設定 › デバイス」で取り消してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能退出 %1$@。请在另一台设备的「设置 › 设备」里撤销本机。"
           }
         }
       },
