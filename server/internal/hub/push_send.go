@@ -198,8 +198,17 @@ func (p *Pusher) sendBuiltWith(build localized, collapseID, pushType, priority s
 		lang := p.langOf(d)
 		key := variant{lang, hush != nil && hush(d)}
 		b, ok := byLang[key]
+		if ok && b.payload == nil {
+			continue // nothing in its language: logged once below
+		}
 		if !ok {
 			b.payload = cleanAlert(build(lang))
+			if b.payload == nil {
+				// build had nothing in this language: its devices get no push, and the hub_id below is not written to a nil map
+				p.logf("push: no %s payload in %s: its devices get none", pushType, lang)
+				byLang[key] = b
+				continue
+			}
 			if key.quiet {
 				b.payload = hushed(b.payload)
 			}
