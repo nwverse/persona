@@ -99,7 +99,13 @@ func (p *Pusher) pushed(d Device, err error) {
 	p.failed[d.DeviceID] = pushFailure{text: clipRelayError(err.Error()), at: p.now().UTC()}
 }
 
+// settingsOnly: a row only notification settings made (an Android phone, a browser, the simulator), which never
+// registered for APNs and is notified over the WebSocket. It has no push way to show (#1911); an iPhone that
+// registered without a token has a kind and still says why.
+func settingsOnly(d Device) bool { return d.APNSToken == "" && d.Kind == "" }
+
 // routesByCredential is, per device token, the way of the device it registered last (Settings › Devices).
+// Settings-only rows are skipped before picking the newest, so one can never hide a registered device.
 func (p *Pusher) routesByCredential() map[string]pushRoute {
 	out := map[string]pushRoute{}
 	if p == nil {
@@ -107,7 +113,7 @@ func (p *Pusher) routesByCredential() map[string]pushRoute {
 	}
 	newest := map[string]Device{}
 	for _, d := range p.list() {
-		if d.Credential == "" {
+		if d.Credential == "" || settingsOnly(d) {
 			continue
 		}
 		if cur, ok := newest[d.Credential]; !ok || d.UpdatedAt.After(cur.UpdatedAt) {
@@ -149,8 +155,8 @@ func (h *Hub) pushRoutes(api *http.ServeMux) {
 		if h.push != nil {
 			direct = h.push.direct != nil
 			for _, d := range h.push.list() {
-				if d.APNSToken == "" && d.Kind == "" {
-					continue // a row only notification settings made (a browser, the simulator): nothing registered
+				if settingsOnly(d) {
+					continue // nothing registered
 				}
 				devices = append(devices, pushDevice{DeviceID: d.DeviceID, Name: d.Name, Kind: d.Kind, UpdatedAt: d.UpdatedAt, Push: h.push.routeOf(d)})
 			}
