@@ -22,7 +22,11 @@ const EARLIER_RETRY_MAX_MS = 30_000;
 
 export interface Transcript {
   items: Item[];
+  /** Identity of the currently loaded history, independent of how many earlier pages are visible. */
+  history?: string;
   loading: boolean;
+  /** The hub's first page came or failed: until then a cached page says nothing about what went in since. */
+  firstRead: boolean;
   error: string;
   hasMore: boolean;
   loadingEarlier: boolean;
@@ -60,6 +64,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [initial] = useState(() => cachedPage(mid, sid, opts.cache));
   const [items, setItems] = useState<Item[]>(initial?.items ?? []);
   const [loading, setLoading] = useState(!initial);
+  const [firstRead, setFirstRead] = useState(false);
   const [error, setError] = useState("");
   const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -111,6 +116,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       ? kept.page : cachedPage(mid, sid, opts.cache);
     setItems(cached?.items ?? []);
     setLoading(!cached);
+    setFirstRead(false);
     setError("");
     setHasMore(cached?.hasMore ?? false);
     deltas.current.flush("");
@@ -287,7 +293,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         // a session that is still starting has no transcript yet
         if (!opts.starting) setError(sessionLoadError(errorText(e)));
       } finally {
-        if (!dead) setLoading(false);
+        if (!dead) {
+          setLoading(false);
+          setFirstRead(true);
+        }
         lastArrival = Date.now();
         ready = true;
       }
@@ -317,6 +326,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     try {
       const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}&before_seq=${first.seq}`);
       if (gen !== generation.current) return;
+      if (p.history && history.current && p.history !== history.current) {
+        generation.current++;
+        setNonce((n) => n + 1);
+        return;
+      }
       apply(p.items ?? []);
       setHasMore(Boolean(p.has_more));
       earlierRetryAt.current = 0;
@@ -354,5 +368,5 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     [mid, sid, apply],
   );
 
-  return { items, loading, error, hasMore, loadingEarlier, loadEarlier, expandFold, streaming, notLive, reload: () => setNonce((x) => x + 1) };
+  return { items, history: history.current, loading, firstRead, error, hasMore, loadingEarlier, loadEarlier, expandFold, streaming, notLive, reload: () => setNonce((x) => x + 1) };
 }

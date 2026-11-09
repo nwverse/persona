@@ -26,6 +26,8 @@ final class AppModel {
     /// Pairing tokens this launch traded for the device's own, to that token (DeviceCredentialTrade): a socket or a
     /// pairing link still on one goes on with the device's.
     @ObservationIgnored var tradedTokens: [String: String] = [:]
+    /// What a Settings disconnect is signing this device out of (HubSignOut.swift); nil when none runs.
+    var hubSignOut: HubSignOutScope?
     /// One per group, in the registry's order; the demo's alone in Demo Mode.
     private(set) var links: [HubLink] = []
     /// The group hub-level pages show (`selectHub`); the first group when it is not one of them.
@@ -150,6 +152,8 @@ final class AppModel {
     /// Mode's hub, which is one for the whole process: several models side by side, each a device of its own (the
     /// shared sync scenarios with two devices, `SyncDevice`).
     @ObservationIgnored var linkHooksForTests: (transport: APIClient.Transport, socket: () -> LocalSocket)?
+    /// Unit tests: every group's link counts as up (true) or down (false) without a socket (`isLive`, the outbox's sends).
+    @ObservationIgnored var linksUpForTests: Bool?
     /// Unit tests: no machines, agents or cards, whatever `init` restored. A simulator paired by an earlier run keeps
     /// its last snapshot, and a test of everything the model holds (the watch summary) would count those too (#1638).
     func forgetRestoredForTests() {
@@ -266,6 +270,8 @@ final class AppModel {
     @ObservationIgnored private(set) var chats: [SessionKey: ChatStore] = [:]
     /// The groups whose outbox is going out now (`flushOutbox`): one group sending does not hold back another.
     @ObservationIgnored var flushingOutbox = Set<String>()
+    /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
+    @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
     /// Per group: the task asking a member-connected group's center whether it answers again (HubLinks.watchCenter).
     @ObservationIgnored var centerWatch: [String: Task<Void, Never>] = [:]
     @ObservationIgnored let outboxWriter = Debouncer(.milliseconds(300))
@@ -506,6 +512,7 @@ final class AppModel {
     /// `ssh`: the SSH tunnel set up on the pairing page (docs/operations/network.md「经 SSH 隧道连 hub」): pairing goes through it
     /// when the address does not answer (or always, with Always Use SSH), and the hub keeps it.
     func pair(_ new: ServerConfig, ssh: SSHRoute? = nil) async throws {
+        try refusePairingWhileSigningOut()
         retryRegistry()
         // Unknown pairings would be written over (the keychain is not readable before the first unlock).
         guard !registryUnreadable else { throw APIError(status: 0, message: String(localized: "Can't read your saved pairings right now. Unlock your phone and try again.")) }
@@ -525,6 +532,12 @@ final class AppModel {
             throw error
         }
         let identity = try? await client.identity()
+        do {
+            try refusePairingWhileSigningOut() // one may have started while the hub answered
+        } catch {
+            tunnels.close(SSHTunnels.pairingID)
+            throw error
+        }
         if isDemo { leaveDemo() } // a real hub ends Demo Mode
         var r = registry
         let group: String
@@ -664,6 +677,8 @@ final class AppModel {
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
         LiveActivityController.shared.endAll() // its buttons would talk to a hub we no longer know
+        // No key may open a push any more: the notification extension tries every key left (PushCrypto.allKeys).
+        for g in Set(registry.groups).union(PushCrypto.allKeys().map(\.group)) { PushCrypto.removeKey(group: g) }
         links = []
         registry = HubRegistry()
         saveRegistry(registry)
@@ -1117,8 +1132,8 @@ final class AppModel {
     func features(_ group: String) -> Set<String> { link(group)?.features ?? [] }
     /// What the hub-level group's hub listed (hub-level pages: connectors, skills…).
     var hubFeatures: Set<String> { hub?.features ?? [] }
-    /// The desktop apps (the Mac app) connected to the hub-level group's hub: the iPhone's 「Mac 上的 Persona 已登录」
-    /// (DesktopPresence.swift).
+    /// The hub-level group's hub's desktops: Mac apps connected and computers where Persona Link reports you at them
+    /// (`DesktopDevice`, the banner in DesktopPresence.swift).
     var desktops: [DesktopDevice] { hub?.desktops ?? [] }
     /// What the hub-level group's hub said it is in its hello: build and protocol, for the compatibility notices
     /// (docs/operations/hub-update.md「兼容」); nil until it said anything.
@@ -1128,6 +1143,13 @@ final class AppModel {
     }
     /// Moves on each `managers` push from the hub-level group's hub: its roster changed (docs/assistant/managers.md).
     var managersRevision = 0
+    /// Each group's hub's managers, as `AppModel+Managers.swift` reads them; a group without one: a hub from before
+    /// managers, or not read yet.
+    var managerRosters: [String: ManagerRoster] = [:]
+    /// Each group's latest roster read: an earlier one answering after it is dropped.
+    @ObservationIgnored var managerRosterReads: [String: Int] = [:]
+    /// Moves on each change of this device's prefs saved from a page: a prefs read started before it is stale.
+    @ObservationIgnored var notifyPrefsWrites = 0
 
     /// The hub's version and its updating itself: fetched on connect, then the `hub_update` events.
     var hubUpdate: HubUpdateStatus? {
@@ -1176,7 +1198,12 @@ final class AppModel {
     /// The hub-level group's socket is up.
     var isLive: Bool { live.state == .connected }
     /// A group's socket is up.
-    func isLive(_ group: String) -> Bool { socket(group)?.state == .connected }
+    func isLive(_ group: String) -> Bool {
+        #if DEBUG
+        if let linksUpForTests { return linksUpForTests }
+        #endif
+        return socket(group)?.state == .connected
+    }
 
 
     /// Starts (or continues, with the last epoch and seq the view holds) a session's terminal stream. grid: drive it at
@@ -1367,6 +1394,8 @@ final class AppModel {
         if plan.refetch { AgentSync.shared.schedule() }
         // A new socket is a new client for the hub: the Files / Git panes' folders are told again and refreshed (#3089).
         fsLive.reconnected(group: group)
+        // Waiting messages get a whole minute on the new socket before they fail (`OutboxWait`).
+        restartOutboxWaits(group)
         // Ports whose question failed while the hub was unreachable are asked again (#4302).
         portPresence.reconnected(group: group)
         // Paths whose lookup failed while the hub was unreachable are looked up again (#4352).
@@ -1473,7 +1502,7 @@ final class AppModel {
 
     /// Sign Out a desktop: revokes its device token; the hub closes its connection and says it is gone (desktops event).
     func signOutDesktop(_ d: DesktopDevice) async {
-        guard let api, !d.device.isEmpty else { return }
+        guard let api, d.canSignOut else { return }
         do {
             try await api.revokeToken(d.device)
             Haptics.success()
@@ -1481,6 +1510,14 @@ final class AppModel {
             show(error)
         }
     }
+
+    #if DEBUG
+    /// `-showDesktopSample YES|link|links|both`; nil when absent or NO.
+    static var desktopSample: String? {
+        let value = UserDefaults.standard.string(forKey: "showDesktopSample")
+        return (["link", "links", "both"].contains(value) || UserDefaults.standard.bool(forKey: "showDesktopSample")) ? value : nil
+    }
+    #endif
 
     /// How this device introduces itself to the hub. The iPhone is the phone (its phone_* tools, the wake pushes when
     /// it is away); a Mac is a desktop, like WeChat's 「Mac 微信已登录」 (hub/desktops.go, docs/apple/mac.md「Mac 是桌面端，不是手机」):
@@ -1582,6 +1619,7 @@ final class AppModel {
             }
             if isHub { PersonalAgentSync.shared.received([]) }
             Task { await refreshInAppTunnel(group) }
+            Task { await refreshManagerRoster(group) }
             // Back on the hub: an install that moved on while the connection was down shows where it is now (#3307).
             if isHub, Set(hello.features).hasExtensionFeature("operations") { Task { await ExtensionOperations.shared.reload() } }
             if isHub { flushErrorReports(group) } // the feature may have come or gone with this hello (#5621)
@@ -1590,9 +1628,14 @@ final class AppModel {
             if RuntimeCLI.overHub, let link = link(group) { registerPhone(link) }
             #endif
             #if DEBUG
-            // `-showDesktopSample YES`: a Mac signed in (and Phone Muted on), for screenshots of the banner (the demo hub sends no desktops).
-            if UserDefaults.standard.bool(forKey: "showDesktopSample"), isHub {
-                link(group)?.desktops = [DesktopDevice(device: "dev_sample", name: "MacBook Pro", since: Date().addingTimeInterval(-3600))]
+            // `-showDesktopSample YES|link|links|both`: a Mac signed in, Persona Link on one computer, Persona Link on two, or a Mac
+            // app with Persona Link on the same Mac and on a second computer (and Phone Muted on), for screenshots of the banner (the
+            // demo hub sends no desktops).
+            if let sample = Self.desktopSample, isHub {
+                let app = DesktopDevice(device: "dev_sample", name: "MacBook Pro", since: Date().addingTimeInterval(-3600))
+                let here = DesktopDevice(device: "", name: "MacBook Pro", since: Date().addingTimeInterval(-1200), kind: .link, machineID: "mbp")
+                let other = DesktopDevice(device: "", name: "Mac Studio", since: Date().addingTimeInterval(-600), kind: .link, machineID: "studio")
+                link(group)?.desktops = switch sample { case "link": [other]; case "links": [here, other]; case "both": [app, here, other]; default: [app] }
                 muteWhileDesktop = true
             }
             #endif
@@ -1659,6 +1702,7 @@ final class AppModel {
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
+            Task { await refreshManagerRoster(group) }
         case .assistantFeed(let item):
             if isHub { TasksStore.shared.received(item, group: group) }
         case .assistantView(let view):
@@ -1675,13 +1719,17 @@ final class AppModel {
         case .hubUpdate(let status):
             if isHub, hubUpdate != status { hubUpdate = status }
         case .desktops(let list):
-            link(group)?.desktops = list
-        case .extensionOperation(let op):
+            link(group)?.desktops = DesktopDevice.shown(list)
+        case .extensionOperation(var op, let manager):
+            // Each manager has its own copy of an extension (docs/assistant/managers.md "Clients"): what is pushed
+            // counts only for the copy of the manager that sent it.
+            op.manager = pushedBy(manager)
             if isHub { ExtensionOperations.shared.received(op) }
-        case .extensionAuth(let id, let auth):
-            if isHub { ExtensionAuthStore.shared.received(id, auth) }
-        case .pluginBadge(let plugin, let id, let badge):
-            if isHub { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
+        case .extensionAuth(let id, let auth, let manager):
+            if isHub { ExtensionAuthStore.shared.received(id, auth, manager: pushedBy(manager)) }
+        case .pluginBadge(let plugin, let id, let badge, let manager):
+            // The places are the default manager's (`…/-/ui` names none): another manager's badge is not theirs.
+            if isHub, pushedBy(manager) == nil { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
             #if os(iOS)
@@ -2875,15 +2923,16 @@ final class AppModel {
     func refresh() async {
         guard let api else { return }
         Task { await loadPins() }
+        for link in links { Task { await refreshManagerRoster(link.group) } }
         Task {
-            let writes = muteWrites
+            let writes = muteWrites, saves = notifyPrefsWrites
             if let p = try? await api.notifyPrefs(device: PushRegistrar.deviceID) {
                 if writes == muteWrites { muteWhileDesktop = p.muteWhileDesktop } // not over a switch made meanwhile
                 #if DEBUG
-                if UserDefaults.standard.bool(forKey: "showDesktopSample") { muteWhileDesktop = true } // the demo hub's prefs say off
+                if Self.desktopSample != nil { muteWhileDesktop = true } // the demo hub's prefs say off
                 #endif
                 Translator.shared.syncPrefs(hubHas: p.translate)
-                LiveActivityController.shared.settings(p)
+                if saves == notifyPrefsWrites { LiveActivityController.shared.settings(p) }
             }
         }
         // Not after the prefs above: a hub-level hub out of reach held every group's fleet back by its timeout (#4705).
