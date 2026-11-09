@@ -102,7 +102,7 @@ func storageProcessManager(t *testing.T, backend *storageFaultStore, program, ad
 	startTestExtensions(t, h)
 	if h.extensions.reg.SnapshotExact("fixture-storage") == nil {
 		at := time.Now().UTC().Truncate(time.Microsecond)
-		manifest := json.RawMessage(`{"manifest_version":1,"id":"fixture-storage","name":"Synthetic storage fixture","version":"1.0.0","runtime":{"command":"fixture"},"permissions":{"storage":{"patterns":["state/*","queue/*","media/*"],"queues":true,"blobs":true}},"contributes":{"ui":[{"id":"home","title":"Synthetic storage fixture","placement":"extension_page"}]}}`)
+		manifest := json.RawMessage(`{"manifest_version":1,"id":"fixture-storage","name":"Synthetic storage fixture","version":"1.0.0","engines":{"extension_protocol":1},"runtime":{"command":"fixture"},"permissions":{"storage":{"patterns":["state/*","queue/*","media/*"],"queues":true,"blobs":true}},"contributes":{"ui":[{"id":"home","title":"Synthetic storage fixture","placement":"extension_page"}]}}`)
 		row := extension.Record{ID: "fixture-storage", Source: extension.SourceInstalled, Version: "1.0.0", Manifest: manifest, Enabled: true, InstalledAt: at, UpdatedAt: at,
 			Granted: extension.Permissions{Storage: &extension.StoragePermission{Patterns: []string{"state/*", "queue/*", "media/*"}, Queues: true, Blobs: true}}}
 		if err := backend.PutExtension(t.Context(), row); err != nil {
