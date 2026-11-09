@@ -331,6 +331,45 @@ func TestInboxFormsKeepTheLatestAnswer(t *testing.T) {
 	merge(i18n.En, "/api/v1/inbox", body) // back to the first answer
 }
 
+// The merge allocates about its output: 540,520 bytes for these 400 items (477,131 B), where decoding the answer and
+// encoding it again took 7.0 MB. An inbox GET whose items are kept adds the slot's map, 605,864 bytes in all, where
+// localizing the whole answer before merging it took 13.2 MB in en. The bounds are those plus 3%. Run in a process of
+// its own (isolatedSessionAllocation): TotalAlloc counts every goroutine.
+func TestMergedListAllocation(t *testing.T) {
+	if !isolatedSessionAllocation(t) {
+		return
+	}
+	body := inboxBody(t, 400)
+	answers := []listAnswer{listOf("assistant", 200, string(body))}
+	forms := &inboxForms{}
+	for _, c := range []struct {
+		name  string
+		limit int
+		merge func()
+	}{
+		{"writeMerged", 557_000, func() { writeMerged(discardWriter{}, "items", answers) }},
+		{"inbox en, kept", 624_000, func() {
+			local := []listAnswer{answers[0]}
+			local[0].localize = &inboxLocalize{forms: forms, slot: inboxSlot{route: "/api/v1/inbox", manager: "assistant", lang: i18n.En}}
+			writeMerged(discardWriter{}, "items", local)
+		}},
+	} {
+		c.merge()
+		if got := allocated(c.merge); got > c.limit && !raceEnabled {
+			t.Errorf("%s: %d bytes for 400 items (%d B), want at most %d", c.name, got, len(body), c.limit)
+		} else {
+			t.Logf("%s: %d bytes", c.name, got)
+		}
+	}
+}
+
+// discardWriter keeps nothing it is written: a recorder's growing body would be counted as the merge's.
+type discardWriter struct{}
+
+func (discardWriter) Header() http.Header         { return http.Header{} }
+func (discardWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (discardWriter) WriteHeader(int)             {}
+
 func FuzzWriteMerged(f *testing.F) {
 	for _, c := range mergeCases(f) {
 		if c.key == "items" && len(c.answers) == 1 && len(c.answers[0].body) < 4<<10 {

@@ -92,6 +92,9 @@ func scanItems(list []byte, out []scannedItem) []scannedItem {
 	i := jsonWS(list, 1)
 	for list[i] != ']' {
 		end, shape := scanItem(list, i)
+		if len(out) == 0 { // room for as many items like the first as the list holds, within reason
+			out = slices.Grow(out, min(len(list)/max(end-i, 64), 4096))
+		}
 		out = append(out, scannedItem{raw: list[i:end], shape: shape})
 		i = jsonWS(list, end)
 		if list[i] == ',' {
