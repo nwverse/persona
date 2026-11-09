@@ -19,6 +19,13 @@ func TestParse(t *testing.T) {
 	if u, err := Parse("  "); u != nil || err != nil {
 		t.Errorf("blank: %v %v", u, err)
 	}
+	// A left-out port is 80 in the URL itself, not only in net/http: mail dials u.Host for its CONNECT tunnels.
+	for raw, host := range map[string]string{"http://proxy.example": "proxy.example:80", "http://user:pass@proxy.example/": "proxy.example:80",
+		"http://[::1]": "[::1]:80", "http://proxy.example:3128": "proxy.example:3128"} {
+		if u, err := Parse(raw); err != nil || u.Host != host || (u.User != nil) != strings.Contains(raw, "@") {
+			t.Errorf("%q: %v %v, want host %q", raw, u, err, host)
+		}
+	}
 	for _, bad := range []string{"socks5://127.0.0.1:1080", "127.0.0.1:8080", "http://", "http://h:1/x", "http://h:1?a=b", "https://h:1",
 		"http://:8080", "http://proxy.example:", "http://proxy.example:0", "http://proxy.example:99999", "http://[::1]:", "http://h:1#x"} {
 		if _, err := Parse(bad); err == nil {

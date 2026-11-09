@@ -5,6 +5,7 @@ package netproxy
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -14,7 +15,8 @@ import (
 )
 
 // Parse reads an http://[user:pass@]host:port proxy (port 1-65535, 80 when left out); "" (or blanks) is no proxy
-// (nil). Errors never show any part of user:pass.
+// (nil). Errors never show any part of user:pass. The URL's Host always has a port, so callers that dial it themselves
+// (mail's CONNECT tunnels) need no default of their own.
 func Parse(raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -23,6 +25,9 @@ func Parse(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || !wellFormed(u) {
 		return nil, fmt.Errorf("proxy must be http://[user:pass@]host:port, got %q", redact(raw))
+	}
+	if u.Port() == "" {
+		u.Host = net.JoinHostPort(u.Hostname(), "80")
 	}
 	return u, nil
 }
