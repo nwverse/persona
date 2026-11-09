@@ -317,7 +317,7 @@ The app's crashes and ANRs go to the hub's `error_reports` (format and rules: [p
 The release build runs R8 with shrinking and optimization but without obfuscation (`android/app/build.gradle.kts`,
 `android/app/proguard-rules.pro`, #2441, #2840): it removes the classes and members nothing reaches, then inlines,
 merges and outlines code; with `-dontobfuscate` the classes and members that are left keep their source names. Resource
-shrinking stays off, and debug builds are not shrunk.
+shrinking stays off (below), and debug builds are not shrunk.
 
 - **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it was 32,358,397
   bytes. At 0357a0117 the shrunk APK is 33,205,885 bytes, 3 dex files, 33,620 classes and 179,163 method references;
@@ -361,6 +361,9 @@ shrinking stays off, and debug builds are not shrunk.
 - **Compose trace markers**: optimized R8 already removes them (no `traceEventStart` call or trace string is left in the
   dex, against 1,528 trace strings in the shrunk APK), so `includeTraceMarkers = false` in the Compose compiler options
   saves nothing (the APK stayed 19,459,663 bytes) and is not set.
+- **Resource shrinking**: `isShrinkResources = true` takes 67,422 bytes off the optimized APK but removes 98 of
+  persona's own resources from the table (strings and plurals that no code left after R8 references, such as
+  `chat_composer_placeholder` and `notify_stopped_title`), so it stays off.
 - **Icons**: icons come from `PhIcons` ([android-design.md](android-design.md)); `material-icons-extended`, whose only
   use was a button nothing called, is no longer a dependency. The debug APK went from 123,355,666 to 91,537,359 bytes
   (-31.8 MB, 29 to 28 dex files); R8 had already dropped the library from the release APK.
