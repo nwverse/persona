@@ -18,6 +18,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/managerconf"
 )
 
 const usage = `usage:
@@ -80,10 +82,32 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "office %s writes a %s file: -o %s\n", kind, ext, *out)
 		return 2
 	}
+	abs, err := filepath.Abs(*out)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// Never over the input, however -o names it (`office docx notes.docx`, a link, another case of the name): that
+	// would read the document as Markdown and replace it with what that makes.
+	perm := os.FileMode(0o644)
+	if outInfo, err := os.Stat(abs); err == nil {
+		if inInfo, err := os.Stat(in); err == nil && os.SameFile(inInfo, outInfo) {
+			fmt.Fprintf(stderr, "office %s would write over its input %s: give -o another file\n", kind, in)
+			return 2
+		}
+		if outInfo.Mode().IsRegular() {
+			perm = outInfo.Mode().Perm() // replacing a file keeps its permissions, as writing into it did
+		}
+	}
 	src, err := os.ReadFile(in)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	// An Office file is a zip, never the text these are made from.
+	if bytes.HasPrefix(src, []byte("PK\x03\x04")) {
+		fmt.Fprintf(stderr, "office %s: %s is an Office file, not Markdown, JSON or CSV\n", kind, in)
+		return 2
 	}
 	dir := filepath.Dir(in)
 	if *title == "" {
@@ -106,8 +130,9 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	abs, _ := filepath.Abs(*out)
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	// In one step (a temporary file beside it, renamed over it): a write that fails part way, on a full disk say,
+	// leaves the earlier file as it was. A link at -o is replaced, not written through.
+	if err := managerconf.WriteFileAtomic(abs, data, perm); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

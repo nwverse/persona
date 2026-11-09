@@ -50,6 +50,7 @@ Why it works this way (tried on real claude on 2026-11-04):
 | `personad office check <file.docx\|.xlsx\|.pptx>` | Reads the structure back, ours or anyone else's |
 
 - Without `-o`, the output goes next to the input with the matching extension. After writing, it prints JSON: `file` (absolute path), `bytes`, `check` (same as the check result).
+- It never writes over its input and takes no Office file as input (`docx notes.docx`, or `-o` naming the input by any path, exits 2). It replaces the output in one step (a temporary file beside it, renamed over it), so a failed write leaves the earlier file as it was. A link at `-o` is replaced, not written through.
 - Exit codes: 0 success, 1 failure (one line of reason on stderr, e.g. image not found), 2 bad usage.
 
 ## What to write

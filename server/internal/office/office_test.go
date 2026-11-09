@@ -283,6 +283,53 @@ func TestMain(t *testing.T) {
 	}
 }
 
+// The command never writes over its input: `office docx notes.docx`, or -o naming the input (itself, a hard link or a
+// symbolic link), would read the document as Markdown and replace it with what that makes. Into another file, an
+// Office file is no input either.
+func TestMainRefusesToWriteOverItsInput(t *testing.T) {
+	dir := t.TempDir()
+	md := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(md, []byte("# Plan\n\nOne paragraph.\n\n## Next\n\nAnother one.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"docx", md}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	doc := filepath.Join(dir, "notes.docx")
+	before, err := os.ReadFile(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hard := filepath.Join(dir, "same.docx")
+	if err := os.Link(doc, hard); err != nil {
+		t.Fatal(err)
+	}
+	cases := [][]string{{"docx", doc}, {"docx", doc, "-o", doc}, {"docx", "-o", hard, doc}}
+	if link := filepath.Join(dir, "link.docx"); os.Symlink(doc, link) == nil {
+		cases = append(cases, []string{"docx", doc, "-o", link})
+	}
+	for _, args := range cases {
+		var errOut bytes.Buffer
+		if code := Main(args, io.Discard, &errOut); code != 2 || !strings.Contains(errOut.String(), "would write over its input") {
+			t.Errorf("%q: exit %d: %s", args, code, errOut.String())
+		}
+		if after, err := os.ReadFile(doc); err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("%q changed the document (%d bytes, was %d): %v", args, len(after), len(before), err)
+		}
+	}
+	if info, err := Check(doc); err != nil || fmt.Sprint(info["headings"]) != "[Plan Next]" {
+		t.Errorf("check: %v %v", info, err)
+	}
+	other := filepath.Join(dir, "other.docx")
+	var errOut bytes.Buffer
+	if code := Main([]string{"docx", doc, "-o", other}, io.Discard, &errOut); code != 2 || !strings.Contains(errOut.String(), "is an Office file") {
+		t.Errorf("an Office file as input: exit %d: %s", code, errOut.String())
+	}
+	if _, err := os.Stat(other); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("wrote %s: %v", other, err)
+	}
+}
+
 // Formulas carry their values (for viewers that do not calculate), worked out as Excel does; what is not worked out
 // here is left for Excel.
 func TestFormulas(t *testing.T) {
