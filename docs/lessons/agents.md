@@ -624,6 +624,14 @@ Closing is not durable merely because the card vanished: persist the interaction
   a struct's field names without regard to case, so a check of `p["text"]` misses a body that spells it `"Text"`, and
   a handler that decodes only the first value of a body leaves the rest to whatever reads it next. Check the decoded
   path and query too: a route can keep text from them (a knowledge-base entry is named from its id).
+- The hub's refusal covers only extension tokens; channel messages and the apps reach a prompt without one. So the
+  computer also makes those characters inert in every text it prompts an agent with (`inertControls`,
+  `server/internal/node/hosts.go`): an ESC becomes `<ESC>` and any other becomes `<U+XXXX>`, for every host and
+  caller. That covers each paste (`hostPrompt`, the fallback paste, Codex answers) and a compatible CLI's first
+  message, which is shell-quoted onto a command line that may be typed into a shell: there `^U` erases the line,
+  quotes or not, and a carriage return then runs what follows. Match what the agent shows or its transcript records
+  against that inert text, not the text as sent; a runtime is sent the text itself, so the echo tie accepts either.
+  Keys sent as keys (`session.keys`) are the one way left to press a control key, on purpose.
 
 ## Profile acceptance must include launcher defaults
 

@@ -49,7 +49,7 @@ func otherAgentCommand(launcher, resume, prompt string) string {
 		cmd += " resume " + shellQuote(resume)
 	}
 	if prompt != "" {
-		cmd += " " + shellQuote(prompt)
+		cmd += " " + shellQuote(inertControls(prompt)) // the line may be typed (typedstart.go): ^U or ^C would edit it, quotes or not
 	}
 	return cmd
 }
