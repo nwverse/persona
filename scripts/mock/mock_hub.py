@@ -9250,7 +9250,10 @@ def ext_look_personas():
 # POST /api/v1/looks/uploads makes a package in a temporary directory, as the hub does in personas/u-<hex>; the mock
 # keeps the image as it came for every size and state (the hub scales it and draws the states). DELETE takes it away.
 # MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404); =demo: one uploaded look at start.
+# MOCK_LOOK_UPLOAD_FILES=fail: the looks POST makes are listed but their files answer 503, so the apps' "made but not
+# downloaded" path (Try Again) can be seen.
 UPLOADED_LOOKS = tempfile.mkdtemp(prefix="mock-look-uploads-")
+MADE_LOOKS = set()
 PERSONA_ROOTS.append(UPLOADED_LOOKS)
 UPLOAD_STATES = ("idle", "thinking", "working", "needs_you", "offline")
 
@@ -9325,6 +9328,7 @@ def look_uploads_route(handler, method, p, raw):
             handler.send_json({"error": "这个文件不是 Persona 能读的图片，请用 PNG、JPEG、WebP 或 GIF", "code": "not_image"}, 400)
             return True
         lid = make_uploaded_look(name, image, (body.get("subtitle") or "").strip())
+        MADE_LOOKS.add(lid)
         looks = looks_list()
         out = {"look": next(l for l in looks if l["id"] == lid)}
         _push_live({"type": "personas"})
@@ -13981,6 +13985,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
+            if os.environ.get("MOCK_LOOK_UPLOAD_FILES") == "fail" and p[len("/api/v1/personas/"):].split("/", 1)[0] in MADE_LOOKS:
+                return self.send_json({"error": "mock: MOCK_LOOK_UPLOAD_FILES=fail"}, 503)
             f = persona_file(p[len("/api/v1/personas/"):])
             if not f: return self.send_json({"error": "no such file"}, 404)
             body = open(f, "rb").read()
