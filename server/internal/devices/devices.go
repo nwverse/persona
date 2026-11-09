@@ -143,8 +143,10 @@ type Devices struct {
 
 	metrics metricsBook // the machines' monitoring (metrics.go)
 	usage   usageBook   // their token usage (metrics.go)
-	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop).
+	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop); usageWait: how long it takes the
+	// ones that come after one to store them together (usageGather as New found it).
 	usageWrites chan usageWrite
+	usageWait   time.Duration
 	// metricWrites: the samples to store (metrics.go's writeMetrics); metricsWait: how long it waits for a tick's other
 	// samples (metricsGather as New found it).
 	metricWrites chan db.MachineSample
@@ -164,7 +166,7 @@ func New(o Options) *Devices {
 		o.Logf = func(string, ...any) {}
 	}
 	d := &Devices{opts: o, logf: o.Logf, gotCh: make(chan struct{}), ready: make(chan struct{}), byID: map[string]*Machine{}, ownWait: ownListWait,
-		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024),
+		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), usageWait: usageGather,
 		metricWrites: make(chan db.MachineSample, metricsQueue), metricsWait: metricsGather, reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	// The account-pool gateways' usage windows (usagegateways.go, #2595): manager.json's usage section as it is now.
 	var usage UsageConfig

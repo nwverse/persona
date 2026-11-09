@@ -3,8 +3,10 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -134,36 +136,117 @@ func (s *usageMemStore) UsageSeries(_ context.Context, machine string, from, to 
 	return out, nil
 }
 
-// A node's usage goes to Postgres in the order it came: its whole window first (replacing the window's minutes),
-// then what changed; the machine's page reads its range from there.
-func TestUsageIsStoredInOrder(t *testing.T) {
-	st := &usageMemStore{memStore: newMemStore(), done: make(chan struct{}, 8)}
-	d := New(Options{Hub: &fakeHost{}, Store: st})
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go d.usageLoop(ctx)
-	now := time.Now()
-	minute := now.Unix() / 60 * 60
-	send := func(full bool, out int64) {
-		b, _ := json.Marshal(map[string]any{"full": full, "launchers": true,
-			"buckets": []proto.UsageBucket{{Minute: minute, Model: "m", Launcher: "claude", Output: out, Requests: 1}}})
-		d.onUsage("a", b, now)
+// usageBatchMemStore stores several writes at once (db.PutUsages); calls: how many each time.
+type usageBatchMemStore struct {
+	*usageMemStore
+	calls []int
+}
+
+func (s *usageBatchMemStore) PutUsages(ctx context.Context, writes []db.UsageWrite) ([]error, error) {
+	s.mu.Lock()
+	s.calls = append(s.calls, len(writes))
+	s.mu.Unlock()
+	for _, w := range writes {
+		_ = s.PutUsage(ctx, w.Machine, w.Buckets, w.ReplaceFrom)
 	}
-	send(true, 10)
-	send(false, 30)
-	for range 2 {
+	return nil, nil
+}
+
+// A node's usage goes to Postgres in the order it came: its whole window first (replacing the window's minutes),
+// then what changed; the machine's page reads its range from there. While another machine writes too, writes that
+// come within usageGather of each other go in one transaction when the store can (PutUsages), else one PutUsage each.
+func TestUsageIsStoredInOrder(t *testing.T) {
+	for _, batched := range []bool{false, true} {
+		t.Run(fmt.Sprint("batched=", batched), func(t *testing.T) {
+			mem := &usageMemStore{memStore: newMemStore(), done: make(chan struct{}, 8)}
+			var st Store = mem
+			batch := &usageBatchMemStore{usageMemStore: mem}
+			if batched {
+				st = batch
+			}
+			d := New(Options{Hub: &fakeHost{}, Store: st})
+			d.usageWait = time.Second
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			go d.usageLoop(ctx)
+			now := time.Now()
+			minute := now.Unix() / 60 * 60
+			send := func(machine string, full bool, out int64) {
+				b, _ := json.Marshal(map[string]any{"full": full, "launchers": true,
+					"buckets": []proto.UsageBucket{{Minute: minute, Model: "m", Launcher: "claude", Output: out, Requests: 1}}})
+				d.onUsage(machine, b, now)
+			}
+			stored := func(n int) {
+				t.Helper()
+				for range n {
+					select {
+					case <-mem.done:
+					case <-time.After(5 * time.Second):
+						t.Fatal("usage not written")
+					}
+				}
+			}
+			send("b", false, 5) // another machine that writes
+			stored(1)
+			send("a", true, 10)
+			send("a", false, 30)
+			stored(2)
+			mem.mu.Lock()
+			defer mem.mu.Unlock()
+			if len(mem.writes) != 3 || mem.writes[0].machine != "b" {
+				t.Fatalf("writes = %+v", mem.writes)
+			}
+			if a := mem.writes[1:]; a[0].machine != "a" || a[1].machine != "a" || a[0].replaceFrom.IsZero() ||
+				!a[1].replaceFrom.IsZero() || a[1].buckets[0].Output != 30 {
+				t.Fatalf("writes = %+v", mem.writes)
+			}
+			if from := mem.writes[1].replaceFrom; now.Sub(from) > usageNodeWindow || now.Sub(from) < usageNodeWindow-2*time.Minute {
+				t.Fatalf("a full window replaces from %v (%v ago), want the node's window", from, now.Sub(from))
+			}
+			if batched && !slices.Equal(batch.calls, []int{1, 2}) {
+				t.Fatalf("PutUsages calls = %v, want b's write alone, then a's two in one", batch.calls)
+			}
+		})
+	}
+}
+
+// gatherUsage takes what is queued, and waits for more only while another machine wrote in the last usageActive: one
+// busy machine's writes are not held back.
+func TestUsageGatherWaitsOnlyForOthers(t *testing.T) {
+	d := New(Options{Hub: &fakeHost{}})
+	w := func(machine string) usageWrite { return usageWrite{machine: machine} }
+	gather := func(active map[string]time.Time) []string {
+		t.Helper()
+		d.usageWrites <- w("a") // queued already
+		got := make(chan []usageWrite, 1)
+		go func() { got <- d.gatherUsage(context.Background(), w("a"), active) }()
 		select {
-		case <-st.done:
+		case writes := <-got:
+			var machines []string
+			for _, w := range writes {
+				machines = append(machines, w.machine)
+			}
+			return machines
 		case <-time.After(5 * time.Second):
-			t.Fatal("usage not written")
+			t.Fatal("gatherUsage waited")
+			return nil
 		}
 	}
-	if len(st.writes) != 2 || st.writes[0].replaceFrom.IsZero() || !st.writes[1].replaceFrom.IsZero() ||
-		st.writes[1].buckets[0].Output != 30 {
-		t.Fatalf("writes = %+v", st.writes)
+
+	d.usageWait = time.Hour // alone (or b wrote long ago): nothing to wait for
+	active := map[string]time.Time{"a": time.Now(), "b": time.Now().Add(-usageActive - time.Second)}
+	if got := gather(active); !slices.Equal(got, []string{"a", "a"}) {
+		t.Fatalf("alone: %v", got)
 	}
-	if from := st.writes[0].replaceFrom; now.Sub(from) > usageNodeWindow || now.Sub(from) < usageNodeWindow-2*time.Minute {
-		t.Fatalf("a full window replaces from %v (%v ago), want the node's window", from, now.Sub(from))
+	if _, ok := active["b"]; ok {
+		t.Fatal("a machine quiet for longer than usageActive is still active")
+	}
+
+	d.usageWait = 200 * time.Millisecond // b wrote lately: wait for it
+	active["b"] = time.Now()
+	go func() { time.Sleep(50 * time.Millisecond); d.usageWrites <- w("b") }()
+	if got := gather(active); !slices.Equal(got, []string{"a", "a", "b"}) {
+		t.Fatalf("with b: %v", got)
 	}
 }
 
