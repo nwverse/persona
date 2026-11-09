@@ -188,12 +188,18 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
         <Button tone={view === "manual" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs" onClick={() => changeView("manual")}>{t("workspaceboard.view_manual")}</Button>
         <Button tone={view === "auto" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs" onClick={() => changeView("auto")}>{t("workspaceboard.view_auto")}</Button>
       </div>
-      {view === "auto" && <div className="flex shrink-0 items-center gap-1 rounded-control bg-field p-1" role="group" aria-label={t("workspaceboard.card_source_label")}>
+      {view === "auto" && <div className="hidden shrink-0 items-center gap-1 rounded-control bg-field p-1 @3xl:flex" role="group" aria-label={t("workspaceboard.card_source_label")}>
         <Button tone={source === "workspaces" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeSource("workspaces")}>{t("workspaceboard.card_source_workspaces")}</Button>
         <Button tone={source === "todos" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeSource("todos")}>{t("workspaceboard.card_source_todos")}</Button>
       </div>}
       {view === "manual" && <Button icon="plus" disabled={!board || disabled} onClick={() => setEdit({ kind: "column", title: "" })}>{t("workspaceboard.add_column")}</Button>}
     </header>
+    {view === "auto" && <div className="flex shrink-0 items-center justify-end border-b border-line bg-surface px-4 py-2 @3xl:hidden">
+      <div className="flex items-center gap-1 rounded-control bg-field p-1" role="group" aria-label={t("workspaceboard.card_source_label")}>
+        <Button tone={source === "workspaces" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeSource("workspaces")}>{t("workspaceboard.card_source_workspaces")}</Button>
+        <Button tone={source === "todos" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeSource("todos")}>{t("workspaceboard.card_source_todos")}</Button>
+      </div>
+    </div>}
     <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-3">
       <label className="flex min-w-0 flex-1 items-center gap-2 rounded-control bg-field px-3 py-2"><Icon name="search" size={14} className="text-ink-3" /><input aria-label={t(view === "auto" && source === "todos" ? "workspaceboard.search_todos_label" : "workspaceboard.search_label")} placeholder={t(view === "auto" && source === "todos" ? "workspaceboard.search_todos_placeholder" : "workspaceboard.search_placeholder")} className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
       <select aria-label={t("workspaceboard.filter_machine")} className="max-w-full rounded-control bg-field px-3 py-2 text-sm text-ink" value={machine} onChange={(e) => setMachine(e.target.value)}><option value="">{t("workspaceboard.all_machines")}</option>{machineIDs.map((id) => <option key={id} value={id}>{names.get(id) || id}</option>)}</select>
@@ -299,8 +305,9 @@ function TodoAutoCard({ row, machineNames, disabled, onOpen, onOpenAgent, onHand
   const machineID = location?.machine_id ?? row.todo.spaces?.[0]?.machine_id;
   const folder = location?.cwd;
   const activity = row.lastActivity ? ago(row.lastActivity) : "";
+  const activityLabel = activity ? t("workspaceboard.last_activity", { time: activity }) : "";
   return <article className="rounded-card bg-surface p-3 shadow-card" data-todo-id={row.todo.id}>
-    <div className="flex items-start gap-2"><button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(row.todo.id)}><span className="truncate text-sm font-semibold text-ink" title={row.todo.title}>{row.todo.title}</span></button><span className="shrink-0 text-xs text-ink-3">{activity && t("workspaceboard.last_activity", { time: activity })}</span></div>
+    <div className="flex items-start gap-2"><button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(row.todo.id)}><span className="block truncate text-sm font-semibold text-ink" title={row.todo.title}>{row.todo.title}</span></button>{activity && <span className="shrink-0 whitespace-nowrap text-xs text-ink-3" title={activityLabel} aria-label={activityLabel}>{activity}</span>}</div>
     <div className="mt-2 flex items-center gap-2 text-xs text-ink-2"><span className="whitespace-nowrap">{todoStatusLabel(row.todo, row.status)}</span>{row.todo.notes && <span className="min-w-0 truncate text-ink-3" title={row.todo.notes}>{row.todo.notes}</span>}</div>
     {machineID && <div className="mt-2 flex min-w-0 items-center gap-1 text-xs text-ink-3"><Icon name="machine" size={12} /><span className="truncate" title={machineID}>{machineNames.get(machineID) || machineID}</span>{folder && <><span>·</span><span className="truncate font-mono" title={folder}>{folder}</span></>}</div>}
     <div className="mt-3 flex flex-wrap items-center gap-1.5">
