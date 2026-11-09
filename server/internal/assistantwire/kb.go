@@ -107,12 +107,20 @@ const (
 	MethodKBPostsPending  = "kb.posts_pending"
 	MethodKBArchivedChats = "kb.archived_chats"
 
-	// EventKBKick: {}: a source has something new (a connector's realtime event, a feed turned on): go round soon.
+	// EventKBKick: KBKick: a source has something new (a connector's realtime event, a feed turned on): go round soon,
+	// and read that connector's chats (or the items) at that round even before its poll interval. A manager before
+	// #1562 sends {}: only the round.
 	EventKBKick = "kb.kick"
 	// EventKBAgentTurn: KBAgentTurn: an agent finished a turn (after the hub's done delay, not the assistant's own
 	// conversations); the projects of its directory get a timeline line.
 	EventKBAgentTurn = "kb.agent_turn"
 )
+
+// KBKick is EventKBKick's params: the connector that has something new, and what (a connector scope: chats, items).
+type KBKick struct {
+	Connector string `json:"connector,omitempty"`
+	Scope     string `json:"scope,omitempty"`
+}
 
 // KBSettings is the knowledge base's settings the manager goes by: its manager.json's kb section, laid over the hub's
 // hello (an older hub still sends its hub.json's). Its ai is the models' (HubModels.KBAI).
