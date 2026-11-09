@@ -249,6 +249,11 @@ def later(minutes=0, hours=0):
     return (NOW + timedelta(minutes=minutes, hours=hours)).isoformat().replace("+00:00", "Z")
 
 
+def day_from_now(days):
+    """A to-do's due_date ("YYYY-MM-DD", #1683) this many days from now (negative: past)."""
+    return (NOW + timedelta(days=days)).date().isoformat()
+
+
 def _mock_qr(text, n=29):
     """A QR-looking grid of "0" / "1" rows for text: three finder squares and noise from its hash (not scannable)."""
     seed = hashlib.sha256(text.encode()).digest()
@@ -1676,6 +1681,8 @@ TODOS_INIT = [
         "id": "todo_weather",
         "title": "天气 App 发 1.3 版",
         "notes": "1.3 的内容：主屏幕小组件、网络层补测试、发布说明。周五前提交审核。",
+        # Due at a moment (#1683): the list shows it under the title, the detail page edits it.
+        "due_at": later(hours=50),
         # The stage bar on the todo detail (#2776): how far the work got, and the PR it is in.
         "stage": "develop",
         "pr_url": "https://example.com/pull/128",
@@ -1748,6 +1755,7 @@ TODOS_INIT = [
     {
         "id": "todo_photos",
         "title": "照片同步脚本支持 HEIC",
+        "due_date": day_from_now(-1),  # overdue (#1683)
         "notes": "计划写好了，等你批准后开始改。",
         "done_at": None,
         "created_at": ago(hours=3),
@@ -1844,6 +1852,10 @@ TODOS_INIT = [
         "id": "todo_nas",
         "title": "给 NAS 配自动备份",
         "notes": "配置 NAS 的定期备份任务。",
+        # The user's own to-do with a due day, a reminder still to push and high priority (#1683).
+        "due_date": day_from_now(2),
+        "remind_at": later(hours=18),
+        "priority": "high",
         "done_at": None,
         "created_at": ago(days=1),
         "updated_at": ago(days=1),
@@ -1951,6 +1963,25 @@ def format_todo(t):
     else:
         t_copy.setdefault("spaces", [])
     return t_copy
+
+
+def apply_todo_plan(t, body):
+    """A POST / PATCH body's due_at | due_date, remind_at and priority (#1683, server/internal/assistant/todo_plan.go):
+    null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
+    if "due_at" in body or "due_date" in body:
+        at, day = body.get("due_at") or None, body.get("due_date") or None
+        if at and day: return "give due_at or due_date, not both"
+        t["due_at"], t["due_date"] = at, day
+    if "remind_at" in body:
+        new = body.get("remind_at") or None
+        if new != t.get("remind_at"):
+            t["remind_at"], t["reminded_at"] = new, None
+    if "priority" in body:
+        pr = (body.get("priority") or "").strip().lower()
+        pr = "" if pr == "normal" else pr
+        if pr not in ("", "high", "low"): return "priority must be high, normal or low"
+        t["priority"] = pr
+    return None
 
 
 def sorted_todos():
@@ -7637,6 +7668,49 @@ def subagent_step():
     return {"step": n}
 
 
+# MOCK_MESSAGE_LIFT=1: chats for the lifted message of a long press (#603): short messages, the newest one just above the
+# composer, and a long answer with a heading, a list, a code block and a table, taller than any screen. Synthetic text.
+LIFT_SHORT = "a1f3c2d4-0000-4000-8000-0000000c1e08"
+LIFT_LONG = "a1f3c2d4-0000-4000-8000-0000000c1e09"
+
+
+def mock_message_lift():
+    ITEMS[LIFT_SHORT] = [
+        it("user", "text", 30, text="登录页的按钮文字太长了，小屏上换行了"),
+        it("assistant", "text", 29, text="看到了：「使用手机号和验证码登录」在 320 宽的屏幕上折成两行。改成「验证码登录」，再把说明放到按钮下面一行小字，可以吗？"),
+        it("user", "text", 20, text="可以，就这么改"),
+        it("assistant", "text", 19, text="改好了，三种语言的文案都换了，截图在 `shots/login-after.png`。"),
+        it("user", "text", 12, text="顺手看看注册页有没有同样的问题"),
+        it("assistant", "text", 10, text="注册页的按钮没有换行，但「获取验证码」在日语下被截短了，我把它改成两个字的「送信」，其他语言不变。"),
+        it("user", "text", 3, text="好的"),
+        it("assistant", "text", 2, text="收到，都提交了。"),
+    ]
+    rows = "\n".join("| %s | %d | %d | %s |" % r for r in [
+        ("登录", 42, 42, "全部通过"), ("注册", 38, 37, "1 个超时，重跑通过"), ("找回密码", 21, 21, "全部通过"),
+        ("个人资料", 30, 28, "2 个截图对比失败"), ("设置", 25, 25, "全部通过"), ("消息列表", 56, 56, "全部通过")])
+    long = ("## 改动和验证\n\n这次一共改了三处，下面按模块说明，最后是测试结果和还没做的事。\n\n"
+            "### 1. 登录页\n\n- 按钮文字从「使用手机号和验证码登录」改成「验证码登录」，说明挪到按钮下面一行小字。\n"
+            "- 小屏（320 宽）上不再换行；大字号下按钮高度跟着字号变，不截断。\n- 深色模式下说明文字的对比度从 3.2 提到 4.8。\n\n"
+            "### 2. 注册页\n\n- 「获取验证码」在日语下被截短，改成「送信」。\n- 倒计时期间按钮显示剩余秒数，读屏会念出来。\n"
+            "- 手机号输入框加了格式提示，输错时在框下面说明原因，不再只是变红。\n\n"
+            "### 3. 共用的按钮组件\n\n按钮标签统一单行，放不下时先缩小字号，最小到 0.8 倍：\n\n"
+            "```swift\nstruct PrimaryButton: View {\n    var title: String\n    var action: () -> Void\n\n    var body: some View {\n"
+            "        Button(action: action) {\n            Text(title)\n                .lineLimit(1)\n                .minimumScaleFactor(0.8)\n"
+            "                .frame(maxWidth: .infinity)\n        }\n        .buttonStyle(.borderedProminent)\n    }\n}\n```\n\n"
+            "### 测试结果\n\n| 模块 | 用例 | 通过 | 说明 |\n| --- | --- | --- | --- |\n" + rows + "\n\n"
+            "个人资料页的两个截图对比失败是因为头像换了新的占位图，基准图要更新，和这次改动无关。\n\n"
+            "### 还没做\n\n- 安卓端的同样问题还没改，文案已经同步到共享的字符串表里。\n- 网页端的登录页用的是另一套组件，下次一起改。\n"
+            "- 截图基准图等你确认后再更新。\n\n有问题的话告诉我具体哪一页，我再调整。")
+    ITEMS[LIFT_LONG] = [it("user", "text", 15, text="把这次登录和注册页的改动整理一下，带上测试结果"),
+                        it("assistant", "text", 5, text=long)]
+    SESSIONS.append(sess("macbook", LIFT_SHORT, "登录页文案", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 1, 2, "收到，都提交了。"))
+    SESSIONS.append(sess("macbook", LIFT_LONG, "改动整理", "/Users/me/code/shop-app", "done", "done", "shop-app", 17, "lift", 2, 5, "有问题的话告诉我具体哪一页。"))
+
+
+if os.environ.get("MOCK_MESSAGE_LIFT") == "1":
+    mock_message_lift()
+
+
 # MOCK_SUBAGENT_PARALLEL=1: three subagents launched together in the live exchange (#5602, the grid): one done, one
 # still running (its latest call is what its card says it does), one that failed.
 SUBPAR = "a1f3c2d4-0000-4000-8000-0000000c1e05"
@@ -11973,7 +12047,8 @@ def _catalog_item(c):
 
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
-# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), none.
+# one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), rolled_back_by_user (the
+# user rolled back from 1.1.0 by hand: skipped as the user's, #1826), none.
 AUTO_UPGRADE = {"auto": True}
 # A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
 _UPGRADE_WHILE_ON = {}
@@ -12006,7 +12081,10 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
-    if state in ("needs_permission", "waiting_idle", "skipped", "disabled"):
+    elif state == "rolled_back_by_user":  # no note: the version it was upgraded to is not installed any more
+        up["state"], up["skipped_by"] = "skipped", "user"
+        up["detail"] = "你从这个版本回滚过，所以不会自动装它；要装就手动更新"  # i18n-ignore: the hub's words
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled", "rolled_back_by_user"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
@@ -14146,6 +14224,8 @@ class H(BaseHTTPRequestHandler):
                 "updated_at": now_str,
                 "agents": [],
             }
+            err = apply_todo_plan(new_todo, body)
+            if err: return self.send_json({"error": err}, 400)
             TODOS.insert(0, new_todo)
             push_todos()
             return self.send_json({"todo": new_todo})
@@ -14298,6 +14378,8 @@ class H(BaseHTTPRequestHandler):
                     t["title"] = title
                 if "notes" in body:
                     t["notes"] = body["notes"] or ""
+                err = apply_todo_plan(t, body)
+                if err: return self.send_json({"error": err}, 400)
                 if "done" in body:
                     if body["done"]:
                         if not t.get("done_at"):
