@@ -2877,8 +2877,8 @@ struct ChatView: View {
     /// shows the space's tabs (the selected one is this agent's; 2026-11-01 user request: it said it twice). Short of
     /// room the machine goes; the place always stays (cut short if it must), so the line keeps one shape whatever the state.
     private func devSubtitle(_ s: Session) -> some View {
-        TimelineView(.periodic(from: .now, by: 30)) { ctx in
-            let words = stateWords(s, now: ctx.date)
+        VisibleTimelineView(interval: 30) { now in
+            let words = stateWords(s, now: now)
             // Hosted (one agent's page, #3255) the line is status · machine · project: the tab's name would crowd the machine out.
             let tabShown = host != nil || !model.siblings(of: key).isEmpty
             let place = [s.spaceName, tabShown ? nil : s.slotLabel].compactMap { $0 }.joined(separator: " › ")
@@ -5578,7 +5578,7 @@ struct WorkLine: View, Equatable {
                 ToolRunTitle(isOpen: open, isRunning: live) {
                     // Whole words, never cut: the full summary, or a shorter one when the row is narrow.
                     if live {
-                        TimelineView(.periodic(from: .now, by: 1)) { ctx in summary(now: ctx.date) }
+                        VisibleTimelineView(interval: 1) { now in summary(now: now) }
                     } else {
                         summary(now: end ?? .now)
                     }
@@ -5610,7 +5610,7 @@ struct WorkLine: View, Equatable {
                         if live { ProgressView().controlSize(.mini).tint(Theme.busy) }
                         // Whole words, never cut: the full summary, or a shorter one when the row is narrow.
                         if live {
-                            TimelineView(.periodic(from: .now, by: 1)) { ctx in summary(now: ctx.date) }
+                            VisibleTimelineView(interval: 1) { now in summary(now: now) }
                         } else {
                             summary(now: end ?? .now)
                         }

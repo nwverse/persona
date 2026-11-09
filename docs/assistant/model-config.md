@@ -22,11 +22,11 @@ The home page has five category rows and a separate **Lark /agent** row, showing
 
 | Execution method | Used for | Constraints |
 | --- | --- | --- |
-| Direct API | Triage, assessment, translation, drafting, knowledge processing, titles | Messages or Responses; the manager reads / decrypts credentials and sends requests itself |
+| Direct API | Triage, assessment, translation, drafting, knowledge processing, titles | Messages, Responses, or Chat Completions; the manager reads / decrypts credentials and sends requests itself |
 | Launcher | Claude Code / Codex chats and Agents | Must exist on the execution machine; the CLI/app-server must actually receive the specific model |
 | Plugin model | Integrated voice services | Only models provided by that plugin can be selected; the plugin's own provider and credentials are not changed |
 
-The original `/launchers` API remains. New connections have `kind` of `launcher` or `api`; omitted on legacy entries, it still means launcher. Messages-protocol API connections (`api` empty or `messages`) can also be selected for the main chat and Agents: node starts claude with their address and key (#2455; see `docs/integrations/claude-integration.md` for environment variables). Responses connections support only direct calls; `finishModel` refuses to treat them as launchers. Legacy API connections (`ai`, `inbox.*_ai`, `kb.ai`, in the manager's `manager.json` since 2026-11-06, in `hub.json` before) appear as compatibility sources; authentication-file paths and values are not returned to clients.
+The original `/launchers` API remains. New connections have `kind` of `launcher` or `api`; omitted on legacy entries, it still means launcher. Messages-protocol API connections (`api` empty or `messages`) can also be selected for the main chat and Agents: node starts claude with their address and key (#2455; see `docs/integrations/claude-integration.md` for environment variables). Responses and Chat Completions connections support only direct calls; `finishModel` refuses to treat them as launchers. Chat Completions can be configured manually, while extension provider declarations accept only Messages and Responses. Legacy API connections (`ai`, `inbox.*_ai`, `kb.ai`, in the manager's `manager.json` since 2026-11-06, in `hub.json` before) appear as compatibility sources; authentication-file paths and values are not returned to clients.
 
 ## Editing and inheritance
 
@@ -35,7 +35,7 @@ Each category shows both “In Effect” and “Model Settings”:
 - Empty provider: inherit; empty specific model: use that source's default model.
 - Changing providers clears the previous model and thinking effort, preventing fields from different providers being combined.
 - “Restore defaults” clears only that category's choices; it takes effect after “Save,” and all its purposes reset together.
-- The web provider wizard can test either direct API protocol and discover paginated model lists. Catalog context windows take precedence over server-reported values; a server value fills a missing catalog window. If discovery fails, a valid model ID can be entered. Saving is not a paid-availability test.
+- The web provider wizard can test all three direct API protocols and discover paginated model lists. Catalog context windows take precedence over server-reported values; a server value fills a missing catalog window. If discovery fails, a valid model ID can be entered. Saving is not a paid-availability test. Chat Completions uses Bearer authentication and supports direct model purposes; reasoning effort is available only for Responses. Voice uses its own real-time provider configuration, independently of these model connections.
 - Offline, protocol mismatch, missing provider, and similar states are explicit. An invalid explicit configuration never silently switches providers.
 - Concurrent edits to the same item from two devices use revision checks. Conflicts retain the draft and require reloading before saving again.
 
