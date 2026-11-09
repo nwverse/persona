@@ -39,7 +39,16 @@ const (
 // be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
 const CodedStartErrorMax = 600
 
+// ToolLoop is a node-detected repetition. It contains no tool input or output.
+// Since identifies the start of this repetition within the current turn.
+type ToolLoop struct {
+	Tool  string    `json:"tool"`
+	Count int       `json:"count"`
+	Since time.Time `json:"since"`
+}
+
 type Session struct {
+	ToolLoop *ToolLoop `json:"tool_loop,omitempty"`
 	// Manager is the manager it belongs to (docs/assistant/managers.md, "Ownership"); the hub stamps it on what it sends the apps.
 	Manager          string               `json:"manager,omitempty"`
 	MachineID        string               `json:"machine_id"`
@@ -65,7 +74,13 @@ type Session struct {
 	// RepoRoot is the main checkout of the repository Cwd belongs to, when the host knows it (#2840: the Paseo bridge,
 	// whose worktrees live under Paseo's own folder): "By repo" groups by it; without it the clients infer the repository
 	// from Cwd's path.
-	RepoRoot    string `json:"repo_root,omitempty"`
+	RepoRoot string `json:"repo_root,omitempty"`
+	// Worktree is the top of the git working tree Cwd is in (RepoRoot itself for the main checkout, a linked worktree's
+	// own folder otherwise) and Branch the branch checked out there ("" when detached or unknown). The node reads both,
+	// and RepoRoot when no host names it, off the filesystem (node/gitplace.go): the apps list machine → project
+	// (RepoRoot) → worktree (Worktree, labelled Branch) → sessions, as Orca does (#1805).
+	Worktree    string `json:"worktree,omitempty"`
+	Branch      string `json:"branch,omitempty"`
 	Status      string `json:"status"`
 	PaneID      string `json:"pane_id,omitempty"`
 	TabID       string `json:"tab_id,omitempty"`
@@ -113,12 +128,12 @@ type Session struct {
 	Efforts          []string `json:"efforts,omitempty"`
 	StartedByPersona bool     `json:"started_by_persona"`
 	Assistant        bool     `json:"assistant"` // runs in the assistant directory (the app's "Chat" tab)
-	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
-	// assistant's own. Set by the hub on the assistant's conversations.
-	Space string `json:"space,omitempty"`
 	// Archived: a retained conversation moved out of the normal list. Assistant
 	// conversations and Claude/Codex Agents are managed by their owning manager.
 	Archived bool `json:"archived,omitempty"`
+	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
+	// assistant's own. Set by the hub on the assistant's conversations.
+	Space string `json:"space,omitempty"`
 	// ArchiveChangedAt is the manager's last explicit archive/restore visibility change.
 	// The hub uses it only to order its legacy delete tombstones against that report.
 	ArchiveChangedAt time.Time `json:"archive_changed_at,omitzero"`
@@ -131,6 +146,9 @@ type Session struct {
 	// the assistant's snapshot (internal/assistant/fleet.go).
 	Origin    string `json:"origin,omitempty"`
 	OriginRef string `json:"origin_ref,omitempty"`
+	// OpenedBy is the extension whose token opened an assistant conversation, by id (docs/protocol/protocol.md "Origin of
+	// assistant chats"): noted when it opens, never backfilled; "" for any other. Set like Origin.
+	OpenedBy string `json:"opened_by,omitempty"`
 	// Compaction is the last compaction the user asked for in an assistant conversation (POST …/compact), kept by the
 	// node until the next one: running, then done or failed (docs/assistant/assistant.md "Manual compaction").
 	Compaction *Compaction `json:"compaction,omitempty"`
@@ -228,6 +246,8 @@ type Session struct {
 	// TurnErrorCode says what is wrong when the hub can tell from TurnError (docs/assistant/onboarding.md 5.2): one of the
 	// TurnErrorCode* values, for a card that says what to fix (sign in, the key, the model). Empty: not known.
 	TurnErrorCode string `json:"turn_error_code,omitempty"`
+	// ModelFallback is the refusal fallback still active in this session, as the runtime recorded it.
+	ModelFallback *ModelRefusal `json:"model_fallback,omitempty"`
 	// Work is where the session stands in its work (docs/assistant/agent-work.md): working, blocked on a named precondition, or
 	// done, with a line saying what it waits for or what it concluded. Set by the hub; absent before the hub has
 	// triaged a stopped session's turn.
@@ -242,17 +262,18 @@ type Session struct {
 	Rev int64 `json:"rev,omitempty"`
 	// WokeByTask: the latest turn was started by a background task reporting back, not by the user; finishing
 	// it sends no push (the user did not ask for anything).
-	WokeByTask          bool `json:"woke_by_task,omitempty"`
+	WokeByTask bool `json:"woke_by_task,omitempty"`
+	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
+	// ready.
+	Starting            bool `json:"starting,omitempty"`
 	PendingInteractions int  `json:"pending_interactions"`
 	// Suggestion is the next message Claude Code proposes after a turn (grey in its empty input box), read off the
 	// screen; gone once the agent works again or a message is sent.
 	Suggestion string `json:"suggestion,omitempty"`
-	// Starting: Persona is opening its tab and waiting for claude (node/starting.go); messages sent now go in once it is
-	// ready. StartError: the start failed (shown in the chat for a while). StartErrorCode is the start's coded refusal
+	// StartError: the start failed (shown in the chat for a while). StartErrorCode is the start's coded refusal
 	// when it was one (claude_missing, launcher_missing…: the code a synchronous start is answered 409 with), with
 	// StartErrorArgs, the refusal's details (launcher, where, missing, pane_shell…, docs/protocol/protocol.md "Errors"):
 	// the hub writes StartError as the sentence for that code in the user's language, and a client offers its remedy.
-	Starting       bool              `json:"starting,omitempty"`
 	StartError     string            `json:"start_error,omitempty"`
 	StartErrorCode string            `json:"start_error_code,omitempty"`
 	StartErrorArgs map[string]string `json:"start_error_args,omitempty"`
@@ -299,10 +320,11 @@ const (
 
 // Session.TurnErrorCode values (docs/assistant/onboarding.md 4.6).
 const (
-	TurnErrorNotLoggedIn = "not_logged_in" // Claude Code on that machine is not signed in
-	TurnErrorAuthFailed  = "auth_failed"   // the key or token was refused or has expired
-	TurnErrorModelRoute  = "model_route"   // the model name is not one the service or gateway knows
-	TurnErrorRateLimited = "rate_limited"  // too many requests, or a usage limit
+	TurnErrorNotLoggedIn              = "not_logged_in"              // Claude Code on that machine is not signed in
+	TurnErrorAuthFailed               = "auth_failed"                // the key or token was refused or has expired
+	TurnErrorModelRoute               = "model_route"                // the model name is not one the service or gateway knows
+	TurnErrorRateLimited              = "rate_limited"               // too many requests, or a usage limit
+	TurnErrorModelFallbackUnavailable = "model_fallback_unavailable" // a refusal selected a model the service cannot use
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):
@@ -315,6 +337,9 @@ const (
 	// CodeTerminalNotReady: the new tab's terminal would not take the start command (herdr's pane_send_failed); nothing
 	// ran, the tab is closed, a retry may work (node/typedstart.go). 503, retryable.
 	CodeTerminalNotReady = "terminal_not_ready"
+	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
+	// launcher health and must not trigger an automatic retry or a health detour.
+	CodeAgentStartStalled = "agent_start_stalled"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).
