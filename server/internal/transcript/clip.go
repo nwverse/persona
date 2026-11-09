@@ -65,7 +65,14 @@ func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
 	return it, cut
 }
 
-// clipJSON shortens very long string fields (e.g. Write content) inside tool inputs.
+const (
+	minInputShare = 256 // a long string in a tool input is never cut shorter than this
+	clipNoteRoom  = 48  // what clipTo's note adds to a cut string, as JSON
+)
+
+// clipJSON shortens long strings anywhere in a tool input object: a Write's content, but also push_files'
+// files[].content, MultiEdit's edits[].new_string or an MCP call's nested blocks, which went out whole in every page and
+// push. The shape stays, so the apps' renderers still find their fields. A value that is not an object is left as it is.
 func clipJSON(raw json.RawMessage) json.RawMessage {
 	if len(raw) <= maxInputLen {
 		return raw
@@ -74,11 +81,47 @@ func clipJSON(raw json.RawMessage) json.RawMessage {
 	if json.Unmarshal(raw, &m) != nil {
 		return raw
 	}
-	for k, v := range m {
-		if s, ok := v.(string); ok && len(s) > maxInputLen/2 {
-			m[k] = clipTo(s, maxInputLen/2)
-		}
+	b, _ := json.Marshal(mapStrings(m, func(s string) string { return clipTo(s, maxInputLen/2) }))
+	if len(b) <= maxInputLen {
+		return b
 	}
-	b, _ := json.Marshal(m)
+	// Still too long (many medium strings): the long ones share evenly what the rest leaves, so the input stays about
+	// maxInputLen. A share is never under minInputShare, so only a great many long strings can still go over.
+	long, kept := 0, 0
+	rest, _ := json.Marshal(mapStrings(m, func(s string) string {
+		if len(s) <= minInputShare {
+			return s
+		}
+		long, kept = long+1, kept+min(len(s), maxInputLen/2)
+		return ""
+	}))
+	if long == 0 {
+		return b
+	}
+	// JSON escapes make a kept byte cost more than one: scale the share by what the first pass's strings cost.
+	share := (maxInputLen - len(rest)) * kept / (len(b) - len(rest)) / long
+	share = min(max(share-clipNoteRoom, minInputShare), maxInputLen/2)
+	b, _ = json.Marshal(mapStrings(m, func(s string) string { return clipTo(s, share) }))
 	return b
+}
+
+// mapStrings is a copy of v, a decoded JSON value, with f applied to every string in it (object keys are kept).
+func mapStrings(v any, f func(string) string) any {
+	switch v := v.(type) {
+	case string:
+		return f(v)
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = mapStrings(e, f)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = mapStrings(e, f)
+		}
+		return out
+	}
+	return v
 }
