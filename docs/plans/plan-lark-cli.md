@@ -41,7 +41,7 @@ The "Needs" column: unread = Lark's unread / read position; feed = the conversat
 | --- | --- | --- |
 | Candidate conversations: unread conversations + @me anywhere (`conversations?scope=unread / mentions`, needs feed, unread) | One `+messages-search --start <last>` per poll, filtered in the hub: mentions me, direct chats, new replies in topics I take part in (see "What the Inbox collects") | Collects @me, direct chats, and replies in topics I take part in; unread group messages outside these three do not enter the Inbox. "Handled" is still recorded only in Persona |
 | Item context, whether I replied (`Messages` / `threads` + `isMine`) | `+chat-messages-list`, `+threads-messages-list`, sender is me | Works |
-| Document notifications: @me, comments, shares (`documents/notifications`) | None | Not in the first version |
+| Document notifications: @me, comments, shares (`documents/notifications`) | Watched document comments (`drive +list-comments` / `+list-replies`), #2691 | Shares and unconfigured documents remain out of scope |
 | Reading and writing docs, sheets, Base, and replying to comments (`documents/*`) | `docs`, `sheets`, `base`, `drive` comments | Works, with a rewritten adapter layer |
 | Moments (`moments/*`) | None | Not doing |
 | Sending confirmed replies (`Send` / `Reply`) | `+messages-send` / `+messages-reply` | Works |
@@ -167,7 +167,7 @@ Codex app-server approvals use the same `larkCheck`.
   Acceptance: the assistant can look up recent messages, documents and calendar; sending a message shows a confirmation card and nothing is sent after denial; hubs with the Lark gateway behave the same (existing goldens unchanged).
 - [x] **L2 Connector skeleton**: added the subprocess-only `internal/larkcli` adapter, version and auth/status checks, and the `larkcli` connector with Settings status plus `larkcli_chats`, `larkcli_messages`, and `larkcli_search` read tools.
 - [ ] **L3 Knowledge base**: `Archive` (conversations, messages, people, groups: search polling + backfill; attachments), `Items` (calendar, meetings, Minutes, document titles). Acceptance: the knowledge base has Lark conversations and people, in the same format as the Lark gateway source.
-- [ ] **L4 Inbox**: `Inbox`: @me, direct chats, replies in topics I take part in ("What the Inbox collects"); when coexisting with the Lark gateway, collect only from the primary source; replies go through `Actions`, the gate and the phone card.
+- [ ] **L4 Inbox**: chat Inbox polling remains on the L4 branch; #2691 adds the self-contained watched-document comment Inbox (`kind: "doc"`) in the lark-cli connector. Join the chat poller and this comment poller in the manifest/lifecycle, keeping their state and files separate; when coexisting with the Lark gateway, the primary-source rule still applies. Document comments are read-only and never go through `Actions`.
 - [ ] **L5 `/agent`**: recognize requests by search polling, reactions, context, replies; `/agent` in document comments is not done.
 - [ ] **L6 App**: the conversation page's messages, sending, replies, reactions and media wired to lark-cli (same JSON); the document reader uses markdown; unread, labels and Moments are hidden for this source.
 

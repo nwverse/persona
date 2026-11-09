@@ -101,6 +101,26 @@ Handled by the Lark plugin (formerly hub `inbox_docs.go`). Mentions / comments t
 - Tests: row detection, status columns, fingerprints, reply targets, AI-change validation, plus a live change-and-restore test on your own demo document. Since #1571 these live with Lark Inbox in the Lark plugin (formerly hub `inbox_docs_test.go`, TestDocsLive).
   This repository retains `inbox_agent_test.go` / `inbox_golden_test.go` for block types (`assistant/inbox_blocks.go`) and UI `InboxDocTests` (`MOCK_DOCS=1`). Never test on someone else's sheet.
 
+### Lark via lark-cli: watched document comments (#2691)
+
+The `larkcli` connector has a separate, read-only document-comment poller. It is enabled only for links the user puts in
+Settings › Connectors › Lark via lark-cli › Watched documents; an empty list watches nothing. Options accept `documents`
+(`docx`, sheet, Base, or wiki-node links) and `wiki_spaces`. A selected wiki space is expanded through bounded
+`wiki spaces list` / `wiki nodes list` reads, so a space never turns into an unbounded crawl.
+
+On each Inbox round the connector runs `drive +list-comments --solved-status false` as the lark-cli user, then reads each
+thread with `drive +list-replies`. It keeps an opaque cursor per watched document and deduplicates comment and reply ids.
+Rate limits pause the document poller; a permission or not-found result marks that document unreadable and stops retrying it.
+The title, quoted passage (or “Whole document”), latest matching comment text, and a link with the comment id are kept in
+one Inbox item per thread (`kind: "doc"`). A comment that mentions the user by open_id is included, as is a later reply
+when the user has written in that thread; resolved threads are skipped. The connector never replies or changes a comment.
+
+The existing document block is used for the detail page (`doc.url`, `doc.link`, `doc.type`, `doc.notice_id`), while the
+quoted passage and comment text are in the item's context. An unreadable watched document appears as a warning in the
+connector's Settings status and can be removed from the watch list there. The comment poller and state live in
+`server/internal/connector/larkcli/doc_comments.go`; the parallel L4 chat poller should be joined in that connector's
+manifest and lifecycle, with its own files and state kept separate to avoid making either poller own the other's cursor.
+
 ## AI triage
 
 `server/internal/assistant/inbox_triage.go` (manager-owned): every new item, or item with new messages, goes to the small-task model (`inbox.triage` in model configuration, falling back to `ai` in the manager's `manager.json`, default DeepSeek flash), which assigns one of three tiers,

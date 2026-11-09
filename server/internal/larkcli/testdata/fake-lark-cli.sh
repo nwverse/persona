@@ -5,6 +5,7 @@ set -eu
 
 base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 scenario=${LARKCLI_FAKE_SCENARIO:-success}
+phase=${LARKCLI_FAKE_PHASE:-initial}
 if [ -n "${LARKCLI_FAKE_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$LARKCLI_FAKE_LOG"
 fi
@@ -45,6 +46,60 @@ case "${1:-}" in
       +messages-search|+chat-search) cat "$base/search.json" ;;
       *) cat "$base/search.json" ;;
     esac
+    exit 0
+    ;;
+  drive)
+    case "${2:-}" in
+      +inspect)
+        cat "$base/document_inspect.json"
+        exit 0
+        ;;
+      +list-comments)
+        case "$scenario" in
+          comments_unreadable)
+            cat "$base/error_permission.json" >&2
+            exit 3
+            ;;
+          comments_rate_limited)
+            cat "$base/error_rate_limited.json" >&2
+            exit 4
+            ;;
+          comments_reply)
+            if [ "$phase" = "reply" ]; then
+              cat "$base/comments_reply.json"
+            else
+              cat "$base/comments_initial.json"
+            fi
+            ;;
+          comments|success)
+            cat "$base/comments_initial.json"
+            ;;
+          *)
+            cat "$base/replies_empty.json"
+            ;;
+        esac
+        exit 0
+        ;;
+      +list-replies)
+        cat "$base/replies_empty.json"
+        exit 0
+        ;;
+      *)
+        cat "$base/replies_empty.json"
+        exit 0
+        ;;
+    esac
+    ;;
+  wiki)
+    if [ "${2:-}" = "spaces" ] && [ "${3:-}" = "list" ]; then
+      cat "$base/wiki_spaces.json"
+      exit 0
+    fi
+    if [ "${2:-}" = "nodes" ] && [ "${3:-}" = "list" ]; then
+      cat "$base/wiki_nodes.json"
+      exit 0
+    fi
+    cat "$base/replies_empty.json"
     exit 0
     ;;
   *)

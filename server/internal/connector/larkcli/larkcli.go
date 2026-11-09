@@ -27,23 +27,28 @@ const expiryReminderDays = 7
 // credentials; the adapter delegates all authentication to lark-cli.
 type Connector struct {
 	runner *adapter.Runner
+	docs   *documentInbox
 	now    func() time.Time
 }
 
 // New creates the built-in connector from the configured CLI runner.
 func New(cfg adapter.Config) *Connector {
-	return &Connector{runner: adapter.New(cfg)}
+	return &Connector{runner: adapter.New(cfg), docs: newDocumentInbox()}
 }
 
 // NewWithRunner is useful for unit tests and embedders that already constructed a
 // runner. The runner still executes the real configured subprocess.
-func NewWithRunner(r *adapter.Runner) *Connector { return &Connector{runner: r} }
+func NewWithRunner(r *adapter.Runner) *Connector {
+	return &Connector{runner: r, docs: newDocumentInbox()}
+}
 
 func (c *Connector) ID() string   { return ID }
 func (c *Connector) Name() string { return Name }
 
 func (c *Connector) Manifest() connector.Manifest {
-	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools}}
+	return connector.Manifest{Capabilities: []connector.Capability{
+		connector.CapStatus, connector.CapTools, connector.CapInbox, connector.CapOptions, connector.CapEvents,
+	}, Kinds: []string{"doc"}}
 }
 
 func (c *Connector) Tools() []proto.Tool {
@@ -85,6 +90,15 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 	st.State = connector.StateOK
 	if days := auth.DaysUntilExpiry(c.currentTime()); days > 0 && days <= expiryReminderDays {
 		st.Error = i18n.T(c.lang(ctx), "hub-connectors.expiry_reminder", i18n.Args{"count": days})
+	}
+	if c.docs != nil {
+		if warning := c.docs.warning(c.lang(ctx)); warning != "" {
+			if st.Error != "" {
+				st.Error += " · " + warning
+			} else {
+				st.Error = warning
+			}
+		}
 	}
 	return st
 }

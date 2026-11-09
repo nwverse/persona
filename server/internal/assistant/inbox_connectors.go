@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
@@ -174,6 +175,14 @@ func (b *inboxBook) settleThing(open *InboxItem, t connector.InboxThing, now tim
 func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 	it.Kind, it.Title, it.Sender, it.Preview, it.Context = t.Kind, t.Title, t.Sender, t.Preview, t.Context
 	it.UpdatedAt, it.Last, it.Rules = t.At, t.Last, t.Rules
+	// A connector may use the existing document block while it is still a
+	// generic connector source (lark-cli does this for read-only comments). The
+	// generic connector block remains present for source/thread bookkeeping, but
+	// clients render the document block first and can open its comment link.
+	it.Doc = nil
+	if t.Extra != nil && len(t.Extra.Doc) > 0 {
+		_ = json.Unmarshal(t.Extra.Doc, &it.Doc)
+	}
 	rule := t.Tier
 	if rule == "" && t.Extra != nil && connector.Tier(t.Extra.RuleTier).Known() {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
