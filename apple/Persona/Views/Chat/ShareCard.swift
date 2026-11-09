@@ -108,15 +108,13 @@ struct MessageShareCard: View {
 
 extension MarkdownUI.Theme {
     /// The chat's theme with code blocks that wrap instead of scrolling (an image can't scroll; the renderer
-    /// draws no scroll views at all), and paragraphs no wider than a line that still reads well (`ShareCardWidth.measure`)
-    /// on a card widened for its tables and code.
+    /// draws no scroll views at all).
     @MainActor static let card = MarkdownUI.Theme.persona
         .text { FontSize(15) }
         .paragraph { config in
             config.label
                 .fixedSize(horizontal: false, vertical: true)
                 .relativeLineSpacing(.em(0.26))
-                .frame(maxWidth: ShareCardWidth.measure, alignment: .leading)
                 .markdownMargin(top: 0, bottom: 10)
         }
         .codeBlock { config in
@@ -138,12 +136,11 @@ extension MarkdownUI.Theme {
 
 /// How wide a message's card is drawn (#2216). Plain text keeps a phone's width; tables, code blocks and their long lines
 /// widen it to their own width, up to `cap`, past which a table wraps its cells instead. A card that would still be a
-/// thin strip, taller than `tallest` times its width, widens toward `measure`, the longest line a paragraph reads well
-/// at (about 34 Chinese characters at 15 pt); paragraphs never get wider than that, tables and code use the whole card.
+/// thin strip, taller than `tallest` times its width, widens too, also up to `cap`: about 28 Chinese characters a line
+/// at 15 pt, still a comfortable line to read, and filling a phone's screen the words are about three quarters as big.
 nonisolated enum ShareCardWidth {
     static let base: CGFloat = 390
-    static let cap: CGFloat = 680
-    static let measure: CGFloat = 520
+    static let cap: CGFloat = 520
     static let tallest: CGFloat = 2.6
     /// Around the words: the 24 pt margin and the 22 pt padding on each side.
     static let chrome: CGFloat = 2 * (24 + 22)
@@ -156,7 +153,7 @@ nonisolated enum ShareCardWidth {
             // The words keep about the same area as they widen: height × width of the text ≈ the same.
             let area = height * (base - chrome)
             let fit = (tallest * chrome + (tallest * tallest * chrome * chrome + 4 * tallest * area).squareRoot()) / (2 * tallest)
-            width = max(width, min(fit, measure + chrome))
+            width = max(width, fit)
         }
         return min(width.rounded(), cap)
     }

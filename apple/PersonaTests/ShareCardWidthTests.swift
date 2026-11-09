@@ -12,7 +12,7 @@ struct ShareCardWidthTests {
     }
 
     @Test func tablesAndCodeWidenItToTheirOwnWidthUpToTheCap() {
-        #expect(ShareCardWidth.width(natural: 480, height: 900) == 480 + ShareCardWidth.chrome)
+        #expect(ShareCardWidth.width(natural: 400, height: 900) == 400 + ShareCardWidth.chrome)
         #expect(ShareCardWidth.width(natural: 2000, height: 900) == ShareCardWidth.cap) // wider: its cells wrap
     }
 
@@ -20,10 +20,9 @@ struct ShareCardWidthTests {
         let base = ShareCardWidth.base
         #expect(ShareCardWidth.width(natural: 0, height: ShareCardWidth.tallest * base) == base)
         let tall = ShareCardWidth.width(natural: 0, height: 1400)
-        #expect(tall > base && tall < ShareCardWidth.measure + ShareCardWidth.chrome)
-        // However tall, text alone never goes past the paragraph's measure.
-        #expect(ShareCardWidth.width(natural: 0, height: 20000) == ShareCardWidth.measure + ShareCardWidth.chrome)
-        #expect(ShareCardWidth.width(natural: 560, height: 20000) == 560 + ShareCardWidth.chrome)
+        #expect(tall > base && tall < ShareCardWidth.cap)
+        // However tall, never past the cap.
+        #expect(ShareCardWidth.width(natural: 0, height: 20000) == ShareCardWidth.cap)
     }
 
     /// The sample reply with a five-column table and a long line of code: wider than a phone, within the cap, and the
