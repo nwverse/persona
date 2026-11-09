@@ -1,6 +1,4 @@
-// The chat's lines other than an exchange (iOS ChatView.lineView): the wake that opens new work, the chip under an
-// answer for background tasks that reported back (and its drawer), recaps (and their drawer, and the strip above the
-// composer), model API errors as cards, and the header of a split exchange.
+// Transcript notices, recaps and model errors. Background continuation belongs to the normal execution summary.
 import { memo, useMemo, useState } from "react";
 import { lineItemIds } from "../../lib/chat-search";
 import { useChatContext } from "./chat-context";
@@ -10,13 +8,13 @@ import { ago, clock } from "../../lib/format";
 import { retryable, type APIErrorInfo } from "../../lib/api-errors";
 import { runAction, turnErrorFix } from "../../lib/readiness";
 import { wakeSummary } from "../../lib/tasks";
-import { wakeDrawer, workSegment, type ChatLine, type OpenRecap, type Turn } from "../../lib/turns";
+import { type ChatLine, type OpenRecap } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import { Button, Collapse, copyText, cx, Dialog } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { Answer, SegmentView } from "./SegmentView";
-import { CompactDivider, NoticeRow } from "./Steps";
+import { SegmentView } from "./SegmentView";
+import { CompactDivider } from "./Steps";
 import { t } from "../../i18n";
 import { ScrollFold } from "./fold-scroll";
 
@@ -36,6 +34,8 @@ export interface LineProps {
   limit?: string;
   /** Inside an opened supervision trace, show complete injected inputs. */
   trace?: boolean;
+  /** A finished exchange before the last two may skip drawing off screen (SegmentView `offscreen`). */
+  offscreen?: (section: HTMLElement) => () => void;
 }
 
 export const ChatLineView = memo(function ChatLineView(props: LineProps) {
@@ -47,7 +47,7 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   );
 });
 
-function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assistant, limit, trace }: LineProps) {
+function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assistant, limit, trace, offscreen }: LineProps) {
   switch (line.kind) {
     case "supervision":
       return <SupervisionLine line={line} mid={mid} sid={sid} streaming={streaming} expandFold={expandFold} assistant={assistant} />;
@@ -62,7 +62,7 @@ function LineBody({ line, mid, sid, streaming, expandFold, onRetry, fix, assista
           streaming={line.live ? streaming : undefined}
           batchedWords={!assistant}
           expandFold={expandFold}
-          beforeWords={line.wakes && <WakeChip turn={line.wakes} mid={mid} sid={sid} expandFold={expandFold} />}
+          offscreen={offscreen}
         />
       );
     case "notice":
@@ -133,54 +133,6 @@ function LineNotice({ item }: { item: Item }) {
       <Icon name="info" size={13} className="mt-[3px] shrink-0 text-ink-3" />
       <span className={cx("min-w-0 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2", !open && "line-clamp-4")}>{text}</span>
     </button>
-  );
-}
-
-// ── background tasks that woke the agent: a chip above its newest words, their runs in a drawer (#3783) ──
-
-function WakeChip({ turn, mid, sid, expandFold }: { turn: Turn; mid: string; sid: string; expandFold: (f: Item) => Promise<void> }) {
-  const [open, setOpen] = useState(false);
-  const notices = turn.wakes;
-  const failed = notices.some((n) => wakeSummary(n).failed);
-  const text = notices.length === 1 ? wakeSummary(notices[0]).text : t("chat-lines.wake_count", { count: notices.length });
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label={t("chat-lines.wake_open")}
-        className="flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-full bg-inset px-3 py-1 text-[12px] text-ink-2 shadow-hairline transition-colors hover:bg-hover-2"
-      >
-        <Icon name="bell" size={12} className={cx("shrink-0", failed ? "text-red" : "text-accent")} />
-        <span className="min-w-0 truncate">{text}</span>
-        <Icon name="chevronRight" size={12} stroke={2.2} className="shrink-0 text-ink-3" />
-      </button>
-      <Dialog open={open} onClose={() => setOpen(false)} title={notices.length > 1 ? t("chat-lines.wake_count", { count: notices.length }) : t("chat-lines.wake_single")} width={640}>
-        {open && <WakeDrawerBody turn={turn} mid={mid} sid={sid} expandFold={expandFold} />}
-      </Dialog>
-    </>
-  );
-}
-
-/** Each wake (its reports, then what the agent answered to them), newest first; the steps in between fold into one
- *  work row at the end. */
-function WakeDrawerBody({ turn, mid, sid, expandFold }: { turn: Turn; mid: string; sid: string; expandFold: (f: Item) => Promise<void> }) {
-  const d = wakeDrawer(turn);
-  const work = workSegment(`dw-${turn.id}`, d.process);
-  return (
-    <div className="flex max-h-[65vh] flex-col gap-5 overflow-y-auto pr-1">
-      {d.groups.map((g) => (
-        <section key={g.id} className="flex flex-col gap-2">
-          <div className="flex flex-col gap-0.5">
-            {g.notices.map((n) => (
-              <NoticeRow key={n.id} item={n} mid={mid} sid={sid} />
-            ))}
-          </div>
-          {g.answer && <Answer item={g.answer} mid={mid} sid={sid} />}
-        </section>
-      ))}
-      {work.steps.length > 0 && <SegmentView seg={work} live={false} mid={mid} sid={sid} expandFold={expandFold} />}
-    </div>
   );
 }
 

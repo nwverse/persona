@@ -61,7 +61,7 @@ const (
 	notifyPayloadMost = 3500
 	// notifyCollapse keeps a caller's ids apart from the hub's own (interaction ids).
 	notifyCollapse = "notify:"
-	// kindAlert is the WebSocket notify event's kind for these (docs/protocol/protocol.md "Persistent connection notifications").
+	// kindAlert is the WebSocket notify event's kind for these (docs/protocol/protocol.md "Notifications over the persistent connection (ws_notify)").
 	kindAlert = "alert"
 )
 

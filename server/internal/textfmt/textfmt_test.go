@@ -33,6 +33,25 @@ func TestFormatting(t *testing.T) {
 	}
 }
 
+func TestFirstNonEmpty(t *testing.T) {
+	for _, c := range []struct {
+		in   []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{""}, ""},
+		{[]string{"", " \t\n", ""}, ""},
+		{[]string{"a", "b"}, "a"},
+		{[]string{"", "b", "c"}, "b"},
+		{[]string{"  ", " b "}, " b "}, // as given, not trimmed
+		{[]string{"\u00a0", "x"}, "x"}, // a no-break space is white space too
+	} {
+		if got := FirstNonEmpty(c.in...); got != c.want {
+			t.Errorf("FirstNonEmpty(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestAgentLabel(t *testing.T) {
 	for _, tc := range []struct {
 		s    proto.Session
