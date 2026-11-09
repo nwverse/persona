@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -149,7 +150,7 @@ func (s *Service) publishList(machine string) []proto.Session {
 // decorated returns a machine's sessions as the apps get them: the unified states, the pending interaction counts,
 // what the assistant says of its conversations, the work and todos.
 func (s *Service) decoratedUnarchived(machine string) []proto.Session {
-	return s.decorateInventory(machine, slices.Clone(s.nodeSessions(machine)), true)
+	return s.decorateInventory(machine, s.nodeSessions(machine), true) // a copy already: the devices' list stays as it is
 }
 
 // decorateInventory owns list. A subset gets the same live fields as the full
@@ -179,10 +180,11 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	shown, via := r.sessions, r.marks
 	r.mu.RUnlock()
 	lang := s.lang(context.Background())
+	dir := m.assistantCwd() // once, not a path.Join for each row
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
-		list[i].Assistant = m.isAssistant(list[i])
+		list[i].Assistant = isAssistantSession(&list[i], dir, m.manager)
 		if list[i].Assistant {
 			list[i].Space = identity.SpaceOf(list[i].Cwd)
 		}
@@ -202,12 +204,19 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		list[i].SeenAt = seen[list[i].SessionID]
 		localizeSession(lang, &list[i]) // the node's Chinese activity line… (fleet_text.go)
+		if list[i].StartErrorCode != "" {
+			list[i].StartError = startErrorText(lang, cmp.Or(m.Name, machine), list[i])
+		}
 		list[i].State, list[i].BackgroundWorking = stateWithBackground(agentState(list[i], list[i].SeenAt), list[i])
 		list[i].BackgroundWaiting = backgroundWaiting(list[i])
 		list[i].TurnError, list[i].TurnErrorKind = turnError(list[i])
+		decorateLimit(&list[i]) // a subscription's usage limit and when it resets (usage_limit.go)
 		list[i].TurnErrorCode = ""
 		if list[i].TurnError != "" {
-			list[i].TurnErrorCode = turnErrorCode(list[i].TurnError)
+			list[i].TurnErrorCode = proto.TurnErrorRateLimited
+			if list[i].TurnErrorKind != proto.TurnErrorUsageLimit {
+				list[i].TurnErrorCode = turnErrorCode(list[i].TurnError)
+			}
 			// Not worth a "Continue": the user signs in, fixes the key or the model. Only where agents_work would not retry it
 			// anyway: a gateway's 5xx that mentions the model stays transient.
 			if list[i].TurnErrorKind == "" && userTurnError(list[i].TurnErrorCode) && !transientError(list[i].TurnError) {

@@ -90,6 +90,7 @@ type Service struct {
 	upReports  reportRate        // agent_control.go: report_to_supervisor
 	noteRate   reportRate        // todo_decisions.go: todo_decision_add
 	adoptMu    sync.Mutex        // agent_control.go: one agent_supervise at a time
+	placeBook  placeBook         // places.go
 	accept     acceptBook        // acceptance.go
 	later      laterBook         // later.go: questions that can wait for a briefing
 	brief      briefBook         // briefing.go
@@ -97,6 +98,7 @@ type Service struct {
 	sched      schedule          // schedule.go
 	tasks      tasksState        // tasks.go
 	questions  questions         // tools.go (ask_user)
+	askTodos   askTodoBook       // ask_todo.go: the questions nobody answered, now to-dos
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
@@ -154,6 +156,7 @@ func New(o Options) *Service {
 	s.readinessRoutes()
 	s.startRoutes()
 	s.scheduleRoutes()
+	s.placeRoutes()
 	s.taskRoutes()
 	s.viewActionRoutes()
 	s.todayRoutes()
@@ -457,6 +460,8 @@ func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	// A usage limit marks the launcher there until it resets (launcher_health.go).
+	go s.launcherLimitTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
 }
 
@@ -487,6 +492,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
+	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 }
 
 func randomHex(n int) string {

@@ -281,8 +281,8 @@ func TestUserWritingWithdrawsAskUserWithoutTheQueue(t *testing.T) {
 	}
 }
 
-// A question that expires after its wait ends as before: the history says expired, the Lark card closes (as ended),
-// and it is never nudged. The wait is shortened to 300 ms here; the real one
+// A question that expires after its wait ends for good: the history says expired, the Lark card closes saying it moved
+// to the to-dos (the question becomes one, ask_todo.go), and it is never nudged. The wait is shortened to 300 ms here; the real one
 // is askUserWait.
 func TestExpiredAskUserCardIsEndedForGood(t *testing.T) {
 	a := newAskRig(t)
@@ -307,8 +307,8 @@ func TestExpiredAskUserCardIsEndedForGood(t *testing.T) {
 	for time.Now().Before(deadline) && a.closed() == "" {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(a.closed(), i18n.T(a.s.botLang(ctx), "assistant-channels.ended")) {
-		t.Errorf("the Lark card was not closed as ended: %q", a.closed())
+	if !strings.Contains(a.closed(), i18n.T(a.s.botLang(ctx), "assistant-feishu_cards.moved_to_todos")) {
+		t.Errorf("the Lark card was not closed as moved to the to-dos: %q", a.closed())
 	}
 	a.tick(a.s, 2*time.Hour)
 	for _, n := range a.sent() { // the card the shape was taken from still waits, and is nudged

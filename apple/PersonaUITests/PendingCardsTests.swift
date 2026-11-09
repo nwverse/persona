@@ -5,7 +5,7 @@ import XCTest
 /// while the chat's header and back button stay on screen: they were pushed off the top, out of reach.
 ///   PORT=18797 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/PendingCardsTests
-/// Both layouts (TEST_RUNNER_PERSONA_LAYOUT=shell) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class PendingCardsTests: XCTestCase {
     private var app: XCUIApplication!
     /// The mock's agent with three cards waiting, and one with none.

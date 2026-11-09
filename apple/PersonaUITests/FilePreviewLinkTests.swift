@@ -51,7 +51,7 @@ final class FilePreviewLinkTests: XCTestCase {
     }
 
     @MainActor func testConversationFileLinkOpensAbovePreview() throws {
-        let app = launch(["-ui.oldLayout", "YES", "-tab", "dev"])
+        let app = launch(["-tab", "dev"])
         let path = app.links["/Users/me/code/weather/README.md"].firstMatch // linked in the message's text (#1706)
         XCTAssertTrue(path.waitForExistence(timeout: 20), app.debugDescription)
         path.tap()

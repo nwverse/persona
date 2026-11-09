@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // launchFile is where a project keeps its dev servers, under its folder.
@@ -69,7 +69,7 @@ const (
 	problemBadEnv   = "bad_env"   // an env name that is not one
 )
 
-var launchEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var launchEnvName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // findLaunchFile is the launch.json for a session in dir: dir's own, else the nearest folder above it up to the
 // repository's root (or the home folder) that has one.
@@ -203,8 +203,8 @@ func launchServer(root string, e launchEntry) previewServer {
 }
 
 var (
-	jsoncComment = regexp.MustCompile(`(?s)"(?:[^"\\]|\\.)*"|//[^\n]*|/\*.*?\*/`)
-	jsoncComma   = regexp.MustCompile(`(?s)"(?:[^"\\]|\\.)*"|,(\s*[\]}])`)
+	jsoncComment = lazyre.New(`(?s)"(?:[^"\\]|\\.)*"|//[^\n]*|/\*.*?\*/`)
+	jsoncComma   = lazyre.New(`(?s)"(?:[^"\\]|\\.)*"|,(\s*[\]}])`)
 )
 
 // jsonc is a JSON-with-comments text (what VS Code writes launch.json as) as JSON: comments and trailing commas out,

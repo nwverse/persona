@@ -6,13 +6,13 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
@@ -277,7 +277,7 @@ func (e *Engine) saveArchived(c *Chat, cursor string, n int, listed time.Time) e
 	return nil
 }
 
-var docLink = regexp.MustCompile(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides)/[A-Za-z0-9]+`)
+var docLink = lazyre.New(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides)/[A-Za-z0-9]+`)
 
 // DownloadFunc saves one media path of a message to dst (Source.Download, or a connector's attachments).
 type DownloadFunc func(ctx context.Context, media, dst string) error

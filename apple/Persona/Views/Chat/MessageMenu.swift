@@ -152,7 +152,7 @@ final class LeftDragRecognizer: UIPanGestureRecognizer {
 
     // It waits for no one but the scroll views. The message's long press (the action bar) is a child's gesture, which
     // SwiftUI makes this one wait for, and the navigation stack's back pans (the edge, and on iOS 26 anywhere in the
-    // content) are around it in the old layout: now and then the drag lost those races and never started. A drag
+    // content) are around it in a navigation stack: now and then the drag lost those races and never started. A drag
     // that goes left has moved past the press's allowance and is not a way back, so they never both happen.
     private static func standsAside(_ other: UIGestureRecognizer) -> Bool {
         other is UILongPressGestureRecognizer || (other is UIPanGestureRecognizer && !(other.view is UIScrollView))
@@ -338,7 +338,7 @@ private struct MessageActionBarHost: ViewModifier {
                 .overlay(alignment: .trailing) {
                     if drag < 0 {
                         let progress = min(1, -drag / MessageSwipe.threshold)
-                        Image(systemName: Theme.Icon.reply)
+                        ThemedIcon(Theme.Icon.reply)
                             .font(Theme.Font.labelStrong)
                             .foregroundStyle(armed ? Color.white : Color.secondary)
                             .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
@@ -411,7 +411,7 @@ struct MessageActionBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            action(String(localized: "Copy [Message Menu 63d90d]"), "doc.on.doc") {
+            action(String(localized: "Copy [Message Menu 63d90d]"), Theme.Icon.copy) {
                 UIPasteboard.general.string = text
                 Haptics.success()
             }
@@ -422,7 +422,7 @@ struct MessageActionBar: View {
             if !pending {
                 action(String(localized: "Quote"), "quote.opening") { menu.quote?(text, id, isUser, nil) }
             }
-            action(String(localized: "Share"), "square.and.arrow.up") {
+            action(String(localized: "Share"), Theme.Icon.share) {
                 menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
             }
             if isUser && !pending {
@@ -453,7 +453,7 @@ struct MessageActionBar: View {
     private func label(_ title: String, _ symbol: String) -> some View {
         VStack(spacing: Theme.Space.xs) {
             // Symbols differ in height: a fixed box keeps every label on one line.
-            Image(systemName: symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
+            ThemedIcon(symbol).font(Theme.Font.heading).dynamicTypeSize(...DynamicTypeSize.xxLarge).scaledFrame(height: Theme.Size.iconS)
             Text(title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
         .foregroundStyle(.white)

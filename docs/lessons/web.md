@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## Streamed stat grids need the same text bounds as snapshots (#1703)
+
+Fixed grid columns do not constrain a value's painted text. Give each cell `min-w-0` and its value `truncate`, retaining the full DOM text and title. The legacy renderer can already have these guards while a separate native stream renderer omits them. A six-column grid exposed overlapping values that looked fine with two columns. Regress the native snapshot/delta DOM contract, then check real wide/narrow light/dark browser geometry; jsdom cannot prove clipping.
+
 ## Notification preference writes need hub ordering (#1285)
 
 Ignoring an older PUT response cannot stop its request from committing last. Serialize notification and manager-push writes together, keep confirmed preferences separately from queued intents, and send only the changed fields. Remove a failed intent before rebuilding the optimistic view, so another field's save does not silently retry it. Reads started during a write need completion fencing too. Regress authoritative commits and reloads with a deferred transport; response-only checks can pass while the hub retains the wrong choice.
@@ -27,6 +31,14 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 - In Playwright, `scroll_into_view_if_needed` did not scroll the sidebar's own `overflow-y-auto` list when the row was in the last few pixels of the window; `hover()` then fell outside it and `:hover` stayed false. Scroll with `page.mouse.wheel` over the list, then assert `el.matches(':hover')` before checking a hover state.
 - Two marks that differ only in color fail color-blind users, and at 16 px two framed icons (terminal box vs window box) read as the same rounded square, next to the todo icon's box as well. Give each kind its own silhouette (a frameless prompt vs a framed window).
 - A row's title is `flex-1` (basis 0) and an end tag `shrink-0`: the tag keeps its whole width and the title takes what is left, so a selected row with a mark, a runtime tag and the ⋯ cut the title to about 5 characters. Give the title `basis-auto` when end words exist and let those words shrink first (`min-w-6 shrink-[20]`). Screenshot the selected row with the mouse moved away, and a sidebar tall enough that the usage card does not cover the list.
+
+## Listeners on an element React may replace (2026-11-07, #1309)
+
+- The chat's scroller is a different element once an agent's session arrives: the page's frame changes (a terminal to switch to), and React reuses the old `div` for something else (it became the composer dock). Effects that bound a `ResizeObserver` and wheel / touch listeners to `scroller.current` once (`[]` deps) kept watching the old one, so on an agent's page opened by its address the chat stopped following content that grows after layout (streamed Markdown): the live reply's last lines sat under the composer. Navigating from the sidebar never showed it, because the session was already there. Keep the element in state through a callback ref and list it in those effects' deps (`ChatView.tsx` `scrollEl`); `web/e2e/agent-live.mjs` checks a page opened by its address.
+
+## Live text and older pages (2026-11-07, #1309)
+
+- `useTranscript` once ended the live text whenever a batch of items had any of the agent's words, and older pages and opened folds go through the same `apply`. The main chat did not show it (its delta comes again 80 ms later); an agent's does not come again while a tool runs, so scrolling up or opening "Worked for …" blanked it for minutes. Only the newest items (pushes, the first page, a pull) may touch live text, and an agent's is recomputed against them from the last delta, not cleared.
 
 ## Native extension delta boundaries (#5956)
 
@@ -122,6 +134,10 @@ Exercise the actual hook and upload helper together with a synthetic XHR transpo
 - After adding status labels, keep titles single-line with truncation, prevent labels from shrinking, and provide full-title tooltips. Constrain actual menu width to viewport minus side margins before positioning by that width, rather than merely moving the left edge; desktop fixed-width menus overflow narrow screens.
 - Browser tests closing a menu must wait for removal (`detached`), not just `hidden`; its hidden initial-positioning phase can satisfy `hidden` too early. Wait for specific rows and status text before assertions, avoiding false "missing state" reports before rendering finishes.
 - Cards use `overflow-hidden` for rounded corners (`Group` in Settings), clipping overlays opened from rows: the last row's "Confirm delete" / "Confirm revoke" shows only an edge; clicking the button center hits the description below the card (2026-11-04, #1504). `z-index` cannot defeat clipping. Confirm row actions inline (`RowConfirm`), or put real overlays outside the card (portal). Measure the last row; the first row cannot reveal this.
+
+## Modal focus and autoFocus (2026-11-09, #1822)
+
+- React focuses an `autoFocus` field (and runs a child's `useLayoutEffect` focus) while it commits, before any `useEffect`. A modal that reads `document.activeElement` in its effect to learn where focus goes back on close sees its own field, so a closed `Dialog` gave focus to that field during the exit and then to `<body>`. `useModalFocus` (`web/src/ui/overlay.ts`) notes the opener while rendering the first open frame. StrictMode then replays the effect of a dialog mounted open: its cleanup gives the focus to the opener and `autoFocus` does not run again, so the hook puts the focus back on what had it inside. A modal can open in the same render another closes (a Palette command such as Keyboard shortcuts, or a Dialog button that opens the next Dialog): the opener read while rendering is then inside the closing modal, which unmounts after its exit, so the closing modal's cleanup notes its own opener by element and the new one takes that over (every cleanup in a commit runs before any setup). A focus-return test needs a body with an `autoFocus` field (a plain button inside never takes the focus first), a case under `StrictMode` and a handoff case (`web/src/ui/dialog-focus.test.tsx`, `web/src/views/Palette.a11y.test.tsx`).
 
 ## New sessions and multimodal input
 

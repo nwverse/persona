@@ -23,7 +23,7 @@ func (m fleetMachine) assistantCwd() string {
 
 // isAssistant: sess is one of this manager's assistant's conversations on the machine (isAssistantSession).
 func (m fleetMachine) isAssistant(sess proto.Session) bool {
-	return isAssistantSession(sess, m.assistantCwd(), m.manager)
+	return isAssistantSession(&sess, m.assistantCwd(), m.manager)
 }
 
 // fleetMachines are the machines the devices carry.
@@ -84,7 +84,8 @@ func (s *Service) nodeSession(machine, id string) (proto.Session, bool) {
 	return s.devs.Session(machine, id)
 }
 
-// nodeSessions are a machine's sessions as its node listed them.
+// nodeSessions are a machine's sessions as its node listed them: a copy of the whole list, the caller's own. A caller
+// that keeps a few rows, or only asks whether one is there, reads them with nodeSessionsWhere instead.
 func (s *Service) nodeSessions(machine string) []proto.Session {
 	if s.devs == nil {
 		return nil
@@ -93,10 +94,34 @@ func (s *Service) nodeSessions(machine string) []proto.Session {
 	return list
 }
 
+// nodeSessionsWhere are those of a machine's sessions keep accepts, copied out without the rest (Devices.SessionsWhere:
+// keep reads each in place, under the devices' lock), and how many its node listed.
+func (s *Service) nodeSessionsWhere(machine string, keep func(*proto.Session) bool) (kept []proto.Session, listed int) {
+	if s.devs == nil {
+		return nil, 0
+	}
+	kept, _ = s.devs.SessionsWhere(machine, func(sess *proto.Session) bool {
+		listed++
+		return keep(sess)
+	})
+	return kept, listed
+}
+
+// assistantSessions are this manager's assistant's conversations on machine m (isAssistant), copied out of its node's
+// list without the rest: a machine can list thousands of coding sessions beside them.
+func (s *Service) assistantSessions(m fleetMachine) []proto.Session {
+	if s.devs == nil {
+		return nil
+	}
+	dir := m.assistantCwd()
+	list, _ := s.devs.SessionsWhere(m.ID, func(sess *proto.Session) bool { return isAssistantSession(sess, dir, m.manager) })
+	return list
+}
+
 // isAssistantSession identifies manager's headless conversations in its directory dir, or its health space's. A host
 // pane is stronger evidence than a shared working directory. Another manager's directory, left on a machine moved
 // away from it, is not this one's (docs/assistant/managers.md "Directories on a computer").
-func isAssistantSession(sess proto.Session, dir, manager string) bool {
+func isAssistantSession(sess *proto.Session, dir, manager string) bool {
 	if sess.PaneID != "" || dir == "" || sess.Cwd == "" {
 		return false
 	}

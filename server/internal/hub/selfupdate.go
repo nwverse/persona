@@ -4,26 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/compat"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/osproc"
-
-	"github.com/nwverse/persona/server/internal/hubedge"
-	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -104,10 +98,16 @@ type updater struct {
 	edgeConfirmed func()
 	startWatch    func(prev, pendingPath string) error
 	target        func() (string, error)
-	notify        func(title, body string)
-	confirmIn     time.Duration
-	idleEvery     time.Duration
-	manualIdle    time.Duration
+	// self is the binary this hub runs as (runningBinary): persona-hub goes on as the persona-hub the update
+	// swapped, personad as personad (runAs).
+	self func() (string, error)
+	// services finds what runs a program beside personad: a release that would leave one a service runs as it was is
+	// not installed (unreplaced).
+	services   serviceFinder
+	notify     func(title, body string)
+	confirmIn  time.Duration
+	idleEvery  time.Duration
+	manualIdle time.Duration
 
 	mu          sync.Mutex
 	settings    updateSettings
@@ -116,6 +116,7 @@ type updater struct {
 	progress    string
 	errText     string
 	release     *update.Published
+	blocked     error  // why release cannot be installed here (unreplaced), as of when it was read; nil when it can
 	newestImage string // a Docker hub: the newest release tag of its image
 	lastCheck   time.Time
 	busy        []busyItem
@@ -142,7 +143,7 @@ func newUpdater(h *Hub) *updater {
 			// The hub's arguments; `hub …` when it runs as persona-hub and path is personad (update.TargetArgs).
 			return execKeepingListeners(path, append([]string{path}, update.TargetArgs(os.Args, path)...), os.Environ())
 		},
-		startWatch: startWatchdog, target: ServerBinary, confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
+		startWatch: startWatchdog, target: ServerBinary, self: runningBinary, services: systemServices(), confirmIn: updateConfirmIn, idleEvery: updateIdleEvery,
 		manualIdle: updateManualIdle, state: "idle", confirmed: true,
 		notify: func(title, body string) {
 			h.push.send(map[string]any{"aps": map[string]any{
@@ -179,10 +180,10 @@ func runningBinary() (string, error) {
 }
 
 // ServerBinary is the program that is the whole server: this one, unless it is persona-hub, which runs the hub
-// alone: then the personad beside it. What runs or replaces the server goes by it until the hub/manager split is done
-// (docs/server/server.md "Programs"): the built-in manager the hub starts (`personad assistant`), the update's target
-// (personad is the release's main download; persona-hub is swapped as a program), setup's service binary and the
-// edge's default switch.
+// alone: then the personad beside it (docs/server/server.md "Programs"). The update's target goes by it (personad is
+// the release's main download; persona-hub is swapped as a program and the hub goes on as it: runAs), and so does
+// setup's service binary. What the hub runs goes by the program it runs as: the built-in manager it starts is
+// persona-manager beside persona-hub (managerBinary).
 func ServerBinary() (string, error) {
 	p, err := runningBinary()
 	if err != nil {
@@ -191,17 +192,41 @@ func ServerBinary() (string, error) {
 	return serverBinaryOf(p)
 }
 
-// serverBinaryOf is ServerBinary for the running binary p.
+// serverBinaryOf is ServerBinary for the running binary p. The personad beside persona-hub is resolved through
+// symlinks, as the running binary is: an update replaces the file, never a link to it (an install under the former
+// name keeps personad as a link to that file).
 func serverBinaryOf(p string) (string, error) {
-	ext := filepath.Ext(p)
-	if strings.TrimSuffix(filepath.Base(p), ext) != "persona-hub" {
+	if !isProgram(p, "persona-hub") {
 		return p, nil
 	}
-	sibling := filepath.Join(filepath.Dir(p), "personad"+ext)
-	if _, err := os.Stat(sibling); err != nil {
+	sibling := filepath.Join(filepath.Dir(p), "personad"+filepath.Ext(p))
+	resolved, err := filepath.EvalSymlinks(sibling)
+	if err != nil {
 		return "", fmt.Errorf("persona-hub runs the hub alone and needs the personad beside it (%s): %w", sibling, err)
 	}
-	return sibling, nil
+	return resolved, nil
+}
+
+// isProgram says whether the binary at p is the program name (on Windows name.exe).
+func isProgram(p, name string) bool {
+	return strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)) == name
+}
+
+// runAs is Pending.Run for an update that swapped programs beside personad: the persona-hub among them when the hub
+// runs as that persona-hub, so it goes on as the hub's own program; "" otherwise (it goes on as personad, the target).
+// A release without persona-hub leaves it on personad, the same build, rather than on a persona-hub the update did
+// not replace.
+func runAs(running func() (string, error), programs []update.Swapped) string {
+	self, err := running()
+	if err != nil || !isProgram(self, "persona-hub") {
+		return ""
+	}
+	for _, s := range programs {
+		if filepath.Clean(s.Target) == filepath.Clean(self) {
+			return s.Target
+		}
+	}
+	return ""
 }
 
 // startWatchdog runs `<old binary> update-watch <pending>` in its own session, its output in update/watch.log.
@@ -425,8 +450,8 @@ func (u *updater) rollback(p update.Pending, reason string) {
 		u.h.logf("update: restore %s: %v", p.Prev, err)
 		return
 	}
-	if err := u.exec(p.Target); err != nil {
-		u.h.logf("update: run %s: %v", p.Target, err)
+	if err := u.exec(p.RunPath()); err != nil {
+		u.h.logf("update: run %s: %v", p.RunPath(), err)
 	}
 }
 
@@ -469,166 +494,6 @@ func copyInto(from, to string) error {
 	return os.WriteFile(to, b, 0o755)
 }
 
-// loop checks for releases (a minute after starting, then every hour) and installs one when updating itself is
-// on and the release is newer and not a build that went back.
-func (u *updater) loop(ctx context.Context) {
-	if !u.h.build.SelfUpdates() && u.h.build.Channel != update.Docker {
-		return
-	}
-	wait := updateFirstCheck
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(wait):
-		}
-		wait = updateCheckEvery
-		if _, err := u.check(ctx); err != nil {
-			continue
-		}
-		if u.wantsAuto() {
-			go u.install(ctx, true)
-		} else {
-			u.noteHeld(ctx)
-		}
-	}
-}
-
-// wantsAuto: on, newer, not a bad build, its code contains this one's (Build.Hold), not already running.
-func (u *updater) wantsAuto() bool {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	r := u.release
-	return (u.loaded || u.h.store == nil) && u.settings.auto() && !u.running && r != nil && u.h.build.Newer(r.Manifest.Build) &&
-		!slices.Contains(u.settings.Bad, r.Manifest.Build) && u.h.build.Hold(r.Manifest) == ""
-}
-
-// noteHeld writes into the history, once per release, that a newer release was not installed by itself because its
-// code may not contain this hub's (Build.Hold): the app shows it as available, with the reason, and the user can
-// still install it.
-func (u *updater) noteHeld(ctx context.Context) {
-	if err := u.load(ctx); err != nil {
-		return
-	}
-	u.mu.Lock()
-	r := u.release
-	if !u.settings.auto() || u.running || r == nil || !u.h.build.Newer(r.Manifest.Build) || slices.Contains(u.settings.Bad, r.Manifest.Build) {
-		u.mu.Unlock()
-		return
-	}
-	why := u.h.build.Hold(r.Manifest)
-	for _, h := range u.settings.History {
-		if h.Result == "held" && h.ToBuild == r.Manifest.Build {
-			why = ""
-		}
-	}
-	u.mu.Unlock()
-	if why == "" {
-		return
-	}
-	u.h.logf("update: %s is newer but not installed by itself: %s", r.Manifest.Version, why)
-	now := time.Now()
-	u.record(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
-		Started: now, Ended: now, Result: "held", Reason: why, Auto: true})
-}
-
-// check reads the release now (a Docker hub: its image's tags).
-func (u *updater) check(ctx context.Context) (*update.Published, error) {
-	if err := u.load(ctx); err != nil {
-		return nil, err
-	}
-	u.recordRolledBack(ctx)
-	if u.h.build.Channel == update.Docker {
-		return nil, u.checkImage(ctx)
-	}
-	if u.h.build.UpdateURL == "" {
-		return nil, errNotRelease
-	}
-	u.setState("checking")
-	cctx, cancel := context.WithTimeout(ctx, updateRequestLimit)
-	defer cancel()
-	r, err := update.Check(cctx, u.client, u.h.build.UpdateURL)
-	u.mu.Lock()
-	u.lastCheck = time.Now()
-	if err == nil {
-		u.release, u.releaseRead = r, u.lastCheck
-	}
-	u.mu.Unlock()
-	if err != nil {
-		u.set("idle", "", su(u.h.userLang(), "check_failed", i18n.Args{"error": i18n.Localize(err, u.h.userLang())}))
-		return nil, err
-	}
-	if u.h.build.Newer(r.Manifest.Build) {
-		u.set("available", "", "")
-	} else {
-		u.set("idle", "", "")
-	}
-	return r, nil
-}
-
-// freshRelease reads latest.json again for an install script when the release the hub has is older than
-// releaseFreshFor: the script checks the download (the newest one on the site) against its sha256s, so sums from
-// before the last release would fail every install until the next check. Bounded by releaseRefreshLimit and tried at
-// most once every releaseRefreshEvery across requests; when it fails the release the hub had stays. Nothing for a
-// Docker hub or a build with nowhere to look.
-func (u *updater) freshRelease(ctx context.Context) {
-	if u == nil || u.h.build.Channel == update.Docker || u.h.build.UpdateURL == "" {
-		return
-	}
-	u.refreshing.Lock()
-	defer u.refreshing.Unlock()
-	now := time.Now()
-	u.mu.Lock()
-	stale := now.Sub(u.releaseRead) >= releaseFreshFor && now.Sub(u.refreshTried) >= releaseRefreshEvery
-	if stale {
-		u.refreshTried = now
-	}
-	u.mu.Unlock()
-	if !stale {
-		return
-	}
-	cctx, cancel := context.WithTimeout(ctx, releaseRefreshLimit)
-	defer cancel()
-	r, err := update.Check(cctx, u.client, u.h.build.UpdateURL)
-	if err != nil {
-		u.h.logf("update: reading the release for an install script: %v (keeping the one read before)", err)
-		return
-	}
-	u.mu.Lock()
-	u.lastCheck = time.Now()
-	u.release, u.releaseRead = r, u.lastCheck
-	available := u.state == "idle" && u.h.build.Newer(r.Manifest.Build)
-	u.mu.Unlock()
-	if available {
-		u.setState("available")
-	}
-}
-
-// begin starts an update the user asked for; now skips waiting for idle ("Update now" in the second confirmation).
-func (u *updater) begin(ctx context.Context, now bool) error {
-	if !u.h.build.SelfUpdates() {
-		return u.whyNot()
-	}
-	u.mu.Lock()
-	if u.running {
-		if now {
-			u.now = true
-		}
-		u.mu.Unlock()
-		return nil
-	}
-	r := u.release
-	u.mu.Unlock()
-	if r == nil || !u.h.build.Newer(r.Manifest.Build) {
-		return errNoUpdate
-	}
-	u.mu.Lock()
-	u.now = now
-	u.mu.Unlock()
-	go u.install(ctx, false)
-	return nil
-}
-
 // whyNot is why this hub cannot update itself (begin's error); whyNotReason is the reason alone (the view's why_not).
 func (u *updater) whyNot() error {
 	key, args := u.whyNotKey()
@@ -653,224 +518,6 @@ func (u *updater) whyNotKey() (string, i18n.Args) {
 // su is a hub-selfupdate text in l.
 func su(l i18n.Lang, name string, args ...i18n.Args) string {
 	return i18n.T(l, "hub-selfupdate."+name, args...)
-}
-
-// install is one update: download, verify, wait for idle, swap, restart. It returns only when it did not restart.
-func (u *updater) install(ctx context.Context, auto bool) {
-	u.mu.Lock()
-	if u.running {
-		u.mu.Unlock()
-		return
-	}
-	u.running = true
-	r := u.release
-	u.mu.Unlock()
-	started := time.Now()
-	fail := func(err error) {
-		u.mu.Lock()
-		u.running, u.now = false, false
-		u.busy = nil
-		u.mu.Unlock()
-		why := i18n.Localize(err, u.h.userLang())
-		u.set("failed", "", why)
-		u.record(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
-			Started: started, Ended: time.Now(), Result: "failed", Reason: why, Auto: auto})
-		u.h.logf("update to %s: %v", r.Manifest.Version, err)
-	}
-	m := r.Manifest
-	file, ok := m.Files[runtime.GOOS+"-"+runtime.GOARCH]
-	if !ok {
-		fail(i18n.Err("hub-selfupdate.err_no_binary", i18n.Args{"platform": runtime.GOOS + "/" + runtime.GOARCH}))
-		return
-	}
-	staged := filepath.Join(u.dir, fmt.Sprint(m.Build))
-	u.set("downloading", "hub", "")
-	bin, err := update.Download(ctx, u.client, u.h.build.UpdateURL, file, staged)
-	if err != nil {
-		fail(err)
-		return
-	}
-	nodes, err := u.stageNodes(ctx, m, staged, bin)
-	if err != nil {
-		fail(err)
-		return
-	}
-	if err := update.CheckBinary(ctx, bin, m); err != nil {
-		fail(err)
-		return
-	}
-	// The programs the hub runs beside it (personad-wechat): this platform's build of each, checked like personad.
-	programs := map[string]string{} // name -> the downloaded binary
-	for _, name := range update.ProgramNames {
-		f, ok := m.Programs[name][runtime.GOOS+"-"+runtime.GOARCH]
-		if !ok {
-			continue
-		}
-		u.set("downloading", name, "")
-		pb, err := update.Download(ctx, u.client, u.h.build.UpdateURL, f, filepath.Join(staged, "programs"))
-		if err != nil {
-			fail(err)
-			return
-		}
-		if err := update.CheckBinary(ctx, pb, m); err != nil {
-			fail(fmt.Errorf("%s: %w", name, err))
-			return
-		}
-		programs[name] = pb
-	}
-	// Wait until nothing the restart would interrupt is going on (or the user said "Update now").
-	waitStarted := time.Now()
-	for {
-		busy := u.h.updateBusy()
-		u.mu.Lock()
-		u.busy = busy
-		now, autoOn := u.now, u.settings.auto()
-		u.mu.Unlock()
-		if len(busy) == 0 || now {
-			break
-		}
-		if auto && !autoOn {
-			fail(errUpdateAgain)
-			return
-		}
-		if !auto && time.Since(waitStarted) > u.manualIdle {
-			fail(errUpdateBusy)
-			return
-		}
-		u.set("waiting_idle", "", "")
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(u.idleEvery):
-		}
-	}
-	target, err := u.target()
-	if err != nil {
-		fail(err)
-		return
-	}
-	p := update.Pending{FromVersion: u.h.version, FromBuild: u.h.build.Number, ToVersion: m.Version, ToBuild: m.Build,
-		Target: target, Started: started, Online: u.onlineIDs(), Auto: auto, PID: os.Getpid(), Args: os.Args,
-		HealthURL: u.healthURL(), Nodes: nodes}
-	prev, err := update.Swap(target, bin)
-	if err != nil {
-		fail(err)
-		return
-	}
-	p.Prev = prev
-	for _, name := range update.ProgramNames {
-		if pb, ok := programs[name]; ok {
-			sw, err := update.SwapProgram(filepath.Join(filepath.Dir(target), name), pb)
-			p.Programs = append(p.Programs, sw)
-			if err != nil {
-				_ = update.RestoreAll(p)
-				fail(fmt.Errorf("%s: %w", name, err))
-				return
-			}
-		}
-	}
-	if err := update.Save(update.PendingPath(u.dir), p); err != nil {
-		_ = update.RestoreAll(p)
-		fail(err)
-		return
-	}
-	if u.handover != nil {
-		// Blue-green (docs/operations/hub-restart.md "Blue-green switch"): the edge starts the new binary next to this one and hands over
-		// only once it checked itself; this process goes on serving until then, and stops when the edge releases it.
-		// The edge is the watchdog too (it goes back when the new one does not confirm the update in time).
-		u.set("restarting", "", "")
-		u.h.logf("update: handing over to %s", m.Version)
-		if err := u.handover(ctx, target, m.Build); err != nil {
-			_ = update.RestoreAll(p)
-			_ = os.Remove(update.PendingPath(u.dir))
-			fail(i18n.Err("hub-selfupdate.err_no_start", i18n.Args{"error": err.Error()}))
-		}
-		return
-	}
-	if err := u.startWatch(prev, update.PendingPath(u.dir)); err != nil {
-		u.h.logf("update: watchdog: %v (the new version still checks itself)", err)
-	}
-	u.set("restarting", "", "")
-	u.h.logf("update: restarting into %s", m.Version)
-	time.Sleep(500 * time.Millisecond) // the apps get the restarting event before the socket goes
-	if err := u.exec(target); err != nil {
-		_ = update.RestoreAll(p)
-		_ = os.Remove(update.PendingPath(u.dir))
-		fail(err)
-	}
-}
-
-// nodePlatforms are the platforms the release publishes a node binary for, sorted. That is every platform in the
-// manifest, not only the ones the machines the hub knows now run: a machine added later, or one that had not connected
-// when the hub updated, is deployed to from these files (internal/devices nodeBinary), and nothing else fetches its
-// platform until the next update.
-func nodePlatforms(m *update.Manifest) []string {
-	out := make([]string, 0, len(m.Files))
-	for plat := range m.Files {
-		out = append(out, plat)
-	}
-	slices.Sort(out)
-	return out
-}
-
-func (u *updater) onlineIDs() []string {
-	var out []string
-	for _, m := range u.h.machinesNow() {
-		m.mu.Lock()
-		if m.online {
-			out = append(out, m.cfg.ID)
-		}
-		m.mu.Unlock()
-	}
-	return out
-}
-
-func (u *updater) healthURL() string {
-	host, port, err := net.SplitHostPort(u.h.cfg.Listen)
-	if err != nil || port == "" {
-		port = "18660"
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, port) + "/api/v1/health"
-}
-
-// updateBusy is what a restart would interrupt: any conversation working or waiting for the user (the assistant's
-// and every agent's), and a machine being redeployed.
-func (h *Hub) updateBusy() []busyItem {
-	var out []busyItem
-	for _, m := range h.machinesNow() {
-		if m.snapshot().Deploying {
-			out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), Title: su(h.userLang(), "busy_redeploying")})
-		}
-		m.mu.Lock()
-		resident := m.info.NodeUpdate // advertised only by a resident supervisor
-		m.mu.Unlock()
-		for _, s := range h.decorated(m) {
-			// Terminal-host sessions outlive the node transport. Unknown hosts and
-			// direct assistant processes still wait: an ephemeral SSH node may own them.
-			if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
-				(resident || s.Host == proto.EngineHerdr || s.Host == proto.EngineHerdrCore) {
-				continue
-			}
-			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
-			// update back for as long as it runs, and the restart does not stop it.
-			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou {
-				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(s)})
-			}
-		}
-	}
-	return out
-}
-
-// agentTitle is an agent's title for the update's busy list.
-func agentTitle(s proto.Session) string {
-	t := transcript.Title(s.Title)
-	if t == "" || t == "Claude Code" {
-		t = path.Base(s.Cwd)
-	}
-	return clip(oneLine(t), 24)
 }
 
 func (u *updater) setState(state string) { u.set(state, "", "") }
@@ -918,7 +565,8 @@ type latestView struct {
 	Notes    string     `json:"notes,omitempty"`
 	Newer    bool       `json:"newer"`
 	Bad      bool       `json:"bad"` // went back before: not installed automatically
-	// Held: why a newer release is not installed automatically even with auto-update on (Build.Hold), for people.
+	// Held: why a newer release is not installed automatically even with auto-update on (Build.Hold, unreplaced), for
+	// people.
 	Held string `json:"held,omitempty"`
 }
 
@@ -947,6 +595,9 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 			Newer: u.h.build.Newer(r.Manifest.Build), Bad: slices.Contains(u.settings.Bad, r.Manifest.Build)}
 		if v.Latest.Newer && u.h.build.SelfUpdates() {
 			v.Latest.Held = u.h.build.Hold(r.Manifest)
+			if v.Latest.Held == "" && u.blocked != nil {
+				v.Latest.Held = i18n.Localize(u.blocked, l)
+			}
 		}
 	}
 	if u.h.build.Channel == update.Docker {
@@ -965,142 +616,4 @@ type imageView struct {
 	Name   string `json:"name"`
 	Tag    string `json:"tag"`
 	Pinned bool   `json:"pinned"`
-}
-
-// dockerImage is the image this Docker hub runs: the compose file's PERSONA_IMAGE, else the one it was built as.
-func (u *updater) dockerImage() (update.Image, error) {
-	s := identity.Getenv("PERSONA_IMAGE")
-	if s == "" {
-		s = u.h.build.Image
-	}
-	if s == "" {
-		return update.Image{}, i18n.Err("hub-selfupdate.err_no_image")
-	}
-	return update.ParseImage(s)
-}
-
-// checkImage asks the registry for the newest release of the image this Docker hub runs (docs/operations/hub-update.md "Docker").
-// A private image needs PERSONA_REGISTRY_TOKEN (a read token) in the container's environment.
-func (u *updater) checkImage(ctx context.Context) error {
-	im, err := u.dockerImage()
-	if err != nil {
-		u.set("idle", "", i18n.Localize(err, u.h.userLang()))
-		return err
-	}
-	u.setState("checking")
-	cctx, cancel := context.WithTimeout(ctx, updateRequestLimit)
-	defer cancel()
-	newest, err := update.LatestVersion(cctx, u.client, im, identity.Getenv("PERSONA_REGISTRY_TOKEN"))
-	u.mu.Lock()
-	u.lastCheck = time.Now()
-	if err == nil {
-		u.newestImage = newest
-	}
-	u.mu.Unlock()
-	switch {
-	case errors.Is(err, update.ErrPrivate):
-		u.set("idle", "", su(u.h.userLang(), "image_private", i18n.Args{"error": err.Error()}))
-	case err != nil:
-		u.set("idle", "", su(u.h.userLang(), "image_failed", i18n.Args{"error": err.Error()}))
-	case update.NewerVersion(newest, u.h.version):
-		u.set("available", "", "")
-	default:
-		u.set("idle", "", "")
-	}
-	return err
-}
-
-func (u *updater) routes(api *http.ServeMux) {
-	api.HandleFunc("GET /api/v1/hub/update", func(w http.ResponseWriter, r *http.Request) {
-		if err := u.load(r.Context()); err != nil {
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		writeJSON(w, u.viewIn(u.h.requestLang(r)))
-	})
-	api.HandleFunc("POST /api/v1/hub/update/check", func(w http.ResponseWriter, r *http.Request) {
-		if err := u.load(r.Context()); err != nil {
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		if _, err := u.check(r.Context()); err != nil && !errors.Is(err, errNotRelease) {
-			writeErr(w, http.StatusBadGateway, err)
-			return
-		}
-		if u.wantsAuto() {
-			go u.install(context.WithoutCancel(r.Context()), true)
-		} else {
-			u.noteHeld(r.Context())
-		}
-		writeJSON(w, u.viewIn(u.h.requestLang(r)))
-	})
-	api.HandleFunc("POST /api/v1/hub/update", func(w http.ResponseWriter, r *http.Request) {
-		if err := u.load(r.Context()); err != nil {
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		var body struct {
-			Now bool `json:"now"`
-		}
-		// No body (or one that does not decode) is an ordinary update; only an oversized one is refused.
-		if err := decodeJSONBody(w, r, &body, 4<<10); bodyTooLarge(err) {
-			writeBodyErr(w, err, err)
-			return
-		}
-		// The update outlives this request: it runs on the hub's own context.
-		if err := u.begin(context.WithoutCancel(r.Context()), body.Now); err != nil {
-			writeErr(w, http.StatusConflict, err)
-			return
-		}
-		writeJSON(w, u.viewIn(u.h.requestLang(r)))
-	})
-	api.HandleFunc("PUT /api/v1/hub/update/settings", func(w http.ResponseWriter, r *http.Request) {
-		if err := u.load(r.Context()); err != nil {
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		var body struct {
-			Auto           *bool `json:"auto"`
-			AutoNoticeSeen *bool `json:"auto_notice_seen"`
-		}
-		if err := decodeJSONBody(w, r, &body, 4<<10); err != nil {
-			writeBodyErr(w, err, err)
-			return
-		}
-		u.mu.Lock()
-		if err := u.loadLocked(r.Context()); err != nil {
-			u.mu.Unlock()
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		if body.Auto != nil {
-			a := *body.Auto
-			u.settings.Auto = &a
-			u.settings.AutoNoticeSeen = true // they chose: no need to tell them again
-		}
-		if body.AutoNoticeSeen != nil {
-			u.settings.AutoNoticeSeen = *body.AutoNoticeSeen
-		}
-		err := u.saveLocked(r.Context())
-		u.mu.Unlock()
-		if err != nil {
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		writeJSON(w, u.viewIn(u.h.requestLang(r)))
-	})
-	api.HandleFunc("GET /api/v1/hub/update/history", func(w http.ResponseWriter, r *http.Request) {
-		if err := u.load(r.Context()); err != nil {
-			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
-			return
-		}
-		u.mu.Lock()
-		out := slices.Clone(u.settings.History)
-		u.mu.Unlock()
-		slices.Reverse(out)
-		if out == nil {
-			out = []updateRecord{}
-		}
-		writeJSON(w, map[string]any{"history": out})
-	})
 }

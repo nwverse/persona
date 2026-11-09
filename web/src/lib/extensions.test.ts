@@ -53,6 +53,23 @@ describe("扩展的文字", () => {
     expect(stateLine(extension("running", { source: "hub.json" }))).toBe("启动 · manager.json");
     expect(sourceText("other")).toBeUndefined();
   });
+  it("says whether an attached extension is online, since when, and the version its program says", () => {
+    const at = new Date();
+    at.setHours(10, 42, 0, 0);
+    const since = at.toISOString();
+    const attached = (status: string, a: HubExtension["attached"]) => extension(status, { version: "1.0.0", attached: a });
+    expect(runNote(attached("running", { online: true, since }))).toBe("独立运行 · 10:42 起在线");
+    // within the hub's 30 seconds it is still starting, with no error of its own: the note says why
+    expect(runNote(attached("starting", { online: false, since, error: "连不上" }))).toBe("独立运行 · 正在重连，10:42 起离线：连不上");
+    expect(runNote(attached("starting", { online: false, since }))).toBe("独立运行 · 正在重连，10:42 起离线");
+    // past them it is an error, which says why itself
+    expect(runNote(attached("error", { online: false, since, error: "连不上" }))).toBe("独立运行 · 10:42 起离线");
+    expect(runNote(attached("stopped", { online: false }))).toBe("独立运行，需要时再连接");
+    expect(runNote(attached("disabled", { online: false }))).toBe("");
+    expect(["running", "starting", "error"].map((s) => extensionTone(attached(s, { online: s === "running", since })))).toEqual(["green", "idle", "red"]);
+    expect(stateLine(attached("running", { online: true, since }))).toBe("启动 · 1.0.0");
+    expect(stateLine(attached("error", { online: false, since, version: "1.1.0" }))).toBe("出错了 · 已批准 1.0.0，程序是 1.1.0");
+  });
   it("marks required fields without a default, and shows the default as a placeholder", () => {
     expect(fieldTitle({ name: "url", type: "string", required: true })).toBe("url（必填）");
     expect(fieldTitle({ name: "url", type: "string", title: "地址", required: true, default: "https://x" })).toBe("地址");

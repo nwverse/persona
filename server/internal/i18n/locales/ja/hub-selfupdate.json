@@ -28,5 +28,6 @@
   "image_failed": "新しいイメージを確認できません：{error}",
   "err_no_start": "新しいバージョンが起動しなかったため、旧バージョンがそのまま動いています：{error}",
   "reason_no_takeover": "新しいバージョンが引き継げませんでした：{error}",
-  "reason_not_confirmed": "新しいバージョンが3分以内に確認されませんでした"
+  "reason_not_confirmed": "新しいバージョンが3分以内に確認されませんでした",
+  "err_program_unreplaced": "バージョン{version}には{platform}用の{program}がありませんが、{service}がそれを実行しています。インストールすると{program}が古いバージョンのまま残ります。{program}を含むリリースを待ってください"
 }

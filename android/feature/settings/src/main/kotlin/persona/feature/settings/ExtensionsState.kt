@@ -152,6 +152,9 @@ internal object ExtensionText {
         else -> ""
     }
 
+    /** The auto-upgrade switch as shown: off while it is paused (the extension switched off), else the extension's own. */
+    fun autoUpgradeShown(e: HubExtension): Boolean = e.autoUpgradePaused == null && (e.autoUpgrade ?: true)
+
     /** When the line asks something of the user, what its button says (it opens the upgrade in the market); null otherwise. */
     fun upgradeAction(res: Resources, u: ExtensionUpgrade): String? = when (u.state) {
         "needs_permission" -> res.getString(R.string.settings_ext_upgrade_review)

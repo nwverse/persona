@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"net/url"
 	"path"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -113,30 +113,30 @@ func Activity(name string, input json.RawMessage) string {
 
 // commandRule: a shell command matching re is doing what says.
 type commandRule struct {
-	re   *regexp.Regexp
+	re   *lazyre.Regexp
 	says string
 }
 
 // commandRules, first match wins: waiting for CI before tests (gh run watch), tests before builds (xcodebuild test,
 // go build && go test), releases before builds (release.sh archives).
 var commandRules = []commandRule{
-	{regexp.MustCompile(`\bgh\s+(pr\s+checks|run\s+(watch|view|list))\b|statuscheckrollup|\bgh\s+pr\s+view\b.*\bchecks\b`), "在等 CI"},
-	{regexp.MustCompile(`\bgh\s+pr\s+create\b`), "在提 PR"},
-	{regexp.MustCompile(`\bgh\s+pr\s+merge\b`), "在合并 PR"},
-	{regexp.MustCompile(`\b(release|publish)\.(sh|py)\b|\b(npm|cargo)\s+publish\b|\basc_testflight\.py\b`), "在发版"},
-	{regexp.MustCompile(`\bdeploy\.sh\b|\bkubectl\s+(apply|rollout)\b|\bwrangler\s+deploy\b`), "在部署"},
-	{regexp.MustCompile(`\b(go|cargo|swift|mvn|dotnet|deno|bun)\s+test\b|\b(npm|pnpm|yarn)\s+(run\s+)?test\b|\bpytest\b|\bjest\b|\bvitest\b|\bxcodebuild\b.*\btest(-without-building)?\b|\bgradlew\b.*\b(test|check|connected\w*test)\b|\btest[-_][\w-]*\.sh\b|\bscripts/test/|\bmake\s+(test|check)\b|\bctest\b|\brspec\b|\bphpunit\b|\bunittest\b`), "在跑测试"},
-	{regexp.MustCompile(`\b(golangci-lint|eslint|swiftlint|ruff|flake8|mypy|shellcheck|prettier\s+--check)\b|\b(go|cargo)\s+(vet|clippy)\b|\b(npm|pnpm|yarn)\s+(run\s+)?lint\b`), "在检查代码"},
-	{regexp.MustCompile(`\b(go|cargo|swift)\s+build\b|\bxcodebuild\b|\bxcodegen\b|\bgradlew\b|\b(npm|pnpm|yarn)\s+(run\s+)?build\b|\btsc\b|\bmake\b|\bcmake\b|\bdocker\s+build\b`), "在编译"},
-	{regexp.MustCompile(`\b(npm|pnpm|yarn|bun)\s+(install|ci|add)\b|\bpip3?\s+install\b|\bbrew\s+install\b|\bgo\s+(mod|get)\b|\bpod\s+install\b`), "在装依赖"},
-	{regexp.MustCompile(`\bgit\s+push\b`), "在推送代码"},
-	{regexp.MustCompile(`\bgit\s+commit\b`), "在提交代码"},
-	{regexp.MustCompile(`\bgit\s+(rebase|merge|pull|fetch|cherry-pick)\b`), "在同步代码"},
-	{regexp.MustCompile(`\bgit\s+(diff|log|show|status|blame)\b`), "在看改动"},
-	{regexp.MustCompile(`^\s*(sleep|until|while)\b|\bwait\b`), "在等待"},
-	{regexp.MustCompile(`\bsimctl\b`), "在用模拟器"},
-	{regexp.MustCompile(`\b(rg|grep|ag|find)\s`), "在搜代码"},
-	{regexp.MustCompile(`^\s*(cat|head|tail|less|sed\s+-n|bat)\s`), "在读文件"},
+	{lazyre.New(`\bgh\s+(pr\s+checks|run\s+(watch|view|list))\b|statuscheckrollup|\bgh\s+pr\s+view\b.*\bchecks\b`), "在等 CI"},
+	{lazyre.New(`\bgh\s+pr\s+create\b`), "在提 PR"},
+	{lazyre.New(`\bgh\s+pr\s+merge\b`), "在合并 PR"},
+	{lazyre.New(`\b(release|publish)\.(sh|py)\b|\b(npm|cargo)\s+publish\b|\basc_testflight\.py\b`), "在发版"},
+	{lazyre.New(`\bdeploy\.sh\b|\bkubectl\s+(apply|rollout)\b|\bwrangler\s+deploy\b`), "在部署"},
+	{lazyre.New(`\b(go|cargo|swift|mvn|dotnet|deno|bun)\s+test\b|\b(npm|pnpm|yarn)\s+(run\s+)?test\b|\bpytest\b|\bjest\b|\bvitest\b|\bxcodebuild\b.*\btest(-without-building)?\b|\bgradlew\b.*\b(test|check|connected\w*test)\b|\btest[-_][\w-]*\.sh\b|\bscripts/test/|\bmake\s+(test|check)\b|\bctest\b|\brspec\b|\bphpunit\b|\bunittest\b`), "在跑测试"},
+	{lazyre.New(`\b(golangci-lint|eslint|swiftlint|ruff|flake8|mypy|shellcheck|prettier\s+--check)\b|\b(go|cargo)\s+(vet|clippy)\b|\b(npm|pnpm|yarn)\s+(run\s+)?lint\b`), "在检查代码"},
+	{lazyre.New(`\b(go|cargo|swift)\s+build\b|\bxcodebuild\b|\bxcodegen\b|\bgradlew\b|\b(npm|pnpm|yarn)\s+(run\s+)?build\b|\btsc\b|\bmake\b|\bcmake\b|\bdocker\s+build\b`), "在编译"},
+	{lazyre.New(`\b(npm|pnpm|yarn|bun)\s+(install|ci|add)\b|\bpip3?\s+install\b|\bbrew\s+install\b|\bgo\s+(mod|get)\b|\bpod\s+install\b`), "在装依赖"},
+	{lazyre.New(`\bgit\s+push\b`), "在推送代码"},
+	{lazyre.New(`\bgit\s+commit\b`), "在提交代码"},
+	{lazyre.New(`\bgit\s+(rebase|merge|pull|fetch|cherry-pick)\b`), "在同步代码"},
+	{lazyre.New(`\bgit\s+(diff|log|show|status|blame)\b`), "在看改动"},
+	{lazyre.New(`^\s*(sleep|until|while)\b|\bwait\b`), "在等待"},
+	{lazyre.New(`\bsimctl\b`), "在用模拟器"},
+	{lazyre.New(`\b(rg|grep|ag|find)\s`), "在搜代码"},
+	{lazyre.New(`^\s*(cat|head|tail|less|sed\s+-n|bat)\s`), "在读文件"},
 }
 
 // commandActivity is what a shell command is doing: a kind of work when it is a known one, else the command itself

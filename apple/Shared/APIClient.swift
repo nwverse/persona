@@ -47,7 +47,7 @@ nonisolated struct LocalRequest: Sendable {
     var path: String
     var query: [String: String]
     var body: Data?
-    /// The headers that change what the hub does (`X-Persona-Op-Id`); the rest of a real request's are not kept.
+    /// Operation semantics and anonymous caller diagnostics, matching the real request's headers.
     var headers: [String: String] = [:]
 }
 
@@ -129,6 +129,8 @@ nonisolated struct APIClient: Sendable {
     var personaNaming = false
     /// The hub's hello has `sessions_lookup`: one session's complete row can be asked for by machine and id.
     var sessionLookup = false
+    /// Execution surface is diagnostic only; authorization still uses the paired hub credential.
+    var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
     nonisolated(unsafe) static var local: (@Sendable (LocalRequest) async throws -> Data)?
 
@@ -188,7 +190,7 @@ nonisolated struct APIClient: Sendable {
     func request(_ method: String, _ path: String, query: [String: String] = [:], body: (any Encodable)? = nil,
                  timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
         let query = larkScoped(path, query)
-        let headers = opID.map(HubNaming.operationHeaders) ?? [:]
+        let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
                                                      body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers))
@@ -200,6 +202,7 @@ nonisolated struct APIClient: Sendable {
         req.httpMethod = method
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
@@ -250,6 +253,7 @@ nonisolated struct APIClient: Sendable {
         var req = URLRequest(url: url(path, query: query), timeoutInterval: 30)
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
@@ -264,12 +268,13 @@ nonisolated struct APIClient: Sendable {
         let query = larkScoped(path, query)
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
         if let transport {
-            return try await transport(LocalRequest(method: "POST", path: path, query: query, body: Data(contentsOf: file)))
+            return try await transport(LocalRequest(method: "POST", path: path, query: query, body: Data(contentsOf: file), headers: clientMetadata.headers))
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
         req.httpMethod = "POST"
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
@@ -294,7 +299,7 @@ nonisolated struct APIClient: Sendable {
         if let dest { query["dest"] = dest }
         if let transport { // unit tests (FakeHub): the whole file in one request
             let body = try Data(contentsOf: file)
-            let out = try await transport(LocalRequest(method: "POST", path: "/api/v1/machines/\(machine)/files", query: query, body: body))
+            let out = try await transport(LocalRequest(method: "POST", path: "/api/v1/machines/\(machine)/files", query: query, body: body, headers: clientMetadata.headers))
             progress(Int64(body.count))
             return try JSON.decoder.decode(UploadedFile.self, from: out)
         }
@@ -302,6 +307,7 @@ nonisolated struct APIClient: Sendable {
         req.httpMethod = "POST"
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
@@ -322,6 +328,7 @@ nonisolated struct APIClient: Sendable {
         var req = URLRequest(url: url(path, query: query), timeoutInterval: 120)
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         let (temp, response) = try await Self.uncachedSession.download(for: req, delegate: DownloadProgress(progress))
@@ -509,6 +516,12 @@ nonisolated struct APIClient: Sendable {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
         return try JSON.decoder.decode(LauncherModels.self, from: await request("GET", path, query: refresh ? ["refresh": "1"] : [:], timeout: 75))
     }
+    /// Forgets one model ID typed for this launcher on this computer (#1644, the list's Forget): the hub stops listing
+    /// it (`custom: true`). Forgetting one it doesn't remember is fine too.
+    func forgetCustomModel(machine: String, launcher: String, model: String) async throws {
+        let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models/custom"
+        _ = try await request("DELETE", path, query: ["model": model])
+    }
     /// Model Settings' list for a launcher provider (`launcher.<name>`, #943), asked on a machine that has the launcher (its
     /// `machine`); nil: an older hub, or a provider without a list (a plugin brings its own, an API has none).
     /// `machine`: the purpose's own (a task, Lark /agent run there), so the list is that machine's launcher.
@@ -591,8 +604,11 @@ nonisolated struct APIClient: Sendable {
         /// What the tab name is made from when the first message is sent as a message of its own (not `prompt`).
         var nameHint: String? = nil
         var todoID: String? = nil
+        /// Claude Code's ultracode for this start (#3427): only `true` is ever sent (a new Claude is off anyway, and an
+        /// older hub would ignore the field rather than refuse it); nil leaves it out.
+        var ultracode: Bool? = nil
         enum CodingKeys: String, CodingKey {
-            case cwd, launcher, prompt, effort, async, model
+            case cwd, launcher, prompt, effort, async, model, ultracode
             case machineID = "machine_id", resumeSessionID = "resume_session_id", workspaceID = "workspace_id",
                  permissionMode = "permission_mode", tabName = "tab_name", nameHint = "name_hint", todoID = "todo_id"
         }
@@ -634,7 +650,7 @@ nonisolated struct APIClient: Sendable {
         return out
     }
 
-    /// The bytes of a lazy image (`ImagePayload.ref`, "<machine>/<session>/<item id>").
+    /// The bytes of a lazy image on this hub: "<machine>/<session>/<item id>" (`ImageRef.split` of an `ImagePayload.ref`).
     func image(ref: String) async throws -> Data {
         let parts = ref.split(separator: "/", maxSplits: 2).map(String.init)
         guard parts.count == 3 else { throw APIError(status: 0, message: "bad image ref") }
@@ -642,6 +658,7 @@ nonisolated struct APIClient: Sendable {
         var req = URLRequest(url: itemURL(machine: parts[0], session: parts[1], item: parts[2], "image"), timeoutInterval: 60)
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
         let (data, resp) = try await Self.uncachedSession.data(for: req) // ChatImageLoader keeps it on disk
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
@@ -656,6 +673,7 @@ nonisolated struct APIClient: Sendable {
         var req = URLRequest(url: itemURL(machine: k.machineID, session: k.sessionID, item: id, "full"), timeoutInterval: 60)
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        clientMetadata.apply(to: &req)
         let (data, resp) = try await Self.uncachedSession.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
@@ -891,11 +909,31 @@ nonisolated struct APIClient: Sendable {
         /// Claude Code's model (#3119, the web's #2434): the node types `/model <id>` through the guards of a message
         /// and reads the screen back (node/model_switch.go).
         var model: String? = nil
-        enum CodingKeys: String, CodingKey { case effort, model; case permissionMode = "permission_mode" }
+        /// Claude Code's session-only ultracode switch (#3427); never sent with the others (`setUltracode`).
+        var ultracode: Bool? = nil
+        /// Only takes the resume notice away (`ultracode_lost_at`), the switch untouched.
+        var ultracodeDismissLost: Bool? = nil
+        enum CodingKeys: String, CodingKey {
+            case effort, model, ultracode
+            case permissionMode = "permission_mode", ultracodeDismissLost = "ultracode_dismiss_lost"
+        }
     }
     /// Changes a session's permission mode, effort level and / or model (nil leaves it); a TUI agent takes a second or two.
     func setModes(_ k: SessionKey, permissionMode: String? = nil, effort: String? = nil, model: String? = nil) async throws {
         try await post(sp(k) + "/modes", body: ModesBody(permissionMode: permissionMode, effort: effort, model: model), timeout: 30)
+    }
+
+    /// POST …/modes {"ultracode": on} (docs/protocol/protocol.md "Claude Code ultracode"): its own request, never with
+    /// the model or effort. Success says the node took it, maybe queued (`ultracode_pending`), not that it is on: the
+    /// session's fields say that. 409 `node_outdated` (the computer's node predates it) or `ultracode_unsupported`.
+    func setUltracode(_ k: SessionKey, on: Bool) async throws {
+        // The node may wait for its session state after a restart (about 20 s) before it answers.
+        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: nil, effort: nil, ultracode: on), timeout: 60)
+    }
+
+    /// POST …/modes {"ultracode_dismiss_lost": true}: only takes the resume notice away.
+    func dismissUltracodeLost(_ k: SessionKey) async throws {
+        try await post(sp(k) + "/modes", body: ModesBody(permissionMode: nil, effort: nil, ultracodeDismissLost: true), timeout: 60)
     }
 
     struct QueueEdit: Encodable { var keep: [Int] }
@@ -903,6 +941,13 @@ nonisolated struct APIClient: Sendable {
     /// Pulls the queued input back out of claude and re-queues the indexes in `keep`; returns what was queued.
     func editQueue(_ k: SessionKey, keep: [Int]) async throws -> [String] {
         try await post(sp(k) + "/queue", body: QueueEdit(keep: keep), as: QueueResponse.self).queue
+    }
+
+    /// Gives the agent what waits in its queue now (#6088, Claude Code's own send-now: a command it runs moves to the
+    /// background, a reply it writes starts again with the messages). 409 `nothing_queued`, `send_now_unsupported`,
+    /// `send_now_in_doubt`; an older node `node_outdated`. The hub's words for them are in the reader's language.
+    func sendQueuedNow(_ k: SessionKey) async throws {
+        try await post(sp(k) + "/queue/send-now", timeout: 30)
     }
 
     struct AssistantState: Codable, Sendable {
@@ -1080,6 +1125,47 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(TaskBody.self, from: data).task
     }
     func deleteTask(_ id: String) async throws { try await delete("/api/v1/assistant/tasks/\(id)") }
+
+    /// A saved place (Settings › Assistant › Saved Places, #1598): what a reminder by place goes off at when the user says
+    /// "home" or "the office". The hub keeps them; the assistant reads them (`list_places`).
+    struct SavedPlace: Codable, Identifiable, Hashable, Sendable {
+        /// The reminder's circle: 150 m by default, 100–2000 m (the hub and `PlaceTrigger` clamp to the same).
+        static let defaultRadius = 150
+        static let radiusRange = 100...2000
+
+        var id: String = ""          // "" until the hub has it
+        var name: String = ""
+        var address: String = ""
+        var latitude: Double = 0
+        var longitude: Double = 0
+        var radiusMeters: Int = SavedPlace.defaultRadius
+        enum CodingKeys: String, CodingKey { case id, name, address, latitude, longitude, radiusMeters = "radius_meters" }
+
+        init(id: String = "", name: String = "", address: String = "", latitude: Double = 0, longitude: Double = 0,
+             radiusMeters: Int = SavedPlace.defaultRadius) {
+            self.id = id; self.name = name; self.address = address
+            self.latitude = latitude; self.longitude = longitude; self.radiusMeters = radiusMeters
+        }
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            name = try c.decode(String.self, forKey: .name)
+            address = try c.decodeIfPresent(String.self, forKey: .address) ?? ""
+            latitude = try c.decode(Double.self, forKey: .latitude)
+            longitude = try c.decode(Double.self, forKey: .longitude)
+            radiusMeters = try c.decodeIfPresent(Int.self, forKey: .radiusMeters) ?? SavedPlace.defaultRadius
+        }
+    }
+    struct PlacesBody: Decodable { var places: [SavedPlace] }
+    struct PlaceBody: Decodable { var place: SavedPlace }
+    func savedPlaces() async throws -> [SavedPlace] { try await get("/api/v1/assistant/places", as: PlacesBody.self).places }
+    /// Adds `p` (no id yet) or saves the user's changes to it; returns it as the hub has it.
+    func savePlace(_ p: SavedPlace) async throws -> SavedPlace {
+        let data = p.id.isEmpty ? try await request("POST", "/api/v1/assistant/places", body: p)
+                                : try await request("PUT", "/api/v1/assistant/places/\(p.id)", body: p)
+        return try JSON.decoder.decode(PlaceBody.self, from: data).place
+    }
+    func deletePlace(_ id: String) async throws { try await delete("/api/v1/assistant/places/\(id)") }
     struct TaskRun: Decodable {
         var sessionID: String
         var machineID: String
@@ -1198,12 +1284,12 @@ nonisolated struct APIClient: Sendable {
         enum CodingKeys: String, CodingKey { case prompt, images, launcher, effort, main, space; case permissionMode = "permission_mode" }
     }
     /// `main`: the new conversation becomes the main one. `space`: the space it opens in (nil: the assistant's own).
+    /// `opID`: the first message's op id (`AssistantStart`, hub feature `assistant_start_ops`): the hub starts it once.
     func startConversation(prompt: String, images: [ImagePayload] = [], launcher: String? = nil, permissionMode: String? = nil,
-                           effort: String? = nil, main: Bool = false, space: String? = nil) async throws -> Session {
-        var s = try await post("/api/v1/assistant/conversations", body: NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
-                                                                                      launcher: launcher, permissionMode: permissionMode, effort: effort,
-                                                                                      main: main ? true : nil, space: space),
-                               timeout: 110, as: SessionResponse.self).session
+                           effort: String? = nil, main: Bool = false, space: String? = nil, opID: UUID? = nil) async throws -> Session {
+        let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
+                                   launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space)
+        var s = try JSON.decoder.decode(SessionResponse.self, from: try await post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session
         if s.assistantSpace == nil { s.assistantSpace = space }
         return stamp(s)
     }
@@ -1266,6 +1352,19 @@ nonisolated struct APIClient: Sendable {
     func setBlockedClaudeDirs(machine: String, blocked: [String]) async throws -> ClaudeDirsState {
         try JSON.decoder.decode(ClaudeDirsState.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-dirs/blocked",
             body: SetBlockedClaudeDirs(blocked: blocked)))
+    }
+
+    /// Settings › Claude Code › Live Replies (#1309, docs/integrations/claude-integration.md "Live replies (MessageDisplay)"):
+    /// whether the Claude sessions Persona starts on the machine send their replies as Claude writes them. On unless
+    /// turned off; an older hub has no such route (404).
+    struct LiveReplies: Codable, Sendable, Equatable { var on: Bool }
+    func claudeLiveReplies(machine: String) async throws -> Bool {
+        try await get("/api/v1/machines/\(machine)/claude-live-replies", as: LiveReplies.self).on
+    }
+    /// What the hub keeps after the change.
+    func setClaudeLiveReplies(machine: String, on: Bool) async throws -> Bool {
+        try JSON.decoder.decode(LiveReplies.self, from: try await request("PUT", "/api/v1/machines/\(machine)/claude-live-replies",
+            body: LiveReplies(on: on))).on
     }
 
     func interactions() async throws -> [Interaction] {

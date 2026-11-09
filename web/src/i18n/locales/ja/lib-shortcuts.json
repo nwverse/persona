@@ -19,6 +19,7 @@
   "cmd_terminal_chat": "ターミナル ⇄ チャット",
   "cmd_right_panel": "右パネルの表示 / 非表示",
   "cmd_focus_input": "入力欄にフォーカス",
+  "cmd_focus_card": "待機中のカードにフォーカス",
   "cmd_prev_tab": "このコンピューターの前のタブ",
   "cmd_next_tab": "このコンピューターの次のタブ",
   "cmd_sidebar_grouping": "サイドバーのグループ方法を切り替え",

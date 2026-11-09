@@ -322,8 +322,8 @@ func (h *Hub) lookRoutes(api *http.ServeMux) {
 			ID      string `json:"id"`
 			IfUnset bool   `json:"if_unset"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
+		if err := decodeJSONBody(w, r, &body, 4<<10); err != nil {
+			writeBodyErr(w, err, err)
 			return
 		}
 		if h.store == nil {

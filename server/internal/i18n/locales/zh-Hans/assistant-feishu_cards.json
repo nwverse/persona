@@ -169,5 +169,6 @@
   "nudge_permission": "还在等你：是否允许使用 {tool}",
   "nudge_bare": "还在等你回复。",
   "board_nudged": "已催过",
-  "board_verdict": "{title}：{verdict}"
+  "board_verdict": "{title}：{verdict}",
+  "moved_to_todos": "已转成待办"
 }

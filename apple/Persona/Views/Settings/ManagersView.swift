@@ -92,12 +92,13 @@ private struct ManagerRow: View {
         let status = ManagersText.status(manager, now: now)
         let place = ManagersText.whereItRuns(manager)
         HStack(spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.managers)
+            ThemedIcon(Theme.Icon.managers)
                 .scaledFrame(width: Theme.Size.icon)
                 .foregroundStyle(manager.online || manager.installing != nil ? Theme.accent : Theme.Hue.gray)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                HStack(spacing: Theme.Space.sm) {
+                NameWithChips {
                     Text(manager.name).lineLimit(1)
+                } chips: {
                     if manager.isDefault { Chip(text: String(localized: "Default [Prompt Composer 844b8c]"), look: .tint(Theme.accent)) }
                 }
                 HStack(spacing: Theme.Space.sm) {

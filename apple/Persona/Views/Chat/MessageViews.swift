@@ -240,6 +240,7 @@ struct PeerMessage: View {
     var item: Item
     var from: String
     @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.subagentsByCall) private var agents
 
     var body: some View {
         let d = RowMemo.assistant(RowMemo.key(memoScope, item.id)) { _ in AssistantRowText(item.text ?? "") } // once per message
@@ -248,20 +249,32 @@ struct PeerMessage: View {
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Markdown(d.markdown)
-                .markdownSoftBreakMode(.lineBreak)
-                .markdownTheme(.persona)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                #if os(macOS)
-                .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
-                #endif
+            if Self.isHandback(from: from, agents: agents.values) {
+                // A subagent's report that came as a message: one line until opened, as in its card.
+                FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
+            } else {
+                words(d)
+            }
         }
         .padding(Theme.Space.m)
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
         .padding(.trailing, Theme.Space.xxl)
+        .chatPinned(pinKey)
         .messageLongPress(id: item.id)
         .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
+    }
+
+    private var pinKey: String { "peer-" + item.id }
+
+    private func words(_ d: AssistantRowText) -> some View {
+        Markdown(d.markdown)
+            .markdownSoftBreakMode(.lineBreak)
+            .markdownTheme(.persona)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(macOS)
+            .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
+            #endif
     }
 }
 
@@ -311,7 +324,7 @@ struct PendingBubble: View {
                         Button(action: retry) { Label("Retry Now [Message Views f40f4f]", systemImage: Theme.Icon.retry) }
                         Button(role: .destructive, action: discard) { Label("Don't Send", systemImage: Theme.Icon.delete) }
                     } label: {
-                        Image(systemName: Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(.secondary)
                             .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
                             .contentShape(.rect)
                     }
@@ -321,7 +334,7 @@ struct PendingBubble: View {
                         Button(action: retry) { Label("Resend", systemImage: Theme.Icon.retry) }
                         Button(role: .destructive, action: discard) { Label("Delete", systemImage: Theme.Icon.delete) }
                     } label: {
-                        Image(systemName: Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
+                        ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
                     }
                     .accessibilityLabel("Failed to send. Resend or delete.")
                 }
@@ -468,6 +481,8 @@ struct AssistantText: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.quiet == b.quiet }
     @Environment(\.openFile) private var openFile
     @Environment(\.rowMemoScope) private var memoScope
+    /// The new conversation layout (#1666, `ChatLayout`): Persona's answer in its pale gray box.
+    @Environment(\.chatLayout) private var layout
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -481,6 +496,7 @@ struct AssistantText: View, Equatable {
                 .modifier(QuietMarkdown(on: quiet))
                 .markdownTheme(.persona)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .chatBoxed(Theme.ChatBox.persona, on: layout.on && !quiet)
                 #if os(macOS)
                 // Drag to select and ⌘C, as on the web (#2542); iOS keeps the long-press menu's Select.
                 .textSelection(.enabled)
@@ -580,12 +596,12 @@ struct ThinkingRow: View {
                 toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, unfold: $unfold, closing: open) { open.toggle() }
             } label: {
                 HStack(spacing: Theme.Space.sm) {
-                    Image(systemName: Theme.Icon.memory).font(Theme.Font.label)
+                    ThemedIcon(Theme.Icon.memory).font(Theme.Font.label)
                     Text(open ? String(localized: "Thinking [Message Views a62acb]") : ToolPresentation.firstLine(item.text ?? ""))
                         .font(Theme.Font.label)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    Image(systemName: Theme.Icon.disclosure).font(Theme.Font.label).rotationEffect(.degrees(open ? 90 : 0))
+                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label).rotationEffect(.degrees(open ? 90 : 0))
                 }
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, compact ? 10 : 0)
@@ -691,7 +707,7 @@ struct CompactDivider: View {
                     rule
                     HStack(spacing: Theme.Space.xs) {
                         Text(title).lineLimit(1)
-                        Image(systemName: open ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.caption)
+                        ThemedIcon(open ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.caption)
                     }
                     .font(Theme.Font.label)
                     .foregroundStyle(.secondary)
@@ -748,7 +764,7 @@ struct NoticeRow: View {
             }
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.info).font(Theme.Font.label).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.info).font(Theme.Font.label).foregroundStyle(.tertiary)
                 Text(item.text ?? "")
                     .font(Theme.Font.label)
                     .foregroundStyle(.secondary)
@@ -781,7 +797,7 @@ struct NoticeRow: View {
     private var wake: some View {
         let w = Self.wakeSummary(item)
         return HStack(spacing: Theme.Space.sm) {
-            Image(systemName: w.failed ? Theme.Icon.errorFilled : "bell.fill")
+            ThemedIcon(w.failed ? Theme.Icon.errorFilled : "bell.fill")
                 .foregroundStyle(w.failed ? Theme.danger : Theme.accent)
             Text(w.text).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
         }
@@ -842,13 +858,13 @@ struct WakeChip: View {
                 if live {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Image(systemName: failed ? Theme.Icon.errorFilled : "bell.fill")
+                    ThemedIcon(failed ? Theme.Icon.errorFilled : "bell.fill")
                         .foregroundStyle(failed ? Theme.danger : Theme.accent)
                 }
                 Text(live ? String(localized: "Background task done · Processing") : summary?.text ?? String(localized: "\(notices.count) background tasks done"))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong)
             }
             .font(Theme.Font.caption)
             .foregroundStyle(.secondary)
@@ -907,11 +923,11 @@ struct RecapCard: View {
             open = true
         } label: {
             HStack(spacing: Theme.Space.sm) {
-                Image(systemName: "arrow.uturn.backward.circle.fill").foregroundStyle(Theme.accent)
+                ThemedIcon("arrow.uturn.backward.circle.fill").foregroundStyle(Theme.accent)
                 Text("While You Were Away").lineLimit(1)
                 if items.count > 1 { Text("· \(items.count)×").lineLimit(1) }
                 if let ts = newest.ts, ts.isMeaningful { Text("· " + Fmt.relative(ts)).lineLimit(1) }
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong)
             }
             .font(Theme.Font.caption)
             .foregroundStyle(.secondary)
@@ -947,13 +963,13 @@ struct RecapStrip: View {
                 Capsule().fill(Theme.accent).frame(width: Theme.Size.bar)
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     HStack(spacing: Theme.Space.sm) {
-                        Image(systemName: "arrow.uturn.backward.circle.fill").foregroundStyle(Theme.accent)
+                        ThemedIcon("arrow.uturn.backward.circle.fill").foregroundStyle(Theme.accent)
                         Text("While You Were Away").font(Theme.Font.captionStrong).lineLimit(1)
                         if let ts = item.ts, ts.isMeaningful {
                             Text("· " + Fmt.relative(ts)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 4)
-                        Image(systemName: Theme.Icon.close).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
+                        ThemedIcon(Theme.Icon.close).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
                     }
                     Text(Fmt.plain(item.text ?? ""))
                         .font(Theme.Font.secondary)
