@@ -27,6 +27,7 @@
     <string name="settings_onb_retest">再テスト</string>
     <string name="settings_onb_done_title">%1$sを接続しました</string>
     <string name="settings_onb_done_pick_later">メインの会話や Agent で使うには「モデル設定」で選んでください。</string>
+    <string name="settings_onb_direct_note">メインの会話と Agent では使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。</string>
     <string name="settings_onb_done_no_claude">キーを保存しました。メインの会話で使うには、%1$s に Claude Code をインストールする必要があります。</string>
     <string name="settings_onb_done_no_claude_any">キーを保存しました。メインの会話で使うには、コンピューターに Claude Code をインストールする必要があります。</string>
     <string name="settings_onb_done_no_claude_kept">キーを保存しました。このキーで動かすには、%1$s に Claude Code をインストールする必要があります。</string>
