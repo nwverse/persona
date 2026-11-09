@@ -5,7 +5,7 @@ The repo hard-codes nobody's machines, accounts, domains, or preferences. Everyt
 | Config | Location | Read by | Covers |
 | --- | --- | --- | --- |
 | Build / deploy config | `~/.config/persona/config.json` on the dev machine (point elsewhere with `PERSONA_CONFIG`), template `config.example.json` at the repo root | `scripts/*` (via `scripts/persona_config.py`), XcodeGen (via the generated `apple/Config.xcconfig`) | The App's bundle id and team, the App Store Connect account, TestFlight testers, which machine / address the hub is on, machines to deploy to, simulators |
-| hub runtime config | `~/.persona/hub.json` on the hub machine (0600, contains the token and database password; generated automatically the first time `personad hub` runs) | `personad hub` | Listen address, public address, which machines to connect, push timings, whether the hub starts the built-in manager, the card formats its apps get |
+| hub runtime config | `~/.persona/hub.json` on the hub machine (0600, contains the token and database password; written by `personad hub setup`, or generated automatically the first time the hub starts; `hub pair`, `hub peer`, `hub manager-code` and `hub assistant-token` only talk to a running hub: they need this file and never create it) | `personad hub` | Listen address, public address, which machines to connect, push timings, whether the hub starts the built-in manager, the card formats its apps get |
 | Manager config | `~/.persona/managers/assistant/manager.json` for the built-in manager, `~/.persona/managers/<id>/manager.json` for one made in the app (0600) | the manager (`personad assistant`, `personad manager run`) | Whose assistant it is and what it should know, where it runs by default, the AI gateway and models, the Agents' triage, question delegation and launcher health, the Inbox and its AI twin, the knowledge base, how long hook cards wait; connectors, extensions written by hand, bots, mail sign-ins and the Gmail proxy, Lark and lark-cli, usage sources ("manager.json" below) |
 
 The configs live outside the repo: releases run in a clean worktree (`docs/operations/release.md`), where anything outside the repo would be missing; it also avoids committing them by accident.
@@ -287,6 +287,8 @@ The sections that are a manager's (whose assistant it is, `ai`, `agents`, `inbox
   Each device's push preferences are set separately in the App (**Settings › Notifications**, stored in hub `devices.prefs`), not here.
   This section stays in hub.json: push delivery is the hub's, and it hands the timings to the managers in its hello.
 - `shutdown_timeout_seconds` (default 8): total hub shutdown budget, including closing the database connection pool; external `docker stop -t` must be longer (`docs/server/server.md` ("Shutdown")).
+- `auto_update_nodes` (default `false`): lets the managers update the computers' nodes by themselves, after a confirmed hub update and when a node on another build reconnects (the hub hands it over in `devices.config`).
+  Off, a node changes only when someone picks **Redeploy** for its computer ([hub-update.md](hub-update.md) ("Node upgrade policy")).
 
 ## manager.json
 

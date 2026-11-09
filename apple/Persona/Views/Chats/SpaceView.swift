@@ -90,7 +90,7 @@ struct SiblingTabs: View {
 
     private func tab(_ s: Session, role: TabPanes.Role?) -> some View {
         let on = s.key == current
-        let tone = s.state.tone
+        let tone = s.stateTone
         let quiet = s.state == .idle || s.state == .unknown || s.state == .offline
         let label = TabPanes.tabLabel(s, role: role)
         let launcher = role?.launcher == true
@@ -164,7 +164,7 @@ struct SiblingTabs: View {
         let waiting = siblings.contains { $0.key != current && $0.state == .needsYou }
         return Button { Haptics.tap(); showAll = true } label: {
             HStack(spacing: Theme.Space.xs) {
-                Image(systemName: Theme.Icon.space)
+                ThemedIcon(Theme.Icon.space)
                     .font(Theme.Font.labelStrong)
                     .foregroundStyle(.secondary)
                 Text("\(siblings.count)")
@@ -230,7 +230,7 @@ private struct SiblingList: View {
     /// Where a new tab goes: the space this chat is in (its machine, directory and herdr workspace).
     private var preset: SpacePreset? {
         guard let s = space, let ws = s.spaceID else { return nil }
-        return SpacePreset(machineID: s.machineRef.path, cwd: s.cwd, workspaceID: ws, spaceName: s.spaceName ?? "")
+        return SpacePreset(machineID: s.machineRef.path, cwd: s.cwd, workspaceID: ws, spaceName: s.spaceName ?? "", host: s.hostKind ?? s.spaceKind)
     }
 
     var body: some View {
@@ -264,10 +264,10 @@ private struct SiblingList: View {
                 if let s = space, let name = s.spaceName, let k = s.spaceKey {
                     Button { openSpace(k) } label: {
                         HStack(spacing: Theme.Space.m) {
-                            Image(systemName: Theme.Icon.space).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.iconS)
+                            ThemedIcon(Theme.Icon.space).foregroundStyle(Theme.accent).scaledFrame(width: Theme.Size.iconS)
                             Text("All agents in space \(name)").font(Theme.Font.secondaryStrong).lineLimit(1)
                             Spacer(minLength: 8)
-                            Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                            ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                         }
                         .padding(.horizontal, Theme.Space.l)
                         .scaledFrame(minHeight: Theme.Size.avatarL)
@@ -287,7 +287,7 @@ private struct SiblingList: View {
                     let label = TabPanes.tabLabel(s, role: role)
                     Button { pick(s.key) } label: {
                         HStack(spacing: Theme.Space.m) {
-                            Circle().fill(s.state.color).scaledFrame(width: Theme.Size.dotL, height: Theme.Size.dotL).scaledFrame(width: Theme.Size.iconS) // a still dot
+                            Circle().fill(s.stateTone.dot).scaledFrame(width: Theme.Size.dotL, height: Theme.Size.dotL).scaledFrame(width: Theme.Size.iconS) // a still dot
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 Text(label).font(on ? Theme.Font.secondaryStrong : Theme.Font.secondary).lineLimit(1)
                                 // The state in its color, then the model the tab runs on (2026-10-31: which tab is which model).
@@ -298,7 +298,7 @@ private struct SiblingList: View {
                             }
                             Spacer(minLength: 8)
                             if stopping == s.key { ProgressView().tint(Theme.danger) }
-                            else if on { Image(systemName: Theme.Icon.done).font(Theme.Font.captionStrong).foregroundStyle(Theme.accent) }
+                            else if on { ThemedIcon(Theme.Icon.done).font(Theme.Font.captionStrong).foregroundStyle(Theme.accent) }
                         }
                         .padding(.horizontal, Theme.Space.l)
                         // A tab's other agents hang a level in under its starter.
@@ -377,9 +377,9 @@ struct SpaceView: View {
                         // The machine opens its own list of projects.
                         NavigationLink(value: MachineRoute(first.machineRef)) {
                             HStack(spacing: Theme.Space.sm) {
-                                Image(systemName: model.machine(first.machineRef)?.symbol ?? Theme.Icon.machine)
+                                ThemedIcon(model.machine(first.machineRef)?.symbol ?? Theme.Icon.machine)
                                 Text(model.machine(first.machineRef)?.title ?? first.machineID).lineLimit(1)
-                                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelHeavy)
+                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy)
                             }
                             .fontWeight(.semibold)
                             .foregroundStyle(Theme.accent)
@@ -403,7 +403,7 @@ struct SpaceView: View {
                     }
                     Button { showNew = true } label: {
                         VStack(spacing: Theme.Space.s) {
-                            Image(systemName: Theme.Icon.add).font(Theme.Font.title)
+                            ThemedIcon(Theme.Icon.add).font(Theme.Font.title)
                             Text("Open a new tab in this space").font(Theme.Font.captionMedium)
                         }
                         .foregroundStyle(Theme.accent)
@@ -436,7 +436,7 @@ struct SpaceView: View {
         }
         .sheet(isPresented: $showNew) {
             if let first, let ws = first.spaceID {
-                NewChatView(preset: SpacePreset(machineID: first.machineRef.path, cwd: first.cwd, workspaceID: ws, spaceName: first.spaceName ?? "")) { s in
+                NewChatView(preset: SpacePreset(machineID: first.machineRef.path, cwd: first.cwd, workspaceID: ws, spaceName: first.spaceName ?? "", host: first.hostKind ?? first.spaceKind)) { s in
                     showNew = false
                     started = s.key
                 }
@@ -472,7 +472,7 @@ struct SlotCard: View {
                         .padding(.vertical, 2.5)
                         .background(tone.tint, in: .capsule)
                     Spacer(minLength: 4)
-                    StatusDot(state: session.state, size: 9)
+                    StatusDot(state: session.state, size: 9, waiting: session.waitsInBackground)
                 }
             }
             Text(session.displayTitle).font(Theme.Font.secondaryStrong).lineLimit(2)
@@ -495,11 +495,11 @@ struct SlotCard: View {
 
     private func header(agent: Bool) -> some View {
         HStack {
-            Chip(text: tabChip, look: .tone(session.state.tone))
+            Chip(text: tabChip, look: .tone(session.stateTone))
             // Beside its tab mates the tab's chip names the agent already.
             if agent, pane == nil { Chip(text: session.agentLabel, look: .outline) }
             Spacer(minLength: 4)
-            StatusDot(state: session.state, size: 9)
+            StatusDot(state: session.state, size: 9, waiting: session.waitsInBackground)
         }
     }
 }

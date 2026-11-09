@@ -8,12 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -36,7 +36,7 @@ var (
 	reviewAlone = reviewBudget{left: 2 << 20, fileBytes: 2 << 20, fileLines: 20000}
 )
 
-var hunkHead = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$`)
+var hunkHead = lazyre.New(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$`)
 
 func reviewErr(code, msg string) error { return &rpc.Error{Code: code, Message: msg} }
 

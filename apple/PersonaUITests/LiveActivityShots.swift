@@ -95,7 +95,14 @@ final class LiveActivityShots: XCTestCase {
             app.activate()
             let card = app.buttons["persona-\(id)"]
             if !card.waitForExistence(timeout: 3) { // Settings keeps its page; open Avatar again if it did not
-                app.tabBars.buttons["设置"].tap()
+                let close = app.buttons["settings-close"].firstMatch
+                if close.exists { close.tapCenter() }
+                let drawer = app.buttons["assistant-sidebar-button"].firstMatch
+                XCTAssertTrue(drawer.waitForExistence(timeout: 10), "no drawer button")
+                drawer.tapCenter()
+                let settings = app.drawerSettingsButton
+                XCTAssertTrue(settings.waitForExistence(timeout: 5), "no Settings entry")
+                settings.tapCenter()
                 let row = app.buttons["settings-persona"]
                 XCTAssertTrue(row.waitForExistence(timeout: 10), "no 形象 row:\n\(app.debugDescription)")
                 row.tap()

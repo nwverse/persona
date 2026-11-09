@@ -19,13 +19,14 @@ import (
 // Plugins upgrade themselves from their markets (docs/extensions/extensions.md "Automatic upgrades"): the hub reads the registered
 // markets every few hours and installs a newer version of a plugin it installed from one, when the version asks for
 // nothing more than the user granted and nothing is using the plugin. One that asks for more waits for the user; one
-// that does not come up is rolled back (watchUpgrade) and not tried again. Built-in, hub.json's and plugins installed
-// from elsewhere (a directory, a file, a URL, a remote socket) are never upgraded by the hub.
+// that does not come up is rolled back (watchUpgrade) and not tried again. One switched off waits until it is on again:
+// with no program running, watchUpgrade could not tell whether the new version comes up. Built-in, hub.json's and
+// plugins installed from elsewhere (a directory, a file, a URL, a remote socket) are never upgraded by the hub.
 
 const (
 	extensionUpgradesKey  = "plugin_upgrades"
 	extensionUpgradeActor = "自动升级"
-	// pluginUpgradeEvery is how often it looks (reading a market only when its index is due); pluginUpgradeFirst is
+	// extensionUpgradeEvery is how often it looks (reading a market only when its index is due); extensionUpgradeFirst is
 	// the first look after the hub starts.
 	extensionUpgradeEvery = time.Minute
 	extensionUpgradeFirst = 2 * time.Minute
@@ -35,18 +36,26 @@ const (
 	marketBackoff = 15 * time.Minute
 )
 
-// States of a newer version (PluginUpgrade.State).
+// States of a newer version (ExtensionUpgrade.State).
 const (
 	upgradeAvailable    = "available"        // it goes in at the next look
 	upgradeWaitingIdle  = "waiting_idle"     // the plugin (or the assistant) is busy
 	upgradeNeedsConsent = "needs_permission" // it asks for more: the user confirms it in the app
-	upgradeOff          = "off"              // auto-upgrade is off for it (or for all)
+	upgradeOff          = "off"              // auto-upgrade is off for it (or for all), or paused while it is switched off
 	upgradeSkipped      = "skipped"          // this version rolled back: not tried again
 	upgradeFailed       = "failed"           // installing it failed: tried again after the market's next read
 	upgradeIncompatible = "incompatible"     // no package for this hub, or a newer hub needed
 )
 
-// pluginUpgradeSettings are the switches and what the hub remembers (the hub's settings, key plugin_upgrades).
+// skippedByUser is extensionUpgradeSettings.SkippedBy (and ExtensionUpgrade.SkippedBy) for a version the user rolled back
+// from by hand, as opposed to one that did not come up.
+const skippedByUser = "user"
+
+// autoUpgradePausedDisabled is ExtensionView.AutoUpgradePaused for an extension switched off: its own switch is kept,
+// and applies again once the extension is on.
+const autoUpgradePausedDisabled = "disabled"
+
+// extensionUpgradeSettings are the switches and what the hub remembers (the hub's settings, key plugin_upgrades).
 type extensionUpgradeSettings struct {
 	Auto *bool    `json:"auto,omitempty"` // nil: on
 	Off  []string `json:"off,omitempty"`  // plugins the user switched off
@@ -54,9 +63,12 @@ type extensionUpgradeSettings struct {
 	Skipped  map[string]string               `json:"skipped,omitempty"`
 	Notified map[string]string               `json:"notified,omitempty"`
 	Last     map[string]ExtensionUpgradeNote `json:"last,omitempty"`
+	// SkippedBy: plugin → skippedByUser when its skipped version is one the user rolled back from (absent: it did not
+	// come up).
+	SkippedBy map[string]string `json:"skipped_by,omitempty"`
 }
 
-// PluginUpgradeNote is what happened last with a plugin's upgrade, for its page in the app.
+// ExtensionUpgradeNote is what happened last with a plugin's upgrade, for its page in the app.
 type ExtensionUpgradeNote struct {
 	Kind   string    `json:"kind"` // upgraded | rolled_back | needs_permission | failed
 	From   string    `json:"from"`
@@ -65,7 +77,7 @@ type ExtensionUpgradeNote struct {
 	At     time.Time `json:"at"`
 }
 
-// PluginUpgrade is a newer version of a market plugin (GET /api/v1/plugins/-/upgrades, PluginView.upgrade).
+// ExtensionUpgrade is a newer version of a market plugin (GET /api/v1/plugins/-/upgrades, ExtensionView.upgrade).
 type ExtensionUpgrade struct {
 	RenameFrom       string                     `json:"rename_from,omitempty"`
 	RenameTo         string                     `json:"rename_to,omitempty"`
@@ -77,6 +89,8 @@ type ExtensionUpgrade struct {
 	State            string                     `json:"state"`
 	AddedPermissions []extension.PermissionLine `json:"added_permissions,omitempty"`
 	Detail           string                     `json:"detail,omitempty"`
+	// SkippedBy is "user" for a skipped version the user rolled back from (absent: it did not come up).
+	SkippedBy string `json:"skipped_by,omitempty"`
 }
 
 type extensionUpgrades struct {
@@ -96,7 +110,7 @@ type extensionUpgrades struct {
 	busy func(id string) string
 }
 
-// pluginUpgrades is the hub's auto-upgrade (nil without plugins).
+// extensionUpgrades is the hub's auto-upgrade (nil without plugins).
 func (h *Manager) extensionUpgrades() *extensionUpgrades {
 	if h.extensions == nil {
 		return nil
@@ -111,7 +125,7 @@ func (h *Manager) extensionUpgrades() *extensionUpgrades {
 	return u
 }
 
-// pluginBusy is why plugin id is in use: a call or a request in flight, or the assistant working (it may call the
+// extensionBusy is why plugin id is in use: a call or a request in flight, or the assistant working (it may call the
 // plugin's tools next).
 func (h *Manager) extensionBusy(id string) string {
 	if hp := h.extensions.get(id); hp != nil && hp.proc != nil && !hp.proc.Idle() {
@@ -127,7 +141,7 @@ func (h *Manager) extensionBusy(id string) string {
 	return ""
 }
 
-// pluginUpgradeLoop looks for newer versions until ctx ends.
+// extensionUpgradeLoop looks for newer versions until ctx ends.
 func (h *Manager) extensionUpgradeLoop(ctx context.Context) {
 	u := h.extensionUpgrades()
 	if u == nil {
@@ -202,6 +216,7 @@ func (u *extensionUpgrades) change(ctx context.Context, f func(s *extensionUpgra
 func (s extensionUpgradeSettings) clone() extensionUpgradeSettings {
 	s.Off = slices.Clone(s.Off)
 	s.Skipped, s.Notified, s.Last = maps.Clone(s.Skipped), maps.Clone(s.Notified), maps.Clone(s.Last)
+	s.SkippedBy = maps.Clone(s.SkippedBy)
 	return s
 }
 
@@ -233,10 +248,37 @@ func (u *extensionUpgrades) forget(ctx context.Context, id string) {
 	}
 	if err := u.change(ctx, func(s *extensionUpgradeSettings) {
 		delete(s.Skipped, id)
+		delete(s.SkippedBy, id)
 		delete(s.Notified, id)
 		delete(s.Last, id)
 	}); err != nil {
 		u.h.logf("plugin %s: forgetting its upgrades: %v", id, err)
+	}
+}
+
+// rolledBackByUser keeps version, which the user rolled back from by hand (the admin page, the extension API that
+// personad extension rollback uses), from being installed again by auto-upgrade until the market has a newer one, as
+// an automatic rollback does (watched); the new-version row says why (#1826). A note left of version (upgraded to it)
+// goes: it is not installed any more. Nothing is pushed: the user did it.
+func (u *extensionUpgrades) rolledBackByUser(ctx context.Context, id, version string) {
+	if u == nil || version == "" {
+		return
+	}
+	u.load(ctx)
+	key := u.storageKey(id)
+	if err := u.change(ctx, func(s *extensionUpgradeSettings) {
+		if s.Skipped == nil {
+			s.Skipped = map[string]string{}
+		}
+		if s.SkippedBy == nil {
+			s.SkippedBy = map[string]string{}
+		}
+		s.Skipped[key], s.SkippedBy[key] = version, skippedByUser
+		if n, ok := s.Last[key]; ok && n.To == version {
+			delete(s.Last, key)
+		}
+	}); err != nil {
+		u.h.logf("plugin %s: keeping %s from auto-upgrade after its rollback: %v", id, version, err)
 	}
 }
 
@@ -296,14 +338,23 @@ func granted(p *extension.Extension) string {
 	return extension.Digest(p.Full)
 }
 
+// upgradesFrom is the market p upgrades itself from, "" for none: not installed from a market, or attached (it runs on
+// its own, so the manager has no program of it to replace).
+func upgradesFrom(p *extension.Extension) string {
+	if p.Record.Source != extension.SourceInstalled || p.Record.Remote != nil {
+		return ""
+	}
+	return extension.FromMarket(p.Record.Origin)
+}
+
 // candidate is p's newer version in its market, and where it stands (ok false: none, or p is not a market plugin).
 func (u *extensionUpgrades) candidate(p *extension.Extension) (up ExtensionUpgrade, rec extension.MarketRecord, e *extension.MarketEntry, ok bool) {
 	return u.candidateIn(p, u.h.userLang())
 }
 
 func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up ExtensionUpgrade, rec extension.MarketRecord, e *extension.MarketEntry, ok bool) {
-	mid := extension.FromMarket(p.Record.Origin)
-	if p.Record.Source != extension.SourceInstalled || mid == "" {
+	mid := upgradesFrom(p)
+	if mid == "" {
 		return up, rec, nil, false
 	}
 	rec, e, err := u.h.marketEntry(mid, p.Record.ID)
@@ -339,6 +390,11 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 		up.State, up.Detail = upgradeIncompatible, i18n.Localize(engines, l)
 	case s.Skipped[id] == m.Version:
 		up.State, up.Detail = upgradeSkipped, i18n.T(l, "hub-extension_autoupgrade.skipped")
+		if s.SkippedBy[id] == skippedByUser {
+			up.SkippedBy, up.Detail = skippedByUser, i18n.T(l, "hub-extension_autoupgrade.skipped_by_user")
+		}
+	case !p.Record.Enabled: // before asking for consent: the user is not told of versions of one they switched off
+		up.State, up.Detail = upgradeOff, i18n.T(l, "hub-extension_autoupgrade.paused_disabled")
 	case up.RenameFrom != "" && ((s.Auto != nil && !*s.Auto) || slices.Contains(s.Off, id)):
 		up.State = upgradeOff
 	case up.RenameFrom != "":
@@ -523,6 +579,7 @@ func (u *extensionUpgrades) watched(ctx context.Context, id, from, to string, ro
 				s.Skipped = map[string]string{}
 			}
 			s.Skipped[key] = to
+			delete(s.SkippedBy, key) // this one did not come up
 			s.note(key, n)
 		})
 		u.tell(id, n, "rolled_back", func(i18n.Lang) i18n.Args { return i18n.Args{"name": name, "version": to, "from": from} })
@@ -569,14 +626,17 @@ func (u *extensionUpgrades) auto(id string) (global, own bool) {
 	return u.settings.Auto == nil || *u.settings.Auto, !slices.Contains(u.settings.Off, id)
 }
 
-// decorate adds to a market plugin's view its switch, its newer version and what happened last.
+// decorate adds to a market plugin's view its switch (and why it is paused), its newer version and what happened last.
 func (u *extensionUpgrades) decorate(ctx context.Context, v *ExtensionView, p *extension.Extension) {
-	if u == nil || p.Record.Source != extension.SourceInstalled || extension.FromMarket(p.Record.Origin) == "" {
+	if u == nil || upgradesFrom(p) == "" {
 		return
 	}
 	u.load(ctx)
 	_, own := u.auto(p.Record.ID)
 	v.AutoUpgrade = &own
+	if !p.Record.Enabled {
+		v.AutoUpgradePaused = autoUpgradePausedDisabled
+	}
 	if up, _, _, ok := u.candidateIn(p, u.h.contextLang(ctx)); ok {
 		v.Upgrade = &up
 	}
@@ -670,7 +730,7 @@ func (h *Manager) upgradeRoutes(api *http.ServeMux) {
 			writeErrCode(w, http.StatusNotFound, "not_found", errors.New("no such plugin"))
 			return
 		}
-		if p.Record.Source != extension.SourceInstalled || extension.FromMarket(p.Record.Origin) == "" {
+		if upgradesFrom(p) == "" {
 			writeErrCode(w, http.StatusBadRequest, "not_from_market", i18n.Err("hub-extension_autoupgrade.not_from_market"))
 			return
 		}

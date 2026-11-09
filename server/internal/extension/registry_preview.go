@@ -11,12 +11,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // previewFor is how long a preview's staged package is kept.
@@ -63,7 +63,7 @@ type Preview struct {
 func (pv *Preview) MarketTrust() (string, string) { return pv.marketSpec, pv.marketKey }
 
 // previewIDPattern is what newID makes: a preview's staging directory is named so (staging/<id>).
-var previewIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
+var previewIDPattern = lazyre.New(`^[0-9a-f]{24}$`)
 
 // dropStalePreviews removes the staging directories of previews an earlier run of the hub made and never installed
 // or discarded: previews live in memory only, so after a restart nothing else would remove them. Only those older
@@ -356,10 +356,6 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 	return pv, nil // the check is done when the hub has resolved its bundle too (it says so)
 }
 
-// checkPackage holds a staged package to what a manifest says of it: its program is in it for this platform.
-func (r *Registry) checkPackage(m *Manifest, root string) error {
-	return r.checkPackageContext(context.Background(), m, root)
-}
 func (r *Registry) checkPackageContext(ctx context.Context, m *Manifest, root string) error {
 	return r.checkPackageFiles(ctx, m, root, true)
 }

@@ -46,6 +46,19 @@ const (
 	DeviceLaunchersRepair     = "launchers.repair"      // {name, action: "upgrade_cli"} → proto.LauncherRepair
 )
 
+// EventModelUsed: ModelUsed, one way, hub → manager: something an app picked a model for went through with it (#1644):
+// a new Agent's start (POST /api/v1/sessions with model), a running session's switch (…/modes with model), a message
+// to one of the assistant's conversations sent with a model picked in its chip. The manager remembers an id the
+// launcher's own /model list does not have (assistant/models_custom.go); an older manager ignores it.
+const EventModelUsed = "models.used"
+
+// ModelUsed is models.used's params: Launcher is the launcher name it ran with on MachineID.
+type ModelUsed struct {
+	MachineID string `json:"machine_id"`
+	Launcher  string `json:"launcher"`
+	Model     string `json:"model"`
+}
+
 const (
 	// PluginsPresets: {} → {presets: [LauncherPreset]}, the model providers of the plugins switched on and running.
 	PluginsPresets = "plugins.presets"
@@ -152,6 +165,7 @@ var modelRoutes = []string{
 	"GET /api/v1/launchers/{name}/quota",
 	"GET /api/v1/machines/{mid}/launchers",
 	"GET /api/v1/machines/{mid}/launchers/{name}/models",
+	"DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom", // ?model=: forget a typed id (#1644)
 	// Model profiles (model_profiles.go there, docs/assistant/model-profiles.md).
 	"GET /api/v1/model-profiles",
 	"PUT /api/v1/model-profiles/{id}",

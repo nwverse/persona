@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import time
 import unittest
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -132,6 +132,17 @@ class NewConversationMockTests(unittest.TestCase):
                 self.assertEqual(msg["machine_id"], s["machine_id"])
                 return
         self.fail("no sessions push with the new conversation")
+
+    def test_start_fail_cuts_the_next_starts_off(self):
+        # #1368: GET /mock/start-fail?n=1 cuts the next start off as the hub does when the link to the assistant drops.
+        self.get("/mock/start-fail?n=1")
+        self.addCleanup(self.get, "/mock/start-fail?n=0&delay=0")
+        with self.assertRaises(HTTPError) as cut:
+            self.start("断了")
+        self.assertEqual(cut.exception.code, 502)
+        body = json.load(cut.exception)
+        self.assertEqual((body["code"], body["delivered"]), ("assistant_in_doubt", "unknown"))
+        self.assertEqual(self.start("好了")["state"], "working")  # only the next one
 
 
 if __name__ == "__main__":

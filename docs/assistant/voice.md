@@ -986,7 +986,7 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
    - collapsed row: idle `[+][composer][dictation][voice]`, working `[+][composer][voice][stop]`, dictation in expanded row;
    - expanded row: voice button occupies send position when composer empty;
    - one round button per row (#3508, `ComposerVoiceButton`): idle, voice is the round button in send's place; working, stop is round and voice a plain icon like dictation;
-   - the new shell uses `ShellComposerBar` in every style (BeautifulUI too); the old layout's `ComposerRow` and BeautifulUI `PromptComposer` only get "Voice Chat" in "+", no inline button; the voice bar replaces them all the same;
+   - compact and regular-width iOS chats use `ShellComposerBar` in every style (BeautifulUI too); the voice bar replaces the composer while voice mode is active;
    - reuse `Theme.Icon.voiceChannel`, one meaning, one icon.
 2. **"Voice Chat" in "+" menu**: accessible from anywhere.
 3. Main-chat and Agent pages share `ChatView`, so one change gives both entries. Without a main chat, assistant shows `ShellHome`, no phase-one entry there.

@@ -276,6 +276,7 @@
     <!-- Auto-upgrade (docs/extensions/extensions.md "Auto-upgrade") -->
     <string name="settings_ext_upgrade_title">アップグレード</string>
     <string name="settings_ext_upgrade_footer">マーケットに新しいバージョンが出ると、拡張機能がアイドル状態のときに自動でインストールされます。必要な権限が増える場合は先に確認します。インストール後に起動できない場合は元のバージョンに戻ります。</string>
+    <string name="settings_ext_upgrade_paused_footer">この拡張機能がオフの間、自動アップグレードは一時停止します。拡張機能をオンに戻すと、元の自動アップグレード設定に戻ります。</string>
     <string name="settings_ext_auto_upgrade">自動アップグレード</string>
     <string name="settings_ext_new_version">新しいバージョン %1$s</string>
     <string name="settings_ext_auto_upgrade_on">自動アップグレードをオンにしました</string>
@@ -286,6 +287,7 @@
     <string name="settings_ext_upgrade_available">後で自動で更新します</string>
     <string name="settings_ext_upgrade_off">自動更新はオフです</string>
     <string name="settings_ext_upgrade_skipped">前回の更新後に起動しなかったため%1$sに戻しました。このバージョンには自動更新しません</string>
+    <string name="settings_ext_upgrade_skipped_user">このバージョンから%1$sにロールバックしたため、このバージョンには自動更新しません</string>
     <string name="settings_ext_upgrade_failed">インストールできませんでした</string>
     <string name="settings_ext_upgrade_failed_detail">インストールできませんでした：%1$s</string>
     <string name="settings_ext_upgrade_incompatible">このハブにはインストールできません</string>

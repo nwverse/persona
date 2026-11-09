@@ -2,8 +2,9 @@ import XCTest
 
 /// The chat's composer in the liquid glass style is laid out on its own (`LayoutIsland`, a hosting controller of its
 /// own): its field, + and send must still be in the accessibility tree, where VoiceOver and the UI tests find them.
-/// The island showed as an `Other` with nothing under it in every launch (#995: an agent's chat, #1006: Persona's in
-/// the four tabs). Against scripts/mock/mock_hub.py (TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>).
+/// The island previously showed as an `Other` with nothing under it for both an agent's chat (#995) and Persona's
+/// (#1006). Against scripts/mock/mock_hub.py
+/// (TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>).
 final class ComposerAccessibilityTests: XCTestCase {
     private let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private let main = "server/b2e4d6f8-0000-4000-8000-000000000001"
@@ -32,14 +33,16 @@ final class ComposerAccessibilityTests: XCTestCase {
     @MainActor private func expectComposer(_ what: String) {
         // ComposerRow's + reads Add (its symbol's own label); the shell's composer, an agent's too since #1091, says what it adds.
         let plus = app.buttons.matching(NSPredicate(format: "label == '添加' OR label == '添加照片或文件'")).firstMatch
-        let send = app.buttons["发送"].firstMatch, stop = app.buttons["中断"].firstMatch
-        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        let send = app.buttons["shell-composer-send"].firstMatch
+        let stop = app.buttons["shell-composer-stop"].firstMatch
+        let mic = app.buttons["shell-composer-mic"].firstMatch
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
         guard plus.waitForExistence(timeout: 15) else {
             attachScreen("no + (\(what))")
             return XCTFail("no + (\(what))\n\(composerTree())")
         }
         attachScreen(what)
-        XCTAssertTrue(send.exists || stop.exists, "neither 发送 nor 中断 (\(what))\n\(composerTree())")
+        XCTAssertTrue(send.exists || stop.exists || mic.exists, "no send, interrupt or dictation control (\(what))\n\(composerTree())")
         XCTAssertTrue(field.exists, "no input field (\(what))\n\(composerTree())")
         XCTAssertTrue(plus.isHittable, "+ is not hittable (\(what))")
 
@@ -75,31 +78,28 @@ final class ComposerAccessibilityTests: XCTestCase {
         app.debugDescription.split(separator: "\n").filter { $0.contains("{{") }.suffix(25).joined(separator: "\n")
     }
 
-    /// An agent's chat, in the shell and in the four tabs, launched twice each (#995).
+    /// An agent's chat in the Shell, launched twice (#995).
     @MainActor func testAnAgentsComposerIsInTheTree() throws {
         let pair = try pairURL()
-        for layout in ["NO", "YES"] {
-            for round in 1...2 {
-                let what = (layout == "NO" ? "agent, shell" : "agent, four tabs") + " #\(round)"
-                app = XCUIApplication()
-                app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", layout, "-openSession", widget]
-                app.launchPinned()
-                expectComposer(what)
-                app.terminate()
-            }
+        for round in 1...2 {
+            let what = "agent, shell #\(round)"
+            app = XCUIApplication()
+            app.launchArguments = ["-pairURL", pair, "-openSession", widget]
+            app.launchPinned()
+            expectComposer(what)
+            app.terminate()
         }
     }
 
-    /// Persona's main conversation in the four tabs, where its composer is in an island too (#1006; in the shell Assistant
-    /// has a composer of its own).
-    @MainActor func testTheAssistantsComposerIsInTheTreeInTheFourTabs() throws {
+    /// Persona's main conversation exposes the same accessible controls as an agent's conversation.
+    @MainActor func testTheAssistantsComposerIsInTheTree() throws {
         let pair = try pairURL()
         for round in 1...2 {
             app = XCUIApplication()
-            app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "YES", "-app.tab", "assistant", "-tab", "assistant",
+            app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
                                    "-openAssistant", main]
             app.launchPinned()
-            expectComposer("Persona, four tabs #\(round)")
+            expectComposer("Persona, shell #\(round)")
             app.terminate()
         }
     }

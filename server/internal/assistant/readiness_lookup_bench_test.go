@@ -3,13 +3,16 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func BenchmarkReadinessMainLargeInventory(b *testing.B) {
+// largeInventory is a service whose computer "box" holds 8200 sessions, the main conversation "session-00000" among
+// them.
+func largeInventory() *Service {
 	f := newFakeHub()
 	f.hello.Assistant.MachineID = "box"
 	f.hello.Assistant.Machines = []string{"box"}
@@ -27,6 +30,11 @@ func BenchmarkReadinessMainLargeInventory(b *testing.B) {
 		}
 	}
 	d.setSessions("box", list)
+	return s
+}
+
+func BenchmarkReadinessMainLargeInventory(b *testing.B) {
+	s := largeInventory()
 	ctx := context.Background()
 	if _, ok := s.readinessMain(ctx, "box", "session-00000"); !ok {
 		b.Fatal("main session not found")
@@ -36,5 +44,26 @@ func BenchmarkReadinessMainLargeInventory(b *testing.B) {
 		if _, ok := s.readinessMain(ctx, "box", "session-00000"); !ok {
 			b.Fatal("main session not found")
 		}
+	}
+}
+
+// Readiness reads the one main conversation, not the computer's whole inventory: about 4.7 KB a lookup measured,
+// where a copy of the 8200 sessions alone is 11.7 MB.
+func TestReadinessMainSkipsInventory(t *testing.T) {
+	s := largeInventory()
+	ctx := context.Background()
+	if _, ok := s.readinessMain(ctx, "box", "session-00000"); !ok {
+		t.Fatal("main session not found")
+	}
+	const runs = 500
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		s.readinessMain(ctx, "box", "session-00000")
+	}
+	runtime.ReadMemStats(&after)
+	if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 4885 {
+		t.Fatalf("one readiness lookup allocated %d bytes, want at most 4885", per)
 	}
 }

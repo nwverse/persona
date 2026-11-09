@@ -31,7 +31,7 @@ import (
 //   - fleet.interaction / fleet.interaction_resolved / fleet.interactions: the pending interactions, kept here,
 //     sent to the apps, answered on GET /api/v1/interactions and to a connecting app;
 //   - fleet.live: the Live Activity's content and the island's numbers (liveactivity.go pushes it per device);
-//   - notify.request: a push to deliver (push.go, notifyws.go): which devices take it is each device's settings.
+//   - notify.request: a push to deliver (push_send.go, notifyws.go): which devices take it is each device's settings.
 //
 // What is kept stays while the manager is away (the apps see the last of it); answers to the cards need it (the
 // relayed routes answer 503 assistant_offline). The hub tells it what of the apps it needs (fleet.clients, fleet.seen,
@@ -153,7 +153,7 @@ func (h *Hub) takeFleetSessions(p assistantwire.FleetSessions) {
 	}
 	f.muted[m.cfg.ID] = p.Muted
 	f.mu.Unlock()
-	h.broadcastSessions(m, h.decorated(m))
+	h.broadcastSessions(m, m.keptSessions())
 }
 
 // takeFleetInteractions is takeFleetInteractionsFrom the assistant the hub starts.
@@ -252,14 +252,28 @@ func (h *Hub) stampSessions(m *Machine, list []proto.Session) {
 	}
 }
 
-// decoratedSession is one of m's sessions as the apps get it.
-func (h *Hub) decoratedSession(m *Machine, sid string) (proto.Session, bool) {
-	for _, s := range h.decorated(m) {
-		if s.SessionID == sid {
-			return s, true
+// stamped is list with manager on each session, as stampSessions puts it: list itself when every session has it
+// already, else a copy. list is never changed.
+func stamped(list []proto.Session, manager string) []proto.Session {
+	for i := range list {
+		if list[i].Manager != manager {
+			out := slices.Clone(list)
+			for j := i; j < len(out); j++ {
+				out[j].Manager = manager
+			}
+			return out
 		}
 	}
-	return proto.Session{}, false
+	return list
+}
+
+// decoratedSession is one of m's sessions as the apps get it: that one copied and stamped, not the whole list.
+func (h *Hub) decoratedSession(m *Machine, sid string) (proto.Session, bool) {
+	s, ok := m.session(sid)
+	if ok {
+		s.Manager = h.machineOwner(m.cfg.ID)
+	}
+	return s, ok
 }
 
 // listedWaitMax is how long awaitListed waits at most (Hub.listedWait shortens it in tests: their fake nodes start

@@ -7,8 +7,8 @@ import type { Resolution } from "./answered";
 import { isSecretRun } from "./tool-detail";
 import type { Interaction } from "./types";
 
-/** A permission card this page cannot allow: it has fields to fill in (#4987), or it is a password card, filled in only on
- *  the iPhone (#1137). Its quick paths (a row's answers, a notification's buttons) open the chat instead. */
+/** A permission card only its own form can allow: it has fields to fill in (#4987), or it is a password card (#1137),
+ *  answered only with the password typed on it. Its quick paths (a row's answers, a notification's buttons) open the chat instead. */
 export function needsFieldValues(ix: Interaction): boolean {
   return ix.kind === "permission" && (!!ix.fields?.length || isSecretRun(ix));
 }
@@ -40,8 +40,9 @@ export function quickAnswers(ix: Interaction): QuickChoice[] | null {
     case "question": {
       const qs = ix.questions ?? [];
       const q = qs[0];
-      if (qs.length !== 1 || !q || q.multi_select || !q.options.length || q.options.length > 4) return null;
-      return q.options.map((o, i) => ({ key: `o${i}`, label: o.label, body: { answers: { [q.question]: o.label } }, hint: o.description }));
+      const options = q?.options ?? [];
+      if (qs.length !== 1 || !q || q.multi_select || !options.length || options.length > 4) return null;
+      return options.map((o, i) => ({ key: `o${i}`, label: o.label, body: { answers: { [q.question]: o.label } }, hint: o.description }));
     }
     case "screen": {
       const d = ix.dialog;

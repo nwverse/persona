@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -38,7 +38,7 @@ const installCodeTTL = 10 * time.Minute
 // installCodePrefix starts every install code, so it is never mistaken for a token of another kind.
 const installCodePrefix = "mi_"
 
-var installCodeShape = regexp.MustCompile(`^mi_[0-9a-f]{32}$`)
+var installCodeShape = lazyre.New(`^mi_[0-9a-f]{32}$`)
 
 // managerStore is what the roster needs of the store beyond busStore (internal/db/bus.go on Postgres).
 type managerStore interface {

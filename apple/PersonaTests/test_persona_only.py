@@ -221,7 +221,7 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertIn('static let avatar = "person.crop.artframe"', icons)
         self.assertIn('static let persona = "sparkle"', icons)
         self.assertIn("symbol: Theme.Icon.avatar", source("Persona/Views/Settings/AppearanceSettingsView.swift"))
-        launch = source("PersonaUITests/LaunchLayout.swift")
+        launch = source("PersonaUITests/UITestStyle.swift")
         self.assertEqual(len(re.findall(r"\bfunc launchPersona\(\)", launch)), 1)
         self.assertNotRegex(launch, r"func launchPersona\(\)\s*\{\s*launchPersona\(\)")
         wire = source("Shared/Generated/ExtensionWire.swift")
