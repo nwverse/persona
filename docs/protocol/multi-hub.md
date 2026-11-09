@@ -80,9 +80,9 @@
   → the group containing the session → the first group. Notification buttons (allow / deny / approve / send back) target that group's hub; tapping opens that group's session; silent wakeups wake only that group's connection.
 - Disconnecting signs this device out first (`apple/Persona/App/HubSignOut.swift`): Disconnect This Group, Disconnect This Hub, Disconnect and Forget Server, Disconnect All Hubs, and Revoke and Unpair in Settings › Devices.
   On each hub it forgets, the App reads its own credential id (`current` of `GET /api/v1/auth/tokens`), revokes the watch's answer-only credential made there, then its own (`DELETE /api/v1/auth/tokens/{id}`), all hubs at once with a 10-second timeout per request.
-  The hub then drops the push registration and Live Activity tokens that credential made (`Pusher.signedOut`), so pushes and remote Live Activity starts stop. A credential already revoked (401) counts as signed out.
-  The local cleanup runs either way. A hub out of reach, one that refuses, or one where this device is still on the master token (no id) or the pairing token (`pair_<hash>`: its trade failed) is named in a toast: it may keep pushing until this device is revoked in Settings › Devices on another device.
-  While it runs, the row that started it shows progress, and the disconnect, Add Hub and Pair Again entries are disabled (`AppModel.hubSignOut`): a hub paired meanwhile could be removed with the others.
+  The hub then drops the push registration and Live Activity tokens that credential made (`Pusher.signedOut`), so pushes and remote Live Activity starts stop. A credential already revoked (401) counts as signed out, unless the device never traded its pairing token there: that token has expired, and the pushes registered with it stay.
+  The local cleanup runs either way. A hub out of reach, one that refuses (for this device's credential or the watch's), or one where this device is still on the master token (no id) or the pairing token (`pair_<hash>`: its trade failed) is named in a toast: it may keep pushing until this device is revoked in Settings › Devices on another device.
+  While it runs, the row that started it shows progress, the disconnect, Add Hub and Pair Again entries are disabled, and `AppModel.pair` refuses any pairing, links included (`AppModel.hubSignOut`): a hub paired meanwhile could be removed with the others without being signed out.
   When the removed hub was its group's first hub, the App registers for pushes again and gets the watch a new credential at the group's next hub; a socket on the removed hub's credential reconnects through the group's other hubs.
 
 ## Live Activities
@@ -91,6 +91,8 @@
   Tapping a row opens that group's session; allow / deny / approve actions target that group's hub.
 - Report the activity's push token only to the first group's hub: two hubs pushing to the same activity would overwrite each other. While the App is in the background, the activity therefore follows only the first group's pushes,
   and all ids without a group prefix belong to the first group. This is a trade-off: background merging would require hubs to merge Fleets with each other, outside this round's scope.
+- Signing out of that hub ("Push and notifications") ends the activity on screen: revoking the credential makes the hub send it an `end` push (`liveActivities.endCredential`); a disconnect that forgets every hub (`unpair`) also ends it in the App.
+  While the App is in the foreground, the next `fleet` event from a remaining group with agents to show starts a new one, whose tokens go to the new first group's hub; in the background none starts until the App comes to the front.
 
 ## Watch, Siri, Mac, and demo mode
 
