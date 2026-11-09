@@ -27,7 +27,7 @@ type toolLoopState struct {
 	cardID                                            string
 	pendingCard                                       *proto.Interaction // being committed before the card is published
 	checks, checkedCount                              int
-	pending, silenced                                 bool
+	pending, silenced, uncertain, silencedByInput     bool
 	answering, consuming                              bool
 	consumedSaved, pendingSaved, pendingPriorSilenced bool
 }
@@ -72,7 +72,7 @@ func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
 				checks = 0
 			}
 			// Ignore an old session snapshot until the node reports a different loop.
-			s.work.loops[k] = &toolLoopState{since: state.since, updatedAt: time.Now().UTC(), tool: state.tool, checks: checks, silenced: true}
+			s.work.loops[k] = &toolLoopState{since: state.since, updatedAt: time.Now().UTC(), tool: state.tool, checks: checks, silenced: true, silencedByInput: true}
 		case reason == loopTurnChanged:
 			delete(s.work.loops, k)
 		case reason == loopUserInput || !state.silenced:
@@ -89,6 +89,23 @@ func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
 	if changed {
 		s.publishSoon()
 	}
+}
+
+// retainUncertainLoop handles a candidate whose identity changed after its node
+// or manager was unavailable. A bounded transcript rescan can move Since even
+// for the same loop. A same-tool candidate might also be a genuinely new loop;
+// withdraw any old card and stay quiet until an unambiguous turn or tool change.
+// The caller holds work.mu.
+func (s *Service) retainUncertainLoop(k [2]string, st *toolLoopState, c proto.Session) (bool, bool) {
+	if !st.uncertain || st.silencedByInput || !eligibleToolLoop(c) || st.tool != c.ToolLoop.Tool || st.since.Equal(c.ToolLoop.Since) ||
+		!st.silenced && st.cardID == "" && st.pendingCard == nil {
+		return false, false
+	}
+	withdrawn := st.cardID != ""
+	delete(s.work.cards, st.cardID)
+	s.work.loops[k] = &toolLoopState{since: c.ToolLoop.Since, updatedAt: time.Now().UTC(), tool: st.tool,
+		checks: st.checks, checkedCount: st.checkedCount, silenced: true, uncertain: true}
+	return true, withdrawn
 }
 
 // toolLoopsChanged invalidates cards and model calls as soon as a node reports a changed candidate.
@@ -119,6 +136,12 @@ func (s *Service) toolLoopsChanged(d DeviceSessions) {
 		// A temporarily missing candidate or session is not proof that a loop
 		// ended; nodes may still be reconstructing their transcripts.
 		if !ok || len(c.Queued) == 0 && (c.Status == proto.StatusOffline || c.ToolLoop == nil && c.Status == proto.StatusWorking) {
+			st.uncertain = true
+			continue
+		}
+		if retained, withdrew := s.retainUncertainLoop(k, st, c); retained {
+			changed = changed || withdrew
+			stateChanged = true
 			continue
 		}
 		if st.silenced && (c.ToolLoop == nil || len(c.Queued) != 0 || c.Status != proto.StatusWorking) {
@@ -130,7 +153,7 @@ func (s *Service) toolLoopsChanged(d DeviceSessions) {
 		}
 		stateChanged = true
 		if ok && len(c.Queued) != 0 {
-			s.work.loops[k] = &toolLoopState{since: st.since, updatedAt: time.Now().UTC(), tool: st.tool, checks: st.checks, silenced: true}
+			s.work.loops[k] = &toolLoopState{since: st.since, updatedAt: time.Now().UTC(), tool: st.tool, checks: st.checks, silenced: true, silencedByInput: true}
 		} else {
 			s.work.loops[k] = &toolLoopState{updatedAt: time.Now().UTC(), checks: st.checks}
 		}
@@ -189,6 +212,13 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 	seen := map[[2]string]bool{}
 	for _, d := range v.machines() {
 		if !d.Reachable {
+			s.work.mu.Lock()
+			for k, st := range s.work.loops {
+				if k[0] == d.ID {
+					st.uncertain = true
+				}
+			}
+			s.work.mu.Unlock()
 			continue
 		}
 		for _, c := range v.sessions(d.ID) {
@@ -199,6 +229,11 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 				continue
 			}
 			if c.Status == proto.StatusOffline || c.Status == proto.StatusWorking && c.ToolLoop == nil {
+				s.work.mu.Lock()
+				if st := s.work.loops[k]; st != nil {
+					st.uncertain = true
+				}
+				s.work.mu.Unlock()
 				continue // the node may still be reconstructing its transcript
 			}
 			if !eligibleToolLoop(c) || v.isMuted(d.ID, c.SessionID) {
@@ -212,6 +247,9 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 	s.work.mu.Lock()
 	removed, pruned := false, false
 	for k, st := range s.work.loops {
+		if !seen[k] {
+			st.uncertain = true
+		}
 		if d, ok := v.devices[k[0]]; ok && d.Reachable && !v.failed[k[0]] && !seen[k] &&
 			!st.updatedAt.IsZero() && time.Since(st.updatedAt) > workKeep {
 			delete(s.work.cards, st.cardID)
@@ -250,6 +288,18 @@ func (s *Service) considerToolLoop(ctx context.Context, machine string, c proto.
 	s.work.mu.Lock()
 	s.work.init()
 	st := s.work.loops[k]
+	if st != nil {
+		if retained, withdrew := s.retainUncertainLoop(k, st, c); retained {
+			s.work.mu.Unlock()
+			if err := s.saveToolLoops(ctx); err != nil {
+				s.logf("tool loop: save reconstructed candidate: %v", err)
+			}
+			if withdrew {
+				s.publishSoon()
+			}
+			return
+		}
+	}
 	if st == nil || !st.since.Equal(loop.Since) || st.tool != loop.Tool {
 		checks := 0
 		if st != nil {

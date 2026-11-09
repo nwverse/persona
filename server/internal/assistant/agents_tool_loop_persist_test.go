@@ -69,6 +69,98 @@ func TestToolLoopCardAndContinueSurviveRestart(t *testing.T) {
 	}
 }
 
+func TestToolLoopRescanKeepsContinueQuiet(t *testing.T) {
+	s, f, store, c, card := persistentLoopFixture(t)
+	answerCard(t, s, card.ID, proto.Resolution{Answers: map[string]string{card.Questions[0].Question: card.Questions[0].Options[1].Label}})
+	s = newServiceOn(t, f, store)
+	s.work.switches = &TriageSwitches{Enabled: true, ToolLoop: true}
+	if err := s.loadToolLoops(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	missing := c
+	missing.ToolLoop = nil
+	s.toolLoopsChanged(DeviceSessions{MachineID: "box", Sessions: []proto.Session{missing}})
+	shifted := *c.ToolLoop
+	shifted.Since = shifted.Since.Add(20 * time.Second)
+	c.ToolLoop = &shifted
+	f.setSessions("box", c)
+	s.toolLoopsChanged(DeviceSessions{MachineID: "box", Sessions: []proto.Session{c}})
+	s.considerToolLoop(context.Background(), "box", c)
+	if cards := s.workCards(); len(cards) != 0 {
+		t.Fatalf("rescanned loop asked again: %+v", cards)
+	}
+	s = newServiceOn(t, f, store)
+	if err := s.loadToolLoops(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.work.mu.Lock()
+	st := s.work.loops[[2]string{"box", "s1"}]
+	quiet := st != nil && st.silenced && st.since.Equal(shifted.Since)
+	s.work.mu.Unlock()
+	if !quiet {
+		t.Fatal("rescanned loop silence was not saved")
+	}
+}
+
+func TestToolLoopNodeOnlyRescanKeepsContinueQuiet(t *testing.T) {
+	s, f, _, c, card := persistentLoopFixture(t)
+	answerCard(t, s, card.ID, proto.Resolution{Answers: map[string]string{card.Questions[0].Question: card.Questions[0].Options[1].Label}})
+	missing := c
+	missing.ToolLoop = nil
+	s.toolLoopsChanged(DeviceSessions{MachineID: "box", Sessions: []proto.Session{missing}})
+	shifted := *c.ToolLoop
+	shifted.Since = shifted.Since.Add(20 * time.Second)
+	c.ToolLoop = &shifted
+	f.setSessions("box", c)
+	s.toolLoopsChanged(DeviceSessions{MachineID: "box", Sessions: []proto.Session{c}})
+	s.considerToolLoop(context.Background(), "box", c)
+	if cards := s.workCards(); len(cards) != 0 {
+		t.Fatalf("node-only rescan asked again: %+v", cards)
+	}
+}
+
+func TestToolLoopRescanWithdrawsOldCardAndAllowsNewTurn(t *testing.T) {
+	_, f, store, c, card := persistentLoopFixture(t)
+	s := newServiceOn(t, f, store)
+	s.work.switches = &TriageSwitches{Enabled: true, ToolLoop: true}
+	if err := s.loadToolLoops(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	missing := c
+	missing.Status, missing.ToolLoop = proto.StatusOffline, nil
+	s.toolLoopsChanged(DeviceSessions{MachineID: "box", Sessions: []proto.Session{missing}})
+	shifted := *c.ToolLoop
+	shifted.Since = shifted.Since.Add(time.Second)
+	c.ToolLoop = &shifted
+	f.setSessions("box", c)
+	// The tick may see the reconstructed candidate before a session event.
+	s.considerToolLoop(context.Background(), "box", c)
+	if len(s.workCards()) != 0 {
+		t.Fatal("old card stayed up after ambiguous rescan")
+	}
+	answer := proto.Resolution{Answers: map[string]string{card.Questions[0].Question: card.Questions[0].Options[0].Label}}
+	if _, err := s.toolLoopAnswer(context.Background(), card.ID, answer); err == nil {
+		t.Fatal("old card could interrupt a different candidate")
+	}
+	s.clearToolLoop([2]string{"box", "s1"}, loopTurnChanged)
+	// A confirmed new turn permits a candidate with the same tool again.
+	next := shifted
+	next.Since = next.Since.Add(time.Minute)
+	next.Count = 4
+	c.ToolLoop = &next
+	s.work.mu.Lock()
+	s.work.loops[[2]string{"box", "s1"}].checks = toolLoopMaxChecks
+	s.work.mu.Unlock()
+	s.considerToolLoop(context.Background(), "box", c)
+	s.work.mu.Lock()
+	st := s.work.loops[[2]string{"box", "s1"}]
+	newCandidate := st != nil && !st.silenced && st.since.Equal(next.Since)
+	s.work.mu.Unlock()
+	if !newCandidate {
+		t.Fatal("new turn did not permit a same-tool candidate")
+	}
+}
+
 func TestToolLoopContinueWriteFailureIsRetryable(t *testing.T) {
 	s, f, store, _, card := persistentLoopFixture(t)
 	store.mu.Lock()

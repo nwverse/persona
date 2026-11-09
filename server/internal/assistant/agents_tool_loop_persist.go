@@ -10,15 +10,16 @@ import (
 const toolLoopsSetting = "agents.tool_loops"
 
 type savedToolLoop struct {
-	Machine      string             `json:"machine"`
-	Session      string             `json:"session"`
-	Since        time.Time          `json:"since"`
-	UpdatedAt    time.Time          `json:"updated_at"`
-	Tool         string             `json:"tool"`
-	Checks       int                `json:"checks"`
-	CheckedCount int                `json:"checked_count"`
-	Silenced     bool               `json:"silenced"`
-	Card         *proto.Interaction `json:"card,omitempty"`
+	Machine         string             `json:"machine"`
+	Session         string             `json:"session"`
+	Since           time.Time          `json:"since"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+	Tool            string             `json:"tool"`
+	Checks          int                `json:"checks"`
+	CheckedCount    int                `json:"checked_count"`
+	Silenced        bool               `json:"silenced"`
+	SilencedByInput bool               `json:"silenced_by_input,omitempty"`
+	Card            *proto.Interaction `json:"card,omitempty"`
 }
 
 // loadToolLoops must finish before checking loops, answering cards or publishing
@@ -52,13 +53,13 @@ func (s *Service) loadToolLoops(ctx context.Context) error {
 		if updatedAt.IsZero() {
 			updatedAt = time.Now().UTC()
 		}
-		state := &toolLoopState{since: row.Since, updatedAt: updatedAt, tool: row.Tool, checks: row.Checks, checkedCount: row.CheckedCount, silenced: row.Silenced}
+		state := &toolLoopState{since: row.Since, updatedAt: updatedAt, tool: row.Tool, checks: row.Checks, checkedCount: row.CheckedCount, silenced: row.Silenced, silencedByInput: row.SilencedByInput, uncertain: true}
 		if reason, invalid := s.work.loopInvalid[key]; invalid {
 			if reason == loopTurnChanged {
 				state.checks = 0
 			}
 			if reason != loopCandidateGone && !state.since.IsZero() {
-				state.silenced = true
+				state.silenced, state.silencedByInput = true, true
 			} else if !state.silenced {
 				state.since, state.tool = time.Time{}, ""
 			}
@@ -100,7 +101,7 @@ func (s *Service) saveToolLoops(ctx context.Context, committing ...[2]string) er
 		if updatedAt.IsZero() {
 			updatedAt = time.Now().UTC()
 		}
-		row := savedToolLoop{Machine: key[0], Session: key[1], Since: state.since, UpdatedAt: updatedAt, Tool: state.tool, Checks: state.checks, CheckedCount: state.checkedCount, Silenced: state.silenced}
+		row := savedToolLoop{Machine: key[0], Session: key[1], Since: state.since, UpdatedAt: updatedAt, Tool: state.tool, Checks: state.checks, CheckedCount: state.checkedCount, Silenced: state.silenced, SilencedByInput: state.silencedByInput}
 		switch {
 		case state.consuming && (state.consumedSaved || commit):
 			// The terminal decision is durable; never restore its old card.
