@@ -339,7 +339,7 @@ struct ChatSupervisionTests {
         folded.fold?.supervisionUser = nil
         folded.supervisionUser = nil
         #expect(!visible([input(1), folded]))
-        #expect(ChatCache.folder == "chats-v12")
+        #expect(ChatCache.folder == "chats-v13")
     }
 
     @Test func queuedSupervisionAndTheNextGenuineQueuedInputAreSeparateTurns() {

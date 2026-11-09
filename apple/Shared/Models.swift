@@ -1733,9 +1733,11 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     /// Client-retained evidence of user-visible supervision. Survives overlap replacing a promoted work fold and is
     /// encoded in the chat cache, not a request to change the hub's visibility.
     var supervisionUser: Bool? = nil
+    /// Additive display provenance; kept as JSON so future kinds and malformed optional fields remain readable.
+    var source: JSONValue? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id"
     }

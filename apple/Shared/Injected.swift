@@ -94,6 +94,7 @@ nonisolated struct Injected: Codable, Hashable, Sendable {
     /// (`client_msg_id`) or another session did (`from`) is the user's whatever it says.
     static func of(_ item: Item) -> Injected? {
         guard item.role == "user", item.kind == .text else { return nil }
+        if MessageSource.protectsUser(item.text ?? "") { return nil }
         if var marked = item.injected {
             if marked.isSupervision, marked.level == nil { marked.level = parse(item.text ?? "")?.level ?? "triage" }
             return marked
@@ -132,6 +133,7 @@ nonisolated struct Injected: Codable, Hashable, Sendable {
     }
 
     private static func compute(_ raw: String) -> Injected? {
+        guard !MessageSource.protectsUser(raw) else { return nil }
         var text = raw
         while let m = leadContext.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let r = Range(m.range, in: text) {
