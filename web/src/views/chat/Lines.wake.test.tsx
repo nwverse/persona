@@ -3,7 +3,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { t } from "../../i18n";
 import { chatLines } from "../../lib/turns";
 import { emptyTaskIndex } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
@@ -41,7 +40,8 @@ describe.each(["assistant", "agents"] as const)("%s background continuation", (s
     expect(slot()).toBe(originalSlot);
     expect(slot()?.textContent).toContain("New progress.");
     expect(host.querySelectorAll("[data-work-group]")).toHaveLength(1);
-    expect(host.querySelector(`button[aria-label="${t("chat-lines.wake_open")}"]`)).toBeNull();
+    expect(host.textContent).not.toContain(wake.text);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(header().getAttribute("aria-expanded")).toBe("false");
     act(() => header().click());
     for (const seq of [2, 5, 7]) expect(host.querySelector("[data-work-detail]")?.textContent).toContain(`echo example-${seq}`);

@@ -89,13 +89,17 @@ async function verify(browser, kind, theme, width) {
   assert.equal(await chat.getByText("First progress: the example files are loaded.", { exact: true }).count(), 0);
   await slot.evaluate((el) => { el.dataset.identity = "fixed-text-slot"; });
   const shot = async (state) => {
-    if (state.endsWith("expanded")) await page.waitForFunction(() => {
+    const expanded = state.endsWith("expanded");
+    // Keep the full manually opened trace in the screenshot rather than behind the fixed composer.
+    if (expanded) await page.setViewportSize({ width, height: 1800 });
+    if (expanded) await page.waitForFunction(() => {
       const frame = document.querySelector("[data-work-detail]")?.parentElement?.parentElement;
       return frame && frame.getBoundingClientRect().height > 120 && Number(getComputedStyle(frame).opacity) > 0.99;
     });
     assert.deepEqual(errors, [], "no page errors");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "no horizontal overflow");
     await page.screenshot({ path: join(shots, `web-${kind}-${width}-${theme}-${state}.png`) });
+    if (expanded) await page.setViewportSize({ width, height: 900 });
   };
   await shot("running");
   items = changed;
@@ -131,14 +135,55 @@ async function verify(browser, kind, theme, width) {
   assert.equal(await summary.getAttribute("aria-expanded"), "false", "reloaded history is folded");
   await summary.click();
   assert.equal(await chat.locator("[data-action-row]:visible").count(), 4);
-  console.log(`PASS ${kind} ${width} ${theme}: collapsed running/completed, same text slot, manual trace and reload`);
+  // Reload creates a new document; mark that document's slot before checking wake-time identity.
+  await slot.evaluate((el) => { el.dataset.identity = "fixed-text-slot"; });
+  // A background wake reopens this exchange before its recap. A historical manual choice must not reopen the run.
+  const resumed = [...finished,
+    item(15, "system", "recap", { text: "Synthetic prior context." }),
+    item(16, "system", "notice", { wake: true, text: "Synthetic background work resumed." }),
+    ...call(17, "Read", { file_path: "/tmp/example-project/follow-up.md" }),
+    text(19, "Wake progress: checking the follow-up."),
+    ...call(20, "Bash", { command: "npm test", description: "Check the synthetic follow-up" }, false),
+  ];
+  items = resumed;
+  live = true;
+  socket.send(JSON.stringify({ type: "items", machine_id: "example", session_id: sid, items: resumed.filter((i) => i.seq >= 15) }));
+  socket.send(JSON.stringify({ type: "sessions", machine_id: "example", sessions: [session()] }));
+  await slot.getByText("Wake progress: checking the follow-up.", { exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector("[data-work-group] > button")?.getAttribute("aria-expanded") === "false");
+  await chat.locator("[data-work-detail]").waitFor({ state: "detached" });
+  assert.equal(await chat.locator("[data-work-group]").count(), 1, "no extra placeholder or wake drawer");
+  assert.equal(await slot.getAttribute("data-identity"), "fixed-text-slot", "wake retains the same text slot");
+  await shot("wake-running");
+  await summary.click();
+  assert.equal(await chat.locator("[data-action-row]:visible").count(), 6);
+  await shot("wake-running-expanded");
+  items = [...resumed, item(21, "user", "tool_result", { tool_use_id: "call-20", text: "Synthetic follow-up passed." }), text(22, "Wake final result: follow-up complete.")];
+  live = false;
+  socket.send(JSON.stringify({ type: "items", machine_id: "example", session_id: sid, items: items.filter((i) => i.seq >= 21) }));
+  socket.send(JSON.stringify({ type: "sessions", machine_id: "example", sessions: [session()] }));
+  await slot.getByText("Wake final result: follow-up complete.", { exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector("[data-work-group] > button")?.getAttribute("aria-expanded") === "false");
+  await chat.locator("[data-work-detail]").waitFor({ state: "detached" });
+  await page.getByText("Running", { exact: true }).waitFor({ state: "hidden" });
+  assert.equal(await slot.getAttribute("data-identity"), "fixed-text-slot");
+  await shot("wake-completed");
+  await summary.click();
+  assert.equal(await chat.locator("[data-action-row]:visible").count(), 6);
+  await shot("wake-completed-expanded");
+  await page.reload();
+  await slot.getByText("Wake final result: follow-up complete.", { exact: true }).waitFor();
+  assert.equal(await summary.getAttribute("aria-expanded"), "false");
+  await summary.click();
+  assert.equal(await chat.locator("[data-action-row]:visible").count(), 6);
+  console.log(`PASS ${kind} ${width} ${theme}: collapsed running/completed, same text slot, manual trace, recap wake and reload`);
   await context.close();
 }
 let browser;
 try {
   browser = await chromium.launch({ executablePath: executable, args: ["--no-sandbox"] });
   for (const kind of ["main", "ordinary", "agent"]) for (const width of [1280, 390]) for (const theme of ["light", "dark"]) await verify(browser, kind, theme, width);
-  console.log("PASS compact-execution browser verification: 12 real-app scenarios, 48 screenshots, no production writes");
+  console.log("PASS compact-execution browser verification: 12 real-app scenarios, 96 screenshots, no production writes");
 } catch (error) {
   console.error("FAIL compact-execution browser verification", error);
   process.exitCode = 1;

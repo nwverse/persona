@@ -338,7 +338,7 @@ export function exchangeSteps(s: Segment): Step[] {
 
 /** Presentation identity for an exchange without input: a fold and its real nonzero block share the source sequence. */
 export function segmentIdentity(s: Segment): string {
-  if (s.user) return s.user.id;
+  if (s.user) return s.id;
   const first = s.steps[0];
   let seq = first ? (first.kind === "tool" ? first.use.seq : first.item.seq) : undefined;
   if (s.answer && (seq === undefined || s.answer.seq < seq)) seq = s.answer.seq;
