@@ -843,7 +843,8 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 				if s.fleet.screenDetached == nil {
 					s.fleet.screenDetached = map[string]screenGone{}
 				}
-				s.fleet.screenDetached[id] = screenGone{machine: machineID, session: p.ix.SessionID, at: now, announced: p.announced}
+				s.fleet.screenDetached[id] = screenGone{machine: machineID, session: p.ix.SessionID, at: now, announced: p.announced,
+					told: p.told}
 			}
 		}
 	}

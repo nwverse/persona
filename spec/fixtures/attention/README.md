@@ -5,6 +5,11 @@ badge counts. This fixture holds both sides to it: the manager's summary (`linkA
 `server/internal/assistant/fleet_attention.go`, `TestLinkAttentionFollowsTheSharedFixtures`) and the web app's own functions
 (`web/src/lib/attention-fixture.test.ts`).
 
+Scope: on a steady input (rows and the cards as the web app has them, every card already the user's), the set of agents,
+the count, and what `muted` and a question still being decided on do to `notify`. It does not show when a card becomes
+the user's (recorded, announced, back from a detach or a restart): the manager's own tests in
+`server/internal/assistant/fleet_attention_test.go` and `fleet_cards_test.go` cover that.
+
 | Rule | Source | Cases |
 | --- | --- | --- |
 | The count is the badge's as it is: agents in "Needs you", without quiet tasks' agents and the assistant's conversations; muted agents and agents waiting only on a question the assistant is still deciding on (`delegating`) are counted. | `stateCounts().badge` in `web/src/lib/sessions.ts`, `useAgentSessions` | every case; `card_read_after_a_working_row`: a card does not make its agent count while its row says otherwise |

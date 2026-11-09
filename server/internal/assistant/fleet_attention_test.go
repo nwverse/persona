@@ -695,3 +695,80 @@ func TestLinkAttentionCountsByTheRow(t *testing.T) {
 		}
 	}
 }
+
+// A dialog card that rang, read back half drawn (a card matched only by its session: not the user's), detached again
+// still half drawn and back by its own id: what it takes over from its own detach is that it was not the user's, not
+// that a ring went out for its session. No summary notifies it, and the phone is not pushed again, until the dialog is
+// drawn and the card that rang comes back.
+func TestLinkAttentionHalfDrawnCardBackTwice(t *testing.T) {
+	ft, n := newCardFleet(t, false)
+	s := ft.s
+	shortScreenUpgrade(s)
+	startAttention(t, s)
+	n.setScreen(pickModel)
+	blockSession(ft, proto.Session{SessionID: "s1", Agent: "claude"})
+	got, _ := waitCards(s, 1, 2*time.Second)
+	if len(got) != 1 || len(ft.pushesOf(assistantwire.NotifyInput, 1, time.Second)) != 1 {
+		t.Fatalf("the dialog's card: %v", got)
+	}
+	var dialog string
+	for id := range got {
+		dialog = id
+	}
+	n.setScreen("  ✢ Percolating…\n")
+	from := len(ft.d.handedAttention())
+	for range 2 {
+		s.NodeDetached("mac")
+		if back, _ := waitCards(s, 1, 2*time.Second); len(back) != 1 || back["scr_mac_s1"] == "" {
+			t.Fatalf("the half-drawn card did not come back: %v", back)
+		}
+		if it, ok := lookAt(t, s, ft.d, "s1"); !ok || it.InteractionID != "scr_mac_s1" || it.Notify {
+			t.Fatalf("the half-drawn card back %+v (listed %v)", it, ok)
+		}
+	}
+	for i, a := range ft.d.handedAttention()[from:] {
+		for _, it := range a.Items {
+			if it.Notify {
+				t.Fatalf("summary %d notified the half-drawn card: %+v", i, it)
+			}
+		}
+	}
+	if n := pushCount(ft.f); n != 1 {
+		t.Fatalf("pushed %d times", n)
+	}
+	n.setScreen(pickModel) // drawn: the card that rang is back by its own id
+	waitUntil(t, func() bool { it, ok := lookAt(t, s, ft.d, "s1"); return ok && it.InteractionID == dialog && it.Notify })
+	if n := len(ft.pushesOf(assistantwire.NotifyInput, 2, 300*time.Millisecond)); n != 1 {
+		t.Fatalf("pushed %d times", n)
+	}
+}
+
+// A dialog card detached while its record is still being written (it is set to ring, but has not): back by its own id,
+// it is not the user's, so no summary notifies it and the phone is not pushed while it waits.
+func TestLinkAttentionScreenCardDetachedBeforeItRang(t *testing.T) {
+	ft, n := newCardFleet(t, true)
+	s := ft.s
+	ft.st.insertGate = make(chan struct{})
+	t.Cleanup(func() { close(ft.st.insertGate) })
+	startAttention(t, s)
+	n.setScreen(pickModel)
+	blockSession(ft, proto.Session{SessionID: "s1", Agent: "claude"})
+	got, _ := waitCards(s, 1, 2*time.Second)
+	if len(got) != 1 {
+		t.Fatalf("the dialog's card: %v", got)
+	}
+	var dialog string
+	for id := range got {
+		dialog = id
+	}
+	s.NodeDetached("mac")
+	if back, _ := waitCards(s, 1, 2*time.Second); len(back) != 1 || back[dialog] == "" {
+		t.Fatalf("the card did not come back by its id: %v, had %v", back, got)
+	}
+	if it, ok := lookAt(t, s, ft.d, "s1"); !ok || it.InteractionID != dialog || it.Notify {
+		t.Fatalf("back before it rang %+v (listed %v)", it, ok)
+	}
+	if notifiedSoFar(ft.d, "s1") || pushCount(ft.f) != 0 {
+		t.Fatalf("before any ring: notified %v, %d pushes", notifiedSoFar(ft.d, "s1"), pushCount(ft.f))
+	}
+}

@@ -218,6 +218,8 @@ type fleetMem struct {
 	recs   []db.InteractionRecord
 	always map[string]map[string]bool // session → keys
 	seen   map[[2]string]time.Time
+	// insertGate, when set before the cards come, holds each interaction write until it is closed (a slow database).
+	insertGate chan struct{}
 }
 
 func newFleetMem() *fleetMem {
@@ -225,7 +227,14 @@ func newFleetMem() *fleetMem {
 		seen: map[[2]string]time.Time{}}
 }
 
-func (m *fleetMem) InsertInteraction(_ context.Context, ix proto.Interaction) error {
+func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) error {
+	if m.insertGate != nil {
+		select {
+		case <-m.insertGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
 	if _, ok := m.status[ix.ID]; !ok {

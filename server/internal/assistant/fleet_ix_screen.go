@@ -139,10 +139,9 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 		s.fleet.mu.Unlock()
 		return
 	}
-	back, rang, same := s.screenBackLocked(machine, sess.SessionID, id, d != nil, time.Now())
-	// Back from a detach: its predecessor's ring is carried (announced); it is the user's (told) only when it is that
-	// very card back (same id), not one matched by its session, which a mark left from an older card can also match.
-	p := &pending{ix: ix, announced: rang || !back && d != nil, told: same && rang, local: func(r proto.Resolution) error {
+	back, rang, told := s.screenBackLocked(machine, sess.SessionID, id, d != nil, time.Now())
+	// Back from a detach: its predecessor's ring is carried (announced), and whether it was the user's (told).
+	p := &pending{ix: ix, announced: rang || !back && d != nil, told: told, local: func(r proto.Resolution) error {
 		if r.Dismiss {
 			return nil
 		}
@@ -186,6 +185,7 @@ type screenGone struct {
 	machine, session string
 	at               time.Time
 	announced        bool // the card had rung (pending.announced)
+	told             bool // the card was the user's (pending.told): only this one card back takes it over
 }
 
 // screenBackLocked: card id is a screen card whose node's connection ended within resumeGrace, read again off the same
@@ -193,9 +193,10 @@ type screenGone struct {
 // time (#4252), as a Codex card a reconnected node lists again does; the mark is used up. A card read before the
 // dialog is drawn (no dialog: a half-drawn screen right after the reconnect) is that card too while the session has a
 // mark, which it leaves for the card upgradeScreenCard makes once the dialog shows. announced is whether the card
-// matched had rung: a placeholder (#4450) detached inside its window had not, and still rings once (#4979); same is
-// whether it is card id itself back (its mark used up), not one matched by its session. Callers hold s.fleet.mu.
-func (s *Service) screenBackLocked(machine, session, id string, dialog bool, now time.Time) (back, announced, same bool) {
+// matched had rung: a placeholder (#4450) detached inside its window had not, and still rings once (#4979). told is
+// whether it was the user's (pending.told, not announced: that is set before the ring goes out), and only for card id
+// itself back (its mark used up), never one matched by its session. Callers hold s.fleet.mu.
+func (s *Service) screenBackLocked(machine, session, id string, dialog bool, now time.Time) (back, announced, told bool) {
 	for k, g := range s.fleet.screenDetached {
 		if now.Sub(g.at) > resumeGrace {
 			delete(s.fleet.screenDetached, k)
@@ -203,7 +204,7 @@ func (s *Service) screenBackLocked(machine, session, id string, dialog bool, now
 	}
 	if g, ok := s.fleet.screenDetached[id]; ok {
 		delete(s.fleet.screenDetached, id)
-		return true, g.announced, true
+		return true, g.announced, g.told
 	}
 	if dialog {
 		return false, false, false
