@@ -32,32 +32,28 @@ final class ReplyBreaksUITests: XCTestCase {
     }
 
     /// The step numbered 5 is not in the bold line's paragraph, and the last sentence is not in its bold line's.
-    @MainActor private func checkLines() {
+    @MainActor private func checkLines(_ chat: String) {
         let step = text("附上出错时间前后")
         XCTAssertTrue(step.waitForExistence(timeout: 20), "the reply did not show:\n\(app.debugDescription)")
         acceptIconAlert(timeout: 3) // the scheme's icon
         sleep(1)
-        shot(name)
+        shot(chat)
         XCTAssertFalse(step.label.contains("更快"), "step 5 joined the bold line: \(step.label)")
         XCTAssertFalse(text("页面不再卡住").label.contains("怎么确认修好了"), "the sentence joined its bold line")
     }
 
-    private var name = ""
-
     @MainActor func testAnAgentsChat() throws {
-        name = "agents"
         app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", "macbook/a1f3c2d4-0000-4000-8000-0000000c1e0b",
                                "-openChatsFresh", "YES", "-ui.scheme", scheme]
         app.launchPinned()
-        checkLines()
+        checkLines("agents")
     }
 
     @MainActor func testPersonasConversation() throws {
-        name = "persona"
         app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
                                "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001", "-openChatsFresh", "YES",
                                "-ui.scheme", scheme]
         app.launchPinned()
-        checkLines()
+        checkLines("persona")
     }
 }
