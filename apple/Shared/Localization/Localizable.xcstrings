@@ -12908,6 +12908,29 @@
         }
       }
     },
+    "A hub is being disconnected. Pair again when it's done." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A hub is being disconnected. Pair again when it's done."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ハブを切断しています。完了してから再ペアリングしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在断开 hub，完成后再重新配对。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "A hub you add joins an existing group automatically when it's linked with a hub in it; otherwise it forms its own group. Everything shows in one list, labeled with the group it comes from." : {
       "localizations" : {
         "en" : {

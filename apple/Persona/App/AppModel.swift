@@ -512,6 +512,7 @@ final class AppModel {
     /// `ssh`: the SSH tunnel set up on the pairing page (docs/operations/network.md「经 SSH 隧道连 hub」): pairing goes through it
     /// when the address does not answer (or always, with Always Use SSH), and the hub keeps it.
     func pair(_ new: ServerConfig, ssh: SSHRoute? = nil) async throws {
+        try refusePairingWhileSigningOut()
         retryRegistry()
         // Unknown pairings would be written over (the keychain is not readable before the first unlock).
         guard !registryUnreadable else { throw APIError(status: 0, message: String(localized: "Can't read your saved pairings right now. Unlock your phone and try again.")) }
@@ -531,6 +532,12 @@ final class AppModel {
             throw error
         }
         let identity = try? await client.identity()
+        do {
+            try refusePairingWhileSigningOut() // one may have started while the hub answered
+        } catch {
+            tunnels.close(SSHTunnels.pairingID)
+            throw error
+        }
         if isDemo { leaveDemo() } // a real hub ends Demo Mode
         var r = registry
         let group: String

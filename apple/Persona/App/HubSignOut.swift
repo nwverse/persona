@@ -5,7 +5,7 @@ import Foundation
 // The local cleanup runs either way, and a toast names each hub that may still reach the device.
 
 /// What a Settings disconnect is signing this device out of (`AppModel.hubSignOut`): the row that started it shows
-/// progress, and the disconnect and pairing entries are disabled until it ends.
+/// progress, the disconnect and pairing entries are disabled, and pairing is refused until it ends.
 nonisolated enum HubSignOutScope: Equatable, Sendable {
     case all
     case group(String)
@@ -37,8 +37,16 @@ extension AppModel {
         await upgradeCredentials()
     }
 
-    /// Signs out of `hubs`, then runs the local cleanup. The entries that start one are disabled while one runs
-    /// (`hubSignOut`), so none comes in meanwhile.
+    /// Pairing waits while a disconnect runs (`pair`, every way in: Settings, the connection card, pairing links): the
+    /// disconnect forgets the hubs of a group or all of them when it ends, and a hub paired meanwhile could go with them
+    /// without being signed out.
+    func refusePairingWhileSigningOut() throws {
+        guard hubSignOut != nil else { return }
+        throw APIError(status: 0, message: String(localized: "A hub is being disconnected. Pair again when it's done."))
+    }
+
+    /// Signs out of `hubs`, then runs the local cleanup. A second one while one runs does nothing; the entries that
+    /// start one are disabled meanwhile (`hubSignOut`).
     private func signingOut(_ hubs: [PairedHub], scope: HubSignOutScope, then forget: (AppModel) -> Void) async {
         guard hubSignOut == nil else { return }
         hubSignOut = scope
@@ -54,13 +62,15 @@ extension AppModel {
                       style: .error)
     }
 
-    /// Signs out of every hub at once. Returns the hubs this device may still be signed in to, in the order given: out
-    /// of reach, refusing, or on a credential that cannot be revoked by id. Demo hubs are skipped.
+    /// Signs out of every hub at once. Returns the hubs this device or its watch may still be signed in to, in the
+    /// order given: out of reach, refusing, or on a credential that cannot be revoked by id. Demo hubs are skipped.
     nonisolated static func signOut(_ hubs: [PairedHub], client: @escaping @Sendable (PairedHub) -> APIClient,
                                     timeout: TimeInterval = 10) async -> [PairedHub] {
         let missed = await withTaskGroup(of: (Int, Bool).self) { group in
             for (i, hub) in hubs.enumerated() where !hub.config.isDemo {
-                group.addTask { (i, await Self.signOut(at: client(hub), watch: hub.watchDeviceID, timeout: timeout)) }
+                group.addTask {
+                    (i, await Self.signOut(at: client(hub), watch: hub.watchDeviceID, traded: hub.deviceID != nil, timeout: timeout))
+                }
             }
             var out = Set<Int>()
             for await (i, done) in group where !done { out.insert(i) }
@@ -70,28 +80,37 @@ extension AppModel {
     }
 
     /// Revokes this device's credential at one hub (`current` of GET /auth/tokens), and before it the watch's
-    /// answer-only one made there. true: the hub no longer holds this device's credential.
-    nonisolated static func signOut(at api: APIClient, watch: String?, timeout: TimeInterval) async -> Bool {
+    /// answer-only one made there. true: the hub holds neither any more. `traded`: this device had traded the pairing
+    /// token for its own credential there (`PairedHub.deviceID`).
+    nonisolated static func signOut(at api: APIClient, watch: String?, traded: Bool, timeout: TimeInterval) async -> Bool {
         let current: String
         do {
             current = try await api.deviceTokens(timeout: timeout).current ?? ""
         } catch let error as APIError where error.status == 401 {
-            return true // revoked already (Settings › Devices on another device), and the hub dropped its pushes then
+            // Its own credential was revoked already (Settings › Devices on another device), and the hub dropped its
+            // pushes then. A pairing token never traded has expired instead; the pushes registered with it stay.
+            return traded
         } catch {
             return false
         }
+        var watchGone = true
         if let watch, !watch.isEmpty, watch != current {
-            // Best effort: the watch registers no pushes, and the phone stops handing it this group's credential.
-            try? await api.revokeToken(watch, timeout: timeout)
+            // The watch registers no pushes, but its credential still reads and answers this hub's agents.
+            watchGone = await revoke(watch, at: api, timeout: timeout)
         }
         // Not revocable by id: the hub's master token (no id), and a pairing token (`pair_<hash>`) whose trade for the
         // device's own failed, which also keeps the pushes registered with it.
         guard !current.isEmpty, !current.hasPrefix("pair_") else { return false }
+        return await revoke(current, at: api, timeout: timeout) && watchGone
+    }
+
+    /// DELETE /auth/tokens/{id}. true: the credential is gone, revoked meanwhile (404) included.
+    private nonisolated static func revoke(_ id: String, at api: APIClient, timeout: TimeInterval) async -> Bool {
         do {
-            try await api.revokeToken(current, timeout: timeout)
+            try await api.revokeToken(id, timeout: timeout)
             return true
         } catch let error as APIError where error.status == 404 {
-            return true // revoked meanwhile
+            return true
         } catch {
             return false
         }

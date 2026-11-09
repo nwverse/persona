@@ -6,9 +6,11 @@ import Testing
 /// device's push and Live Activity registrations, so a hub it may still be signed in to has to be named.
 @MainActor
 struct HubSignOutTests {
-    private func hub(_ id: String, host: String = "hub.example.com", watch: String? = nil) -> PairedHub {
+    /// `traded`: the pairing token was traded for this device's own credential there.
+    private func hub(_ id: String, host: String = "hub.example.com", watch: String? = nil, traded: Bool = true) -> PairedHub {
         var h = PairedHub(id: id, config: ServerConfig(url: URL(string: "https://\(host)")!, token: "t_\(id)"))
         h.watchDeviceID = watch
+        h.deviceID = traded ? "dev_\(id)" : nil
         return h
     }
 
@@ -31,15 +33,21 @@ struct HubSignOutTests {
         #expect(calls(fake) == ["GET /api/v1/auth/tokens", "DELETE /api/v1/auth/tokens/dev_watch", "DELETE /api/v1/auth/tokens/dev_phone"])
     }
 
-    @Test func aWatchCredentialThatWontGoDoesNotKeepItsOwn() async {
+    @Test func aWatchCredentialThatWontGoIsNamedButItsOwnStillGoes() async {
         let fake = FakeHub()
         fake.on("GET", "/api/v1/auth/tokens", json: #"{"tokens":[],"current":"dev_phone"}"#)
+        fake.on("DELETE", "/api/v1/auth/tokens/dev_watch") { _ in throw URLError(.timedOut) }
         fake.on("DELETE", "/api/v1/auth/tokens/dev_phone", json: #"{"ok":true}"#)
+        // Revoked meanwhile (from Settings › Devices): gone, as asked.
+        let raced = FakeHub()
+        raced.on("GET", "/api/v1/auth/tokens", json: #"{"tokens":[],"current":"dev_phone"}"#)
+        raced.on("DELETE", "/api/v1/auth/tokens/dev_watch") { _ in throw APIError(status: 404, message: "no such device") }
+        raced.on("DELETE", "/api/v1/auth/tokens/dev_phone", json: #"{"ok":true}"#)
 
-        let missed = await signOut([hub("a", watch: "dev_watch")], ["a": fake])
+        let missed = await signOut([hub("a", watch: "dev_watch"), hub("b", watch: "dev_watch")], ["a": fake, "b": raced])
 
-        #expect(missed.isEmpty, "the watch registers no pushes")
-        #expect(fake.sent("DELETE", "/api/v1/auth/tokens/dev_phone").count == 1)
+        #expect(missed == ["a"], "the watch's credential still reads and answers that hub's agents")
+        #expect(fake.sent("DELETE", "/api/v1/auth/tokens/dev_phone").count == 1, "the pushes stop all the same")
     }
 
     @Test func namesTheHubsItMayStillBeSignedInTo() async {
@@ -88,5 +96,27 @@ struct HubSignOutTests {
 
         #expect(missed.isEmpty)
         #expect(calls(revoked) == ["GET /api/v1/auth/tokens"])
+    }
+
+    @Test func anExpiredPairingTokenIsNamed() async {
+        // Never traded for the device's own: the pairing token expired, and the pushes registered with it stay.
+        let fake = FakeHub()
+        fake.on("GET", "/api/v1/auth/tokens") { _ in throw APIError(status: 401, message: "invalid token") }
+
+        let missed = await signOut([hub("a", traded: false)], ["a": fake])
+
+        #expect(missed == ["a"])
+    }
+
+    @Test func pairingWaitsForADisconnect() async {
+        // Every way in goes through `pair` (Settings, the connection card, pairing links): a hub paired now could go
+        // with the disconnect without being signed out.
+        let model = AppModel()
+        model.hubSignOut = .all
+        // Refused before any request: this address answers nothing, which would fail differently.
+        let error = await #expect(throws: APIError.self) {
+            try await model.pair(ServerConfig(url: URL(string: "http://127.0.0.1:9")!, token: "t"))
+        }
+        #expect(error?.message == String(localized: "A hub is being disconnected. Pair again when it's done."))
     }
 }

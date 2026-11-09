@@ -1437,22 +1437,6 @@ struct SettingsHeading: View {
     }
 }
 
-extension View {
-    /// A Settings row with a progress indicator at its trailing edge while `active` (a disconnect signing this device out,
-    /// HubSignOut.swift); laid out as before otherwise.
-    @ViewBuilder func trailingProgress(_ active: Bool) -> some View {
-        if active {
-            HStack(spacing: Theme.Space.m) {
-                self
-                Spacer(minLength: 0)
-                ProgressView()
-            }
-        } else {
-            self
-        }
-    }
-}
-
 /// Settings' buttons that are rows: the list's tinted button; in the BeautifulUI style a plain row (its tile carries the color).
 struct SettingsButtonLook: ViewModifier {
     func body(content: Content) -> some View {
