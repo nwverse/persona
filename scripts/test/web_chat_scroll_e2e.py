@@ -19,12 +19,15 @@ holds still while they are drawn on the way up, the browser's find reaches their
 jump land on their row and stay there.
 
 Prints one line per check and a verdict; exits 1 on the first failure. --shots saves light / dark / narrow screenshots.
---hub turns on the fake hub's paging and a slow network for one more reload (then resets it).
+--hub lets the fake hub push a new exchange while the reader is up inside the last one (the exchange being read stays
+in place), then turns on its paging and a slow network: the earlier pages come in two exchanges at a time while the
+reader scrolls up, and the rows on screen move by no more than the loading row, as before (then it resets the fake hub).
 """
 import argparse
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
@@ -242,6 +245,108 @@ def offscreen_exchanges(page, what):
     at_end(page, what + ", back to the end after the search")
 
 
+# The last exchange (the one being read) and the one before it, marked to be found again.
+MARK = """() => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const r = sc.getBoundingClientRect();
+  const segs = sc.querySelectorAll('section[data-segment]');
+  const [prev, last] = [segs[segs.length - 2], segs[segs.length - 1]];
+  prev.setAttribute('data-e2e-prev', '');
+  last.setAttribute('data-e2e-read', '');
+  return { top: last.getBoundingClientRect().top - r.top, segs: segs.length, prevBottom: prev.getBoundingClientRect().bottom - r.top };
+}"""
+
+# Once one more exchange is in, over 30 frames: how far the marked exchange being read moved, and whether the one
+# before it skips drawing now (it was the last but one, and is off screen).
+MOVED = """async ({ top, segs }) => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const frame = () => new Promise((f) => requestAnimationFrame(() => f()));
+  for (let i = 0; i < 600 && sc.querySelectorAll('section[data-segment]').length <= segs; i++) await frame();
+  const tops = [];
+  for (let i = 0; i < 30; i++) {
+    await frame();
+    tops.push(document.querySelector('[data-e2e-read]').getBoundingClientRect().top - sc.getBoundingClientRect().top - top);
+  }
+  const prev = document.querySelector('[data-e2e-prev]');
+  return { arrived: sc.querySelectorAll('section[data-segment]').length > segs, worst: Math.max(...tops.map(Math.abs)),
+           skipped: !prev.firstElementChild?.checkVisibility({ contentVisibilityAuto: true }) };
+}"""
+
+
+def new_exchange_holds(page, hub, what):
+    """The reader is up inside a long last exchange when a new one comes in from elsewhere (another device, a channel):
+    the exchange before it starts skipping drawing off screen and keeps the height it was drawn at, so the exchange
+    being read stays where it was. (Inside it, the live row at its top goes to the new exchange, as before #2485.)"""
+    long = "\n\n".join(["The cache layer reads each session once and keeps the decoded rows, so a push only touches the changed entries. " * 6] * 40)
+    hub_get(hub, "/mock/say?" + urllib.parse.urlencode({"user": "How does the cache work, in detail?", "text": long}))
+    page.wait_for_function("() => [...document.querySelectorAll('[data-chat-scroll] section[data-segment]')].pop()?.textContent.includes('cache layer')")
+    at_end(page, what + ", a long reply came in")
+    page.locator(SCROLL).hover()
+    for _ in range(10):
+        page.mouse.wheel(0, -240)
+        page.wait_for_timeout(60)
+    m = settled(page, what + " scrolled up inside the long reply")
+    before = page.evaluate(MARK)
+    if m["gap"] < 1500 or before["top"] > 0 or before["prevBottom"] > -m["view"]:
+        fail(f"{what}: the view is not inside the long reply, or the exchange before it is not off screen ({m}, {before})")
+    hub_get(hub, "/mock/say?" + urllib.parse.urlencode({"user": "A new question from another device", "text": "Done."}))
+    after = page.evaluate(MOVED, before)
+    if not after["arrived"] or not after["skipped"]:
+        fail(f"{what}: the new exchange did not come in, or the one before the long reply did not start skipping ({after})")
+    if after["worst"] > 1:
+        fail(f"{what}: a new exchange coming in moved the exchange being read {after['worst']:.1f} px ({after})")
+    ok(f"{what}: a new exchange coming in moves the exchange being read {after['worst']:.1f} px")
+
+
+# Scrolls up by script (as DRIFT does) while the earlier pages come in; per page, how far the row at the view's middle
+# moved from the frame before the page landed to 20 frames after it. A page goes where the loading row stood, which
+# moves what is under it up by that row, as it did before #2485: the row's share (from its top to the next one's) is
+# taken out on both sides.
+PAGED = """async () => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const r = sc.getBoundingClientRect();
+  const frame = () => new Promise((f) => requestAnimationFrame(() => f()));
+  const probe = () => {
+    let el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    while (el && el !== sc && el.getBoundingClientRect().height < 4) el = el.parentElement;
+    return el;
+  };
+  const loading = () => {
+    const row = [...sc.firstElementChild.children].find((c) => c.firstElementChild?.getAttribute('role') === 'status');
+    let next = row?.nextElementSibling;
+    while (next && getComputedStyle(next).display === 'contents') next = next.firstElementChild; // a line's wrapper
+    return next ? next.getBoundingClientRect().top - row.getBoundingClientRect().top : 0;
+  };
+  const count = () => sc.querySelectorAll('section[data-segment]').length;
+  const moves = [];
+  for (let k = 0; k < 20; k++) {
+    for (let n = 0; n < 400 && sc.scrollTop >= 300; n++) { sc.scrollTop -= 120; await frame(); await frame(); }
+    const el = probe(), n0 = count(), t0 = performance.now();
+    let at = el.getBoundingClientRect().top - loading(), landed = -1;
+    for (let i = 0; performance.now() - t0 < 5000 && (landed < 0 || i - landed < 20); i++) {
+      await frame();
+      if (landed < 0 && count() > n0) landed = i;
+      else if (landed < 0) at = el.getBoundingClientRect().top - loading();
+    }
+    if (landed < 0) break;
+    moves.push(Math.round((el.getBoundingClientRect().top - loading() - at) * 10) / 10);
+  }
+  return { pages: moves.length, worst: Math.max(0, ...moves.map(Math.abs)), moves, segs: count() };
+}"""
+
+
+def paged_up_holds(page, what):
+    page.locator(SCROLL).hover()
+    page.mouse.wheel(0, -200)  # leave the end as a reader does
+    page.wait_for_timeout(800)
+    d = page.evaluate(PAGED)
+    if d["pages"] < 3:
+        fail(f"{what}: scrolling up brought in {d['pages']} earlier pages, 3 or more wanted ({d})")
+    if d["worst"] > 1:
+        fail(f"{what}: an earlier page landing moved what is on screen {d['worst']:.1f} px beyond the loading row ({d})")
+    ok(f"{what}: {d['pages']} earlier pages landed, what is on screen moved at most {d['worst']:.1f} px beyond the loading row")
+
+
 def shot(page, shots, name):
     if shots:
         page.wait_for_timeout(300)
@@ -336,15 +441,17 @@ def wide(browser, base, a, other):
         at_end(page, "wide agent chat, reload before the screenshot")
     shot(page, a.shots, "wide-agent-light.png")
 
-    # The newest page first, more over a slow network.
     if a.hub:
+        new_exchange_holds(page, a.hub, "wide agent chat")
+        # The newest page first, more over a slow network. The long reply stays, so the agent chat's newest page fills
+        # the view and scrolling up asks for the earlier ones.
         hub_get(a.hub, "/mock/paging?on=1")
         hub_get(a.hub, "/mock/delay?s=0.4")
         page.goto(base + "/")
         at_end(page, "wide / over a slow network, paged")
         page.goto(base + path)
-        # its newest page (two exchanges) may fit in the view
-        at_end(page, "wide agent chat over a slow network, paged", short_ok=True)
+        at_end(page, "wide agent chat over a slow network, paged")
+        paged_up_holds(page, "wide agent chat over a slow network, paged")
         hub_get(a.hub, "/mock/reset")
     ctx.close()
 
