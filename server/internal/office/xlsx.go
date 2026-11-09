@@ -30,7 +30,12 @@ type sheetSpec struct {
 	Widths  []float64 `json:"widths"`
 	Formats []string  `json:"formats"`
 	Freeze  *bool     `json:"freeze"`
+	csv     bool      // from CSV: its strings, the header's too, are csvText
 }
+
+// csvText is a CSV field that is not a number: only text, never a formula or a date. An exported field that starts
+// with = is data, and as a formula Excel may not parse it or would run it on open (CSV injection).
+type csvText string
 
 // Xlsx is the workbook JSON src describes.
 func Xlsx(src []byte, title string) ([]byte, error) {
@@ -45,7 +50,7 @@ func Xlsx(src []byte, title string) ([]byte, error) {
 
 // XlsxFromCSV is a one-sheet workbook of CSV src, its first row the header. Integers stay
 // numeric only when serialization keeps them exact, decimals when it changes no more than
-// 15-digit rounding; IDs like 007 stay text.
+// 15-digit rounding; IDs like 007 stay text. A field that starts with = stays text: formulas come only from JSON.
 func XlsxFromCSV(src []byte, name, title string) ([]byte, error) {
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(src, []byte("\xef\xbb\xbf"))))
 	r.FieldsPerRecord = -1
@@ -56,7 +61,7 @@ func XlsxFromCSV(src []byte, name, title string) ([]byte, error) {
 	if len(recs) == 0 {
 		return nil, errEmpty
 	}
-	s := sheetSpec{Name: name, Header: recs[0]}
+	s := sheetSpec{Name: name, Header: recs[0], csv: true}
 	for _, rec := range recs[1:] {
 		row := make([]any, len(rec))
 		for i, v := range rec {
@@ -171,6 +176,9 @@ func buildGrid(s sheetSpec, st *xlsxStyles) (*grid, error) {
 	for ri, r := range rows {
 		row := make([]gcell, len(r))
 		for ci, v := range r {
+			if str, ok := v.(string); ok && s.csv {
+				v = csvText(str)
+			}
 			header := ri == 0 && g.header
 			format := ""
 			if ci < len(s.Formats) && !header {
@@ -206,6 +214,8 @@ func cellOf(v any, format string) (*xcell, error) {
 		return &xcell{v: num(f)}, nil
 	case float64:
 		return &xcell{v: num(v)}, nil
+	case csvText:
+		return &xcell{v: value{kind: 's', str: string(v)}}, nil
 	case string:
 		if strings.HasPrefix(v, "=") && len(v) > 1 {
 			return &xcell{formula: strings.TrimPrefix(v, "=")}, nil
