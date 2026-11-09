@@ -140,6 +140,37 @@ class NewAgentRecentShotsTest {
         assertEquals("A card never starts", 2, service.requests.size)
     }
 
+    @Test fun aTabStartedInAWorkspaceShowsUpInRecent() {
+        val store = preferences()
+        runBlocking { listOf(pipeline, notes, persona).forEach { setup -> store.updateRecentSetups("hub/pairing") { RecentSetups.record(it, setup) } } }
+        val service = Service()
+        val flow = MutableStateFlow(machines)
+        val inSpace = NewAgentViewModel(service, store, flow)
+        var shown by mutableStateOf(inSpace)
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(2000.dp).background(PersonaTheme.palette.background)) {
+                    NewAgentPage(shown, machines, online = true, onBack = {})
+                }
+            }
+        }
+        rule.runOnIdle { inSpace.startIn(AgentSpacePreset("work-b", "w1", "/code/billing", "billing")) }
+        rule.waitForIdle()
+        rule.runOnIdle { inSpace.prompt("修一下发票导出") }
+        rule.onNodeWithText("开始对话").performClick()
+        rule.waitForIdle()
+        runBlocking { inSpace.acknowledge() }
+        assertEquals("w1", service.requests.single().workspaceId)
+
+        val reopened = NewAgentViewModel(service, store, flow)
+        rule.runOnIdle { shown = reopened }
+        rule.waitForIdle()
+        assertEquals(listOf("/code/billing", "/code/persona", "/code/notes-app"), reopened.state.value.recentSetups.take(3).map { it.cwd })
+        rule.onNodeWithText("billing · 工作站").assertExists()
+        val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+        File(out(), "recent-from-workspace-glass-light.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
     private enum class Scene { Cards, Picked, Menu, HandOff }
 
     @Test fun everyStyleLightAndDark() {

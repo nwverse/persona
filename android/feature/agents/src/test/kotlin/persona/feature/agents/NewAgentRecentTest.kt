@@ -193,17 +193,21 @@ class NewAgentRecentTest {
             model.opened()
             advanceUntilIdle()
 
-            // A tab in an existing space and a resume are not setups of this form.
+            // A tab in an existing space is kept too, with the space's folder (as on iOS, the Mac and the web).
             model.startIn(AgentSpacePreset("first", "w1", "/code/space", "space"))
             advanceUntilIdle()
             model.submit()
             advanceUntilIdle()
+            val space = store.recents.first()
+            assertEquals(listOf("first", "/code/space"), listOf(space.machine, space.cwd))
+            assertEquals(listOf(space, codex, claude), store.recents)
             model.opened()
             advanceUntilIdle()
+            // A resume is not a setup of this form.
             model.resume(Session(machineId = "first", sessionId = "old", cwd = "/code/history", launcher = "claude"))
             advanceUntilIdle()
             assertEquals(4, service.starts)
-            assertEquals(listOf(codex, claude), store.recents)
+            assertEquals(listOf(space, codex, claude), store.recents)
         } finally {
             model.viewModelScope.cancel()
         }

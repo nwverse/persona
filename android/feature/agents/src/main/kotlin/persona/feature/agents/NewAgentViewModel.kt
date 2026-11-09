@@ -427,8 +427,8 @@ internal class NewAgentViewModel(
                         return
                     }
                 }
-                // Recent setups (#2134): neither a tab in an existing space (its machine and folder are fixed) nor a resume.
-                if (request.workspaceId == null && request.resumeSessionId == null) recordRecent(request)
+                // Recent setups (#2134): a tab in an existing space too, as on iOS, the Mac and the web; a resume is not a setup.
+                if (request.resumeSessionId == null) recordRecent(request)
                 // A tab in an existing space must not replace the machine's remembered directory.
                 if (request.workspaceId == null && request.resumeSessionId == null) {
                     // A Codex (or any non-Claude) start sends no mode or effort: the machine keeps the ones its next
