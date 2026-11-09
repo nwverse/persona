@@ -282,8 +282,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - `test-server.sh` only says "server test environment preparation failed; tests were not started". `server_test_env.py` first runs `go env`;
   if hub Go is older than `server/go.mod` requires, it downloads a toolchain, but `go env -w` previously set `GOSUMDB=off` on that machine, preventing verification of the downloaded toolchain and failing `go env`.
-  Not a database-config issue. Download the toolchain first in the repo with `GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn go version`,
-  then put `~/go/pkg/mod/golang.org/toolchain@v0.0.1-go<version>.linux-amd64/bin` in PATH and run the same command with `GOTOOLCHAIN=local`, `GOPROXY=https://goproxy.cn,direct`.
+  Not a database-config issue. Download the toolchain first in the repo with `GOPROXY=<go-proxy> GOSUMDB=sum.golang.google.cn go version`,
+  then put `~/go/pkg/mod/golang.org/toolchain@v0.0.1-go<version>.linux-amd64/bin` in PATH and run the same command with `GOTOOLCHAIN=local`, `GOPROXY=<go-proxy>`.
 - Only hub-cached dependencies build: if `proxy.golang.org` is unreachable, other packages report `[setup failed]`, making it look as though half the tests are broken.
 - If hub Postgres is system-installed (no `persona-postgres` container), `db.sh` cannot create `persona_test` (its output is discarded), and role `persona` lacks CREATEDB:
   `internal/db`, `internal/db/dbtest`, `internal/hub` report `database "persona_test" does not exist`, while others pass.
@@ -766,3 +766,9 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Manager hello also runs on Hub instances without an updater, including the mesh harness. Withhold node deployment until the policy reader is available; do not make hello initialize an updater or assume a startup opt-in overrides an unread persisted choice (#2616).
 
 - In the mock hub's request handler, a local binding can shadow a module helper even in a route that never runs: delayed closures capture the local cell and fail before publishing. Name inbox records explicitly so the transcript item factory remains callable, and retain subprocess stderr when diagnosing missing asynchronous pushes (#2523).
+
+## Inbox hand-off UI tests need the sample item and an unambiguous target (2026-11-10, #1846)
+
+- `MOCK_INBOX_EVENTS=1` replaces the whole `INBOX` fixture list, including the sample mail `mail:acc1:t1:501` used by `NewConversationEntryTests`. Do not combine it with `MOCK_SOURCES=1` for those tests: the cached page may still open, but every `GET /api/v1/inbox/{id}` then returns 404. Check that direct GET before debugging the sheet.
+- On iOS 27 a SwiftUI sheet need not appear as an accessibility `Sheet`; `app.sheets.firstMatch` can be empty while its Send button exists. An app-wide label `firstMatch` can instead hit the same Agent title in the inbox behind the sheet. Pick a unique visible fixture title, terminate the app after each case, and inspect the actual hierarchy rather than assuming the sheet type.
+- The mock must implement the same single-item `POST /api/v1/inbox/{id}/done` route as the hub when a test asserts filing. A 404 makes `InboxStore` roll back its optimistic Done; polling cannot turn that into a pass. Reset the item before each case and poll the server after the successful send because filing is asynchronous.

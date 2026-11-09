@@ -112365,6 +112365,29 @@
         }
       }
     },
+    "The message couldn't be sent to the agent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message couldn't be sent to the agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージをエージェントに送信できませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息没能发给这个 Agent"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "The message source can't send encrypted messages right now" : {
       "localizations" : {
         "en" : {
