@@ -9,7 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -335,7 +335,9 @@ func (n *Node) expandPath(path, cwd string) string {
 	return filepath.Clean(path)
 }
 
-// listDir lists a directory for the file tree: directories first, then files, each by name (case-insensitive).
+// listDir lists a directory for the file tree: directories first, then files, each by name (case-insensitive, byte
+// order breaking ties). A folder over maxDirEntries keeps the first maxDirEntries in that order, so the order is decided
+// on every entry before the cap; only the kept ones pay for a stat (e.Info).
 func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 	path, real, err := n.resolveDir(path, cwd)
 	if err != nil {
@@ -345,28 +347,40 @@ func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
 	}
-	list := make([]DirEntry, 0, min(len(ents), maxDirEntries))
-	for _, e := range ents {
-		if len(list) >= maxDirEntries {
-			break
-		}
+	type listed struct {
+		DirEntry
+		key string // lowercased name, computed once rather than in every comparison
+		e   os.DirEntry
+	}
+	all := make([]listed, len(ents))
+	for i, e := range ents {
 		d := DirEntry{Name: e.Name(), Dir: e.IsDir(), Symlink: e.Type()&os.ModeSymlink != 0}
-		if info, err := e.Info(); err == nil {
-			d.Size, d.ModTime = info.Size(), info.ModTime()
-		}
 		if d.Symlink { // follow links so linked directories open like directories (not into iCloud Drive)
 			if _, st, err := n.statSafe(filepath.Join(real, d.Name)); err == nil {
 				d.Dir = st.IsDir()
 			}
 		}
-		list = append(list, d)
+		all[i] = listed{DirEntry: d, key: strings.ToLower(d.Name), e: e}
 	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].Dir != list[j].Dir {
-			return list[i].Dir
+	slices.SortFunc(all, func(a, b listed) int {
+		if a.Dir != b.Dir {
+			if a.Dir {
+				return -1
+			}
+			return 1
 		}
-		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+		if c := strings.Compare(a.key, b.key); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
 	})
+	list := make([]DirEntry, min(len(all), maxDirEntries))
+	for i := range list {
+		list[i] = all[i].DirEntry
+		if info, err := all[i].e.Info(); err == nil {
+			list[i].Size, list[i].ModTime = info.Size(), info.ModTime()
+		}
+	}
 	markIgnored(real, list)
 	return map[string]any{"path": path, "entries": list, "truncated": len(ents) > maxDirEntries}, nil
 }
