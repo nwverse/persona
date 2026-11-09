@@ -25,9 +25,18 @@ This preserves automatic dispatch for read-only work without inheriting a writab
 Start alone would not make an unsafe permission mode read-only.
 
 The node must honor `plan` or refuse the start. Claude Code terminal starts through herdr or Orca pass
-`--permission-mode plan`. Ordinary Codex terminal starts and all external runtime starts (including Paseo) fail
-with `readonly_unsupported`, rather than starting with their defaults. A runtime advertisement cannot guarantee
-that its final provider honors the mode: a runtime may fall back to a different provider at dispatch.
+`--permission-mode plan`. Codex terminal starts and supported terminal resumes use `--sandbox read-only
+--ask-for-approval never`: no approval can escalate past the sandbox. The node retains that constraint for later
+resumes, including a message that reopens the session. The terminal policy uses `never` because Codex 0.167 no
+longer accepts `untrusted` on its CLI; the separate thread API policy is unchanged.
+
+A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `--full-auto`, dangerous bypass
+(including `--yolo`), or `--approve-for-me` is refused with `readonly_unsupported` and `delivered: none` instead
+of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
+that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
+An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
+External runtime starts (including Paseo) still fail closed: their start protocol does not guarantee enforcement,
+and a runtime may ignore the mode or fall back to a different provider at dispatch.
 Update both the assistant and nodes for this behavior. This is the runtime's plan restriction on task work, not a
 promise that the runtime writes no session metadata or plan files, and it does not prevent a later explicit mode
 change by the user.
