@@ -3,6 +3,7 @@ package transcript
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -110,7 +111,7 @@ func TestToolLoopChangedInputAndQueuedPrompt(t *testing.T) {
 	if d.Candidate() != nil {
 		t.Fatal("a different call must clear the previous candidate immediately")
 	}
-	d.Line([]byte(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"next","content":"ok"}]}}`))
+	d.Line([]byte(`{"type":"user","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"next","content":"ok"}]}}`))
 	for i := 5; i < 9; i++ {
 		loopClaude(&d, i, "Read", map[string]any{"path": "one"}, "ok", start.Add(time.Duration(i)*time.Second))
 	}
@@ -123,6 +124,83 @@ func TestToolLoopChangedInputAndQueuedPrompt(t *testing.T) {
 	}
 	if loopHash([]byte(`{"number":9007199254740992}`)) == loopHash([]byte(`{"number":9007199254740993}`)) {
 		t.Fatal("large JSON numbers lost precision")
+	}
+}
+
+func TestToolLoopConcurrentResultsAndPolling(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		gap  time.Duration
+		want bool
+	}{{"fast out of order", time.Second, true}, {"slow results", 30 * time.Second, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var d LoopDetector
+			for i := 0; i < 4; i++ {
+				line, _ := json.Marshal(map[string]any{"type": "assistant", "timestamp": start.Add(time.Duration(i) * time.Second), "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprint(i), "name": "Read", "input": map[string]any{"path": "a"}}}}})
+				d.Line(line)
+			}
+			for i := 3; i >= 0; i-- {
+				line, _ := json.Marshal(map[string]any{"type": "user", "timestamp": start.Add(4*time.Second + time.Duration(3-i)*tc.gap), "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": fmt.Sprint(i), "content": "same"}}}})
+				d.Line(line)
+			}
+			if got := d.Candidate(); (got != nil) != tc.want {
+				t.Fatalf("candidate = %+v, want present %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestToolLoopMissingResultTimeIsNotEvidence(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var d LoopDetector
+	for i := 0; i < 4; i++ {
+		call, _ := json.Marshal(map[string]any{"type": "assistant", "timestamp": start.Add(time.Duration(i) * time.Second), "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprint(i), "name": "Read", "input": map[string]any{}}}}})
+		result, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": fmt.Sprint(i), "content": "ok"}}}})
+		d.Line(call)
+		d.Line(result)
+	}
+	if got := d.Candidate(); got != nil {
+		t.Fatalf("missing result time: %+v", got)
+	}
+}
+
+func TestToolLoopRotationSinceStaysStable(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, names := range [][]string{{"Read", "Grep"}, {"Read", "Grep", "Edit"}} {
+		var d LoopDetector
+		for i := 0; i < 120; i++ {
+			loopClaude(&d, i, names[i%len(names)], map[string]any{"path": "a"}, "ok", start.Add(time.Duration(i)*time.Second))
+			if i+1 >= 3*len(names) {
+				if got := d.Candidate(); got == nil || got.Count != i+1 || !got.Since.Equal(start) {
+					t.Fatalf("rotation %v step %d: %+v", names, i, got)
+				}
+			}
+		}
+	}
+}
+
+func TestToolLoopHashesWholeInputAndOutput(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, diff := range []string{"input", "output"} {
+		t.Run(diff, func(t *testing.T) {
+			var d LoopDetector
+			for i := 0; i < 4; i++ {
+				input := strings.Repeat("a", maxInputLen+100)
+				output := strings.Repeat("b", maxTextLen+100)
+				if i%2 == 1 {
+					if diff == "input" {
+						input += "x"
+					} else {
+						output += "x"
+					}
+				}
+				loopClaude(&d, i, "Read", map[string]any{"path": input}, output, start.Add(time.Duration(i)*time.Second))
+			}
+			if got := d.Candidate(); got != nil {
+				t.Fatalf("different content after clipping boundary matched: %+v", got)
+			}
+		})
 	}
 }
 

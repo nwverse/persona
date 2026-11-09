@@ -22,7 +22,7 @@ type LoopDetector struct {
 type loopCall struct {
 	id, tool       string
 	input, result  [32]byte
-	at             time.Time
+	at, resultAt   time.Time
 	ready, polling bool
 }
 
@@ -125,7 +125,7 @@ func (d *LoopDetector) Line(line []byte) {
 					Content json.RawMessage `json:"content"`
 					Error   bool            `json:"error"`
 				}{b.Content, b.IsError})
-				d.result(b.ToolUseID, r)
+				d.result(b.ToolUseID, r, l.Timestamp)
 			}
 		}
 		if l.Type == "user" && (!hasResult || hasPrompt) {
@@ -160,7 +160,7 @@ func (d *LoopDetector) Line(line []byte) {
 			}
 			d.call(p.CallID, p.Name, raw, l.Timestamp)
 		case "function_call_output", "custom_tool_call_output":
-			d.result(p.CallID, p.Output)
+			d.result(p.CallID, p.Output, l.Timestamp)
 		}
 	}
 }
@@ -219,10 +219,16 @@ func (d *LoopDetector) call(id, name string, input json.RawMessage, at time.Time
 	d.pending = append(d.pending, c)
 }
 
-func (d *LoopDetector) result(id string, output json.RawMessage) {
+func (d *LoopDetector) result(id string, output json.RawMessage, at time.Time) {
+	if at.IsZero() {
+		// Without a result time there is no way to exclude slow polling.
+		d.reset()
+		return
+	}
 	for i := range d.pending {
 		if d.pending[i].id == id {
 			d.pending[i].result = loopHash(output)
+			d.pending[i].resultAt = at
 			d.pending[i].ready = true
 			break
 		}
@@ -247,7 +253,9 @@ func (d *LoopDetector) add(c loopCall) {
 	}
 	if len(d.history) > 0 {
 		last := d.history[len(d.history)-1]
-		if delta := c.at.Sub(last.at); delta < 0 || delta >= 30*time.Second {
+		resultGap := c.resultAt.Sub(last.resultAt)
+		// Concurrent calls may complete out of order; the absolute gap handles either order.
+		if delta := c.at.Sub(last.at); delta < 0 || delta >= 30*time.Second || resultGap >= 30*time.Second || resultGap <= -30*time.Second {
 			d.history = nil
 			d.candidate = nil
 			d.period = 0

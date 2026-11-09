@@ -78,11 +78,36 @@ func TestToolLoopPollPush(t *testing.T) {
 	var body strings.Builder
 	for i := 0; i < 4; i++ {
 		ts := at.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
-		fmt.Fprintf(&body, `{"type":"assistant","timestamp":%q,"message":{"content":[{"type":"tool_use","id":%q,"name":"Read","input":{}}]}}`+"\n"+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":%q,"content":"ok"}]}}`+"\n", ts, fmt.Sprint(i), fmt.Sprint(i))
+		fmt.Fprintf(&body, `{"type":"assistant","timestamp":%q,"message":{"content":[{"type":"tool_use","id":%q,"name":"Read","input":{}}]}}`+"\n"+`{"type":"user","timestamp":%q,"message":{"content":[{"type":"tool_result","tool_use_id":%q,"content":"ok"}]}}`+"\n", ts, fmt.Sprint(i), ts, fmt.Sprint(i))
 	}
 	appendFile(t, path, body.String())
 	if s := nextWorkflowPush(t, pushes, 5*time.Second); s.ToolLoop == nil || s.ToolLoop.Count != 4 {
 		t.Fatalf("loop was not pushed: %+v", s.ToolLoop)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(string(original), `"content":"ok"`, `"content":"no"`, 1)
+	if len(changed) != len(original) || changed == string(original) {
+		t.Fatal("rewrite must change content without changing size")
+	}
+	rewrite := func(contents []byte, stamp time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, contents, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rewrite([]byte(changed), time.Now().Add(time.Second))
+	if s := nextWorkflowPush(t, pushes, 5*time.Second); s.ToolLoop != nil {
+		t.Fatalf("same-size rewrite did not clear loop: %+v", s.ToolLoop)
+	}
+	rewrite(original, time.Now().Add(2*time.Second))
+	if s := nextWorkflowPush(t, pushes, 5*time.Second); s.ToolLoop == nil || s.ToolLoop.Count != 4 {
+		t.Fatalf("same-size rewrite did not rebuild loop: %+v", s.ToolLoop)
 	}
 	appendFile(t, path, `{"type":"user","message":{"content":"new prompt"}}`+"\n")
 	if s := nextWorkflowPush(t, pushes, 5*time.Second); s.ToolLoop != nil {
@@ -101,7 +126,7 @@ func TestToolLoopLargeGapDoesNotReuseOldCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 4; i++ {
-		fmt.Fprintf(f, `{"type":"assistant","timestamp":"2026-01-01T00:00:0%dZ","message":{"content":[{"type":"tool_use","id":"%d","name":"Read","input":{}}]}}`+"\n"+`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"%d","content":"ok"}]}}`+"\n", i, i, i)
+		fmt.Fprintf(f, `{"type":"assistant","timestamp":"2026-01-01T00:00:0%dZ","message":{"content":[{"type":"tool_use","id":"%d","name":"Read","input":{}}]}}`+"\n"+`{"type":"user","timestamp":"2026-01-01T00:00:0%dZ","message":{"content":[{"type":"tool_result","tool_use_id":"%d","content":"ok"}]}}`+"\n", i, i, i, i)
 	}
 	if got := n.toolLoopOf("s"); got == nil {
 		t.Fatal("candidate missing")
