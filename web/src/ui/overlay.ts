@@ -30,11 +30,21 @@ export function focusables(root: HTMLElement): HTMLElement[] {
  *  controls, and on close the focus goes back to where it was before (the button that opened it), unless the close moved it
  *  somewhere else on purpose. */
 export function useModalFocus(ref: RefObject<HTMLElement | null>, open = true): void {
+  // The opener is read while rendering the first open frame: React focuses an autoFocus field inside while it commits,
+  // before any effect runs, so an effect would see that field and give the focus back to it (then to body) on close.
+  const opener = useRef<Element | null>(null);
+  if (!open) opener.current = null;
+  else if (opener.current === null) opener.current = document.activeElement;
+  // What had the focus inside at the last cleanup. StrictMode replays the effect of a modal mounted open (cleanup, which
+  // gives the focus back to the opener, then setup), and an autoFocus field does not take it again by itself.
+  const inside = useRef<Element | null>(null);
   useEffect(() => {
     const el = ref.current;
+    const was = inside.current;
+    inside.current = null;
     if (!open || !el) return;
-    const back = document.activeElement as HTMLElement | null;
-    if (!el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    const back = opener.current;
+    if (!el.contains(document.activeElement)) (was instanceof HTMLElement && el.contains(was) ? was : el).focus({ preventScroll: true });
     const tab = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
       const list = focusables(el);
@@ -46,6 +56,7 @@ export function useModalFocus(ref: RefObject<HTMLElement | null>, open = true): 
     el.addEventListener("keydown", tab);
     return () => {
       el.removeEventListener("keydown", tab);
+      inside.current = el.contains(document.activeElement) ? document.activeElement : null;
       returnFocus(el, back);
     };
   }, [ref, open]);

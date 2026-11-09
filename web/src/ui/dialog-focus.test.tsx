@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Dialog (atoms.tsx) and the keyboard focus: it moves in on open, Tab stays inside, and on close it goes back to the
 // opener, unless the close moved it somewhere else on purpose (a footer action that focuses a field outside).
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Dialog } from "./atoms";
@@ -59,7 +59,17 @@ function Box({ open, onClose = () => {} }: { open: boolean; onClose?: () => void
   );
 }
 
+// a body whose first field takes the focus itself (Rename and most other form dialogs)
+function Fielded({ open }: { open: boolean }) {
+  return (
+    <Dialog open={open} onClose={() => {}} title="T">
+      <input autoFocus data-testid="field" />
+    </Dialog>
+  );
+}
+
 const panel = () => document.querySelector<HTMLElement>("[role=dialog]")!;
+const field = () => document.querySelector<HTMLInputElement>("[data-testid=field]");
 function tab(shift = false): boolean {
   const e = new KeyboardEvent("keydown", { key: "Tab", shiftKey: shift, bubbles: true, cancelable: true });
   (document.activeElement ?? document.body).dispatchEvent(e);
@@ -92,6 +102,33 @@ describe("Dialog focus", () => {
     act(() => root.render(<Box open />));
     act(() => root.render(<Box open={false} />));
     expect(panel()).not.toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("gives the focus back to the opener, not to its own autoFocus field", () => {
+    // autoFocus runs while React commits, before the dialog's effect: the opener has to be noted before that
+    act(() => root.render(<Fielded open={false} />));
+    act(() => root.render(<Fielded open />));
+    expect(document.activeElement).toBe(field());
+    act(() => root.render(<Fielded open={false} />));
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("gives the focus back to the opener while an exit plays after an autoFocus field had it", () => {
+    (Element.prototype as { animate?: unknown }).animate = () => ({ finished: new Promise(() => {}), cancel() {} }) as unknown as Animation;
+    // mounted already open, as a caller that renders {x && <Dialog open />} does
+    act(() => root.render(<Fielded open />));
+    expect(document.activeElement).toBe(field());
+    act(() => root.render(<Fielded open={false} />));
+    expect(panel()).not.toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it("keeps an autoFocus field focused through StrictMode's replay of a dialog mounted open", () => {
+    // the app renders in StrictMode: on mount the cleanup gives the focus back to the opener and the effect runs again
+    act(() => root.render(<StrictMode><Fielded open /></StrictMode>));
+    expect(document.activeElement).toBe(field());
+    act(() => root.render(<StrictMode>{null}</StrictMode>));
     expect(document.activeElement).toBe(opener);
   });
 
