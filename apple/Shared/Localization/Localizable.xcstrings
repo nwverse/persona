@@ -19208,6 +19208,29 @@
         }
       }
     },
+    "As context": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As context"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンテキストとして"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作为上下文"
+          }
+        }
+      }
+    },
     "As usual: asks before changing files or running commands" : {
       "localizations" : {
         "en" : {
@@ -48372,6 +48395,29 @@
       },
       "extractionState" : "manual"
     },
+    "Folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件夹"
+          }
+        }
+      }
+    },
     "Folder %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -62343,6 +62389,29 @@
       },
       "extractionState" : "manual"
     },
+    "Mention a File or Session": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mention a File or Session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルまたはセッションをメンション"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提及文件或会话"
+          }
+        }
+      }
+    },
     "Mention a file or session" : {
       "localizations" : {
         "en" : {
@@ -70107,6 +70176,29 @@
       },
       "extractionState" : "manual"
     },
+    "No matching files or sessions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching files or sessions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一致するファイルまたはセッションはありません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有对得上的文件或会话"
+          }
+        }
+      }
+    },
     "No matching messages" : {
       "localizations" : {
         "en" : {
@@ -74416,6 +74508,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Nothing matches in this folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing matches in this folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このフォルダに一致する項目はありません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个文件夹里没有对得上的"
+          }
+        }
+      }
     },
     "Nothing needs you" : {
       "localizations" : {
@@ -85770,6 +85885,29 @@
       },
       "extractionState" : "manual"
     },
+    "Reading folder…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading folder…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダを読み込み中…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在读取文件夹…"
+          }
+        }
+      }
+    },
     "Reading quota…" : {
       "localizations" : {
         "en" : {
@@ -96733,6 +96871,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Session folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セッションのフォルダ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话目录"
+          }
+        }
+      }
     },
     "Session name" : {
       "localizations" : {

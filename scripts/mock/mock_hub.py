@@ -2876,6 +2876,14 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
         for _a in _w["agents"]:
             ITEMS[_a["session_id"]] = [it("user", "text", 14, text="%s：审这一块，列出问题" % _a["label"]),
                                        it("assistant", "text", 13, text=_a.get("last_text") or "这一块看完了，没有发现问题。")]
+# MOCK_MENTIONS=1 (#2319, the composer's @ list): the review agent read two files of its folder, each call alone between
+# replies, so the hub leaves them unfolded (fold_work) and they are this chat's files in the app (PersonaUITests/MentionMenuTests).
+if os.environ.get("MOCK_MENTIONS"):
+    ITEMS[REVIEW] = (_REVIEW_BEFORE + [it("user", "text", 100, text="看一下 PR #42")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/README.md"}, "# Weather", 99)
+                     + [it("assistant", "text", 98, text="先看了 README，再看小组件的改动。")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/WeatherWidget/Provider.swift"}, "1\timport WidgetKit", 97)
+                     + [it("assistant", "text", 95, text="PR #42 看完了：逻辑没问题，留了两条关于命名的小建议。")])
 ITEMS[CODEX_LIVE] = (
     [it("user", "text", 12, text="把三个环境的部署变量合到一个 env 文件里")]
     + tool("Bash", {"command": "ls deploy/env"}, "dev.env\nprod.env\nstaging.env", 8)
@@ -13123,6 +13131,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
     "PORT=<端口>  监听端口，默认 18760；0 表示自动分配（启动时打印 mock hub on <地址>:<端口>）",
