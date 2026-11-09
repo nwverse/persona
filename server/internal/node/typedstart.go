@@ -51,8 +51,11 @@ func startLine(path, anchor string, shells ...string) string {
 	return line
 }
 
-// writeStartScript writes the start file for cmd in dir (0600) and returns its path.
+// writeStartScript writes the start file for cmd in dir (0600; dir made 0700 when missing) and returns its path.
 func writeStartScript(dir, cmd string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
 	f, err := os.CreateTemp(dir, startScriptPrefix+"*.sh")
 	if err != nil {
 		return "", err
