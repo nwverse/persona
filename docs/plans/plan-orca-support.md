@@ -1,6 +1,6 @@
 # Plan: Orca support
 
-Status: in progress. Steps 0 and 1 are complete. The first Orca and herdr-core phases of step 2 are both written ("Orca source", "herdr-core host"), not merged. Completed steps are checked under "Implementation order" below. Once all steps are done, merge the design into
+Status: in progress. Steps 0 and 1 are complete. The first Orca and herdr-core phases of step 2 are both merged (2026-11-01; "Orca source", "herdr-core host"). Completed steps are checked under "Implementation order" below. Once all steps are done, merge the design into
 `docs/server/architecture.md` / `docs/server/server.md` and delete this plan.
 
 ## Background
@@ -110,7 +110,7 @@ Based on and checked against Orca 1.4.245 source.
 - This socket protocol has no public documentation, only an internal version (`RUNTIME_PROTOCOL_VERSION`, currently 3). Check capabilities with `status.get` at startup; disable if incompatible.
   Connect directly to the socket, not a new `orca` CLI process each time (starting a Node process every second while polling is too heavy).
 
-### Phase 1 (written 2026-11-01, not merged)
+### Phase 1 (merged 2026-11-01)
 
 Orca is this machine's third "engine" ("One engine per machine" below): engine name `orca`, display name "Orca". Code: client `server/internal/orcart`,
 host `server/internal/node/hostorca.go`, fake test runtime `server/internal/orcart/orcarttest`.
