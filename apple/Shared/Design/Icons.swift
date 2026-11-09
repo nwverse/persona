@@ -30,6 +30,8 @@ extension Theme {
         static let byState = "circle.grid.2x1"
         static let muted = "bell.slash.fill"
         static let notifications = "bell.badge"
+        /// The hours this device's notifications keep quiet (Settings › Notifications).
+        static let quietHours = "moon.zzz.fill"
         /// An Agent at work (the fleet's working count).
         static let working = "gearshape.fill"
         /// Calls moved to the background.
@@ -126,6 +128,9 @@ extension Theme {
         static let gitBranch = "arrow.triangle.branch"
         /// The spaces a host nests under another (Orca's child worktrees,「N 个子项」, #3075).
         static let childSpaces = "square.3.layers.3d.down.right"
+        static let workspaceUnread = "bell.fill"
+        /// Where a workspace comes from (its source host): the same plug as a hub plugin.
+        static let workspaceHost = plugins
         /// Branch to New Chat: a new conversation from a reply (#2137).
         static let forkChat = "arrow.branch"
         /// Rewind to Here: back to before one of your messages in a Claude session (#2915).
@@ -234,6 +239,8 @@ extension Theme {
         static let unarchive = "tray.and.arrow.up"
         static let mute = "bell.slash"
         static let unmute = "bell"
+        /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.
+        static let inboxRule = "signpost.right"
         static let collapseAll = "rectangle.compress.vertical"
         static let expandAll = "rectangle.expand.vertical"
         static let newConversation = "plus.bubble"

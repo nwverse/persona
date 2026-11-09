@@ -33,7 +33,7 @@ const adminUsage = `usage:
   personad hub admin setup-code                    a one-time code for first-run setup from this machine (asks the
                                                    running hub; valid 10 minutes)`
 
-// AccessChoices explains each scope; the deploy scripts print the same (scripts/admin_access.sh).
+// accessChoices explains each scope; admin_access_help in scripts/deploy/install.sh prints the same.
 var accessChoices = []struct{ name, meaning string }{
 	{accessLoopback, "只有 hub 这台机器自己（Docker 里是容器自己）能打开；别的电脑要用 ssh 隧道"},
 	{accessLAN, "本机 + 和 hub 同一网段的私网地址（+ security.trusted_cidrs）。默认，适合家里 / 办公室的局域网"},
@@ -83,7 +83,7 @@ func adminAccessCommand(ctx context.Context, dir string, args []string, stdout, 
 		return err
 	}
 	var current AdminConfig
-	if raw, ok := o.get("admin"); ok {
+	if raw, ok := o.Get("admin"); ok {
 		_ = json.Unmarshal(raw, &current)
 	}
 	if *get {
@@ -132,19 +132,19 @@ func adminAccessCommand(ctx context.Context, dir string, args []string, stdout, 
 		return errors.New("--cidrs 只和 cidrs 一起用")
 	}
 	err = editHubJSON(dir, func(o *jsonObject) error {
-		admin, err := o.object("admin")
+		admin, err := o.Object("admin")
 		if err != nil {
 			return err
 		}
-		if err := admin.set("access", access); err != nil {
+		if err := admin.Set("access", access); err != nil {
 			return err
 		}
 		if access == accessCIDRs {
-			if err := admin.set("cidrs", cidrs); err != nil {
+			if err := admin.Set("cidrs", cidrs); err != nil {
 				return err
 			}
 		}
-		o.setObject("admin", admin)
+		o.SetObject("admin", admin)
 		return nil
 	})
 	if err != nil {

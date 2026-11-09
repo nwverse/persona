@@ -106,7 +106,7 @@ func (t *tracker) set(r *voiceRun, state string) {
 	if openState(state) {
 		open = r.task
 	}
-	t.c.setOpen(r.ID, open)
+	t.c.setOpen(r.ID, open, state)
 	if r.State == state && r.Base == r.framed && len(r.MsgIDs) == r.framedIDs {
 		return // a hold moves the base on, a fold adds msg_ids: the app hands them back on a resume
 	}
@@ -272,7 +272,7 @@ func (t *tracker) adopt(r *voiceRun) {
 func (t *tracker) drop(r *voiceRun) {
 	t.runs = slices.DeleteFunc(t.runs, func(o *voiceRun) bool { return o == r })
 	t.link.unwatch(linkKey{r.MachineID, r.SessionID})
-	t.c.setOpen(r.ID, "")
+	t.c.setOpen(r.ID, "", "")
 }
 
 func working(s *proto.Session) bool { return s.Status == proto.StatusWorking || s.Starting }
@@ -582,7 +582,7 @@ func (t *tracker) send(ctx context.Context, r *voiceRun, message string) error {
 }
 
 // words is what the model is told: text, and short for a service that holds a commentary to an append's tokens (it
-// refuses text, and short is sent instead: session.go, deliver).
+// refuses text, and short is sent instead: session_speak.go, deliver).
 type words struct{ text, short string }
 
 func plainWords(text string) words { return words{text: text, short: clipTokens(text, appendTokens)} }

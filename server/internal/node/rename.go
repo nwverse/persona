@@ -7,21 +7,66 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
 )
 
-// renameSpace renames a herdr workspace (what the phone calls a space).
-func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) error {
-	name = strings.TrimSpace(name)
-	if workspaceID == "" || name == "" {
-		return fmt.Errorf("workspace and name are required")
+// renameWorktree targets a listed host container, including one with no Agents.
+func (n *Node) renameWorktree(ctx context.Context, kind, workspace, name string) error {
+	name = strings.Join(strings.Fields(name), " ")
+	if workspace == "" || name == "" || utf8.RuneCountInString(name) > maxLabel {
+		return fmt.Errorf("worktree and a name of 1 to %d characters are required", maxLabel)
 	}
-	org, err := hostCap[host.Organizer](n) // space ids carry no host kind yet: the engine's
+	h, err := n.hostOfKind(kind)
 	if err != nil {
 		return err
 	}
-	return org.RenameSpace(ctx, workspaceID, name)
+	org, ok := h.(host.Organizer)
+	if !ok {
+		return unsupported(h)
+	}
+	launch, ok := h.(host.Launcher)
+	if !ok {
+		return unsupported(h)
+	}
+	spaces, err := launch.Spaces(ctx)
+	if err != nil {
+		return err
+	}
+	for _, space := range spaces {
+		if space.ID == workspace {
+			if err := org.RenameSpace(ctx, workspace, name); err != nil {
+				return err
+			}
+			_ = n.refreshHosts(ctx, h)
+			return nil
+		}
+	}
+	return fmt.Errorf("the selected worktree is no longer available")
+}
+
+// renameSpace renames a herdr workspace (what the phone calls a space) and returns the name it shows now: a named herdr
+// session's with the session in front (sessionLabel, #2196), which the hub keys pins and to-do links by.
+func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if workspaceID == "" || name == "" {
+		return "", fmt.Errorf("workspace and name are required")
+	}
+	org, err := hostCap[host.Organizer](n) // space ids carry no host kind yet: the engine's
+	if err != nil {
+		return "", err
+	}
+	if err := org.RenameSpace(ctx, workspaceID, name); err != nil {
+		return "", err
+	}
+	if _, ok := org.(*herdrHost); ok {
+		if session, _ := herdr.SplitID(workspaceID); session != "" {
+			return sessionLabel(session, strings.TrimPrefix(name, session+sessionLabelSep)), nil
+		}
+	}
+	return name, nil
 }
 
 // renameSession renames the herdr tab a session runs in and / or the Claude session itself. A live claude gets
@@ -62,6 +107,16 @@ func (n *Node) renameSession(ctx context.Context, id string, tab, title *string)
 		t := strings.Join(strings.Fields(*title), " ")
 		if t == "" {
 			return fmt.Errorf("empty title")
+		}
+		if home, thread, codex := n.codexThread(id); codex {
+			if server := n.codexArchiveServer(id, home); server != nil {
+				call, cancel := context.WithTimeout(ctx, 30*time.Second)
+				defer cancel()
+				return server.wire.call(call, "thread/name/set", map[string]any{"threadId": thread, "name": t}, nil)
+			}
+			if !live {
+				return fmt.Errorf("%w: connect this Codex session before renaming it", host.ErrUnsupported)
+			}
 		}
 		if live && !n.isAssistantSession(id) {
 			return n.prompt(ctx, a.PaneID, "/rename "+t)

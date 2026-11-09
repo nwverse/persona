@@ -345,12 +345,16 @@ func TestInboxLegacyDraftIsASuggestion(t *testing.T) {
 // One whose conversation is gone gets a new one that carries the recap and the chain.
 func TestInboxConversationResumes(t *testing.T) {
 	h := agentHub(t)
+	h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+	// Drive recovery passes explicitly below, including after delivery discovers the missing conversation.
+	h.inbox.handing.Lock()
+	defer h.inbox.handing.Unlock()
 	cfg := InboxAgentConfig{Enabled: true}
 	old := time.Now().Add(-10 * time.Minute)
 	it := actionItem("lark:f1:11", time.Now())
 	it.Agent = &InboxAgent{State: AgentRunning, StartedAt: &old, Task: "看看"}
 	h.inbox.items[it.ID] = it
-	h.originSet(context.Background(), "server", "s-found", OriginInbox, it.ID)
+	h.originSet(context.Background(), "server", "s-found", OriginInbox, it.ID, "")
 	h.f.setSessions("server", proto.Session{SessionID: "s-found", Status: proto.StatusIdle})
 	h.sweepInboxAgents(context.Background(), cfg, time.Now())
 	if it.Agent.State != AgentQueued {

@@ -57,7 +57,8 @@ type Host interface {
 	// PaneProcesses are the pids of a pane's foreground processes, claude first.
 	PaneProcesses(ctx context.Context, pane PaneRef) ([]int, error)
 	// PaneEnv is the environment variable that names the pane in the processes running in it ("HERDR_PANE_ID"): its
-	// value is the host's pane id (PaneRef.ID).
+	// value is the host's pane id (PaneRef.ID) — for classic herdr, in its own server; a named session's panes are
+	// qualified with the session the process's HERDR_SESSION names (herdr.PaneOf, node envPane) first.
 	PaneEnv() string
 }
 
@@ -317,7 +318,8 @@ type Agent struct {
 	AgentStatus   string
 	Cwd           string
 	ForegroundCwd string
-	// PaneID is the pane as a PaneRef string (String): a herdr pane id as is.
+	// PaneID is the pane as a PaneRef string (String): a herdr pane id as is ("@<session>:<id>" for a named herdr
+	// session's, herdr.QualifyID).
 	PaneID string
 	// TabID, WorkspaceID: the host's slot and space ids.
 	TabID       string
@@ -390,6 +392,14 @@ type Space struct {
 	Branch string
 	// ParentID is the space this one is nested under in the host (Orca: a child worktree's parent); empty at the top.
 	ParentID string
+	// DisplayName is the host's user-visible title; Label retains its existing session/pin identity.
+	DisplayName string
+	// Project placement is separate from workspace lineage: several roots can share one project.
+	ProjectID, ProjectName, ProjectPath string
+	IsMain                              *bool
+	Unread                              *bool
+	SidebarStatus, WorkspaceKind        string
+	Head                                string
 }
 
 // Slot holds panes inside a space (herdr: a tab).

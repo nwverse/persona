@@ -2,6 +2,17 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A relay push keeps the fallback's sound unless the service extension sets it (#1862)
+
+- The relay writes the outer `aps` itself, `"sound":"default"` included, so the "New message" fallback rings. The notification service extension starts from `request.content.mutableCopy()`, which keeps that sound: replacing the texts, category and interruption level from the sealed payload is not enough. `PushCrypto.apply` sets the sound from the sealed `aps` and clears it when there is none; a silent notification that rings through the relay but not with direct APNs points here.
+- `apple/Shared` compiles for watchOS 10 too, and some UserNotifications APIs don't exist there: `UNNotificationSound(named:)` builds for iOS and the Mac and fails only in the watch build (hosted "iOS and Watch" job). A Mac unit test of shared code does not catch it.
+
+## Retiring a conversation preference (#2477)
+
+- Removing an Appearance row also requires removing its destination case, DEBUG deep link and localized strings. Ignore the retired `openAppearance chat` value rather than falling through to the Avatar page. The Appearance section is on the settings root, not a separate overview page.
+- Fixed defaults must not read legacy UserDefaults values, including the argument domain used by UI launches. Test stored disabled/folded/expanded modes and old line counts; keep other platforms' presentation branches when they still serve Mac, Vision Pro or Agent conversations. Per-message Expand / Collapse remains independent of the retired preference.
+- A text truncated by `lineLimit` retains its full accessibility label. Combine a three-line policy unit assertion with real folded screenshots and Expand controls; an accessibility assertion about the hidden last line alone is not evidence of folding.
+
 ## Idle-energy profiling and caller attribution (#1634)
 
 - Use an isolated mock hub and keep the build, simulator profile, data and visible-page history identical. Frame-count probes and frozen animations change the workload. A runtime-CLI root rebuild can pin `scenePhase`; use a cold launch and real tab actions instead. Home is asynchronous: verify the background transition before starting its window.
@@ -244,7 +255,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   Real hub pushes a machine's sessions every 2 seconds with new `updated_at`; state + last-update sorting reordered spaces on 36% of pushes and jumped the screen.
   - Sort by a time independent of each output: working sessions by work start (`Session.sortDate`, `SpaceGroup.sortDate`).
   - Hold pushes during touch, inertia, covered pages or another tab; land together 0.5 seconds after stopping, at most 5 seconds even with continuous scrolling;
-    never hold needs-you, questions, offline or errors (`docs/apple/ios-state.md` ("Timeliness")). The list reads only an intermediary (`AgentsFeed`,
+    never hold needs-you, questions, offline or errors (`docs/apple/ios-state.md` ("Timely (bounded)")). The list reads only an intermediary (`AgentsFeed`,
     `withObservationTracking` following the model), with an unobserved hold switch. A list `@State` snapshot would redraw at scroll start.
   - Holding must actually block pushes. These leaks still reevaluate each push:
     - Reading the model in `onChange` / `onScrollPhaseChange` counts as body observation.
@@ -371,6 +382,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 - Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
 - A `GeometryReader` that ignores the safe area on an edge reports no inset of its own there (`safeAreaInsets.trailing` was 0 on iPhone Duo's outer display, where the system's bars take the right-hand column): a rail meant for that column came out 59 pt wide against the screen edge, half off it. Measure the column as a reader inside the safe area less one that ignores it (`ShellSideRail`, 2026-11-07).
+- Every page on the shell's strip draws its own bar, so each one has to switch to `ShellSideRail` on `\.shellRailEdge`; the moving bar only stands in while the strip slides. The optional Messages page was missed and put its bar back across the top whenever it was in front (#2318); `ShellSideRailTests` checks the pages' rails on an iPhone Duo.
 - When capping chips in horizontal scrolling, do not put `frame(maxWidth:)` / `scaledFrame(maxWidth:)` outside the background (2026-11-05, #3010): `ScrollView(.horizontal)` proposes no width,
   and flexible frames pass that unlimited proposal through. The chip and background measure the entire title while only the frame's occupied space is capped;
   background and space diverge: shorter chips leave larger gaps, large text does not truncate and capsules overlap neighbors.
@@ -660,6 +672,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   (`Tab.workbench` collided with `-workbench`, renamed `-openWorkbench`). Use `open…` / `show…` names unlike type members and register in `release.sh`.
   Stored properties also collide (2026-10-31, `AgentsListMenu.Actions`.openMonitor vs `-openMonitor` stopped TestFlight 50). For new properties,
   first build locally `xcodebuild build -configuration Release -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO` and run `release.sh` `strings` checks on `Release-iphoneos/Persona.app/Persona`.
+  It happened again with `WorkspaceSidebarCard.openAgent` vs `-openAgent` (2026-11-09, #1675 stopped TestFlight 214, renamed `selectAgent` in #2179):
+  name closure properties `select…` / `on…`, not `open…` / `show…`. `@State` / `@Binding` / `@Environment` properties are stored as `_name` and never collide.
+  A quick check against the source: the list in `release.sh` into a file, then
+  `git grep -hoE '(var|let|case)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' -- 'apple/*.swift' ':!apple/PersonaTests' ':!apple/PersonaUITests' ':!apple/Persona/Debug' | awk '{print $2}' | sort -u | grep -xF -f <list>`
+  (each hit that is not a property wrapper or a Mac-only case is a collision).
 - Launch-argument defaults are `strings` (`-dev.compact YES` is "YES"). Read booleans / numbers with `bool(forKey:)` / `integer(forKey:)` / `double(forKey:)` like AppStorage,
   not `object(forKey:) as? Bool`, which silently falls back (#1473 `StoredValue` broke `-dev.compact YES`; `CompactListShots` showed cards instead of compact rows, #2147).
 - Live Activities (`docs/apple/live-activity.md`): ActivityKit uses default JSONDecoder for `content-state`; `Date` values start 2001; pass Unix-second numbers.
@@ -669,11 +686,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   Island numbers (TPM, tokens, load) consume push budget: hub sends only displayed fields, two significant figures, at most once per minute per device.
   Sharing with another app on 18 Pro gives two width-limited 28 pt compact activities (second clipped);17 Pro and others use minimal.
   Only iOS 27 `isDynamicIslandLimitedInWidth` reports width limitation; app cannot know presentation or other apps. Compact / minimal provide no width, making `ViewThatFits` useless.
-  Screenshot both models (`scripts/app/island_peer.sh` + `LiveActivityShots`, `docs/apple/live-activity.md` ("Sharing Dynamic Island with other apps")).
+  Screenshot both models (`scripts/app/island_peer.sh` + `LiveActivityShots`, `docs/apple/live-activity.md` ("Sharing the Dynamic Island with other apps")).
 - Missing shared keychain groups (push-relay `.push` private key; avatar `.look` also used builds 92–103) silently fall back, while simulator always works:
   build 92 extension signatures had no groups (unsigned archive + ad-hoc signing without entitlements, empty `$(AppIdentifierPrefix)`), always default avatar / system blue.
   Use `$(DEVELOPMENT_TEAM).` prefix in plist; after entitlement / signing changes run `scripts/release/entitlements.py check` on exported ipa (`docs/operations/release.md` ("entitlements")).
-- Simulator Live Activity rendering is insufficient (2026-11-02, build 98 signing fixed but device still default, even built-in avatar; `docs/apple/live-activity.md` ("Why build 98 still failed")):
+- Simulator Live Activity rendering is insufficient (2026-11-02, build 98 signing fixed but device still default, even built-in avatar; `docs/apple/live-activity.md` ("Why build 98 was still wrong")):
   - Put rendered data in ContentState and oversized images in App Group files. **Live Activity extensions cannot read / write keychain on device**:
     build 103 app shared-group write / read succeeded, extension never wrote one diagnostic (simulator both work; Apple only documents its separate sandbox).
     Unchanged-content updates may not redraw; content must really change.
@@ -1409,6 +1426,36 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
   that toggles on tap; if a selectable body is needed, give it its own gap or make the toggle a separate control. Test the
   fold by tapping the header's words, not just its chevron.
 
+## Workspace containers need an action without live Agents (#1399)
+
+Project ownership and workspace parentage are separate edges. Several independent workspace roots can belong to one Orca project; making every root its own repository loses the project layer. Carry the host project ID and name through discovery, group roots by the scoped project ID, and only then render their workspace trees. A child attached across projects follows its explicit parent. Acceptance must compare multiple sibling roots with the host sidebar, not only a single deep chain.
+
+A tree can look correct while its empty rows do nothing: a fold-only button has no content to reveal when there are no running Agents. Give real containers a stable source identity, keep folding as a separate control, and test selecting an empty worktree, starting there, and creating a child under an explicitly chosen parent. Do not add a container details page just to make its title actionable: worktree titles open the first direct Agent in displayed order, while Agent-free containers retain selection and contextual creation commands. A screenshot of an expanded tree alone does not verify these flows. Directory fallback for old provider history must refuse ambiguous same-directory workspace identities. New parent selection also needs a node capability gate: older nodes can silently ignore an additive request field. On macOS a List may expose a full-width selectable accessibility row while a borderless button only takes clicks on its label: an automated click at the row's center can hit blank space. Verify the actual button hit region before diagnosing an unresponsive action. On a narrow screen, show a chosen destination's name separately from its breadcrumb; truncating a long ancestor path can otherwise hide the selected workspace entirely.
+
+App-only workspace glyphs that use `scaledFrame` belong in `Persona/DesignSystem`, not `Shared/Design`: the watch also compiles Shared, but does not compile the app's text-size view modifiers. Verify the iOS build including its watch dependency after adding a shared-looking component.
+
+Custom worktree Agent rows must keep the shared list's accessibility behavior when the shared row changes. At accessibility text sizes, move model and age below the title and let the row grow; fixed-width metadata beside the title can leave only a few visible characters. Check the actual narrow-screen row at an accessibility size as well as the default size, in light and dark appearances.
+
+A recursive workspace card occupies one List cell. Agent controls inside it must not reuse a whole session row: its List insets and swipe actions propagate to the parent cell. Use a bounded button for each Agent, keep explicit context-menu actions on that control, and expose the card's accessibility children independently. Match the source status lane and List content margins as well as the card's own padding when comparing sidebar indentation.
+
+Creation from a sidebar menu must carry the clicked container's source ID even when it has no Agents. Reusing a nearby session or enclosing project selects the wrong parent. A title's `.contextMenu` inside a recursive List cell can use the entire cell as its hit and preview region. Use an independent control for each workspace; do not attach menu traits to the cell. On iOS it is a `Menu` whose primary action opens the worktree's first direct Agent. Exercise root, nested and empty-folder entry points through the real create form, including changing only the code source for a folder. Scroll the entire title into view before a gesture: a runtime accessibility tree can report a partly clipped row as visible, while its center is behind a bottom bar. Verify the form's actual source and parent and the manager's resulting lineage, rather than counting a menu gesture as success.
+
+The Agent menu inside that cell must follow the same rule. On Mac, its `.contextMenu` can replace the workspace menu even when right-clicking a different child's title. Workspace and Agent controls use plain buttons; a transparent AppKit secondary-click layer supplies each control's `NSHostingMenu` within its own bounds, preserving the SwiftUI environment and existing menu actions. Primary/option clicks and scrolling pass through. Verify root, Agent and child targets in an actual hosted List, then check the live workspace menu; a phone long-press alone cannot verify Mac right-click routing.
+
+Keep a workspace's title and branch inside one control, with Agent rows and descendants outside its hit region. In the Mac repository view, legacy `NavigationLink(value:)` Agent rows can retain the split view's implicit selection while workspace buttons change the explicit detail path. Use the same path-replacing buttons for both, disable system cell selection, and draw the selected state from the opened destination. A hosted split test must open an Agent, alternate parent and child worktrees through both title and branch, then return to a specific Agent; checking only the changed path misses a detail column that stayed on the old page. Use different source and display orders in the fixture to verify which Agent opens. Selecting an empty worktree must clear navigation without inventing a details destination. Inspect the empty pane in live acceptance as well: a retained navigation root may not call `onAppear` again when its pushed page closes, so an appearance flag alone cannot prove which page is visible. Present New Session for a newly created child only after the creation sheet dismisses.
+
+Hit routing alone does not verify a context menu. Let the worktree card supply one menu factory to its title/branch and every direct Agent control, passing the owning worktree explicitly. Keep worktree commands common and retain session commands for the clicked Agent; a multi-Agent worktree's title offers named Agent submenus rather than silently choosing one. Tests must inspect the actual hosted menu items and invoke New Child Worktree from each region, asserting the exact parent identity. A placeholder menu that only records which view was hit misses missing commands and incorrect creation targets. Keep menu equality tied to command-relevant identities, availability and Agent capabilities; transcript timestamps and sidebar status alone must not replace a menu while it is open. User-facing Orca containers are called worktrees; API and accessibility identifiers remain stable for compatibility.
+
+Repository badges describe a boundary with the direct parent, not a difference from the outer project heading. In a mixed-repository tree, show the badge when the repository changes, then omit it on descendants in that same repository. Compare host-scoped project IDs first; older catalogs can fall back to repository paths and the nearest known repository name. Comparing every descendant to the outer heading repeats the same badge down an entire branch, while comparing names alone hides boundaries between distinct repositories with equal names.
+
+`NSHostingMenu` can extract a custom label's underlying image at its original asset size, ignoring the SwiftUI frame around a resizable `AgentMark`. Multi-Agent submenu labels then become hundreds of points tall. Supply a native image drawn into a menu-sized box instead, and test the actual hosted `NSMenuItem.image.size` with a branded Agent fixture. A fixture without a known Agent brand only checks the fallback letter tile and misses this regression.
+
+An optional name in the UI needs a host-owned creation mode. Generating a branch on the client and sending it as an explicit override makes Orca treat it as user-chosen, which can disable its content-based naming. Advertise automatic naming separately from parent selection for every host that can create worktrees. Hosts without a native generator choose a unique name on the node and reuse checked creation. Send a boolean intent through the hub allowlist, and omit the branch override in Orca's request. Keep manual branch/path checks and return the host's actual result. A hand-edited path without a branch is still a manual request. Test old capability responses, boolean/string flags, source HEAD, cross-project parents, and branded native menu images.
+
+A Mac `Form` can allocate a nested `TextField` to its label while the actual editor has no useful width. Separate the visible field label from the editor, hide the TextField’s own label, apply the native rounded input style and let it fill the row. Test the real AppKit editor’s bounds and edit its value through the field editor in light and dark appearances. Keep accessibility identifiers on the Advanced toggle itself: putting one on a DisclosureGroup propagates it over the nested input identifiers.
+
+A worktree's display name and its Agents' conversation names are different commands. Do not reuse the first Agent's rename dialog for a container: keep an explicit container ID and a separate single-field action, with Agent actions in named submenus. The legacy herdr/Claude dialog's tab and conversation fields do not describe every runtime. Send only the applicable fields, and publish a local name change only after the server accepts it. A successful request must also be checked against the resulting host name; a menu opening or an optimistic list update proves neither persistence nor the target.
+
 ## A picker's menu drops an option's second line; a DisclosureGroup's chevron ignores the tint (2026-11-09, #1643)
 
 - **Picker in a menu**: Run Agent Here wanted to say why a launcher is unavailable before it is picked. An option drawn as
@@ -1425,3 +1472,14 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 
 - **What went wrong**: the Persona chat's avatar menu nests "Launcher" › each launcher › its models. The models are read a moment after the bar comes up. An `.id` on the innermost menu (built from the list) was not enough: the "Launcher" menu around it had none, kept the launchers' submenus it was built with before the lists came in, and the claude submenu showed only Default and "Other Model…" for as long as the app ran, although the state had all ten models. Whether a run saw it depended on when the outer menu happened to be built first, so a passing UI test proved little.
 - **Now**: every level of a nested `Menu` whose items come from state that loads or changes gets an `.id` built from that state (`AssistantTopBar.launcherMenuID` on "Launcher", the list and pick on each launcher). When a menu's items look stale, log the state first: if it is right, the menu was not built again.
+
+## App Intents that say yes to an agent need `.requiresAuthentication` (2026-11-09, #1878)
+
+- An App Intent without `authenticationPolicy` gets `.alwaysAllowed`. Siri runs it on a locked phone, and the hub
+  credentials (`kSecAttrAccessibleAfterFirstUnlock`) are readable then, so Approve First Pending allowed permissions and
+  approved plans while nobody had unlocked the phone; the notification and Live Activity buttons for the same card asked first.
+- An intent that allows a permission or approves a plan declares `.requiresAuthentication`, as notification actions use
+  `.authenticationRequired`, and a test pins it (`IntentsTests.approvingFromSiriNeedsUnlock`,
+  `FleetIntentsTests.sayingYesNeedsUnlock`). The policy covers the whole intent, so its other replies wait for the unlock too.
+  Ask Claude and Give an Agent a Task still send messages from a locked phone; changing that is a separate decision.
+- An entry that never shows the plan in full approves plans in `acceptEdits`, never `bypassPermissions`.

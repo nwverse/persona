@@ -39,6 +39,9 @@ interface InboxAssistantTransport {
     suspend fun bulk(items: List<InboxDoneTarget>, action: InboxBulkAction): JsonObject =
         setDone(items, action != InboxBulkAction.Reopen)
     suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject
+    /** Hands an item to its manager's main chat (`POST /api/v1/inbox/{id}/handoff`), answering `{item, session}`. */
+    suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject =
+        throw UnsupportedOperationException("Inbox hand-off route unavailable")
     /**
      * Acts on an item's suggestion (`POST /api/v1/inbox/{id}/suggestion`, inbox phase 1): [action] is confirm, reject or
      * instruct, [version] the suggestion's as shown, [text] the edited text (confirm) or the words (instruct). Answers
@@ -104,6 +107,18 @@ interface InboxAssistantTransport {
     suspend fun muteInbox(itemId: String, tag: String): JsonObject = throw UnsupportedOperationException("Inbox mutes unavailable")
     /** `DELETE /api/v1/inbox/mutes/{id}`. */
     suspend fun unmuteInbox(id: String): Unit = throw UnsupportedOperationException("Inbox mutes unavailable")
+
+    // Policies (docs/assistant/inbox.md "Policies"): the tier and AI twin of what an item has under one of its mute options.
+    /** `GET /api/v1/inbox/policies`: `{policies: [{id, source, source_name, tag, value, name, tier?, twin?, created_at, updated_at}]}`. */
+    suspend fun inboxPolicies(): JsonObject = throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `POST /api/v1/inbox/policies` `{item_id, tag, tier, twin}`: `{policy, applied}`; setting neither part removes it. */
+    suspend fun setInboxPolicy(itemId: String, tag: String, tier: String, twin: String): JsonObject =
+        throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `PATCH /api/v1/inbox/policies/{id}` `{tier, twin}`: `{policy, applied}`; setting neither part removes it. */
+    suspend fun updateInboxPolicy(id: String, tier: String, twin: String): JsonObject =
+        throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `DELETE /api/v1/inbox/policies/{id}`. */
+    suspend fun removeInboxPolicy(id: String): Unit = throw UnsupportedOperationException("Inbox policies unavailable")
 
     // A Feishu chat's pinned messages (iOS `LarkChatPins`): reading the list marks the pins read upstream.
     /** `GET /api/v1/lark/conversations/{feed}/pins?limit=50&account_id=&cursor=`. */

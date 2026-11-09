@@ -1,7 +1,9 @@
 package hub
 
 import (
+	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"net/http"
 	"slices"
@@ -11,11 +13,13 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionlist"
+	"github.com/nwverse/persona/server/internal/sessionorigin"
 )
 
 const (
-	featureSessionsList   = "sessions_list"
-	featureSessionsLookup = "sessions_lookup"
+	featureSessionsList       = "sessions_list"
+	featureSessionsLookup     = "sessions_lookup"
+	featureSessionsPaneSource = "sessions_pane_source"
 )
 
 // runtimeList is a transport cache of the manager's already-decorated rows. It
@@ -25,6 +29,9 @@ type runtimeList struct {
 	once     sync.Once
 	index    sessionlist.Index
 	machines map[string]bool // guarded by sessionsMu
+	// unaligned: machines whose last pass had a row not encoded under an id of its own (indexSessionsLocked); guarded
+	// by sessionsMu.
+	unaligned map[string]bool
 }
 
 func (h *Hub) sessionListIndex() *sessionlist.Index {
@@ -41,7 +48,9 @@ func (h *Hub) sessionListIndex() *sessionlist.Index {
 }
 
 // indexSessionsLocked consumes the same encoded whole rows used by the legacy
-// push path. Only row summaries are additionally encoded, once per update.
+// push path. Bounded rows add the scalar origin; summaries encode once per update.
+// A row whose encoded bytes the index already holds keeps its indexed payloads
+// (indexedRow): usually one row of a list changed since the last update.
 func (h *Hub) indexSessionsLocked(mid string, list []proto.Session, encoded []sentSession) {
 	if h.listCache.machines == nil {
 		return // no paginated reader yet; legacy users pay no indexing overhead
@@ -50,39 +59,131 @@ func (h *Hub) indexSessionsLocked(mid string, list []proto.Session, encoded []se
 	for _, row := range encoded {
 		full[row.id] = row.raw
 	}
-	items := make([]sessionlist.Item, 0, len(list))
+	// A row's summary is read from the row and its full row from the bytes under its id: the same session only while
+	// every row encoded under an id of its own. A duplicate id takes the last one's bytes and the first one's summary,
+	// so after a pass that is not so, and in the pass after it, every row is computed again.
+	aligned := len(encoded) == len(list) && len(full) == len(encoded)
+	reuse := aligned && !h.listCache.unaligned[mid]
+	if aligned {
+		delete(h.listCache.unaligned, mid)
+	} else {
+		if h.listCache.unaligned == nil {
+			h.listCache.unaligned = map[string]bool{}
+		}
+		h.listCache.unaligned[mid] = true
+	}
+	rows := make([]int, 0, len(list))
+	ids := make([]string, 0, len(list))
 	seen := make(map[string]bool, len(list))
-	for _, row := range list {
-		if row.SessionID == "" || seen[row.SessionID] {
+	for i := range list {
+		sid := list[i].SessionID
+		if sid == "" || seen[sid] || len(full[sid]) == 0 {
 			continue
 		}
-		seen[row.SessionID] = true
-		project := row.RepoRoot
-		if project == "" {
-			project = row.WorkspaceCwd
-		}
-		if project == "" {
-			project = row.Cwd
-		}
-		group := row.SpaceID
-		if group == "" {
-			group = row.WorkspaceID
-		}
-		summary, _ := json.Marshal(runtimeSummary(row))
-		items = append(items, sessionlist.Item{
-			ID: runtimeListID(mid, row.SessionID), Machine: mid, Project: project, Group: group,
-			State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
-			SearchText: strings.Join([]string{row.Title, row.Cwd, row.RepoRoot, row.SpaceName, row.SlotName, row.AgentName, row.LastText}, "\n"),
-			Summary:    json.RawMessage(summary), Full: full[row.SessionID],
-		})
+		seen[sid] = true
+		rows = append(rows, i)
+		ids = append(ids, runtimeListID(mid, sid))
+	}
+	var items []sessionlist.Item
+	if reuse {
+		items = h.listCache.index.Items(ids) // what each row was indexed as, to compare
+	} else {
+		items = make([]sessionlist.Item, len(ids))
+	}
+	for k, i := range rows {
+		items[k] = indexedRow(mid, ids[k], &list[i], full[list[i].SessionID], items[k])
 	}
 	h.listCache.index.Replace(mid, items)
 	h.listCache.machines[mid] = true
 }
 
+// indexedRow is row's item in the paged index, raw its encoding and indexed what the index holds under id (the zero
+// Item for none). When indexed's Full is raw with the same pane_source, its Summary is what row's is too: the summary
+// is cut from the fields raw encodes. Both are then kept, and the item is unchanged for Replace, rather than
+// marshalled again. The scalars are always read from row.
+func indexedRow(mid, id string, row *proto.Session, raw json.RawMessage, indexed sessionlist.Item) sessionlist.Item {
+	project := row.RepoRoot
+	if project == "" {
+		project = row.WorkspaceCwd
+	}
+	if project == "" {
+		project = row.Cwd
+	}
+	group := row.SpaceID
+	if group == "" {
+		group = row.WorkspaceID
+	}
+	pane := sessionorigin.Of(*row)
+	item := sessionlist.Item{
+		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane,
+		State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
+	}
+	text := [...]string{row.Title, row.Cwd, row.RepoRoot, row.SpaceName, row.SlotName, row.AgentName, row.LastText}
+	if was, ok := indexed.Full.(json.RawMessage); ok && sameIndexedFull(was, raw, pane) {
+		item.Summary, item.Full = indexed.Summary, indexed.Full
+		if item.SearchText = indexed.SearchText; !joinedBy(item.SearchText, text[:], '\n') {
+			item.SearchText = strings.Join(text[:], "\n")
+		}
+		return item
+	}
+	summary, _ := json.Marshal(runtimeSummary(*row))
+	item.Summary = json.RawMessage(summary)
+	// Reuse the exact legacy encoding, including compatibility keys.
+	item.Full = runtimeListFields(raw, struct {
+		PaneSource string `json:"pane_source"`
+	}{pane})
+	item.SearchText = strings.Join(text[:], "\n")
+	return item
+}
+
+// paneSourceKey is what runtimeListFields puts between a row's fields and its pane_source value.
+const paneSourceKey = `,"pane_source":"`
+
+// sameIndexedFull reports whether indexed is runtimeListFields(raw, pane_source) byte for byte, without building it.
+// A pane source JSON would escape is never taken as the same.
+func sameIndexedFull(indexed, raw []byte, pane string) bool {
+	head := raw[:len(raw)-1]
+	if len(indexed) != len(head)+len(paneSourceKey)+len(pane)+2 || !plainJSONString(pane) {
+		return false
+	}
+	tail := indexed[len(head):]
+	return string(tail[len(paneSourceKey):len(tail)-2]) == pane && string(tail[len(tail)-2:]) == `"}` &&
+		string(tail[:len(paneSourceKey)]) == paneSourceKey && bytes.Equal(indexed[:len(head)], head)
+}
+
+// plainJSONString: json.Marshal writes s between quotes as it is (printable ASCII that is not escaped).
+func plainJSONString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c > 0x7e || c == '"' || c == '\\' || c == '<' || c == '>' || c == '&' {
+			return false
+		}
+	}
+	return true
+}
+
+// joinedBy reports whether s is strings.Join(parts, string(sep)), without joining them.
+func joinedBy(s string, parts []string, sep byte) bool {
+	for i, p := range parts {
+		if i > 0 {
+			if s == "" || s[0] != sep {
+				return false
+			}
+			s = s[1:]
+		}
+		if !strings.HasPrefix(s, p) {
+			return false
+		}
+		s = s[len(p):]
+	}
+	return s == ""
+}
+
 // The JSON tuple is unambiguous even if a runtime id contains slashes. Clients
 // form the same key from machine_id/session_id when applying delta removals.
 func runtimeListID(mid, sid string) string {
+	if plainJSONString(mid) && plainJSONString(sid) {
+		return `["` + mid + `","` + sid + `"]` // json.Marshal's bytes, in one allocation rather than four
+	}
 	b, _ := json.Marshal([2]string{mid, sid})
 	return string(b)
 }
@@ -108,16 +209,53 @@ func rowText(s string, max int) string {
 // configuration. The normal info/items routes remain the source for chat detail.
 type runtimeRowSummary struct {
 	proto.Session
-	Waiting          bool `json:"waiting"`
-	BackgroundCount  int  `json:"background_count,omitempty"`
-	RunningSubagents int  `json:"running_subagents,omitempty"`
-	RunningWorkflows int  `json:"running_workflows,omitempty"`
+	PaneSource       string `json:"pane_source"`
+	Waiting          bool   `json:"waiting"`
+	BackgroundCount  int    `json:"background_count,omitempty"`
+	RunningSubagents int    `json:"running_subagents,omitempty"`
+	RunningWorkflows int    `json:"running_workflows,omitempty"`
+}
+
+// runtimeListFields joins two encoded objects. Embedding proto.Session in a
+// wrapper directly would promote its compatibility MarshalJSON and hide all
+// sibling fields. Both objects here are produced by our own JSON encoders.
+func runtimeListFields(session json.RawMessage, fields any) json.RawMessage {
+	extra, _ := json.Marshal(fields)
+	out := make([]byte, 0, len(session)+len(extra))
+	out = append(out, session[:len(session)-1]...)
+	out = append(out, ',')
+	out = append(out, extra[1:]...)
+	return out
+}
+
+func (s runtimeRowSummary) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(s.Session)
+	if err != nil {
+		return nil, err
+	}
+	return runtimeListFields(raw, struct {
+		PaneSource       string `json:"pane_source"`
+		Waiting          bool   `json:"waiting"`
+		BackgroundCount  int    `json:"background_count,omitempty"`
+		RunningSubagents int    `json:"running_subagents,omitempty"`
+		RunningWorkflows int    `json:"running_workflows,omitempty"`
+	}{s.PaneSource, s.Waiting, s.BackgroundCount, s.RunningSubagents, s.RunningWorkflows}), nil
+}
+
+// MarshalJSONTo shadows the promoted (*proto.Session).MarshalJSONTo, which encoding/json prefers for an addressable
+// summary (a pointer, a slice element) and which would drop the fields beside the session.
+func (s *runtimeRowSummary) MarshalJSONTo(enc *jsontext.Encoder) error {
+	b, err := s.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	return enc.WriteValue(b)
 }
 
 func runtimeSummary(s proto.Session) runtimeRowSummary {
 	out := proto.Session{
 		Manager: s.Manager, MachineID: s.MachineID, SessionID: s.SessionID,
-		Title: rowText(s.Title, 256), Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot,
+		Title: rowText(s.Title, 256), Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
 		Status: s.Status, State: s.State, UpdatedAt: s.UpdatedAt, StateSince: s.StateSince, SeenAt: s.SeenAt,
 		LastText: rowText(s.LastText, 180), Activity: rowText(s.Activity, 120), ActivityAt: s.ActivityAt,
 		AwaitsReply: s.AwaitsReply, BackgroundWorking: s.BackgroundWorking, BackgroundWaiting: s.BackgroundWaiting,
@@ -131,7 +269,7 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		Assistant: s.Assistant, Archived: s.Archived, ArchiveChangedAt: s.ArchiveChangedAt, Space: s.Space,
 		Starting: s.Starting, StartError: rowText(s.StartError, startErrorRow(s)), StartedByPersona: s.StartedByPersona,
 		StartErrorCode: s.StartErrorCode, StartErrorArgs: s.StartErrorArgs,
-		ReadOnlyReason: rowText(s.ReadOnlyReason, 180), Origin: s.Origin, OriginRef: s.OriginRef,
+		ReadOnlyReason: rowText(s.ReadOnlyReason, 180), Origin: s.Origin, OriginRef: s.OriginRef, OpenedBy: s.OpenedBy,
 		TurnError: rowText(s.TurnError, 180), TurnErrorKind: s.TurnErrorKind, TurnErrorCode: s.TurnErrorCode,
 		TurnErrorResetsAt: s.TurnErrorResetsAt, TurnErrorResumes: s.TurnErrorResumes,
 		PendingInteractions: s.PendingInteractions, Rev: s.Rev, Quiet: s.Quiet,
@@ -162,7 +300,8 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		cp.Reason = rowText(cp.Reason, 120)
 		out.Loop = &cp
 	}
-	row := runtimeRowSummary{Session: out, BackgroundCount: len(s.Background)}
+	out.Host = s.Host
+	row := runtimeRowSummary{Session: out, PaneSource: sessionorigin.Of(s), BackgroundCount: len(s.Background)}
 	for _, sub := range s.Subagents {
 		if sub.Running {
 			row.RunningSubagents++
@@ -212,6 +351,12 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request) {
 			opts.Machine = own[0]
 		}
 		limited = opts.Machine == ""
+	}
+	if limited && opts.PaneSource != "" {
+		// The legacy ownership projection recomputes totals outside the frozen view.
+		// Require one authorized machine for this stricter origin contract.
+		sessionListErr(w, errors.New("pane_source requires machine_id for a manager-scoped aggregate"))
+		return
 	}
 	if counts := r.URL.Query().Get("counts"); counts == "1" || counts == "true" {
 		var counts sessionlist.Counts
@@ -320,6 +465,7 @@ func (h *Hub) pruneSessionListMachines() bool {
 		if !present[mid] {
 			h.listCache.index.RemoveSource(mid)
 			delete(h.listCache.machines, mid)
+			delete(h.listCache.unaligned, mid)
 			changed = true
 		}
 	}

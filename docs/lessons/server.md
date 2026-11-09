@@ -1,5 +1,50 @@
 # Lessons: hub / node and networking
 
+## Durable storage receipts do not extend authority (#1187)
+
+Check current declared keys and queue/blob flags before replay lookup, including
+queue operations inside an atomic transaction. A prior success receipt cannot
+bypass a withdrawn flag. A claim receipt describes its original lease: replay
+must reject it after expiry, retry, completion or worker replacement, rather than
+returning an old `leased` result as fresh work. Time-relative admission checks for
+a new retry belong after replay lookup so a committed retry can still recover a
+lost reply after its next-attempt deadline passes.
+
+Carry the process's captured installation epoch and grants into the transaction.
+Re-resolving a replacement after an initial memory fence can lend an old callback
+the new scope; the persisted row lock must compare the original capture. Cancel
+attempt-bound callbacks before child cleanup, not after waiting for a dead child.
+Postgres owns mutation/receipt atomicity and uninstall retention; managers own
+business validation, so the DB package must not import a manager implementation.
+A recreated pool is not a database-server restart, and a canceled precommit update
+is not an injected unknown commit. Name and report those tests accurately.
+
+Do not pre-truncate every database fixture's timestamps: that masks an actual
+install's nanosecond registry record failing authorization against Postgres's
+microsecond `timestamptz`. Compare at the persisted precision in start, restore
+replay and uninstall, and test that a one-microsecond epoch/revision difference
+still rejects the stale operation. Real installed-source acceptance catches this
+edge even when synthetic transport fixtures all pass.
+
+A successful owner restore must restart the extension under the manager's context,
+not the HTTP request's. The committed data can be correct while a lazy runtime is
+canceled as soon as the 200 response returns, making its next page time out. Drive
+restore through the real API and open a fresh page after the response; DB-only
+restore tests do not exercise this lifetime boundary.
+
+## The first gh on PATH may not be the GitHub CLI (#2081)
+
+Some Linux hosts have an unrelated program named `gh` in `/usr/local/bin`, and `New` puts that directory ahead of
+most of the node's PATH. `exec.LookPath("gh")` then found it, `gh auth token` printed something that was not a
+token, and the GitHub page said the machine was not signed in although the GitHub CLI there was. A service's PATH
+also misses Homebrew on Linux (`/home/linuxbrew/.linuxbrew/bin`), where that CLI usually is. The node now asks each
+`gh` on PATH, then in Homebrew's Linux prefixes, for `--version` and runs the first that answers as the GitHub CLI
+(`server/internal/node/ghpath.go`). Check what a binary is before trusting its name on PATH.
+
+## A credential bound to an id outlives the entry (#1869)
+
+Deleting a Link computer in admin removed its hub.json entry but left its credential and unused pairing codes valid: the link only failed while no entry had that id, so adding the id again, for any computer, let the old one back in. Now deleting a computer in admin, rejecting it, and a pending one expiring revoke what is bound to its id (`device_tokens.machine_id`, `pair_tokens.machine_id`), and so does adding a computer under an id not in use, from the admin console, an app or `personad hub pair --add`. An entry dropped another way (a manager's `drop_machines`, a hand edit of hub.json) is not revoked then, only when its id is added again through the hub; one written back into hub.json by hand is not covered at all. The revocation filters on the role it means, because a peer hub's credential binds its hub id in the same column.
+
 ## Finish a revocation's activity push before forgetting its target (#1864)
 
 Push registration IDs differ from credential IDs: select the registrations bound
@@ -133,6 +178,11 @@ Don't add a `pending.json` field for it: older edges and watchdogs read the same
 - Node identity revisions and installation generations must use Postgres timestamp precision before the first bind. Raw Go nanoseconds are truncated to microseconds on storage; after a reload, a node would reject that lower revision or mistake the installation time for a new generation. Normalize both fields and test before/after database precision, not only whole-second fixtures.
 - Persistent hook ownership must remain recognizable to the rollback binary. Stop and join the old process's heartbeat and cleanup before starting the replacement; a late cleanup can remove the new hook even when the database migration is correct.
 
+
+## Private frames cannot carry a manager's resume cursor (#2354)
+
+Targeted extension UI frames bypass the event log, so the broadcast sanitizer never sees them. Strip the top-level `event_seq` at that relay boundary too; nested page data remains the source's. Test actual delivery and recipient restrictions together, including authenticated manager attribution, and keep private frames out of the global log.
+
 ## Mail account writes publish only committed candidates (#1302)
 
 Whole-account snapshots need one guard covering candidate capture, storage and publication across adds, OAuth
@@ -164,6 +214,12 @@ not replace a live session notification received while that RPC was in flight. A
 and a local session revision protect that boundary without changing the node protocol.
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
+
+## Usage scans must wait for launcher state (#2220)
+
+- Transcript scans consume file offsets and reply deduplication IDs. Looking up launcher ownership before persisted session state is available permanently assigns those replies to the unknown launcher; later state loading cannot repair the consumed history.
+- Start the first full usage scan only after a successful state load, not merely after the load attempt finishes. On a failed load, preserve the hub's previous window rather than publishing unknown attribution: the meter waits until a later try on the same connection (`reloadState`) loads the state, or the connection ends. Cancellation must release the waiting meter.
+- Regressions use synthetic transcripts and a captured RPC writer, with historical and current replies in the first report; no real transcript directories or hub database are needed.
 
 ## One silent address must not take the whole dial (2026-11-08, #1181)
 
@@ -407,6 +463,8 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 
 - To-do Agent linking and removal must lock rows in the same order (2026-11-05, #2660): acquire a session transaction lock, then lock the target and other active to-do parent rows by id, then update Agent rows, preventing concurrent link/removal deadlocks and duplicate active links. Auto-link first confirms the target isn't an existing row or dismissed marker, releases old active links, then inserts; `todo_agents_active` is an immediate unique index, so inserting before release raises 23505. Preserve soft unlink and roll back the whole transaction on unexpected conflicts. Regressions observe real lock waits and use `FOR UPDATE NOWAIT` to check order, not added sleeps or retries.
 
+- Workspace ownership transactions and publication need one ordering boundary (#1479). A store can commit A, return B first, then return A: serializing only the in-memory map still leaves two task lists and a stale automatic-routing index. Order link, unlink, rename and task deletion with their live publication. Release the write lock for session-list RPCs, then recheck the exact link before fanout; background automatic membership writes must also verify their still-current record before persisting. Test committed-store barriers and delayed session RPCs through HTTP handlers, including reload, failure/retry and preservation of manual/spawned links.
+
 - Extension-button notifications must check ordinary direct APNs, not just relay (2026-11-05, #2619): relay's encrypted envelope already had `mutable-content: 1`; direct delivery with only dynamic category/actions doesn't run the notification service extension on the App's first background receipt of a new category, preventing button registration before delivery. Add the field only when extension buttons exist and update `.apns` samples; plain, buttonless, and static interaction notifications stay unchanged. Check JSON actually sent to fake APNs; server success doesn't replace first-background-notification acceptance on iPhone.
 
 - When the hub calls a new node RPC, don't cache rejection forever (2026-11-04, #1742): the hub restarts first during deployment, while resident node (`node --attach`) waits until assistant chats are idle before replacing its binary via `exec` (same pid; `restarting on` in `node-attach.log` confirms replacement). At #1700 rollout, the hub's first cleanup preceded node replacement by 27 seconds; old node returned `unknown method session.retire` for every completed Agent, and the hub cached "don't ask again unless session changes". After node upgrade none of the backlog closed. Rejections of new methods need expiry (retry here after 10 minutes); log only the first occurrence / changed reason. Regression covers "rejected → node replaced → ask again later" end to end.
@@ -566,9 +624,15 @@ home volume (docs/operations/link.md "Without systemd").
   though a new link is up (`setLink` wakes the loop, `choosePath` still skips the path). With a container that stayed up 75 s or more before
   each restart, ten runs came back in min 2.2 / p50 2.4 / p90 2.5 / max 2.8 s (time from `docker restart` to the hub listing it online on a
   new link). A real flapping link (a laptop on a bad network) gets the same delays.
-- **No systemd, no remote node updates**: `can_deploy` is false ("The resident node is not managed by launchd/systemd…", `nodeupdate.New` looks
-  for `INVOCATION_ID` and `systemd-run`): the hub's Redeploy and its automatic node update after a hub update skip such a node. Upgrade it by
-  hand: put the hub's own node build (`~/.persona/bin/nodes/…-linux-amd64`, the same version) into the volume and kill the node process.
+- **No systemd: remote node updates need the supervisor to say so** (2026-11-08). `nodeupdate.New` recognized only systemd (`INVOCATION_ID`
+  plus `systemd-run`) and launchd (`XPC_SERVICE_NAME`), so the box showed `can_deploy` false ("The resident node is not managed by
+  launchd/systemd…") and Redeploy skipped it. What an update needs from a supervisor is only a restart when the node exits: the switch execs
+  the new program in place (same pid; the script's `wait -n` sees nothing), and the restart matters only after a crash or the watchdog's
+  rollback. The script now runs `personad node --attach --supervised` (docs/operations/link.md "Without systemd"); the watchdog then runs
+  detached in a session of its own, as on a Mac, so the script must restart only the pid it started. Don't fake `INVOCATION_ID` instead: the
+  node would then call `systemd-run`, which the box doesn't have. A personad from before the flag ignores whatever follows `--attach`, so the
+  script can pass it before the box runs a build that knows it; until then, upgrade by hand: put the hub's own node build (`~/.persona/bin/nodes/…-linux-amd64`,
+  the same version) into the volume and kill the node process.
 - **Some downloads only work over IPv6 from that network, and a default bridge has none**: the Claude Code installer's download host timed out
   over IPv4 from the NAS and its containers, while the npm registry worked (`npm install -g @anthropic-ai/claude-code` with
   `npm config set prefix ~/.local`). herdr's manifest (`herdr.dev/latest.json`) timed out repeatedly; the binary itself came from GitHub
@@ -584,6 +648,21 @@ home volume (docs/operations/link.md "Without systemd").
 - New network commands mustn't reuse the default 15-second read-only timeout: pull 60 seconds, full node operation 75, hub 90, client 100. Disable terminal credential prompts and bound pipe waits after cancellation. Test with local bare remotes and isolated Git config, not users' real repositories.
 - Git's "no upstream" used nonexistent SF Symbol `cloud.slash`; registration in the design system let `everyNameIsASymbol` catch it. The correct slashed-cloud symbol is `icloud.slash`. Don't exempt icon registration or validity checks.
 - Direct node RPC `handle` tests need even minimal fixtures to initialize `state: newState()`: dispatch reads session state before Git methods, so `home` alone panics first.
+- An upstream deleted on the remote and pruned (a merged pull request's branch) still prints `# branch.upstream` in `git status --porcelain=v2 --branch`,
+  but no `# branch.ab` line (2026-11-09, #1884). Ahead / behind left at their zero values then read as "up to date" and "nothing to push" while the new
+  commits exist only locally: report the missing `branch.ab` as `gone`, and never treat "upstream set, 0 / 0" as in sync without checking it.
+
+### Stash positions change outside the node (#1480)
+
+A stash index is a reflog position, not an identity. Carry the full object ID from list to request and apply by
+that ID. Checking it before an unguarded `git stash drop` leaves the same deletion race: terminal Git does not
+share the node mutex. For files storage, own the common-directory stash reference lock while validating,
+applying a pop and rewriting the reflog/reference, with packed-reference coordination for final deletion.
+Refuse unsupported storage or reference hooks before applying content; Git before 2.45 echoes
+`--show-ref-format` back instead of naming the backend, and only has the files backend. Preserve foreign locks on refusal,
+keep conflicts retryable, preserve existing storage modes and honor repository sharing for new loose refs,
+and require refresh/reselection after stale identities. Test the real JSON dispatcher
+against disposable Git with an independent writer at the last read before removal.
 
 ## Cloudflare Tunnel push relay (2026-11-02)
 
@@ -597,6 +676,8 @@ home volume (docs/operations/link.md "Without systemd").
   Keep new credentials and existing grant-secret backups in the password manager; temporary files 0600, no secret values in arguments or logs.
 
 ## Unified model configuration
+
+- Provider deletion must check dynamic extension purposes as well as the fixed category and Lark /agent IDs (#1839). Resolve the current extensions' effective bindings and use their display names in the existing localized refusal; an extension-only override is otherwise invisible to the guard. Build purpose IDs with `StorageKey()`, so a renamed extension still protects its saved provider. Regress deletion through HTTP, assert the provider and override remain unchanged on 409, and check deletion succeeds after switching or resetting the binding when no current purpose still uses it.
 
 - A managed-provider read failure is not an empty list (#1365). Read the whole raw setting reliably before changing providers, deciding assignments or resolving deletion dependencies; preserve readable sealed records so users can explicitly replace or remove corrupt credentials. Keep the confirmed snapshot through nested model resolution under the configuration lock, and publish that same committed snapshot to nodes. Decrypt only where import matching or node publication needs credentials. Reconnects and profile/trust notifications must omit a replacement on read or credential errors, and a safe committed edit must log and defer unsafe publication; only a genuinely missing setting permits first creation. Regress with selective failures at individual reads while writes remain available, full sealed-record equality, zero writes or node pushes on rejection, and a healthy retry.
 
@@ -644,6 +725,7 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- Deleting a connector is broader than deleting an archive namespace (#1836): include its alternate chat sources, posts and items, plus indexes and project references. Record the connector at ingestion, separately from a chat's namespace, and stamp item ownership before the unchanged-item fast path. Never infer legacy ownership from an item ID, title or a shared archive alias; use explicit provenance or a known source chat, leaving ambiguous records intact. Deletion tests need another connector's records, shared aliases and unowned legacy data, not only a single source.
 - A connector's knowledge-base switch must gate every ingestion path (#1835): conversations, items (documents, meetings and events), document-title lookups and program-initiated posts. Filtering the source list alone leaves direct calls open after a switch changes. Check both the feed and the main switch at the call boundary too; a shared extension process may keep running after its connector is disabled. `Registry.Feeds` does not include `Registry.Enabled`. Test both switches independently, with a connector that still answers calls, and assert that neither source reads nor post forwarding occur while off.
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
 - A checkpoint after append is a replay window (#1343): connector pages can repeat after a cursor failure, a later batch failure or a process interruption.
@@ -657,6 +739,7 @@ home volume (docs/operations/link.md "Without systemd").
   Attachment filenames must hash the full raw ID, not sanitize or truncate it: punctuation, case and long suffixes can otherwise overwrite an earlier message's
   attachment even when receipts correctly keep both IDs. Put new files in a separate day subdirectory so hash-shaped legacy names stay intact, keep legacy
   links/files, and use separate anonymous filenames when no stable ID is supplied.
+- Recording uploads need an accepted read boundary across all three files (#1488). A final metadata error can otherwise leave rejected segments and rendered text searchable under the previous revision. Save a durable undo snapshot before replacing content, keep it authoritative for readers until commit, and restore on writable reopen before exposing the store. Cover both search APIs, detail, segments, reconciliation and summarization, including failed restoration and metadata ownership edits. Exclude the undo journal at the shared search eligibility boundary: searching only natural transcript text misses plaintext UUID/schema keys around its encoded contents, including ghost hits for a rejected first upload. Test every replacement before and after writing, actual subprocess exits, first uploads, legacy files and retry; an in-memory rollback or metadata-only assertion misses the defect. Keep snapshot locks outside the metadata lock and release them before read-capable observer callbacks.
 - Enforce retention at write entry points, not only daily cleanup: initial archive reads "latest 100 messages", which in quiet sessions can reach years back;
   after cleanup, 47 expired day files reappeared 6 seconds later (production 2026-11-02). All day-file writes (`Archive`, `Ingest`, `WriteHistory`) share
   `Engine.textCutoff()` (midnight of the earliest retained day); cleanup uses `Engine.Prune`, with the same retention days. New write paths use it too. `TestArchiveKeepsToTheTextRetention` checks "cleanup immediately after writing should delete 0 days".
@@ -668,6 +751,31 @@ home volume (docs/operations/link.md "Without systemd").
   newline as they are, and test it as a property (original lines an exact subsequence of the result, count included) plus a fuzz target. The fuzzer found within seconds that a
   sender name with a line break formatted into two physical lines no reader took for one message, so its duplicate was written again; `Line.Format` now folds line breaks in
   the sender. Day files have no message ids: duplicates are "same minute, sender and text", which is exactly the formatted line.
+- History import (#1239): a source's page `limit` is a hint (one real source answers limit+10 around a position, limit+5 paging back), so go on only from the cursor or
+  positions a page answers, and treat "the same cursor again" as stuck, or a chat is read forever. A paced answer is empty with `more` false too: read `pace` first, then
+  `unreadable`, and only then take it as the start (`HistoryPage.AtStart`).
+- Never retry a history read that timed out, and never cancel one in flight to stop: the source may have served it (and counted it against a limit that trips a circuit
+  breaker after a few failures). The driver's call context is detached from the run's (`context.WithoutCancel` plus its own timeout); every stop switch is checked before the
+  next call instead, and any timeout or unknown code stops everything until a person looks.
+- A slowness baseline must be per method: an image's first chunk legitimately takes 1–2 s where a page takes 0.3 s, so measured against pages every image looks slow. Count
+  the "three slow among the last twenty" window over all calls, though, or a burst of image calls hides slow pages.
+- Positional windows from a search: windows grow when a read finds an anchor the search missed, so persist the anchors and the ranges covered, not the windows; and every read
+  must add coverage (give the gap up when one adds nothing), or a deleted message at a window's edge is asked for forever. Count as covered only what was kept (the read
+  inside the windows as they are then): a review probe showed positions read and dropped outside one window, then inside another a later anchor widened, missing with no
+  omission line. Omission lines need the edge messages' times, so keep those too: after a restart nothing else knows them.
+- "Fall back for a year the search found nothing in" must not include years before the conversation existed: with a 10-year retention every empty year streamed a whole
+  chat below its windows. Learn when the conversation began (one page around position 0) and skip the years before it.
+- Pacing state is safety state: a rest, a `retry_after` pause, the multiplier and the very-slow watch kept only in memory are gone after a redeploy, and the next call goes
+  out after one ordinary interval. Persist them with the status and wait out what is left before the first call.
+- A write that downloads images inside it must be able to abort as a whole: written with placeholders after a stop cut the downloads short, the page's cursor moves on and
+  the images are lost for good (a later read only adds the same message again, with its image, as a duplicate line). `kb.ErrDownloadAborted` from the download aborts
+  `WriteHistory`, and the page is read again after the resume.
+- Every call to a fragile source goes through the same safety path, a tool's too: a list call made from a chat turn was cancelled with the turn and its timeout only made a
+  note, so the next call of the tool asked again. Detach its context, and stop the import on a timeout as the driver does.
+- `filepath.WalkDir` does not follow a link at its root: a backup of a data directory that is a link archived nothing, succeeded, and three runs later had pruned every real
+  backup. Resolve the root first, and fail a backup that kept no file.
+- Attachment days longer than `text_days` only keep files no line points to (the day file is pruned, and a message past the text retention is never written, so its image is
+  never downloaded): `Engine.AttachmentDaysFor` caps them at `text_days`.
 
 ## Port forwarding (docs/operations/ports.md)
 
@@ -806,6 +914,7 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## File preview foundations (2026-11-04, #1292)
 
+- **JPEG pixels are stored before EXIF orientation** (#1303): apply all eight primary-image orientations, including mirrors, before sizing a thumbnail; re-encoding alone drops the orientation metadata. Keep metadata scans bounded and separate from nested/thumbnail IFDs. A derived thumbnail's ETag also needs a processing version, but clients must reach that validator: revalidate persisted disk thumbnails once per launch even when a listing's size/time match, and give browser thumbnail URLs a new page-load identity. Test both upgrade orders with a seeded old image; a new client may see an old node first. Unupdated clients can retain their private caches until they refresh or upgrade.
 - **Go `mime.TypeByExtension` varies by machine**: it reads `/etc/mime.types` and other system files; docx / xlsx / ipynb / heic may be known on one machine and empty on another, making MIME-selected viewers differ for the same file. Keep a fixed preview-type table in node (`node/filemime.go`); outside it, consult the system, then sniff initial bytes.
 - **`qlmanage -t` hangs on locked Macs** (still running after 30 seconds measured), without errors. System thumbnail tools need timeouts, cooldown after a timeout, and one concurrent execution: a file list may request dozens, otherwise node fills with stuck processes waiting on every thumbnail.
 - **Hub and web share an origin; isolate inline files**: standalone `Content-Disposition: inline` SVG / HTML scripts run as the web app and can read localStorage tokens. Inline only images, audio/video, PDF, with `Content-Security-Policy: sandbox`; PDF is exempt because Chrome won't display sandboxed PDFs.
@@ -846,6 +955,7 @@ home volume (docs/operations/link.md "Without systemd").
 - **Don't derive workspaces only from Agents**: host spaces can lack terminals, and Agent exit doesn't delete a workspace. Enumerate spaces separately, supplement session and bound directories, and persist the merged Postgres snapshot. Report partial host failures and preserve old records from those sources, not a successful empty list.
 - **The node owning the filesystem validates directory identity**: hub doesn't interpret remote paths with its own filepath/filesystem. Validate directories and resolve symlinks when binding; sessions supply the same physical directory through optional `workspace_cwd`, retaining original `cwd` for runtimes. Frontend slash/`..` cleanup can't recognize symlinks and misses Agents in the same directory. Cache validation if needed, but later file operations still check independently.
 - **Machine aliases can merge after binding**: normalizing ids only when adding cards isn't enough. On read, project cards and snapshots to current routing identities, preserving original card ids, columns, and order; mutations and CAS still target original state, preventing silent merger of two existing alias cards. New bindings dedup by effective machine and canonical directory (including archived); choose the latest complete snapshot by effective machine rather than restoring deleted workspaces from stale aliases.
+- **Project cached catalogs only when discovery needs them** (#2108): a growing `proto.Workspace` magnifies an unnecessary decode/qualify/encode pass even when discovery code is unchanged. An isolated warm GET with 8,200 sessions allocated about 201.8 KB against its unchanged 177,600-byte ceiling; selecting raw snapshots and qualifying only offline or failed-source fallbacks reduced it to about 175.6 KB. Qualify cached source defaults and machine-scoped IDs before failed-source filtering and duplicate checks, not just before response encoding, or the persisted catalog can retain duplicate alias rows. Preserve the latest-snapshot rule, Orca metadata, successful-source deletions, unavailable flags and restart behavior; a cold-only measurement misses the redundant warm-cache work.
 
 ## Block iCloud paths component by component (2026-11-04, #1669)
 
@@ -892,6 +1002,7 @@ and add that directory to image workflow PR paths.
 - `plugin.Digest` is what users consented to (stored in `plugins.granted`, compared on install / upgrade). New manifest fields (here `node`) enter digests as `omitempty` pointers:
   plugins lacking the field must produce byte-identical old digests, or every installed plugin appears to request more permissions after hub upgrade. `TestDigestWithoutNodeIsAsBefore` recomputes using the old structure and compares.
 - "More permissions" (`MorePermissions`) mustn't inspect only `Permissions` in `granted`: node permissions aren't there; compare old/new manifests (`NodeAdds`).
+- Top-level secrets are absent from the consent digest too (#1829). Compare secret names through the same helper in `MorePermissions` and `AddedIn`: otherwise the marketplace candidate permits an automatic upgrade that its own preview rejects as asking for more. Cover required and optional hub-only secrets, unchanged names, and the persisted once-per-version consent notice without changing existing digests.
 
 ## State surviving node connections can't belong to `Node` (2026-11-05, #1830)
 
@@ -1171,6 +1282,10 @@ A successful `git ls-files` can return no files when the requested directory con
 
 A verified download or unpacked binary is still temporary until its final rename succeeds. Register removal of the staging path immediately after creating it, so copy, verification and promotion failures share cleanup. Remove only that temporary file; keep the existing destination and valid input archive intact.
 
+## CSV numeric inference must precede lossy conversion (#1568)
+
+Compare the original CSV decimal with the exact decimal written by the 15-significant-digit XLSX serializer before choosing a numeric cell. Require integers (often identifiers) to match exactly, but round decimals and exponents to 15 significant digits first: tools print a float's shortest round-trip form with 16-17 digits, and turning those into text breaks sums and charts over a computed column. Float-to-float comparisons can hide rounding and underflow; counting all digits also rejects safe trailing zeros. Normalize decimal digits and scale with bounded exponents instead of expanding powers of ten. Verify generated worksheet values and cell types, including signed identifiers, decimal/exponent boundaries, and ordinary numeric controls.
+
 ## Spreadsheet text coercion requires finite values (#6352)
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
@@ -1236,6 +1351,10 @@ Go's `http.Client` follows a 301, 302 or 303 as a GET for any method but GET and
 - A dropped bus connection can wrap the offline error even after a request was sent. Notification choices use the send-aware forwarding path: only a definitely offline manager releases the receipt; a lost response keeps an unknown receipt so reconnecting cannot execute the same tap again.
 - Hub tests isolate `HOME` in `TestMain`. A subprocess such as the architecture guard's `go list -deps` can then lose the downloaded toolchain and module caches even though the parent `go test` compiled successfully. Before running tests with a downloaded `GOTOOLCHAIN`, export `GOPATH`, `GOMODCACHE` and `GOCACHE` from their original `go env` values; retain the isolated home rather than disabling it.
 
+## GitHub's bounded thread window starts at the REST tail (#1590)
+
+Ascending REST pages 1–5 retain the oldest 500 entries. Discover the last page from Link metadata, read enough tail pages to cover 500, then trim: a partial final page can require six physical pages. Keep pagination metadata beside the cached body on fresh and conditional reads. An unchanged first-page ETag does not establish an unchanged last page; prefer updated 304 Link metadata, and make one unconditional discovery read when a 304 omits it. A refreshed discovery establishes the earliest request admission order for its selected tail pages: their individual TTLs may otherwise reuse pre-append bodies. Keep completion timestamps for TTLs separately, publish immutable representations, and fence cache replacement by admission order so a late partial response or 304 cannot supersede a newer full page. Extract page numbers while keeping the original endpoint, and bound requests independently of the total history. Exercise the real Thread merge and every retained cursor with synthetic HTTP lists larger than the window.
+
 ## A source read newest first must not let an older entry replace a newer one
 
 A connector that folds several notifications into one thread (GitHub CI failures per repository and branch) read them newest first and let each replace the thread's thing, so the oldest one read won. It went unseen while the in-memory `seen` set skipped notifications already read; after every restart the whole unread backlog was read again, a few per poll, and the open item's time walked back by hours while its count rose once per step (#1527). Keep the newest per key by comparing times, never by reading order, and have the consumer ignore a step older than what it holds: a restart, a retry or a second page can each hand it an earlier one. Test it with a backlog larger than one poll's budget, read after a restart.
@@ -1268,3 +1387,50 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A scratch buffer for such bytes is a `sync.Pool` of the encoder's own, not `jsontext.Encoder.AvailableBuffer`: `encoding/json` resets its pooled encoder for each value, and the available buffer shrinks with it. A nested value is written with `jsonv2.MarshalWrite` into a `bytes.Buffer` set on the output slice, so it is not marshalled and then copied.
 - Lowering a text only to test a literal gate copies it every time (`transcript.AskOf`, three copies per list row): `lazyre.Regexp.MayMatchLowered` tests the gate on the text as `strings.ToLower` would have it, without copying an ASCII text, and the caller lowers only when it says true.
 - A catalog of anchored templates tried in turn (`i18n.DeploymentText`, `InboxText`, `ComputerText`) runs every regexp on a text that matches none: keep each template's literal pieces and run its regexp only on a text that starts with the first, ends with the last and holds the others.
+
+## Hot paths: re-reading every row of a list that barely changed, a catalog tried end to end (2026-11-09, #1986)
+
+- A list decorated again on every publish re-read every row's question (`transcript.AskOf` on the last words of each of 8,200 sessions). Keep the answer per machine and session with the text it was read from, and read again only when the text differs (`asksMemo`); a complete list drops the rows it no longer carries, a subset keeps them. Prove it with a table of lists that change between calls, each decorated warm and fresh.
+- To find out whether a list changed since it was last sent, compare its bytes as they are encoded (`changedWriter`), not after encoding them into a new slice: an unchanged list then costs no copy.
+- An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`, `isolatedSessionAllocation` in `hub/sessions_push_test.go`, #2050). Repeated garbage collection clears pools but does not stop unrelated goroutines; a synchronized allocation in another goroutine is still included in the measured callback's `TotalAlloc` delta. Rerun the whole test in the child, preserving its fixtures, functional assertions, collection cadence and allocation ceilings. Bound and reap the child, propagate its failures, and verify a child receipt rather than treating an early return as isolation. Check the source revision before attributing two failures to the same missing guard: a newer revision may already isolate one of them.
+- A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
+- Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
+- The paged index rebuilt every row's item (a summary marshalled, the full row and search text joined) on each list update and `sessions.revs`, for one changed row: 2.65 MB for 150 rows. The index's own item is the memo: when its stored full row is the row's new encoding with the same suffix, its summary is the row's too, since the summary is cut from the fields that encoding holds (`indexedRow`, 0.10 MB). Text read from the row itself is still compared, because the encoding folds every invalid UTF-8 byte into the same escape. The keys must line up: a list with two rows under one id pairs one row's summary with the other's bytes, so after such a list, and for the list after it, compute every row. Prove it with the full computation run beside it on changing lists, step for step (`TestIndexRowReuseMatchesFullPath`), and let `Replace` keep a payload that is the stored slice itself without walking it by reflection (`sessionlist.sameItem`).
+
+## Hot paths: compressing the same file on every request, a privacy scan that cannot read gzip (2026-11-09, #2219)
+
+- A response compressed as it is sent costs the same CPU for every client: the hub's gzip at level 6 over the web client's hashed assets was about 38 ms of CPU per cold first screen, 1.2 ms when the gzip bytes are stored. Files that never change under one name (Vite's `assets/`) are compressed once at build time (`webasset.Precompress`) and sent as stored; a request that must not get gzip (no `Accept-Encoding`, `HEAD`, `Range`, the admin paths) gets them decompressed, so its answer is the plain file's. Decompress such a file as it is read (`gunzipSeeker`: the size from the gzip trailer, a seek forward skips, a seek back starts again), not into memory first: a `HEAD` or a 304 then inflates nothing. A client without gzip pays the inflate (about 22 ms per first screen, against 0.9 ms for plain files); browsers always take gzip. Prove it against the plain site behind the same middleware for each kind of request, comparing status, headers and decoded bytes (`TestWebAppServesPrecompressedAssetsAsThePlainFiles`), and check that the stored bytes go out unchanged, not compressed again.
+- A stored file's own name must not become a second way to fetch it: the built-in copy answers `assets/<name>.gz` with a 404, as the plain site did.
+- `check_bundle_privacy.py` reads printable strings, and gzip turns a file's strings into noise: scan the plain web copy before precompressing it, or the scan of the binaries silently stops covering the web client.
+
+## Fixed heap: a lazy value evaluated as an argument, a whole set built for one member (2026-11-09, #2475)
+
+- A value made on first use is made anyway when it is passed as an argument to a call that may not need it: `writeIfMissing(p, prompts.RenderKBReadme())` parsed every prompt template on each manager start for a README that was already there. Pass the function (`writeIfMissing(p, prompts.RenderKBReadme)`) and call it after the check; a `heap?gc=1` profile of an idle process shows such frames.
+- A catalog or template set built whole on first use holds every member once any is needed: the deployment, inbox and computer indexes compiled every template of theirs (624 regexps, 2.9 MB live for the three) the first time they translated a text, and one prompt render parsed all 139 templates (1.56 MB). Keep each member's source and build it on first use (`i18n.templatePattern`, `prompts.templateSet` parsing a template with the ones its tree includes), and keep a test that builds every member, so a broken one still fails there (`TestEveryTemplateCompiles`, `Names()`).
+- A receive buffer sized for a worst case that cannot happen is kept for the life of a watch: the kernel never sends a netlink datagram over 32 KiB, so `netaddr` uses 64 KiB and retries a truncated dump with the old 1 MiB.
+
+## Hot paths: a whole list decoded again for one changed row, one message projected per app (2026-11-09, #2250)
+
+- A session list travels whole on every change, twice (node to manager `sessions.changed`, manager to hub `fleet.sessions`), and usually one of its 150 sessions changed. Decode only the elements whose bytes changed (`proto.SessionListDecoder`): a session decoded from the same bytes is the same session, so keep each decoded session by its bytes and hand out copies; drop what the last list did not name. The callers write `MachineID` and `Rev` into the list they get, so hand out struct copies, never the kept value.
+- Splitting an event into the list and the rest is only safe where `json.Unmarshal` would read both parts the same way: it folds names case-insensitively (Unicode folding included, `ſessions` is `sessions`), lets a repeated key win last and merges a repeated array. `proto.ScanSessionList` takes the fast way only for one exact, unescaped `sessions` member and names given once, and leaves everything else to `json.Unmarshal`; compare both on every edge (`TestScanSessionListMatchesUnmarshal`).
+- A row encoded from the same bytes, rev and manager is the same row: keep it with them and push the same slice again (`Machine.encodeKept`), so the delta and dedupe comparisons find it equal by its first byte. Tie the bytes to the exact kept list they describe (`rawsOf`, first element and length): any other writer of the list (a warm start, `markUnknownLocked`, a test's edit) then gets no memo and encodes everything. Prove it against a reference hub that decodes and encodes every list whole, byte for byte per app, and check the test fails when each key of the memo (bytes, rev, manager, an id listed twice) is dropped.
+- A message queued to many apps through a per-app transform (`compat.ProjectJSON`, which scans for legacy names) costs the transform once per app: a third of a push with two older apps. Transform once per kind of app (`queueProjected`). Delta apps in sync hold equal maps of what they have; hand a connecting app the map another holds when they are equal, and work out each push once per map (`broadcastSessions`).
+- An oracle test that compares output bytes cannot see whether a memo was used: the bytes are the same either way, so every test passed with the row memo or either hop's changed-row decoding turned off. Pin the reuse itself: the unchanged rows are pushed as the same slices, and each hop stays under an allocation ceiling far below a whole decode (`TestFleetSessionsOneChangedReusesRows`, `TestSessionsChangedOneChangedAllocations`). Bypass each memo once and check that a guard fails.
+
+## Transport source is not pane origin (#994)
+
+A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
+
+When adding scalars beside an embedded session DTO, account for its custom JSON methods: Go promotes them and can silently hide sibling fields. Preserve the compatibility encoding and explicitly serialize the additional list fields.
+
+## Catalog recipes carry opaque tool argument keys (#2037)
+
+A catalog's recipe contains the upstream tool's argument object. Protocol field names are snake_case, but argument and input-schema keys belong to that tool and may be camelCase. Keep both opaque to the recursive wire-key check, while still validating their object shape and the surrounding recipe. Check original JSON before decoding optional limits or generated recipe types; otherwise mistyped fields and explicit zero values can disappear before semantic validation.
+
+## Bound read-state snapshots by recorded entries (#2400)
+
+When decorating a large session list, reserve the timestamp snapshot by the smaller of the list and the recorded read-state table, under the same lock used to copy it. Reserving for every row wastes memory when few or no sessions have been read. The unchanged isolated publication budget can expose this cost even after workspace discovery allocations are fixed; identify the failing subcase rather than treating all session-reader failures as the same regression. Keep the original budgets and seen-state semantics.
+
+## Publication follows the explicit node policy (#1175)
+
+A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.

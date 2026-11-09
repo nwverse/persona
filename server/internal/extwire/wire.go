@@ -215,11 +215,29 @@ const (
 	// hub's: the manager asks HubWaitInteraction).
 	HubSettingsTool = "settings.tool"
 	// HubKBArchives, … see the routes.
+	// HubAudit: Audit → {}: a request of an extension's token the hub refused, for that extension's audit in its manager
+	// (plugin_audit). The manager takes the actions below only.
+	HubAudit = "audit"
 )
+
+// What the hub records with HubAudit (Audit.Action).
+const (
+	// AuditPermissionModeRefused: {machine_id, session_id, reason}: a permission mode change it may not make (not a
+	// conversation it opened, without agents.permission_mode, or with more than the permission mode).
+	AuditPermissionModeRefused = "permission_mode_refused"
+)
+
+// Audit is HubAudit's params: what extension Extension's token was refused. Detail holds ids and reasons only.
+type Audit struct {
+	Extension string         `json:"extension"`
+	Action    string         `json:"action"`
+	Detail    map[string]any `json:"detail,omitempty"`
+}
 
 // More of the hub's apps the manager calls.
 const (
-	// HubPushLocalized: {payloads: {lang: payload}} → {}: a push to every device in its language.
+	// HubPushLocalized: {payloads: {lang: payload}} → {}: a push to every device in its language. A device whose language
+	// has no payload gets the fallback's (en), else the default's (zh-Hans), else the first by code; none at all is an error.
 	HubPushLocalized = "push.localized"
 	// HubMailTargets: {} → {targets}: the languages the devices want mail translated into.
 	HubMailTargets = "push.mail_targets"

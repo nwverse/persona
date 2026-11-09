@@ -207,13 +207,16 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings.managers")
                             Button { showPair = true } label: { SettingsRow(title: String(localized: "Pair Again"), symbol: "qrcode.viewfinder", tint: Theme.accent) }
                                 .modifier(SettingsButtonLook())
+                                .disabled(model.hubSignOut != nil) // a hub paired now would go with the disconnect
                             Button(role: .destructive) { confirmUnpair = true } label: {
                                 SettingsRow(title: model.isMultiHub ? String(localized: "Disconnect All Hubs") : String(localized: "Disconnect and Forget Server"), symbol: Theme.Icon.end, tint: Theme.danger)
                                     #if os(macOS)
                                     .foregroundStyle(Theme.danger) // a plain row on the Mac: red says what it does
                                     #endif
+                                    .trailingProgress(model.hubSignOut == .all)
                             }
                             .modifier(SettingsButtonLook())
+                            .disabled(model.hubSignOut != nil)
                         }
                         .bareListRow()
                     } header: {
@@ -282,7 +285,7 @@ struct SettingsView: View {
             .onAppear(perform: openDebugPage)
             #endif
             .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
-                Button("Disconnect", role: .destructive) { model.unpair() }
+                Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
             #if os(iOS) || os(visionOS)
@@ -394,8 +397,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
-        else if d.string(forKey: "openAppearance") == "chat" { p.append(SettingsPage.chatLayout) } // New Conversation Layout (#1666)
-        else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
+        else if let a = d.string(forKey: "openAppearance"), a != "chat" { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
                      : a == "scheme" ? SettingsPage.colorScheme : SettingsPage.persona)
         }
@@ -459,8 +461,6 @@ enum SettingsPage: Hashable {
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
-    /// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`).
-    case chatLayout
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -517,7 +517,6 @@ private struct SettingsDestinations: ViewModifier {
         case .themeColor: ThemeColorSettingsPage()
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
-        case .chatLayout: ChatLayoutSettingsPage()
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
         #else
@@ -1350,6 +1349,48 @@ struct SettingsRow: View {
             #else
             Label(title, systemImage: symbol)
             #endif
+        }
+    }
+}
+
+/// A switch row of Settings with a mark (#1650): the system's switch with its label; in the BeautifulUI style the list row
+/// `SettingsRow` draws there (the tile, the name, its description under it) with the switch at its end, so a card's switch
+/// rows and the rows that open a page start with the same mark. `tint` is the tile's, `iconColor` the bare symbol's in the
+/// other styles (nil leaves it the list's).
+struct SettingsSwitchRow: View {
+    var title: String
+    var detail: String? = nil
+    var symbol: String
+    var tint: Color = Theme.accent
+    var iconColor: Color? = nil
+    /// The name's line limit in the other styles; BeautifulUI's row wraps it.
+    var titleLines: Int? = nil
+    /// On the switch itself, where UI tests look for it (`app.switches[…]`).
+    var accessibilityID: String? = nil
+    @Binding var isOn: Bool
+
+    var body: some View {
+        if AppStyle.current.usesBeautifulUI {
+            BUIListRow(title, detail: detail, detailLines: .max) { IconTile(symbol, tint: tint) } trailing: {
+                Toggle(title, isOn: $isOn).labelsHidden().accessibilityIdentifier(accessibilityID ?? "")
+            }
+            .accessibilityElement(children: .contain)
+        } else {
+            Toggle(isOn: $isOn) {
+                Label {
+                    if let detail {
+                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                            Text(title).lineLimit(titleLines)
+                            Text(detail).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text(title).lineLimit(titleLines)
+                    }
+                } icon: {
+                    if let iconColor { ThemedIcon(symbol).foregroundStyle(iconColor) } else { ThemedIcon(symbol) }
+                }
+            }
+            .accessibilityIdentifier(accessibilityID ?? "")
         }
     }
 }

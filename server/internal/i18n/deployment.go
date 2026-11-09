@@ -17,7 +17,7 @@ func DeploymentText(l Lang, text string) string { return deploymentText(l, text,
 
 type deploymentTemplate struct {
 	key     string
-	pattern *regexp.Regexp
+	pattern *templatePattern
 	names   []string
 	fixed   int
 	// literals are the template's text around its placeholders, one more than names ("" where two placeholders meet
@@ -40,8 +40,23 @@ func (t *deploymentTemplate) fits(text string) bool {
 	return true
 }
 
+// templatePattern is a template's regexp, anchored at both ends, compiled from its source the first time it runs: a
+// catalog has hundreds of templates in each language, a process meets the texts of few of them, and each compiled
+// regexp costs a few kilobytes (#2475). TestEveryTemplateCompiles compiles them all. Safe for concurrent use.
+type templatePattern struct {
+	src  string
+	once sync.Once
+	rx   *regexp.Regexp
+}
+
+func (p *templatePattern) FindStringSubmatch(text string) []string {
+	p.once.Do(func() { p.rx = regexp.MustCompile(p.src) })
+	return p.rx.FindStringSubmatch(text)
+}
+
 // match is the pattern's submatches in text, nil when it does not match. A text is tried against a catalog's hundreds
-// of templates in turn, and nearly all of them do not fit it: those cost a few string comparisons, not a regexp run.
+// of templates in turn, and nearly all of them do not fit it: those cost a few string comparisons, not a regexp run,
+// and a template no text has fitted yet has not compiled its regexp.
 func (t *deploymentTemplate) match(text string) []string {
 	if !t.fits(text) {
 		return nil
@@ -49,8 +64,47 @@ func (t *deploymentTemplate) match(text string) []string {
 	return t.pattern.FindStringSubmatch(text)
 }
 
+// templateIndex is a catalog's templates in the order they are tried, indexed by the first byte of the texts each may
+// match.
+type templateIndex struct {
+	forms []deploymentTemplate
+	// first: for each byte a text may start with, the templates whose text starts with that byte or with a placeholder,
+	// as indices into forms in their order. Any other template's first literal is not a prefix of such a text, so it
+	// could not match (fits). open: those starting with a placeholder, the only ones that may match the empty text.
+	first [256][]int32
+	open  []int32
+}
+
+func indexTemplates(forms []deploymentTemplate) *templateIndex {
+	x := &templateIndex{forms: forms}
+	var lead [256][]int32
+	for i := range forms {
+		if l := forms[i].literals[0]; l != "" {
+			lead[l[0]] = append(lead[l[0]], int32(i))
+		} else {
+			x.open = append(x.open, int32(i))
+		}
+	}
+	for c := range x.first {
+		x.first[c] = x.open
+		if len(lead[c]) > 0 {
+			x.first[c] = slices.Sorted(slices.Values(append(slices.Clone(x.open), lead[c]...)))
+		}
+	}
+	return x
+}
+
+// candidates are the templates text may match, in the order they are tried: a few of the catalog's hundreds, so a
+// text no template is worded as (the usual case) costs a lookup and a few string comparisons.
+func (x *templateIndex) candidates(text string) []int32 {
+	if text == "" {
+		return x.open
+	}
+	return x.first[text[0]]
+}
+
 var deploymentPlaceholders = lazyre.New(`\{(\w+)\}`)
-var deploymentTemplates = sync.OnceValue(makeDeploymentTemplates)
+var deploymentTemplates = sync.OnceValue(func() *templateIndex { return indexTemplates(makeDeploymentTemplates()) })
 
 func makeDeploymentTemplates() []deploymentTemplate {
 	return makeCatalogTemplates(func(key string) bool {
@@ -95,7 +149,7 @@ func makeCatalogTemplates(eligible func(string) bool) []deploymentTemplate {
 			fixed += len(text[at:])
 			pattern.WriteString("$")
 			literals = append(literals, text[at:])
-			out = append(out, deploymentTemplate{base, regexp.MustCompile(pattern.String()), names, fixed, literals})
+			out = append(out, deploymentTemplate{base, &templatePattern{src: pattern.String()}, names, fixed, literals})
 		}
 	}
 	// A more specific template (e.g. not_back_why) must precede its shorter, open-ended counterpart.
@@ -106,7 +160,7 @@ func makeCatalogTemplates(eligible func(string) bool) []deploymentTemplate {
 		if n := strings.Compare(a.key, b.key); n != 0 {
 			return n
 		}
-		return strings.Compare(a.pattern.String(), b.pattern.String())
+		return strings.Compare(a.pattern.src, b.pattern.src)
 	})
 	return out
 }
@@ -116,8 +170,8 @@ func deploymentText(l Lang, text string, depth int) string {
 		return text
 	}
 	forms := deploymentTemplates()
-	for i := range forms { // by index: a range value copies each template, for every text
-		form := &forms[i]
+	for _, n := range forms.candidates(text) {
+		form := &forms.forms[n]
 		match := form.match(text)
 		if match == nil {
 			continue

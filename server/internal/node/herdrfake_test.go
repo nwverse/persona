@@ -41,12 +41,33 @@ type fakeHerdr struct {
 type herdrCall struct {
 	Method string
 	Params map[string]any
+	Typed  string // a start's send_input: the line typed, `. <start file>`; Params has the file's command (typedstart.go)
 }
 
 // String is the canonical form tests compare: the method and its params as JSON with sorted keys.
 func (c herdrCall) String() string {
 	b, _ := json.Marshal(c.Params)
 	return c.Method + " " + string(b)
+}
+
+// startFileCommand is the command a start typed through its start file (runAgentCommand) when text is the line that
+// sources one: what the tests that pin a start's command compare.
+func startFileCommand(text string) (string, bool) {
+	_, file, ok := strings.Cut(text, " ")
+	if !ok || !strings.HasPrefix(text, ". ") && !strings.HasPrefix(text, "source ") {
+		return "", false
+	}
+	file, _, _ = strings.Cut(file, " && true ")
+	file = strings.TrimSuffix(strings.TrimPrefix(file, "'"), "'")
+	if !strings.HasPrefix(filepath.Base(file), startScriptPrefix) {
+		return "", false
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "", false
+	}
+	_, cmd, _ := strings.Cut(strings.TrimSuffix(string(b), "\n"), "\n") // after its rm of itself
+	return cmd, true
 }
 
 // herdrFail makes a handler answer with a herdr error instead of a result.
@@ -99,6 +120,12 @@ func (f *fakeHerdr) serveConn(c net.Conn) {
 		req.Params = map[string]any{}
 	}
 	call := herdrCall{Method: req.Method, Params: req.Params}
+	if req.Method == "pane.send_input" {
+		if cmd, ok := startFileCommand(str(req.Params["text"])); ok {
+			call.Typed = str(req.Params["text"])
+			call.Params["text"] = cmd
+		}
+	}
 	f.mu.Lock()
 	h := f.on[req.Method]
 	var result any = map[string]any{}
@@ -307,6 +334,9 @@ func agentOf(kind, session, status, pane, tab, ws, cwd, title string) map[string
 func herdrNode(t *testing.T) (*Node, *fakeHerdr, string) {
 	t.Helper()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	// herdr's config is the temp home's, not one the environment points at (herdr.WorktreesDir)
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	f := newFakeHerdr(t)
 	n, home := testNode(t)
 	n.hosts, n.dir, n.bin = herdrHosts(&herdr.Client{Socket: f.sock}), filepath.Join(home, ".persona"), "/tmp/persona-test/personad"

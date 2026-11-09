@@ -27,6 +27,18 @@ type inboxState struct {
 	fullAt       time.Time                        // the last read without If-Modified-Since
 	ci           map[string]*ciMeta               // CI items, by thread (rules.go)
 	repos        map[string]repoMeta              // repositories' default branches (rules.go)
+	marks        map[string]*readMark             // by thread: whether its thing was read on GitHub
+}
+
+// readMark is what says whether a thread's thing was read on GitHub (applyNotifications). It lives in memory only,
+// like the things; a thread without one is never inferred read.
+type readMark struct {
+	// notified is the updated_at of the newest notification the thing came from. The thing's At is not always that:
+	// the CI follow-up moves it to later runs GitHub sent no notification of. Zero is unknown: nothing is inferred.
+	notified time.Time
+	// missing counts the list reads in a row the thing was missing from while that notification would have been in
+	// them (missedAgain).
+	missing int
 }
 
 var (
@@ -35,6 +47,10 @@ var (
 	maxDetails   = 30                 // threads read per poll; the rest wait for the next
 	forgetAfter  = 8 * 24 * time.Hour // things kept for the hub to settle its items, like its own inboxForget
 	contextMoves = 8                  // newest comments / reviews in a thing's context
+
+	notificationsPage    = 50 // unread notifications per page
+	maxNotificationPages = 5  // pages read per poll; past them the list is incomplete (missedAgain)
+	readAfter            = 2  // list reads in a row a thing must be missing from to count as read on GitHub (readMark)
 )
 
 type notification struct {
@@ -75,23 +91,32 @@ func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) er
 }
 
 // poll reads the unread notifications (not at all when nothing changed: 304) and returns how long GitHub wants
-// the next poll to wait and whether a thing changed.
+// the next poll to wait and whether a thing changed. The first page decides: only it carries If-Modified-Since,
+// and its Last-Modified and X-Poll-Interval are kept. A rate limit is waited out, not returned: watchOne would
+// restart Watch long before GitHub takes another request.
 func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
+	if left := c.pauseLeft(); left > 0 {
+		return left, false, nil // GitHub asked for no requests until then (notePause)
+	}
 	st := &c.inbox
 	st.mu.Lock()
 	if st.things == nil {
 		st.things, st.seen = map[string]*connector.InboxThing{}, map[string]string{}
 	}
 	hdr := http.Header{}
-	full := time.Since(st.fullAt) >= fullEvery
+	// A thing missing from the last list read is settled by the next one: read in full, not answered with a 304.
+	full := time.Since(st.fullAt) >= fullEvery || st.unsure()
 	if !full && st.lastModified != "" {
 		hdr.Set("If-Modified-Since", st.lastModified)
 	}
 	st.mu.Unlock()
 
 	var ns []notification
-	code, h, err := c.request(ctx, http.MethodGet, "/notifications?per_page=50", hdr, nil, &ns)
+	code, h, err := c.request(ctx, http.MethodGet, notificationsPath(1), hdr, nil, &ns)
 	if err != nil {
+		if left := c.pauseLeft(); left > 0 { // a rate limit (request records it: notePause)
+			return max(left, pollDefault), false, nil
+		}
 		return 0, false, err
 	}
 	wait := pollDefault
@@ -107,43 +132,65 @@ func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
 		st.fullAt = time.Now()
 	}
 	st.mu.Unlock()
-	moved := c.applyNotifications(ctx, ns, time.Now())
+	ns, complete := c.laterNotifications(ctx, ns)
+	moved := c.applyNotifications(ctx, ns, complete, time.Now())
 	if c.followUpCI(ctx) {
 		moved = true
 	}
 	return wait, moved, nil
 }
 
-// applyNotifications reads the threads that moved (at most maxDetails, none while requests run low) and marks
-// those no longer unread as read elsewhere.
-func (c *Connector) applyNotifications(ctx context.Context, ns []notification, now time.Time) bool {
+func notificationsPath(page int) string {
+	return fmt.Sprintf("/notifications?per_page=%d&page=%d", notificationsPage, page)
+}
+
+// laterNotifications reads the pages after the first one, ns, while they come full, up to maxNotificationPages, and
+// says whether the list is complete (it ended on a short page). A page that fails ends the list incomplete without
+// an error: what was read still counts, and the next poll reads again; a rate limit is recorded (request) and
+// holds back the threads' details too. So does a pause another read recorded meanwhile: no page is asked for in it.
+func (c *Connector) laterNotifications(ctx context.Context, ns []notification) ([]notification, bool) {
+	batch := len(ns)
+	for page := 2; page <= maxNotificationPages && batch == notificationsPage; page++ {
+		if c.pauseLeft() > 0 {
+			return ns, false
+		}
+		var more []notification
+		if _, _, err := c.request(ctx, http.MethodGet, notificationsPath(page), nil, nil, &more); err != nil {
+			return ns, false
+		}
+		ns, batch = append(ns, more...), len(more)
+	}
+	return ns, batch < notificationsPage
+}
+
+// applyNotifications reads the threads that moved (at most maxDetails, none while requests run low or GitHub asks
+// for a pause) and marks those no longer in ns, the unread list newest first, as read elsewhere (missedAgain).
+func (c *Connector) applyNotifications(ctx context.Context, ns []notification, complete bool, now time.Time) bool {
 	st := &c.inbox
 	me := c.Status(ctx).Account
 	budget := maxDetails
-	if c.ratesLow() {
-		budget = 0
+	var oldest time.Time
+	for _, n := range ns {
+		if oldest.IsZero() || n.UpdatedAt.Before(oldest) {
+			oldest = n.UpdatedAt
+		}
 	}
 	unread := map[string]bool{}
 	moved := false
 	o := c.options()
 	for _, n := range ns {
-		if o.muted(n.Repository.FullName) {
-			continue
-		}
 		kind, label := classify(n)
-		if kind == "" {
+		thread, run, parsed := threadOf(n), ciRun{}, false
+		if kind == "ci_failed" {
+			if run, parsed = parseCI(n.Subject.Title); parsed {
+				thread = ciThread(n.Repository.FullName, run.branch)
+			}
+		}
+		// Unread on GitHub, whatever the inbox makes of it below (a reason it leaves out, a muted repository).
+		unread[thread] = true
+		if kind == "" || o.muted(n.Repository.FullName) || kind == "ci_failed" && (!parsed || o.ignoredBranch(run.branch) || o.ci() == CIOff) {
 			continue
 		}
-		thread := threadOf(n)
-		var run ciRun
-		if kind == "ci_failed" {
-			var ok bool
-			if run, ok = parseCI(n.Subject.Title); !ok || o.ignoredBranch(run.branch) || o.ci() == CIOff {
-				continue
-			}
-			thread = ciThread(n.Repository.FullName, run.branch)
-		}
-		unread[thread] = true
 		stamp := n.UpdatedAt.UTC().Format(time.RFC3339)
 		st.mu.Lock()
 		known := st.seen[n.ID] == stamp
@@ -155,6 +202,10 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, n
 		}
 		st.mu.Unlock()
 		if known || older || budget == 0 {
+			continue
+		}
+		if c.ratesLow() { // checked per thread: a detail read may have run into a rate limit
+			budget = 0
 			continue
 		}
 		budget--
@@ -191,20 +242,57 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, n
 		st.mu.Lock()
 		st.seen[n.ID] = stamp
 		st.things[thread] = &thing
+		if st.marks == nil {
+			st.marks = map[string]*readMark{}
+		}
+		st.marks[thread] = &readMark{notified: n.UpdatedAt}
 		st.mu.Unlock()
 		moved = true
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	for thread, t := range st.things {
-		switch {
-		case now.Sub(t.At) > forgetAfter:
+		if now.Sub(t.At) > forgetAfter {
 			delete(st.things, thread)
-		case !unread[thread] && !t.Read && t.Done == "":
+			delete(st.marks, thread)
+			continue
+		}
+		if m := st.marks[thread]; m != nil && m.missedAgain(t, !unread[thread] && !t.Read && t.Done == "", complete, oldest) {
 			t.Read, moved = true, true
 		}
 	}
 	return moved
+}
+
+// missedAgain counts the unread list just read (newest first; oldest is its oldest notification) for t, the thread's
+// thing, gone from it (not in it, nor read or done already), and says whether t now counts as read on GitHub: gone
+// from readAfter list reads in a row that would have had its own newest notification, being complete or reaching
+// past that notification. GitHub pages by offset, not from a snapshot: a notification read, or moved to the top by
+// new activity, while the poll is between pages shifts the rest, so one still unread can be on no page once (the next
+// poll reads the list in full at once: unsure). A thing the CI follow-up moved past its notification never counts:
+// GitHub sent no notification of the later run, so reading an earlier one says nothing of it. st.mu is held.
+func (m *readMark) missedAgain(t *connector.InboxThing, gone, complete bool, oldest time.Time) bool {
+	listed := complete || !oldest.IsZero() && m.notified.After(oldest)
+	if !gone || !listed || m.notified.IsZero() || t.At.After(m.notified) {
+		m.missing = 0
+		return false
+	}
+	if m.missing++; m.missing < readAfter {
+		return false
+	}
+	m.missing = 0
+	return true
+}
+
+// unsure says whether a thing was missing from the last list read without counting as read yet (missedAgain). st.mu
+// is held.
+func (st *inboxState) unsure() bool {
+	for _, m := range st.marks {
+		if m.missing > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // tagsOf is what a notification's thing is about: its repository, who made the newest move (a person's PR / issue

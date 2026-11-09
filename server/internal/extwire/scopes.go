@@ -32,6 +32,9 @@ var RouteScopes = map[string]string{
 	"POST /api/v1/inbox/{id}/handoff":                    ScopeInboxWrite,
 	"POST /api/v1/inbox/{id}/doc/status":                 ScopeInboxWrite,
 	"PUT /api/v1/inbox/{id}/parent":                      ScopeInboxWrite,
+	"PUT /api/v1/inbox/{id}/folder":                      ScopeInboxWrite,
+	"GET /api/v1/inbox/folders":                          ScopeInboxRead,
+	"PUT /api/v1/inbox/folders":                          ScopeInboxWrite,
 	"GET /api/v1/inbox/tree/{kind}/{id...}":              ScopeInboxRead,
 	"POST /api/v1/inbox/mutes":                           ScopeInboxWrite,
 	"DELETE /api/v1/inbox/mutes/{id}":                    ScopeInboxWrite,
@@ -61,6 +64,8 @@ var RouteScopes = map[string]string{
 	"POST /api/v1/sessions/{mid}/{sid}/queue":            ScopeAgentsControl,
 	"POST /api/v1/sessions/{mid}/{sid}/queue/send-now":   ScopeAgentsControl, // #6088
 	"POST /api/v1/sessions/{mid}/{sid}/seen":             ScopeAgentsControl,
+	"POST /api/v1/sessions/{mid}/{sid}/rename":           ScopeAgentsControl,
+	"POST /api/v1/sessions/{mid}/{sid}/modes":            ScopeAgentsPermissionMode,
 	"POST /api/v1/interactions/{id}/choose":              ScopeAgentsControl,
 	"POST /api/v1/interactions/{id}/resolve":             ScopeAgentsControl,
 	"POST /api/v1/interactions/{id}/reanswer":            ScopeAgentsControl, // "Change answer": a message to the agent
@@ -77,12 +82,14 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/assistant/conversations/{id}/feed":      ScopeAssistantAsk,
 	"POST /api/v1/assistant/conversations/{id}/stop":     ScopeAssistantAsk, // /agent's /stop (#3308)
 	"GET /api/v1/assistant/reporters":                    ScopeAssistantAsk,
-	// The todos (the assistant's, relayed): reading them, and adding, editing and attaching agents and spaces. Deleting
-	// a todo, its decisions, the done check and a retry stay with full credentials.
+	// The todos (the assistant's, relayed): reading them, adding, editing and attaching agents and spaces, and writing
+	// outcome decisions (an extension writes no other source). Deleting a todo, superseding decisions, the done check and
+	// a retry stay with full credentials.
 	"GET /api/v1/todos":                                 ScopeTodosRead,
 	"GET /api/v1/todos/{id}/decisions":                  ScopeTodosRead,
 	"POST /api/v1/todos":                                ScopeTodosWrite,
 	"PATCH /api/v1/todos/{id}":                          ScopeTodosWrite,
+	"POST /api/v1/todos/{id}/decisions":                 ScopeTodosWrite,
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}":         ScopeTodosWrite,
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":      ScopeTodosWrite,
 	"PUT /api/v1/todos/{id}/spaces/{mid}/{space...}":    ScopeTodosWrite,

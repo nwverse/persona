@@ -120,10 +120,10 @@ struct ExtensionsModelTests {
             ExtensionField(name: name, type: type, title: name == "machines" ? "能操控的电脑" : nil,
                         items: machines ? ExtensionItems(type: "string", format: "machine") : nil)
         }
-        #expect(ExtensionText.saveFooter([field("url", "string")])?.hasPrefix("改完点右上角「保存」") == true)
+        #expect(ExtensionText.saveFooter([field("url", "string")]) == String(localized: "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults."))
         #expect(ExtensionText.saveFooter([field("machines", "array", machines: true)]) == nil)
-        #expect(ExtensionText.saveFooter([field("machines", "array", machines: true), field("confirm", "boolean")])?
-            .hasPrefix("「能操控的电脑」的开关即时生效；其他项改完点右上角「保存」") == true)
+        let names = ExtensionText.list([String(localized: "「\(field("machines", "array", machines: true).label)」", comment: "A field's name in quotes")])
+        #expect(ExtensionText.saveFooter([field("machines", "array", machines: true), field("confirm", "boolean")]) == String(localized: "Switches in \(names) take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults."))
     }
 
     @Test func aRefusedFieldComesBackBesideIt() async {
@@ -139,6 +139,34 @@ struct ExtensionsModelTests {
         #expect(await page.save() == false)
         #expect(page.fieldError(["proxy", "port"]) == "要是一个整数" && page.error == nil)
         #expect(page.value(["proxy", "port"]) == .number(1.5), "the draft is kept")
+    }
+
+    /// A failed immediate save leaves its field's refusal visible; saving that field again clears it and takes the
+    /// hub's new value. Other fields' errors are not discarded by an unrelated machine switch.
+    @Test func aSuccessfulMachineRetryClearsItsOldFieldError() async throws {
+        let hub = FakeHub()
+        let cua = #"{"id":"cua","name":"Cua","kind":"computer","status":"running","enabled":true,"# +
+            #""form":{"fields":[{"name":"machines","type":"array","max_items":1,"items":{"type":"string","format":"machine"}},"# +
+            #"{"name":"confirm","type":"boolean"}]},"config":{"machines":["macbook"],"confirm":false},"secrets":[],"permissions":[]}"#
+        hub.on("GET", "/api/v1/plugins/cua/-/", json: cua)
+        var attempts = 0
+        hub.on("PUT", "/api/v1/plugins/cua/-/config") { _ in
+            attempts += 1
+            if attempts == 1 {
+                throw APIError(status: 400, message: "machines: refused", fields: ["code": "invalid_config", "field": "machines", "message": "Choose one Mac"])
+            }
+            return Data(cua.replacingOccurrences(of: #""machines":["macbook"]"#, with: #""machines":["studio"]"#).utf8)
+        }
+        let page = ExtensionModel(id: "cua", deps: .init(api: { hub.client }))
+        await page.load()
+        page.set(.bool(true), at: ["confirm"]) // another unsaved edit survives both attempts
+        await page.saveNow(.array([.string("macbook"), .string("studio")]), at: ["machines"])
+        #expect(page.fieldError(["machines"]) == "Choose one Mac")
+        #expect(page.value(["machines"]) == .array([.string("macbook")]))
+        await page.saveNow(.array([.string("studio")]), at: ["machines"])
+        #expect(page.fieldError(["machines"]) == nil)
+        #expect(page.value(["machines"]) == .array([.string("studio")]))
+        #expect(page.value(["confirm"]) == .bool(true) && page.dirty)
     }
 
     @Test func aSecretIsSentAndOnlyItsStateComesBack() async {
@@ -176,4 +204,59 @@ struct ExtensionsModelTests {
         #expect(ExtensionNodeState.status(ExtensionNodeState(machineID: "x", state: "outdated")).contains("personad 太旧"))
     }
 
+
+    // MARK: machine and launcher pickers (#2385)
+
+    private static let chat = #"""
+    {"id":"example-chat","name":"Example 聊天","kind":"connectors","status":"running","source":"installed","enabled":true,
+     "form":{"fields":[
+       {"name":"agent_machine","type":"string","format":"machine","os":["darwin","linux"],"title":"在哪台电脑上跑"},
+       {"name":"proxy","type":"object","fields":[{"name":"launcher","type":"string","format":"launcher"}]},
+       {"name":"mode","type":"string","format":"machine","enum":[{"value":"a"}]}]},
+     "config":{"agent_machine":"old-mac"}}
+    """#
+
+    /// A string of format machine / launcher is a picker (not one with its own choices); x-os comes along.
+    @Test func pickerFieldsDecode() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins/example-chat/-/", json: Self.chat)
+        hub.on("GET", "/api/v1/launchers", json: #"{"launchers":[{"name":"claude","source":"builtin"},{"name":"work_gw","source":"persona","display_name":"Work gateway"},{"name":"old_gw","source":"zshrc","hidden":true}]}"#)
+        let page = ExtensionModel(id: "example-chat", deps: .init(api: { hub.client }))
+        await page.load()
+        let form = try #require(page.detail?.form)
+        #expect(form[0].picksMachine && !form[0].picksLauncher && form[0].os == ["darwin", "linux"])
+        #expect(form[1].fields?[0].picksLauncher == true)
+        #expect(!form[2].picksMachine, "a field with its own choices keeps them")
+        // The launchers are read once the form has a launcher field, apart from load.
+        #expect(page.launchers == nil)
+        await page.loadLaunchersIfNeeded()
+        #expect(page.launchers?.map(\.name) == ["claude", "work_gw", "old_gw"])
+        await page.loadLaunchersIfNeeded()
+        #expect(hub.sent("GET", "/api/v1/launchers").count == 1, "read once")
+    }
+
+    /// A form without a launcher field never asks the hub for them (it asks every machine).
+    @Test func noLauncherFieldNoLaunchers() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins/example-notes/-/", json: Self.detail)
+        let page = make(hub)
+        await page.load()
+        await page.loadLaunchersIfNeeded()
+        #expect(page.launchers == nil && hub.sent("GET", "/api/v1/launchers").isEmpty)
+    }
+
+    /// The machines of the systems named, by name; the shown launchers, a differing display name with the name; a value
+    /// naming none of them first, marked.
+    @Test func pickerChoices() throws {
+        let field = ExtensionField(name: "m", type: "string", format: "machine", os: ["darwin", "linux"])
+        let machines: [(id: String, name: String, os: String?)] = [("studio", "Mac Studio", "darwin"), ("server", "服务器", "linux"), ("pc", "PC", "windows")]
+        #expect(ExtensionPickerChoice.machines(field, current: "server", machines: machines).map(\.label) == ["Mac Studio", "服务器"])
+        let kept = ExtensionPickerChoice.machines(field, current: "old-mac", machines: machines)
+        #expect(kept.first?.value == "old-mac" && kept.first?.missing == true && kept.first?.label.contains("old-mac") == true && kept.count == 3)
+        let launchers = [LauncherView(name: "claude", source: "builtin"), LauncherView(name: "work_gw", source: "persona", displayName: "Work gateway"),
+                         LauncherView(name: "old_gw", source: "zshrc", hidden: true)]
+        #expect(ExtensionPickerChoice.launchers(current: nil, launchers: launchers).map(\.label) == ["claude", "Work gateway (work_gw)"])
+        #expect(ExtensionPickerChoice.launchers(current: "old_gw", launchers: launchers).first?.missing == true, "a hidden one set stays, marked")
+        #expect(ExtensionPickerChoice.launchers(current: "", launchers: launchers).count == 2)
+    }
 }

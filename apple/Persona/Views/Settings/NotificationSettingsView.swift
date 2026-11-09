@@ -14,6 +14,8 @@ struct NotificationSettingsView: View {
     @State private var activitiesAllowed = ActivityAuthorizationInfo().areActivitiesEnabled
     #endif
     @State private var debugIsland = false
+    /// The quiet-hours request in flight: an older one's answer does not undo a newer choice.
+    @State private var quietRequest = 0
 
     var body: some View {
         SettingsForm {
@@ -35,16 +37,10 @@ struct NotificationSettingsView: View {
             BackgroundPushSection(status: pushStatus)
 
             Section {
-                Toggle(isOn: binding(\.input)) {
-                    Label {
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            Text("When You're Needed")
-                            Text("Questions, plan approvals, tool permissions, a terminal waiting for input").font(Theme.Font.caption).foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        ThemedIcon("exclamationmark.bubble").foregroundStyle(StatusPalette.needsYou.dot)
-                    }
-                }
+                SettingsSwitchRow(title: String(localized: "When You're Needed"),
+                                  detail: String(localized: "Questions, plan approvals, tool permissions, a terminal waiting for input"),
+                                  symbol: "exclamationmark.bubble", tint: StatusPalette.needsYou.dot, iconColor: StatusPalette.needsYou.dot,
+                                  isOn: binding(\.input))
             } footer: {
                 #if os(macOS)
                 Text("On permission and plan notifications you can Allow/Approve or Deny/Reject directly (hover over the notification and click Options).")
@@ -73,29 +69,18 @@ struct NotificationSettingsView: View {
                 Text(doneFooter)
             }
 
+            // This device's quiet hours (#1863); a hub whose prefs have no `quiet` has none.
+            if let quiet = prefs?.quiet { quietHoursSection(quiet) }
+
             // Live Activities (Lock Screen and Dynamic Island) are an iPhone's: a Mac has neither (docs/apple/mac.md).
             #if os(iOS)
             Section {
-                Toggle(isOn: binding(\.liveActivity)) {
-                    Label {
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            Text("Lock Screen and Dynamic Island")
-                            Text("One Live Activity sums up agents that need you, are working, or are done").font(Theme.Font.caption).foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        ThemedIcon(Theme.Icon.persona).foregroundStyle(Theme.brand)
-                    }
-                }
-                Toggle(isOn: binding(\.lockDetails)) {
-                    Label {
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            Text("Show Details on Lock Screen")
-                            Text("When off, the Lock Screen shows only counts and “A permission is waiting”, not agent names or content").font(Theme.Font.caption).foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        ThemedIcon(Theme.Icon.view).foregroundStyle(.secondary)
-                    }
-                }
+                SettingsSwitchRow(title: String(localized: "Lock Screen and Dynamic Island"),
+                                  detail: String(localized: "One Live Activity sums up agents that need you, are working, or are done"),
+                                  symbol: Theme.Icon.persona, tint: Theme.brand, iconColor: Theme.brand, isOn: binding(\.liveActivity))
+                SettingsSwitchRow(title: String(localized: "Show Details on Lock Screen"),
+                                  detail: String(localized: "When off, the Lock Screen shows only counts and “A permission is waiting”, not agent names or content"),
+                                  symbol: Theme.Icon.view, tint: Theme.Hue.gray, iconColor: .secondary, isOn: binding(\.lockDetails))
                 .disabled(prefs?.liveActivity == false)
                 NavigationLink {
                     IslandSettingsView(island: binding(\.island))
@@ -202,6 +187,75 @@ struct NotificationSettingsView: View {
         let delay = NotifyPrefs.duration(prefs?.doneDelaySeconds)
         let long = NotifyPrefs.duration(prefs?.longTurnSeconds)
         return String(localized: "After finishing, Persona waits \(delay) and skips the notification if you've already looked on your computer or in the app. It notifies once, after background tasks and subagents are all done. A “long task” is a turn that ran \(long) or longer; quick answers are best read where you asked.")
+    }
+
+    @ViewBuilder private func quietHoursSection(_ quiet: QuietHours) -> some View {
+        Section {
+            SettingsSwitchRow(title: String(localized: "Quiet Hours"),
+                              detail: quiet.enabled ? nil : String(localized: "Off: notifications come at any time"),
+                              symbol: Theme.Icon.quietHours, tint: Theme.Hue.indigo, iconColor: Theme.Hue.indigo,
+                              accessibilityID: "notify.quiet", isOn: quietBinding(quiet, \.enabled))
+            if quiet.enabled {
+                DatePicker(String(localized: "From [Notification Settings View 5d2f81]"), selection: clockBinding(quiet, \.start),
+                           displayedComponents: .hourAndMinute)
+                    .accessibilityIdentifier("notify.quiet.start")
+                DatePicker(String(localized: "Until [Notification Settings View 9a07c3]"), selection: clockBinding(quiet, \.end),
+                           displayedComponents: .hourAndMinute)
+                    .accessibilityIdentifier("notify.quiet.end")
+            }
+        } footer: {
+            if let zone = quiet.elsewhere() {
+                Text("During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. They're in \(zone), where they were set; changing them here puts them in this device's time zone.")
+            } else {
+                Text("During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. In this device's time zone.")
+            }
+        }
+    }
+
+    private func quietBinding(_ quiet: QuietHours, _ path: WritableKeyPath<QuietHours, Bool>) -> Binding<Bool> {
+        Binding { quiet[keyPath: path] } set: { value in
+            var next = quiet
+            next[keyPath: path] = value
+            saveQuiet(next)
+        }
+    }
+
+    /// A "HH:MM" of the quiet hours as a time today, for the picker.
+    private func clockBinding(_ quiet: QuietHours, _ path: WritableKeyPath<QuietHours, String>) -> Binding<Date> {
+        Binding {
+            let minutes = QuietHours.minutes(quiet[keyPath: path]) ?? 0
+            return Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: .now) ?? .now
+        } set: { date in
+            let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+            var next = quiet
+            next[keyPath: path] = QuietHours.clock((c.hour ?? 0) * 60 + (c.minute ?? 0))
+            guard next != quiet else { return }
+            saveQuiet(next)
+        }
+    }
+
+    /// Optimistic like `save`, but only `quiet` goes, with this device's time zone.
+    private func saveQuiet(_ quiet: QuietHours) {
+        guard let api = model.api, var next = prefs else { return }
+        let before = prefs
+        var quiet = quiet
+        quiet.tz = TimeZone.current.identifier
+        next.quiet = quiet
+        prefs = next
+        quietRequest += 1
+        let request = quietRequest
+        Task {
+            do {
+                let saved = try await api.setQuietHours(device: PushRegistrar.deviceID, quiet)
+                guard request == quietRequest else { return }
+                prefs = saved
+                model.savedNotifyPrefs(saved)
+            } catch {
+                guard request == quietRequest else { return }
+                prefs = before
+                model.show(error)
+            }
+        }
     }
 
     private func binding<V>(_ path: WritableKeyPath<NotifyPrefs, V>) -> Binding<V> {

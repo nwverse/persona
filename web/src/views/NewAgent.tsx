@@ -1,20 +1,22 @@
-// Start an agent on one of your computers: machine, folder (recent ones first), launcher, model and effort for this
-// start, Claude Code's ultracode switch (#3428: off each time, never remembered), the first message.
-import { useEffect, useMemo, useRef, useState } from "react";
+// Start an agent on one of your computers: machine, folder (recent ones first), a preset (a tier of the model profile in use,
+// #2225) or launcher, model and effort for this start, Claude Code's ultracode switch (#3428: off each time, never
+// remembered), the first message.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
-import { api, ApiError, enc, errorText, isAbort } from "../lib/api";
+import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
+import { defaultManager, useKnownDefault } from "../lib/manager-choice";
 import { pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
 import { browserStartKeys, launchAgent, presetPrompt, type NewAgentPreset } from "../lib/new-agent";
 import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
   defaultLabel, effortChoices, fitEffort, followedBinding, launcherAgent, launcherModels, machineLaunchers, modelName, oneOff, pickerLauncher, startPicks,
-  takesEffort, takesTypedModel, forgetCustomModel, typedModelOffered, withoutCustom, type LauncherDefault,
+  takesEffort, takesTypedModel, tierLeftOut, forgetCustomModel, typedModelOffered, withoutCustom, type LauncherDefault, type PickerTier,
 } from "../lib/launcher-models";
 import { BYPASS_MODE, BYPASS_WARNING, EFFORTS, effortTitle, PERMISSION_MODES } from "../lib/session-actions";
 import { baseName, shortPath } from "../lib/format";
 import { addAgentWorktree, agentBranch, agentNameHint, suggestedPath, worktreeStatus, type WorktreeStatus } from "../lib/worktree";
-import { useStore } from "../lib/store";
+import { getState, useStore } from "../lib/store";
 import type { Launcher } from "../lib/types";
 import { AgentMark } from "../ui/AgentMark";
 import { Button, cx, Dialog, Spinner, Switch, toast } from "../ui/atoms";
@@ -62,6 +64,11 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const [models, setModels] = useState<ModelList>({ status: "idle" });
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
+  // the presets this computer offers (tiers of the profile in use, from `tiersProfile`), and the one picked: it fills the
+  // launcher, model and effort as picking them by hand would; a pick by hand after it unmarks it. Never saved.
+  const [tiers, setTiers] = useState<PickerTier[]>([]);
+  const [tiersProfile, setTiersProfile] = useState("");
+  const [tier, setTier] = useState<PickerTier | null>(null);
   // ultracode for this start: off whenever the sheet opens, never saved (the server's rule: no choice carries over)
   const [ultracode, setUltracode] = useState(false);
   const features = useStore((s) => s.features);
@@ -82,6 +89,23 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const submitted = useRef(false);
+  const preparation = useRef<AbortController | null>(null);
+  const promptRevision = useRef(0);
+  const credential = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const knownDefault = useKnownDefault();
+  const manager = machines.find((m) => m.id === mid)?.manager || knownDefault || defaultManager();
+  const targetOnline = online.some((m) => m.id === mid);
+  const retirePreparation = () => {
+    const previous = preparation.current;
+    preparation.current = null;
+    previous?.abort();
+  };
+  const dismiss = () => {
+    retirePreparation();
+    // Keep admission closed until another opening, including events in the same React batch.
+    submitted.current = true;
+    onClose();
+  };
   // a preset's folder, put in once its computer is the chosen one (choosing a computer loads that one's last folder)
   const presetCwd = useRef<{ mid: string; cwd: string } | null>(null);
   const attachmentsRef = useRef(attachments);
@@ -91,6 +115,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     if (!open) return;
     submitted.current = false;
     setEffort("");
+    setTier(null);
     setUltracode(false);
     setInWorktree(false);
     setWtBranch("");
@@ -102,6 +127,13 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const [wtBranch, setWtBranch] = useState("");
   const [wtBusy, setWtBusy] = useState(false);
   const [wtError, setWtError] = useState("");
+  // Cleanup fences completions even when the transport ignores abort. A target change starts a new admission scope.
+  useLayoutEffect(() => {
+    submitted.current = false;
+    setWtBusy(false);
+    setWtError("");
+    return retirePreparation;
+  }, [open, mid, cwd, manager, credential, targetOnline]);
   const [repo, setRepo] = useState<WorktreeStatus | null>(null);
   useEffect(() => {
     setRepo(null);
@@ -117,7 +149,10 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const worktreeOffered = Boolean(repo?.path);
   useEffect(() => {
     if (!open || !preset) return;
-    if (preset.prompt) setPrompt((draft) => presetPrompt(preset.prompt, draft));
+    if (preset.prompt) {
+      promptRevision.current++;
+      setPrompt((draft) => presetPrompt(preset.prompt, draft));
+    }
     if (preset.machineId && preset.cwd && online.some((m) => m.id === preset.machineId)) {
       presetCwd.current = { mid: preset.machineId, cwd: preset.cwd };
       setMid(preset.machineId);
@@ -151,6 +186,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     setHelpFor("");
     const controller = new AbortController();
     setLauncher("");
+    setTiers([]);
+    setTier(null);
     setModelDefault("");
     setHubDefault(undefined);
     setConfigured(null);
@@ -167,6 +204,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
         const ls = r.launchers ?? [];
         setLaunchers(ls);
         setHubDefault(r.default);
+        setTiers(r.tiers ?? []);
+        setTiersProfile(r.tiers_profile?.name ?? "");
         setLaunchersOf(mid);
         setUnified(config !== null);
         if (config) {
@@ -207,10 +246,28 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const followed = followedBinding(launcher, unified ? configured : null);
   const listLauncher = launchersOf === mid ? pickerLauncher(launcher, followed) : "";
   useEffect(() => {
-    setModel("");
+    // a new launcher starts from its default, but a preset picked for it keeps its model (every pick by hand unmarks it)
+    setModel(tier?.launcher === listLauncher ? (tier.model ?? "") : "");
     setPicking(false);
     setQuery("");
   }, [open, mid, listLauncher]);
+  const pickTier = (x: PickerTier) => {
+    setHelpFor("");
+    if (tier?.name === x.name) {
+      // picked again: back to the defaults (the model settings' launcher where there is one)
+      setTier(null);
+      if (unified) setLauncher("");
+      setModel("");
+      setEffort("");
+      return;
+    }
+    // the list of another launcher is not this one's: until it is in, nothing is judged by it (the preset's effort stays)
+    if (x.launcher !== listLauncher) setModels({ status: "loading" });
+    setTier(x);
+    setLauncher(x.launcher);
+    setModel(x.model ?? "");
+    setEffort(x.effort ?? "");
+  };
   useEffect(() => {
     if (!open || !mid || !listLauncher) {
       setModels({ status: "idle" });
@@ -275,11 +332,22 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   useEffect(() => { setEffort((e) => fitEffort(e, effortsKey ? effortsKey.split(" ") : [])); }, [effortsKey]);
   // offered with Claude Code whose effort can be set here; grayed when this computer's Claude Code is known to be too old
   const ultracodeShown = !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
+  // what of the picked preset this launcher can't take, said once its list is in
+  const tierMissed = tier && listLauncher === tier.launcher && models.status === "ready" ? tierLeftOut(tier, { agent, list: models.list, followed }) : [];
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
   const start = () => {
-    if (submitted.current || loadingModels || !online.some((m) => m.id === mid) || !cwd.trim()) return;
+    if (!open || submitted.current || loadingModels || !online.some((m) => m.id === mid) || !cwd.trim()) return;
     submitted.current = true;
+    const controller = new AbortController();
+    preparation.current = controller;
+    const owner = credentialOwner();
+    const token = getToken();
+    const revision = promptRevision.current;
+    const snapshot = { text: prompt.trim(), attachments: [...attachments] };
+    const current = () => preparation.current === controller && !controller.signal.aborted && owner === credentialOwner()
+      && getState().machines.some((m) => m.id === mid && m.online)
+      && manager === (getState().machines.find((m) => m.id === mid)?.manager || defaultManager());
     localStorage.setItem(`new.cwd.${mid}`, cwd.trim());
     if (launcher && !unified) localStorage.setItem(`new.launcher.${mid}`, launcher);
     const picks = startPicks({ agent, list: models.list, model, effort, followed });
@@ -293,25 +361,35 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     // only an explicit "on" is sent: off is what a new Claude is anyway
     const ultra = ultracodeShown && !ultracodeBlocked && ultracode ? true : undefined;
     const launch = (dir: string) => {
-      launchAgent({ machineId: mid, cwd: dir, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: prompt.trim(), attachments });
-      attachmentsRef.current = [];
-      setAttachments([]);
-      setPrompt("");
-      onClose();
+      if (!current()) return;
+      // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
+      const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
+      launchAgent({ machineId: mid, cwd: dir, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent });
+      const ids = new Set(snapshot.attachments.map((a) => a.id));
+      releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
+      attachmentsRef.current = attachmentsRef.current.filter((a) => !ids.has(a.id));
+      setAttachments(attachmentsRef.current);
+      if (promptRevision.current === revision) setPrompt("");
+      dismiss();
     };
     // in a worktree of its own (#6115): made first; a failure says why here, and nothing starts
     if (inWorktree && worktreeOffered) {
       setWtBusy(true);
       setWtError("");
-      void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch)
+      void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner })
         .then(
           (wt) => launch(wt.path),
           (e) => {
+            if (!current()) return;
             submitted.current = false;
             setWtError(errorText(e));
           },
         )
-        .finally(() => setWtBusy(false));
+        .finally(() => {
+          if (!current()) return;
+          preparation.current = null;
+          setWtBusy(false);
+        });
       return;
     }
     launch(cwd.trim());
@@ -322,11 +400,11 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
       <>
         <Dialog
           open={open}
-          onClose={onClose}
+          onClose={dismiss}
           title={t("newagent.title")}
           width={520}
           footer={
-            <Button tone="quiet" onClick={onClose}>
+            <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
           }
@@ -344,7 +422,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                 tone="primary"
                 icon="plus"
                 onClick={() => {
-                  onClose(); // the add flow is a dialog of its own, not one over this
+                  dismiss(); // the add flow is a dialog of its own, not one over this
                   adding.open();
                 }}
               >
@@ -361,13 +439,13 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     <>
       <Dialog
         open={open}
-        onClose={onClose}
+        onClose={dismiss}
         title={t("newagent.title")}
         width={520}
         footer={
           <>
             <span className="mr-auto min-w-0 truncate text-[11.5px] text-ink-3">{cwd ? shortPath(cwd) : t("newagent.pick_folder")}</span>
-            <Button tone="quiet" onClick={onClose}>
+            <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
             <Button tone="primary" busy={wtBusy} disabled={loadingModels || !online.some((m) => m.id === mid) || !cwd.trim()} onClick={start}>
@@ -475,11 +553,41 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             </Field>
           )}
 
+          {tiers.length > 0 && (
+            <Field label={t("newagent.preset")}>
+              <div role="radiogroup" aria-label={t("newagent.preset")} className="flex flex-wrap gap-1.5">
+                {tiers.map((x) => {
+                  // its launcher failed its check here (#1643): still a choice, marked; the list below says why
+                  const block = launcherBlock(launchers.find((l) => l.name === x.launcher));
+                  return (
+                    <Choice key={x.name} radio mono selected={tier?.name === x.name} onClick={() => pickTier(x)}
+                      title={[x.description, tierRuns(x), block?.reason].filter(Boolean).join("\n")}>
+                      <span className="flex items-center gap-1.5">
+                        {block && <Icon name="warning" size={12} className="text-orange" />}
+                        {x.name}
+                      </span>
+                    </Choice>
+                  );
+                })}
+              </div>
+              <p data-testid="new-agent-preset-hint" aria-live="polite" className={cx("mt-1.5 flex min-w-0 items-start gap-1.5 text-[11.5px]", tierMissed.length ? "text-orange" : "text-ink-3")}>
+                {tierMissed.length > 0 && <Icon name="warning" size={12} className="mt-px shrink-0" />}
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  {tierMissed.length
+                    ? t("newagent.preset_left_out", { what: tierMissed.map((v) => (v === tier?.effort ? effortTitle(v) : v)).join(" · ") })
+                    : tier
+                      ? tier.description || tierRuns(tier)
+                      : t("newagent.preset_hint", { profile: tiersProfile })}
+                </span>
+              </p>
+            </Field>
+          )}
+
           {(unified || launchers.length > 1 || blocked.length > 0) && (
             <Field label={unified ? t("newagent.launcher_override") : t("newagent.launcher")}>
               <div className="flex flex-wrap gap-1.5">
                 {unified && (
-                  <Choice selected={launcher === ""} onClick={() => setLauncher("")} title={defaultBlock ? `${modelDefault} · ${defaultBlock.reason}` : modelDefault}>
+                  <Choice selected={launcher === ""} onClick={() => { setTier(null); setLauncher(""); }} title={defaultBlock ? `${modelDefault} · ${defaultBlock.reason}` : modelDefault}>
                     {defaultBlock ? (
                       // what the default runs can't start here (#1643): marked, still the default, said in the list below
                       <span data-testid="new-agent-default-blocked" className="flex items-center gap-1.5">
@@ -502,7 +610,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                       selected={launcher === l.name}
                       // grayed out with why, never hidden (#1643): choosing it shows how to fix it instead of picking it
                       blocked={Boolean(block)}
-                      onClick={() => (block ? setHelpFor((open) => (open === l.name ? "" : l.name)) : setLauncher(l.name))}
+                      onClick={() => (block ? setHelpFor((open) => (open === l.name ? "" : l.name)) : (setTier(null), setLauncher(l.name)))}
                       title={block ? block.reason : l.model}
                     >
                       <span className="flex items-center gap-1.5">
@@ -547,6 +655,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                   name={help.l.name}
                   block={help.block}
                   onTryAnyway={() => {
+                    setTier(null);
                     setLauncher(help.l.name);
                     setHelpFor("");
                   }}
@@ -578,6 +687,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
               onQuery={setQuery}
               search={search}
               onPick={(id) => {
+                setTier(null);
                 setModel(id);
                 setPicking(false);
                 setQuery("");
@@ -610,9 +720,9 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             <Field label={t("newagent.effort")}>
               {efforts.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
-                  <Choice selected={effort === ""} onClick={() => setEffort("")}>{followed.effort ? t("newagent.follow_model_settings") : t("newagent.follow_launcher")}</Choice>
+                  <Choice selected={effort === ""} onClick={() => { setTier(null); setEffort(""); }}>{followed.effort ? t("newagent.follow_model_settings") : t("newagent.follow_launcher")}</Choice>
                   {efforts.map((id) => (
-                    <Choice key={id} selected={effort === id} onClick={() => setEffort(id)} title={EFFORTS.find((e) => e.id === id)?.detail}>
+                    <Choice key={id} selected={effort === id} onClick={() => { setTier(null); setEffort(id); }} title={EFFORTS.find((e) => e.id === id)?.detail}>
                       {effortTitle(id)}
                     </Choice>
                   ))}
@@ -637,7 +747,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
               }} /></div>}
               <textarea
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
+                onChange={(e) => { promptRevision.current++; setPrompt(e.target.value); }}
                 onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
                 onKeyDown={(e) => {
                   if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -669,6 +779,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+/** What a preset runs on, in a line: its launcher, model and effort (its name). */
+function tierRuns(x: PickerTier): string {
+  return [x.launcher, x.model, x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
 }
 
 function Choice({ selected, onClick, title, mono, radio, blocked, children }: { selected: boolean; onClick: () => void; title?: string; mono?: boolean; /** One of a radiogroup. */ radio?: boolean; /** Grayed out: this computer can't start it now (#1643); a click explains instead of picking. */ blocked?: boolean; children: React.ReactNode }) {
