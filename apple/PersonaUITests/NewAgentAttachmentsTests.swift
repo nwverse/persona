@@ -114,7 +114,7 @@ final class NewAgentAttachmentsTests: XCTestCase {
     @MainActor func testToDoHandoffKeepsItsContextFirst() throws {
         launch(["-tab", "assistant", "-openShellPage", "todos", "-openNewAgentAttachments", "photo"])
         see(app.buttons["新建待办"], "the to-do list", timeout: 60)
-        see(button("给 NAS 配自动备份"), "the to-do").tap()
+        reveal(button("给 NAS 配自动备份"), "the to-do", timeout: 20).tap()
         reveal(button("交给 Agent"), "Hand to Agent").tap()
         see(button("选择电脑和启动器"), "the handoff's New Agent").tap()
         see(app.navigationBars["新对话"], "新对话 sheet")
