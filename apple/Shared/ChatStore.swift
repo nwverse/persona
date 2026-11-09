@@ -1488,10 +1488,19 @@ nonisolated enum ChatCache {
 nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// waiting: no network or no hub; it goes by itself once the app is connected and caught up (AppModel.flushOutbox).
     enum State: Hashable, Codable, Sendable { case sending, sent, failed, waiting }
+    /// An Agent hand-off's filing intent, restored with the outbox so delivery after an app relaunch still files the item.
+    struct InboxHandOff: Hashable, Codable, Sendable {
+        let itemID: String
+        let manager: String?
+        var filed = false
+    }
     var id = UUID()
     var text: String
     var images: [ImagePayload]
     var state: State = .sending
+    /// Why the last send failed, kept with the message so a caller waiting through outbox retries can show the reason.
+    var failure: String?
+    var inboxHandOff: InboxHandOff?
     /// When it was written, in whole seconds (it survives the outbox's JSON as it is); nil in outboxes saved before this
     /// was kept.
     var createdAt: Date? = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
@@ -1501,6 +1510,11 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     /// The hub refused it with nothing typed (delivered: none: a draft in the computer's input box, a dialog…) and
     /// answers its id with that refusal from then on: Resend and Clear and Send go with a new id (#6425).
     var refused: Bool?
+    /// When its sends started coming back waiting while its group's link was up (AppModel.settleSend, `OutboxWait`);
+    /// in memory only: a relaunch starts the run again.
+    var stalledSince: Date?
+
+    private enum CodingKeys: String, CodingKey { case id, text, images, state, failure, inboxHandOff, createdAt, mayHaveArrived, refused }
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
     /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either

@@ -169,7 +169,7 @@ The native method also honors these variables (e.g. systemd's `Environment=`), b
 
 Some hosts pay heavily for every `fsync`: a NAS volume on a single SSD formatted btrfs (copy-on-write, metadata kept twice) turns each one into several metadata writes, so how often things are flushed matters more than how many bytes are written. Two flushers dominate:
 
-- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute).
+- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute). The manager groups its background writes: each 10 s tick's monitoring samples of all machines go in one commit, token usage reports of several machines that come within 5 s of each other in one, and indexing a knowledge base entity again with nothing changed writes nothing, so the number of machines no longer multiplies these commits.
 - **Health checks.** dockerd rewrites and fsyncs a container's state file on every health check run (about 1 MB a run on btrfs): the postgres check runs every 5 s, the hub's every 30 s.
 
 `compose.yaml` takes all of these from `.env`. Every default is what compose did before, or PostgreSQL's own default, so nothing changes until you set one; Postgres settings take effect when the container is recreated (`docker compose up -d`), health checks and logging likewise.
@@ -335,7 +335,7 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
 
 1. On the old machine, stop the hub (`systemctl --user stop personad`) and export the database:
    `docker exec persona-postgres pg_dump -U persona -Fc persona > persona.dump`, and the built-in manager's database in the same server: `docker exec persona-postgres pg_dump -U persona -Fc persona_manager > persona_manager.dump`. Both together are the hub's data ([managers.md](../assistant/managers.md) ("The built-in manager's database")); one without the other loses the manager's data or the hub's.
-2. Copy the actual runtime directory (the new default is `~/.persona`; existing deployments may still use the compatibility directory `~/.persona`) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
+2. Copy the actual runtime directory (`~/.persona` by default; an older deployment may still keep it under the old name: [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md)) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
    change it to `ssh` or `tailcat`). Leave `database_url` alone (the environment variable overrides it).
 3. `docker compose up -d postgres`, then import: `docker compose exec -T postgres pg_restore -U persona -d persona --clean --if-exists < persona.dump` (and the manager's: `docker compose exec -T postgres createdb -U persona persona_manager`, then the same `pg_restore -d persona_manager < persona_manager.dump`),
    then `docker compose up -d`. The token is unchanged; paired phones only need the address changed to the new one (or scan again).

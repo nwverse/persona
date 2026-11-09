@@ -6,7 +6,6 @@
     <string name="settings_style_glass_auto">Refractive glass on Android 13 and later, blurred glass on earlier versions; switches to opaque panels in battery saver or when scrolling drops frames.</string>
     <string name="settings_style_glass_reduced">All overlays use opaque panels: the most battery-friendly, with the clearest text.</string>
     <string name="settings_default">Default</string>
-    <string name="settings_preview_tab_inbox">Inbox</string>
     <string name="settings_preview_row1_title">Add unit tests for the network layer</string>
     <string name="settings_preview_row1_preview">Which framework for the network layer tests?</string>
     <string name="settings_preview_row1_time">2 min ago</string>
@@ -97,6 +96,12 @@
     <string name="settings_notify_live_about">On by default. On Android 16 and later, status counts show on the lock screen and in the status bar chip; when off or unsupported, the regular ongoing notification stays.</string>
     <string name="settings_notify_lock_details">Show details on lock screen</string>
     <string name="settings_notify_lock_details_about">When off, the ongoing notification never shows agent names or request contents.</string>
+    <string name="settings_notify_quiet">Quiet hours</string>
+    <string name="settings_notify_quiet_off">Off: notifications come at any time</string>
+    <string name="settings_notify_quiet_start">From</string>
+    <string name="settings_notify_quiet_end">Until</string>
+    <string name="settings_notify_quiet_footer">During these hours you\'re not told when an agent finishes (the morning\'s Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot\'s nudges about unanswered cards also wait while any of your devices is in its quiet hours. In this phone\'s time zone.</string>
+    <string name="settings_notify_quiet_footer_zone">During these hours you\'re not told when an agent finishes (the morning\'s Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot\'s nudges about unanswered cards also wait while any of your devices is in its quiet hours. They\'re in %1$s, where they were set; changing them here puts them in this phone\'s time zone.</string>
     <string name="settings_reading">Reading</string>
     <string name="settings_retry_read">Try again</string>
     <string name="settings_saving">Saving…</string>
@@ -228,7 +233,7 @@
     <string name="settings_ready_autostart">Autostart</string>
     <string name="settings_ready_autostart_detail">Allow Persona to start on its own in the app launch settings. If you skip this, you may need to open Persona by hand after restarting the phone. The system can\'t verify this; confirm once it\'s set.</string>
     <string name="settings_ready_vendor">%1$s %2$s background settings</string>
-    <string name="settings_ready_vendor_detail">%1$s The system can\'t read these switches; tap “Done” once they\'re set. Skipping may mean missed notifications.</string>
+    <string name="settings_ready_vendor_detail">%1$s The system can\'t read these switches; tap “Mark done” once they\'re set. Skipping may mean missed notifications.</string>
     <string name="settings_ready_task_lock">Lock in recent apps</string>
     <string name="settings_ready_task_lock_detail">Open recent apps, long-press the Persona card or open its menu, and choose Lock. If you skip this, clearing all apps may close the connection.</string>
     <string name="settings_ready_local_network">Local network</string>
@@ -325,7 +330,7 @@
     <string name="settings_ready_open">Open settings</string>
     <string name="settings_ready_open_failed">Couldn\'t open system settings. Open Persona\'s app info from the phone\'s Settings.</string>
     <string name="settings_ready_undo_confirm">Undo</string>
-    <string name="settings_ready_mark_done">Done</string>
+    <string name="settings_ready_mark_done">Mark done</string>
     <string name="settings_ready_unskip">Unskip</string>
     <string name="settings_ready_skip">Skip</string>
     <string name="settings_ready_no_machines">No machine info yet</string>

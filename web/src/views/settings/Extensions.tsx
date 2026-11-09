@@ -1,8 +1,8 @@
 // Settings › Extensions: all sources use the host-owned layout in ExtensionSettingsPage.
 // This controller owns manager routing, configuration drafts, authentication and mutation results;
 // extensions supply only their configuration fields and custom content (docs/extensions/extension-settings.md).
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { enc, errorText } from "../../lib/api";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { defaultManager, pinManagerAt, useKnownDefault } from "../../lib/manager-choice";
 import { groupByManager, multiManager, useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
@@ -13,10 +13,12 @@ import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
   changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
-  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
-  channelOf, machineStatus, nodeProgramStatus, sandboxEgress, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
+  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
+  channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxEgress, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
+  type PickerLauncher,
 } from "../../lib/extensions";
+import { loadLaunchers } from "../../lib/launcher-list";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { TriageRuleField } from "../../ui/TriageRuleField";
 import { Icon } from "../../ui/icons";
@@ -173,7 +175,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
     const mine = ++reads.current;
     setLoading(true);
     listExtensionsInfo()
-      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError("")))
+      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError(""), dropGone(r.extensions)))
       .catch((e) => mine === reads.current && setError(errorText(e)))
       .finally(() => mine === reads.current && setLoading(false));
   };
@@ -206,6 +208,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
   // with several managers, each one's extensions under its name (docs/assistant/managers.md "Clients"); one: as before
   const roster = useRoster();
   const groups = groupByManager(extensions ?? [], roster, (x) => x.manager);
+  const drafts = useUnsaved();
 
   return (
     <>
@@ -244,7 +247,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           </span>
         }
         right={<IconButton icon="retry" label={t("settings-extensions.refresh")} onClick={load} disabled={loading} size={24} iconSize={13} className="-mb-1" />}
-        footer={t("settings-extensions.list_footer")}
+        footer={markets ? t("settings-extensions.list_footer_market") : t("settings-extensions.list_footer")}
       >
         {!extensions && !error && (
           <div className="px-4 py-3">
@@ -276,6 +279,10 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           ),
           ...g.items.map((p) => {
             const i = (extensions ?? []).indexOf(p);
+            const kept = drafts.has(unsavedKey(p.id, p.manager));
+            // the kept edits' mark goes before what is still missing, not instead of it
+            const needs = p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : "";
+            const note = p.error || [kept ? t("settings-extensions.unsaved") : "", needs].filter(Boolean).join(" · ") || p.description;
             return (
               <button
                 key={`${p.manager ?? ""}:${p.id}`}
@@ -292,9 +299,9 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
                     <span className="truncate text-[13px] text-ink">{p.name}</span>
                     {p.source && p.source !== "installed" && <Pill>{sourceText(p.source)}</Pill>}
                   </div>
-                  {(p.needs_setup?.length || p.error || p.description) && (
-                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : p.needs_setup?.length ? "text-orange" : "text-ink-3")}>
-                      {p.error || (p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : p.description)}
+                  {note && (
+                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : kept || needs ? "text-orange" : "text-ink-3")}>
+                      {note}
                     </div>
                   )}
                 </div>
@@ -325,7 +332,77 @@ function usePinnedExtension(id: string, manager: string | undefined) {
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
 }
 
-function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, onConnector }: {
+// ── unsaved configuration ──────────────────────────────────
+
+/** A form's unsaved edits: the draft and the configuration it was made on (`base`), so that only what the user changed is
+ *  put back on a newer read (lib/extensions.ts rebaseDraft). */
+type Unsaved = { base: JsonObject; draft: JsonObject; typed: Typed };
+
+/** Configuration edits not saved yet, by manager and extension (`unsavedKey`). They stay in memory while the page is
+ *  closed, so leaving it any way (another extension, another category or page, Back) and coming back finds them on top of
+ *  the configuration read then; saving or Revert drops them, and so does a new credential. Never written to storage: a
+ *  reload asks first instead. */
+const unsaved = new Map<string, Unsaved>();
+/** A detail without a configuration: one object, so reading it again is not a change. */
+const NO_CONFIG: JsonObject = {};
+const unsavedListeners = new Set<() => void>();
+let unsavedVersion = 0;
+
+/** The default manager's extension has no manager in its route (the list's rows, OwnedExtension): both name it "". */
+const unsavedOwner = (manager?: string) => (manager && manager !== defaultManager() ? manager : "");
+const unsavedKey = (id: string, manager?: string) => `${unsavedOwner(manager)}|${id}`;
+
+function warnUnsaved(e: BeforeUnloadEvent) {
+  e.preventDefault();
+  e.returnValue = true; // browsers before preventDefault() counted here (Chrome before 119) ask only when it is set
+}
+
+function unsavedChanged() {
+  unsavedVersion++;
+  if (unsaved.size) addEventListener("beforeunload", warnUnsaved);
+  else removeEventListener("beforeunload", warnUnsaved);
+  unsavedListeners.forEach((l) => l());
+}
+
+/** Keep an extension's unsaved edits, or drop them (null). The list and the reload prompt follow whether any are kept. */
+function keepUnsaved(key: string, kept: Unsaved | null) {
+  const had = unsaved.has(key);
+  if (kept) unsaved.set(key, kept);
+  else unsaved.delete(key);
+  if (had !== unsaved.has(key)) unsavedChanged();
+}
+
+/** After the list is read: the kept edits of an extension it no longer has (uninstalled while its page was closed) go, or
+ *  a reload would keep asking about edits nobody can open. Only for managers the list has rows of: another one may just
+ *  not have answered. */
+function dropGone(list: HubExtension[]) {
+  const there = new Set(list.map((x) => unsavedKey(x.id, x.manager)));
+  const owners = new Set(list.map((x) => unsavedOwner(x.manager)));
+  const gone = [...unsaved.keys()].filter((k) => !there.has(k) && owners.has(k.slice(0, k.indexOf("|"))));
+  if (!gone.length) return;
+  gone.forEach((k) => unsaved.delete(k));
+  unsavedChanged();
+}
+
+// Signing out or pairing again: another person's hub (or none), so the edits are not theirs.
+subscribeCredentialOwner(() => {
+  if (!unsaved.size) return;
+  unsaved.clear();
+  unsavedChanged();
+});
+
+function subscribeUnsaved(listener: () => void) {
+  unsavedListeners.add(listener);
+  return () => void unsavedListeners.delete(listener);
+}
+
+/** The kept edits, redrawn when an extension gains or loses them. */
+function useUnsaved(): ReadonlyMap<string, Unsaved> {
+  useSyncExternalStore(subscribeUnsaved, () => unsavedVersion);
+  return unsaved;
+}
+
+function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChannel, onConnector }: {
   id: string;
   /** Whose extension it is (several managers); none: the default's. */
   manager?: string;
@@ -352,7 +429,6 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
-  const [leaving, setLeaving] = useState(false);
   const [dependents, setDependents] = useState<Dependent[] | null>(null);
 
   const apply = (d: HubExtensionDetail) => {
@@ -408,11 +484,39 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   const fields = detail?.form?.fields ?? [];
   const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
 
+  // The draft is the user's edits on top of `base`, the configuration last read (null until the page's first read is
+  // shown). Each newer configuration the hub sends (another device's or app's change, an upgrade, a save) takes the
+  // fields the user did not touch, so the form never shows or saves back an old value of them; the touched ones keep
+  // the edit. Edits outlive the page: kept while the form is dirty, and put back on the first read of the next visit,
+  // where the save bar shows them as unsaved. Saving or Revert leaves the form clean, which drops them.
+  const keptKey = unsavedKey(id, manager);
+  const base = useRef<JsonObject | null>(null);
+  useEffect(() => {
+    if (base.current) keepUnsaved(keptKey, dirty ? { base: base.current, draft, typed } : null);
+  }, [keptKey, dirty, draft, typed]);
+  const config = detail ? (detail.config ?? NO_CONFIG) : null;
+  useEffect(() => {
+    if (!config) return;
+    const edits = base.current ? { base: base.current, draft, typed } : unsaved.get(keptKey);
+    base.current = config;
+    if (!edits) return;
+    const next = rebaseDraft(edits, config);
+    setDraft(next.draft);
+    setTyped(next.typed);
+  }, [config, keptKey]);
+  /** Back to the list once the extension is gone (uninstalled here or elsewhere): its edits go with it. */
+  const onBack = () => {
+    base.current = null;
+    keepUnsaved(keptKey, null);
+    back();
+  };
+
   // An operation of this extension that succeeds while the page is open (an upgrade, also the hub's auto-upgrade, or
   // an install or uninstall from another device): its version, upgrades and permissions are read again. A dirty form
-  // keeps its draft, as a switch does; an uninstall goes back to the list. Those that ended before the page opened
-  // are not acted on: when this page is the first to start listening, the hub's list (which keeps ended operations a
-  // while) arrives after it opened, and what it brings that was not pushed meanwhile is old.
+  // keeps the user's edits, as a switch does (the fields not touched follow the new read); an uninstall goes back to
+  // the list. Those that ended before the page opened are not acted on: when this page is the first to start listening,
+  // the hub's list (which keeps ended operations a while) arrives after it opened, and what it brings that was not
+  // pushed meanwhile is old.
   const dirtyNow = useRef(dirty);
   dirtyNow.current = dirty;
   const backNow = useRef(onBack);
@@ -546,32 +650,22 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   };
   const computers = !!detail?.contributes?.computer;
   const nodes = detail?.node_machines ? { field: detail.node_machines, states: detail.nodes ?? [] } : undefined;
+  const launchers = useFormLaunchers(!!detail?.form?.fields?.some((f) => f.format === "launcher" || f.fields?.some((g) => g.format === "launcher")), detail?.id);
 
   // A secret's answer is a whole detail too; keep the form's draft as it is.
   // The dialog's request is numbered as it leaves, like the page's own writes.
   const secretStart = () => writing();
   const secretDone = (n: number, d: HubExtensionDetail) => wrote(n, d);
 
-  const back = () => (dirty ? setLeaving(true) : onBack());
   const p = detail;
 
   return (
     <div>
       <div className="relative mb-3 flex items-center gap-2">
+        {/* unsaved edits stay (the list marks them); Revert in the save bar drops them */}
         <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2">
           {t("settings-extensions.title")}
         </Button>
-        {leaving && (
-          <span className="absolute top-full left-0 z-10 mt-1 flex items-center gap-1 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
-            <span className="px-2 text-[12px] whitespace-nowrap text-ink-2">{t("settings-extensions.unsaved")}</span>
-            <Button tone="quiet" onClick={() => setLeaving(false)}>
-              {t("settings-extensions.keep_editing")}
-            </Button>
-            <Button tone="danger" onClick={onBack}>
-              {t("settings-extensions.discard")}
-            </Button>
-          </span>
-        )}
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.reload")} onClick={load} disabled={loading} />
       </div>
@@ -646,7 +740,7 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
                   {fields
                     .filter((f) => f.type !== "object")
                     .map((f) => (
-                      <FieldRow key={f.name} field={f} path={[f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} />
+                      <FieldRow key={f.name} field={f} path={[f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} launchers={launchers} />
                     ))}
                 </Group>
               )}
@@ -655,7 +749,7 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
                 .map((g) => (
                   <Group key={g.name} title={fieldLabel(g)} footer={g.description}>
                     {(g.fields ?? []).map((f) => (
-                      <FieldRow key={f.name} field={f} path={[g.name, f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} />
+                      <FieldRow key={f.name} field={f} path={[g.name, f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} launchers={launchers} />
                     ))}
                   </Group>
                 ))}
@@ -797,6 +891,13 @@ interface FieldProps {
   computers: boolean;
   /** The plugin's program on computers: the field that picks them, and how it is on each (their rows say). */
   nodes?: { field: string; states: ExtensionNodeState[] };
+  /** The hub's launchers, for a field of format launcher. */
+  launchers: FormLaunchers;
+}
+
+interface FormLaunchers {
+  list: PickerLauncher[] | null;
+  loading: boolean;
 }
 
 /** One field of the form, by its type; its title above (or beside a switch), its description and error below. */
@@ -842,7 +943,7 @@ function FieldRow(props: FieldProps) {
   );
 }
 
-function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, computers, nodes, id, invalid }: FieldProps & { id: string; invalid: boolean }) {
+function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, computers, nodes, launchers, id, invalid }: FieldProps & { id: string; invalid: boolean }) {
   const ring = invalid ? "shadow-[inset_0_0_0_1px_var(--red)]" : "shadow-inset-field";
   const v = valueAt(draft, path);
 
@@ -852,6 +953,9 @@ function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, comp
     return <MachineSwitches field={f} path={path} draft={draft} onSaveNow={onSaveNow} computers={computers} nodes={nodes?.field === f.name ? nodes.states : undefined} id={id} />;
   }
   if (f.type === "array") return <ListControl field={f} path={path} draft={draft} onEdit={onEdit} id={id} ring={ring} />;
+  if (f.type === "string" && (f.format === "machine" || f.format === "launcher") && !f.enum?.length) {
+    return <PickerControl field={f} path={path} draft={draft} onEdit={onEdit} launchers={launchers} id={id} ring={ring} />;
+  }
 
   if (f.enum?.length) {
     const at = f.enum.findIndex((c) => v !== undefined && same(c.value, v));
@@ -901,6 +1005,60 @@ function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, comp
       autoCapitalize="off"
       className={cx(inputClass, ring, f.format && "font-mono")}
     />
+  );
+}
+
+/** The hub's launchers for the form's launcher pickers, read once while the page is open (GET /launchers asks every
+ *  machine): null while they load, or when they could not be read. */
+function useFormLaunchers(on: boolean, page: string | undefined): FormLaunchers {
+  const [state, setState] = useState<FormLaunchers>({ list: null, loading: false });
+  useEffect(() => {
+    if (!on) return;
+    let live = true;
+    setState({ list: null, loading: true });
+    loadLaunchers<PickerLauncher>().then(
+      (r) => live && setState({ list: r.launchers, loading: false }),
+      () => live && setState({ list: null, loading: false }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [on, page]);
+  return state;
+}
+
+/** One of the hub's machines (format machine, of the systems x-os names) or launchers (format launcher) by name, "Not set"
+ *  first; a value naming none of them still shows. Launchers that are not in yet, or could not be read, are typed. */
+function PickerControl({ field: f, path, draft, onEdit, launchers, id, ring }: Pick<FieldProps, "field" | "path" | "draft" | "onEdit" | "launchers"> & { id: string; ring: string }) {
+  const machines = useStore((s) => s.machines);
+  const v = valueAt(draft, path);
+  const choices = pickerChoices(f, v, machines, launchers.list);
+  if (!choices) {
+    return (
+      <div className="flex items-center gap-2">
+        <input
+          id={id}
+          value={typeof v === "string" ? v : ""}
+          onChange={(e) => onEdit(path, e.target.value === "" ? undefined : e.target.value)}
+          placeholder={placeholder(f)}
+          spellCheck={false}
+          autoComplete="off"
+          autoCapitalize="off"
+          className={cx(inputClass, ring, "max-w-[320px] font-mono")}
+        />
+        {launchers.loading && <span className="text-[11px] whitespace-nowrap text-ink-3">{t("lib-extensions.launchers_loading")}</span>}
+      </div>
+    );
+  }
+  return (
+    <select id={id} value={typeof v === "string" ? v : ""} onChange={(e) => onEdit(path, e.target.value === "" ? undefined : e.target.value)} className={cx(inputClass, ring, "max-w-[320px]")}>
+      <option value="">{placeholder(f)}</option>
+      {choices.map((c) => (
+        <option key={c.value} value={c.value}>
+          {c.label}
+        </option>
+      ))}
+    </select>
   );
 }
 

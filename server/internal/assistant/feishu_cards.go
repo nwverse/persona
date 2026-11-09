@@ -533,7 +533,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		var b strings.Builder
 		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(toolDisplayName(ix.ToolName)))
 		if ix.Reason != "" {
-			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clipRunes(ix.Reason, maxPermissionReason)))
+			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
 		}
 		c.Markdown(b.String())
 		if sum := strings.TrimSpace(ix.Summary); sum != "" {
@@ -720,9 +720,9 @@ func firstQuestion(ix proto.Interaction) string {
 func questionText(l i18n.Lang, q proto.Question) string {
 	s := ""
 	if q.Header != "" {
-		s = "**" + feishubot.EscapeMarkdown(clipRunes(q.Header, 60)) + "**\n"
+		s = "**" + feishubot.EscapeMarkdown(clip(q.Header, 60)) + "**\n"
 	}
-	s += feishubot.EscapeMarkdown(clipRunes(q.Question, maxQuestionRunes))
+	s += feishubot.EscapeMarkdown(clip(q.Question, maxQuestionRunes))
 	descBudget := maxOptionDescBudget
 	clippedOptions := 0
 	for i, o := range q.Options {
@@ -731,9 +731,9 @@ func questionText(l i18n.Lang, q proto.Question) string {
 			break
 		}
 		if o.Description != "" && descBudget > 0 {
-			desc := clipRunes(o.Description, maxOptionDescRunes)
+			desc := clip(o.Description, maxOptionDescRunes)
 			if len([]rune(desc)) > descBudget {
-				desc = clipRunes(desc, descBudget)
+				desc = clip(desc, descBudget)
 			}
 			descBudget -= len([]rune(desc))
 			s += "\n- " + feishubot.EscapeMarkdown(clip(o.Label, 40)) + "：" + feishubot.EscapeMarkdown(desc)
@@ -758,7 +758,7 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 			qs = qs[:maxAnsweredQuestions]
 		}
 		for _, q := range qs {
-			c.Markdown(feishubot.EscapeMarkdown(clipRunes(q.Question, maxAnsweredQRunes)))
+			c.Markdown(feishubot.EscapeMarkdown(clip(q.Question, maxAnsweredQRunes)))
 		}
 		if more > 0 {
 			c.Note(strings.TrimSpace(i18n.T(s.botLang(ctx), "assistant-feishu_cards.clipped")))
@@ -823,16 +823,21 @@ func (s *Service) webBase(ctx context.Context) string {
 	return strings.TrimRight(st.PublicURL, "/")
 }
 
-// sessionLink is a conversation's page in the web app at web (web/src/lib/router.ts): a Persona conversation is
-// /persona/<id>, an agent /s/<machine>/<id>; "" when web is.
+// sessionLink is a conversation's page in the web app at web; "" when web is.
 func sessionLink(web, machine, session string, assistant bool) string {
 	if web == "" {
 		return ""
 	}
+	return web + sessionPath(machine, session, assistant)
+}
+
+// sessionPath is a conversation's path in the web app (web/src/lib/router.ts): a Persona conversation is
+// /persona/<id>, an agent /s/<machine>/<id>.
+func sessionPath(machine, session string, assistant bool) string {
 	if assistant {
-		return web + "/persona/" + url.PathEscape(session)
+		return "/persona/" + url.PathEscape(session)
 	}
-	return web + "/s/" + url.PathEscape(machine) + "/" + url.PathEscape(session)
+	return "/s/" + url.PathEscape(machine) + "/" + url.PathEscape(session)
 }
 
 // todoLink is a todo's page in the web app at web, "" when web is.

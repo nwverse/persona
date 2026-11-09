@@ -377,6 +377,83 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   page (a plan card in BeautifulUI at the standard size): another loop. Now it uses only values the cards do not move: the page height, the open
   header, the bar's own measured height (`VoiceBarRoom`) and the count's. The rule: what sizes an area must not take inputs the area itself moves.
 
+## Choosing the voice (#2411, 2026-11-09)
+
+- **Every call went out with no voice, and nobody could tell**: the app asked for the voice list once, as the call started, and ignored a failure
+  (`try?`); the menu item then stayed a bare "Voice" with nothing in it for the whole call. On a real hub that first request came back 502 twice.
+  A list request that fails must have a visible state and a way back (Retry, a retry by itself, asking again when the menu opens), or it reads as
+  "not supported".
+- **Where a 502 came from**: the app sends `model=` empty while the use `plugin.<id>` names no model. The extension then looks for the default
+  model, which for a form upstream without `default_model` means reading the service's `/models`; when that read failed, `/voices` failed with it,
+  although the voice list itself has a built-in fallback. Now the last good model list stands in, and with none the voices still come (the last
+  good list of any of the upstream's models, else the built-in one), marked `stale`.
+- **A SwiftUI submenu in a menu shows no second line**: neither a menu-style `Picker`'s label nor a nested `Menu`'s label with `Text` + `Text`
+  draws the subtitle (iOS 27 simulator), so the current voice goes into the title ("Voice: Marin"). Buttons do draw one, but only from a second
+  `Text` right in the label (docs/lessons/ios.md, #1307).
+- **A SwiftUI `Menu`'s items appear when it opens**: `onAppear` on an item is the cue to ask again for a list that is missing. A menu drawn again as
+  the state changes (loading → failed) must not turn that into a loop: an open asks only 2 s after the last ask began (`VoiceVoicesLoader.reopenGap`).
+  Checked with a failure slower than the gap (the mock's `slowfail`, 3 s): with the menu closed the asks followed 2, 5, 15 s only; with it open
+  for 25 s, one ask on opening and then the same backoff, no loop.
+- **A menu item's second line wraps instead of truncating**: "Couldn't load voices · Retry" took two lines in English and Japanese
+  (「声の一覧を読み込めませんでした · 再試行」) in the iPhone 17 Pro's ⋯ menu, and `.lineLimit` does not reach a menu. The words have to be short in
+  every language ("Couldn't load · Retry", 「読み込めません · 再試行」); look at the menu in all three languages, not only the one the tests run in.
+
+## The web voice mode (#2273, 2026-11-09)
+
+- **Chrome's fake microphone still waits on macOS's permission**: with `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream`
+  (Playwright's headless shell or the installed Chrome, permission granted to the context or not), `getUserMedia` never settles on a Mac
+  where the browser has no system microphone permission: the request goes to the system, and in a headless run nobody can answer it.
+  Worse, a browser left with that request pending stops answering everything afterwards (the next page's click hangs in "performing click
+  action"). `web/e2e/voice.mjs` asks once in a browser of its own, closes it, and where the fake device does not answer plays the same
+  16 kHz WAV (made with `say` + `afconvert`) through WebAudio into the stream it hands back as `getUserMedia`; everything after the stream
+  (the worklet, resampling, frames, the socket) stays real. Where the fake device answers, it is used as is (`results.json` says which).
+- **A browser hides a refused WebSocket handshake's status**: 401, 403 and 404 all look like a close with 1006 before `open`. The call asks
+  `GET …/info` with the same credential when a socket closes without having opened, and treats that status as the handshake's.
+- **Loading the AudioWorklet with Vite**: `new URL("./capture.worklet.ts", import.meta.url)` copies the raw TypeScript into the build;
+  `import url from "./capture.worklet.ts?worker&url"` bundles it into one self-contained file (an IIFE: valid as the module a worklet loads)
+  and serves an ES module in development (worklets accept imports, `/@vite/env` included). The hub serves `/web` with no
+  Content-Security-Policy; the worklet is a same-origin script either way, so no `blob:` URL is needed.
+- **Two AudioContexts**: the capture context runs at the device's rate (Firefox refuses a `MediaStreamAudioSourceNode` in a context at another
+  rate), the worklet resamples to `input_rate`; the playback context runs at `output_rate`. Both are made inside the click that starts the
+  call, before anything is awaited: once the permission prompt has been answered, the gesture's activation may be gone.
+- **Asserting that `clear` stops playback**: the mock streams 20 ms chunks in real time, so at any moment there is about one chunk queued,
+  sometimes none. Reading the queue from the test runner and then clicking raced it; the test reads the queue and clicks the orb in the
+  same task in the page, then checks that every queued chunk was stopped and nothing started after.
+- **Mute before the worklet exists**: the bar (and its Mute) shows as soon as the call starts, while the browser is still asking for
+  the microphone. A mute posted to a worklet node that is not there yet was lost, and the node made after it started unmuted: the
+  audio object keeps the mute itself and hands it to the worklet it makes. Likewise each frame carries the rate the worklet made it
+  at (a frame already posted when `ready` named another rate is still the old one). The e2e checks that muted frames keep coming
+  and are all zero (the mock counts all-zero frames, `audio_silent`).
+- **The capture context must never look silent**: at the mock's real pace (`MOCK_VOICE_PACE=1`) the uplink fell from 50 to about 20
+  frames a second some 30 seconds into every call, muted or not; the page's own binary `WebSocket.send` calls were as few, and in a 1.2 s
+  window the capture `AudioContext`'s `currentTime` moved 0.27 s while the player's moved 1.2 s. The capture graph's output was exact zeros
+  (the worklet writes no output, through a gain of 0). Chrome moves a Web Audio context whose output has been all zero for 30 seconds off
+  the audio device to a timer-driven fake sink (its silent sink suspender, to save power); in a headless Chrome on macOS that sink ran at
+  about a quarter of real time, and the worklet, which runs on the context's clock, made a quarter of the frames: the extension would
+  have heard a quarter of what was said. The suspender looks for samples that are exactly zero, so a tiny constant counts as sound.
+  `audio.ts` adds a `ConstantSourceNode` at 2^-26 (about -156 dBFS) to the capture context's output from the click on (the permission
+  prompt alone can take 30 seconds): a constant has no sound at any frequency, it is under half a step of a 24-bit converter (2^-24) so it
+  rounds to nothing on the way to the speaker, and it is far under the level at which Chrome marks a tab as playing audio. The microphone
+  still goes into the worklet only (no monitoring; `audio.test.ts` walks the graph). CPU: one node filling 128 samples per render quantum,
+  and the context stays on the device it used for the first 30 seconds anyway. With it: 50.0 frames a second over 41 s, every 5 s window
+  49.4–50.5; with the level set to 0: 39.9 on average, windows down to 12.5. The experiment before the fix (a sink gain of `1e-10` with
+  the microphone also connected to it) worked too, but a microphone that delivers exact zeros (a hardware mute switch) would put the
+  context back to sleep. The player context is left alone; the suspender is meant to hand a context back to the device once it renders
+  sound, not measured here after more than 30 seconds of silence between replies. Whether a headed, foreground Chrome's fake sink runs
+  slow as well was not checked; the fix does not depend on it.
+  The guard: `audio.ts` checks every 5 seconds (`capture-pace.ts`) and logs `[voice] microphone frames fell behind: N in 5.0 s, 250
+  expected; the capture context's clock moved X s` at debug level (DevTools' Verbose) when a window brings fewer than 90 % of the frames
+  the wall clock expects. A context clock far behind the wall clock means the sink; one on time means the page's main thread could not
+  take the frames. The e2e at pace 0.5 reaches the mute before the 30 s mark, which is why it passed: run it at pace 1 too, where it
+  holds each call until it has watched the uplink for 40 seconds (average 47–53 frames a second, every 5 s window at least 40) and keeps
+  the `[voice]` debug lines in `results.json`.
+- **The mock wrote state changes into a copy**: `voice_mock.py` took its session from `all_sessions()`, which decorates copies, so "the
+  conversation turns working" never reached a sessions push. It takes the hub's own row now; a client that reads the session's state (the
+  web's Stop <agent>, iOS's working line) sees the script. Once that worked, a call that closed after its script's "sent" and before
+  "done" (the e2e's Continue, and the reconnect after picking a voice) left the conversation working for the next run, whose line then
+  said "working" instead of "handing" (the line shows handing only while the conversation is idle): the e2e timed out there on its
+  seventh run at pace 0.5. A call that closes before done now puts the conversation back to idle.
+
 ## An address that accepts TCP but never answers TLS
 
 #1350, 2026-11-08.
@@ -394,3 +471,6 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   Providers with `ssh` still dial through that machine.
 - **Checking it**: `server/internal/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
   TLS server, for both `GET /models` and the session dial.
+
+- **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
+  After HTTP Hijack, detach already-buffered bytes from the returned reader before applying probe deadlines: that reader still uses `net/http`'s connection reader, which cancels the request on a read timeout even after hijacking. Probe the raw connection and preserve the detached bytes instead; otherwise a banner or an idle client closes the entire tunnel. Real CONNECT banner tests catch this even when direct connection-helper tests pass.

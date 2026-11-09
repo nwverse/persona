@@ -107,6 +107,14 @@ export function mergeItems(have: Item[], batch: Item[]): Item[] {
   return sortItems(kept.map((i) => realWork.has(i) && promotedFolds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq) ? { ...i, supervisionUser: true } : i));
 }
 
+/** `have` without what a fold of this fresh page now stands for. Left in, a step kept from before the fold existed
+ *  would make mergeItems drop the fold as if it had been expanded, and every other step in it would be lost. */
+export function withoutFolded(have: Item[], page: Item[]): Item[] {
+  const folds = page.filter((f) => f.fold);
+  if (!folds.length) return have;
+  return have.filter((i) => !((i.kind === "thinking" || i.kind === "fold" || i.tool_use_id) && folds.some((f) => i.seq >= f.seq && i.seq <= f.fold!.through_seq)));
+}
+
 // Only the canonical persona-context tag is recognized.
 
 const ATTR_RE = /(\w+)="([^"]*)"/g;
@@ -328,6 +336,15 @@ export function exchangeSteps(s: Segment): Step[] {
   return at < 0 ? [...s.steps, step] : [...s.steps.slice(0, at), step, ...s.steps.slice(at)];
 }
 
+/** Presentation identity for an exchange without input: a fold and its real nonzero block share the source sequence. */
+export function segmentIdentity(s: Segment): string {
+  if (s.user) return s.id;
+  const first = s.steps[0];
+  let seq = first ? (first.kind === "tool" ? first.use.seq : first.item.seq) : undefined;
+  if (s.answer && (seq === undefined || s.answer.seq < seq)) seq = s.answer.seq;
+  return seq !== undefined && Number.isFinite(seq) ? `exchange-${seq}` : s.id;
+}
+
 // The first line worth showing for a tool call: the command, the file, the pattern…
 export function toolChip(use: Item): string {
   const inp = (use.tool_input ?? {}) as Record<string, unknown>;
@@ -420,7 +437,7 @@ export function isPersonaTool(name?: string): boolean {
 
 /** Persona's tools with a verb of their own, by their bare name (iOS PersonaToolNames + ToolPresentation.verb). */
 const PERSONA_VERB_KEY: Record<string, string> = {
-  // Agents on the user's computers (docs/assistant/assistant.md "Agents and Lark tools")
+  // Agents on the user's computers (docs/assistant/assistant.md "Current structure", Agents)
   agent_read: "persona_agent_read",
   agent_send: "persona_agent_send",
   send_to_agent: "persona_agent_send",
@@ -717,7 +734,7 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
     // woken by background tasks: the chip with the runs since the first wake sits above the newest words (#3783)
-    out.push({ kind: "segment", id: seg.id, seg, live: live && last, ...(last && t.wakes.length ? { wakes: t } : {}) });
+    out.push({ kind: "segment", id: segmentIdentity(seg), seg, live: live && last, ...(last && t.wakes.length ? { wakes: t } : {}) });
   });
   for (const n of t.trailing) out.push({ kind: "notice", id: n.id, item: n });
   return out;
@@ -726,8 +743,10 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
 /** The chat as lines (iOS ChatLines.lines): exchanges, their wakes and notices, recaps, API errors as cards. */
 export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[] {
   const blocks = buildBlocks(foldCompactions(items));
-  const last = blocks[blocks.length - 1];
-  const liveId = opts.live && last?.kind === "turn" ? last.turn.id : undefined;
+  const source = items.at(-1);
+  // A wake can reopen a turn before a recap. Select the owner of the latest source item, not the last drawn block.
+  const active = opts.live && source ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id))) : undefined;
+  const liveId = active && active.kind === "turn" ? active.turn.id : undefined;
   const out: ChatLine[] = [];
   // A result can land after another segment or user input; associate it with its original call, not its position.
   const results = new Map(items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => [i.tool_use_id!, i]));

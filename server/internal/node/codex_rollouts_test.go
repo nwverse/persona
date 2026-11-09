@@ -15,6 +15,8 @@ func TestRolloutID(t *testing.T) {
 		`C:\Users\u\.codex\sessions\2026\01\02\rollout-2026-01-02T03-04-05-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl`,
 		"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
 		"x0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl",
+		"rollout-time-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b_11111111-2222-3333-4444-555555555555.jsonl",
+		"rollout-time-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b_11111111-2222-3333-4444-555555555555_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl",
 		"/h/rollout-2026-01-02T03-04-05-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl.tmp",
 		"/h/rollout-2026-01-02T03-04-05-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5.jsonl",
 		"/h/rollout-2026-01-02T03-04-05-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5g.jsonl",
@@ -31,6 +33,42 @@ func TestRolloutID(t *testing.T) {
 		if got := rolloutID(p); got != want {
 			t.Errorf("rolloutID(%q) = %q, want %q", p, got, want)
 		}
+	}
+}
+
+// A rollout listed before its first line is written (Codex 0.167 creates it empty and writes session_meta some
+// milliseconds later) gets its directory once the line is there: what an empty or half-written line said is not kept.
+func TestRolloutsMetaAfterTheFileIsWritten(t *testing.T) {
+	codex := filepath.Join(t.TempDir(), ".codex")
+	const id = "d1111111-1111-1111-1111-111111111111"
+	now := time.Now()
+	dir := filepath.Join(codex, "sessions", now.Format("2006"), now.Format("01"), now.Format("02"))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "rollout-"+now.Format("2006-01-02T15-04-05")+"-"+id+".jsonl")
+	whole := []byte(`{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"` + id + `","cwd":"/w"}}` + "\n")
+	for _, part := range [][]byte{nil, whole[:len(whole)/2]} {
+		if err := os.WriteFile(p, part, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		expireRollouts(codex, true)
+		if got := rollouts(codex); len(got) != 1 || got[0].cwd != "" {
+			t.Fatalf("%d bytes written: %+v", len(part), got)
+		}
+		if m := metaOf(codex, p); m.cwd != "" {
+			t.Fatalf("%d bytes written: metaOf %+v", len(part), m)
+		}
+	}
+	if err := os.WriteFile(p, whole, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expireRollouts(codex, true)
+	if got := rollouts(codex); len(got) != 1 || got[0].cwd != "/w" {
+		t.Fatalf("written: %+v", got)
+	}
+	if m := metaOf(codex, p); m.cwd != "/w" {
+		t.Fatalf("written: metaOf %+v", m)
 	}
 }
 

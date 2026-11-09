@@ -108,7 +108,7 @@ func loadOrMakeKey(file string) (*ecdsa.PrivateKey, error) {
 			return nil, err
 		}
 		// Linked into place, never over an existing key: two processes making one at once end up with the same.
-		if err := writePrivate(file, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), false); err != nil && !os.IsExist(err) {
+		if err := WritePrivate(file, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), false); err != nil && !os.IsExist(err) {
 			return nil, err
 		}
 		if b, err = os.ReadFile(file); err != nil {
@@ -167,7 +167,7 @@ func (id *identity) renew(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	if err := writePrivate(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), true); err != nil {
+	if err := WritePrivate(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), true); err != nil {
 		return err
 	}
 	id.crt = &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: id.key, Leaf: leaf}
@@ -187,8 +187,10 @@ func (id *identity) certificate(now time.Time) (*tls.Certificate, error) {
 	return id.crt, nil
 }
 
-// writePrivate publishes a 0600 file whole: renamed over the old one when replace is set, else linked into place.
-func writePrivate(path string, data []byte, replace bool) error {
+// WritePrivate publishes a 0600 file whole: renamed over the old one when replace is set, else linked into place,
+// where a file already there wins (an os.IsExist error), so concurrent creators of a key all use the one that won.
+// The hub's TLS identity is written with it too.
+func WritePrivate(path string, data []byte, replace bool) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".tls-*")
 	if err != nil {
 		return err
