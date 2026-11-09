@@ -19,6 +19,7 @@ vi.mock("./router", () => ({ navigate: vi.fn() }));
 
 import { arrived, askPersona, discardOutbox, inSendOrder, keepFailed, keepOutgoing, noteSent, noteWritten, outboxMessage, placeFailed, resetRestoredForTests, restoreOutbox, retryOutbox, sendToSession, settle, settleOutbox, SENT_GRACE_MS, type OutboxEntry } from "./outbox";
 import type { ChatLine } from "./turns";
+import { ApiError } from "./api";
 import { pickLauncher } from "./assistant-chat";
 import { navigate } from "./router";
 import { getState } from "./store";
@@ -234,6 +235,14 @@ describe("messages kept across a reload", () => {
     expect(store.size).toBe(0);
   });
 
+  it("a message the hub answered keeps that reason, and its new id on Retry", () => {
+    keepFailed("m", "s", { id: "a6", text: "到了吗", images: [], at: 1000 }, new ApiError(502, "x", { delivered: "unknown" }));
+    const reason = outbox()["m/s"][0].error;
+    reload();
+    restoreOutbox("m", "s");
+    expect(outbox()["m/s"]).toMatchObject([{ id: "a6", error: reason, newId: true }]);
+  });
+
   it("a message still sending when the page closed comes back too", () => {
     keepOutgoing("m/s", { id: "a2", text: "发出去了吗", images: [], at: 2000 });
     restoreOutbox("m", "s");
@@ -260,6 +269,21 @@ describe("messages kept across a reload", () => {
 });
 
 describe("inSendOrder", () => {
+  it("stops waiting for a POST that hung", async () => {
+    vi.useFakeTimers();
+    try {
+      void inSendOrder("hung", () => new Promise(() => {}));
+      const next = vi.fn(async () => {});
+      void inSendOrder("hung", next);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(next).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(next).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs a conversation's sends one at a time, past a failure", async () => {
     let fail!: (e: Error) => void;
     const first = inSendOrder("k", () => new Promise((_, reject) => (fail = reject)));

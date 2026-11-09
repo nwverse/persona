@@ -124,6 +124,8 @@ interface Pending {
   at: number;
   /** The node held it back until an ultracode change waiting for the turn is through (#3428): it goes again then. */
   waits?: boolean;
+  /** Its POST has not been answered yet (it may be behind earlier ones): the bubble does not time out. */
+  posting?: boolean;
 }
 
 /** How many times a message held back for an ultracode change goes again before it is taken as not sent. */
@@ -337,7 +339,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       // a sent one waits for its copy while the agent works and SENT_GRACE_MS after, as the outbox and the apps do: the
       // transcript can write it late (a long context compacted first, #1119); one held back for an ultracode change
       // waits as long as the turn does
-      return ps.filter((p) => !drop.has(p.id) && (p.waits || state === "working" || now - p.at < SENT_GRACE_MS));
+      return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - p.at < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segs, tr.loading]);
@@ -565,7 +567,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         return false;
       }
       // a sending bubble shows picked contexts as quote cards, like the transcript will (not the raw tags)
-      const p: Pending = { id, at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } };
+      const p: Pending = { id, at: Date.now(), posting: true, msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } };
       // a new try: an earlier failure's card no longer applies (its bubble stays, with Retry)
       setSendFailure(null);
       noteWritten(id, p.at);
@@ -583,6 +585,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model },
         }));
         forgetOutgoing(key, id);
+        setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false } : x)));
         return true;
       } catch (e) {
         // An ultracode change waits for the turn (docs/protocol/protocol.md "Claude Code ultracode"): the node holds messages back
@@ -628,9 +631,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       toast(t("chat-chatview.route_no_images"), "error");
       return false;
     }
-    if (assistant && !out.images.length && out.text.trim()) {
+    if (assistant && !out.images.length && out.text.trim() && getFeedState().routes[sid]) {
       try {
-        if (await sendRouted(sid, out.text)) return true;
+        // in turn: the route is used up by the first message that takes it, and the next one must see that
+        if (await inSendOrder(outboxKey(mid, sid), () => sendRouted(sid, out.text))) return true;
       } catch (e) {
         toast(t("chat-chatview.not_delivered", { error: errorText(e) }), "error");
         return false;

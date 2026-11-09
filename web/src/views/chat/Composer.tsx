@@ -716,7 +716,8 @@ export const Composer = memo(function Composer({
               // any Enter while blocked says why (also an empty box or attachments only): submit() would do nothing
               if (blocked) {
                 setNudge((n) => n + 1);
-                blocked.onNudge?.();
+                // held down, the key repeats: one fresh ask, not one per repeat
+                if (!e.repeat) blocked.onNudge?.();
               } else void submit();
             }
           }}

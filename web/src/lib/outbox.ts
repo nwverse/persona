@@ -12,7 +12,7 @@ import { uuid } from "./format";
 import { navigate } from "./router";
 import { getState, refreshAssistant, setOutbox } from "./store";
 import { chooseManager, chosenManager, noteConversation, otherManager, ownerHeaders } from "./manager-choice";
-import { apiOp, isTransient } from "./ops";
+import { apiOp, isTransient, OP_OFFLINE_MS, OP_RETRY_MS } from "./ops";
 import { echoed, isEcho, type Seen, type Sent } from "./echo";
 import { parseUserText, type ChatLine, type UserMessage } from "./turns";
 import type { AssistantInfo, Item } from "./types";
@@ -190,14 +190,15 @@ export function keepFailed(mid: string, sid: string, sent: Pick<OutboxEntry, "id
 // ── one conversation's sends, in order ──────────────────
 
 const sendTurns = new Map<string, Promise<void>>();
+/** As long as a send can honestly take (a gap waited out, a session resuming): a POST still open after this hung (a send
+ *  has no fetch timeout), and the later ones stop waiting for it. */
+const SEND_TURN_MAX_MS = OP_OFFLINE_MS + OP_RETRY_MS;
 
 /** Runs `post` once the conversation's earlier sends have settled, however they ended: two POSTs in flight can reach the
- *  hub in either order. With none before it, it starts at once.
- *  ponytail: a POST that never settles holds the later ones until the page reloads (a send has no fetch timeout); add a
- *  ceiling here if one is ever seen hanging. */
+ *  hub in either order. With none before it, it starts at once. */
 export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> {
   const before = sendTurns.get(key);
-  const turn = before ? before.then(post) : post();
+  const turn = before ? Promise.race([before, new Promise<void>((done) => setTimeout(done, SEND_TURN_MAX_MS))]).then(post) : post();
   const settled = turn.then(() => {}, () => {});
   sendTurns.set(key, settled);
   void settled.then(() => {
@@ -210,14 +211,14 @@ export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> 
 
 const KEPT_PREFIX = "outbox-msg:";
 const keptKey = (key: string, id: string) => `${KEPT_PREFIX}${key}/${id}`;
-type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId">>;
+type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "error">>;
 
 /** Keeps one message's words in this browser while it is on its way or failed (pictures are not kept: they would fill the
  *  storage). Storage can be full or refused; the message then lasts only as long as the page. */
 export function keepOutgoing(key: string, e: Outgoing) {
   if (!e.text.trim()) return;
   try {
-    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, images: e.images.length }));
+    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, error: e.error, images: e.images.length }));
   } catch {
     // only this page's copy then
   }
@@ -258,7 +259,7 @@ export function restoreOutbox(mid: string, sid: string, inFlight: string[] = [])
   restored.add(key);
   const back = keptEntries(key).filter((k) => !inFlight.includes(k.id) && !list(key).some((e) => e.id === k.id));
   if (!back.length) return;
-  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: "failed", restored: true, error: t(lostImages ? "lib-outbox.not_confirmed_images" : "lib-outbox.not_confirmed") }));
+  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: "failed", restored: true, error: lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
   setOutbox(key, [...list(key), ...entries]);
 }
 

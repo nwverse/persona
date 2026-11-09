@@ -30,7 +30,7 @@ vi.mock("./Composer", async (importOriginal) => ({
   },
 }));
 // one transcript for every render: a new one each time would re-run the sending bubble's echo check forever
-const transcript = vi.hoisted(() => ({ items: [], loading: false, error: "", hasMore: false, streaming: "" }));
+const transcript = vi.hoisted(() => ({ items: [] as unknown[], loading: false, error: "", hasMore: false, streaming: "" }));
 vi.mock("./useTranscript", () => ({ useTranscript: () => transcript }));
 vi.mock("../../lib/store", async (importOriginal) => {
   const store = await importOriginal<typeof import("../../lib/store")>();
@@ -79,6 +79,8 @@ vi.mock("../../lib/ultracode", async (importOriginal) => ({
 const { ChatView } = await import("./ChatView");
 const { t } = await import("../../i18n");
 const { getState, setOutbox } = await import("../../lib/store");
+const { setRoute } = await import("../../lib/feed");
+const { SENT_GRACE_MS } = await import("../../lib/outbox");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
@@ -265,6 +267,60 @@ describe("sending in order, and with no row yet", () => {
     await flush();
     expect(bodies.map((b) => b.text)).toEqual(["one", "two"]);
     release[1]();
+    await act(async () => void (await Promise.all([first, second])));
+  });
+
+  it("keeps a message waiting behind a slow one on screen and in this browser, past the grace", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let first!: Promise<boolean>, second!: Promise<boolean>;
+    act(() => {
+      first = captured.onSend!({ text: "one", images: [] });
+      second = captured.onSend!({ text: "two", images: [] });
+    });
+    await flush();
+    const later = Date.now() + SENT_GRACE_MS + 1;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => later);
+    transcript.items = [{ id: "n1", seq: 1, role: "notice", kind: "notice", text: "something else" }];
+    try {
+      act(() => root.render(<ChatView mid="hub" sid="c1" />));
+      await flush();
+      expect(host.textContent).toContain("two");
+      expect(Object.keys(localStorage).filter((k) => k.startsWith("outbox-msg:"))).toHaveLength(2);
+      release[0]();
+      await flush();
+      release[1]();
+      await act(async () => void (await Promise.all([first, second])));
+      expect(Object.keys(localStorage).filter((k) => k.startsWith("outbox-msg:"))).toHaveLength(0);
+    } finally {
+      clock.mockRestore();
+      transcript.items = [];
+    }
+  });
+
+  it("sends a message after a routed one only once that one has used the route", async () => {
+    const posts: string[] = [];
+    const open: (() => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (!path.endsWith("/route") && !path.endsWith("/messages")) return Promise.resolve(json({}));
+      posts.push(path.slice(path.lastIndexOf("/") + 1));
+      return new Promise<Response>((resolve) => open.push(() => resolve(json({}))));
+    }));
+    setRoute("c1", "todo1");
+    act(() => root.render(<ChatView mid="hub" sid="c1" assistant />));
+    await flush();
+    let first!: Promise<boolean>, second!: Promise<boolean>;
+    act(() => {
+      first = captured.onSend!({ text: "for the task", images: [] });
+      second = captured.onSend!({ text: "for persona", images: [] });
+    });
+    await flush();
+    expect(posts).toEqual(["route"]);
+    open[0]();
+    await flush();
+    expect(posts).toEqual(["route", "messages"]);
+    open[1]();
     await act(async () => void (await Promise.all([first, second])));
   });
 

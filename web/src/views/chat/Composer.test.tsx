@@ -442,6 +442,17 @@ describe("sending while another send is in flight", () => {
       await act(async () => click(sendButton()));
     };
 
+    it("asks once while Enter is held down in a blocked box", () => {
+      fine = true;
+      const onNudge = vi.fn();
+      act(() => root.render(<Composer draftKey="held" placeholder="" blocked={{ label: "x", onNudge }} onSend={async () => true} />));
+      const press = (repeat: boolean) => act(() => host.querySelector("textarea")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, repeat })));
+      press(false);
+      press(true);
+      press(true);
+      expect(onNudge).toHaveBeenCalledTimes(1);
+    });
+
     it("returns to the box with a precise pointer, from the send button", async () => {
       fine = true;
       await send();
