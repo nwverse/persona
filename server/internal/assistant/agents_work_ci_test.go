@@ -208,7 +208,7 @@ func TestCIWatchDoesNotWakeForPRReview(t *testing.T) {
 	}
 }
 
-func TestCIEmptyChecksKeepWaiting(t *testing.T) {
+func TestCIEmptyChecksReturnToScheduledWake(t *testing.T) {
 	ctx := context.Background()
 	s, f := workService(t)
 	c := stopped("ci", "Waiting for PR #12 CI")
@@ -226,8 +226,8 @@ func TestCIEmptyChecksKeepWaiting(t *testing.T) {
 	}
 	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
 	got := entryOf(t, s, "ci")
-	if got.Work.CI == nil || got.WakeAt == nil || !got.WakeAt.After(at) {
-		t.Fatalf("empty checks did not remain pending: %+v", got)
+	if got.Work.CI != nil || got.WakeAt == nil || got.WakeAt.After(at) {
+		t.Fatalf("empty checks did not fall back: %+v", got)
 	}
 }
 
@@ -740,5 +740,99 @@ func TestCIWatchURLWithoutSessionDirectory(t *testing.T) {
 	startCIWatch(c, &e, turnEnd, "", "")
 	if e.Work.CI != nil {
 		t.Fatal("number without repository or cwd was accepted")
+	}
+}
+
+func TestCIWatchViewedDuringSettleDoesNotStart(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "Waiting for PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+	f.hello.Agents.Triage.SettleSeconds = 1
+	seen := false
+	h := &ciSwapHub{fakeHub: f}
+	h.onHello = func() {
+		if !seen {
+			seen = true
+			s.workSeen("box", "ci", turnEnd.Add(time.Second))
+		}
+	}
+	s.hub = h
+	s.workTurnEnded(ctx, "box", "ci")
+	if !seen {
+		t.Fatal("did not deliver seen during settle")
+	}
+	got := entryOf(t, s, "ci")
+	if got.Work.CI != nil || got.WakeAt != nil {
+		t.Fatalf("viewed turn registered a watch: %+v", got)
+	}
+}
+
+func TestCIOutboxDoesNotSendWhenPersistenceFails(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub()
+	st := &failingDeferredWorkStore{}
+	c := stopped("ci", "CI https://github.com/example/repo/pull/12")
+	f.sessions["box"] = []proto.Session{c}
+	s := newServiceOn(t, f, st)
+	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+		t.Fatal(err)
+	}
+	at := turnEnd.Add(3 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: &proto.WorkCI{Repo: "example/repo", Number: 12, Observed: "ready", ObservedAt: turnEnd}}}
+	s.putWork(ctx, e)
+	s.ext = fakeCIExtensions{call: func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error) {
+		return github.PRCheckSnapshot{Count: 1, Fingerprint: "ready"}, time.Time{}, true, nil
+	}}
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	st.fail = true
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+	if sends != 0 || entryOf(t, s, "ci").Work.CI.Message != "" {
+		t.Fatal("sent despite failing to persist")
+	}
+	st.fail = false
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+	if sends != 1 {
+		t.Fatalf("sent %d times after recovery", sends)
+	}
+}
+
+func TestCIEmptyThenChecksAppear(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	f.sessions["box"] = []proto.Session{c}
+	at := turnEnd.Add(10 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
+	startCIWatch(c, &e, turnEnd, "", "")
+	s.putWork(ctx, e)
+	phase := 0
+	f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) {
+		checks := []map[string]string{}
+		if phase > 0 {
+			state := "pending"
+			if phase > 1 {
+				state = "pass"
+			}
+			checks = append(checks, map[string]string{"name": "test", "state": state})
+		}
+		return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "head_oid": "0123456789abcdef0123456789abcdef01234567", "checks_complete": true, "checks": checks}}, nil
+	})
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
+	phase = 1
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(2*time.Minute))
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, at)
+	if got := entryOf(t, s, "ci"); got.Work.CI == nil || sends != 0 {
+		t.Fatalf("pending check lost: %+v", got)
+	}
+	phase = 2
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(11*time.Minute))
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(13*time.Minute))
+	if sends != 1 {
+		t.Fatalf("got %d wakes", sends)
 	}
 }

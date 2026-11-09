@@ -464,6 +464,9 @@ func (s *Service) putTriageWork(e db.SessionWork, generation uint64) bool {
 		s.work.mu.Unlock()
 		return false
 	}
+	if seen := s.work.seen[key]; e.Work.CI != nil && !seen.IsZero() && !seen.Before(e.TurnAt) {
+		e.WakeAt, e.Work.WakeAt, e.Work.CI = nil, nil, nil
+	}
 	e.UpdatedAt = time.Now().UTC()
 	saved := e
 	s.work.entries[key] = &saved

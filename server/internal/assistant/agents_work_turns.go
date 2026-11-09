@@ -88,6 +88,10 @@ func (s *Service) workSeen(machine, sid string, at time.Time) {
 	k := [2]string{machine, sid}
 	s.work.mu.Lock()
 	s.work.init()
+	previousSeen := s.work.seen[k]
+	if at.After(previousSeen) {
+		s.work.seen[k] = at
+	}
 	if s.work.triaging[k] && !at.Before(s.work.tried[k].turn) {
 		s.work.generation[k]++
 	}
@@ -96,10 +100,7 @@ func (s *Service) workSeen(machine, sid string, at time.Time) {
 		s.work.mu.Unlock()
 		return
 	}
-	first := s.work.seen[k].Before(e.TurnAt)
-	if first {
-		s.work.seen[k] = at
-	}
+	first := previousSeen.Before(e.TurnAt) && !at.Before(e.TurnAt)
 	phase, on, turn := e.Work.Phase, e.Work.On, e.TurnAt
 	var cancelled *db.SessionWork
 	if !at.Before(turn) && e.Work.CI != nil && e.WakeAt != nil {

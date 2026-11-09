@@ -269,6 +269,15 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 		s.replaceCI(e, current)
 		return "", true
 	}
+	// An empty set does not establish that the PR has a CI source. Give checks
+	// time to register, then use the ordinary scheduled wake.
+	if reset.IsZero() && result.count == 0 && !now.Before(ci.FallbackAt) {
+		current.Work.CI = nil
+		at := now.UTC()
+		current.WakeAt, current.Work.WakeAt = &at, &at
+		s.replaceCI(e, current)
+		return "", true
+	}
 	if !reset.IsZero() || result.pending || result.count == 0 || result.fingerprint == "" {
 		ci.Observed, ci.ObservedAt = "", time.Time{}
 		ci.Polls = min(ci.Polls+1, 15) // cap the interval, not the lifetime
