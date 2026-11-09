@@ -345,7 +345,7 @@ const unsavedKey = (id: string, manager?: string) => `${manager && manager !== d
 
 function warnUnsaved(e: BeforeUnloadEvent) {
   e.preventDefault();
-  e.returnValue = ""; // older Safari and Firefox ask only when it is set
+  e.returnValue = true; // browsers before preventDefault() counted here (Chrome before 119) ask only when it is set
 }
 
 function unsavedChanged() {
