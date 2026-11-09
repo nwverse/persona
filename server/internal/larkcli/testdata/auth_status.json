@@ -11,7 +11,7 @@
       "openId": "ou_example_user",
       "userName": "Example User",
       "tokenStatus": "valid",
-      "scope": "im:chat:read im:message:readonly",
+      "scope": "im:chat:read im:message:readonly im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user im:message.reactions:read search:message search:docs:read contact:user:search minutes:minutes.search:read task:task:read mail:user_mailbox.message:readonly mail:user_mailbox.message.address:read mail:user_mailbox.message.subject:read mail:user_mailbox.message.body:read calendar:calendar.event:read",
       "expiresAt": "2030-01-08T12:00:00Z",
       "refreshExpiresAt": "2030-01-15T12:00:00Z"
     }
