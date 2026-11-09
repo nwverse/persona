@@ -2877,6 +2877,14 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
         for _a in _w["agents"]:
             ITEMS[_a["session_id"]] = [it("user", "text", 14, text="%s：审这一块，列出问题" % _a["label"]),
                                        it("assistant", "text", 13, text=_a.get("last_text") or "这一块看完了，没有发现问题。")]
+# MOCK_MENTIONS=1 (#2319, the composer's @ list): the review agent read two files of its folder, each call alone between
+# replies, so the hub leaves them unfolded (fold_work) and they are this chat's files in the app (PersonaUITests/MentionMenuTests).
+if os.environ.get("MOCK_MENTIONS"):
+    ITEMS[REVIEW] = (_REVIEW_BEFORE + [it("user", "text", 100, text="看一下 PR #42")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/README.md"}, "# Weather", 99)
+                     + [it("assistant", "text", 98, text="先看了 README，再看小组件的改动。")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/WeatherWidget/Provider.swift"}, "1\timport WidgetKit", 97)
+                     + [it("assistant", "text", 95, text="PR #42 看完了：逻辑没问题，留了两条关于命名的小建议。")])
 ITEMS[CODEX_LIVE] = (
     [it("user", "text", 12, text="把三个环境的部署变量合到一个 env 文件里")]
     + tool("Bash", {"command": "ls deploy/env"}, "dev.env\nprod.env\nstaging.env", 8)
@@ -3085,17 +3093,25 @@ if MOCK_TASKS:
         # what is in progress. The Accept button posts to /api/v1/todos/{id}/accept (accept_brief below).
         _feed("feed_brief", 1.5, "brief", "morning", {
             "title": "早报", "at": ago(minutes=1.6), "hours": 12,
-            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 4800, "nudged": True},
+            # A card and a question name the chat they came from (machine_id / session_id, #2320): the apps open it. The second
+            # card names none, as a card from no chat (or a hub from before) does.
+            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock",
+                         "machine_id": "macbook", "session_id": TESTS, "waited_s": 4800, "nudged": True},
                         {"id": "ix_mock_2", "title": "需要你批准", "from": "来自 Persona", "waited_s": 300}],
+            # The newest rows of each, the totals counting all of them ("and 5 more"; iPhone folds them behind the heading).
             "failed": [{"kind": "task", "id": "todo_task_align", "title": "设置页按钮对齐", "at": ago(hours=3), "why": "rpc: connection closed"},
                        {"kind": "routine", "id": "patrol", "ref": "run_mock", "title": "巡检", "at": ago(hours=5), "why": "Persona 停机，错过了时间", "skipped": True}],
-            "failed_total": 2,
-            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)}], "done_total": 1,
+            "failed_total": 3,
+            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)},
+                     {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
+            # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)}],
+                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
-                       "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 26 * 3600},
+                       "link": "http://127.0.0.1/s/macbook/mock", "machine_id": "macbook", "session_id": TESTS, "waited_s": 26 * 3600},
                       {"id": "lt_mock_2", "title": "发布说明里要不要写内部编号？", "from": "来自 Agent「发布」", "waited_s": 3 * 3600}],
             "later_total": 2,
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
@@ -5037,6 +5053,35 @@ ITEM_MUTES = {
 }
 for _x in INBOX:
     if _x["id"] in ITEM_MUTES: _x["mutes"] = ITEM_MUTES[_x["id"]]
+
+# Folders (docs/assistant/inbox.md "Folders", #2463): GET/PUT /api/v1/inbox/folders and PUT /api/v1/inbox/{id}/folder.
+# MOCK_INBOX_FOLDERS=1 turns automatic folders on and files most items (one by hand); the rest stay unfiled.
+FOLDER_CFG = {"enabled": bool(os.environ.get("MOCK_INBOX_FOLDERS")), "rules": ""}
+if os.environ.get("MOCK_INBOX_FOLDERS"):
+    FOLDER_CFG["rules"] = "Messages from build and alert bots go to work/alerts/<service>"
+    for _id, _f, _by in [("lark:f1:100", "projects/atlas/release", "model"), ("lark:f2:200", "projects/atlas/design", "user"),
+                         ("mail:acc1:t1:501", "work/talks", "model"), ("lark:f3:300", "personal/hiking", "model"),
+                         ("mail:acc1:t2:502", "personal/shopping", "model"), ("mail:acc1:t3:503", "subscriptions/newsletters", "model"),
+                         ("github:review12", "work/reviews/example-repo", "model"), ("github:ci7", "work/alerts/ci", "model")]:
+        for _x in INBOX:
+            if _x["id"] == _id: _x["folder"], _x["folder_by"] = _f, _by
+
+
+def folder_state(query):
+    """GET /api/v1/inbox/folders: the settings and the folders the listed items are filed in, most used first."""
+    by = {}
+    for x in inbox_for(query):
+        if not x.get("folder"): continue
+        f = by.setdefault(x["folder"], {"path": x["folder"], "count": 0, "open": 0})
+        f["count"] += 1
+        if not x.get("done_at"): f["open"] += 1
+    return dict(FOLDER_CFG, folders=sorted(by.values(), key=lambda f: (-f["count"], f["path"])))
+
+
+def normalize_folder(s):
+    """The hub's normalizeFolder, enough for the mock."""
+    segs = [" ".join(seg.split())[:40] for seg in str(s).replace("\\", "/").split("/")]
+    return "/".join([x for x in segs if x and x not in (".", "..")][:6])
 SOURCE_NAMES = {"lark": "飞书", "mail": "邮件", "github": "GitHub", "imessage": "信息", "telegram": "Telegram"}
 # The mutes the user set (GET/POST/DELETE /api/v1/inbox/mutes); MOCK_MUTES=1 starts with two.
 MUTES = [] if not os.environ.get("MOCK_MUTES") else [
@@ -5160,6 +5205,33 @@ def inbox_triage_from(spec):
 
 
 INBOX_TRIAGE = inbox_triage_from(os.environ.get("MOCK_INBOX_TRIAGE", ""))
+
+
+# Sources the hub could not read this round (triage.sources[].read_error / read_reason, #1849; the hub's inbox_admit.go).
+# MOCK_INBOX_UNREAD=<name>[:<code>[:<reason>]],… : each name is marked not read (code timeout | rate_limited | failed,
+# default timeout); with no reason the source has no read_reason (the apps' own words). Adds `triage` (ok) if unset.
+def inbox_unread_into(triage, spec):
+    """The triage block with MOCK_INBOX_UNREAD's sources marked not read; triage as it was when spec is empty."""
+    if not spec:
+        return triage
+    out = copy.deepcopy(triage) if triage is not None else {"state": "ok", "waiting": 0}
+    sources = out.setdefault("sources", [])
+    for i, entry in enumerate(x for x in spec.split(",") if x.strip()):
+        parts = entry.split(":", 2)
+        name = parts[0].strip()
+        code = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "timeout"
+        src = next((x for x in sources if x.get("name") == name), None)
+        if src is None:
+            src = {"source": "unread%d" % (i + 1), "name": name, "state": "ok", "waiting": 0}
+            sources.append(src)
+        src["read_error"] = code
+        if len(parts) > 2 and parts[2].strip():
+            src["read_reason"] = parts[2].strip()
+    sources.sort(key=lambda x: x["source"])
+    return out
+
+
+INBOX_TRIAGE = inbox_unread_into(INBOX_TRIAGE, os.environ.get("MOCK_INBOX_UNREAD", ""))
 
 
 def inbox_list(query):
@@ -11981,6 +12053,30 @@ PLUGINS["example-gateway"] = {
             "icon": "chart", "badge": {"text": "3", "tone": "danger"}},
            # UI version 3's components and pages (docs/extensions/extensions.md "UI version 3"): -openPlugin example-gateway -openPluginPage notes
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
+# MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and
+# Linux) and launchers (format launcher) from the hub's lists, and steps whole numbers (#2385). Its auto-reply launcher
+# names one the hub no longer has, so its picker keeps it, marked.
+if os.environ.get("MOCK_EXTENSION_PICKERS"):
+    PLUGINS["example-agent-chat"] = {
+        "id": "example-agent-chat", "name": "Example 聊天", "kind": "connectors", "status": "running", "version": "0.4.0", "source": "installed",
+        "enabled": True, "description": "以你的身份接入 Example 聊天：消息进收件箱；在聊天里发 /agent 交给助手，被 @ 时可让 AI 代答。",
+        "contributes": {"connectors": ["exampleagentchat"]}, "publisher": "example", "origin": "market:3f2a9c1d0b/example-agent-chat",
+        "form": {"fields": [
+            {"name": "agent", "type": "boolean", "title": "聊天里的 /agent", "default": False,
+             "description": "在聊天里发「/agent 要求」，交给助手处理并以你的身份回复"},
+            {"name": "agent_machine", "type": "string", "format": "machine", "os": ["darwin", "linux"], "title": "/agent 在哪台电脑上跑",
+             "description": "空着用助手那台"},
+            {"name": "agent_launcher", "type": "string", "format": "launcher", "title": "/agent 用的启动器", "description": "空着用助手的"},
+            {"name": "agent_reply_mode", "type": "string", "title": "/agent 回复方式", "default": "quote",
+             "enum": [{"value": "quote", "title": "引用回复"}, {"value": "thread", "title": "回复到话题"}]},
+            {"name": "agent_continue_hours", "type": "integer", "title": "「同一聊天」接着多久（小时）", "minimum": 1, "maximum": 72, "default": 4,
+             "description": "距上一条 /agent 多少小时内接着那段对话（1–72）"},
+            {"name": "auto_reply", "type": "string", "title": "别人 @我 时 AI 代答", "default": "off",
+             "enum": [{"value": "off", "title": "关"}, {"value": "all", "title": "所有聊天"}, {"value": "allowlist", "title": "只在白名单里的聊天"}]},
+            {"name": "auto_reply_launcher", "type": "string", "format": "launcher", "title": "代答用的启动器", "description": "空着用 /agent 的"}]},
+        "config": {"agent_machine": "server", "auto_reply_launcher": "cc_retired"}, "secrets": [],
+        "permissions": [_RUNS, {"key": "network", "title": "访问网络", "detail": "chat.example.com"}]}
+
 # A plugin whose program runs on computers (docs/extensions/extensions.md "Programs running on computers", #1830): its field picking them asks
 # before one is switched on (the hub's x-confirm), each machine's row says how the program is there (nodes).
 PLUGINS["example-helper"] = {
@@ -13157,6 +13253,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
     "PORT=<端口>  监听端口，默认 18760；0 表示自动分配（启动时打印 mock hub on <地址>:<端口>）",
@@ -14028,6 +14125,7 @@ class H(BaseHTTPRequestHandler):
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
             return self.send_json({"mutes": OTHER_MUTES.get(other[0], []) if other else MUTES})
+        if p == "/api/v1/inbox/folders": return self.send_json(folder_state(q))
         if p == "/api/v1/inbox/policies":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -15202,6 +15300,25 @@ class H(BaseHTTPRequestHandler):
             pid = p.rsplit("/", 1)[1]
             PLACES[:] = [x for x in PLACES if x["id"] != pid]
             return self.send_json({"ok": True})
+        if p == "/api/v1/inbox/folders" and self.command == "PUT":
+            body = json.loads(self.last_body or b"{}")
+            if "enabled" in body: FOLDER_CFG["enabled"] = bool(body["enabled"])
+            if "rules" in body: FOLDER_CFG["rules"] = str(body["rules"] or "").strip()
+            return self.send_json(folder_state({}))
+        if p.startswith("/api/v1/inbox/") and p.endswith("/folder") and self.command == "PUT":
+            iid = unquote(p[len("/api/v1/inbox/"):-len("/folder")])
+            inbox_item = next((x for x in INBOX if x["id"] == iid), None)
+            if not inbox_item: return self.send_json({"error": "no such inbox item"}, 404)
+            folder = json.loads(self.last_body or b"{}").get("folder")
+            if folder is None:
+                inbox_item.pop("folder", None); inbox_item.pop("folder_by", None)
+            else:
+                f = normalize_folder(folder)
+                if not f and str(folder).strip(): return self.send_json({"error": "folder must have at least one name between the slashes"}, 400)
+                inbox_item["folder_by"] = "user"
+                if f: inbox_item["folder"] = f
+                else: inbox_item.pop("folder", None)
+            return self.send_json(dict({k: v for k, v in inbox_item.items() if k != "context"}, version=inbox_version(inbox_item)))
         if p == "/api/v1/inbox/policies" and self.command == "POST":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -16296,6 +16413,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -16353,6 +16471,7 @@ if os.environ.get("MOCK_MOMENTS_FEED"):  # the project's posts say which feed th
 MOCK_HELP.append("MOCK_MOMENTS_FEED=<名字>  知识库的公司圈帖子带 feed（项目的「相关<名字>」和存档帖子页的标题用它；不设时叫「公司圈」）")
 MOCK_HELP.append("MOCK_NO_LARK=1  没装接飞书的扩展的 hub：features 里没有 lark / lark_moments / lark_attachments，/api/v1/lark/… 404，连接器里没有飞书")
 MOCK_HELP.append("MOCK_INBOX_TRIAGE=<状态>[:<条数>[:<来源名，逗号隔开>[:<原因>]]]  收件箱列表带 triage（新条目在等分拣，#1773）：unconfigured / paused / error / timeout / behind / ok；不设时没有 triage（老 hub）")
+MOCK_HELP.append("MOCK_INBOX_UNREAD=<来源名>[:<代码>[:<原因>]],…  收件箱 triage 的这些来源这一轮没读到（read_error / read_reason，#1849）：代码 timeout / rate_limited / failed；不写原因就没有 read_reason")
 
 # ---------- area: commenting in the Feishu document reader (#1290) ----------
 # MOCK_DOC_COMMENTS=1: the plugin says `lark_doc_comments`; GET /api/v1/lark/raw/documents/comments has three made-up
