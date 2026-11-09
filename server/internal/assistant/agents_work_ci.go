@@ -24,14 +24,16 @@ var ciPRNumber = lazyre.New(`(?i)\b(?:pr|pull request)\s*#?([1-9][0-9]*)\b`)
 var ciBareNumber = lazyre.New(`(?:^|[^A-Za-z0-9_/#])#([1-9][0-9]*)\b`)
 var ciArtifactNumber = lazyre.New(`^#?[1-9][0-9]*$`)
 var ciArtifactRepo = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$`)
-var ciWaitSignal = lazyre.New(`(?i)\b(ci|checks?|pipeline|workflows?|builds?|tests?)\b|持续集成|构建|测试|检查|ビルド|テスト|チェック`)                 // i18n-ignore: match model output
-var ciOtherWait = lazyre.New(`(?i)\b(review|reviews|approval|deployment|deploy|feedback)\b|审核|审查|评审|部署|上线|反馈|レビュー|承認|デプロイ|フィードバック`) // i18n-ignore: match model output
+var ciWaitSignal = lazyre.New(`(?i)\b(ci|checks?|pipelines?|workflows?)\b|持续集成|检查|チェック`)                                                                                                              // i18n-ignore: match model output
+var ciPRWaitSignal = lazyre.New(`(?i)\b(pr|pull request)\b|拉取请求|合并请求|プルリクエスト`)                                                                                                                        // i18n-ignore: match model output
+var ciBuildSignal = lazyre.New(`(?i)\b(builds?|tests?)\b|构建|测试|ビルド|テスト`)                                                                                                                              // i18n-ignore: match model output
+var ciOtherWait = lazyre.New(`(?i)\b(review|reviews|approval|deployment|deploy|feedback|manual|external|customer|client|user)\b|审核|审查|评审|部署|上线|反馈|手动|手工|外部|客户|用户|レビュー|承認|デプロイ|フィードバック|手動|外部|顧客|ユーザー`) // i18n-ignore: match model output
 
 // ciWaitIntent is shared by triage and watch registration so unrelated waits
 // never require a second transcript read.
 func ciWaitIntent(w *proto.WorkState) bool {
 	wait := w.Wait + " " + w.Line
-	return !ciOtherWait.MatchString(wait) && ciWaitSignal.MatchString(wait)
+	return !ciOtherWait.MatchString(wait) && (ciWaitSignal.MatchString(wait) || ciPRWaitSignal.MatchString(wait) && ciBuildSignal.MatchString(wait))
 }
 
 // startCIWatch records only an unambiguous PR. A number without a repository

@@ -1315,8 +1315,14 @@ func TestCIWatchRequiresCIWaitIntent(t *testing.T) {
 		{"feedback with incidental tests", "customer feedback", "Waiting for feedback", "Tests and CI passed for PR #12", false},
 		{"other wait with incidental CI", "waiting for a customer", "Awaiting a response", "CI checks passed on PR #12", false},
 		{"user testing feedback", "user test feedback", "Waiting for feedback", "PR #12 CI passed", false},
+		{"external manual tests", "external security tests", "Waiting for manual tests", "PR #12 is open", false},
+		{"ambiguous tests", "security tests", "Waiting for tests", "PR #12 is open", false},
+		{"ambiguous build", "build", "Waiting for build", "PR #12 is open", false},
+		{"customer PR tests", "customer PR tests", "Waiting for tests", "PR #12 is open", false},
 		{"actual CI checks", "CI checks", "Waiting for CI", "PR #12 is open", true},
-		{"actual build", "build", "Waiting for build", "PR #12 is open", true},
+		{"actual PR build", "PR #12 build", "Waiting for build", "PR #12 is open", true},
+		{"actual PR tests", "tests for pull request #12", "Waiting for tests", "PR #12 is open", true},
+		{"workflow", "workflow", "Waiting for workflow", "PR #12 is open", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := stopped("ci", tc.reply)
@@ -1467,7 +1473,9 @@ func TestCIWatchTranscriptReadOnlyForCIWait(t *testing.T) {
 		{"customer feedback", "customer feedback", "Waiting for feedback", 1, false},
 		{"review", "code review", "Waiting for review", 1, false},
 		{"deployment", "deployment", "Waiting for deployment", 1, false},
+		{"manual external tests", "external security tests", "Waiting for manual tests", 1, false},
 		{"CI checks", "CI checks", "Waiting for CI", 2, true},
+		{"PR build", "PR #12 build", "Waiting for build", 2, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := workService(t)
