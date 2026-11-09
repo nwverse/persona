@@ -81,8 +81,9 @@
 - Disconnecting signs this device out first (`apple/Persona/App/HubSignOut.swift`): Disconnect This Group, Disconnect This Hub, Disconnect and Forget Server, Disconnect All Hubs, and Revoke and Unpair in Settings › Devices.
   On each hub it forgets, the App reads its own credential id (`current` of `GET /api/v1/auth/tokens`), revokes the watch's answer-only credential made there, then its own (`DELETE /api/v1/auth/tokens/{id}`), all hubs at once with a 10-second timeout per request.
   The hub then drops the push registration and Live Activity tokens that credential made (`Pusher.signedOut`), so pushes and remote Live Activity starts stop. A credential already revoked (401) counts as signed out.
-  The local cleanup runs either way. A hub out of reach, one that refuses, or one paired with the master token (no id to revoke) is named in a toast: it may keep pushing until this device is revoked in Settings › Devices on another device.
-  When the removed hub was its group's first hub, the App registers for pushes again and gets the watch a new credential at the group's next hub.
+  The local cleanup runs either way. A hub out of reach, one that refuses, or one where this device is still on the master token (no id) or the pairing token (`pair_<hash>`: its trade failed) is named in a toast: it may keep pushing until this device is revoked in Settings › Devices on another device.
+  While it runs, the row that started it shows progress, and the disconnect, Add Hub and Pair Again entries are disabled (`AppModel.hubSignOut`): a hub paired meanwhile could be removed with the others.
+  When the removed hub was its group's first hub, the App registers for pushes again and gets the watch a new credential at the group's next hub; a socket on the removed hub's credential reconnects through the group's other hubs.
 
 ## Live Activities
 
@@ -105,6 +106,8 @@
 - In the background, Live Activities reflect only the first group (see above).
 - Hub-level pages such as Inbox, Persona, Knowledge, model configuration, and notification settings show one group at a time (contract 2.6: no cross-hub merging).
 - A hub that can't be reached while disconnecting keeps this device's credential and push registration; the App only names it ("Push and notifications").
+- Pairing registers for pushes before the pairing token is traded for this device's own, so that registration stays under the pairing token on the hub (`pair_<hash>`) and revoking the device's own credential does not remove it (needs a hub-side follow-up).
+- When the hub the Live Activity's tokens were reported to is disconnected (the first group's), the App reports the push-to-start token to the next one only when ActivityKit issues a new one.
 - When a group's first hub goes offline, push registration remains there (the contract has the issuer send pushes), so that group's pushes may not arrive during the outage.
 - Hubs known only through mesh (not paired with this device) use only the addresses they advertise. With TLS enabled, these are https addresses with self-signed certificates. iOS does not yet pin them using `fp`,
   so probes fail and those addresses are not selected (routing switches only among paired hubs). To let the phone switch directly to a particular hub in a group, pair it too (it will join the same group).
