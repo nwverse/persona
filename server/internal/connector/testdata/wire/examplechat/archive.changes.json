@@ -5,6 +5,7 @@
         "id": "primary.user_example_a",
         "name": "Example A",
         "kind": "dm",
+        "muted": true,
         "updated_at": "2026-11-04T08:24:00.000Z"
       },
       "messages": [
@@ -12,6 +13,7 @@
           "id": "880000000002",
           "position": "2",
           "mine": false,
+          "mentioned": true,
           "type": "TEXT",
           "text": "Synthetic question: are you free today?",
           "at": "2026-11-04T08:22:00.000Z",

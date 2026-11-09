@@ -3634,12 +3634,23 @@ export interface ConnectorChatBatch {
   messages?: ConnectorArchiveMessage[];
 }
 
+/**
+ * A batch's conversation. The flags are what the owner set at the source (none: not set, or the program cannot tell);
+ * the knowledge base's selection matches its rules on them and on kind, and a flag a program never reports never
+ * matches its rule.
+ */
 export interface ConnectorArchiveChat {
   id: string;
   name: string;
-  /** dm, group or bot. */
+  /** dm, group, bot, official (an official or service account) or system (the service's own notices). */
   kind: string;
   topic?: boolean;
+  /** The owner muted it (a source's automatic muting of large groups included). */
+  muted?: boolean;
+  /** The owner folded it away (a chat box, folded groups). */
+  collapsed?: boolean;
+  /** The owner marked it done. */
+  done?: boolean;
   updated_at?: string;
 }
 
@@ -3652,7 +3663,10 @@ export interface ConnectorArchiveMessage {
   sender_id?: string;
   sender_name?: string;
   mine?: boolean;
-  /** The owner is mentioned in it (an @-mention, or the owner's display names): the program decides. */
+  /**
+   * The owner is mentioned in it (an @-mention, an @all, or the owner's display names): the program decides, on
+   * archive.changes batches and history pages alike.
+   */
   mentioned?: boolean;
   /** TEXT, POST, IMAGE, FILE, CARD, SYSTEM… */
   type?: string;
@@ -3680,7 +3694,10 @@ export interface ConnectorHistoryChat {
   id: string;
   name: string;
   kind: string;
+  /** As an archive chat's muted, collapsed and done. */
   muted?: boolean;
+  collapsed?: boolean;
+  done?: boolean;
   bot?: boolean;
   estimate?: number;
   source?: string;
@@ -3788,6 +3805,12 @@ export interface ConnectorKBItem {
   projects?: string[];
   note?: string;
   seen?: string;
+  /**
+   * Why it concerns the owner, as far as the program can tell: mentions (the document mentions the owner),
+   * comment_mentions (a comment or reply on it does), authored (the owner owns it), viewed (the owner opened it
+   * recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
+   */
+  signals?: string[];
   importance?: string;
   relevance?: number;
   tags?: string[];

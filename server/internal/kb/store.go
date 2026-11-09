@@ -174,6 +174,7 @@ type Item struct {
 	Projects []string  `json:"projects,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Seen     time.Time `json:"seen"`
+	Signals  []string  `json:"signals,omitempty"` // kbwire.Signal*: why it concerns the owner, as the source told
 	Tagging
 }
 

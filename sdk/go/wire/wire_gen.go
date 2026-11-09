@@ -3476,12 +3476,21 @@ type ConnectorChatBatch struct {
 	Messages []ConnectorArchiveMessage `json:"messages,omitempty"`
 }
 
+// ConnectorArchiveChat: A batch's conversation. The flags are what the owner set at the source (none: not set, or the
+// program cannot tell); the knowledge base's selection matches its rules on them and on kind, and a flag a program
+// never reports never matches its rule.
 type ConnectorArchiveChat struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// dm, group or bot.
-	Kind      string    `json:"kind"`
-	Topic     bool      `json:"topic,omitempty"`
+	// dm, group, bot, official (an official or service account) or system (the service's own notices).
+	Kind  string `json:"kind"`
+	Topic bool   `json:"topic,omitempty"`
+	// The owner muted it (a source's automatic muting of large groups included).
+	Muted bool `json:"muted,omitempty"`
+	// The owner folded it away (a chat box, folded groups).
+	Collapsed bool `json:"collapsed,omitempty"`
+	// The owner marked it done.
+	Done      bool      `json:"done,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 
@@ -3493,7 +3502,8 @@ type ConnectorArchiveMessage struct {
 	SenderID   string `json:"sender_id,omitempty"`
 	SenderName string `json:"sender_name,omitempty"`
 	Mine       bool   `json:"mine,omitempty"`
-	// The owner is mentioned in it (an @-mention, or the owner's display names): the program decides.
+	// The owner is mentioned in it (an @-mention, an @all, or the owner's display names): the program decides, on
+	// archive.changes batches and history pages alike.
 	Mentioned bool `json:"mentioned,omitempty"`
 	// TEXT, POST, IMAGE, FILE, CARD, SYSTEM…
 	Type string    `json:"type,omitempty"`
@@ -3514,13 +3524,16 @@ type ConnectorHistoryChats struct {
 // unknown); source is the name it is filed under, as a batch's (none: the connector's id). id alone names it, unique
 // across the connector's sources.
 type ConnectorHistoryChat struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Muted    bool   `json:"muted,omitempty"`
-	Bot      bool   `json:"bot,omitempty"`
-	Estimate int    `json:"estimate,omitempty"`
-	Source   string `json:"source,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	// As an archive chat's muted, collapsed and done.
+	Muted     bool   `json:"muted,omitempty"`
+	Collapsed bool   `json:"collapsed,omitempty"`
+	Done      bool   `json:"done,omitempty"`
+	Bot       bool   `json:"bot,omitempty"`
+	Estimate  int    `json:"estimate,omitempty"`
+	Source    string `json:"source,omitempty"`
 }
 
 // ConnectorHistoryParams: archive.history: one page of a conversation, older than before, newer than after, or around
@@ -3606,10 +3619,14 @@ type ConnectorKBItem struct {
 	URL   string    `json:"url,omitempty"`
 	At    time.Time `json:"at,omitzero"`
 	// Where it came from (a chat id, calendar…).
-	Where        string    `json:"where,omitempty"`
-	Projects     []string  `json:"projects,omitempty"`
-	Note         string    `json:"note,omitempty"`
-	Seen         time.Time `json:"seen,omitzero"`
+	Where    string    `json:"where,omitempty"`
+	Projects []string  `json:"projects,omitempty"`
+	Note     string    `json:"note,omitempty"`
+	Seen     time.Time `json:"seen,omitzero"`
+	// Why it concerns the owner, as far as the program can tell: mentions (the document mentions the owner),
+	// comment_mentions (a comment or reply on it does), authored (the owner owns it), viewed (the owner opened it
+	// recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
+	Signals      []string  `json:"signals,omitempty"`
 	Importance   string    `json:"importance,omitempty"`
 	Relevance    int       `json:"relevance,omitempty"`
 	Tags         []string  `json:"tags,omitempty"`

@@ -4,12 +4,21 @@ import (
 	"time"
 )
 
-// SourceChat is a chat as a source lists it, newest activity first.
+// SourceChat is a chat as a source lists it, newest activity first. The flags are what the owner set at the source;
+// the knowledge base's selection (docs/assistant/knowledge.md "Selection") matches its rules on them and on the kind, and a
+// source that does not report one never matches that rule.
 type SourceChat struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"` // dm | group | bot
-	Topic     bool      `json:"topic,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"` // dm | group | bot | official | system
+	// Topic: a topic (thread-first) group.
+	Topic bool `json:"topic,omitempty"`
+	// Muted: the owner muted it (a source's automatic muting of large groups included).
+	Muted bool `json:"muted,omitempty"`
+	// Collapsed: the owner folded it away (a chat box, folded groups).
+	Collapsed bool `json:"collapsed,omitempty"`
+	// Done: the owner marked it done.
+	Done      bool      `json:"done,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
@@ -23,8 +32,9 @@ type SourceMessage struct {
 	SenderID   string `json:"sender_id,omitempty"`
 	SenderName string `json:"sender_name,omitempty"`
 	Mine       bool   `json:"mine,omitempty"`
-	// Mentioned: the owner is mentioned in it. The connector decides (an @-mention of the owner, or a match of the
-	// owner's display names); history import reads around such messages.
+	// Mentioned: the owner is mentioned in it. The connector decides (an @-mention of the owner, an @all, or a match
+	// of the owner's display names), on archive.changes batches and history pages alike; the selection's mentions
+	// rule keeps such messages and history import reads around them.
 	Mentioned bool      `json:"mentioned,omitempty"`
 	Type      string    `json:"type,omitempty"` // TEXT, POST, IMAGE, FILE, CARD, SYSTEM…
 	Text      string    `json:"text,omitempty"`

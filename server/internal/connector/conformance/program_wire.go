@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/serve"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -559,6 +560,14 @@ func checkItems(raw json.RawMessage) (serve.ItemsResult, error) {
 	for i, it := range res.Items {
 		if !slices.Contains([]string{"docs", "meetings", "events"}, it.Kind) || it.ID == "" || it.Title == "" {
 			is.add("items[%d]: needs a kind (docs, meetings, events), an id and a title", i)
+		}
+		for j, sg := range it.Signals {
+			switch {
+			case !slices.Contains(kbwire.Signals, sg):
+				is.add("items[%d]: signal %q is none of %v", i, sg, kbwire.Signals)
+			case slices.Contains(it.Signals[:j], sg):
+				is.add("items[%d]: signal %q twice", i, sg)
+			}
 		}
 	}
 	return res, is.err()

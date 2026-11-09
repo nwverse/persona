@@ -14,8 +14,22 @@ type Item struct {
 	Projects []string  `json:"projects,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Seen     time.Time `json:"seen"`
+	// Signals are why the item concerns the owner, as far as the source can tell (Signal*): the knowledge base's
+	// selection decides by them which documents it keeps. A source that cannot tell one leaves it out.
+	Signals []string `json:"signals,omitempty"`
 	Tagging
 }
+
+// What a source can tell about a document and the owner (Item.Signals).
+const (
+	SignalMentions        = "mentions"         // the document mentions the owner
+	SignalCommentMentions = "comment_mentions" // a comment or reply on it mentions the owner
+	SignalAuthored        = "authored"         // the owner owns it
+	SignalViewed          = "viewed"           // the owner opened it recently
+)
+
+// Signals are every signal an item may carry, in the selection's default order.
+var Signals = []string{SignalMentions, SignalCommentMentions, SignalAuthored, SignalViewed}
 
 // Tagging is how an entity is tagged, as the knowledge base writes it into the entity's metadata.
 type Tagging struct {

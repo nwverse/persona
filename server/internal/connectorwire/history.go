@@ -31,8 +31,11 @@ type HistoryChat struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Kind string `json:"kind"` // HistoryKind*
-	// Muted: the owner muted it at the source (a hint for which ones to import; it is still offered).
-	Muted bool `json:"muted,omitempty"`
+	// Muted, Collapsed, Done: the owner muted it, folded it away or marked it done at the source, as SourceChat's flags
+	// (the selection's rules match on them; a conversation is offered either way).
+	Muted     bool `json:"muted,omitempty"`
+	Collapsed bool `json:"collapsed,omitempty"`
+	Done      bool `json:"done,omitempty"`
 	// Bot: the other side is a bot (a dm with a bot, or a group that is only bots).
 	Bot bool `json:"bot,omitempty"`
 	// Estimate is roughly how many messages it has (0: the source cannot tell), to size the import.
