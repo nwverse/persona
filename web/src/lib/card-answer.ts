@@ -1,5 +1,7 @@
-// Answering a card (POST /interactions/{id}/resolve): the card's own buttons (views/chat/Interactions.tsx) and a system
-// notification's Allow / Deny (lib/notification-answer.ts) go through here, so both check the same and send the same.
+// Answering a card (POST /interactions/{id}/resolve): the card's own buttons (views/chat/Interactions.tsx), Overview's
+// quick answers and a system notification's Allow / Deny (lib/notification-answer.ts) go through here, so all check the
+// same, send the same and see the one answer on its way for each card.
+import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { ApiError, enc, errorText } from "./api";
 import { endedText, type Resolution, type ResolveResult } from "./answered";
@@ -38,9 +40,68 @@ function redacted(ix: Interaction, body: Resolution): Resolution {
   return r;
 }
 
-export async function answerCard(ix: Interaction, body: Resolution): Promise<CardAnswer> {
-  if (!interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id))) return { ok: false, error: t("chat-interactions.approve_not_allowed") };
-  if (isSecretRun(ix) && !isSecretRunAnswer(body)) return { ok: false, error: t("chat-interactions.secret_run_card_only") };
+/** An answer on its way to the hub (apiOp keeps trying through a gap, up to OP_OFFLINE_MS while the hub is away): what
+ *  it says, as its receipt will show it (redacted), and how it ends. */
+interface Pending {
+  body: Resolution;
+  shown: Resolution;
+  done: Promise<CardAnswer>;
+}
+
+/** At most one per card, by interaction id: it outlives the card's own state (leaving the chat unmounts it). */
+const pending = new Map<string, Pending>();
+const watchers = new Set<() => void>();
+const changed = () => watchers.forEach((l) => l());
+
+/** Plain JSON answers, equal key by key (in any order). */
+function sameAnswer(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  const keys = Object.keys(x);
+  return keys.length === Object.keys(y).length && keys.every((k) => k in y && sameAnswer(x[k], y[k]));
+}
+
+/**
+ * Answers a card, once at a time: while an answer to it is on its way, the same answer again shares that request and
+ * its result, and a different one is refused without a request. It is not swapped in: a retry keeps its op id and
+ * body (an op id with another body is 409 op_id_reused, docs/lessons/web.md #2459), and the first one may have reached
+ * the hub already. Once it ends (delivered, refused, or out of time) the card can be answered again.
+ */
+export function answerCard(ix: Interaction, body: Resolution): Promise<CardAnswer> {
+  if (!interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id))) return Promise.resolve({ ok: false, error: t("chat-interactions.approve_not_allowed") });
+  if (isSecretRun(ix) && !isSecretRunAnswer(body)) return Promise.resolve({ ok: false, error: t("chat-interactions.secret_run_card_only") });
+  const cur = pending.get(ix.id);
+  if (cur) return sameAnswer(cur.body, body) ? cur.done : Promise.resolve({ ok: false, error: t("chat-interactions.answer_pending") });
+  const entry: Pending = {
+    body,
+    shown: redacted(ix, body),
+    done: send(ix, body).finally(() => {
+      if (pending.get(ix.id) !== entry) return;
+      pending.delete(ix.id);
+      changed();
+    }),
+  };
+  pending.set(ix.id, entry);
+  changed();
+  return entry.done;
+}
+
+const watch = (l: () => void) => {
+  watchers.add(l);
+  return () => {
+    watchers.delete(l);
+  };
+};
+
+/** The answer on its way for this card, as its receipt will show it (redacted); undefined when there is none. */
+export function usePendingAnswer(id: string): Resolution | undefined {
+  const read = () => pending.get(id)?.shown;
+  return useSyncExternalStore(watch, read, read);
+}
+
+async function send(ix: Interaction, body: Resolution): Promise<CardAnswer> {
   try {
     // one op id for this answer: sent again through a gap (a hub restart), it is taken once
     const res = await apiOp<ResolveResult>(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: body });
