@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -374,5 +376,44 @@ func TestServeShutdownGraceExceeded(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not give up after the grace period")
+	}
+}
+
+// TestHTTPServerClosesStalledConnections: with proxy_secret unset the relay listens directly, and register reads the
+// body before checking anything. A client that sends headers and stalls the body, or leaves a keep-alive connection
+// idle, must not hold a goroutine and an fd for ever.
+func TestHTTPServerClosesStalledConnections(t *testing.T) {
+	oldRead, oldIdle := readTimeout, idleTimeout
+	readTimeout, idleTimeout = 300*time.Millisecond, 300*time.Millisecond
+	defer func() { readTimeout, idleTimeout = oldRead, oldIdle }()
+	_, _, h := newTest(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- serve(ctx, ln, newHTTPServer(h)) }()
+	defer func() { cancel(); <-served }()
+	for _, tc := range []struct{ name, req, want string }{
+		{"stalled body", "POST /relay/v1/register HTTP/1.1\r\nHost: x\r\nContent-Length: 4000\r\n\r\n{\"apns_token\":", "HTTP/1.1 400 "},
+		{"idle keep-alive", "GET /relay/v1/health HTTP/1.1\r\nHost: x\r\n\r\n", "HTTP/1.1 200 "},
+	} {
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := io.WriteString(c, tc.req); err != nil {
+			t.Fatalf("%s: write: %v", tc.name, err)
+		}
+		got, err := io.ReadAll(c)
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("%s: the relay kept the connection open: %v", tc.name, err)
+		}
+		if !strings.HasPrefix(string(got), tc.want) {
+			t.Fatalf("%s: answer %q, want %q...", tc.name, got, tc.want)
+		}
 	}
 }
