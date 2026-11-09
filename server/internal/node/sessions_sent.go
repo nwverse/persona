@@ -46,16 +46,21 @@ func (n *Node) sendSessions(list []proto.Session) {
 		s.last = nil
 		return
 	}
+	// pending before epoch, never the other way round: the skip is decided as of the pending read. An answer that
+	// starts after it lists the sessions later than list was built, so the manager may well take it. One that ends
+	// between the two reads has moved the epoch read below. Read epoch first and an answer could start and end in
+	// between unseen, with list skipped behind it on the wire.
+	idle := s.pending.Load() == 0
 	epoch := s.epoch.Load()
-	if s.last != nil && s.peer == peer && s.at == epoch && s.pending.Load() == 0 && bytes.Equal(s.last, b) {
+	if s.last != nil && s.peer == peer && s.at == epoch && idle && bytes.Equal(s.last, b) {
 		return
 	}
-	err = peer.Notify("sessions.changed", json.RawMessage(b))
-	// An answer or a switch that went while this was written may be after it on the wire: not known then.
-	if err != nil || s.pending.Load() != 0 || s.epoch.Load() != epoch {
+	if err := peer.Notify("sessions.changed", json.RawMessage(b)); err != nil {
 		s.last = nil
 		return
 	}
+	// Kept as of epoch: an answer still pending blocks the skip above until it ends, and then the epoch has moved, as
+	// it has for an answer or a switch that went while this was written (it may be after it on the wire).
 	s.peer, s.last, s.at = peer, b, epoch
 }
 
