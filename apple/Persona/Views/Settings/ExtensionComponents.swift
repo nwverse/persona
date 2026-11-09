@@ -96,6 +96,10 @@ struct ExtensionRemoteImage: View {
         .task(id: url) {
             image = nil
             failed = false
+            #if DEBUG && os(macOS)
+            let captureLoad = MacExtensionSnapshotBatch.beginImageLoad(url)
+            defer { MacExtensionSnapshotBatch.finishImageLoad(captureLoad, loaded: image != nil) }
+            #endif
             guard let data = try? await ExtensionRemoteImage.session.data(from: url).0, let img = UIImage(data: data) else {
                 failed = true
                 return

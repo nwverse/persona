@@ -297,19 +297,23 @@ struct UserBubbleBody: View {
     var text: String
     /// The paths in `text`: linked where they are there on the machine (`PathText`).
     var paths: [PathRef] = []
+    /// The new conversation layout (#1666, `ChatLayout`): the user's box is pale blue under the primary text color.
+    @Environment(\.chatLayout) private var layout
 
     var body: some View {
         if quotes.isEmpty {
             words.padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m)
-                .background(Theme.userBubbleFill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
+                .background(fill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
         } else {
             quoted
         }
     }
 
+    private var fill: AnyShapeStyle { layout.on ? AnyShapeStyle(Theme.ChatBox.user) : Theme.userBubbleFill }
+
     private var words: some View {
-        PathText(text: text, refs: paths, link: Theme.userBubbleLink)
-            .font(Theme.Font.body).lineHeight(.body).foregroundStyle(Theme.userBubbleText)
+        PathText(text: text, refs: paths, link: layout.on ? Theme.accent : Theme.userBubbleLink)
+            .font(Theme.Font.body).lineHeight(.body).foregroundStyle(layout.on ? Color.primary : Theme.userBubbleText)
             #if os(macOS)
             .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
             #endif
@@ -332,7 +336,7 @@ struct UserBubbleBody: View {
                     .padding(.vertical, Theme.Space.m)
             }
         }
-        .background(Theme.userBubbleFill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
+        .background(fill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
     }
 }
 

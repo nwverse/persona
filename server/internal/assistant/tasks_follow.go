@@ -124,7 +124,7 @@ func (s *Service) taskWaits(ctx context.Context, t Todo) bool {
 }
 
 // taskWorking: one of the task's agents started a turn. The agent of a task the hub closed meanwhile (judged done,
-// reviewed) works on it again — sent more by agent_send, which resumes a closed one, or by the user: the task is open
+// accepted) works on it again — sent more by agent_send, which resumes a closed one, or by the user: the task is open
 // again first, as a change asked for on its "Please verify" card reopens it (#3457), so this turn is followed
 // (interrupted or done receipt, judgment) and the task shows in progress, not done (#5892).
 func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
@@ -166,7 +166,7 @@ type receiptBody struct {
 }
 
 type receiptReview struct {
-	State    string `json:"state"` // awaiting
+	State    string `json:"state"` // checking: Persona follows up; awaiting: completion already judged
 	Criteria int    `json:"criteria"`
 }
 
@@ -199,6 +199,13 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		}
 		if w := c.Work; w != nil && w.Phase == proto.WorkBlocked && w.On == proto.WaitTransient && w.WakeAt != nil {
 			return // "Continue" goes by itself (agents_work.go): the receipt waits for how that ends
+		}
+		if now := time.Now(); limitTakenUp(c, now) {
+			// A usage limit stopped it until the reset, and its CLI or the manager goes on then (usage_limit.go): the
+			// receipt waits for how that ends. Looked at again once the wait is over, so a turn that did not go on after
+			// all (the continue cancelled) still gets its receipt.
+			s.taskTurnEndedAfter(ctx, machine, sid, limitLookAgain(c, now))
+			return
 		}
 		if c.UpdatedAt.After(last.UpdatedAt) {
 			last = c
@@ -298,7 +305,11 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	// needs_user waits on the user instead. Read the latest todo in case it changed while reading the reply.
 	if current, ok := s.todoNow(t.ID); ok && current.DoneAt == nil {
 		if v := current.Supervision; v != nil && v.state(current) != reviewNeedsUser {
-			body.Review = &receiptReview{State: "awaiting", Criteria: len(v.DoneWhen)}
+			state := "checking" // receipt stays ahead of the model; a stopped turn is not a completion verdict
+			if v.state(current) == reviewPending {
+				state = "awaiting"
+			}
+			body.Review = &receiptReview{State: state, Criteria: len(v.DoneWhen)}
 		}
 	}
 	if body.Summary == "" {
@@ -320,7 +331,34 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
 }
 
-// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation.
+// taskTurnEndedAfter has taskTurnEnded look at sid's task again at at. What happened meanwhile decides as ever: a turn
+// that went on and ended had its own receipt, one that works again has none yet. A look already set for as early is
+// enough (one still waiting then sets the next): the wait's wakes (a background task reporting, a /loop) end a turn
+// each, and each comes here.
+func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, at time.Time) {
+	ref := SessionRef{MachineID: machine, SessionID: sid}
+	s.tasks.mu.Lock()
+	if s.tasks.limitLooks == nil {
+		s.tasks.limitLooks = map[SessionRef]time.Time{}
+	}
+	if pending, ok := s.tasks.limitLooks[ref]; ok && !pending.After(at) { // one as early is set: it looks again if need be
+		s.tasks.mu.Unlock()
+		return
+	}
+	s.tasks.limitLooks[ref] = at
+	s.tasks.mu.Unlock()
+	time.AfterFunc(time.Until(at), func() {
+		s.tasks.mu.Lock()
+		if s.tasks.limitLooks[ref].Equal(at) {
+			delete(s.tasks.limitLooks, ref)
+		}
+		s.tasks.mu.Unlock()
+		s.taskTurnEnded(ctx, machine, sid)
+	})
+}
+
+// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
+// the user's (no from: a task card's Message, or a decision the owner made in Lark).
 func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text string) (FeedItem, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return FeedItem{}, err

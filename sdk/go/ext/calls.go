@@ -189,9 +189,22 @@ func (h *Hub) KBOwner(ctx context.Context) (wire.KBOwner, error) {
 // ModelComplete asks a model for one answer (permission models): it runs on the extension's own purpose in Settings ›
 // Model configuration, which the user chooses; no key and no budget. With JSONSchema the result's JSON has the answer
 // decoded. Errors carry wire.ModelErrorCode* or permission_denied; model_paused (wire.ModelPause) is worth trying
-// again after its until.
+// again after its until, model_refused (wire.ModelRefusal) is not: the same input is declined again.
 func (h *Hub) ModelComplete(ctx context.Context, p wire.ModelCompleteParams) (wire.ModelCompleteResult, error) {
 	return callHub[wire.ModelCompleteResult](ctx, h, "model.complete", p)
+}
+
+// The user's conversations with the assistant (docs/extensions/extensions.md "Assistant conversations"): the
+// permission assistant.read, read-only, only the assistant's own space and only words.
+
+// AssistantConversations lists the conversations last active since a time, newest first, a page at a time.
+func (h *Hub) AssistantConversations(ctx context.Context, p wire.AssistantConversationsParams) (wire.AssistantConversationsResult, error) {
+	return callHub[wire.AssistantConversationsResult](ctx, h, "assistant.conversations", p)
+}
+
+// AssistantMessages is one conversation's messages after a seq, in time order; continue with NextSeq while set.
+func (h *Hub) AssistantMessages(ctx context.Context, p wire.AssistantMessagesParams) (wire.AssistantMessagesResult, error) {
+	return callHub[wire.AssistantMessagesResult](ctx, h, "assistant.messages", p)
 }
 
 func callHub[R any](ctx context.Context, h *Hub, method string, params any) (R, error) {

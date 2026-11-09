@@ -398,8 +398,21 @@ final class ChatStore {
     /// while the lines were still the cache's last two turns (#597).
     private(set) var backlogBuilt = false
     var screen: String = ""
-    /// Text of the assistant message being generated (headless sessions stream it token by token).
+    /// Text of the assistant message being generated (headless sessions stream it token by token), or what of an
+    /// agent's live message its newest items do not hold yet (`agentStreamed`).
     var liveText: String = ""
+    /// The live text is an agent's (its last delta came through `agentStreamed`): a chat of it draws it under the
+    /// newest items, as the main chat draws the assistant's, matched against the transcript (`LiveText`).
+    private(set) var liveIsAgents = false
+    /// An agent's live message as its last delta brought it (docs/integrations/claude-integration.md "Live replies
+    /// (MessageDisplay)"), "" for none: never drawn as it is, only what of it the newest items lack (`liveText`).
+    @ObservationIgnored private(set) var agentLive = ""
+    /// What an agent's live text should be changed while a rebuild was on its way: worked out again when the rebuild
+    /// publishes the rows, so words leave the live copy in the same pass their row comes (no gap, no double).
+    @ObservationIgnored private var agentLiveDue = false
+    /// Where the latest page from the end begins (line, block): what is before it came with older pages, which an
+    /// agent's live text is never checked against. Nil: all of it (a cached chat, an older hub's batches).
+    @ObservationIgnored private var newestFrom: (Int, Int)?
     /// The streamed message is in the items, its row not yet in `rows`: the live copy stays until the rebuild publishes
     /// the row (`endLive`).
     @ObservationIgnored private var liveEnds: String?
@@ -442,8 +455,8 @@ final class ChatStore {
     @ObservationIgnored private(set) var arrivedAt: Date?
     /// Folds opened here (`unfold`), as far as each reached. A page with one of them again (the latest page can come
     /// twice as a chat opens) leaves its work open: folded again, its row had already fetched it and stayed on
-    /// "Loading N steps…" (#6038). Starting over forgets them.
-    @ObservationIgnored private var opened: [String: Fold] = [:]
+    /// "Loading N steps…" (#6038). Starting over forgets them. By the fold's id, the fold as the page brought it.
+    @ObservationIgnored private var opened: [String: Item] = [:]
 
     init(key: SessionKey) {
         self.key = key
@@ -482,6 +495,7 @@ final class ChatStore {
     @discardableResult
     func apply(_ new: [Item], span: ItemSpan, backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> Gap {
         arrivedAt = .now
+        defer { newestArrived() }
         if let h = span.history, let mine = history, h != mine {
             reset()
             history = h
@@ -505,6 +519,7 @@ final class ChatStore {
             return moreAfter ? .fill : .none
         }
         // A page from the end.
+        if let first = new.first { newestFrom = (first.seq, first.part) }
         if covered > 0, let first = new.first?.seq, first > covered + 1 {
             replace(with: new, hasMore: hasMore ?? true, span: span)
             if backlog { loadedOnce = true }
@@ -520,6 +535,7 @@ final class ChatStore {
         items = []
         ids = []
         opened = [:]
+        newestFrom = nil
         covered = 0
         hasMore = false
         loadedOnce = false
@@ -584,7 +600,7 @@ final class ChatStore {
 
     /// A fold over work opened here that reaches no further than what was opened (`opened`).
     private func stillOpen(_ f: Item) -> Bool {
-        guard f.kind == .fold, let was = opened[f.id], let now = f.fold else { return false }
+        guard f.kind == .fold, let was = opened[f.id]?.fold, let now = f.fold else { return false }
         return (now.throughSeq, Item.part(of: now.throughID)) <= (was.throughSeq, Item.part(of: was.throughID))
     }
 
@@ -593,7 +609,7 @@ final class ChatStore {
         guard let i = items.firstIndex(where: { $0.id == fold.id }) else { return }
         items.remove(at: i)
         ids.remove(fold.id)
-        opened[fold.id] = fold.fold
+        opened[fold.id] = fold
         settled = nil
         merge(work.filter { $0.kind != .fold })
         scheduleRebuild()
@@ -691,6 +707,71 @@ final class ChatStore {
         }
     }
 
+    // MARK: An agent's live reply
+
+    /// A delta as the pacer lets it through (`AppModel`'s `.delta`): an agent's (`agents`) goes through
+    /// `agentStreamed`; the headless assistant's is its whole reply so far, "" when it ends (`newest`: a newer text the
+    /// pacer kept back).
+    func streamed(_ text: String, agents: Bool, newest: String? = nil) {
+        if agents { agentStreamed(text) } else if text.isEmpty { clearLive(newest: newest) } else { liveText = text }
+    }
+
+    /// An agent's delta as the pacer lets it through (docs/integrations/claude-integration.md "Live replies
+    /// (MessageDisplay)"): its message as Claude shows it, less what the node's transcript had; "" once the transcript has
+    /// it or its turn ended. What the newest items hold of it is taken off too (`LiveText.unlandedLive`).
+    func agentStreamed(_ text: String) {
+        if !liveIsAgents { liveIsAgents = true }
+        agentLive = text
+        showAgentLive()
+    }
+
+    /// The newest items changed (a push, the latest page, a pull: `apply`, `replace`): an agent's live text is checked
+    /// against them again. An older page or an opened fold (`prepend`, `unfold`) never is the reply being written, and
+    /// leaves it as it is.
+    private func newestArrived() {
+        guard liveIsAgents, !agentLive.isEmpty || !liveText.isEmpty else { return }
+        showAgentLive()
+    }
+
+    /// The live text drops at once: the socket started over, or (an agent's) the chat's subscription ended or started
+    /// again (`AppModel.forgetAgentLive`); the hub sends the current one again after its catch-up.
+    func dropLive() {
+        liveText = ""
+        agentLive = ""
+        agentLiveDue = false
+    }
+
+    private func showAgentLive() {
+        guard !rebuildScheduled else { agentLiveDue = true; return } // with the rows it waits for
+        let want = agentLiveShown()
+        if want != liveText { liveText = want }
+    }
+
+    /// What of the agent's live message to draw: what the newest items do not hold.
+    private func agentLiveShown() -> String {
+        agentLive.isEmpty ? "" : LiveText.unlandedLive(agentLive, liveTail())
+    }
+
+    /// The items an agent's live text is checked against: the newest ones, from the latest exchange's opening on (the
+    /// check never looks further back) and never before the latest page from the end (older pages are not the reply
+    /// being written), with the work of folds opened here folded again, as the page brought it, so that opening a
+    /// fold never changes what the live text is.
+    private func liveTail() -> [Item] {
+        let floor = newestFrom.flatMap { f in items.firstIndex { ($0.seq, $0.part) >= f } } ?? items.startIndex
+        let start = max(floor, items.lastIndex { LiveText.opens($0) } ?? floor)
+        guard !opened.isEmpty else { return Array(items[start...]) }
+        let folds = opened.values.filter { $0.fold != nil }
+        var out: [Item] = []
+        for it in items[start...] {
+            if let f = folds.first(where: { $0.folds(it) }) {
+                if out.last?.id != f.id { out.append(f) }
+            } else {
+                out.append(it)
+            }
+        }
+        return out
+    }
+
     /// Coalesces events into one background worker; only a current snapshot is published on the main actor.
     private func scheduleRebuild() {
         rebuildRevision += 1
@@ -714,6 +795,12 @@ final class ChatStore {
                 if let ended = self.liveEnds {
                     self.liveEnds = nil
                     if ended.hasPrefix(self.liveText) { self.liveText = "" }
+                }
+                // An agent's live text that waited for these rows (`showAgentLive`): in the same pass.
+                if self.agentLiveDue {
+                    self.agentLiveDue = false
+                    let want = self.agentLiveShown()
+                    if want != self.liveText { self.liveText = want }
                 }
                 // No item changed since the snapshot (same revision): these blocks hold everything loaded so far.
                 if self.backlogBuilt != self.loadedOnce { self.backlogBuilt = self.loadedOnce }
@@ -763,6 +850,7 @@ final class ChatStore {
     /// Starts over from the latest page: what came in between was too much to fetch, and a hole would never fill.
     func replace(with latest: [Item], hasMore: Bool, span: ItemSpan = ItemSpan()) {
         arrivedAt = .now
+        defer { newestArrived() }
         // Pushes that came in while the page was on its way, past what it holds, stay (the next push finds the hole
         // between, if any). Not after another history: those seqs belong to the old file.
         let keep = span.history == nil || span.history == history ? items.filter { $0.seq > (span.to ?? .max) } : []
@@ -770,6 +858,7 @@ final class ChatStore {
         items = []
         ids = []
         opened = [:]
+        newestFrom = latest.first.map { ($0.seq, $0.part) }
         self.hasMore = hasMore
         if let h = span.history { history = h }
         merge(latest)
@@ -1180,11 +1269,12 @@ nonisolated enum ChatCache {
     /// v8: folds carry the images their work looked at (`Fold.images`); v7's folds had none, and their turns no strip.
     /// v9: user lines Persona typed in for the model carry `injected` (docs/protocol/protocol.md「Persona 注入的消息」, #2358).
     /// v10: a background workflow's end notice is kind `workflow` (#3731) and the hub gives it in the App's language
-    /// (#5511); v9's copies would keep its Chinese text for English and Japanese users.
+    /// (#5511); v9's copies would keep its Chinese text for English and Japanese users. v11: folds carry the task
+    /// lists their calls left (`Fold.tasks`), the chat's plan while its TodoWrite is folded (#5602).
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v10"
+    static let folder = "chats-v11"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v9"
+    private static let previous = "chats-v10"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1291,12 +1381,14 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     var refused: Bool?
 
     /// Comparable form: what the transcript keeps of it — the phone's image note, pasted wrappers and Claude's
-    /// "[Image #21]" placeholders removed, whitespace ignored.
+    /// "[Image #21]" placeholders removed, whitespace ignored, and a context or file block read under either
+    /// generation's tag name (a hub from before the rename keeps what `HubNaming.outbound` sent it).
     private static let normalized = TextMemo<String>(limit: 512)
 
     static func normalize(_ s: String) -> String {
         normalized(s) { s in
-            var t = s
+            var t = s.replacingOccurrences(of: #"(<\s*/?\s*)"# + HubNaming.productPattern + #"-(context|file)"#,
+                                           with: "$1persona-$2", options: .regularExpression)
             for pattern in [#"<attached_images>[\s\S]*?</attached_images>"#, #"<[\\/]*pasted_content[^>]*>"#, #"\[Image #\d+\]"#, #"\s+"#] {
                 t = t.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
             }

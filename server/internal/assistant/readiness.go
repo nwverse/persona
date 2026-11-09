@@ -496,10 +496,18 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, ok: true})
 		}
 	}
-	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && time.Since(h.CheckedAt) < healthStale && h.State != "" {
-		if h.State == healthOK {
+	// A launcher only the terminal cannot run says nothing of the main conversation, which runs in the login shell.
+	if h, ok := s.launcherHealth(ctx, d.ID, launcher); ok && h.State != "" && h.Kind != errKindNotInTerminal {
+		switch {
+		case h.Kind == errKindUsageLimit:
+			// The subscription's limit, used up: it recovers on its own, and says nothing once it reset.
+			if h.unusable() {
+				ev = append(ev, readinessEvidence{at: h.CheckedAt, code: proto.TurnErrorRateLimited})
+			}
+		case time.Since(h.CheckedAt) >= healthStale:
+		case h.State == healthOK:
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, ok: true})
-		} else if missingCode(h.Error) == "" { // a start that found no claude is the claude step's
+		case missingCode(h.Error) == "": // a start that found no claude is the claude step's
 			ev = append(ev, readinessEvidence{at: h.CheckedAt, text: h.Error})
 		}
 	}
@@ -544,7 +552,9 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 			case proto.TurnErrorNotLoggedIn:
 				alt = "login_claude"
 			case proto.TurnErrorAuthFailed:
-				action = "edit_provider"
+				action, alt = "edit_provider", "test_assistant"
+			case proto.TurnErrorModelRoute:
+				alt = "test_assistant"
 			}
 			st := s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action)
 			st.Machine = d.ID
@@ -595,7 +605,7 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		}
 		s.clearStart(ctx, *st)
 	}
-	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK {
+	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK && h.Kind != errKindNotInTerminal {
 		switch missingCode(h.Error) { // the launcher's health record: its start or check found no such command
 		case proto.CodeClaudeMissing:
 			return problem(proto.CodeClaudeMissing, "install_claude")
@@ -737,9 +747,9 @@ const (
 // assistant launcher counts as not Claude Code) and whether it is there.
 func (s *Service) readinessLauncher(ctx context.Context, machine, launcher string) (string, int) {
 	// A managed launcher runs Claude Code through personad launch, and so does a direct API provider speaking Messages
-	// (its gateway, #2455); a Responses one cannot start Claude.
+	// (its gateway, #2455); other direct API protocols cannot start Claude.
 	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool {
-		return l.Name == launcher && !(l.Kind == "api" && l.API == "responses")
+		return l.Name == launcher && !(l.Kind == "api" && !messagesAPI(l.API))
 	}) {
 		return "", launcherThere
 	}
@@ -840,21 +850,31 @@ func (s *Service) askAhead(machine, launcher string) {
 }
 
 // claudeAuthStatus is launcher's sign-in status on machine (claude.auth_status), cached readinessAuthFresh, and
-// readinessClaudeRetry when signed out or not answered (readinessAuthFresh for an old node). done false when the node did not answer within wait (the
+// readinessClaudeRetry when signed out or not answered (readinessAuthFresh for an old node). An expired answer that
+// said nothing is answered at once while it is asked again. done false when the node did not answer within wait (the
 // question goes on, and is cached).
 func (s *Service) claudeAuthStatus(ctx context.Context, machine, launcher string, wait time.Duration) (claudeAuth, bool) {
 	key := machine + "/" + launcher
 	b := &s.ready
 	b.mu.Lock()
+	var stale *claudeAuth
 	if a, ok := b.auth[key]; ok {
 		fresh := readinessAuthFresh
-		if !a.known && !a.old || a.st.State == proto.ClaudeNotLoggedIn ||
-			a.st.State == proto.ClaudeAuthUnknown && (a.st.Reason == proto.ClaudeAuthTimeout || a.st.Reason == proto.ClaudeAuthUnreadable) {
+		saidNothing := !a.known && !a.old ||
+			a.st.State == proto.ClaudeAuthUnknown && (a.st.Reason == proto.ClaudeAuthTimeout || a.st.Reason == proto.ClaudeAuthUnreadable)
+		if saidNothing || a.st.State == proto.ClaudeNotLoggedIn {
 			fresh = readinessClaudeRetry
 		}
 		if time.Since(a.at) < fresh {
 			b.mu.Unlock()
 			return a, true
+		}
+		if saidNothing {
+			// The last ask said nothing (no answer, a timeout, output with no status): asked again below, but not
+			// waited for. A launcher whose status cannot be read says so again on every ask, and each ask runs the
+			// login shell and Claude Code (seconds, up to claudeAuthTimeout); the readiness takes unknown as not
+			// known either way. Signed out is still waited for: the user may have just signed in.
+			stale = &a
 		}
 	}
 	ch := b.authIn[key]
@@ -867,6 +887,9 @@ func (s *Service) claudeAuthStatus(ctx context.Context, machine, launcher string
 		go s.askClaudeAuth(machine, launcher, key, ch)
 	}
 	b.mu.Unlock()
+	if stale != nil {
+		return *stale, true
+	}
 	if wait <= 0 {
 		return claudeAuth{}, false
 	}

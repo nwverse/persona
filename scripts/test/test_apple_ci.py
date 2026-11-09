@@ -1,6 +1,7 @@
 """Keep minimum-Xcode platform preparation ahead of destination validation."""
 
 from pathlib import Path
+import os
 import plistlib
 import subprocess
 import sys
@@ -17,6 +18,56 @@ import apple_diagnostics
 
 
 class AppleCIPreparationTests(unittest.TestCase):
+    def test_hosted_runner_initializes_the_same_minimum_system_toolchain(self):
+        workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
+        selection = 'ci_run \'Select system Xcode 26.0\' 60 sudo xcode-select --switch "$DEVELOPER_DIR"'
+        initialization = 'ci_run \'Initialize Xcode 26.0 platform services\' 900 sudo env DEVELOPER_DIR="$DEVELOPER_DIR" xcodebuild -runFirstLaunch'
+        self.assertIn('DEVELOPER_DIR: /Applications/Xcode_26.0.1.app/Contents/Developer', workflow)
+        self.assertLess(workflow.index(selection), workflow.index(initialization))
+        self.assertLess(workflow.index(initialization), workflow.index('run: scripts/ci/apple.sh'))
+        self.assertIn('source scripts/ci/common.sh', workflow)
+        # System-wide initialization is limited to the disposable hosted runner.
+        self.assertNotIn('sudo', SCRIPT.read_text())
+
+    def test_hosted_initialization_order_and_failures_with_fake_system_tools(self):
+        workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
+        lines = workflow.split('      - name: Initialize pinned Xcode\n        run: |\n', 1)[1].splitlines()
+        body = []
+        for line in lines:
+            if not line.startswith('          '):
+                break
+            body.append(line[10:])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = {
+                'sudo': '#!/bin/bash\nexec "$@"\n',
+                'xcode-select': '#!/bin/bash\nprintf "select %s\\n" "$*" >> "$CALL_LOG"\n',
+                'xcodebuild': '#!/bin/bash\nprintf "initialize %s %s\\n" "$DEVELOPER_DIR" "$*" >> "$CALL_LOG"\nexit "$INITIALIZE_STATUS"\n',
+            }
+            for name, source in tools.items():
+                path = root / name
+                path.write_text(source)
+                path.chmod(0o755)
+            log = root / 'commands.log'
+            env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ['PATH'],
+                       DEVELOPER_DIR='/Applications/Xcode_26.0.1.app/Contents/Developer',
+                       CALL_LOG=str(log))
+            for status in ('0', '1'):
+                with self.subTest(status=status):
+                    log.write_text('')
+                    env['INITIALIZE_STATUS'] = status
+                    result = subprocess.run(['bash', '-c', '\n'.join(body)], cwd=ROOT, env=env,
+                                            text=True, capture_output=True, timeout=15)
+                    self.assertEqual(result.returncode, int(status), result.stdout + result.stderr)
+                    expected = [
+                        'select --switch ' + env['DEVELOPER_DIR'],
+                        'initialize ' + env['DEVELOPER_DIR'] + ' -runFirstLaunch',
+                    ]
+                    if status == '0':
+                        expected.append('select --print-path')
+                    self.assertEqual(log.read_text().splitlines(), expected)
+                    self.assertIn('PASS' if status == '0' else 'FAIL', result.stdout)
+
     def test_matching_runtime_is_prepared_before_device_build(self):
         script = SCRIPT.read_text()
         self.assertLess(
@@ -35,6 +86,15 @@ class AppleCIPreparationTests(unittest.TestCase):
             '-skip-testing:PersonaTests/VideoFileResourceTests/realHTTPReadsMiddleTailAndRejectsChangedRevision()',
         })
         self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()', script)
+
+    def test_mac_lane_excludes_the_same_old_hub_lab_suite_as_ios(self):
+        # The suite is compiled into PersonaMacTests too; selected without its lab hub it is reported as a skip,
+        # which result inspection rightly refuses.
+        script = SCRIPT.read_text()
+        mac = script.split("ci_run 'macOS offline unit tests'", 1)[1].split('result macos-unit', 1)[0]
+        self.assertIn('-skip-testing:PersonaMacTests/OldHubCompatibilityIntegrationTests', mac)
+        self.assertIn('-skip-testing:PersonaMacTests/ExtensionStreamSnapshotTests', mac)
+        self.assertIn('-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests', script)
 
     def test_reminder_round_trip_is_enabled_with_owned_simulator_permission(self):
         script = SCRIPT.read_text()

@@ -440,7 +440,7 @@ struct WatchRootView: View {
                             NavigationLink { WatchSessionView(session: s) } label: {
                                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                                     // On the title's first line (titles wrap to two), not centered on the row.
-                                    Circle().fill(s.state.color).frame(width: 8, height: 8)
+                                    Circle().fill(s.stateTone.dot).frame(width: 8, height: 8)
                                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 2 }
                                     VStack(alignment: .leading, spacing: Theme.Watch.lineSpacing) {
                                         WatchTitle(session: s)
@@ -617,13 +617,15 @@ struct WatchInteractionView: View {
                     }
                 case .plan:
                     Text(WatchText.shown(interaction.plan ?? "")).font(.footnote)
-                    Button("Approve & Run") { act(Resolution(approve: true, mode: "bypassPermissions")) }
+                    // acceptEdits like the phone's lock-screen buttons: commands still ask. Auto-run stays on the phone.
+                    Button("Approve & Run") { act(Resolution(approve: true, mode: "acceptEdits")) }
                         .lineLimit(1).minimumScaleFactor(0.8).buttonStyle(.borderedProminent).tint(Theme.accent)
                     Button("Send Back [Notification Actions a20f13]") { act(Resolution(approve: false, feedback: "请重新考虑这个计划")) }.lineLimit(1) // i18n-ignore: feedback sent to the agent
                 case .permission:
                     Text(interaction.summary ?? "").font(.caption2.monospaced())
                     if interaction.requiresInput {
-                        Text("Fill this in on your iPhone to allow it").font(Theme.Font.caption)
+                        // The hub takes no values from the watch's answer-only credential (#1581).
+                        Text("Fill this in on your iPhone or computer to allow it").font(Theme.Font.caption)
                     } else {
                         Button { act(Resolution(allow: true)) } label: { Text("Allow [Notification Actions ce7ef2]").lineLimit(1) }
                             .buttonStyle(.borderedProminent).tint(Theme.accent)
@@ -747,8 +749,8 @@ struct WatchSessionView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Watch.blockSpacing) {
                 HStack(spacing: Theme.Space.sm) {
-                    Circle().fill(session.state.color).frame(width: 7, height: 7)
-                    Text(session.stateLabel).font(.caption2.weight(.semibold)).foregroundStyle(session.state.tone.text)
+                    Circle().fill(session.stateTone.dot).frame(width: 7, height: 7)
+                    Text(session.stateLabel).font(.caption2.weight(.semibold)).foregroundStyle(session.stateTone.text)
                 }
                 if let run = session.leadWorkflow { WatchWorkflowChip(run: run) }
                 ForEach(liveCards.lines(messages).suffix(WatchMessage.limit)) { line in

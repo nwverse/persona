@@ -36,7 +36,7 @@ struct UltracodeMark: View {
     }
 }
 
-/// The switch in a menu (the composer's model menu, the old layout's effort chip): a section of its own under the thinking
+/// The switch in a menu (the composer's model menu or platform effort chip): a section of its own under the thinking
 /// effort, the switch with its line as the subtitle (what it does, "Applies next turn", or the node's reason), and the
 /// Claude quota with its warning as the section's header (`Ultracode.menuWords`). A menu draws a subtitle only from a
 /// second `Text` directly in the label, not from a `Label`'s title; an iOS menu cuts it after three lines, so there the

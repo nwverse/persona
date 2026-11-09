@@ -11,7 +11,7 @@ final class CalmAttentionShots: XCTestCase {
         ]
         for (name, session, permission) in scenes {
             app.launchArguments = ["-demo.on", "YES", "-openWelcome", "YES", "-openChatsFresh", "YES",
-                                   "-openAgentsFresh", "YES", "-dev.openChat", "", "-ui.oldLayout", "NO", "-tab", "dev",
+                                   "-openAgentsFresh", "YES", "-dev.openChat", "", "-tab", "dev",
                                    "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
             if let session { app.launchArguments += ["-openSession", session] }
             if permission { app.launchArguments += ["-showSamplePermission", "YES"] }

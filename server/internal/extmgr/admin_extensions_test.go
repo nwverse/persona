@@ -23,7 +23,7 @@ func adminExtensionHub(t *testing.T) (*Manager, *extensionStore, *b1Admin) {
 	return h, ps, b1SignedIn(t, h)
 }
 
-// pluginIn is the plugin id in GET /api/v1/admin/plugins's answer (built-in ones are there too), nil when absent.
+// extensionIn is the plugin id in GET /api/v1/admin/plugins's answer (built-in ones are there too), nil when absent.
 func extensionIn(list map[string]any, id string) map[string]any {
 	ps, _ := list["plugins"].([]any)
 	for _, p := range ps {
@@ -161,6 +161,12 @@ func TestAdminExtensionsInstallUpgradeRollbackUninstall(t *testing.T) {
 	if code, out, _ = c.do("POST", "/api/v1/admin/plugins/example-notes/rollback", `{}`); code != 200 || out["version"] != "1.0.0" || out["previous_version"] != nil {
 		t.Fatalf("rollback: %d %v", code, out)
 	}
+	// The version left is skipped by auto-upgrade, as the user's rollback (#1826).
+	var us extensionUpgradeSettings
+	if _, err := h.store.Setting(t.Context(), extensionUpgradesKey, &us); err != nil || us.Skipped["example-notes"] != "1.1.0" ||
+		us.SkippedBy["example-notes"] != skippedByUser {
+		t.Fatalf("not skipped after the rollback: %+v %v", us, err)
+	}
 	if code, out, _ = c.do("POST", "/api/v1/admin/plugins/example-notes/rollback", `{}`); code != 400 || out["code"] != "rollback_failed" {
 		t.Fatalf("rolled back twice: %d %v", code, out)
 	}
@@ -215,7 +221,7 @@ func TestAdminExtensionsUpload(t *testing.T) {
 	}
 }
 
-// Previews stage up to 200 MB each: at most pluginPreviewsPer in the window, failed ones counted too.
+// Previews stage up to 200 MB each: at most extensionPreviewsPer in the window, failed ones counted too.
 func TestAdminExtensionPreviewsAreLimited(t *testing.T) {
 	h, _, c := adminExtensionHub(t)
 	now := time.Now()

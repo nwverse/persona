@@ -38,6 +38,7 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   do your fix in `git worktree add --detach /tmp/x origin/main`.
 - Database migration numbers are split into ranges per lane (00x1…); before picking a number, check `server/internal/db/migrations/` in every worktree and `schema_migrations` in the `persona_test` database:
   another lane's unmerged migration may already hold the number (2026-10-30, 0051 collided; switched to 0061).
+- A migration already on the default branch is frozen (`scripts/ci/migration_freeze.py`, also from `scripts/check-fast.sh`): editing, deleting or renaming it fails. A comment-only or whitespace-only change passes. Repair an applied migration by adding a new one.
 - On 2026-11-01 `ios/` was renamed to `apple/` (the iOS, watch and macOS Apps and shared code are in the same XcodeGen project): when rebasing an old branch / worktree,
   files newly created under `ios/` must be moved to `apple/` by hand (git follows the rename for changes to existing files).
 - On 2026-10-28 the whole git history was rewritten once (removing intranet and personal information; the GitHub repo was deleted and recreated): all earlier commit hashes are invalid;
@@ -186,7 +187,11 @@ after the link and failed two runs in three).
 
 A `workflow_dispatch` event has no pull-request number or comparison base. Resolve
 an explicit base first, otherwise use the PR/merge-group base when present and
-`origin/main` for a manual run. Keep full checkout history and resolve the base to
+`origin/main` for a manual run. A PR's base is the first parent of the merge
+commit `actions/checkout` checks out, not the event's `pull_request.base.sha`:
+that one stays where the PR was opened, so every commit that later lands on
+`main` would count as the PR's (#1962: a PR failed the commit privacy check on a
+`main` commit it did not contain). Keep full checkout history and resolve the base to
 a commit before the privacy range check. An explicit lane override must reject
 unknown names rather than silently skip tests. An `auto` dispatch on unchanged
 `main` tests only the paths selected for an empty diff; use `lanes=all` for a full

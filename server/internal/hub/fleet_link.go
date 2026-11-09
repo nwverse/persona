@@ -153,7 +153,7 @@ func (h *Hub) takeFleetSessions(p assistantwire.FleetSessions) {
 	}
 	f.muted[m.cfg.ID] = p.Muted
 	f.mu.Unlock()
-	h.broadcastSessions(m, h.decorated(m))
+	h.broadcastSessions(m, m.keptSessions())
 }
 
 // takeFleetInteractions is takeFleetInteractionsFrom the assistant the hub starts.
@@ -252,14 +252,28 @@ func (h *Hub) stampSessions(m *Machine, list []proto.Session) {
 	}
 }
 
-// decoratedSession is one of m's sessions as the apps get it.
-func (h *Hub) decoratedSession(m *Machine, sid string) (proto.Session, bool) {
-	for _, s := range h.decorated(m) {
-		if s.SessionID == sid {
-			return s, true
+// stamped is list with manager on each session, as stampSessions puts it: list itself when every session has it
+// already, else a copy. list is never changed.
+func stamped(list []proto.Session, manager string) []proto.Session {
+	for i := range list {
+		if list[i].Manager != manager {
+			out := slices.Clone(list)
+			for j := i; j < len(out); j++ {
+				out[j].Manager = manager
+			}
+			return out
 		}
 	}
-	return proto.Session{}, false
+	return list
+}
+
+// decoratedSession is one of m's sessions as the apps get it: that one copied and stamped, not the whole list.
+func (h *Hub) decoratedSession(m *Machine, sid string) (proto.Session, bool) {
+	s, ok := m.session(sid)
+	if ok {
+		s.Manager = h.machineOwner(m.cfg.ID)
+	}
+	return s, ok
 }
 
 // listedWaitMax is how long awaitListed waits at most (Hub.listedWait shortens it in tests: their fake nodes start
@@ -588,7 +602,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 		}
 		h.notifyInteraction(from, ix, n.Subtitle)
 		return nil
-	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply:
+	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {
 			return &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("a push about machine %q, session %q: another manager's",
 				clip(n.DeviceID, 64), clip(n.SessionID, 64))}
@@ -602,6 +616,11 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 			pushWants{Kind: "done", Took: time.Duration(n.TookMS) * time.Millisecond, Long: time.Duration(n.LongMS) * time.Millisecond})
 	case assistantwire.NotifyReply:
 		h.notifyReply(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body)
+	case assistantwire.NotifyDecide:
+		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() || n.Todo.Recommend == "" {
+			return errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")
+		}
+		h.notifyDecide(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo)
 	default:
 		return fmt.Errorf("unknown notification kind %q", n.Kind)
 	}

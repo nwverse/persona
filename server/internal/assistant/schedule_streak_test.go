@@ -1,13 +1,55 @@
 package assistant
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+// Not-ready skips are neutral even between genuine failures, and the distinction survives storage in any locale.
+func TestNotReadySkipsNeitherCountNorEndAStreak(t *testing.T) {
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		t.Run(string(lang), func(t *testing.T) {
+			st := scheduleStore(t)
+			f := newFakeHub()
+			f.hello.Locale = string(lang)
+			s := newServiceOn(t, f, st)
+			setTasks(s, Task{ID: "p", Title: "Patrol", Repeat: repeatDaily, Time: "02:00", Enabled: true})
+			outcome(s, "p", runFailed, "API Error: 503")
+			outcome(s, "p", runSkipped, "missed")
+			for _, why := range []error{errNotReady, fmt.Errorf("readiness: %w", errNotReady), errNotReady, errNotReady} {
+				if err := s.skipRun(ScheduleRun{Kind: "routine", RefID: "p"}, why); !errors.Is(err, errNotReady) {
+					t.Fatal(err)
+				}
+				if p := f.pushed(); len(p) != 0 {
+					t.Fatalf("not-ready skips must not turn two failures into a streak notification: %+v", p)
+				}
+			}
+			s = newServiceOn(t, f, st)
+			sc := s.loadSchedule(context.Background())
+			sc.mu.Lock()
+			n, _, told, in := runStreak(sc.runs, "p", sc.runs[len(sc.runs)-1].ID)
+			sc.mu.Unlock()
+			if n != 2 || told || in {
+				t.Fatalf("after restart only two real failures count: n=%d told=%v in=%v", n, told, in)
+			}
+			_ = s.skipRun(ScheduleRun{Kind: "routine", RefID: "p"}, errTaskBusy)
+			if r := lastRunOf(t, s, "p"); r.NotReady || !r.StreakTold {
+				t.Fatalf("an ordinary skip still completes the streak: %+v", r)
+			}
+			if p := f.pushed(); len(p) != 1 || p[0].Title != i18n.T(lang, "assistant-schedule.streak", i18n.Args{"name": "Patrol", "count": 3}) {
+				t.Fatalf("three genuine failures are still told once: %+v", p)
+			}
+		})
+	}
+}
 
 // outcome records one run of task ref as it ends (recordRun is where the history and the streak are kept).
 func outcome(h *Service, ref, status, why string) {
@@ -65,6 +107,24 @@ func TestARepeatingTaskThatKeepsNotGoingThroughIsToldOnce(t *testing.T) {
 
 // Only the runs that were meant to happen count: "Run now" is answered in the app (and a failure of it there), and a
 // one-off is not a repeating task (its failure is pushed and retried by the run itself).
+func TestAnEndTimeDoesNotCountTowardTheStreak(t *testing.T) {
+	n := newFakeHub().withMachine()
+	h := newStorelessService(t, n)
+	setTasks(h, Task{ID: "p", Title: "夜间巡检", Prompt: "巡检", Repeat: repeatDaily, Time: "02:00", Enabled: false})
+	reason := i18n.T(i18n.Default, "assistant-schedule.until")
+	for range streakLimit - 1 {
+		h.recordRun(ScheduleRun{Kind: "routine", RefID: "p", Title: "夜间巡检", Status: runSkipped, Error: "missed"})
+	}
+	h.recordRun(ScheduleRun{Kind: "routine", RefID: "p", Title: "夜间巡检", Status: runSkipped, Error: reason, Ended: true})
+	if p := n.pushed(); len(p) != 0 {
+		t.Fatalf("reaching the end time is not a missed run: %+v", p)
+	}
+	h.recordRun(ScheduleRun{Kind: "routine", RefID: "p", Title: "夜间巡检", Status: runSkipped, Error: "missed again"})
+	if p := n.pushed(); len(p) != 0 {
+		t.Fatalf("the end time should have ended the streak, one skip after it is not three: %+v", p)
+	}
+}
+
 func TestOnlyRepeatingTasksAndTheirScheduledRunsCountTowardsTheStreak(t *testing.T) {
 	n := newFakeHub().withMachine()
 	h := newStorelessService(t, n)

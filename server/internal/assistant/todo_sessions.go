@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -120,8 +121,11 @@ func (b *todoBook) linkedNow(key [2]string) bool {
 // now, or that was ever on the todo (dismissed included). Memory first, so the report says it at once; the store
 // after, undone when it fails. True when any was linked.
 func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
+	s.todos.writing.Lock()
+	defer s.todos.writing.Unlock()
 	now := time.Now().UTC()
 	var pending []pendingAutoLink
+	startErrors := s.startErrorsOf(machine, sessions)
 
 	s.todos.mu.Lock()
 	link := func(c proto.Session, target *Todo, source, via string) {
@@ -142,12 +146,13 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 				}
 			}
 		}
+		startError := startErrors.of(c)
 		target.Agents = append(target.Agents, TodoAgent{MachineID: machine, SessionID: c.SessionID, LinkedAt: now, Title: c.Title,
-			Cwd: c.Cwd, Agent: c.Agent, StartError: c.StartError, Source: source, Via: via})
+			Cwd: c.Cwd, Agent: c.Agent, StartError: startError, Source: source, Via: via})
 		s.todos.activeBySession[[2]string{machine, c.SessionID}] = target.ID
 		target.UpdatedAt = now
 		pending = append(pending, pendingAutoLink{todoID: target.ID, machineID: machine, sessionID: c.SessionID, title: c.Title,
-			cwd: c.Cwd, agent: c.Agent, startError: c.StartError, source: source, via: via, linkedAt: now, released: released})
+			cwd: c.Cwd, agent: c.Agent, startError: startError, source: source, via: via, linkedAt: now, released: released})
 	}
 	s.todos.seeBotmux(machine, sessions, now)
 	byChat := s.todos.chatTodos(now)
@@ -202,9 +207,34 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 				defer cancel()
 				undone := false
 				for _, item := range pending {
+					s.todos.writing.Lock()
+					if item.source == "space" {
+						s.todos.mu.RLock()
+						current := false
+						if target := s.todos.todos[item.todoID]; target != nil {
+							for _, a := range target.Agents {
+								if a.MachineID == item.machineID && a.SessionID == item.sessionID && a.LinkedAt.Equal(item.linkedAt) && a.ReleasedAt == nil && a.DismissedAt == nil && a.Source == "space" && s.todos.spacesByKey[a.Via] == item.todoID {
+									item.via = a.Via // a workspace rename may have carried this pending link along
+									current = true
+									break
+								}
+							}
+						}
+						s.todos.mu.RUnlock()
+						if !current {
+							s.todos.mu.Lock()
+							if s.todos.undoAutoLink(item, time.Now().UTC()) {
+								undone = true
+							}
+							s.todos.mu.Unlock()
+							s.todos.writing.Unlock()
+							continue // the move/unlink removed this pending link before it reached the store
+						}
+					}
 					inserted, _, err := st.AutoLinkUnlinkedTodoAgent(ctx, item.todoID, item.machineID, item.sessionID, item.title, item.cwd,
 						item.agent, item.startError, item.source, item.via, item.linkedAt)
 					if err == nil && inserted {
+						s.todos.writing.Unlock()
 						continue
 					}
 					// The store has it otherwise (an error, a row memory did not know of: one just dismissed, or a link by hand since).
@@ -214,6 +244,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 						undone = true
 					}
 					s.todos.mu.Unlock()
+					s.todos.writing.Unlock()
 				}
 				if undone {
 					s.linksChanged(ctx)
@@ -230,6 +261,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 func (s *Service) updateTodoAgentSnapshots(ctx context.Context, machine string, list []proto.Session) {
 	type update struct{ sessionID, title, startError string }
 	var needUpdate []update
+	startErrors := s.startErrorsOf(machine, list)
 	s.todos.mu.Lock()
 	for _, c := range list {
 		key := [2]string{machine, c.SessionID}
@@ -243,13 +275,13 @@ func (s *Service) updateTodoAgentSnapshots(ctx context.Context, machine string, 
 		for _, a := range t.Agents {
 			if a.MachineID == machine && a.SessionID == c.SessionID && a.ReleasedAt == nil {
 				titleChanged := c.Title != "" && c.Title != a.Title
-				if titleChanged || c.StartError != a.StartError {
+				if startError := startErrors.of(c); titleChanged || startError != a.StartError {
 					newTitle := a.Title
 					if titleChanged {
 						newTitle = c.Title
 					}
 					s.todos.snapshotSyncing[key] = true
-					needUpdate = append(needUpdate, update{c.SessionID, newTitle, c.StartError})
+					needUpdate = append(needUpdate, update{c.SessionID, newTitle, startError})
 				}
 				break
 			}
@@ -656,4 +688,32 @@ func (b *todoBook) byChat(id string, key [2]string) bool {
 		}
 	}
 	return false
+}
+
+// sessionStartErrors are the start_error of a session list's coded refusals as the apps get them (decorateInventory),
+// by session: the hub's sentence in the user's language, naming the machine (#1642). A todo's agent keeps the same.
+type sessionStartErrors map[string]string
+
+// of is c's start_error: its sentence when it has one, else the node's text.
+func (e sessionStartErrors) of(c proto.Session) string {
+	if text, ok := e[c.SessionID]; ok {
+		return text
+	}
+	return c.StartError
+}
+
+// startErrorsOf words list's coded refusals on machine (nil: none has one). Before any lock: it reads the settings.
+func (s *Service) startErrorsOf(machine string, list []proto.Session) sessionStartErrors {
+	var out sessionStartErrors
+	var lang i18n.Lang
+	for _, c := range list {
+		if c.StartErrorCode == "" {
+			continue
+		}
+		if out == nil {
+			out, lang = sessionStartErrors{}, s.lang(context.Background())
+		}
+		out[c.SessionID] = startErrorText(lang, s.machineName(machine), c)
+	}
+	return out
 }

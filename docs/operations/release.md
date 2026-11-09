@@ -335,6 +335,7 @@ Let others install the server without getting the source: prebuilt `personad` an
 curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/personad; verify against SHA256SUMS, refuse if wrong
 ```
 
+- On the computer that runs the hub (`--hub`, a `hub.json`, or the two there already) it installs `persona-hub` and `persona-manager` with `personad`, the same release, each checked before any is put in place. A release without one of them leaves the one there as it was, unless a systemd unit or launchd agent runs it: then it is refused before anything changes ([../server/server.md](../server/server.md) ("Programs"), [hub-update.md](hub-update.md) ("A release without `persona-hub` or `persona-manager`")).
 - After installing `personad`, if herdr can't be found on this computer (PATH and directories node searches, such as `~/.local/bin`), install it with herdr's official installer (`https://herdr.dev/install.sh`)
   too, so sessions appear in Agents after the first install. Failure only prints one warning and doesn't affect `personad`; computers using Orca / Herdr App can skip it with `PERSONA_SKIP_HERDR=1`.
   `deploy.sh` does the same when installing `personad` on each computer (`scripts/deploy/ensure-herdr.sh`; keep the two sets of steps aligned).

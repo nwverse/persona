@@ -43,7 +43,7 @@ final class ExtensionNavEntryTests: XCTestCase {
 
     @MainActor func testTheShellDrawerListsTheExtensionsPages() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .pad, "the shell's drawer is the phone's")
-        let app = try launch(["-ui.oldLayout", "NO", "-tab", "assistant", "-dev.openChat", ""])
+        let app = try launch(["-tab", "assistant", "-dev.openChat", ""])
         let face = app.buttons["assistant-sidebar-button"]
         XCTAssertTrue(face.waitForExistence(timeout: 15), app.debugDescription)
         face.tap()

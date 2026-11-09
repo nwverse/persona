@@ -190,7 +190,10 @@ struct TaskNoteRow: View {
             switch n.kind {
             case "shell": CodeBlock(text: "$ " + (n.detail ?? n.title), maxLines: 12)
             case "agent":
-                if let r = n.detail { Text(r).font(Theme.Font.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                if let r = n.detail {
+                    // A subagent's report: one line until opened.
+                    FoldedReport(id: pinKey, text: r) { Text(r).font(Theme.Font.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                }
             default:
                 if let d = n.detail { CodeBlock(text: d, maxLines: 12) }
             }

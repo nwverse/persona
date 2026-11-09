@@ -41,6 +41,7 @@ type principal struct {
 	ID          string
 	Name        string
 	Role        string
+	Kind        string // persisted enrollment kind; diagnostic fallback only
 	PairHash    string
 	PairExpires time.Time
 	Machine     string // roleLink, roleLinkPair: the machine in hub.json it is bound to; rolePeer: the peer's hub_id
@@ -159,7 +160,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 		}
 		c = cachedToken{at: time.Now(), used: time.Now()}
 		if dt != nil {
-			c.p = &principal{ID: dt.ID, Name: dt.Name, Role: dt.Role, Machine: dt.MachineID}
+			c.p = &principal{ID: dt.ID, Name: dt.Name, Role: dt.Role, Kind: dt.Kind, Machine: dt.MachineID}
 		}
 		t.mu.Lock()
 		if c.p != nil && t.isRevoked(c.p.ID) {
@@ -484,7 +485,7 @@ func (h *Hub) revoked(id string) {
 		c.conn.CloseNow()
 	}
 	links := h.closeLinks(id) + h.closePeerLinksOf(id)
-	// What it has open through the manager: an extension's WebSocket (a voice call) among others (extension_calls.go).
+	// Its extension calls, port forwards, live screens and previews (extension_calls.go).
 	links += h.dropRelayed(id)
 	if hub := h.peerForCredential(id); hub != "" { // a peer's credential: that pairing ends
 		go func() {
@@ -493,6 +494,7 @@ func (h *Hub) revoked(id string) {
 			}
 		}()
 	}
-	h.push.signedOut(id) // nil-safe; forgets the devices this credential registered (push.go)
+	h.live.endCredential(id) // finish the end pushes while their devices are still registered
+	h.push.signedOut(id)     // nil-safe; forgets the devices this credential registered (push.go)
 	h.logf("device token %s revoked (%d connections closed)", id, len(gone)+links)
 }

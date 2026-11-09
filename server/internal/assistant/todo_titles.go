@@ -198,6 +198,7 @@ func (s *Service) retitleTodo(ctx context.Context, id, from, to string) (Todo, b
 		row = db.TodoRow{ID: cur.ID, Title: to, Notes: cur.Notes, DoneAt: cur.DoneAt, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 			Origin: cur.Origin, PlanID: cur.PlanID, StartError: cur.StartError, DoneBy: cur.DoneBy, DoneReason: cur.DoneReason,
 			ReopenedAt: cur.ReopenedAt, Quiet: cur.Quiet}
+		cur.keepPlan(&row)
 	}
 	t, doneKeys, ok := s.setTodoRow(id, row, still)
 	s.todos.writing.Unlock()

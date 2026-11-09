@@ -117,6 +117,9 @@ func (s *meshStore) SetDevicePrefs(_ context.Context, id, credential string, pre
 
 func (s *meshStore) LiveActivities(context.Context) ([]db.LiveActivity, error) { return nil, nil }
 func (s *meshStore) SaveLiveActivity(context.Context, db.LiveActivity) error   { return nil }
+func (s *meshStore) ClaimLiveActivityStart(context.Context, string, string, time.Time, time.Duration, time.Duration) (time.Time, bool, error) {
+	return time.Time{}, false, nil // no persisted activity in this non-push fixture
+}
 
 func (s *meshStore) InsertInteraction(_ context.Context, ix proto.Interaction) error {
 	s.mu.Lock()
@@ -272,6 +275,19 @@ func (s *meshStore) RevokeDeviceToken(_ context.Context, id string) (bool, error
 		}
 	}
 	return false, nil
+}
+
+func (s *meshStore) RevokeMachineCredentials(_ context.Context, machine string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []string
+	for _, t := range s.tokens {
+		if t.MachineID == machine && t.Role == roleLink && !s.revoked[t.ID] {
+			s.revoked[t.ID] = true
+			ids = append(ids, t.ID)
+		}
+	}
+	return ids, nil
 }
 
 func (s *meshStore) TouchDeviceToken(context.Context, string) error { return nil }
@@ -505,6 +521,9 @@ func (s *meshStore) DeleteTodo(context.Context, string) error             { retu
 func (s *meshStore) CreateTaskPlan(context.Context, db.TaskPlanRow) error { return nil }
 func (s *meshStore) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
 	return nil, db.ErrTaskPlanNotFound
+}
+func (s *meshStore) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
+	return nil, nil
 }
 func (s *meshStore) TaskPlans(context.Context, string) ([]db.TaskPlanRow, error) { return nil, nil }
 func (s *meshStore) UpdateTaskPlan(context.Context, string, string, string, json.RawMessage, time.Time) (bool, error) {
