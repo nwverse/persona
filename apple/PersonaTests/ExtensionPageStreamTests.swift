@@ -22,6 +22,19 @@ import Testing
             let id = request?["request_id"]?.string ?? ""
             emit(#"{"type":"extension_ui_stream","kind":"snapshot","manager":"owner","request_id":"\#(id)","snapshot":{"protocol":1,"session":"session","epoch":"\#(epoch)","version":\#(version),"root_key":"page","view":{"title":"\#(title)","sections":[{"key":"main","items":[{"type":"button","key":"button","title":"Use","action":{"id":"callback","confirm":"Confirm saved action"}}]}]}}}"#)
         }
+        func reviewSnapshot(version: Int64 = 1, present: Bool = true) {
+            var view: [String: Any] = ["title": "Review", "sections": []]
+            if present {
+                view["review"] = ["count": 2, "name": "summary", "buttons": [
+                    ["title": "Approve", "action": ["id": "review-submit", "values": ["event": "approve"]]]
+                ], "discard": ["id": "review-discard", "confirm": "Discard saved drafts?"]]
+            }
+            let frame: [String: Any] = ["type": "extension_ui_stream", "kind": "snapshot", "manager": "owner",
+                "request_id": request?["request_id"]?.string ?? "", "snapshot": [
+                    "protocol": 1, "session": "session", "epoch": "epoch", "version": version,
+                    "root_key": "page", "view": view]]
+            if let data = try? JSONSerialization.data(withJSONObject: frame) { deliver?(data) }
+        }
         func delta(version: Int64 = 2, base: Int64 = 1, epoch: String = "epoch") {
             emit(#"{"type":"extension_ui_stream","kind":"delta","manager":"owner","delta":{"protocol":1,"session":"session","epoch":"\#(epoch)","base_version":\#(base),"version":\#(version),"operations":[]}}"#)
         }
@@ -30,10 +43,10 @@ import Testing
         }
     }
 
-    private func setup(_ socket: Socket) -> (LiveConnection, ExtensionPageStream) {
+    private func setup(_ socket: Socket, context: ExtensionUIContext = .here()) -> (LiveConnection, ExtensionPageStream) {
         LiveConnection.makeLocal = { socket }
         let connection = LiveConnection(); connection.usesExtensionUIStream = true; connection.connect(.demo)
-        let page = ExtensionPageStream(connection: connection, owner: "example", contribution: "page", context: .here(), state: "")
+        let page = ExtensionPageStream(connection: connection, owner: "example", contribution: "page", context: context, state: "")
         page.setVisible(true)
         return (connection, page)
     }
@@ -45,12 +58,77 @@ import Testing
 
     @Test func opensWithExplicitStateAndHonestCapabilities() throws {
         let previous = LiveConnection.makeLocal; defer { LiveConnection.makeLocal = previous }
-        let socket = Socket(); let (connection, page) = setup(socket); defer { page.close(); connection.disconnect() }
+        let socket = Socket()
+        let context = ExtensionUIContext.here(launcher: "test-launcher", machine: "test-computer", item: "test-item", size: "full")
+        let (connection, page) = setup(socket, context: context); defer { page.close(); connection.disconnect() }
         #expect(socket.request?["request"]?.string == "open")
         #expect(socket.request?["state"] == .string(""))
+        #expect(ExtensionPageStream.uiVersion == 5)
+        #expect(socket.request?["context"]?["ui_version"] == .number("5"))
+        #expect(context.uiVersion == 3 && ExtensionUIContext.here().uiVersion == 3)
+        #expect(socket.request?["context"]?["launcher"] == .string("test-launcher"))
+        #expect(socket.request?["context"]?["machine"] == .string("test-computer"))
+        #expect(socket.request?["context"]?["item"] == .string("test-item"))
+        #expect(socket.request?["context"]?["size"] == .string("full"))
+        let locale = try #require(context.locale)
+        let tz = try #require(context.tz)
+        #expect(socket.request?["context"]?["locale"] == .string(locale))
+        #expect(socket.request?["context"]?["tz"] == .string(tz))
         #expect(socket.request?["context"]?["stream"]?["components"]?.array?.contains(.string("html")) == false)
         socket.snapshot()
         #expect(page.ready && page.tree?.version == 1)
+    }
+
+    @Test func reviewSummarySurvivesUpdatesAndFreezesWithItsOwnActionValues() async throws {
+        let previous = LiveConnection.makeLocal; defer { LiveConnection.makeLocal = previous }
+        let socket = Socket(); LiveConnection.makeLocal = { socket }
+        let connection = LiveConnection(); connection.usesExtensionUIStream = true; connection.connect(.demo)
+        let model = ExtensionViewModel(plugin: "example", ui: "page", context: .here().forPage(),
+            deps: .init(api: { nil }, connection: { connection }))
+        defer { model.cancelConfirmation(); model.stream?.close(); connection.disconnect() }
+        model.setVisible(true); socket.reviewSnapshot()
+        let stream = try #require(model.stream)
+        let review = try #require(model.view?.review)
+        #expect(model.view?.wantsCodePage == true && review.count == 2)
+        model.values[review.name] = "Original summary"
+        socket.delta()
+        #expect(model.values[review.name] == "Original summary")
+        let execute = model.prepared(review.buttons[0].action,
+            with: [review.name: model.values[review.name] ?? ""], displayed: stream.displayedRevision)
+        model.values[review.name] = "Edited after tap"
+        let task = Task { await execute() }
+        for _ in 0..<10 where socket.request?["request"]?.string != "event" { await Task.yield() }
+        let event = try #require(socket.request?["interaction"]?["event_id"]?.string)
+        #expect(socket.request?["interaction"]?["value"]?[review.name] == .string("Original summary"))
+        #expect(socket.request?["interaction"]?["value"]?["event"] == .string("approve"))
+        #expect(socket.request?["interaction"]?["event"] == .string("submit"))
+        socket.receipt(event, version: 3)
+        socket.delta(version: 3, base: 2)
+        #expect(await task.value.toast == "Once")
+        #expect(model.values[review.name] == "Edited after tap")
+        let discard = try #require(review.discard)
+        let cancel = model.prepared(discard, displayed: stream.displayedRevision)
+        let cancelling = Task { await cancel() }
+        for _ in 0..<10 where model.confirmation == nil { await Task.yield() }
+        #expect(model.confirmation?.chosen.isEmpty == true)
+        model.cancelConfirmation()
+        #expect(await cancelling.value.cancelled)
+        #expect(socket.sent.filter { $0["request"]?["request"]?.string == "event" }.count == 1)
+        let approving = model.prepared(discard, displayed: stream.displayedRevision)
+        let approved = Task { await approving() }
+        for _ in 0..<10 where model.confirmation == nil { await Task.yield() }
+        model.approveConfirmation()
+        for _ in 0..<10 where socket.request?["interaction"]?["action"] != .string(discard.id) { await Task.yield() }
+        #expect(socket.request?["interaction"]?["event"] == .string("press"))
+        #expect(socket.request?["interaction"]?["value"]?.object?.isEmpty == true)
+        let discardEvent = try #require(socket.request?["interaction"]?["event_id"]?.string)
+        socket.receipt(discardEvent, version: 4)
+        socket.delta(version: 4, base: 3)
+        #expect(await approved.value.toast == "Once")
+        #expect(socket.sent.filter { $0["request"]?["request"]?.string == "event" }.count == 2)
+        stream.refresh(); socket.reviewSnapshot(version: 5, present: false)
+        #expect(model.view?.review == nil && model.values[review.name] == nil)
+        #expect(model.view?.wantsCodePage == false)
     }
 
     @Test func receiptWaitsForEmptyFenceAndRetryDoesNotRepeatEffect() async throws {

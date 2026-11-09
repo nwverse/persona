@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 
@@ -111,6 +112,17 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	case name == runtimeCLITool:
 		return proto.TextResult("unknown tool "+name, true)
 	case strings.HasPrefix(name, "phone_"):
+		if name == "phone_notify" && s.inHealth(ctx, session) {
+			var a map[string]any
+			if err := json.Unmarshal(args, &a); err != nil {
+				return proto.TextResult(err.Error(), true)
+			}
+			if a != nil {
+				// Local phone notifications follow the same privacy rule as notify_user.
+				a["title"], a["body"] = healthNotice(s.lang(ctx))
+				args, _ = json.Marshal(a)
+			}
+		}
 		var res proto.ToolResult
 		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, map[string]any{"name": name, "args": args}, &res); err != nil {
 			return proto.TextResult(err.Error(), true)
@@ -118,6 +130,33 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 		return res
 	}
 	return proto.TextResult("unknown tool "+name, true)
+}
+
+// mailAttachment answers a node's mail.attachment: the bytes of the attachment mail_save_attachment saves on that
+// machine (node/mailattachment.go), for a caller that could call the tool through mcp.call: not a work machine, an
+// assistant conversation only when it is one, a guest only when it was given the tool; then the extensions decide
+// whether the mail connector offers it to that caller (extmgr MailAttachment).
+func (s *Service) mailAttachment(ctx context.Context, machine string, req proto.MailAttachmentRequest) (proto.MailAttachment, error) {
+	// Not named "name": the i18n key check resolves constants by name across the package, and a constant called
+	// name would turn every "prefix."+name text wrapper into one whole key.
+	const saveAttachmentTool = "mail_save_attachment"
+	if s.isWorkMachine(machine) {
+		return proto.MailAttachment{}, errors.New(i18n.T(s.lang(ctx), "assistant-privacy.tool_denied"))
+	}
+	if req.Assistant && !s.assistantCaller(ctx, machine, req.SessionID) {
+		return proto.MailAttachment{}, errors.New(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"))
+	}
+	if res, refused := s.guestRefuses(ctx, machine, req.SessionID, saveAttachmentTool, req.Guest); refused {
+		var why strings.Builder
+		for _, c := range res.Content {
+			why.WriteString(c.Text)
+		}
+		return proto.MailAttachment{}, errors.New(why.String())
+	}
+	if s.ext == nil {
+		return proto.MailAttachment{}, errors.New("mail is not available")
+	}
+	return s.ext.MailAttachment(ctx, req)
 }
 
 // isOwnTool: name is one of the assistant's own tools.

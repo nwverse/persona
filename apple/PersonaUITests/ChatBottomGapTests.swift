@@ -1,0 +1,161 @@
+import XCTest
+
+/// The newest message sits one row gap (`Theme.Space.l`, 16 pt, as between any two rows) above the footer's first row
+/// (#1108): the chips over the composer, or what is over them (an agent's computer activity, the queued messages); with
+/// the keyboard up and with an upload's bar in the composer too. A little way up, the jump-to-latest arrow is over the list, not over the footer. Light and dark;
+/// run it on the narrowest phone too (SE). Every state gets its screenshot before the gaps are checked.
+///   PORT=18831 MOCK_TURN_IMAGES=many MOCK_QUEUE=1 python3 scripts/mock/mock_hub.py &
+///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18831 xcodebuild test … -only-testing:PersonaUITests/ChatBottomGapTests
+final class ChatBottomGapTests: XCTestCase {
+    private var hub = ""
+    /// The blog conversation: its newest row is the answer's file cards (MOCK_TURN_IMAGES=many).
+    private let blog = "studio/a1f3c2d4-0000-4000-8000-000000000003"
+    /// The widget conversation: working, with two messages queued (MOCK_QUEUE=1).
+    private let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
+    /// Between two rows of the chat (`Theme.Space.l`).
+    private let rowGap: CGFloat = 16
+
+    override func setUpWithError() throws {
+        guard let h = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_TURN_IMAGES=many MOCK_QUEUE=1 (PERSONA_MOCK_HUB)")
+        }
+        hub = h
+    }
+
+    @MainActor func testTheNewestMessageSitsOneRowGapAboveTheFooter() throws {
+        var gaps: [(String, CGFloat)] = []
+        for scheme in ["light", "dark"] {
+            var app = launch(blog, scheme)
+            _ = chips(app)
+            gaps.append(("\(scheme) at the newest", try gap(app, shot: "\(scheme)-bottom")))
+            try arrow(app, shot: "\(scheme)-arrow")
+            app.terminate()
+
+            app = launch(blog, scheme, ["-focusComposer", "YES"])
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 15), "no keyboard")
+            _ = chips(app)
+            gaps.append(("\(scheme) with the keyboard", try gap(app, shot: "\(scheme)-keyboard")))
+            app.terminate()
+
+            app = launch(widget, scheme)
+            let queue = app.descendants(matching: .any)["queue-strip"].firstMatch
+            XCTAssertTrue(queue.waitForExistence(timeout: 20), "no queued messages:\n\(app.debugDescription)")
+            gaps.append(("\(scheme) with queued messages", try gap(app, shot: "\(scheme)-queued")))
+            app.terminate()
+
+            // Terminated while it uploads: the path never lands in the draft, which later runs would keep.
+            app = launch(blog, scheme, ["-openUploadDemo", "季度报告.pdf"])
+            XCTAssertTrue(app.buttons["取消上传 季度报告.pdf"].waitForExistence(timeout: 20), "no upload bar")
+            _ = chips(app)
+            gaps.append(("\(scheme) uploading", try gap(app, shot: "\(scheme)-upload")))
+            app.terminate()
+        }
+        for (state, gap) in gaps {
+            XCTAssertEqual(gap, rowGap, accuracy: 1, "\(state): \(gap) pt from the newest message to the footer")
+        }
+    }
+
+    /// A chat opened at its newest end, with no picture or chat kept from an earlier run.
+    @MainActor private func launch(_ session: String, _ scheme: String, _ extra: [String] = []) -> XCUIApplication {
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-openSession", session, "-openImagesFresh", "YES",
+                               "-openChatsFresh", "YES", "-ui.scheme", scheme] + extra
+        app.launchPinned()
+        dismissAlerts()
+        return app
+    }
+
+    /// The chips over the composer (permission mode, effort): the footer's first row when nothing is queued.
+    @MainActor private func chips(_ app: XCUIApplication) -> XCUIElement {
+        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "权限模式")).firstMatch
+        XCTAssertTrue(chip.waitForExistence(timeout: 20), "no mode chips:\n\(app.debugDescription)")
+        return chip
+    }
+
+    /// From the newest message's bottom to the footer's first row, once the page stops moving. Its screenshot is taken
+    /// first.
+    @MainActor private func gap(_ app: XCUIApplication, shot name: String) throws -> CGFloat {
+        var last = -CGFloat.infinity
+        var gap = CGFloat.nan
+        let settled = waitUntil(15) {
+            guard let l = try? self.layout(app) else { return false }
+            gap = l.footer - l.newest
+            defer { last = gap }
+            return abs(gap - last) < 0.5
+        }
+        shot(app, name)
+        XCTAssertTrue(settled, "\(name): the page did not settle")
+        return gap
+    }
+
+    /// From one snapshot: the lowest bottom edge of what the chat list draws (its rows' texts, buttons, pictures), and
+    /// the highest top edge of what the footer under it draws (its first row).
+    @MainActor private func layout(_ app: XCUIApplication) throws -> (newest: CGFloat, footer: CGFloat) {
+        let root = try app.snapshot()
+        var scrolls: [XCUIElementSnapshot] = []
+        walk(root) { if $0.elementType == .scrollView { scrolls.append($0) } }
+        // The chat list is the tallest scroll view (the others are rows that scroll sideways).
+        let list = try XCTUnwrap(scrolls.max { $0.frame.height < $1.frame.height }).frame
+        let drawn: Set<XCUIElement.ElementType> = [.staticText, .button, .image, .link, .textView, .textField]
+        var newest = -CGFloat.infinity, footer = CGFloat.infinity
+        walk(root) { s in
+            let f = s.frame
+            // The queued messages' card is drawn by its frame, not by its texts.
+            guard drawn.contains(s.elementType) || s.identifier == "queue-strip", f.height > 0, f.height < list.height,
+                  f.minX < list.maxX, f.maxX > list.minX else { return }
+            if f.maxY > list.minY, f.maxY <= list.maxY + 0.5 { newest = max(newest, f.maxY) }
+            if f.minY >= list.maxY - 0.5 { footer = min(footer, f.minY) }
+        }
+        guard newest > list.minY, footer < .infinity else { throw XCTSkip("nothing drawn around the chat list's end") }
+        return (newest, footer)
+    }
+
+    /// Up from the newest end (past `ChatFollow.tolerance`; the first of it can unfold the header): the jump-to-latest
+    /// arrow shows over the list, clear of the footer.
+    @MainActor private func arrow(_ app: XCUIApplication, shot name: String) throws {
+        let jump = app.buttons["回到最新"]
+        // A swipe on the list itself: a drag by the window's coordinates did not scroll it on an SE. How far it goes
+        // does not matter here, only that the arrow comes.
+        let list = try XCTUnwrap(app.scrollViews.allElementsBoundByIndex.max { $0.frame.height < $1.frame.height })
+        for _ in 0..<3 where !jump.waitForExistence(timeout: 2) { list.swipeDown(velocity: .slow) }
+        XCTAssertTrue(jump.waitForExistence(timeout: 10), "no jump-to-latest arrow:\n\(app.debugDescription)")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        shot(app, name)
+        XCTAssertLessThanOrEqual(jump.frame.maxY, try layout(app).footer, "the arrow is over the footer")
+    }
+
+    private func walk(_ s: XCUIElementSnapshot, _ visit: (XCUIElementSnapshot) -> Void) {
+        visit(s)
+        for c in s.children { walk(c, visit) }
+    }
+
+    /// SpringBoard's notification question, and 「你已更改“Persona”的图标」 (the icon follows the appearance).
+    private func dismissAlerts() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for _ in 0..<2 {
+            let ok = springboard.alerts.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许", "OK", "好"])).firstMatch
+            if ok.waitForExistence(timeout: 2) { ok.tap() }
+        }
+    }
+
+    /// An attachment, and a file in PERSONA_SHOTS when set.
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "gap-" + name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
+            try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/gap-\(name).png"))
+        }
+    }
+
+    private func waitUntil(_ timeout: TimeInterval, _ ok: @escaping () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            if ok() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        return false
+    }
+}

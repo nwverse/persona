@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // A model's final answer laid out as cards by plain rules (no model call): the first "# " heading becomes the
@@ -87,17 +88,17 @@ var answerStatuses = []answerStatus{ // in order: the longer "no changes" wordin
 }
 
 var (
-	answerSectionRe = regexp.MustCompile(`^[一二三四五六七八九十]{1,3}[、.．]\s*\S`)
-	answerNoteRe    = regexp.MustCompile(`^(?:>\s*)?(?:备注|注|附注|PS|P\.S\.)\s*[:：]`)
-	answerStatusRe  = regexp.MustCompile(`^(?:当前状态|状态|结论)\s*[:：]\s*`)
+	answerSectionRe = lazyre.New(`^[一二三四五六七八九十]{1,3}[、.．]\s*\S`)
+	answerNoteRe    = lazyre.New(`^(?:>\s*)?(?:备注|注|附注|PS|P\.S\.)\s*[:：]`)
+	answerStatusRe  = lazyre.New(`^(?:当前状态|状态|结论)\s*[:：]\s*`)
 	// answerStatusLabelRe: what is left of a heading that was a status after its label ("Status: please review").
-	answerStatusLabelRe = regexp.MustCompile(`^(?:当前状态|状态|结论)\s*[:：]?$`)
+	answerStatusLabelRe = lazyre.New(`^(?:当前状态|状态|结论)\s*[:：]?$`)
 	// answerEmptyBracketsRe: brackets a status was taken out of.
-	answerEmptyBracketsRe = regexp.MustCompile(`[【（(\[]\s*[】）)\]]`)
-	answerLinkRe          = regexp.MustCompile(`\[([^\]\n]+)\]\((https?://(?:[^\s()]|\([^\s()]*\))+)\)`)
-	answerURLRe           = regexp.MustCompile(`https?://[^\s<>\[\]（）【】，。；：、！？「」《》"'` + "`" + `]+`)
-	answerListRe          = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s`)
-	answerCellRe          = regexp.MustCompile(`^:?-{2,}:?$`)
+	answerEmptyBracketsRe = lazyre.New(`[【（(\[]\s*[】）)\]]`)
+	answerLinkRe          = lazyre.New(`\[([^\]\n]+)\]\((https?://(?:[^\s()]|\([^\s()]*\))+)\)`)
+	answerURLRe           = lazyre.New(`https?://[^\s<>\[\]（）【】，。；：、！？「」《》"'` + "`" + `]+`)
+	answerListRe          = lazyre.New(`^(?:[-*+]|\d+[.)])\s`)
+	answerCellRe          = lazyre.New(`^:?-{2,}:?$`)
 )
 
 // RenderAnswer lays out answer (GitHub Markdown) as cards of about budget runes each, at most maxParts of them.

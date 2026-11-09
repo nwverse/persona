@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -324,15 +325,15 @@ func readBodyFile(p, cwd string) string {
 	return string(b)
 }
 
-var httpMethod = regexp.MustCompile(`^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$`)
+var httpMethod = lazyre.New(`^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$`)
 
 var (
 	// timeoutArg is the duration of a leading `timeout 20 …` (also read by readsOnlyMemory).
-	timeoutArg = regexp.MustCompile(`^[0-9.]+[smh]?$`)
+	timeoutArg = lazyre.New(`^[0-9.]+[smh]?$`)
 	// shellVarRef is a $NAME or ${NAME} reference parseGateCall expands.
-	shellVarRef = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
+	shellVarRef = lazyre.New(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
 	// commandNameRe is what safeCommandName lets onto PATH.
-	commandNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	commandNameRe = lazyre.New(`^[a-z][a-z0-9_-]{0,31}$`)
 )
 
 // larkDecision is the gate's call on one call: its command gate's rules (the user's first, the hub put them there),
@@ -438,23 +439,23 @@ func larkPattern(c larkCall) string {
 }
 
 var larkActions = []struct {
-	re   *regexp.Regexp
+	re   *lazyre.Regexp
 	what string
 }{
 	// lark-cli commands (larkcligate.go): "CLI /<domain>/<command>"
-	{regexp.MustCompile(`^CLI /im/\+messages-send`), "发消息"},
-	{regexp.MustCompile(`^CLI /im/\+messages-reply`), "回复消息"},
-	{regexp.MustCompile(`^CLI /im/reactions/`), "表情回复"},
-	{regexp.MustCompile(`^CLI /im/messages/delete`), "撤回消息"},
-	{regexp.MustCompile(`^CLI /im/(messages/(forward|merge_forward)|threads/forward)`), "转发消息"},
-	{regexp.MustCompile(`^CLI /im/messages/urgent`), "加急"},
-	{regexp.MustCompile(`^CLI /im/`), "改群 / 会话"},
-	{regexp.MustCompile(`^CLI /(markdown|slides|whiteboard|mindnotes)`), "写文档"},
-	{regexp.MustCompile(`^CLI /task`), "改待办"},
-	{regexp.MustCompile(`^CLI /approval`), "处理审批"},
-	{regexp.MustCompile(`^CLI /calendar`), "建 / 改日程"},
-	{regexp.MustCompile(`^CLI /(docs|sheets|wiki|drive|base)`), "写文档"},
-	{regexp.MustCompile(`^CLI /mail`), "发 / 改邮件"},
+	{lazyre.New(`^CLI /im/\+messages-send`), "发消息"},
+	{lazyre.New(`^CLI /im/\+messages-reply`), "回复消息"},
+	{lazyre.New(`^CLI /im/reactions/`), "表情回复"},
+	{lazyre.New(`^CLI /im/messages/delete`), "撤回消息"},
+	{lazyre.New(`^CLI /im/(messages/(forward|merge_forward)|threads/forward)`), "转发消息"},
+	{lazyre.New(`^CLI /im/messages/urgent`), "加急"},
+	{lazyre.New(`^CLI /im/`), "改群 / 会话"},
+	{lazyre.New(`^CLI /(markdown|slides|whiteboard|mindnotes)`), "写文档"},
+	{lazyre.New(`^CLI /task`), "改待办"},
+	{lazyre.New(`^CLI /approval`), "处理审批"},
+	{lazyre.New(`^CLI /calendar`), "建 / 改日程"},
+	{lazyre.New(`^CLI /(docs|sheets|wiki|drive|base)`), "写文档"},
+	{lazyre.New(`^CLI /mail`), "发 / 改邮件"},
 }
 
 // larkSummary is the phone card's text: what each write does, then its method, path and body.
@@ -525,7 +526,7 @@ func (n *Node) larkGate(ctx context.Context, in hookInput, ix proto.Interaction)
 // larkCheck is the gate itself, for any agent: "allow" / "deny" with the reason to give the model, or "" when the
 // command is not the gate's to decide (the usual permission flow). Writes are confirmed on the phone here, so a
 // "deny" may carry the user's own words. Claude reaches it through the Bash PreToolUse hook (larkGate), Codex through
-// the app-server's command approvals (assistant_codex.go).
+// the app-server's command approvals (assistant_codex_approve.go).
 func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix proto.Interaction) (string, string, error) {
 	cfg := n.assistantLark(ctx)
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
@@ -880,7 +881,7 @@ const gateWrapperMark = "# a skill's gated command"
 // extensions' ("# <helper> (<skill>), on the assistant's PATH (node/larkgate.go)."): it goes like any gone gate's.
 const legacyWrapperMark = ", on the assistant's PATH (node/larkgate.go)."
 
-var envName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+var envName = lazyre.New(`^[A-Z_][A-Z0-9_]*$`)
 
 // safeCommandName: a plain file name for a command on PATH.
 func safeCommandName(s string) bool {

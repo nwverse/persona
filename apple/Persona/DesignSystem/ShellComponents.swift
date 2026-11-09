@@ -18,6 +18,9 @@ import SwiftUI
 /// `WaitingBadge`, beside the menu rather than in its label, and reads the agents itself.
 struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     @Binding var tab: AppTab
+    /// Across the top bar, or down the side rail on iPhone Duo (`ShellSideRail`): a segment there is the page's symbol over
+    /// its name, as a tab bar's item on the side.
+    var axis: Axis = .horizontal
     @ViewBuilder var chatMenu: () -> ChatMenu
     @ViewBuilder var workMenu: () -> WorkMenu
     @Namespace private var pill
@@ -64,9 +67,9 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     }
 
     private var row: some View {
-        HStack(spacing: .zero) {
+        stack {
             if opensMenu(.assistant) {
-                Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), selected: true) }
+                Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, selected: true) }
                     .menuStyle(.button)
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("shell-assistant")
@@ -76,7 +79,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
             }
             ZStack(alignment: .topTrailing) {
                 if opensMenu(.chats) {
-                    Menu { workMenu() } label: { segment("Agents", selected: true) }
+                    Menu { workMenu() } label: { segment("Agents", .chats, selected: true) }
                         .menuStyle(.button)
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("shell-agents")
@@ -84,7 +87,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
                 } else {
                     button("Agents", .chats, id: "shell-agents")
                 }
-                WaitingBadge()
+                WaitingBadge(axis: axis)
             }
             #if os(iOS) || os(visionOS)
             if LarkHomePreference.shared.shows {
@@ -92,9 +95,14 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
             }
             #endif
         }
-        .background(alignment: .leading) {
-            if let shell { PagerPill(shell: shell, follows: follows) }
+        .background(alignment: axis == .vertical ? .top : .leading) {
+            if let shell { PagerPill(shell: shell, follows: follows, axis: axis) }
         }
+    }
+
+    /// The segments side by side, or one above the other on the side rail.
+    @ViewBuilder private func stack<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        if axis == .vertical { VStack(spacing: .zero, content: content) } else { HStack(spacing: .zero, content: content) }
     }
 
     private func button(_ title: String, _ value: AppTab, id: String) -> some View {
@@ -111,15 +119,41 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
                 tab = value
             }
         } label: {
-            segment(title, selected: chosen == value)
+            segment(title, value, selected: chosen == value)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
         .accessibilityAddTraits(chosen == value ? .isSelected : [])
     }
 
-    @ViewBuilder private func segment(_ title: String, selected: Bool) -> some View {
-        if AppStyle.current.usesBeautifulUI { beautifulSegment(title, selected: selected) } else { plainSegment(title, selected: selected) }
+    @ViewBuilder private func segment(_ title: String, _ value: AppTab, selected: Bool) -> some View {
+        if axis == .vertical {
+            railSegment(title, symbol: Self.symbol(value), selected: selected)
+        } else if AppStyle.current.usesBeautifulUI {
+            beautifulSegment(title, selected: selected)
+        } else {
+            plainSegment(title, selected: selected)
+        }
+    }
+
+    /// The page's symbol on the rail, matching its shared tab.
+    private static func symbol(_ value: AppTab) -> String {
+        #if os(iOS) || os(visionOS)
+        if value == .feishu { return Theme.Icon.feishuChats } // a phone's tab only (no such tab on the Mac)
+        #endif
+        return value == .chats ? Theme.Icon.agents : Theme.Icon.ai
+    }
+
+    /// A segment of the side rail's switch: the page's symbol over its name, square, the pill (`PagerPill`) under the
+    /// chosen one.
+    private func railSegment(_ title: String, symbol: String, selected: Bool) -> some View {
+        VStack(spacing: Theme.Space.xxs) {
+            ThemedIcon(symbol).font(Theme.Font.heading)
+            Text(title).font(Theme.Font.caption).lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .foregroundStyle(selected ? Color.primary : Color.secondary)
+        .scaledFrame(width: Theme.Shell.railSegment, height: Theme.Shell.railSegment)
+        .contentShape(.rect(cornerRadius: Theme.Radius.card))
     }
 
     private func beautifulSegment(_ title: String, selected: Bool) -> some View {
@@ -164,21 +198,26 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
 private struct PagerPill: View {
     let shell: ShellState
     var follows: Bool
+    /// Along the switch: across it, or down it on the side rail.
+    var axis: Axis = .horizontal
     @Environment(\.buiTheme) private var theme
 
     var body: some View {
         GeometryReader { g in
-            let half = g.size.width / CGFloat(shell.pager.pageCount)
-            let at = follows ? min(CGFloat(shell.pager.pageCount - 1), max(0, shell.pager.position)) : CGFloat(shell.page)
+            let n = CGFloat(shell.pager.pageCount)
+            let at = follows ? min(n - 1, max(0, shell.pager.position)) : CGFloat(shell.page)
+            let down = axis == .vertical
+            let size = down ? CGSize(width: g.size.width, height: g.size.height / n) : CGSize(width: g.size.width / n, height: g.size.height)
+            let offset = down ? CGSize(width: 0, height: at * size.height) : CGSize(width: at * size.width, height: 0)
             if AppStyle.current.usesBeautifulUI {
                 // BeautifulUI's segmented control: the chosen segment is a raised capsule.
                 Color.clear.buiSurface(Capsule(), fill: theme.colors.surface, elevation: .button)
-                    .frame(width: half, height: g.size.height)
-                    .offset(x: at * half)
+                    .frame(width: size.width, height: size.height)
+                    .offset(offset)
             } else {
                 Capsule().fill(Theme.Shell.segment)
-                    .frame(width: half, height: g.size.height)
-                    .offset(x: at * half)
+                    .frame(width: size.width, height: size.height)
+                    .offset(offset)
             }
         }
     }
@@ -188,7 +227,10 @@ private struct PagerPill: View {
 /// (an agent asks, another is answered), and only this badge is drawn again.
 private struct WaitingBadge: View {
     @Environment(AppModel.self) private var model
+    var axis: Axis = .horizontal
     private var offset: CGSize {
+        // On the side rail, inside the segment's corner: past it is the screen's edge.
+        if axis == .vertical { return CGSize(width: -Theme.Space.xs, height: Theme.Space.xs) }
         #if os(iOS) || os(visionOS)
         if LarkHomePreference.shared.shows { return CGSize(width: -Theme.Space.s, height: -Theme.Space.l) }
         #endif
@@ -225,7 +267,7 @@ struct ShellCircleButton: View {
             Haptics.tap()
             action()
         } label: {
-            Image(systemName: symbol)
+            ThemedIcon(symbol)
                 .font(Theme.Font.heading)
                 .fontWeight(.medium) // a touch heavier and rounder, like ChatGPT's line icons
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
@@ -241,7 +283,7 @@ struct ShellCircleButton: View {
 }
 
 /// The top bar's left button on both pages (2026-11-01 user request, in place of ☰): the persona's face in Persona's
-/// state, as the old layout's bar shows it in the middle (`PersonaDot`, docs/apple/persona.md「状态」), opening the drawer
+/// state, shared with the platform bar's centered `PersonaDot` (docs/apple/persona.md「状态」), opening the drawer
 /// (Chat History, Inbox…). The state is that of Persona's conversation on Assistant (`assistantCurrent`), on Agents too, so the
 /// face stays the same while the strip slides. While the inbox has something for the user a small soft red dot sits
 /// on the face's lower right (2026-11-04 user request, in place of a red tray beside it: smaller, paler, overlapping
@@ -429,7 +471,7 @@ private struct ShellScaled: ViewModifier {
 }
 
 extension ShellSwitch where WorkMenu == EmptyView {
-    init(tab: Binding<AppTab>, @ViewBuilder chatMenu: @escaping () -> ChatMenu) {
-        self.init(tab: tab, chatMenu: chatMenu, workMenu: { EmptyView() })
+    init(tab: Binding<AppTab>, axis: Axis = .horizontal, @ViewBuilder chatMenu: @escaping () -> ChatMenu) {
+        self.init(tab: tab, axis: axis, chatMenu: chatMenu, workMenu: { EmptyView() })
     }
 }

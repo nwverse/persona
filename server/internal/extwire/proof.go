@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -80,8 +81,10 @@ func SignProof(key, manager, method, requestURI, token string, now time.Time) st
 }
 
 var (
-	proofManager = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
-	proofNonce   = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
+	// Compiled on first use, not whenever a program that links the contract starts (a hook, #1308). A contract
+	// depends on the standard library only, so not internal/lazyre.
+	proofManager = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`) })
+	proofNonce   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`) })
 	errProof     = errors.New("not a manager's proof")
 )
 
@@ -114,8 +117,8 @@ func ParseProof(v string) (Proof, error) {
 		}
 	}
 	secs, err := strconv.ParseInt(t, 10, 64)
-	if err != nil || secs <= 0 || strconv.FormatInt(secs, 10) != t || !proofManager.MatchString(p.Manager) ||
-		!proofNonce.MatchString(p.Nonce) {
+	if err != nil || secs <= 0 || strconv.FormatInt(secs, 10) != t || !proofManager().MatchString(p.Manager) ||
+		!proofNonce().MatchString(p.Nonce) {
 		return Proof{}, errProof
 	}
 	p.Time = time.Unix(secs, 0)

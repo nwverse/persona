@@ -213,7 +213,7 @@ final class ExtensionManagementUITests: XCTestCase {
 
     @MainActor func testPromptOnlyFillsTheComposer() async throws {
         _ = try await state(reset: [:])
-        let app = try launch(["-ui.oldLayout", "NO", "-tab", "assistant", "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"])
+        let app = try launch(["-tab", "assistant", "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"])
         let attach = app.buttons["shell-composer-add"]
         XCTAssertTrue(attach.waitForExistence(timeout: 15), app.debugDescription)
         attach.tap()

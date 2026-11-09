@@ -67,7 +67,7 @@ final class SSHTunnelPairingTests: XCTestCase {
 
         // Paired through the tunnel (the address itself does not answer): the engine step if the hub asks, then the app.
         let engine = app.buttons["engine.save"]
-        let root = app.buttons["设置"]
+        let root = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(engine.waitForExistence(timeout: 30) || root.waitForExistence(timeout: 5), "not paired")
         if engine.exists { engine.tap() }
         XCTAssertTrue(root.waitForExistence(timeout: 15))

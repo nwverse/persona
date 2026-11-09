@@ -32,6 +32,8 @@ data class HubExtension(
      * from a market, or an older hub), its newer version and what happened last with an upgrade.
      */
     @SerialName("auto_upgrade") val autoUpgrade: Boolean? = null,
+    /** Why its own switch does not apply now: "disabled" while the extension is off (the hub keeps the switch for when it is on). */
+    @SerialName("auto_upgrade_paused") val autoUpgradePaused: String? = null,
     val upgrade: ExtensionUpgrade? = null,
     @SerialName("upgrade_note") val upgradeNote: ExtensionUpgradeNote? = null,
     /** An extension with a program on computers: how that program is on each machine it is switched on for. */
@@ -58,6 +60,8 @@ data class ExtensionUpgrade(
     val state: String = "",
     @SerialName("added_permissions") val addedPermissions: List<ExtensionPermission>? = null,
     val detail: String? = null,
+    /** `"user"` when a skipped version is one the user rolled back from (null: it didn't start). */
+    @SerialName("skipped_by") val skippedBy: String? = null,
 )
 
 /** What happened last with an extension's upgrade: `upgraded | rolled_back | needs_permission | failed`. */

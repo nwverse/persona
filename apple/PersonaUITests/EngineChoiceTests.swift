@@ -58,11 +58,15 @@ final class EngineChoiceTests: XCTestCase {
         save.tap()
     }
 
-    /// UIKit renders the four tabs in a side rail on Duo's cover, without a TabBar accessibility parent.
+    /// Pairing finishes on the Shell, whose drawer exposes Inbox and Settings.
     @MainActor private func pairedRoot() {
-        for title in ["Persona", "Agents", "收件箱", "设置"] {
-            XCTAssertTrue(app.buttons[title].firstMatch.waitForExistence(timeout: 10), "no paired root control: \(title)")
+        for id in ["shell-assistant", "shell-agents", "assistant-sidebar-button"] {
+            XCTAssertTrue(app.buttons[id].firstMatch.waitForExistence(timeout: 10), "no paired root control: \(id)")
         }
+        app.buttons["assistant-sidebar-button"].firstMatch.tapCenter()
+        XCTAssertTrue(app.buttons["sidebar-inbox"].firstMatch.waitForExistence(timeout: 5), "no paired drawer Inbox route")
+        XCTAssertTrue(app.drawerSettingsButton.waitForExistence(timeout: 5), "no paired drawer Settings route")
+        app.descendants(matching: .any)["assistant-drawer-close"].firstMatch.tapCenter()
         XCTAssertFalse(app.buttons["engine.save"].exists, "the engine step did not finish")
     }
 

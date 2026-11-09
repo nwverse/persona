@@ -9,6 +9,7 @@ import { chosenManager } from "../../lib/manager-choice";
 import { discardFeedCache, readFeedCache, writeFeedCache, type FeedCache } from "../../lib/feed-cache";
 import type { Item, ItemsPage } from "../../lib/types";
 import { createTextThrottle, type TextThrottle } from "../../ui/stream/throttle";
+import { unlandedLive } from "../../lib/live-text";
 
 const PAGE = "turns=2&fold_work=1&lazy_images=1";
 /** How often a page checks whether it is behind (a pure comparison; nothing is asked unless it is, lib/stale-page.ts). */
@@ -27,7 +28,9 @@ export interface Transcript {
   loadingEarlier: boolean;
   loadEarlier: () => Promise<void>;
   expandFold: (fold: Item) => Promise<void>;
-  streaming: string; // the headless assistant's reply as it is written
+  /** The reply as it is written, before the transcript has it: the headless assistant's, or an agent's as Claude shows it
+   *  (a Claude session Persona started; docs/integrations/claude-integration.md "Live replies"). "" for none. */
+  streaming: string;
   /** The stream keeps losing items (the page got them by asking): say so, with a reload. */
   notLive: boolean;
   reload: () => void;
@@ -50,8 +53,10 @@ function cachedPage(mid: string, sid: string, cache?: TranscriptCache): FeedCach
   return page?.machineID === mid && page.sessionID === sid && (page.manager ?? "") === (cache.manager ?? "") ? page : null;
 }
 
-/** `updatedAt`: the session's `updated_at` from the list (a subagent's from its parent's), what the stale-page check compares. */
-export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; cache?: TranscriptCache } = {}): Transcript {
+/** `updatedAt`: the session's `updated_at` from the list (a subagent's from its parent's), what the stale-page check compares.
+ *  `assistant`: a Persona conversation, whose live text is the headless assistant's whole reply so far (any reply item
+ *  ends it); otherwise it is an agent's message as Claude shows it, which the transcript replaces by its start. */
+export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; cache?: TranscriptCache; assistant?: boolean } = {}): Transcript {
   const [initial] = useState(() => cachedPage(mid, sid, opts.cache));
   const [items, setItems] = useState<Item[]>(initial?.items ?? []);
   const [loading, setLoading] = useState(!initial);
@@ -79,15 +84,20 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   // The back-off after a failed older page: when loadEarlier may ask again, and how long the last wait was.
   const earlierRetryAt = useRef(0);
   const earlierWait = useRef(0);
-  // The assistant's delta (the whole reply so far, about every 80 ms; "" when it ends) re-renders the chat at most once
-  // per throttle interval (ui/stream/throttle.ts), the last one never dropped; the end and the reply's item at once.
+  // The live text (the whole message so far: the assistant's about every 80 ms, an agent's a batch of lines at a time;
+  // "" when it ends) re-renders the chat at most once per throttle interval (ui/stream/throttle.ts), the last one never
+  // dropped; the end and the reply's item at once. Only the newest items touch it: an older page or an opened fold is
+  // never the reply being written.
   const deltas = useRef<TextThrottle>(null!);
   deltas.current ??= createTextThrottle(setStreaming);
+  const assistant = Boolean(opts.assistant);
+  // an agent's last delta as it came, and what of it the page shows (lib/live-text.ts)
+  const liveRaw = useRef("");
+  const liveShown = useRef("");
 
   const apply = useCallback((batch: Item[]) => {
     if (!batch.length) return;
     setItems((have) => mergeItems(have, batch));
-    if (batch.some((i) => i.role === "assistant" && i.kind === "text")) deltas.current.flush("");
   }, []);
 
   useEffect(() => {
@@ -104,6 +114,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     setError("");
     setHasMore(cached?.hasMore ?? false);
     deltas.current.flush("");
+    liveRaw.current = liveShown.current = "";
     covered.current = 0;
     history.current = cached?.history ?? "";
     earlierRetryAt.current = 0;
@@ -142,6 +153,25 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       setNonce((x) => x + 1);
     };
 
+    // The live text against the newest items, after they changed (`batch`) or a delta came: the assistant's ends at
+    // its reply's item; an agent's shows what of its message the latest one does not hold (lib/live-text.ts).
+    const showLive = (batch?: Item[]) => {
+      if (assistant) {
+        if (batch?.some((i) => i.role === "assistant" && i.kind === "text")) deltas.current.flush("");
+        return;
+      }
+      const want = liveRaw.current && unlandedLive(liveRaw.current, latest);
+      if (want === liveShown.current) return;
+      liveShown.current = want;
+      if (!want || batch) deltas.current.flush(want); // the end, and what items took off, at once
+      else deltas.current.push(want);
+    };
+    const onDelta = (text: string) => {
+      if (assistant) return applyDelta(deltas.current, text);
+      liveRaw.current = text;
+      showLive();
+    };
+
     const subscribe = () => send({ type: "subscribe", machine_id: mid, session_id: sid, since_seq: covered.current || undefined, lazy_images: true, fold_work: true });
 
     // Items after what we have, a page at a time (past 8 the newest page is cheaper); how many of them were new.
@@ -159,6 +189,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         fresh += got.filter((i) => i.seq > covered.current).length;
         apply(got);
         remember(got);
+        showLive(got);
         if (p.to_seq) covered.current = Math.max(covered.current, p.to_seq);
         lastArrival = Date.now();
         if (!p.more_after) return fresh;
@@ -201,6 +232,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (e.history) history.current = e.history;
       if (!ready && e.history) pendingHistory = e.history;
       remember(e.items ?? []);
+      showLive(e.items ?? []);
       lastArrival = Date.now();
       if (e.items?.length && tally !== FRESH_TALLY) {
         tally = afterPush(tally); // the stream works
@@ -228,7 +260,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
 
     const off = listenSession(mid, sid, {
       items: onItems,
-      delta: (text) => applyDelta(deltas.current, text),
+      delta: onDelta,
       reconnected: subscribe,
     });
 
@@ -248,7 +280,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         setHasMore(latestMore);
         if (p.history) history.current = p.history;
         save();
-        if (batch.some((i) => i.role === "assistant" && i.kind === "text")) deltas.current.flush("");
+        showLive(batch);
         covered.current = Math.max(covered.current, p.to_seq ?? Math.max(0, ...batch.map((i) => i.seq)));
       } catch (e) {
         if (dead) return;
@@ -274,7 +306,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       send({ type: "unsubscribe", machine_id: mid, session_id: sid });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mid, sid, nonce, cacheScope, cacheManager]);
+  }, [mid, sid, nonce, cacheScope, cacheManager, assistant]);
 
   const loadEarlier = useCallback(async () => {
     const first = itemsRef.current[0];

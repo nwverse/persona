@@ -1,0 +1,11 @@
+{
+  "manifest_version": 1,
+  "id": "example-gateway",
+  "name": "Example Gateway",
+  "version": "1.0.0",
+  "engines": {"extension_protocol": 1},
+  "runtime": {"command": "bin/example-gateway"},
+  "contributes": {
+    "ui": [{"id": "usage", "title": "Usage", "placement": "nav_page", "icon": "chart", "families": ["small"]}]
+  }
+}

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +28,10 @@ type Plugin struct {
 	link   *hubLink // the conversations' one WebSocket to the hub (hublink.go)
 	logger *log.Logger
 	active atomic.Int32 // open conversations: a redeploy waits for 0 (GET /health)
+	// toolless are the providers (by id) whose service refused the function tools of an auto provider's session start
+	// (Provider.Tools unset, #1420): their sessions go without them from then on, for as long as the plugin runs.
+	toolless sync.Map
+	calls    atomic.Int64 // the calls taken since it started: a call's id in the log (calllog.go)
 }
 
 func New(cfg Config, hubURL, hubToken string, logger *log.Logger) *Plugin {
@@ -37,6 +42,18 @@ func New(cfg Config, hubURL, hubToken string, logger *log.Logger) *Plugin {
 }
 
 func (pl *Plugin) logf(format string, args ...any) { pl.logger.Printf(format, args...) }
+
+// refusesTools: provider id's service refused the function tools (toolless).
+func (pl *Plugin) refusesTools(id string) bool {
+	_, ok := pl.toolless.Load(id)
+	return ok
+}
+
+// forgoTools remembers that provider id's service refuses the function tools; false when that was known already.
+func (pl *Plugin) forgoTools(id string) bool {
+	_, known := pl.toolless.LoadOrStore(id, struct{}{})
+	return !known
+}
 
 // Handler is the plugin's API (docs/extensions/extensions.md "Voice"): /health, /models, /voices, /ws.
 func (pl *Plugin) Handler() http.Handler {
@@ -85,7 +102,6 @@ func (pl *Plugin) Handler() http.Handler {
 		// Who is calling, as the hub found it (docs/extensions/extensions.md "The caller on forwarded requests"): the role decides the tools, the
 		// language the words the model is told.
 		role, lang := r.Header.Get(extwire.HeaderRole), i18n.Resolve(r.Header.Get(extwire.HeaderLang))
-		pl.logf("conversation opened (role %q)", role)
 		pl.converse(context.WithoutCancel(r.Context()), c, role, lang)
 	})
 	return mux
