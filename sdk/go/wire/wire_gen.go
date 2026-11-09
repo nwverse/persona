@@ -3508,11 +3508,13 @@ type ConnectorItems struct {
 // ConnectorKBItem: one knowledge-base item. The fields after where are the knowledge base's own (its tagging); a
 // program leaves them out.
 type ConnectorKBItem struct {
-	Kind  string    `json:"kind"`
-	ID    string    `json:"id"`
-	Title string    `json:"title"`
-	URL   string    `json:"url,omitempty"`
-	At    time.Time `json:"at,omitzero"`
+	Kind string `json:"kind"`
+	// Who it came from. The collector overwrites this with its trusted connector ID, so an extension cannot spoof it.
+	Source string    `json:"source,omitempty"`
+	ID     string    `json:"id"`
+	Title  string    `json:"title"`
+	URL    string    `json:"url,omitempty"`
+	At     time.Time `json:"at,omitzero"`
 	// Where it came from (a chat id, calendar…).
 	Where        string    `json:"where,omitempty"`
 	Projects     []string  `json:"projects,omitempty"`

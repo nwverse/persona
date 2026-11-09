@@ -658,6 +658,7 @@
       "type": "object",
       "properties": {
         "kind": {"type": "string", "enum": ["docs", "meetings", "events"]},
+        "source": {"type": "string", "description": "Who it came from. The collector overwrites this with its trusted connector ID, so an extension cannot spoof it."},
         "id": {"type": "string"},
         "title": {"type": "string"},
         "url": {"type": "string"},

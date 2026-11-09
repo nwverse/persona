@@ -3674,6 +3674,10 @@ export interface ConnectorItems {
  */
 export interface ConnectorKBItem {
   kind: string;
+  /**
+   * Who it came from. The collector overwrites this with its trusted connector ID, so an extension cannot spoof it.
+   */
+  source?: string;
   id: string;
   title: string;
   url?: string;
