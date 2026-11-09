@@ -193,9 +193,11 @@ class PairingFlowTest {
     @Config(qualifiers = "en-w400dp-h4000dp-xhdpi")
     @Test fun theFirstChecklistHasOneDone() {
         firstChecklist {}
-        // The items' own confirm buttons are named apart from the page's finish button.
-        val markDone = hasText(text(R.string.settings_ready_mark_done)) and hasClickAction()
-        rule.waitUntil(5_000) { rule.onAllNodes(markDone).fetchSemanticsNodes().isNotEmpty() }
+        // Wait for the items (each has "Open settings"); then their own confirm buttons are named apart from the page's finish button.
+        val open = hasText(text(R.string.settings_ready_open)) and hasClickAction()
+        rule.waitUntil(5_000) { rule.onAllNodes(open).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitForIdle()
+        rule.onAllNodes(hasText(text(R.string.settings_ready_mark_done)) and hasClickAction()).onFirst().assertExists()
         rule.onAllNodes(hasText(text(R.string.settings_done)) and hasClickAction()).assertCountEquals(1)
     }
 
