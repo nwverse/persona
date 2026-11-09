@@ -25,6 +25,7 @@ import { repairStreamingMarkdown } from "./stream/repair";
 import { useThrottledText } from "./stream/throttle";
 import { whenIdle } from "./stream/idle";
 import { createWordFadeState, rememberShown, remainingMs, shownBefore, type WordFadeState } from "./stream/wordFade";
+import { cachedMarkdown, markdownCache, markdownKey } from "./markdown-cache";
 import "./stream/stream.css";
 
 // A link ends at whitespace or any non-ASCII character (Chinese text, full-width punctuation), without trailing
@@ -479,6 +480,29 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
   );
 }
 
+// A conversation's link components (paths on its machine open in the file panel), one object per machine and directory:
+// a kept tree (markdown-cache.ts) and a fresh one then use the same component types, so swapping one for the other
+// does not mount the links again.
+const linkComponents = new Map<string, Components>();
+
+function componentsFor(mid: string, cwd: string | undefined): Components {
+  const k = `${mid}\0${cwd ?? "\u0001"}`;
+  let c = linkComponents.get(k);
+  if (!c) {
+    c = {
+      ...markdownComponents,
+      a: ({ href, children, node }) => {
+        const line = Number(node?.properties?.dataLine) || undefined;
+        const title = typeof node?.properties?.title === "string" ? node.properties.title : undefined;
+        return <Link href={href} mid={mid} cwd={cwd} line={line} title={title}>{children}</Link>;
+      },
+    };
+    linkComponents.set(k, c);
+    if (linkComponents.size > 64) linkComponents.delete(linkComponents.keys().next().value!);
+  }
+  return c;
+}
+
 // `compact`: a few lines inside a card (a task's receipt): body size in the card's color, headings as bold body text,
 // tight blocks, so a parent's line-clamp shows as much as it can.
 // With `mid` (a conversation's machine) the paths the text names that are there link to the file panel; while
@@ -488,14 +512,7 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
 // `fade`: a block that just arrived whole: its words fade in once, then it is rendered plain. Neither fades with
 // "Reply animation" off or reduced motion; once streaming ends it is plain Markdown again, without the fade's spans.
 export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean }) {
-  const components = useMemo<Components>(() => mid ? {
-    ...markdownComponents,
-    a: ({ href, children, node }) => {
-      const line = Number(node?.properties?.dataLine) || undefined;
-      const title = typeof node?.properties?.title === "string" ? node.properties.title : undefined;
-      return <Link href={href} mid={mid} cwd={cwd} line={line} title={title}>{children}</Link>;
-    },
-  } : markdownComponents, [mid, cwd]);
+  const components = useMemo<Components>(() => (mid ? componentsFor(mid, cwd) : markdownComponents), [mid, cwd]);
   const text = useThrottledText(raw, Boolean(streaming));
   const motion = useReplyMotion();
   const wordFade = useWordFade(Boolean(streaming) && motion, Boolean(fade && !streaming) && motion, text);
@@ -512,12 +529,22 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
     [key, highlight, katex],
   );
   const chunks = useMemo(() => (streaming ? splitChunks(md) : wordFade ? [{ start: 0, content: md }] : null), [md, streaming, wordFade]);
+  // A finished block: its tree from the cache when this text was drawn with the same plugins and links before.
+  const tree = useMemo(
+    () =>
+      chunks || !markdownCache.on
+        ? null
+        : cachedMarkdown(markdownKey(md, `${katex ? "katex" : ""}|${highlight ? "highlight" : ""}|${key}`, mid, cwd), { children: md, remarkPlugins: REMARK, rehypePlugins, components, urlTransform: markdownUrl }),
+    [chunks, md, katex, highlight, key, mid, cwd, rehypePlugins, components],
+  );
   return (
     <div className={`prose-j ${small ? "prose-sm" : ""} ${compact ? "prose-compact" : ""}`}>
       {chunks ? (
         chunks.map((c) => (
           <StreamChunk key={c.start} start={c.start} content={c.content} remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl} fade={wordFade} plain={!streaming} wholeDocument={chunks.length === 1} />
         ))
+      ) : tree ? (
+        tree
       ) : (
         <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={rehypePlugins} components={components} urlTransform={markdownUrl}>
           {md}
