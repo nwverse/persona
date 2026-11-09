@@ -20,6 +20,12 @@ class AndroidUpdateProbeTest {
         assertFalse(report.contains("private-token"))
     }
 
+    @Test fun rawDownloadTimeoutKeepsProgressAndErrorKind() {
+        val report = updateProbeFailure("download", 8192, 15000, SocketTimeoutException("private response"))
+        assertTrue(report.contains("stage=download bytes=8192 elapsedMs=15000 kind=Timeout status=null"))
+        assertFalse(report.contains("private response"))
+    }
+
     @Test fun productionMetadataBypassesConfiguredHttpProxy() = runBlocking {
         val previous = ProxySelector.getDefault()
         val selections = java.util.concurrent.CopyOnWriteArrayList<String>()

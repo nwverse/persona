@@ -70,7 +70,7 @@ internal fun updateProbeFailure(stage: String, bytes: Long, elapsedMs: Long, err
         val frames = cause.stackTrace.take(6).joinToString(",") { "${it.className}.${it.methodName}:${it.lineNumber}" }
         "${cause.javaClass.simpleName}[$frames]"
     }
-    val failure = error as? HubFailure
+    val failure = HubFailure.from(error)
     return "Live update probe failed: stage=$stage bytes=$bytes elapsedMs=$elapsedMs " +
-        "kind=${failure?.kind} status=${failure?.status} causes=$causes"
+        "kind=${failure.kind} status=${failure.status} causes=$causes"
 }
