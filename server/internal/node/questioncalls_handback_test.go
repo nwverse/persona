@@ -27,6 +27,35 @@ func TestQuestionHandBackPreventsLaterOriginalPair(t *testing.T) {
 	}
 }
 
+// Handing back an ambiguous generation must not leak its first pending id into the next identical question.
+func TestQuestionHandBackDoesNotLeakPendingIntoNextQuestion(t *testing.T) {
+	q := &questionCalls{}
+	in := handBackInput()
+	now := time.Now()
+	for _, id := range []string{"toolu_first", "toolu_second"} {
+		pre := in
+		pre.HookEventName, pre.ToolUseID = "PreToolUse", id
+		q.before(pre, now)
+	}
+	if !q.handBack(in, "a1", now) {
+		t.Fatal("the ambiguous attempt was not handed back")
+	}
+	if id := q.pair(in, "a2", false, now); id != "" {
+		t.Fatalf("the next question inherited the handed-back pending id %q", id)
+	}
+	for _, id := range []string{"toolu_first", "toolu_second"} {
+		post := in
+		post.HookEventName, post.ToolUseID = "PostToolUse", id
+		q.complete(post, now)
+	}
+	pre := in
+	pre.HookEventName, pre.ToolUseID = "PreToolUse", "toolu_third"
+	q.before(pre, now)
+	if id := q.pair(in, "a3", false, now); id != "toolu_third" {
+		t.Fatalf("a completed handed-back generation blocked the next new question: %q", id)
+	}
+}
+
 // If the original request paired while the transcript was being read, the stale ambiguity cannot cancel its card.
 func TestQuestionOriginalPairBeforeHandBackWins(t *testing.T) {
 	q := &questionCalls{}

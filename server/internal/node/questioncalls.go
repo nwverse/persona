@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,12 +14,13 @@ import (
 // omits tool_use_id, so PreToolUse supplies it and attempt keeps it across reconnects. PostToolUse completes only the
 // same id: a late receipt for one identical question can never cancel the next (#2382).
 type questionCalls struct {
-	mu         sync.Mutex
-	pending    map[string][]questionID      // PreToolUse ids awaiting PermissionRequest, by permissionKey
-	attempts   map[string]questionID        // assigned ids, by permissionKey + hook attempt
-	waiting    map[string][]*questionWaiter // live PermissionRequests, by permissionKey
-	completed  map[string]time.Time         // PostToolUse receipts, by permissionKey + toolUseID
-	handedBack map[string]time.Time         // ambiguous attempts handed to the terminal, by permissionKey + attempt
+	mu            sync.Mutex
+	pending       map[string][]questionID      // PreToolUse ids awaiting PermissionRequest, by permissionKey
+	attempts      map[string]questionID        // assigned ids, by permissionKey + hook attempt
+	waiting       map[string][]*questionWaiter // live PermissionRequests, by permissionKey
+	completed     map[string]time.Time         // PostToolUse receipts, by permissionKey + toolUseID
+	handedBack    map[string]time.Time         // ambiguous attempts handed to the terminal, by permissionKey + attempt
+	handedBackIDs map[string]time.Time         // ambiguous pending calls, by permissionKey + toolUseID
 }
 
 type questionID struct {
@@ -77,6 +79,11 @@ func (q *questionCalls) forget(now time.Time) {
 			delete(q.handedBack, key)
 		}
 	}
+	for key, at := range q.handedBackIDs {
+		if questionExpired(at, now) {
+			delete(q.handedBackIDs, key)
+		}
+	}
 }
 
 // before remembers a PreToolUse id. Duplicate reports of the same call share one entry.
@@ -106,6 +113,26 @@ func (q *questionCalls) before(in hookInput, now time.Time) {
 	sort.SliceStable(q.pending[key], func(i, j int) bool { return q.pending[key][i].at.Before(q.pending[key][j].at) })
 }
 
+// handingBackLocked reports whether an ambiguous call of this input still needs its terminal answer. q.mu is held.
+func (q *questionCalls) handingBackLocked(key string) bool {
+	for completed := range q.handedBackIDs {
+		if strings.HasPrefix(completed, key+"\x00") {
+			return true
+		}
+	}
+	return false
+}
+
+func (q *questionCalls) markHandBackLocked(attemptKey string, now time.Time) {
+	if attemptKey == "" {
+		return
+	}
+	if q.handedBack == nil {
+		q.handedBack = map[string]time.Time{}
+	}
+	q.handedBack[attemptKey] = now
+}
+
 // pair returns this PermissionRequest's id. A resumed attempt reuses its assignment and never consumes the next
 // question's pending id. Spool replay calls pair too, rebuilding the assignment without creating a waiter.
 func (q *questionCalls) pair(in hookInput, attempt string, resume bool, now time.Time) string {
@@ -121,6 +148,12 @@ func (q *questionCalls) pair(in hookInput, attempt string, resume bool, now time
 		if _, ok := q.handedBack[attemptKey]; ok {
 			return ""
 		}
+	}
+	if q.handingBackLocked(key) {
+		// Every call in an ambiguous generation goes to the terminal. Pairing any of them to a new identical id
+		// would leave its eventual PostToolUse unable to release that waiter.
+		q.markHandBackLocked(attemptKey, now)
+		return ""
 	}
 	if resume {
 		return ""
@@ -180,10 +213,16 @@ func (q *questionCalls) handBack(in hookInput, attempt string, now time.Time) bo
 	if _, ok := q.attempts[attemptKey]; ok {
 		return false
 	}
-	if q.handedBack == nil {
-		q.handedBack = map[string]time.Time{}
+	if ids := q.pending[key]; len(ids) > 0 {
+		if q.handedBackIDs == nil {
+			q.handedBackIDs = map[string]time.Time{}
+		}
+		for _, id := range ids {
+			q.handedBackIDs[key+"\x00"+id.id] = now
+		}
+		delete(q.pending, key)
 	}
-	q.handedBack[attemptKey] = now
+	q.markHandBackLocked(attemptKey, now)
 	return true
 }
 
@@ -195,6 +234,10 @@ func (q *questionCalls) restore(in hookInput, attempt, id string, completed bool
 	defer q.mu.Unlock()
 	q.forget(now)
 	if _, ok := q.handedBack[attemptKey]; ok {
+		return
+	}
+	if q.handingBackLocked(key) {
+		q.markHandBackLocked(attemptKey, now)
 		return
 	}
 	if assigned, ok := q.attempts[attemptKey]; ok {
@@ -278,4 +321,5 @@ func (q *questionCalls) completeLocked(key, id string, now time.Time) {
 		q.completed = map[string]time.Time{}
 	}
 	q.completed[key+"\x00"+id] = now
+	delete(q.handedBackIDs, key+"\x00"+id)
 }
