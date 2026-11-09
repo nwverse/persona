@@ -196,7 +196,7 @@ const taskFailTimeout = 30 * time.Second
 func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, retry bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
-	placed := t.Machine
+	placed, placedWhy := t.Machine, t.Why
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
@@ -214,7 +214,7 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 			}
 		}
 	}
-	if t.Machine != placed { // the card shows where it runs
+	if t.Machine != placed || t.Why != placedWhy { // the card shows where it runs, and on what (launcher_fit.go)
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
