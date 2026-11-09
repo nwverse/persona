@@ -191,6 +191,10 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   not a separate "Starting" placeholder later replaced by another. Match a rollout in this directory started after launch (`session_meta` timestamp) whose first user message exactly matches what was sent.
   During this wait the pane is excluded from "newest rollout in the same directory" guessing (`codexStarting`), preventing premature association with an old thread in the directory.
   Answer Codex's dialogs according to the user's intent: trust the directory (the user selected it), skip update prompts.
+  The screen is read as `visible` (the blank rows under it left out): 0.167 draws its trust dialog from the top of the pane, and the last 40 `recent` rows of a 51-row pane were all blank (#2351).
+  The trust dialog is known by its question asking about trust, the option by what it says ("Trust and continue", "Yes, continue"), not by its number or the other option
+  (0.167 has "Back to Agent Command Center" where 0.163 had "Quit"); the cursor is walked to it, then Enter.
+  A rollout's `session_meta` is kept only once its first line is all written: 0.167 creates the file empty and writes the line milliseconds later, and a meta read in between, kept, hid the thread from the start for good.
 - **No match**: the node waits at most 60 seconds (hub 100 seconds, App 110 seconds), then reports "Codex has opened in a new tab on the computer, but its session was not identified within 60 seconds…",
   followed by the last screen lines of that tab. If the launcher cannot run (command not found), fail as soon as a `personad codex-start:` line appears, without waiting the full timeout.
   Leave the tab on the computer; do not close it for the user.
@@ -201,7 +205,8 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 - **Not offered**: permission mode / thinking effort selection at creation (Codex uses launcher arguments and `~/.codex/config.toml`; effort can be changed in-chat after joining app-server, see "Thinking effort"). Resuming an existing session: see "Resuming from the phone" below.
 - **Tests**: `node/codex_start_test.go` (fake herdr: pane command only `codex-start <file>`, file contains launcher words and message, exactly one session, route note, rejection, timeout and startup failure errors, trust dialogs,
   `codex-start` subprocess receives message byte-for-byte, Codex aliases in `~/.zshrc`). Real Codex: `TestLiveCodexStart` in `scripts/test/test-codex.sh`
-  (0.163 connected with `--remote` to the test's own app-server, 0.153, 0.163 with `-c`; multiple turns each, messages with quotes / newlines / `$` / backticks / Chinese / long text,
+  (0.163 connected with `--remote` to the test's own app-server, 0.153, 0.163 with `-c`; each round in a fresh git repository, so Codex asks to trust it and the start must answer;
+  multiple turns each, messages with quotes / newlines / `$` / backticks / Chinese / long text,
   unchanged in rollout, one session per pane, correct route, a subsequent phone message received). App: `MachinePagesTests.testNewCodexSessionStartsWithItsFirstMessage`.
 
 ## Resuming from the phone
@@ -263,7 +268,7 @@ Codex has no terminal hook that can answer on its behalf ("Research" below), so 
   Do not restore async questions older than 12 hours (node restart rereads rollout).
 - The internal Codex fork shares rollout parsing (also recognizes AgentMessage / UserMessage in `history_mutation`) and screen parsing, with state inferred by the node. Not yet tested against the real fork.
 - Implementation: the node scans live Codex / internal-fork sessions every second (`node/codexask.go`; rollout reads only appended data, initially the last 8 MB). Whenever open cards change, send the complete list to the hub
-  (`codex.interactions`). The manager creates a local interaction for each card (`assistant/fleet_ix.go`): push new ones, end those absent from the list, and replace generic screen cards for the same session.
+  (`codex.interactions`). The manager creates a local interaction for each card (`assistant/fleet_ix_codex.go`): push new ones, end those absent from the list, and replace generic screen cards for the same session.
   Answers return to the node through `codex.answer`. Reread screen and rollout before keys / input; errors return directly to the answering user (synchronously, like screen cards).
   If input fails (draft, wrong UI state), retain the card. If the node says Codex no longer asks (`prompt_changed`), remove it. Relisted cards after node reconnect do not ring again.
   The hub waits 3 extra seconds before creating a generic Codex screen card, giving node cards time to arrive. Push titles are "Codex has a question" and "Codex needs permission".

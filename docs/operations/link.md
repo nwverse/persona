@@ -145,10 +145,11 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 
 ## Responsibilities
 
-- **persona-link** (`server/cmd/persona-link`, also reachable as `server/cmd/persona-link`; `server/internal/link`): a separate small program doing only three things:
+- **persona-link** (`server/cmd/persona-link`, also reachable as `server/cmd/persona-link`; `server/internal/link`): a separate small program doing only these things:
   - Discovery: find the hub among candidate addresses and connect;
   - Reporting: identify the computer, version and address used;
-  - Link: maintain the connection and forward streams opened by the hub unchanged to the local resident node.
+  - Link: maintain the connection and forward streams opened by the hub unchanged to the local resident node;
+  - Summary: put the hub's "Needs you" summary into its status for the menu bar App and the tray (see "Needs you").
 
   It implements no specific feature.
 - **node is unchanged**: all features live in `personad node`. This computer needs a resident node (installed together under "Install the node service" above; separately, use `persona-link node install`
@@ -168,7 +169,9 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 
 ```text
 persona-link ── WSS /api/v1/link ──▶ hub TLS port (public.tls_listen)
-  → hello {machine, version, address}          First message; hub closes with 4003 if machine id doesn't match credentials
+  → hello {machine, version, address, features?}
+                                               First message; hub closes with 4003 if machine id doesn't match credentials;
+                                               features: ["attention"] asks for the "Needs you" summary
   ← endpoints {endpoints, hub_name, mesh_hubs, ping_ms?, ping_timeout_ms?, pending?, machine_name?}
                                                Sent on connect and again when hub addresses, linked group, heartbeat, pending status or this computer's name changes
   ← open {id}                                  hub wants to connect to node
@@ -177,7 +180,10 @@ persona-link ── WSS /api/v1/link ──▶ hub TLS port (public.tls_listen)
   ← node {online, error}                       Whether hub connected to node, displayed in the menu bar
   → rename {id, machine_name}                  Asks the hub to call this computer machine_name ("": its id again); see "The computer's name"
   ← renamed {id, machine_name | code, error}   The hub's answer to that rename: the name it has now, or why not
+  ← attention {attention}                      The "Needs you" summary, to a link whose hello asked for it: right after endpoints, then on every change
 ```
+
+Both sides ignore a message type they don't know.
 
 **Route selection**
 - Candidate addresses are ordered "LAN → public IPv6 → domain → public IPv4", with manually added addresses first within their category.
@@ -349,13 +355,14 @@ The direction is reversed from active mode (the computer may not be able to reac
 
 ### Endpoints
 
-Only these three exist: no shell, files or port forwarding; streams can connect only to `~/.persona/node-attach.sock`. All other paths and methods return `404 {"error":"not_found"}`.
+Only these four exist: no shell, files or port forwarding; streams can connect only to `~/.persona/node-attach.sock`. All other paths and methods return `404 {"error":"not_found"}`.
 Errors are JSON: `{"error":"<code>","message":"<human-readable Chinese>"}`.
 
 | Endpoint | Authentication | Request | Response |
 | --- | --- | --- | --- |
 | `POST /api/v1/connector/pair` | One-time code | Body ≤ 16 KiB: `{"code","token","machine","hub_id","hub_name"}`; `code`, `token`, `machine` required (`token`: 32–512 printable ASCII characters, no whitespace), `hub_id`, `hub_name` optional but please include them | `200 {"version"}`; invalid fields: `400 bad_request` (not rate-limited, doesn't invalidate the code); wrong, expired or used code: `401 bad_code` (rate-limited) |
-| `GET /api/v1/connector/info` | `Authorization: Bearer <credential>` | — | `200 {"machine","version"}`: `machine` is the machine id supplied by the hub during pairing; missing / wrong credential: `401 unauthorized` |
+| `GET /api/v1/connector/info` | `Authorization: Bearer <credential>` | — | `200 {"machine","version","features","attention_rev"?}`: `machine` is the machine id supplied by the hub during pairing; `features: ["attention"]`: it takes the "Needs you" summary; `attention_rev`: the `rev` of the summary it holds (absent: none); missing / wrong credential: `401 unauthorized` |
+| `POST /api/v1/connector/attention` | Same | One summary object (see "Needs you") and nothing after it but white space, the whole body ≤ 64 KiB | `204`; no `rev`, anything else in the body or over the cap: `400 bad_request`; missing / wrong credential: `401 unauthorized` |
 | `GET /api/v1/connector/stream` | Same | WebSocket upgrade; optional `X-Persona-Ping` (heartbeat, below) | Authenticate, connect node-attach.sock, then upgrade: node unreachable: `503 node_unavailable` (`message` gives the reason for the hub to record as this computer's error); non-upgrade request: `400`; after upgrading, see below |
 
 - Successful pairing replaces the previously paired hub ("only trusts the hub it paired with": the group's primary; a new primary re-pairs after a switch). Old credentials stop working immediately, and streams opened with them close with code **4002**.
@@ -403,6 +410,67 @@ Errors are JSON: `{"error":"<code>","message":"<human-readable Chinese>"}`.
 - Firewall: open this TCP port only to the hub (or its proxy), not everyone. `pair --listen`, `install --listen` and `mode passive` all show a reminder, for example
   `sudo ufw allow from <hub address> to any port 18663 proto tcp`; likewise for routers and cloud security groups. With the Mac application firewall enabled, the system may ask whether to allow
   incoming connections on first listen (not tested).
+
+## Needs you
+
+The manager that carries this computer tells its Persona Link which agents wait for the user, so the menu bar App and the Windows tray can list them and notify while no web page is open (#2214).
+persona-link only relays the summary into its status: it shows nothing itself, and nothing on this computer can answer or approve a card with it.
+
+**What is in it**
+- The list and the count are the web app's "Needs you" badge as it is (`stateCounts().badge` in `web/src/lib/sessions.ts`): agents whose row says "Needs you" (the same rows the web app gets; a card read
+  just after its row does not count before the row says so), without quiet tasks' agents and the assistant's conversations;
+  muted agents and agents waiting only on a question the assistant is still deciding on (`delegating`) stay. One item per agent, by its oldest card handed to the user; while it has none,
+  by its oldest card (one the manager has not decided on yet, or a question the assistant is still deciding on). Cards of the same time go by id. An agent with no card that can stand for it
+  (a terminal dialog, an MCP elicitation) is `screen`.
+- Whether an item notifies is the phone's push rule, worked out by the manager into `notify`: only once one of its cards is the user's (the manager rang it, when the phone is pushed; not a question
+  the assistant is still deciding on: such a question is pushed only once the assistant hands it to the user), and never for a muted agent (or one in a muted space;
+  `server/internal/assistant/fleet_mutes.go`). An agent in a terminal dialog notifies once the screen card made for it is announced (a moment later, or when its dialog can be read),
+  as the phone is pushed then; the web app rings such a dialog at once. Otherwise the web app's system notifications follow the same rule. Clients notify on `notify` alone
+  and never work the rule out themselves; `muted` is only for showing the item muted. An item notifies the first time it shows with `notify: true`, which may come after it was listed
+  without it: a question the assistant hands to the user keeps its `interaction_id` and `since`.
+- A card made again (a screen card read again once its node is back, a card the manager takes back after a restart, a Codex card listed again) notifies only when the manager can tell it
+  rang before: a screen card read again as the very card that rang (its own id; one matched only by its session is not). Any other comes back not notifying, until it rings again: fewer notifications rather than more. A hook's card waits in the manager
+  while its node reconnects: it is the same card and keeps what it was. (Persona Link takes the first summary of a link as its baseline, so a card pushed before a restart does not ring
+  there again either.)
+- `spec/fixtures/attention` holds the manager and the web app to the same list, count and `notify`.
+- Order: by when the agent started waiting (`since`), newest first, then by machine and session id. Past 20 items the oldest are cut, so an agent that just started waiting is always listed and can be notified.
+  The same agents and cards always give the same summary.
+- Scope: the agents of the manager that carries this computer; with one manager (the default), every agent.
+
+```json
+{"rev": "9f2c41d0a1b2c3d4", "needs_you": 3, "more": 0, "web_url": "https://hub.example.com/persona",
+ "items": [{"machine_id": "laptop", "session_id": "<session id>", "title": "Fix the login redirect", "place": "Laptop · web › 2",
+            "kind": "permission", "detail": "Bash: npm test", "muted": false, "notify": true, "interaction_id": "<card id>",
+            "since": "2026-11-09T07:00:00Z", "route": "/s/laptop/<session id>"}]}
+```
+
+- `needs_you`: the count, muted and not-notifying items included; `items`: at most 20, newest first; `more`: the rest. Nothing needs you: `"needs_you": 0, "items": []`.
+- `kind`: `permission` / `plan` / `question` / `screen`. `interaction_id`: the card's id (a screen card has one too); absent for an agent no card stands for. `since`: when it started waiting, RFC 3339 UTC to the second; absent when unknown.
+- `title`, `place`: at most 80 characters, `detail` at most 60, the ellipsis that marks a cut included. The largest summary stays far below the 64 KiB post cap and the link's 1 MiB read limit.
+- `route`: the web app's path for the session (`/s/<machine>/<session>`, percent-encoded); open `web_url` + `route`.
+- `web_url`: the hub's https `public_url`, sub-path included (`devicewire.Config.web_url`); without one, in active mode the hub address of the link's hello, in passive mode absent.
+  That address may have a self-signed certificate and be another origin than the one the user signed in to, so the menu bar App's own "Web address" setting wins.
+- `rev`: a hash of the rest; the same summary has the same `rev`, so sending it again changes nothing.
+
+**When it is sent**
+- The manager works it out in `liveLoop` from the Live Activity's inputs (woken by session lists, cards and mutes, at most every 100 ms, and every 15 seconds) and hands it on only when it changed.
+  The Live Activity's own count does not change: it leaves muted agents out and counts questions the assistant is still deciding on.
+- Active mode: to a link whose hello listed `features: ["attention"]`, once right after `endpoints`, then on every change.
+- Passive mode: `POST /api/v1/connector/attention` to a connector whose `info` listed `attention`, on every change; and again after an `info` read whose `attention_rev` is not the summary's
+  (a post that failed, a connector that restarted). Not while the connector holds the hub off (`401`, `429`), as for `info` and streams.
+- A computer waiting to be confirmed or marked `trust: "work"` gets an empty summary (`needs_you: 0`, no items, no `web_url`): the summary names every agent's work, which neither may read.
+  That also takes back what a computer had when it may no longer have it, without the link reconnecting. It gets the summary once it may. While the hub cannot say which computers wait to be
+  confirmed, nothing new goes to a computer that is not known to be a work one: what it has stays, and one that has nothing gets nothing (an empty summary and the full one back would ring every
+  item again). A work computer gets the empty summary all the same.
+
+**On the computer**
+- persona-link puts the latest summary into its status as `attention`: the JSON line the menu bar App reads and `link.status.json` (`persona-link status`, the Windows tray).
+- Active mode: the status is reset when the link drops and when it connects, so the last link's list never shows on the next one. Passive mode: the summary goes when another hub pairs,
+  and after 2 minutes without the hub coming in (it may have answered the cards meanwhile); the hub's next `info` read sees that and posts it again.
+
+**Old and new**
+- Old persona-link: no `features` in its hello, so the manager sends nothing (an unknown type would be ignored anyway). Old connector: no `features` in its `info`, so it is never posted to.
+- Old manager: ignores `features` and the extra `info` fields and sends nothing; persona-link's status has no `attention`.
 
 ## Credentials (active mode)
 
@@ -465,6 +533,9 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - `./scripts/app/mac-link.sh build|install|snapshot <directory>`.
 - A standalone SwiftPM package (not in `apple/project.yml`, no shared code with the Persona App), built with `xcodebuild`: on this development machine, `swift build`'s default build system reports "Developer directory not found".
 - persona-link and persona-node are built into `Contents/Helpers/` (persona-node is for the resident node; see "The device's program").
+- The App's newer text is in `Resources/Localizable.xcstrings` (en / zh-Hans / ja); the build copies its resource bundle into `Contents/Resources/`.
+  `scripts/i18n/apple_l10n.py check` checks that catalog apart from the apps' and keeps the older hard-coded Chinese from growing (`LINK_CJK`, counts per file that may only go down).
+- Unit tests: `xcrun swift test --package-path apple/PersonaLink`; the Apple CI packages lane runs them (`scripts/ci/apple.sh`).
 - Local ad-hoc signing (Sign to Run Locally), no hard-coded team.
 - Default bundle id is the placeholder `com.example.persona.link`, overrideable by `mac.link_bundle_id` in `~/.config/persona/config.json` or environment variable
   `PERSONA_LINK_BUNDLE_ID` (old name `PERSONA_LINK_BUNDLE_ID`).
@@ -511,7 +582,22 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - The first line describes the state plainly: unpaired is "Not connected to hub yet" (menu action "Paste pairing link…"); "Connected to hub"; awaiting confirmation is "Waiting for confirmation on your phone" plus "Tap ‘This is my computer’ in the phone App";
   if the resident node is not running, "Persona's background service on this computer is not running", with **Reinstall** in the menu (`persona-link node uninstall` then `node install`, preserving the node program in `~/.persona/bin`); "Connecting" or "Offline".
   "Waiting for confirmation" uses status-line `pending`: the hub does not yet send this field (#4655), so this period currently shows "Connected".
-- **Reconnect now** (not in passive mode, where the hub initiates), **Pair / Change connection…**, **Install local node service** (only when absent), **Launch at login**, **Quit**.
+- **Reconnect now** (not in passive mode, where the hub initiates), **Pair / Change connection…**, **Install local node service** (only when absent), **Set Web Address…** (while the hub sends a "Needs you" summary, or once an address is set), **Launch at login**, **Quit**.
+
+**Needs you** (the status line's `attention`: the hub's summary of the sessions waiting on you; without it the menu and the icon are as above)
+- The icon: the count (`needs_you`, muted sessions included) beside the symbol, `99+` above 99; nothing at 0.
+- The menu: a **Needs You** section under the status block with the first 5 sessions in the hub's order (latest `since` first): title, the card's kind and detail ("Permission: Bash: npm test"), place.
+  A muted session (`muted`) is listed dimmed, with a muted bell; `muted` changes only how it looks. **And N More…** counts the rest (the ones the hub left out included) and opens the web app's root. An empty summary says "Nothing needs you right now".
+- Notifications (`UNUserNotificationCenter`): one per session, identifier `<machine_id>/<session_id>#needs` (the web app's tag), only for items with `notify: true`
+  (the manager applies the phone's push rule: not for a muted session, nor for a question the assistant is still deciding on; a missing `notify` counts as false).
+  A card notifies once per connection, the first time it has `notify: true`, also when it was listed before without it (the assistant handed you its question); a card whose notification is still shown does not notify again.
+  The cards already notifying in a connection's first summary make none (the web app's baseline rule). A newer card of a session replaces the older notification once its own goes out; when it does not notify, or its post is dropped, the older one is taken back. A session that leaves the summary, or no longer waits on the card its notification shows, takes the notification back, including one left from an earlier run of the App (a notification remembers its card).
+  The summary goes away with the connection, so the next connection's first summary is a baseline again; a summary that does not decode changes nothing. A notification counts as shown only once it went out; one still waiting (behind the permission prompt) is dropped once its card is answered or replaced, it stops notifying, or the connection is gone.
+  While the list is capped (`more` above 0, the oldest cut), a session missing from it may still wait: its notification stays (also one found at launch), and it does not notify again when it comes back; a post still waiting for it is dropped.
+- Permission to notify is asked when the first summary arrives, not at launch (an older hub never sends one). Denied: the section says so, with **Turn On Notifications…** (System Settings › Notifications).
+- A row or a notification opens `<web address> + route` in the default browser. The web address is **Set Web Address…** if set, else the summary's `web_url`
+  (the hub's https public URL; in active mode without one, the hub address the link went to, which may have a self-signed certificate and is another origin than the one you signed in to).
+  Set the web address when the hub has no https public URL. Without either (passive mode, no public URL), the section says so, and a row or a notification opens the **Web Address** window; saving an address there opens what was clicked, unless a later click already opened it. A typed address without a scheme is saved as https.
 
 **Pairing window**
 - Select **Connect to hub (active)** or **Let hub connect (passive)** at the top, defaulting to the current mode; viewing doesn't switch. Switching happens when pairing (active: paste and pair; passive: generate link),
@@ -526,9 +612,9 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 
 **Screenshots**
 - `./scripts/app/mac-link.sh snapshot <directory>` renders the App's own views offscreen, a light and dark set each:
-  - Every menu state;
-  - Pairing window;
-  - Every icon.
+  - Every menu state, including "Needs you" with none, one, five (all four kinds, one muted), an item that does not notify without being muted, more than the menu lists, the longest text the hub sends, notifications off, and no web address;
+  - Pairing window and the web address window;
+  - Every icon, and the icon with a count.
 - No screen-recording permission needed, and no unrelated content captured.
 
 ## Status line (helper → App)
@@ -550,6 +636,13 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - `machine_name`: what the hub calls this computer (see "The computer's name"); absent with old hubs. `rename`: how the last rename asked of this persona-link went: `{id, name}` or `{id, code, error}`.
 - `pending`: meaningful only when `connected`; `true` means the hub is waiting for the user to confirm this computer (see "Pending confirmation"); absent or `false` means confirmed.
 - `trust`: `system` when active mode validates the hub through system CAs (reverse proxy, no fingerprint); absent when pinned.
+- `attention`: the hub's latest "Needs you" summary, as it sent it; the full shape is in "Needs you". In short: `needs_you` (the count), `items` (at most 20,
+  newest first, each with `machine_id`, `session_id`, `title`, `place`, `kind`, `detail`, `muted`, `notify`, `route`, and `interaction_id`, `since` when known), `more` (the rest),
+  `web_url` (where `route` opens; in active mode the manager already fell back to the hub address when the hub has no https `public_url`, so the App needs no fallback of its own;
+  absent in passive mode without one) and `rev` (the same summary has the same `rev`). Notify only items with `notify: true` (an item without it does not notify), also one listed before without it;
+  `muted` only shows an item muted.
+  Absent before the first summary, with old hubs, when the link drops or reconnects, and in passive mode once the hub stopped coming in for 2 minutes. A computer that may not have it
+  (waiting to be confirmed, or a work computer) has an empty one (`needs_you: 0`, no items).
 - No credentials included.
 - Each line is also written to `~/.persona/link.status.json` (with `pid`, `version`, `updated`; normal exit writes `"state":"stopped"`) for
   `persona-link status` to read, since it can't query the running instance.
