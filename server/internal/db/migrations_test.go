@@ -299,7 +299,9 @@ func unifiedMigrate(t *testing.T, url string, until int) {
 }
 
 // Opening a database that is up to date only reads schema_migrations: no ALTER TABLE, no renumbering write. So a start
-// does not wait for a session that holds SHARE on the table, and takes no ACCESS EXCLUSIVE lock or transaction id.
+// does not wait for a session that holds SHARE on the table, and takes no ACCESS EXCLUSIVE lock or transaction id. The
+// migrations' part of it is four statements, whatever the sets: the lock, the catalog check, one read and the unlock
+// (a check per migration took about a hundred).
 func TestOpenUpToDateOnlyReadsSchemaMigrations(t *testing.T) {
 	ctx := context.Background()
 	url := migratedDatabase(t, AllSets)
@@ -325,6 +327,14 @@ func TestOpenUpToDateOnlyReadsSchemaMigrations(t *testing.T) {
 			t.Fatalf("open %d while a reader holds schema_migrations: %v", s, err)
 		}
 		d.Close()
+		traced, log := tracedDB(t, url)
+		traced.sets = s
+		if err := traced.migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := log.take(); len(got) > 4 {
+			t.Fatalf("migrating %d up to date took %d statements: %v", s, len(got), got)
+		}
 	}
 }
 
