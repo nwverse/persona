@@ -43,6 +43,16 @@ describe("source messages in the actual transcript renderer", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("keeps selected excerpts inspectable while hiding transport metadata", () => {
+    const value = input(1, `<persona-context kind="message-source" title="">{"kind":"conversation"}</persona-context>\n<persona-context kind="doc" title="Selected excerpt" url="">Quoted acceptance requirement</persona-context>\nPlease check this excerpt`);
+    const host = render([value]);
+    expect(host.textContent).toContain("Selected excerpt");
+    expect(host.textContent).not.toContain('{"kind":"conversation"}');
+    const toggle = host.querySelector("button[aria-expanded]") as HTMLButtonElement;
+    act(() => toggle.click());
+    expect(host.textContent).toContain("Quoted acceptance requirement");
+  });
+
   it("never exposes injected model instructions in the source block", () => {
     const value = input(1, "PRIVATE MODEL INSTRUCTION", "followup");
     value.injected = { kind: "followup", state: "once", line: "A reminder is due", detail: "Check the report" };

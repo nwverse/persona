@@ -230,7 +230,6 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       else {
         const p = parseUserText(it.text ?? "");
         cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
-        cur.user!.source ??= sourceOf(it, null, p.contexts);
         cur.user!.contexts.push(...p.contexts.filter((c) => c.kind !== "message-source"));
         if (p.files.length) cur.user!.files = [...(cur.user!.files ?? []), ...p.files];
         if (p.photos.length) cur.user!.photos = [...new Set([...(cur.user!.photos ?? []), ...p.photos])];
@@ -871,13 +870,10 @@ export function wakeDrawer(t: Turn): { groups: { id: string; notices: Item[]; an
   return { groups: groups.filter((g) => g.notices.length || g.answer).reverse(), process };
 }
 
-/** The title of the context a message another Persona conversation sent carries (prompts/assistant/relay.md). */
-const RELAY_TITLE = "来自对话「"; // i18n-ignore: matches the hub's relay text
-
 /** Sent by another Persona conversation (conversation_new / conversation_send), not typed by you. */
 export function isRelayed(msg: UserMessage): boolean {
   if (msg.client_msg_id || msg.rawInput?.some((item) => userSourceSentinel(item.text ?? ""))) return false;
-  return msg.contexts.some((c) => c.title?.startsWith(RELAY_TITLE));
+  return msg.source?.kind === "conversation";
 }
 
 /** Typed (or dictated, or a quick command expanded) by you: the pale blue bubble. Persona's own messages, another

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,10 @@ internal fun SourceMessage(item: Item, source: MessageSource, showLabel: Boolean
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val contexts = remember(model.contexts) { model.contexts.filterNot { it.kind == "message-source" || persona.core.domain.isRelaySourceContext(it) } }
     var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
+    val searchItem = LocalChatSearchItem.current
+    LaunchedEffect(item.id, searchItem) {
+        if (searchItem == item.id) expanded = true
+    }
     var clipped by remember(item.id, body) { mutableStateOf(false) }
     val long = body.length > 320 || body.lineSequence().count() > ContentTokens.sourcePreviewLines
     val title = source.title?.takeIf(String::isNotBlank) ?: stringResource(when (source.kind) {

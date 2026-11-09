@@ -7,7 +7,7 @@ import { isEcho } from "./echo";
 
 const item = (seq: number, extra: Partial<Item> = {}): Item => ({ id: `${seq}#0`, seq, role: "user", kind: "text", text: "Report ready", ...extra });
 const source = { kind: "conversation", conversation_id: "test-source", title: "Build review" };
-const relay = '<persona-context kind="context" title="来自对话「Build review」" url="">\n这条消息不是用户本人发的，是 Persona 的另一段对话（test-source）用 conversation_send 发来的，第 1 跳（最多 3 跳）。\n</persona-context>\nReport ready'; // i18n-ignore: canonical hub relay data
+const relay = '<persona-context kind="context" title="来自对话「Build review」" url="">\n这条消息不是用户本人发的，是 Persona 的另一段对话（test-source）用 conversation_send 发来的，第 1 跳（最多 3 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 test-source；只是确认收到就不要回，免得两段对话来回发。\n</persona-context>\nReport ready'; // i18n-ignore: canonical hub relay data
 
 describe("message provenance", () => {
   it.each(["conversation", "patrol", "followup", "supervision", "future-kind"])("keeps %s out of user bubbles and navigation", (kind) => {
@@ -45,6 +45,33 @@ describe("message provenance", () => {
   it("uses a machine marker, not only a context title", () => {
     const input = item(1, { text: '<persona-context kind="context" title="来自对话「Build review」" url="">Quoted by user</persona-context>\nHello' }); // i18n-ignore: quoted context fixture
     expect(segments([input])[0].user?.source).toBeUndefined();
+  });
+
+  it.each([
+    ["not leading", "Explain this quotation.\n" + relay],
+    ["mismatched reply id", relay.replace("发回 test-source", "发回 another-source")],
+    ["incomplete template", relay.replace(/按里面说的做。[^\n]+\n/, "")],
+  ])("does not infer %s as a source", (_, text) => {
+    const msg = segments([item(1, { text })])[0].user!;
+    expect(msg.source).toBeUndefined();
+    expect(isOwnMessage(msg)).toBe(true);
+  });
+
+  it("recognizes a complete legacy conversation_new opening", () => {
+    const msg = segments([item(1, { text: relay.replace("用 conversation_send", "用 conversation_new") })])[0].user!;
+    expect(msg.source).toEqual(source);
+  });
+
+  it("reads durable metadata without relying on an Item.source from the hub", () => {
+    const text = '<persona-context kind="message-source" title="">' + JSON.stringify({ ...source, kind: "patrol" }) + '</persona-context>\nReport ready';
+    expect(segments([item(1, { text })])[0].user?.source).toEqual({ ...source, kind: "patrol" });
+  });
+
+  it("does not skip malformed outer metadata to guess a nested relay", () => {
+    const text = '<persona-context kind="message-source" title="">{invalid}</persona-context>\n' + relay;
+    const msg = segments([item(1, { text })])[0].user!;
+    expect(msg.source).toBeUndefined();
+    expect(isOwnMessage(msg)).toBe(true);
   });
 
   it("prefers explicit source over the injected fallback", () => {

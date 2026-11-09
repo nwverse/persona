@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { t } from "../../i18n";
-import { sourceLabel } from "../../lib/message-source";
+import { isRelayContext, sourceLabel } from "../../lib/message-source";
 import { parseUserText } from "../../lib/turns";
 import type { UserMessage } from "../../lib/turns";
 import { cx } from "../../ui/atoms";
@@ -13,6 +13,7 @@ import { useReveal } from "./search-reveal";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { FileCards } from "./FileCards";
 import { Thumb } from "./Steps";
+import { ContextGroup } from "./ContextGroup";
 
 /** Relayed words and automatic inputs are sources in one chat, never participants or user bubbles. */
 export function SourceMessage({ msg, mid, sid }: { msg: UserMessage; mid: string; sid: string }) {
@@ -28,6 +29,7 @@ export function SourceMessage({ msg, mid, sid }: { msg: UserMessage; mid: string
     return () => setOpen(false);
   });
   const label = sourceLabel(msg.source!);
+  const contexts = (full.text ? parseUserText(full.text).contexts : msg.contexts).filter((context) => context.kind !== "message-source" && !isRelayContext(context));
   return (
     <div className="chat-source" data-message-source={msg.source!.kind} data-source-conversation={msg.source!.conversation_id} data-items={[msg.id, ...msg.images.map((item) => item.id)].join(" ")}>
       {!msg.continuedSource && <span className="chat-source-label" title={label}>@{label}</span>}
@@ -41,6 +43,7 @@ export function SourceMessage({ msg, mid, sid }: { msg: UserMessage; mid: string
       {long && <button type="button" className="chat-source-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         {t(open ? "chat-segmentview.collapse" : "chat-segmentview.expand")}
       </button>}
+      {contexts.length > 0 && <ContextGroup contexts={contexts} />}
       {msg.images.length > 0 && <div className="flex flex-wrap gap-1.5">{msg.images.map((image) => <Thumb key={image.id} item={image} mid={mid} sid={sid} />)}</div>}
       {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
       {msg.files && <FileCards files={msg.files} mid={mid} />}

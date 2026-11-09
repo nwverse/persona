@@ -99,6 +99,72 @@ class InjectedLineShotsTest {
     @Config(sdk = [35], qualifiers = "ja-w400dp-h1600dp-xhdpi")
     @Test fun sourcesJa() = sourceShots("ja", "@定期チェック", "もっと見る", "折りたたむ")
 
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
+    @Test fun searchRevealsOnlyItsSourceAndPreservesManualFolding() {
+        val body = "Opening report.\nSecond line.\nThird line.\nFourth line.\nNeedle below preview.\nReport end."
+        val item = Item("search-source", role = "user", kind = "text", text = """<persona-context kind="message-source" title="">{"kind":"conversation","conversation_id":"cv_review","title":"Release review"}</persona-context>
+$body""")
+        val other = item.copy(id = "unselected-source", source = persona.core.contracts.MessageSource("conversation", "cv_review", "Release review"),
+            text = "Unselected report.\nSecond line.\nThird line.\nFourth line.\nUnselected needle.\nUnselected end.")
+        val rows = listOf(item, other).map { ChatLine.Row(ChatRow("user", it.asLineItem())) }
+        val labels = sourceLabelIds(rows)
+        val search = ChatSearchState()
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val resources = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().resources
+        val hit = kotlinx.coroutines.runBlocking { searchChat(resources, listOf(item), "Needle below preview").hits.single() }
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                val context = LocalContext.current
+                val loader = remember { ImageLoader.Builder(context).build() }
+                Column(Modifier.testTag("search-source-shot").width(400.dp).background(PersonaTheme.palette.background).padding(Tokens.Space.l),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Tokens.Space.m)) {
+                    rows.forEach { line ->
+                        ChatSearchHighlight(search, line.id) {
+                            ChatLineContent(line, SessionKey("computer", "conversation"), loader, null, {}, {}, emptySet(), emptyMap(),
+                                onFullText = {}, showSourceLabel = line.id in labels)
+                        }
+                    }
+                }
+            }
+        }
+        fun layout(text: String): TextLayoutResult {
+            val layouts = mutableListOf<TextLayoutResult>()
+            rule.onNodeWithText(text, substring = true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            return layouts.single()
+        }
+        org.junit.Assert.assertTrue(layout("Needle below preview").hasVisualOverflow)
+        org.junit.Assert.assertTrue(layout("Unselected needle").hasVisualOverflow)
+        rule.runOnIdle { search.choose(hit) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Show less").assertIsDisplayed()
+        org.junit.Assert.assertFalse("The selected fifth line must be visible", layout("Needle below preview").hasVisualOverflow)
+        org.junit.Assert.assertTrue(layout("Needle below preview").lineCount > ContentTokens.sourcePreviewLines)
+        org.junit.Assert.assertTrue("Other sources stay folded", layout("Unselected needle").hasVisualOverflow)
+        rule.onNodeWithTag("source-label-search-source").assertIsDisplayed()
+        rule.onNodeWithTag("source-label-unselected-source").assertDoesNotExist()
+        rule.onNodeWithText("message-source", substring = true).assertDoesNotExist()
+        val light = mutableMapOf<AppStyle, Bitmap>()
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            rule.waitForIdle()
+            val bitmap = rule.onNodeWithTag("search-source-shot").captureToImage().asAndroidBitmap()
+            if (!d) light[s] = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            else org.junit.Assert.assertFalse(bitmap.sameAs(light.getValue(s)))
+            File(out(), "sources-search-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream()
+                .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        rule.onNodeWithTag("source-toggle-search-source").performClick()
+        org.junit.Assert.assertTrue("Manual collapse remains available during search", layout("Needle below preview").hasVisualOverflow)
+        rule.runOnIdle { search.selected = null }
+        rule.waitForIdle()
+        org.junit.Assert.assertTrue(layout("Needle below preview").hasVisualOverflow)
+        rule.runOnIdle { search.choose(hit) }
+        rule.waitForIdle()
+        org.junit.Assert.assertFalse("Selecting the source again reveals it", layout("Needle below preview").hasVisualOverflow)
+    }
+
     private fun sourceShots(language: String, patrolLabel: String, expandLabel: String, collapseLabel: String) {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)

@@ -9,7 +9,7 @@ import { SegmentView } from "./SegmentView";
 const u = (seq: number, text: string, extra: Partial<Item> = {}): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text, ...extra });
 const notice = "🔔 任务「跑测试」做完了（电脑）\n（这是 Persona 的任务通知，不是用户发的消息。……）\n\nAgent 最后说的：\n全过了。";
 const followup = "⏰ 早报（定时任务）\n\n看看今天的日程。";
-const relay = '<persona-context kind="context" title="来自对话「写周报」" url="">\n这条消息不是用户本人发的，是 Persona 的另一段对话（c1）用 conversation_send 发来的，第 1 跳（最多 3 跳）。\n</persona-context>\n周报写好了';
+const relay = '<persona-context kind="context" title="来自对话「写周报」" url="">\n这条消息不是用户本人发的，是 Persona 的另一段对话（c1）用 conversation_send 发来的，第 1 跳（最多 3 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 c1；只是确认收到就不要回，免得两段对话来回发。\n</persona-context>\n周报写好了';
 
 const cases: [string, Item, boolean][] = [
   ["typed in the composer", u(1, "看一下 CI", { client_msg_id: "c1" }), true],
