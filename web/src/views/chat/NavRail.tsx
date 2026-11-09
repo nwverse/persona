@@ -77,10 +77,24 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     raf.current = 0;
     const sc = view.current;
     if (!sc) return;
-    // Nothing to draw — too few questions, or no precise pointer — so nothing to measure: no layout reads, and no
-    // state writes, so a short chat and a long chat on a touch screen draw no extra frame on mount or on each scroll.
-    // The pointer-wake band goes with it; a strip rect left from an earlier rail would wake an empty margin.
-    if (!fine || list.current.length < NAV_RAIL_MIN_TICKS) {
+    // Nothing to draw, so no layout reads. A short chat writes no state (mounting it draws no extra frame). A touch
+    // screen drops whatever a pointer had measured and does not read the chat on this frame or the next scroll.
+    if (!fine) {
+      // Drop what a precise pointer had measured. Leaving room/left/height frozen would paint the rail from that old
+      // geometry for a frame when a pointer comes back (a trackpad undocked, the window rotated, the trackpad back).
+      // A hover or a pending jump dies with the rail: unmounting does not fire mouseleave, so those refs would stick
+      // and the rail would come back already previewing, and never dim.
+      railX.current = null;
+      hovering.current = false;
+      focused.current = false;
+      setRoom(false);
+      setActive((x) => (x === null ? x : null));
+      setPreview((x) => (x === null ? x : null));
+      setPending((x) => (x === null ? x : null));
+      return;
+    }
+    if (list.current.length < NAV_RAIL_MIN_TICKS) {
+      // The pointer-wake band goes with it; a strip rect left from an earlier rail would wake an empty margin.
       railX.current = null;
       setActive((x) => (x === null ? x : null));
       return;
@@ -119,7 +133,10 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
 
   useEffect(() => {
     const sc = view.current;
-    if (!sc) return;
+    // No precise pointer: nothing to draw, so a scroll must not measure or arm the idle timer. A phone's long chat
+    // would otherwise reset that timer on every scroll event and commit again when it fired. A pointer attached
+    // later re-subscribes, and the effect above measures the chat as it is then.
+    if (!sc || !fine) return;
     const onScroll = () => {
       wake();
       schedule();
@@ -139,7 +156,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
       if (raf.current) cancelAnimationFrame(raf.current);
       raf.current = 0;
     };
-  }, [scroller, schedule, wake]);
+  }, [scroller, schedule, wake, fine]);
 
   // another chat: no leftover active tick, hover or pending jump; show itself once as the where-you-are hint
   useEffect(() => {

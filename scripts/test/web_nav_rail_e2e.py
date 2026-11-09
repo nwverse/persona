@@ -144,7 +144,9 @@ def case(browser, base, token, shots, base_url):
     page.mouse.move(WIDE["width"] * 0.7, WIDE["height"] / 2)
     page.evaluate("document.querySelector('textarea')?.focus()")
     seen = {"opacity": None}
-    end = time.time() + (IDLE_FADE_MS + FADE_MS) / 1000 + 2.5
+    # A smooth scroll can still be emitting after the jump looks landed, and each event restarts the 2s idle timer,
+    # so the bound is a full idle cycle past the fade — not a single sample. The loop returns as soon as it settles.
+    end = time.time() + (IDLE_FADE_MS + FADE_MS + IDLE_FADE_MS) / 1000 + 1.5
 
     def dimmed():
         seen["opacity"] = float(rail(page).evaluate("el => getComputedStyle(el).opacity"))
