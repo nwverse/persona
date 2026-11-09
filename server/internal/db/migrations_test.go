@@ -147,14 +147,17 @@ func freshDatabase(t *testing.T) string {
 	if _, err := EnsureDatabase(ctx, url); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		admin, err := pgx.Connect(context.Background(), base)
-		if err == nil {
-			_, _ = admin.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
-			_ = admin.Close(context.Background())
-		}
-	})
+	t.Cleanup(func() { dropDatabase(base, name) })
 	return url
+}
+
+// dropDatabase drops a test's database name next to base, closing what is still connected to it.
+func dropDatabase(base, name string) {
+	admin, err := pgx.Connect(context.Background(), base)
+	if err == nil {
+		_, _ = admin.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
+		_ = admin.Close(context.Background())
+	}
 }
 
 // tablesOf are the database's tables but schema_migrations, sorted.

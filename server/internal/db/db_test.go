@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,12 +37,63 @@ func open(t testing.TB) *DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Close)
-	// Union of the integration branch's list and master's TruncateForTest: TruncateForTest alone
-	// does not clear lock_tests, client_ops, pair_tokens or device_sessions.
-	if _, err := d.pool.Exec(context.Background(), `TRUNCATE push_device_retirements, lock_tests, client_ops, devices, device_tokens, pair_tokens, device_sessions, live_activities, phone_tools, node_sessions, mail_accounts, interactions, settings, inbox_items, kb_entities, connector_secrets, machine_systems, machine_metrics, machine_usage, sent_messages, todos, todo_agents, assistant_always, sent_as_user CASCADE`); err != nil {
+	if _, err := d.pool.Exec(context.Background(), `TRUNCATE `+strings.Join(openTables, ", ")+` CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// openTables are what open clears (with what refers to them): the union of the integration branch's list and master's
+// TruncateForTest. TruncateForTest alone does not clear lock_tests, client_ops, pair_tokens or device_sessions.
+var openTables = []string{"push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
+	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
+	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
+	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user"}
+
+// templates are the databases migratedDatabase copies: one per sets, migrated once per test binary.
+var templates = struct {
+	sync.Mutex
+	dbs map[Sets]string
+}{dbs: map[Sets]string{}}
+
+// migratedDatabase is a new database next to the test one with sets' migrations applied, dropped afterwards: a copy
+// of a template this binary migrated once (dbtest.Template), equal to a fresh migration but for the applied_at of its
+// schema_migrations rows. A test of a database at an older state starts from freshDatabase instead.
+func migratedDatabase(t *testing.T, sets Sets) string {
+	t.Helper()
+	base := os.Getenv(dbtest.Env)
+	if base == "" {
+		t.Skip(dbtest.Env + " not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	templates.Lock()
+	tpl, ok := templates.dbs[sets]
+	if !ok {
+		url, err := dbtest.Template(ctx, base)
+		if err != nil {
+			templates.Unlock()
+			t.Fatal(err)
+		}
+		d, err := Open(ctx, url, sets)
+		if err != nil {
+			templates.Unlock()
+			t.Fatal(err)
+		}
+		d.Close()
+		tpl = DatabaseName(url)
+		templates.dbs[sets] = tpl
+	}
+	templates.Unlock()
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	name := "persona_split_t_" + hex.EncodeToString(b)
+	url, err := dbtest.Clone(ctx, base, tpl, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dropDatabase(base, name) })
+	return url
 }
 
 func TestLiveActivityStartBudget(t *testing.T) {
