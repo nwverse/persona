@@ -426,7 +426,7 @@
       "required": ["sizes"]
     },
     "LookPalette": {
-      "description": "An appearance's colors, #RRGGBB (docs/apple/persona.md \"Palettes\", the apps' PersonaPalette).",
+      "description": "An appearance's colors, #RRGGBB (docs/apple/persona.md \"Color scheme\", the apps' PersonaPalette).",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -478,7 +478,7 @@
       "required": ["states"]
     },
     "LookItem": {
-      "description": "A look (docs/extensions/extensions.md \"Looks\"): Persona's name, face, colors and dot, served as a persona package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.",
+      "description": "A look (docs/extensions/extensions.md \"Avatars\"): Persona's name, face, colors and dot, served as a persona package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

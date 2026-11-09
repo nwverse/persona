@@ -126,7 +126,7 @@ data class ExtensionMarket(
 }
 
 /**
- * A market's signature (docs/extensions/extensions.md "Signatures"): `signed` (signed with the key the hub trusts; `verified` counts too,
+ * A market's signature (docs/extensions/extensions.md "Signing"): `signed` (signed with the key the hub trusts; `verified` counts too,
  * #4812), `unsigned` (an older market: still usable), or anything else (the signature fails or the key changed): the hub
  * then neither refreshes nor installs from it until its owner trusts the new key on the hub's machine. [detail] says why,
  * for people.
