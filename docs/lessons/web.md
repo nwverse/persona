@@ -1,5 +1,16 @@
 # Lessons: web UI and interactions
 
+## Settings layout tests need real scroll regions (#2197)
+
+- A flex child with `overflow-y-auto` also needs `min-h-0` and `min-w-0`; otherwise adding a sidebar can expand the page rather than give each side its own scroll area. Check geometry and wheel input in short windows, not just class names in jsdom, and retain 640 px / 320 px boundary checks.
+- `lib/viewport.ts` caches each MediaQueryList. A responsive test mock must expose a live `matches` getter (and deliver change events when testing an in-place resize), rather than capture its first value. Pin the test language explicitly: a shared Chrome's browser preferences can differ from the test driver's locale.
+- Continuous deep-link reloads hit a Vite development-module fetch failure during this check. Keep the failure record and rerun against the production build with the same mock hub; a working initial dev screenshot does not prove reload/share behavior.
+
+## Message provenance is independent of model roles (#2125)
+
+- An automatic or relayed input can legitimately have model role `user` without belonging in a user bubble, pending-message echo matching or the user-input navigator. Carry structured provenance through display parsing and cached pages; test these consumers together. Legacy relay inference requires the complete machine template, and an app user's protected quotation must suppress inference. Use transcript-backed metadata for long-lived history rather than a short-lived echo record.
+- Source folding uses the chat typography tokens. Unlayered `.prose-j` rules override component-layer inheritance unless the component deliberately pins that inheritance; otherwise narrow-screen folds can clip half a line.
+
 ## Pushed batches follow more_after too (#1118)
 
 - A contiguous reconnect replay can still be incomplete when its final batch carries `more_after`. Follow that flag on pushed batches as well as HTTP pages, continuing from the updated contiguous coverage cursor through the existing gap-fill timer; do not wait for another push to reveal a gap.
