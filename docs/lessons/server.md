@@ -1424,3 +1424,7 @@ A catalog's recipe contains the upstream tool's argument object. Protocol field 
 ## Bound read-state snapshots by recorded entries (#2400)
 
 When decorating a large session list, reserve the timestamp snapshot by the smaller of the list and the recorded read-state table, under the same lock used to copy it. Reserving for every row wastes memory when few or no sessions have been read. The unchanged isolated publication budget can expose this cost even after workspace discovery allocations are fixed; identify the failing subcase rather than treating all session-reader failures as the same regression. Keep the original budgets and seen-state semantics.
+
+## Publication follows the explicit node policy (#1175)
+
+A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.
