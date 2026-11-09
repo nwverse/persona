@@ -86,7 +86,7 @@ import { usePersona } from "../assistant/Persona";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
 import { usageLimitLabel } from "../../lib/usage-limit";
-import { displayLines, getFeedState, loadFeed, loadToday, sendRouted, useFeed, type FeedItem } from "../../lib/feed";
+import { displayLines, getFeedState, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark } from "../../ui/AgentMark";
 import { DayLine, FeedLineView, QuickResultCard, RouteChip, TaskDock, TaskQuestions } from "../assistant/Tasks";
@@ -255,6 +255,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const working = state === "working" || Boolean(tr.streaming) || outgoing > 0 || awaiting;
   // still starting only until the conversation has anything in it: the flag the caller passes may outlive the start
   const starting = Boolean(launching) && !tr.items.length && !tr.streaming && state !== "working";
+  // a new conversation with its first message on the way and no transcript yet (#1697): the lines the transcript opens
+  // with ("Chat started", today) are there already and no loader goes above the message, so it doesn't move when they come
+  const opening = Boolean(assistant) && !tr.items.length && outgoing > 0;
 
   // ── the middle of an agent's page: its conversation, or its terminal in place (lib/session-view.ts) ──
   const switchable = Boolean(inPage && !assistant && !readOnly && canShowTerminal(session));
@@ -1030,8 +1033,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 <Loading label={t("chat-chatview.loading_earlier")} />
               </div>
             )}
-            {!tr.hasMore && !tr.loading && tr.items.length > 0 && <div className="text-center text-[11.5px] text-ink-3">{session?.cwd && !assistant ? t("chat-chatview.started_in", { path: shortPath(session.cwd) }) : t("chat-chatview.chat_start")}</div>}
-            {tr.loading && !tr.items.length && (
+            {((!tr.hasMore && !tr.loading && tr.items.length > 0) || opening) && <div className="text-center text-[11.5px] text-ink-3">{session?.cwd && !assistant ? t("chat-chatview.started_in", { path: shortPath(session.cwd) }) : t("chat-chatview.chat_start")}</div>}
+            {opening && <DayLine date={startOfDay(Date.now())} />}
+            {tr.loading && !tr.items.length && !opening && (
               <div className="flex justify-center py-16">
                 <Loading label={starting ? t("chat-chatview.preparing") : t("chat-chatview.loading_chat")} />
               </div>
@@ -1397,6 +1401,7 @@ export const Header = memo(function Header({
   onView,
   viewDot,
   panel: chrome,
+  subtitle,
 }: {
   session?: Session;
   title: string;
@@ -1421,6 +1426,8 @@ export const Header = memo(function Header({
   /** The conversation has something that wants an answer while the terminal is shown. */
   viewDot?: boolean;
   panel?: PanelChrome;
+  /** A conversation still starting has no session to make its subtitle from: what it will say (the new-conversation page, #1697). */
+  subtitle?: string;
 }) {
   const menu = useMenu();
   const tabs = useMenu();
@@ -1455,6 +1462,8 @@ export const Header = memo(function Header({
   useNow(60_000, Boolean(!chrome?.sub && !main && assistant && session?.updated_at));
   const place = chrome?.sub
     ? chrome.sub
+    : subtitle !== undefined
+    ? subtitle
     : main
     ? ""
     : assistant
