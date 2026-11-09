@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -238,9 +239,22 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 	return hits
 }
 
+// clip cuts s to its first n runes plus an ellipsis; a string of at most n runes comes back as it is, without a copy.
+// Ranging over s steps through the same runes as []rune(s) (one U+FFFD per invalid byte), so the cut lands where it
+// always did: a valid prefix is cut at its byte offset, and one with invalid bytes still has them replaced.
 func clip(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
+	if len(s) <= n { // n bytes are at most n runes
+		return s
+	}
+	runes := 0
+	for i := range s {
+		if runes == n { // rune n+1 starts at i
+			if utf8.ValidString(s[:i]) {
+				return s[:i] + "…"
+			}
+			return string([]rune(s[:i])) + "…"
+		}
+		runes++
 	}
 	return s
 }
