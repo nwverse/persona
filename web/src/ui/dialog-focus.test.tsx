@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Dialog (atoms.tsx) and the keyboard focus: it moves in on open, Tab stays inside, and on close it goes back to the
 // opener, unless the close moved it somewhere else on purpose (a footer action that focuses a field outside).
-import { act, StrictMode } from "react";
+import { act, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Dialog } from "./atoms";
@@ -68,6 +68,24 @@ function Fielded({ open }: { open: boolean }) {
   );
 }
 
+// Dialog A whose button closes it and opens Dialog B in the same click, as a Palette command that opens a Dialog does:
+// while B renders its first open frame the focus is still inside A, which is on its way out
+function Handoff({ fielded = false }: { fielded?: boolean }) {
+  const [shown, setShown] = useState<"a" | "b" | null>("a");
+  return (
+    <>
+      <Dialog open={shown === "a"} onClose={() => setShown(null)} title="A">
+        <button type="button" data-testid="swap" onClick={() => setShown("b")}>
+          swap
+        </button>
+      </Dialog>
+      <Dialog open={shown === "b"} onClose={() => setShown(null)} title="B">
+        {fielded ? <input autoFocus data-testid="field" /> : <p>text</p>}
+      </Dialog>
+    </>
+  );
+}
+
 const panel = () => document.querySelector<HTMLElement>("[role=dialog]")!;
 const field = () => document.querySelector<HTMLInputElement>("[data-testid=field]");
 function tab(shift = false): boolean {
@@ -130,6 +148,61 @@ describe("Dialog focus", () => {
     expect(document.activeElement).toBe(field());
     act(() => root.render(<StrictMode>{null}</StrictMode>));
     expect(document.activeElement).toBe(opener);
+  });
+
+  describe.each([
+    ["once the closing dialog is gone", false],
+    ["while the closing dialog's exit plays", true],
+  ])("handing over to a dialog opened as another closes, %s", (_, exits) => {
+    beforeEach(() => {
+      // an exit that never ends keeps the closing dialog mounted and inert, as in a browser for its 140 ms
+      if (exits) (Element.prototype as { animate?: unknown }).animate = () => ({ finished: new Promise(() => {}), cancel() {} }) as unknown as Animation;
+    });
+
+    function swapThenEscape(fielded: boolean) {
+      act(() => root.render(<StrictMode><Handoff fielded={fielded} /></StrictMode>));
+      const swap = document.querySelector<HTMLButtonElement>("[data-testid=swap]")!;
+      swap.focus();
+      act(() => swap.click());
+      const b = [...document.querySelectorAll<HTMLElement>("[role=dialog]")].find((d) => d.textContent?.includes("B"))!;
+      expect(b.contains(document.activeElement)).toBe(true);
+      act(() => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    }
+
+    it("gives the focus back to the first dialog's opener", () => {
+      swapThenEscape(false);
+      expect(document.activeElement).toBe(opener);
+    });
+
+    it("gives the focus back to the first dialog's opener when the second has an autoFocus field", () => {
+      swapThenEscape(true);
+      expect(document.activeElement).toBe(opener);
+    });
+  });
+
+  it("gives the focus back to the button in a dialog that stays open under the one it opened", () => {
+    function Stack() {
+      const [top, setTop] = useState(false);
+      return (
+        <>
+          <Dialog open onClose={() => {}} title="A">
+            <button type="button" data-testid="more" onClick={() => setTop(true)}>
+              more
+            </button>
+          </Dialog>
+          <Dialog open={top} onClose={() => setTop(false)} title="B">
+            <input autoFocus data-testid="field" />
+          </Dialog>
+        </>
+      );
+    }
+    act(() => root.render(<StrictMode><Stack /></StrictMode>));
+    const more = document.querySelector<HTMLButtonElement>("[data-testid=more]")!;
+    more.focus();
+    act(() => more.click());
+    expect(document.activeElement).toBe(field());
+    act(() => void field()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(more);
   });
 
   it("wraps Tab and Shift+Tab among its controls", () => {
