@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // inboxRows is n inbox items about the size of a Feishu chat's (its JSON with the last messages and the triage).
@@ -54,6 +56,27 @@ func TestPutInboxItems(t *testing.T) {
 	}
 	if err := d.PutInboxItems(ctx, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An item with \u0000 in a string (json.Marshal writes a NUL so) is refused, as jsonb refused it, and nothing is
+// stored. json alone would take it; computing source parses the whole document and refuses it (0471). Stored, such a
+// row would make the done page's data->'connector' fail for as long as it is kept.
+func TestInboxItemWithNULRefused(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	for name, data := range map[string]string{
+		"a string before source":       `{"id":"nul","title":"a\u0000b","source":"mail"}`,
+		"a nested string after source": `{"id":"nul","source":"mail","chain":[{"text":"a\u0000b"}]}`,
+		"a key":                        `{"id":"nul","source":"mail","a\u0000b":1}`,
+	} {
+		err := d.PutInboxItem(ctx, "nul", []byte(data), time.Now(), nil)
+		if pe := (*pgconn.PgError)(nil); !errors.As(err, &pe) || pe.Code != "22P05" {
+			t.Fatalf("%s: %v, want untranslatable_character (22P05)", name, err)
+		}
+	}
+	var n int
+	if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM inbox_items`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d rows stored (%v), want none", n, err)
 	}
 }
 
