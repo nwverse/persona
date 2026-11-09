@@ -133,9 +133,10 @@ const (
 	cancelPendingSQL = `UPDATE interactions SET status = 'cancelled', resolved_at = now()
 		WHERE status = 'pending' AND NOT (id = ANY($1))
 		AND id NOT IN (SELECT interaction_id FROM session_work WHERE interaction_id <> '')
-		AND id NOT IN (SELECT item->'card'->>'id' FROM settings,
-			jsonb_array_elements(CASE WHEN jsonb_typeof(value) = 'array' THEN value ELSE '[]'::jsonb END) AS item
-			WHERE key = 'agents.tool_loops' AND item->'card'->>'id' IS NOT NULL)`
+		AND id NOT IN (SELECT protected.id FROM settings,
+			jsonb_array_elements(CASE WHEN jsonb_typeof(value) = 'array' THEN value ELSE '[]'::jsonb END) AS item,
+			LATERAL unnest(ARRAY[item->'card'->>'id', item->>'expired_id']) AS protected(id)
+			WHERE key = 'agents.tool_loops' AND protected.id IS NOT NULL)`
 )
 
 // ExpireStaleInteractions marks interactions left pending by a previous hub process cancelled, and returns the

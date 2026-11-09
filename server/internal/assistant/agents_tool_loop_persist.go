@@ -19,6 +19,7 @@ type savedToolLoop struct {
 	CheckedCount    int                `json:"checked_count"`
 	Silenced        bool               `json:"silenced"`
 	SilencedByInput bool               `json:"silenced_by_input,omitempty"`
+	ExpiredID       string             `json:"expired_id,omitempty"`
 	Card            *proto.Interaction `json:"card,omitempty"`
 }
 
@@ -53,7 +54,7 @@ func (s *Service) loadToolLoops(ctx context.Context) error {
 		if updatedAt.IsZero() {
 			updatedAt = time.Now().UTC()
 		}
-		state := &toolLoopState{since: row.Since, updatedAt: updatedAt, tool: row.Tool, checks: row.Checks, checkedCount: row.CheckedCount, silenced: row.Silenced, silencedByInput: row.SilencedByInput, uncertain: true}
+		state := &toolLoopState{since: row.Since, updatedAt: updatedAt, tool: row.Tool, checks: row.Checks, checkedCount: row.CheckedCount, silenced: row.Silenced, silencedByInput: row.SilencedByInput, expiredID: row.ExpiredID, uncertain: true}
 		if reason, invalid := s.work.loopInvalid[key]; invalid {
 			if reason == loopTurnChanged {
 				state.checks = 0
@@ -80,6 +81,84 @@ func (s *Service) loadToolLoops(ctx context.Context) error {
 	return nil
 }
 
+// expireToolLoopCard keeps the card visible until its terminal state is saved.
+// A failed save leaves the same card for the next tick to retry.
+func (s *Service) expireToolLoopCard(ctx context.Context, k [2]string) error {
+	s.work.mu.Lock()
+	state := s.work.loops[k]
+	if state == nil || state.answering || state.expiredID != "" {
+		s.work.mu.Unlock()
+		return nil
+	}
+	card, ok := s.work.cards[state.cardID]
+	if !ok || time.Now().Before(card.ExpiresAt) {
+		s.work.mu.Unlock()
+		return nil
+	}
+	id := state.cardID
+	state.answering, state.consuming, state.silenced = true, true, true
+	state.consumedSaved, state.expiredID = false, id
+	s.work.mu.Unlock()
+	if err := s.saveToolLoops(ctx, k); err != nil {
+		s.work.mu.Lock()
+		if s.work.loops[k] == state && state.cardID == id && state.consuming {
+			state.answering, state.consuming, state.silenced = false, false, false
+			state.expiredID = ""
+		}
+		s.work.mu.Unlock()
+		return err
+	}
+	s.work.mu.Lock()
+	valid := s.work.loops[k] == state && state.cardID == id && state.consuming
+	if valid {
+		delete(s.work.cards, id)
+		state.cardID, state.answering, state.consuming = "", false, false
+	}
+	s.work.mu.Unlock()
+	if valid {
+		s.publishSoon()
+	}
+	return nil
+}
+
+// finishExpiredToolLoop retries interaction history independently of card
+// withdrawal. The saved id survives a restart until history is finished.
+func (s *Service) finishExpiredToolLoop(ctx context.Context, k [2]string) {
+	s.work.mu.Lock()
+	state := s.work.loops[k]
+	if state == nil || state.expiredID == "" || state.consuming {
+		s.work.mu.Unlock()
+		return
+	}
+	id := state.expiredID
+	s.work.mu.Unlock()
+	if st := s.fleetStore(); st != nil {
+		writeCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+		err := st.FinishInteraction(writeCtx, id, "expired", nil)
+		cancel()
+		if err != nil {
+			s.logf("tool loop: expire history: %v", err)
+			return
+		}
+	}
+	s.work.mu.Lock()
+	current := s.work.loops[k]
+	if current == nil || current.expiredID != id {
+		s.work.mu.Unlock()
+		return
+	}
+	current.expiredID = ""
+	s.work.mu.Unlock()
+	if err := s.saveToolLoops(ctx); err != nil {
+		s.work.mu.Lock()
+		if current := s.work.loops[k]; current != nil && current.expiredID == "" {
+			current.expiredID = id
+		}
+		s.work.mu.Unlock()
+		s.logf("tool loop: clear expired history: %v", err)
+	}
+}
+
 // saveToolLoops serializes snapshots and takes each snapshot after acquiring the
 // write lock. An older captured state cannot overwrite a newer transition.
 func (s *Service) saveToolLoops(ctx context.Context, committing ...[2]string) error {
@@ -101,13 +180,13 @@ func (s *Service) saveToolLoops(ctx context.Context, committing ...[2]string) er
 		if updatedAt.IsZero() {
 			updatedAt = time.Now().UTC()
 		}
-		row := savedToolLoop{Machine: key[0], Session: key[1], Since: state.since, UpdatedAt: updatedAt, Tool: state.tool, Checks: state.checks, CheckedCount: state.checkedCount, Silenced: state.silenced, SilencedByInput: state.silencedByInput}
+		row := savedToolLoop{Machine: key[0], Session: key[1], Since: state.since, UpdatedAt: updatedAt, Tool: state.tool, Checks: state.checks, CheckedCount: state.checkedCount, Silenced: state.silenced, SilencedByInput: state.silencedByInput, ExpiredID: state.expiredID}
 		switch {
 		case state.consuming && (state.consumedSaved || commit):
 			// The terminal decision is durable; never restore its old card.
 		case state.consuming:
 			// Another session's write must not commit this unfinished answer.
-			row.Silenced = false
+			row.Silenced, row.ExpiredID = false, ""
 			if card, ok := s.work.cards[state.cardID]; ok {
 				row.Card = &card
 			}

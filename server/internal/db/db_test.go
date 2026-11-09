@@ -745,12 +745,12 @@ func TestInteractions(t *testing.T) {
 
 func TestLoopInteractionRestart(t *testing.T) {
 	d, ctx := open(t), context.Background()
-	for _, id := range []string{"tool_loop_kept", "tool_loop_orphan"} {
+	for _, id := range []string{"tool_loop_kept", "tool_loop_orphan", "tool_loop_expiring"} {
 		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "box", SessionID: "session", Kind: proto.IxQuestion, CreatedAt: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := d.PutSetting(ctx, "agents.tool_loops", []any{map[string]any{"card": map[string]any{"id": "tool_loop_kept"}}, map[string]any{"silenced": true}}); err != nil {
+	if err := d.PutSetting(ctx, "agents.tool_loops", []any{map[string]any{"card": map[string]any{"id": "tool_loop_kept"}}, map[string]any{"expired_id": "tool_loop_expiring"}, map[string]any{"silenced": true}}); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
@@ -760,10 +760,16 @@ func TestLoopInteractionRestart(t *testing.T) {
 	if _, err := d.ExpireStaleInteractions(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[string]string{"tool_loop_kept": "pending", "tool_loop_orphan": "cancelled"} {
+	for id, want := range map[string]string{"tool_loop_kept": "pending", "tool_loop_expiring": "pending", "tool_loop_orphan": "cancelled"} {
 		if status, _, err := d.InteractionOutcome(ctx, id); err != nil || status != want {
 			t.Fatalf("%s status = %s, %v; want %s", id, status, err, want)
 		}
+	}
+	if err := d.FinishInteraction(ctx, "tool_loop_expiring", "expired", nil); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, err := d.InteractionOutcome(ctx, "tool_loop_expiring"); err != nil || status != "expired" {
+		t.Fatalf("restored expiry status = %s, %v", status, err)
 	}
 }
 

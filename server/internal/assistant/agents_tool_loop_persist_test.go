@@ -429,6 +429,7 @@ func TestToolLoopInputWhileReadUnavailable(t *testing.T) {
 	store.failKeys = map[string]error{toolLoopsSetting: errors.New("read unavailable")}
 	store.mu.Unlock()
 	s := newServiceOn(t, f, store)
+	s.work.switches = &TriageSwitches{Enabled: true, ToolLoop: true}
 	s.clearToolLoop([2]string{"box", "s1"}, loopUserInput)
 	store.mu.Lock()
 	delete(store.failKeys, toolLoopsSetting)

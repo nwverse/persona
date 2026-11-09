@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -151,6 +152,7 @@ type workBook struct {
 	loops       map[[2]string]*toolLoopState // running-turn loop candidates and cards
 	loopLoadMu  sync.Mutex                   // serialize loading without holding work.mu on the database
 	loopSaveMu  sync.Mutex                   // serialize durable loop snapshots
+	switchMu    sync.Mutex                   // serialize settings updates
 	loopLoaded  bool
 	loopSaved   bool
 	loopInvalid map[[2]string]loopClearReason // activity received while the saved state could not be read
@@ -270,20 +272,74 @@ func (s *Service) workOn(ctx context.Context) bool { return s.triageSwitches(ctx
 // putTriageSwitches saves the switches. What they turn off stops at once: the cards are withdrawn, due retries and
 // wakes dropped; the apps hear of it ({"type":"agents.triage"}) and the lists follow the next snapshot.
 func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) error {
-	loopLoadErr := s.loadToolLoops(ctx)
+	s.work.switchMu.Lock()
+	defer s.work.switchMu.Unlock()
+	turnOff := !sw.Enabled || !sw.ToolLoop
+	if turnOff {
+		// A pending expiry must be finished even if the feature is disabled
+		// immediately after a restart. When the old setting is already off,
+		// ordinary triage updates need not read loop state at all.
+		if previous, err := s.readTriageSwitches(ctx); err == nil && previous.Enabled && previous.ToolLoop {
+			if err := s.loadToolLoops(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	loopLocked := false
+	defer func() {
+		if loopLocked {
+			s.work.loopSaveMu.Unlock()
+			s.work.loopLoadMu.Unlock()
+		}
+	}()
+	if turnOff {
+		// A load or loop save must not resurrect old cards between the atomic
+		// settings commit and the in-memory clear.
+		s.work.loopLoadMu.Lock()
+		s.work.loopSaveMu.Lock()
+		loopLocked = true
+	}
+	var expired []savedToolLoop
+	if turnOff {
+		s.work.mu.Lock()
+		for k, state := range s.work.loops {
+			if state.expiredID != "" && (!state.consuming || state.consumedSaved) {
+				expired = append(expired, savedToolLoop{Machine: k[0], Session: k[1], UpdatedAt: time.Now().UTC(), ExpiredID: state.expiredID})
+			}
+		}
+		s.work.mu.Unlock()
+	}
 	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, triageSettingKey, sw); err != nil {
+		if turnOff {
+			batch, ok := st.(interface {
+				PutSettings(context.Context, map[string]any) error
+			})
+			if !ok {
+				return errors.New("atomic triage settings writes are unavailable")
+			}
+			if expired == nil {
+				expired = []savedToolLoop{}
+			}
+			if err := batch.PutSettings(ctx, map[string]any{triageSettingKey: sw, toolLoopsSetting: expired}); err != nil {
+				return err
+			}
+		} else if err := st.PutSetting(ctx, triageSettingKey, sw); err != nil {
 			return err
 		}
 	}
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.switches = &sw
-	if !sw.Enabled || !sw.ToolLoop {
+	if turnOff {
 		for _, loop := range s.work.loops {
 			delete(s.work.cards, loop.cardID)
 		}
 		clear(s.work.loops)
+		for _, row := range expired {
+			s.work.loops[[2]string{row.Machine, row.Session}] = &toolLoopState{updatedAt: row.UpdatedAt, expiredID: row.ExpiredID}
+		}
+		s.work.loopLoaded, s.work.loopSaved = true, len(expired) != 0
+		s.work.loopInvalid = nil
 	}
 	var stale []db.SessionWork
 	for _, e := range s.work.entries {
@@ -299,21 +355,10 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 		}
 	}
 	s.work.mu.Unlock()
-	if !sw.Enabled || !sw.ToolLoop {
-		if loopLoadErr != nil {
-			// A PUT remains usable when settings cannot be read. Turning the
-			// switch off discards every loop even if it could not be loaded.
-			if st := s.store(); st != nil {
-				s.work.loopSaveMu.Lock()
-				err := st.PutSetting(ctx, toolLoopsSetting, []savedToolLoop{})
-				s.work.loopSaveMu.Unlock()
-				if err != nil {
-					return err
-				}
-			}
-		} else if err := s.saveToolLoops(ctx); err != nil {
-			return err
-		}
+	if loopLocked {
+		s.work.loopSaveMu.Unlock()
+		s.work.loopLoadMu.Unlock()
+		loopLocked = false
 	}
 	for _, e := range stale {
 		s.saveWork(e)
@@ -531,9 +576,12 @@ func (s *Service) publishSoon() {
 
 // workReport is the snapshot's work: the stored states (with the switches' On), nil while they could not be read.
 func (s *Service) workReport(ctx context.Context) *WorkReport {
-	if err := s.loadToolLoops(ctx); err != nil {
-		s.logf("tool loop: load: %v", err)
-		return nil
+	sw := s.triageSwitches(ctx)
+	if sw.Enabled && sw.ToolLoop {
+		if err := s.loadToolLoops(ctx); err != nil {
+			s.logf("tool loop: load: %v", err)
+			return nil
+		}
 	}
 	if !s.loadWork(ctx) {
 		return nil
