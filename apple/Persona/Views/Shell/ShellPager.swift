@@ -215,13 +215,15 @@ struct ShellPageSlide: ViewModifier {
         let p = pager.position
         let shown = pager.moving ? abs(CGFloat(index) - p) < 1 : index == pager.page
         let inReach = !pager.moving && index == pager.page && index == shell.page
+        // Typed apart: inline in `.opacity`, Xcode 26.0 found `1 - abs(…)` ambiguous between CGFloat and Double.
+        let fade: Double = max(0, 1 - abs(Double(index) - Double(p)))
         content
             // The page behind is never taken out of the window, so `onDisappear` does not fire for it: `tabIsActive`
             // tells its polling and read reports to stop (docs/apple/ios.md「只在前台做的事」). The page in front, so a drag
             // that does not settle on the other page does not restart them.
             .environment(\.tabIsActive, index == shell.page)
             .offset(x: pager.moving && railEdge == nil ? (CGFloat(index) - p) * pager.width : 0)
-            .opacity(railEdge != nil && pager.moving ? max(0, 1 - abs(CGFloat(index) - p)) : (shown ? 1 : 0))
+            .opacity(railEdge != nil && pager.moving ? fade : (shown ? 1 : 0))
             .allowsHitTesting(inReach)
             .accessibilityHidden(!inReach)
             .zIndex(index == pager.page ? 1 : 0)
