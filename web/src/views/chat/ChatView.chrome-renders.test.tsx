@@ -156,3 +156,14 @@ it("after the pushes, sending and stopping still go out", async () => {
   await settle();
   expect(pressed()).toBeNull();
 });
+
+it("a stop the hub lost track of is not reported as done, and can be pressed again", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  fetcher.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify({ state: "unknown" }), { status: 202 })));
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.interrupt")}"]`)!.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+  expect(host.querySelector(`button[aria-label="${t("chat-composer.interrupt")}"]`)).toBeTruthy();
+});
