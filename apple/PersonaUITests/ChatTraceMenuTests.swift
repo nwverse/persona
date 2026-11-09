@@ -9,7 +9,7 @@ final class ChatTraceMenuTests: XCTestCase {
 
     @MainActor func testTheDrawersMainRowCopiesTheDiagnostics() {
         let app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-app.tab", "assistant", "-dev.openChat", ""]
+        app.launchArguments = ["-demo.on", "YES", "-app.tab", "assistant", "-dev.openChat", ""]
         app.launchPinned()
         let drawer = app.buttons["assistant-sidebar-button"].firstMatch
         XCTAssertTrue(drawer.waitForExistence(timeout: 15), "no sidebar button")

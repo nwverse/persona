@@ -80,7 +80,7 @@ final class MacRichSnapshotBatch {
                 if !window.isVisible { window.orderBack(nil) }
                 guard !window.isKeyWindow, !NSApp.isActive else { throw Failure.focusChanged }
                 content.layoutSubtreeIfNeeded(); content.displayIfNeeded()
-                let entries = accessibilityEntries(content)
+                let entries = MacSnapshot.accessibilityEntries(content)
                 let frame = entries.first(where: { $0.identifier == "assistant-view-card" })?.frame
                 reason = "body=\(bodyReady(entries, sample: sample, fallback: fallback)) frame=\(String(describing: frame)) labels=\(entries.compactMap(\.label).suffix(16))"
                 if entries.contains(where: { $0.identifier == "assistant-view-card" }),
@@ -90,7 +90,7 @@ final class MacRichSnapshotBatch {
                     // The renderer can expose its title before the inverted lazy list settles its full row height.
                     try await Task.sleep(for: .milliseconds(600))
                     content.layoutSubtreeIfNeeded(); content.displayIfNeeded()
-                    let settledFrame = accessibilityEntries(content).first(where: { $0.identifier == "assistant-view-card" })?.frame
+                    let settledFrame = MacSnapshot.accessibilityEntries(content).first(where: { $0.identifier == "assistant-view-card" })?.frame
                     if let cardFrame, cardFrame.height > 0, cardFrame == settledFrame {
                         return window
                     }
@@ -103,7 +103,7 @@ final class MacRichSnapshotBatch {
         throw Failure.notReady
     }
 
-    private func bodyReady(_ entries: [Entry], sample: String, fallback: String?) -> Bool {
+    private func bodyReady(_ entries: [MacSnapshot.AccessibilityEntry], sample: String, fallback: String?) -> Bool {
         switch sample {
         case "decision": entries.contains { $0.identifier == "plugin-ui-action-choose-b" }
         case "compare": entries.contains { $0.identifier == "plugin-ui-action-details" }
@@ -116,25 +116,5 @@ final class MacRichSnapshotBatch {
         }
     }
 
-    private struct Entry { var identifier: String?; var label: String?; var frame: NSRect? }
-    private func accessibilityEntries(_ root: NSObject) -> [Entry] {
-        var visited: Set<ObjectIdentifier> = []
-        var result: [Entry] = []
-        func read(_ object: NSObject, _ selector: String) -> AnyObject? {
-            let selector = NSSelectorFromString(selector)
-            guard object.responds(to: selector) else { return nil }
-            return object.perform(selector)?.takeUnretainedValue()
-        }
-        func visit(_ object: NSObject, depth: Int) {
-            guard depth < 40, visited.insert(ObjectIdentifier(object)).inserted else { return }
-            let frame = object.responds(to: NSSelectorFromString("accessibilityFrame"))
-                ? (object.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue : nil
-            result.append(Entry(identifier: read(object, "accessibilityIdentifier") as? String,
-                                label: read(object, "accessibilityLabel") as? String, frame: frame))
-            for child in read(object, "accessibilityChildren") as? [NSObject] ?? [] { visit(child, depth: depth + 1) }
-        }
-        visit(root, depth: 0)
-        return result
-    }
 }
 #endif

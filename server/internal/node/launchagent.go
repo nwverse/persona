@@ -10,13 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The resident node on a Mac is a launchd agent (scripts/deploy/node-launchd.sh, persona-link's nodesvc.go). A plist
@@ -117,7 +117,7 @@ type launchAgent struct {
 	spawnType   string // launchctl print's "spawn type" (daemon, interactive, background, adaptive); "" when not asked
 }
 
-var spawnTypeLine = regexp.MustCompile(`(?m)^\s*spawn type = ([A-Za-z]+)`)
+var spawnTypeLine = lazyre.New(`(?m)^\s*spawn type = ([A-Za-z]+)`)
 
 func inspectLaunchAgent(ctx context.Context, opts DoctorOptions) launchAgent {
 	var a launchAgent

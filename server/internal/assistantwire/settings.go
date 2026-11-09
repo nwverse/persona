@@ -82,11 +82,13 @@ type StartParams struct {
 	GuestTools []string `json:"guest_tools,omitempty"`
 }
 
-// SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params.
+// SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is
+// the app's language, the one a refusal is said in ("": the user's; an older hub sends none).
 type SendParams struct {
 	MachineID string         `json:"machine_id"`
 	SessionID string         `json:"session_id"`
 	Params    map[string]any `json:"params"`
+	Lang      string         `json:"lang,omitempty"`
 }
 
 // RenameParams is assistant.rename's params: Params are the app's ({title?, tab_name?}).

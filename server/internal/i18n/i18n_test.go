@@ -69,7 +69,7 @@ func TestCatalogsAgree(t *testing.T) {
 	ph := regexp.MustCompile(`\{(\w+)\}`)
 	shape := func(l Lang) map[string][]string {
 		out := map[string][]string{}
-		for k, v := range catalogs[l] {
+		for k, v := range catalogs()[l] {
 			base := plural.ReplaceAllString(k, "")
 			for _, m := range ph.FindAllStringSubmatch(v, -1) {
 				if !slices.Contains(out[base], m[1]) {
@@ -123,10 +123,10 @@ func TestCatalogsAgree(t *testing.T) {
 			t.Errorf("%s namespaces %v, zh-Hans has %v", l, names(l), names(ZhHans))
 		}
 	}
-	for k, v := range catalogs[ZhHans] {
+	for k, v := range catalogs()[ZhHans] {
 		if strings.Contains(v, "Persona") {
 			for _, l := range Langs[1:] {
-				if s, ok := catalogs[l][k]; ok && !strings.Contains(s, "Persona") {
+				if s, ok := catalogs()[l][k]; ok && !strings.Contains(s, "Persona") {
 					t.Errorf("%s %s drops Persona: %q", l, k, s)
 				}
 			}
@@ -138,7 +138,7 @@ func TestCatalogsAgree(t *testing.T) {
 // argument as "{name}" (the web has the same guard in web/src/i18n/catalog.test.ts). Keys and Args built at run
 // time are not checked.
 func TestCallSitesUseKnownKeys(t *testing.T) {
-	cat := catalogs[ZhHans]
+	cat := catalogs()[ZhHans]
 	ph := regexp.MustCompile(`\{(\w+)\}`)
 	plurals := []string{"zero", "one", "two", "few", "many", "other"}
 	root := filepath.Join("..", "..")
@@ -426,7 +426,7 @@ func TestEveryKeyIsUsed(t *testing.T) {
 	plural := regexp.MustCompile(`_(zero|one|two|few|many|other)$`)
 	starts := slices.Collect(maps.Keys(prefixes))
 	var unused []string
-	for key := range catalogs[ZhHans] {
+	for key := range catalogs()[ZhHans] {
 		if exact[key] || exact[plural.ReplaceAllString(key, "")] {
 			continue
 		}

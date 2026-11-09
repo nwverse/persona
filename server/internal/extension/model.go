@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The extension model (docs/extensions/extensions.md "Dependencies, exports and packs", #1854): an extension may need others (depends), open its
@@ -44,8 +45,8 @@ type PackMember struct {
 }
 
 var (
-	exportedPointID = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-	exportedItemID  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	exportedPointID = lazyre.New(`^[a-z][a-z0-9_]{0,31}$`)
+	exportedItemID  = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 )
 
 // SplitExported says whether point is another extension's ("<extension>.<point>") and whose.

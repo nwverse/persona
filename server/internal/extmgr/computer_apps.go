@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -67,7 +67,7 @@ var askedEveryTimeNames = []string{
 // approval: the plugin's "Ask the first time an app is operated", on unless turned off.
 func (s cuaSettings) approval() bool { return s.AppApproval == nil || *s.AppApproval }
 
-var getAppLiteral = regexp.MustCompile(`getApp\(\s*(?:"([^"\\]+)"|'([^'\\]+)')\s*\)`)
+var getAppLiteral = lazyre.New(`getApp\(\s*(?:"([^"\\]+)"|'([^'\\]+)')\s*\)`)
 
 // callApps is what a computer tool call names: its apps by name (or wholeScreen), and whether that is all it may
 // touch (false: a script naming its apps by expression or none, a step with no app of its own or the call's).

@@ -39,7 +39,7 @@ struct CompactFoldRow: View {
 
     var body: some View {
         HStack(spacing: CompactList.gap) {
-            Image(systemName: Theme.Icon.expand)
+            ThemedIcon(Theme.Icon.expand)
                 .font(CompactList.metaStrong)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: CompactList.mark)
@@ -66,7 +66,7 @@ struct CompactCollapseRow: View {
 
     var body: some View {
         HStack(spacing: CompactList.gap) {
-            Image(systemName: Theme.Icon.collapse)
+            ThemedIcon(Theme.Icon.collapse)
                 .font(CompactList.metaStrong)
                 .scaledFrame(width: CompactList.mark)
             Text(title).font(CompactList.title).lineLimit(1)
@@ -90,7 +90,7 @@ struct CompactQuietSpaceRow: View {
     var body: some View {
         let at = Fmt.relative(group.updatedAt(feed))
         HStack(spacing: CompactList.gap) {
-            Image(systemName: repo ? Theme.Icon.folder : Theme.Icon.space)
+            ThemedIcon(repo ? Theme.Icon.folder : Theme.Icon.space)
                 .font(CompactList.meta)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: CompactList.mark)
@@ -123,7 +123,7 @@ struct CompactInteractionRow: View {
 
     var body: some View {
         HStack(spacing: CompactList.gap) {
-            Image(systemName: interaction.kind.symbol)
+            ThemedIcon(interaction.kind.symbol)
                 .font(CompactList.metaStrong)
                 .foregroundStyle(StatusPalette.needsYou.dot)
                 .scaledFrame(width: CompactList.mark)
@@ -133,8 +133,8 @@ struct CompactInteractionRow: View {
                     .font(CompactList.meta).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: Theme.Space.xs)
-            TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                Text(Fmt.relative(interaction.createdAt, now: ctx.date)).font(CompactList.meta.monospacedDigit())
+            VisibleTimelineView(interval: 30) { now in
+                Text(Fmt.relative(interaction.createdAt, now: now)).font(CompactList.meta.monospacedDigit())
                     .foregroundStyle(.secondary).lineLimit(1)
             }
             .fixedSize()

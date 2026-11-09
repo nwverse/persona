@@ -5,7 +5,7 @@ import XCTest
 /// drag no longer pages to the files: the header's ··· menu opens them, and the edge swipe back still works.
 ///   PORT=18797 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/SwipeToQuoteTests
-/// Both layouts (TEST_RUNNER_PERSONA_LAYOUT=shell) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class SwipeToQuoteTests: XCTestCase {
     private var app: XCUIApplication!
     private let answer = "PR #42 看完了"

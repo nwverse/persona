@@ -24,6 +24,8 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
+        /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
+        static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
         static let byState = "circle.grid.2x1"
         static let muted = "bell.slash.fill"
@@ -47,7 +49,7 @@ extension Theme {
         /// A task the main conversation supervises and reviews against its criteria (#3124): its chip, its checklist, a review in the feed.
         static let supervised = "checkmark.diamond"
         /// A criterion a review found missing (the met one is `done`, one not reviewed yet `time`).
-        static let unmet = "xmark"
+        static let unmet = close
         /// A supervised task's agent reported to Persona (a question, a block, a finish; #5112).
         static let reported = "arrow.up.message"
         static let recurring = "repeat"
@@ -65,6 +67,12 @@ extension Theme {
         static let instructed = "quote.bubble"
         /// The manager's conclusion: done, just read it.
         static let concluded = "flag.checkered"
+        /// A to-do's due date (#1683): the list row and the detail page.
+        static let dueDate = "calendar.badge.clock"
+        /// A to-do's reminder: the phone is pushed about it at a set time (#1683).
+        static let reminder = "bell.circle"
+        /// A to-do of high priority (#1683).
+        static let highPriority = "flag.fill"
         /// Remind When Seen, Unanswered (#5096): a question the user saw and did not answer, reminded once after a while.
         static let replyReminder = "clock.badge.exclamationmark"
         /// Persona woke a waiting agent up (a message it typed in for the model, `Injected`).
@@ -113,13 +121,17 @@ extension Theme {
         /// Upload: files from this device into a folder on a machine (#4858).
         static let upload = "doc.badge.arrow.up"
         static let down = "arrow.down"
+        /// One step turns into the next (a setting's example: before → after, a timeline).
+        static let becomes = "arrow.forward"
         static let gitBranch = "arrow.triangle.branch"
         /// The spaces a host nests under another (Orca's child worktrees,「N 个子项」, #3075).
         static let childSpaces = "square.3.layers.3d.down.right"
+        static let workspaceUnread = "bell.fill"
+        static let workspaceHost = "powerplug"
         /// Branch to New Chat: a new conversation from a reply (#2137).
         static let forkChat = "arrow.branch"
         /// Rewind to Here: back to before one of your messages in a Claude session (#2915).
-        static let rewindChat = "clock.arrow.circlepath"
+        static let rewindChat = undo
         static let gitUpstream = "cloud"
         static let gitNoUpstream = "icloud.slash"
         /// Git Pull / Push / Fetch in the node menu (docs/integrations/terminal.md「节点菜单」).
@@ -137,13 +149,15 @@ extension Theme {
         /// Put a computer's own Persona files right (Machine Details › What This Computer Can Do › Repair).
         static let repair = "wrench.adjustable"
         /// Loads the in-app page again (the link sheet's header).
-        static let reload = "arrow.clockwise"
+        static let reload = retry
         static let undo = "arrow.uturn.backward"
         static let interrupt = "stop.fill"
         static let stopLoop = "stop.circle"
         static let run = "play.fill"
         static let add = "plus"
         static let send = "arrow.up"
+        /// Move up, the up-arrow key: the same arrow as `send`.
+        static let up = send
         /// The round send button beside a composer.
         static let submit = "arrow.up.circle.fill"
         static let sendMail = "paperplane.fill"
@@ -160,8 +174,6 @@ extension Theme {
         static let style = "paintpalette"
         /// Settings › Appearance › Theme Color.
         static let themeColor = "swatchpalette"
-        /// Settings › Appearance › Layout (the shell or the old tabs).
-        static let layout = "rectangle.topthird.inset.filled"
         /// Settings › Appearance › Light & Dark, and its Match System.
         static let colorScheme = "circle.lefthalf.filled"
         /// Settings › Appearance › Language: the interface language.
@@ -185,6 +197,11 @@ extension Theme {
         /// The text size setting.
         static let textSize = "textformat.size"
         static let upDown = "arrow.up.arrow.down"
+        /// A queued message one place earlier / later (#6088).
+        static let queueUp = "arrowshape.up"
+        static let queueDown = "arrowshape.down"
+        /// The queued messages given to the agent now, ahead of its next tool boundary (#6088).
+        static let sendNow = "forward.end.fill"
         static let select = "selection.pin.in.out"
         static let insert = "text.cursor"
         static let view = "eye"
@@ -239,7 +256,7 @@ extension Theme {
         /// Persona is working on a tool (the voice screen's Working).
         static let voiceWorking = "hourglass"
         /// The voice conversation has stopped (mic off).
-        static let voiceEnded = "mic.slash"
+        static let voiceEnded = "phone.down"
         /// Start listening again after the conversation stopped.
         static let voiceResume = "mic.circle.fill"
         /// Cut Persona off while it speaks (the voice screen's Interrupt).
@@ -256,6 +273,10 @@ extension Theme {
 
         // MARK: Things
 
+        /// A saved place (Settings › Assistant › Saved Places) and a place a reminder goes off at.
+        static let place = "mappin.and.ellipse"
+        /// The phone's current location (Use Current Location).
+        static let currentLocation = "location"
         /// The phone's own health trends (steps, sleep, weight drawn from Apple Health, #3272).
         static let healthTrends = "chart.line.uptrend.xyaxis"
         /// Persona itself (the brand's four-point star).
@@ -294,7 +315,7 @@ extension Theme {
         /// A database table (Feishu Base).
         static let base = "square.grid.3x2"
         /// A Moments (Feishu Moments) post in the inbox: the company's public feed.
-        static let moments = "rectangle.3.group.bubble"
+        static let moments = "newspaper"
         static let folder = "folder"
         /// Home: Back to Main Chat (the main conversation), and a repository's main checkout in the Agents list's By Repository (as Orca
         /// and the web mark it).
@@ -329,7 +350,7 @@ extension Theme {
         static let pictureInPicture = "pip.enter"
         /// The small window's own buttons, named on its card (VNCPiPCard): back to the app, and ▶ (connect again).
         static let pictureInPictureExit = "pip.exit"
-        static let pictureInPicturePlay = "play.fill"
+        static let pictureInPicturePlay = run
         /// Trackpad Mode: the screen moves the pointer like a trackpad.
         static let trackpad = "rectangle.and.hand.point.up.left"
         /// Center Pointer: the pointer back to the middle.
@@ -341,9 +362,9 @@ extension Theme {
         /// I'm Done: the Mac handed back to the agent.
         static let handBack = "hand.thumbsup"
         /// Signing in with a code entered on a web page instead of a computer's login (GitHub's device flow).
-        static let deviceCode = "key"
+        static let deviceCode = credentials
         /// A website whose sign-in (cookies) a browser keeps (a Mac's Browser Sign-ins, #1304).
-        static let siteLogin = "lock"
+        static let siteLogin = "person.badge.key"
         /// This Mac out of the hub's reach (the Persona page's device chip on the Mac).
         static let laptopOffline = "laptopcomputer.slash"
         static let server = "server.rack"
@@ -359,7 +380,7 @@ extension Theme {
         /// A hub reached through an SSH tunnel (Settings › hub › SSH Tunnel, docs/operations/network.md「经 SSH 隧道连 hub」).
         static let sshTunnel = "network.badge.shield.half.filled"
         /// A hub reached through the app's own in-app tunnel (docs/operations/network.md「经 App 内隧道连 hub」).
-        static let inAppTunnel = "lock.shield"
+        static let inAppTunnel = "lock.iphone"
         /// A hub reached through a SOCKS5 proxy another app on this device serves (Settings › hub › Local Proxy,
         /// docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
         static let localProxy = "app.connected.to.app.below.fill"
@@ -384,9 +405,9 @@ extension Theme {
         /// anything else is `plugins`.
         static let pluginChart = "chart.bar"
         static let pluginGauge = "gauge.with.needle"
-        static let pluginList = "list.bullet"
-        static let pluginBell = "bell"
-        static let pluginDoc = "doc.text"
+        static let pluginList = listView
+        static let pluginBell = unmute
+        static let pluginDoc = document
         static let pluginCalendar = "calendar"
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
@@ -397,6 +418,8 @@ extension Theme {
         static let safari = "safari"
         /// A web page a machine serves on one of its ports (an agent's dev server, docs/operations/ports.md).
         static let servedPage = "globe"
+        /// The web: a page an agent fetches, a browser it drives (the same globe).
+        static let web = servedPage
         /// Something opened in a window of its own (Mac).
         static let newWindow = "macwindow.badge.plus"
         /// The Mac code viewer's find bar: the previous / next match.
@@ -440,7 +463,7 @@ extension Theme {
         static let connectors = "point.3.connected.trianglepath.dotted"
         /// This device as a connector (its contacts, calendar, photos…): iPhone, iPad or Mac.
         #if os(macOS)
-        static let thisDevice = "laptopcomputer"
+        static let thisDevice = laptop
         #else
         static let thisDevice = "iphone.gen3"
         #endif
@@ -501,6 +524,51 @@ extension Theme {
         static let privacy = "checkmark.shield"
         /// A tool the app has no symbol for.
         static let unknownTool = "wrench.and.screwdriver"
+
+        // MARK: Agents' tools, their requests, and files
+
+        /// A request for the user: a question, a plan to approve (cards, panels, the watch, the tools that ask).
+        static let question = "questionmark.bubble"
+        static let questionFilled = "questionmark.bubble.fill"
+        static let plan = "list.bullet.clipboard"
+        static let planFilled = "list.bullet.clipboard.fill"
+        /// A file edited in place (the Edit tools; Auto-Edit mode).
+        static let editFile = "pencil.line"
+        static let newFile = "doc.badge.plus"
+        /// Files looked up by name or listed (Glob, LS).
+        static let findFiles = "folder.badge.questionmark"
+        /// Text searched for inside files (Grep).
+        static let findText = "text.magnifyingglass"
+        /// A subagent the agent started (the Agent / Task tool, a session's subagents); one at work.
+        static let subagent = "person.2"
+        static let subagentWorking = "person.2.badge.gearshape"
+        /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
+        static let agentChat = "bubble.left.and.text.bubble.right"
+        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one).
+        static let meeting = "person.2.wave.2"
+        /// People in the knowledge base.
+        static let people = "person.3"
+        /// A tap on the screen, in tips and features.
+        static let tap = "hand.tap"
+        /// Switching between a space's agents with a swipe.
+        static let switchAgents = "arrow.left.arrow.right"
+        /// The chat history as a column beside the chat, or (narrow) behind a menu button; on the Mac, the window's
+        /// sections column (the toolbar button beside the traffic lights, ⌃⌘S).
+        static let sidebar = "sidebar.left"
+        static let sidebarMenu = "line.3.horizontal"
+        /// A file by kind, filled, on a colored badge (Lark attachments, Feishu files; `FeishuDocsFileKind`).
+        static let fileText = "doc.text.fill"
+        static let filePDF = "doc.richtext.fill"
+        static let fileSheet = "tablecells.fill"
+        static let fileSlides = "play.rectangle.fill"
+        static let fileArchive = "doc.zipper"
+        static let fileImage = "photo.fill"
+        static let fileVideo = "film.fill"
+        static let fileAudio = voiceMessage
+        static let fileApp = "shippingbox.fill"
+        static let fileOther = "doc.fill"
+        /// A Feishu Base (bitable) as a file.
+        static let baseFilled = "square.grid.3x2.fill"
     }
 
     /// Other products' own marks, in the asset catalog's Brands folder (sources and terms in THIRD_PARTY_NOTICES.md).

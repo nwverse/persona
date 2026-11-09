@@ -246,6 +246,9 @@ internal fun AgentsScreen(
     Box(Modifier.fillMaxSize()) {
         JListPage(
             title = if (connection == ConnectionState.Online) names[page.settings.machineFilter] ?: "Agents" else connection.title,
+            // The list holds text fields (search, a password card's password, #1581): it ends above the keyboard so the
+            // focused one scrolls into view; the root leaves keyboard padding to each page (#867).
+            modifier = Modifier.imePadding(),
             state = listState,
             summary = summary, subtitle = subtitle, greet = true,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),

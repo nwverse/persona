@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The inbox (docs/plans/plan-connectors.md "4 · Inbox"): GitHub's unread notifications that ask something of the user —
@@ -248,7 +248,7 @@ func classify(n notification) (kind, label string) {
 	return "", ""
 }
 
-var subjectURL = regexp.MustCompile(`/repos/([^/]+/[^/]+)/(?:issues|pulls)/(\d+)$`)
+var subjectURL = lazyre.New(`/repos/([^/]+/[^/]+)/(?:issues|pulls)/(\d+)$`)
 
 // threadOf is the PR / issue a notification is about ("example-org/example-repo#12"), so a review request and an @
 // on the same PR are one thing; anything else is its own notification.
@@ -429,7 +429,7 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 	return out, nil
 }
 
-var threadRef = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)$`)
+var threadRef = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)$`)
 
 // Reply comments the text on the PR / issue (the user pressed send on it).
 func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {

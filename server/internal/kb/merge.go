@@ -3,10 +3,11 @@ package kb
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // MergeMessages writes lines into a chat's day files at their place in time, for messages that may be older than
@@ -165,7 +166,7 @@ func clockOf(row string) string {
 
 // trailingMedia is one attachment at the end of a message as the archive writes it: "[附件]" with or without the link
 // to the saved file, or a placeholder naming the kind of one imported history did not download.
-var trailingMedia = regexp.MustCompile(`\s*\[(?:附件|文件|视频|语音)\](?:\([^()\s]*\))?\s*$`) // i18n-ignore: archive data
+var trailingMedia = lazyre.New(`\s*\[(?:附件|文件|视频|语音)\](?:\([^()\s]*\))?\s*$`) // i18n-ignore: archive data
 
 // dupKey is what two messages (as Line.Format writes them, without the last "\n") are compared by: the text with its
 // trailing attachments, however many and however written, folded into one mark. The live archive writes a file as

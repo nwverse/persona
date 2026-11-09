@@ -53,8 +53,10 @@ type Machine struct {
 	warmUntil time.Time
 	err       string
 	lastSeen  time.Time
-	sessions  []proto.Session
-	watchers  map[string]int // session id -> subscribed clients
+	// sessions is the manager's last list. A list once kept is never changed in place, only replaced (a change copies
+	// it first): keptSessions hands it out without a copy, to be read after m.mu is let go.
+	sessions []proto.Session
+	watchers map[string]int // session id -> subscribed clients
 	// What the node was told about each session's watch (syncWatch): watchMu orders the session.watch /
 	// session.unwatch calls per session (a 1-slot channel, so a wait for it can end with the caller's ctx), nodeWatch
 	// is what the last of them left (absent: not watched). A slot goes when no call holds or waits for it and the
@@ -281,12 +283,20 @@ func (m *Machine) sessionList() []proto.Session {
 	return out
 }
 
+// keptSessions is the machine's list itself, not a copy: only to be read (Machine.sessions). The pushes read a busy
+// machine's ~200 KB list on every change of one session; a copy each time was most of what they allocated.
+func (m *Machine) keptSessions() []proto.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions
+}
+
 func (m *Machine) session(id string) (proto.Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, s := range m.sessions {
-		if s.SessionID == id {
-			return s, true
+	for i := range m.sessions { // by index: a range value copies every (large) session it passes
+		if m.sessions[i].SessionID == id {
+			return m.sessions[i], true
 		}
 	}
 	return proto.Session{}, false
@@ -544,6 +554,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 			return
 		}
 		m.mu.Lock()
+		m.sessions = slices.Clone(m.sessions) // the kept list may be being read (keptSessions)
 		for i := range m.sessions {
 			if r, ok := p.Revs[m.sessions[i].SessionID]; ok {
 				m.sessions[i].Rev = r
@@ -557,6 +568,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		var p struct {
 			SessionID string       `json:"session_id"`
 			Items     []proto.Item `json:"items"`
+			MoreAfter bool         `json:"more_after"`
 			itemSpan
 		}
 		// A batch without items still matters when it has a span: it moves the apps' "complete up to" forward.
@@ -576,7 +588,7 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		}
 		m.mu.Unlock()
 		p.Items = m.hub.withInjected(p.Items)
-		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan)
+		m.hub.itemsToSubscribers(m.cfg.ID, p.SessionID, p.Items, p.itemSpan, p.MoreAfter)
 	case "session.screen":
 		var p struct {
 			SessionID string `json:"session_id"`

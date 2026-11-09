@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "manifest.schema.json",
   "title": "Extension manifest",
-  "description": "persona-extension.json (read as persona-plugin.json before the rename, #1844) at the root of an extension's package. The hub reads it strictly: a field it does not know anywhere fails the install. Rules a schema cannot say (a gate file inside the package, ids unique across extensions, version ranges) stay the hub's.",
+  "description": "persona-extension.json (read as persona-plugin.json before the rename, #1844) at the root of an extension's package. The hub reads it strictly: a field it does not know anywhere fails the install. Rules a schema cannot say (a gate file inside the package, ids unique across extensions, a name listed twice, what a version range admits) stay the hub's.",
   "$ref": "#/$defs/Manifest",
   "$defs": {
     "ID": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
@@ -18,17 +18,23 @@
       "pattern": "^((\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?|config:[a-z_][a-z0-9_]{0,63}(:http)?)$"
     },
     "ActivationEvent": {"type": "string", "enum": ["on_startup", "on_call", "on_http"]},
+    "VersionRange": {
+      "description": ">=X.Y.Z, <X.Y.Z, or both with spaces between; empty is any version.",
+      "type": "string",
+      "pattern": "^(\\s*(>=|<)(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\s+(>=|<)(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)*\\s*)?$"
+    },
     "Manifest": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "manifest_version": {"type": "integer", "const": 1},
         "id": {"$ref": "#/$defs/ID"},
-        "name": {"type": "string", "minLength": 1, "maxLength": 40},
+        "name": {"type": "string", "minLength": 1, "maxLength": 40, "pattern": "\\S"},
         "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"},
         "description": {"type": "string"},
         "publisher": {"type": "string"},
-        "homepage": {"type": "string", "pattern": "^https://[^/?#]+"},
+        "homepage": {"type": "string",
+          "pattern": "^https://([A-Za-z0-9._~!$&'()*+,;=:%@-]*@)?[^\\x00-\\x20\\x7f/?#@\\\\^`{|}]+([/?#][^\\x00-\\x1f\\x7f]*)?$"},
         "tags": {
           "description": "What the market shows and searches (docs \"Extension market\"): at most 16, each 1 to 24 characters. Packages and indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them instead.",
           "type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 24}
@@ -58,7 +64,11 @@
         },
         "auth": {"$ref": "#/$defs/AuthSpec"}
       },
-      "required": ["manifest_version", "id", "name", "version"]
+      "required": ["manifest_version", "id", "name", "version"],
+      "anyOf": [
+        {"not": {"anyOf": [{"required": ["runtime"]}, {"required": ["node"]}]}},
+        {"required": ["engines"], "properties": {"engines": {"anyOf": [{"required": ["extension_protocol"]}, {"required": ["plugin_protocol"]}]}}}
+      ]
     },
     "ToolSpec": {
       "description": "One command-line program. Exactly one of archive and npm.",
@@ -125,7 +135,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
-        "version": {"type": "string", "description": "A range of its versions: >=1.2.0, <2.0.0, or both with a space between."}
+        "version": {"$ref": "#/$defs/VersionRange", "description": "A range of its versions: >=1.2.0, <2.0.0, or both with a space between."}
       },
       "required": ["id"]
     },
@@ -155,7 +165,7 @@
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "market": {"type": "string", "description": "The address of the market it comes from (github:owner/repo, https://…), as the hub registered it; empty: the pack's own market, else the first registered market that has it."},
-        "version": {"type": "string", "description": "A range of its versions, as in depends."}
+        "version": {"$ref": "#/$defs/VersionRange", "description": "A range of its versions, as in depends."}
       },
       "required": ["id"]
     },
@@ -164,7 +174,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "persona": {"type": "string", "description": "A range of hub build numbers (\">=202611050000 <202701010000\")."},
+        "persona": {"type": "string", "description": "A range of hub build numbers (\">=202611050000 <202701010000\").",
+          "pattern": "^(\\s*(>=|<)\\+?0*[1-9][0-9]*(\\s+(>=|<)\\+?0*[1-9][0-9]*)*\\s*)?$"},
         "extension_protocol": {"type": "integer", "const": 1},
         "plugin_protocol": {"type": "integer", "const": 1}
       }
@@ -177,15 +188,30 @@
         "source": {"$ref": "#/$defs/SourceRuntime"},
         "command": {"$ref": "#/$defs/Command"},
         "args": {"type": "array", "items": {"type": "string"}},
-        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}, "propertyNames": {"$ref": "#/$defs/EnvName"}},
         "rpc": {"type": "string", "enum": ["stdio", "none"]},
         "http": {"type": "boolean"},
         "resources": {"$ref": "#/$defs/Resources"}
       },
-      "allOf": [{"oneOf": [
-        {"required": ["command"], "not": {"required": ["source"]}, "properties": {"mode": {"enum": ["process"]}}},
-        {"required": ["mode", "source"], "properties": {"mode": {"const": "deno"}, "rpc": {"const": "stdio"}, "http": {"const": false}}, "not": {"anyOf": [{"required": ["command"]}, {"required": ["args"]}, {"required": ["env"]}]}}
-      ]}]
+      "allOf": [
+        {"oneOf": [
+          {"required": ["command"], "not": {"required": ["source"]}, "properties": {"mode": {"enum": ["process"]}}},
+          {"required": ["mode", "source"], "properties": {"mode": {"const": "deno"}, "rpc": {"const": "stdio"}, "http": {"const": false}}, "not": {"anyOf": [{"required": ["command"]}, {"required": ["args"]}, {"required": ["env"]}]}}
+        ]},
+        {"description": "command: a package path, or one per <os>-<arch>.", "properties": {"command": {"anyOf": [
+          {"$ref": "#/$defs/PackagePath"},
+          {"type": "object", "minProperties": 1, "propertyNames": {"pattern": "^[a-z0-9]+-[a-z0-9]+$"}, "additionalProperties": {"$ref": "#/$defs/PackagePath"}}
+        ]}}},
+        {"description": "rpc none needs http: the hub could not talk to it otherwise.", "anyOf": [{"properties": {"rpc": {"const": "stdio"}}}, {"required": ["http"], "properties": {"http": {"const": true}}}]}
+      ]
+    },
+    "PackagePath": {
+      "description": "A path inside the package: relative, / only, clean (no . or .. part, no // or trailing /).",
+      "type": "string", "minLength": 1, "not": {"pattern": "^/|\\\\|(^|/)\\.\\.?(/|$)|//|/$"}
+    },
+    "EnvName": {
+      "description": "An environment variable name; not the hub's (PERSONA_*) nor the dynamic loader's (LD_*, DYLD_*).",
+      "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": {"pattern": "^(PERSONA_|LD_|DYLD_)"}
     },
     "SourceRuntime": {
       "type": "object", "additionalProperties": false,
@@ -221,7 +247,7 @@
       "properties": {
         "command": {"$ref": "#/$defs/Command"},
         "args": {"type": "array", "items": {"type": "string"}},
-        "env": {"type": "object", "additionalProperties": {"type": "string"}},
+        "env": {"type": "object", "additionalProperties": {"type": "string"}, "propertyNames": {"$ref": "#/$defs/EnvName"}},
         "machines": {"type": "string", "minLength": 1},
         "rpc": {"type": "string", "enum": ["stdio", "none"]},
         "http": {"type": "boolean"},
@@ -229,7 +255,14 @@
         "secrets": {"type": "array", "items": {"type": "string"}},
         "permissions": {"$ref": "#/$defs/NodePermissions"}
       },
-      "required": ["command", "machines"]
+      "required": ["command", "machines"],
+      "allOf": [
+        {"description": "command: one package path per darwin-<arch> / linux-<arch>, not the hub's own binary.", "properties": {"command": {
+          "type": "object", "minProperties": 1, "propertyNames": {"pattern": "^(darwin|linux)-[a-z0-9]+$"},
+          "additionalProperties": {"$ref": "#/$defs/PackagePath", "not": {"const": "personad"}}
+        }}},
+        {"description": "rpc none needs http: the hub could not talk to it otherwise.", "anyOf": [{"properties": {"rpc": {"const": "stdio"}}}, {"required": ["http"], "properties": {"http": {"const": true}}}]}
+      ]
     },
     "NodePermissions": {
       "description": "What the program on computers asks for there: hosts it reaches, files outside its data directory, macOS's privacy permissions.",
@@ -246,7 +279,7 @@
       "additionalProperties": false,
       "properties": {
         "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
-        "title": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "description": {"type": "string"},
         "required": {"type": "boolean"},
         "hint": {"description": "last4: once set, the settings show its last four characters.", "enum": ["last4"]}
@@ -261,7 +294,7 @@
         "network": {"type": "array", "items": {"$ref": "#/$defs/NetworkEntry"}},
         "hub_api": {"type": "boolean", "description": "The old way: the hub's full token. With hub scopes, the scopes win."},
         "hub": {"type": "array", "description": "The scopes of the hub's API it calls: its token opens their routes only.",
-          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|machines\\.read|notify|assistant\\.ask|todos\\.read|todos\\.write|models|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
+          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|machines\\.read|notify|assistant\\.ask|assistant\\.read|todos\\.read|todos\\.write|models|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
         "launcher_keys": {"type": "boolean"},
         "gh_login": {"type": "boolean", "description": "It asks the hub for the GitHub token of a computer's gh login (the one the user picks for the GitHub connector), held in its memory only."},
         "usage_gateways": {"type": "boolean", "description": "It reads the account list of the account-pool gateways in the hub's usage sources (usage.gateway_accounts): accounts, status and quota windows, never a key."},
@@ -276,30 +309,30 @@
       "minProperties": 1,
       "additionalProperties": true,
       "properties": {
-        "connectors": {"type": "array", "items": {"$ref": "#/$defs/ConnectorItem"}},
-        "voice": {"type": "array", "items": {"$ref": "#/$defs/NamedItem"}},
-        "computer": {"type": "array", "items": {"$ref": "#/$defs/NamedItem"}},
-        "browser": {"type": "array", "items": {"$ref": "#/$defs/NamedItem"}},
-        "quota": {"type": "array", "items": {"$ref": "#/$defs/QuotaItem"}},
-        "providers": {"type": "array", "items": {"$ref": "#/$defs/ProviderItem"}},
-        "api": {"type": "array", "items": {"$ref": "#/$defs/APIItem"}},
-        "assistant": {"type": "array", "items": {"$ref": "#/$defs/AssistantItem"}},
-        "mcp_servers": {"type": "array", "items": {"$ref": "#/$defs/MCPServerItem"}},
-        "ui": {"type": "array", "items": {"$ref": "#/$defs/UIItem"}},
-        "agent_sources": {"type": "array", "items": {"$ref": "#/$defs/AgentSourceItem"}},
-        "channel": {"type": "array", "items": {"$ref": "#/$defs/ChannelItem"}},
-        "events": {"type": "array", "items": {"$ref": "#/$defs/EventsItem"}},
-        "shortcuts": {"type": "array", "items": {"$ref": "#/$defs/ShortcutItem"}},
-        "skills": {"type": "array", "items": {"$ref": "#/$defs/SkillItem"}},
-        "prompts": {"type": "array", "items": {"$ref": "#/$defs/PromptItem"}},
-        "themes": {"type": "array", "items": {"$ref": "#/$defs/ThemeItem"}},
-        "looks": {"type": "array", "items": {"$ref": "#/$defs/LookItem"}},
-        "triage_templates": {"type": "array", "items": {"$ref": "#/$defs/TriageTemplateItem"}},
-        "agent_filters": {"type": "array", "items": {"$ref": "#/$defs/AgentFilterItem"}},
-        "tunnels": {"type": "array", "items": {"$ref": "#/$defs/TunnelItem"}},
-        "error_reports": {"type": "array", "items": {"$ref": "#/$defs/ErrorReportsItem"}},
-        "auth_relay": {"type": "array", "items": {"$ref": "#/$defs/AuthRelayItem"}},
-        "messaging": {"type": "array", "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
+        "connectors": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ConnectorItem"}},
+        "voice": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
+        "computer": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
+        "browser": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NamedItem"}},
+        "quota": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/QuotaItem"}},
+        "providers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ProviderItem"}},
+        "api": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/APIItem"}},
+        "assistant": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AssistantItem"}},
+        "mcp_servers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/MCPServerItem"}},
+        "ui": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/UIItem"}},
+        "agent_sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AgentSourceItem"}},
+        "channel": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ChannelItem"}},
+        "events": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/EventsItem"}},
+        "shortcuts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ShortcutItem"}},
+        "skills": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/SkillItem"}},
+        "prompts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/PromptItem"}},
+        "themes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ThemeItem"}},
+        "looks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/LookItem"}},
+        "triage_templates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TriageTemplateItem"}},
+        "agent_filters": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AgentFilterItem"}},
+        "tunnels": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TunnelItem"}},
+        "error_reports": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ErrorReportsItem"}},
+        "auth_relay": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AuthRelayItem"}},
+        "messaging": {"type": "array", "minItems": 1, "items": {"$ref": "messaging.schema.json#/$defs/MessagingItem"}}
       }
     },
     "SkillItem": {
@@ -463,6 +496,7 @@
     "AuthRelayItem": {
       "description": "Authorization links it completes for the user's Agents (auth_relay.complete): links on these hosts and paths, https only. Needs the program to speak the protocol and permissions.auth_relay.",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "name": {"type": "string", "minLength": 1, "maxLength": 80, "description": "What it completes, in a few words (shown in the extension's details)."},
@@ -476,6 +510,7 @@
     "ErrorReportsItem": {
       "description": "It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the program to speak the protocol, on_startup and permissions.error_reports.",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "sources": {"type": "array", "description": "Only reports from these; omitted: all.", "minItems": 1, "uniqueItems": true,
@@ -511,6 +546,7 @@
     "ConnectorItem": {
       "description": "The connector protocol's manifest (docs/protocol/connector-protocol.md).",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*$"},
         "name": {"type": "string", "minLength": 1},
@@ -518,13 +554,13 @@
         "hosts": {"type": "array", "items": {"type": "string"}},
         "agent_tools": {"type": "array", "items": {"type": "string"}},
         "unlisted": {"type": "array", "items": {"type": "string"}},
-        "confirm_always": {"type": "array", "items": {"type": "string"}},
+        "confirm_always": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "poll_seconds": {"type": "integer", "minimum": 0},
         "kinds": {"type": "array", "items": {"type": "string"}},
         "kind_descriptions": {"type": "object", "additionalProperties": {"type": "string"}},
         "archive_sources": {"type": "array", "maxItems": 4, "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*$"}},
         "meta_description": {"type": "string", "maxLength": 4000},
-        "cli": {"type": "string"},
+        "cli": {"type": "string", "pattern": "^([a-z][a-z0-9-]{0,31})?$", "not": {"enum": ["personad", "lark-cli", "sh", "bash", "git", "gh", "curl", "python3", "node", "claude", "codex"]}},
         "sends_as_user": {"type": "boolean", "description": "The connector sends messages in the user's name by itself, not through the hub's write gate (a read tool that also replies, say). Its program may then record each one in the sent-as-user ledger with sent.record, and the install preview says so."}
       },
       "required": ["id", "name", "capabilities"]
@@ -532,6 +568,7 @@
     "NamedItem": {
       "description": "A contribution with only an id and a name: voice, computer, browser.",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "name": {"type": "string"}
@@ -540,6 +577,7 @@
     },
     "QuotaItem": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "name": {"type": "string", "minLength": 1},
@@ -549,13 +587,14 @@
     },
     "ProviderItem": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "name": {"type": "string", "minLength": 1},
         "description": {"type": "string"},
         "kind": {"type": "string", "enum": ["launcher", "api"]},
         "api": {"type": "string", "enum": ["messages", "responses"]},
-        "base_url": {"type": "string", "pattern": "^https?://"},
+        "base_url": {"type": "string", "pattern": "^https?://([^/?#@\\s]*@)?[^/?#@\\s]+([/?#]|$)"},
         "model": {"type": "string"},
         "small_model": {"type": "string"},
         "models": {"type": "array", "items": {"$ref": "#/$defs/ProviderModel"}},
@@ -566,11 +605,13 @@
     },
     "ProviderModel": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string"}},
       "required": ["id"]
     },
     "APIItem": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "prefix": {"$ref": "#/$defs/ID"},
@@ -582,6 +623,7 @@
     },
     "APIReceipt": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "method": {"type": "string", "enum": ["POST", "PUT", "PATCH", "DELETE"]},
         "path": {"type": "string", "pattern": "^/"},
@@ -591,6 +633,7 @@
     },
     "AssistantItem": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "skills": {"type": "array", "items": {"type": "string"}},
@@ -617,6 +660,7 @@
     "UIItem": {
       "description": "A place in the apps the extension draws (docs \"UI slots\").",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
@@ -625,13 +669,18 @@
         "icon": {"$ref": "view.schema.json#/$defs/NavIcon", "description": "nav_page only."},
         "opens": {"type": "string", "description": "overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension."},
         "connector": {"type": "string", "description": "inbox_item only: one of the extension's own connectors."},
-        "families": {"type": "array", "minItems": 1, "items": {"$ref": "view.schema.json#/$defs/WidgetFamily"}, "description": "widget only (and needed there): the sizes it can be drawn at."},
+        "families": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "view.schema.json#/$defs/WidgetFamily"}, "description": "widget only (and needed there): the sizes it can be drawn at."},
         "refresh_minutes": {"type": "integer", "minimum": 15, "maximum": 1440, "description": "widget only: how often the widget is drawn again on its own (30 when not said)."}
       },
-      "required": ["id", "title", "placement"]
+      "required": ["id", "title", "placement"],
+      "anyOf": [
+        {"properties": {"placement": {"const": "widget"}}, "required": ["families"]},
+        {"properties": {"placement": {"not": {"const": "widget"}}}, "not": {"anyOf": [{"required": ["families"]}, {"required": ["refresh_minutes"]}]}}
+      ]
     },
     "AgentSourceItem": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "name": {"type": "string", "minLength": 1},
@@ -641,6 +690,7 @@
     },
     "ChannelItem": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
         "name": {"type": "string", "minLength": 1, "maxLength": 40},
@@ -654,6 +704,7 @@
     },
     "ChannelCapabilities": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "images_in": {"type": "boolean"},
         "files_in": {"type": "boolean"},
@@ -669,6 +720,7 @@
     },
     "EventsItem": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "subscribe": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": ["kb.changed", "kb.forgotten", "inbox.changed", "agent.needs_you", "agent.finished", "todo.changed", "todo.decision"]}}
@@ -678,6 +730,7 @@
     "ShortcutItem": {
       "description": "An action of the extension the system runs (docs \"System placements\"): Shortcuts and Siri on iPhone, Mac and Apple Watch. The hub asks the extension shortcut.run with the values.",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "id": {"$ref": "#/$defs/ID"},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
@@ -690,6 +743,7 @@
     "ShortcutParam": {
       "description": "A value the shortcut asks for; it reaches the extension as a string (a toggle's \"true\" / \"false\").",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
         "title": {"type": "string", "minLength": 1, "maxLength": 40},
@@ -697,7 +751,11 @@
         "choices": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "view.schema.json#/$defs/Choice"}, "description": "choice only."},
         "required": {"type": "boolean"}
       },
-      "required": ["name", "title", "kind"]
+      "required": ["name", "title", "kind"],
+      "anyOf": [
+        {"properties": {"kind": {"const": "choice"}}, "required": ["choices"]},
+        {"properties": {"kind": {"not": {"const": "choice"}}}, "not": {"required": ["choices"]}}
+      ]
     },
     "ShortcutParamKind": {"type": "string", "enum": ["text", "number", "toggle", "choice"]}
   }
