@@ -2,6 +2,21 @@
 
 Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "Lessons" in `CLAUDE.md`; see the index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+## Visible supervision replies do not exempt tool execution from folding (#2705)
+
+A promoted supervision round must expose its input and final reply, not pull visibility tools out of the work
+summary. `task_review` and `supervision_finish` were extracted by tool name even on failure: a trace with two ordinary
+calls, compaction, a review and a failed finish displayed a two-tool summary plus two uncollapsible rows. Compaction
+was already inside the same turn; the display extraction, not the turn boundary or failure icon, caused the leak.
+Keep every call and compaction step in one summary, including subagent and workflow calls. Manual expansion is the
+only path that exposes those rows, during execution, after completion and after serialized-history reload.
+A compaction after the latest assistant text is not necessarily idle: that text can be narration, with later calls
+still running or already failed. Keep the divider in the work summary unless the turn is stopped and nothing but
+compaction notices follows its answer.
+The generic screenshot mock folds tool calls without production's `fold.supervision_user` evidence. An accepted
+review hidden in such a fold falsely makes the entire synthetic round quiet. Emit the same retained evidence as
+production when testing this case; do not disable folding or force-open the UI to make the screenshot pass.
+
 ## Display provenance is not a model role (#2130)
 
 Persona's `conversation_send` relay is model input with role `user`, not the user's own words. Its existing `from`
@@ -64,8 +79,8 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   Recaps can close a turn without ending its supervision round; only the next actual input does that. A queued genuine
   input must not be absorbed into the quiet round. Preserve successful visibility evidence when overlapping raw pages
   replace server folds, persist that client-side evidence and invalidate caches when adding the fields. Structure-only
-  chat diagnostics must also handle the new line kinds without logging the input or answer. Automatic live-work
-  expansion belongs inside an opened supervision trace; it must never open the quiet round itself. Keep the pending
+  chat diagnostics must also handle the new line kinds without logging the input or answer. Opening a supervision
+  trace does not automatically open its nested work summary; rule 2 requires manual inspection for both. Keep the pending
   stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
   newest transcript owner, not only whether the round is still running.
 
