@@ -329,8 +329,9 @@ var launcherErrorKinds = []struct {
 	kind string
 	re   *lazyre.Regexp
 }{
-	// First: its markers are specific to the node's onboarding messages (node/claudeonboarding.go).
-	{errKindOnboarding, lazyre.New(`hasCompletedOnboarding|first-run setup|首次引导`)},
+	// First: its markers are specific to the node's onboarding messages (node/claudeonboarding.go). Both the Chinese
+	// and the English message carry hasCompletedOnboarding, so no Chinese literal is needed here (i18n baseline).
+	{errKindOnboarding, lazyre.New(`hasCompletedOnboarding|first-run setup`)},
 	// Then the limit: its words name no other cause, and its line may carry a prefix ("Error: …"). Claude Code's own
 	// line ("You've hit your session limit · resets 4:20pm (…)", an older "Claude AI usage limit reached|…") and
 	// Codex's (its message, its error kinds in a rollout and the app-server). A gateway's 429, "rate limit" or "quota"
