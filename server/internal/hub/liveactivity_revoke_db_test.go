@@ -100,10 +100,17 @@ func TestRevokeLiveActivitiesWithDatabase(t *testing.T) {
 			mux := h.routes()
 			before := time.Now().Unix()
 			if route == "admin/relay" {
-				const session, csrf = "revocation-test-session", "revocation-test-csrf"
-				if err := store.CreateAdminSession(ctx, db.AdminSession{IDHash: sha256Hex(session), CSRF: csrf, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+				const csrf = "revocation-test-csrf"
+				session := "revocation-test-" + randomHex(16)
+				sessionHash := sha256Hex(session)
+				if err := store.CreateAdminSession(ctx, db.AdminSession{IDHash: sessionHash, CSRF: csrf, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
 					t.Fatal(err)
 				}
+				t.Cleanup(func() {
+					if err := store.DeleteAdminSession(ctx, sessionHash); err != nil {
+						t.Errorf("delete test admin session: %v", err)
+					}
+				})
 				admin := &adminClient{t: t, h: mux, remote: "127.0.0.1:12345", csrf: csrf,
 					cookie: &http.Cookie{Name: "persona_admin", Value: session}}
 				if code, out, _ := admin.do(http.MethodDelete, "/api/v1/admin/devices/dev_revoked", ""); code != http.StatusOK {

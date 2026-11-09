@@ -14,6 +14,10 @@ the live tokens from memory and do not try to persist them back after retirement
 Transport acceptance is not proof that the phone dismissed the activity; the
 Apple-side rejected-credential fallback remains separate work.
 
+Database fixtures must also survive `go test -count`: `setupTestDB` does not clear
+`admin_sessions`. Give test sessions unique IDs and delete their own rows with
+`t.Cleanup` before the store closes; a fixed ID, even `t.Name()`, repeats within one process.
+
 ## Model connection tests must match the runtime (#1732)
 
 A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
