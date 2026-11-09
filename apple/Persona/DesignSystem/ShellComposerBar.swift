@@ -132,10 +132,12 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                         .padding(.leading, Theme.Space.l)
                         .padding(.trailing, Theme.Space.s)
                         .padding(.top, Theme.Space.m)
-                        .transition(.composerAccessory)
+                        .transition(quoteTransition)
                 }
             }
+            #if os(iOS)
             .clipped() // the quotes slide in from under the box's top edge (Telegram's reply bar)
+            #endif
             HStack(alignment: .bottom, spacing: Theme.Space.xs) {
                 if !expanded { plus }
                 TextField(placeholder, text: $text, selection: fieldSelection, axis: .vertical)
@@ -205,18 +207,18 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                         if let gate {
                             SendGateButton(gate: gate)
                         } else if canSend {
-                            HStack(spacing: 0) {
+                            HStack(spacing: Theme.Space.flush) {
                                 ComposerRoundButton(symbol: Theme.Icon.send, label: String(localized: "Send"), id: "shell-composer-send",
-                                                    pressScales: true) { endDictation(then: sendTyped) }
+                                                    pressScales: telegramMotion) { endDictation(then: sendTyped) }
                                     .keyboardShortcut(sendShortcut)
                             }
-                            .transition(.composerSend)
+                            .transition(telegramMotion ? .composerSend : .scale.combined(with: .opacity))
                         } else if voice != nil || stop != nil {
                             HStack(spacing: Theme.Space.xs) {
                                 if let voice { voiceButton(voice) }
                                 if let stop { stopButton(stop) }
                             }
-                            .transition(.composerSwapped)
+                            .transition(telegramMotion ? .composerSwapped : .scale.combined(with: .opacity))
                         }
                     }
                     .animation(swapMotion, value: canSend)
@@ -240,8 +242,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         .animation(openMotion, value: expanded)
         .animation(Theme.Motion.state, value: canSend)
         .animation(focusMotion, value: focused.wrappedValue)
-        .animation(Theme.Motion.composerAccessory, value: quotes?.wrappedValue.isEmpty == false)
         #if os(iOS)
+        .animation(Theme.Motion.composerAccessory, value: quotes?.wrappedValue.isEmpty == false)
         // A line more or less in the draft: the box follows at once, briefly eased (Telegram's 0.1 s).
         .animation(reduceMotion ? nil : Theme.Motion.composerGrow, value: text)
         .background {
@@ -402,6 +404,17 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         Theme.Motion.standard
         #endif
     }
+
+    /// Telegram's motion (send growing in, the quote bar sliding) is the iPhone's and iPad's; the Mac's card keeps its own.
+    private var telegramMotion: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    private var quoteTransition: AnyTransition { telegramMotion ? .composerAccessory : .opacity }
 
     private var swapMotion: Animation {
         #if os(iOS)

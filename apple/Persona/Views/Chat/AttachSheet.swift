@@ -17,8 +17,9 @@ enum AttachOutcome {
     case closed([String])
     /// Send: what was picked goes into the composer and the message is sent.
     case send([String])
-    /// A row asked for something the panel cannot show itself (the camera, Files, a voice call): it runs once the panel is gone.
-    case then(() -> Void)
+    /// A row asked for something the panel cannot show itself (the camera, Files, a voice call): what was picked goes
+    /// into the composer, and the action runs once the panel is gone.
+    case then([String], () -> Void)
 }
 
 /// The panel's tabs, in the bar's order.
@@ -53,7 +54,7 @@ final class AttachPanel {
     /// Set by a row: the panel animates away, then hands this back.
     fileprivate(set) var leaving: AttachOutcome?
 
-    func close(then action: @escaping () -> Void) { leaving = .then(action) }
+    func close(then action: @escaping () -> Void) { leaving = .then([], action) }
 }
 
 /// The photo library as the grid needs it: access, the newest photos and videos, thumbnails and full pictures.
@@ -112,21 +113,37 @@ final class AttachLibrary {
         }
     }
 
-    /// A copy of the video in the app's temporary directory, for the upload (`VideoAttachments.start(file:)`).
+    /// A copy of the video in a directory of its own under the app's temporary uploads, named as in Photos, for the
+    /// upload (`VideoAttachments.start(staged:)`, which deletes it). A slow-motion or edited video is a composition with
+    /// no file: its original goes instead.
     static func movie(_ asset: PHAsset) async -> URL? {
+        var found = await movieFile(asset, version: .current)
+        if found == nil { found = await movieFile(asset, version: .original) }
+        guard let source = found else { return nil }
+        let name = PHAssetResource.assetResources(for: asset).first?.originalFilename ?? source.lastPathComponent
+        return await Task.detached(priority: .userInitiated) { () -> URL? in
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("uploads").appendingPathComponent(UUID().uuidString)
+            let copy = dir.appendingPathComponent(name)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: source, to: copy)
+                return copy
+            } catch {
+                try? FileManager.default.removeItem(at: dir)
+                return nil
+            }
+        }.value
+    }
+
+    private static func movieFile(_ asset: PHAsset, version: PHVideoRequestOptionsVersion) async -> URL? {
         let options = PHVideoRequestOptions()
         options.isNetworkAccessAllowed = true
-        options.version = .current
-        let source: URL? = await withCheckedContinuation { c in
+        options.version = version
+        return await withCheckedContinuation { c in
             PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { @Sendable av, _, _ in
                 c.resume(returning: (av as? AVURLAsset)?.url)
             }
         }
-        guard let source else { return nil }
-        let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(source.pathExtension.isEmpty ? "mov" : source.pathExtension)
-        do { try FileManager.default.copyItem(at: source, to: copy) } catch { return nil }
-        return copy
     }
 
     static func asset(_ id: String) -> PHAsset? {
@@ -232,7 +249,7 @@ struct AttachSheet<More: View>: View {
         .offset(shift)
         .position(x: width / 2, y: sheetTop + sheetHeight / 2)
         .gesture(AttachPan(enabled: !keyboardUp && !going, shouldBegin: { location, velocity in
-            beginsDrag(at: location, velocity: velocity, open: offset == 0)
+            beginsDrag(onHeader: location.y >= sheetTop && location.y < sheetTop + Theme.Attach.headerHeight, velocity: velocity, open: offset == 0)
         }, changed: { travel in
             follow(travel, rest: rest)
         }, ended: { travel, velocity in
@@ -264,7 +281,7 @@ struct AttachSheet<More: View>: View {
                     .accessibilityIdentifier("attach-close")
                     Spacer()
                     if tab == .photos {
-                        Button { leave(.then(allPhotos)) } label: {
+                        Button { leave(.then(picked, allPhotos)) } label: {
                             Text("All Photos").font(Theme.Font.secondaryMedium).lineLimit(1)
                         }
                         .buttonStyle(.plain)
@@ -297,9 +314,9 @@ struct AttachSheet<More: View>: View {
         case .unknown:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .denied:
-            AttachNoAccess(settings: openSettings, allPhotos: { leave(.then(allPhotos)) })
+            AttachNoAccess(settings: openSettings, allPhotos: { leave(.then(picked, allPhotos)) })
         case .full, .limited:
-            AttachGrid(library: library, picked: $picked, width: width, camera: camera.map { camera in { leave(.then(camera)) } },
+            AttachGrid(library: library, picked: $picked, width: width, camera: camera.map { camera in { leave(.then(picked, camera)) } },
                        limited: library.access == .limited, photoRoom: photoRoom, videoRoom: videoRoom)
                 .scrollDisabled(!open)
                 .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top <= 1 } action: { _, top in pageAtTop = top }
@@ -309,7 +326,7 @@ struct AttachSheet<More: View>: View {
     private func filesPage(open: Bool) -> some View {
         List {
             Section {
-                Button { leave(.then(files)) } label: {
+                Button { leave(.then(picked, files)) } label: {
                     Label { Text("Browse Files").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.file) }
                 }
                 .accessibilityIdentifier("attach-browse-files")
@@ -363,7 +380,7 @@ struct AttachSheet<More: View>: View {
                 .scaledFrame(minHeight: Theme.Size.tapTarget)
                 .modifier(ComposerSurface())
                 .accessibilityIdentifier("attach-caption")
-            HStack(spacing: 0) {
+            HStack(spacing: Theme.Space.flush) {
                 ComposerRoundButton(symbol: Theme.Icon.send, label: String(localized: "Send"), id: "attach-send", pressScales: true) {
                     leave(.send(picked))
                 }
@@ -421,10 +438,10 @@ struct AttachSheet<More: View>: View {
 
     // MARK: Dragging
 
-    private func beginsDrag(at location: CGPoint, velocity: CGPoint, open: Bool) -> Bool {
+    private func beginsDrag(onHeader: Bool, velocity: CGPoint, open: Bool) -> Bool {
         guard abs(velocity.y) > abs(velocity.x) else { return false }
         if !open { return true }
-        return location.y < Theme.Attach.headerHeight || (pageAtTop && velocity.y > 0)
+        return onHeader || (pageAtTop && velocity.y > 0)
     }
 
     private func follow(_ travel: CGFloat, rest: CGFloat) {
@@ -475,7 +492,7 @@ struct AttachTabBar: View {
     @Namespace private var lens
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: Theme.Space.flush) {
             ForEach(tabs) { tab in
                 Button { pick(tab) } label: {
                     VStack(spacing: Theme.Space.xxs) {
@@ -745,7 +762,7 @@ private struct AttachPan: UIGestureRecognizerRepresentable {
 
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
             guard let pan = g as? UIPanGestureRecognizer else { return false }
-            return shouldBegin(pan.location(in: pan.view), pan.velocity(in: pan.view))
+            return shouldBegin(pan.location(in: nil), pan.velocity(in: pan.view)) // the window's: the sheet's top is in it
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {

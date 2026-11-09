@@ -92,10 +92,16 @@ struct ComposerHoldMic: View {
                 guard !down else { return }
                 pending?.cancel()
                 pending = nil
+                decided = false // a touch the system took away leaves the next one free
                 // Taken away mid-hold (a call, a system alert): it goes on, as Telegram's locks.
                 if hold.holding { hold.finish(.lock, dictation, text: $text, reduceMotion: reduceMotion) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(ComposerHold.space)) } action: { hold.micFrame = $0 }
+            .onDisappear { // the line's mic gone under the finger (the box opened): the hold carries on, as a taken-away touch does
+                pending?.cancel()
+                pending = nil
+                if hold.holding { hold.finish(.lock, dictation, text: $text, reduceMotion: reduceMotion) }
+            }
             .accessibilityElement()
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(dictation.isListening ? String(localized: "Stop Dictation") : String(localized: "Dictate"))
@@ -119,6 +125,7 @@ struct ComposerHoldMic: View {
                     pending = Task {
                         try? await Task.sleep(for: Theme.Hold.delay)
                         guard !Task.isCancelled else { return }
+                        decided = true // a hold, even one that could not start: letting go is no tap
                         hold.begin(dictation, text: $text, reduceMotion: reduceMotion)
                     }
                 }

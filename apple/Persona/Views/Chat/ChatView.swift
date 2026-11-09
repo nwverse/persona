@@ -4666,14 +4666,16 @@ struct Composer: View, Equatable {
     /// What the panel handed back: picked photos and videos into the composer (and sent, from its Send), or a row's action.
     private func attachFinished(_ outcome: AttachOutcome) {
         switch outcome {
-        case .then(let action):
+        case .then(let ids, let action):
+            Task { await addPicked(ids) }
             action()
         case .closed(let ids):
             Task { await addPicked(ids) }
         case .send(let ids):
             Task {
                 await addPicked(ids)
-                if canSend { await sendText(text) }
+                // As the box's Send: the gate first; videos still on their way hold the message and say so (sendText).
+                if let gate { gate.action() } else if allowsSend { await sendText(text) }
             }
         }
     }
@@ -4684,7 +4686,7 @@ struct Composer: View, Equatable {
             guard let asset = AttachLibrary.asset(id) else { failed += 1; continue }
             if asset.mediaType == .video {
                 guard let url = await AttachLibrary.movie(asset) else { failed += 1; continue }
-                videos.start(file: url, machine: key.machineRef, model: model)
+                videos.start(staged: url, machine: key.machineRef, model: model)
             } else {
                 guard let picture = await AttachLibrary.picture(asset) else { failed += 1; continue }
                 add(picture)
