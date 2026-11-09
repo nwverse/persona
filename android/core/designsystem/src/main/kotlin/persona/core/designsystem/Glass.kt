@@ -254,6 +254,6 @@ fun AmbientLight(ambience: Ambience, modifier: Modifier = Modifier, inWindow: Bo
  */
 @Composable
 fun PageBackdrop(modifier: Modifier = Modifier, ambience: Ambience = LocalAmbience.current) {
-    if (PersonaTheme.style == AppStyle.Glass) AmbientLight(ambience, modifier, inWindow = true)
+    if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current == null && !LocalFlatPageSurface.current) AmbientLight(ambience, modifier, inWindow = true)
     else Box(modifier.fillMaxSize().background(PersonaTheme.palette.background))
 }

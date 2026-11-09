@@ -30,6 +30,7 @@
     <string name="agents_action_new_session">新建会话</string>
     <string name="agents_action_list_settings">列表设置</string>
     <string name="agents_search_placeholder">搜索空间、会话或最新消息</string>
+    <string name="agents_action_search">搜索</string>
     <string name="agents_requests_title">等你定</string>
     <plurals name="agents_requests_more">
         <item quantity="other">还有 %1$d 个</item>

@@ -26,13 +26,15 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 ## Unified home navigation
 
 The home has only **Assistant** and **Agents**, selected at the top, on phones, tablets and foldables (#2589).
-The avatar opens one shared history sidebar from either page. Settings opens from its bottom gear, never a home tab;
-Back returns to the page it was opened from. Inbox, To-dos, Computers and extension `nav_page` destinations open under
+The avatar opens one shared left-side history drawer from either page; it pushes the full-size page aside rather than
+rising from the bottom. Settings opens from its bottom gear in a sheet, never a home tab. Root Close returns to the
+originating page; child Back pops only the settings sheet's secondary stack. Inbox, To-dos, Computers and extension `nav_page` destinations open under
 Assistant, following the iPhone sidebar mapping. Scheduled tasks and the knowledge base keep their existing Assistant
 entry points. Extension management remains in Settings and is distinct from extension-provided pages.
 
-Android also keeps its existing **Back to home**, **Session info** and **Launcher** rows in the sidebar's More section.
-It has no native Health destination or archived-chat browser; this navigation change does not invent either feature.
+In default Glass, Android-only **Back to home** and **Session info** remain in the selected Assistant tab's menu;
+**Launcher** is reached through Assistant settings in that menu. Other styles retain their existing More section.
+It has no native Health destination or archived-chat browser; this change does not invent either feature.
 Recent, pinned and automatic conversation history, pinning, archive actions and New conversation are retained.
 
 There is no old-layout selector or migration. Android previously had a fixed four-destination shell, not an equivalent

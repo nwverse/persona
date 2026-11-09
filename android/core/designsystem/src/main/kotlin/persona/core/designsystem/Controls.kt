@@ -77,7 +77,7 @@ fun JIcon(
     val vector = when {
         selected -> icon.fill
         PersonaTheme.style == AppStyle.Board -> icon.bold
-        decorative && PersonaTheme.style == AppStyle.Glass -> icon.duotone
+        decorative && PersonaTheme.style == AppStyle.Glass -> icon.regular
         else -> icon.regular
     }
     Icon(vector, contentDescription, modifier.size(size), tint = tint)

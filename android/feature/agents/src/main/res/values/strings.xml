@@ -34,6 +34,7 @@
     <string name="agents_action_new_session">New session</string>
     <string name="agents_action_list_settings">List settings</string>
     <string name="agents_search_placeholder">Search spaces, sessions or latest messages</string>
+    <string name="agents_action_search">Search</string>
     <string name="agents_requests_title">Needs your decision</string>
     <plurals name="agents_requests_more">
         <item quantity="one">1 more</item>

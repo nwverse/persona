@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -188,13 +189,7 @@ fun HubCard(
     JCard(modifier, onClick = onClick, status = if (PersonaTheme.style == AppStyle.Board) (if (connected) Status.Unread else Status.NeedsYou) else null) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             when (PersonaTheme.style) {
-                AppStyle.Glass -> Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
-                    Canvas(Modifier.size(52.dp)) {
-                        drawCircle(Brush.radialGradient(listOf(tone.dot.copy(alpha = 0.55f), Color.Transparent)))
-                        drawCircle(tone.dot, radius = 15.dp.toPx())
-                    }
-                    JIcon(if (connected) PhIcons.PlugsConnected else PhIcons.WifiSlash, null, size = 18.dp, tint = tone.onDot, selected = true)
-                }
+                AppStyle.Glass -> JAppMark(HomeTokens.settingsGlyph)
                 AppStyle.Brief -> Box(Modifier.size(52.dp).clip(CircleShape).background(palette.action), contentAlignment = Alignment.Center) {
                     Text(stringResource(R.string.designsystem_brand_persona).take(1), style = type.title.copy(fontSize = androidx.compose.ui.unit.TextUnit(22f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = FontWeight.Bold), color = palette.onAction)
                     Box(Modifier.align(Alignment.BottomEnd).size(14.dp).clip(CircleShape).background(palette.surface).padding(2.dp).clip(CircleShape).background(tone.dot))
@@ -244,12 +239,55 @@ fun HomeNavigation(
     onSelect: (String) -> Unit,
     leading: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    trailing: @Composable RowScope.() -> Unit = {},
+    onSelectedMenu: (() -> Unit)? = null,
 ) {
-    Row(modifier.fillMaxWidth().background(PersonaTheme.palette.background).statusBarsPadding()
-        .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-        leading()
-        JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
-            items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { onSelect(items[it].key) }, Modifier.weight(1f))
+    val palette = PersonaTheme.palette
+    if (PersonaTheme.style != AppStyle.Glass) {
+        Row(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()
+            .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            leading()
+            JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
+                items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { onSelect(items[it].key) }, Modifier.weight(1f))
+            trailing()
+        }
+        return
+    }
+    val scale = (androidx.compose.ui.platform.LocalDensity.current.fontScale * HomeTokens.shellTextStep)
+        .coerceAtMost(HomeTokens.shellScaleMaximum)
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+    Box(modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight)
+        .padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xxs)) {
+        Box(Modifier.align(Alignment.TopStart)) { leading() }
+        Box(Modifier.align(Alignment.TopCenter)) {
+            Row(Modifier.floatingSurface(CircleShape).padding(Tokens.Space.xs)) {
+                items.forEach { item ->
+                    val chosen = item.key == selected
+                    val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
+                        fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
+                    val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
+                    val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
+                    val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+                    val fittedSize = maxOf(Tokens.Type.Chip.size.value, labelStyle.fontSize.value * fit).sp
+                    Box(Modifier.width(HomeTokens.segmentWidth * scale).height(HomeTokens.segmentHeight * scale)
+                        .clip(CircleShape).background(if (chosen) {
+                            if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
+                        } else Color.Transparent)
+                        .clickable(role = Role.Tab) {
+                            if (chosen && onSelectedMenu != null) onSelectedMenu() else onSelect(item.key)
+                        }.semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
+                        Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
+                            color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            val waiting = items.lastOrNull()?.badge ?: 0
+            if (waiting > 0) Text("$waiting", style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+                color = palette.needsYou.text, modifier = Modifier.align(Alignment.TopEnd).offset(x = Tokens.Space.s, y = -Tokens.Space.xs)
+                    .clip(CircleShape).background(palette.sunken).padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs), maxLines = 1)
+        }
+        Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) { trailing() }
     }
 }

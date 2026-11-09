@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -117,7 +118,7 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = when (style) {
-        AppStyle.Glass -> RoundedCornerShape(24.dp, 24.dp, 8.dp, 24.dp)
+        AppStyle.Glass -> RoundedCornerShape(Tokens.Radius.bubble)
         AppStyle.Brief -> RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
         AppStyle.Board -> RoundedCornerShape(10.dp)
     }
@@ -125,8 +126,8 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
         Column(
             Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End).clip(shape)
                 .then(when (style) {
-                    AppStyle.Glass -> Modifier.background(if (own) palette.statusSurface else palette.surface)
-                        .border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop.copy(alpha = 0.6f), Color.Transparent)), shape)
+                    AppStyle.Glass -> Modifier.background(if (own) palette.userBubble else palette.surface)
+                        .border(HomeTokens.composerStroke, palette.line, shape)
                     AppStyle.Brief -> Modifier.background(if (own) palette.statusSurface else palette.surface)
                     AppStyle.Board -> Modifier.background(if (own) palette.statusSurface else palette.surface).border(1.dp, palette.line, shape)
                 })
@@ -391,11 +392,40 @@ fun ComposerFrame(
     accessory: (@Composable ColumnScope.() -> Unit)? = null,
     // A tap on the frame's blank space that nothing inside handled (around the field, beside the buttons).
     onBlankTap: (() -> Unit)? = null,
+    expanded: Boolean = false,
     field: @Composable BoxScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val blankTap by rememberUpdatedState(onBlankTap)
     val keepsKeyboard = Modifier.keepsKeyboardOnTap { blankTap?.invoke() }
+    if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current != null) {
+        val shape = RoundedCornerShape(HomeTokens.composerRadius)
+        val fill = if (PersonaTheme.darkTheme) HomeTokens.composerDark else HomeTokens.composerLight
+        val stroke = if (PersonaTheme.darkTheme) HomeTokens.composerStrokeDark else HomeTokens.composerStrokeLight
+        Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
+            .shadow(HomeTokens.composerShadow, shape, clip = false,
+                ambientColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha),
+                spotColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha))
+            .clip(shape).background(fill).border(HomeTokens.composerStroke, stroke, shape)
+            .then(keepsKeyboard).padding(Tokens.Space.s)) {
+            accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s), content = it) }
+            if (expanded) {
+                Box(Modifier.fillMaxWidth().heightIn(min = Tokens.MinTouch.android).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
+                    contentAlignment = Alignment.CenterStart, content = field)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    leading?.invoke(this)
+                    Spacer(Modifier.weight(1f))
+                    trailing?.invoke(this)
+                }
+            } else Row(verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke(this)
+                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
+                    contentAlignment = Alignment.CenterStart, content = field)
+                trailing?.invoke(this)
+            }
+        }
+        return
+    }
     when (PersonaTheme.style) {
         AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).floatingSurface(RoundedCornerShape(28.dp)).then(keepsKeyboard).padding(6.dp)) {
             accessory?.let { Column(Modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp), content = it) }

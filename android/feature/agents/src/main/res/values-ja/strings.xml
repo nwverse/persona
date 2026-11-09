@@ -30,6 +30,7 @@
     <string name="agents_action_new_session">新規セッション</string>
     <string name="agents_action_list_settings">リスト設定</string>
     <string name="agents_search_placeholder">スペース、セッション、最新メッセージを検索</string>
+    <string name="agents_action_search">検索</string>
     <string name="agents_requests_title">判断待ち</string>
     <plurals name="agents_requests_more">
         <item quantity="other">ほか%1$d件</item>

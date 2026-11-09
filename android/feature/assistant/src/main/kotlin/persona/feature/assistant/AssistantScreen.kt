@@ -585,7 +585,7 @@ fun AssistantScreen(
                             actions = {
                                 JIconButton(PhIcons.NotePencil, stringResource(R.string.assistant_new_conversation), ::startNewConversation,
                                     enabled = !sending && managers.offline == null)
-                                JIconButton(PhIcons.UserCircle, stringResource(R.string.assistant_profile), {
+                                if (LocalHomeChrome.current == null) JIconButton(PhIcons.UserCircle, stringResource(R.string.assistant_profile), {
                                     if (pageManagement != null) settingsOpen = true else info = AssistantInfo.Settings
                                 })
                             },
@@ -732,6 +732,7 @@ fun AssistantScreen(
     if (menu) JActionSheet(
         title = LocalPersonaName.current, onDismiss = { menu = false },
         actions = buildList {
+            if (sharedSidebar != null) add(JAction(resources.getString(R.string.assistant_home), PhIcons.House, onClick = { newConversation() }))
             listOf(AssistantInfo.Settings, AssistantInfo.Knowledge).forEach { topic ->
                 add(JAction(resources.getString(topic.title), onClick = {
                     if (topic == AssistantInfo.Knowledge && onKnowledge != null) onKnowledge()
@@ -919,7 +920,14 @@ internal fun AssistantDrawer(
 ) {
     // The origin "Automatic chats" lists when open (the first one there is, until another is picked).
     var autoPicked by rememberSaveable { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxHeight().padding(horizontal = 12.dp)) {
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    val drawer = LocalHomeDrawer.current
+    Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp)) {
+        if (drawer) Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.l).padding(top = Tokens.Space.s),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(LocalPersonaName.current, style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink, modifier = Modifier.weight(1f))
+            JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_search_chats), { searchVisible = !searchVisible }, raised = true)
+        }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp)) {
             // The first row is the main conversation, as "Persona" with the app's mark, then a line (#2004, the same on
             // every platform): it is listed nowhere else, has no pin of its own, and is on show whatever the search.
@@ -930,9 +938,9 @@ internal fun AssistantDrawer(
                     onCopy = { groups.main?.let(onCopy) })
                 JDivider(Modifier.padding(vertical = Tokens.Space.s))
             }
-            item { JSectionHeader(stringResource(R.string.assistant_more)) }
-            // Assistant details remain available from the Persona tab's toolbar, not as a drawer row.
-            val totalMore = 5 + (if (showTodos && onTodos != null) 1 else 0) +
+            if (!drawer) item { JSectionHeader(stringResource(R.string.assistant_more)) }
+            // The compact drawer keeps only iPhone destinations; extra actions remain in the selected Assistant menu.
+            val totalMore = (if (drawer) 2 else 5) + (if (showTodos && onTodos != null) 1 else 0) +
                 (if (onInbox != null) 1 else 0) + pages.size
             // Each row's place in the group is taken while the list is built: counted inside an item's own content, it
             // was counted again whenever only some rows recomposed, and the group's corners landed on the wrong rows.
@@ -942,12 +950,14 @@ internal fun AssistantDrawer(
                 item { JGroupItem(position) { content() } }
             }
             if (onInbox != null) more { DrawerItem(stringResource(R.string.assistant_origin_inbox), PhIcons.Tray, badge = inboxCount, onClick = onInbox) }
-            more { DrawerItem(stringResource(R.string.assistant_home), PhIcons.House, onHome) }
+            if (!drawer) more { DrawerItem(stringResource(R.string.assistant_home), PhIcons.House, onHome) }
             if (showTodos && onTodos != null) more { DrawerItem(stringResource(R.string.assistant_todos), PhIcons.ListChecks, badge = todoCount, onClick = onTodos) }
             more { DrawerItem(stringResource(AssistantInfo.Schedule.title), PhIcons.Clock) { onInfo(AssistantInfo.Schedule) } }
             more { DrawerItem(stringResource(AssistantInfo.Knowledge.title), PhIcons.BookOpen) { onInfo(AssistantInfo.Knowledge) } }
-            more { DrawerItem(stringResource(AssistantInfo.Session.title), PhIcons.Info) { onInfo(AssistantInfo.Session) } }
-            more { DrawerItem(stringResource(AssistantInfo.Launcher.title), PhIcons.RocketLaunch) { onInfo(AssistantInfo.Launcher) } }
+            if (!drawer) {
+                more { DrawerItem(stringResource(AssistantInfo.Session.title), PhIcons.Info) { onInfo(AssistantInfo.Session) } }
+                more { DrawerItem(stringResource(AssistantInfo.Launcher.title), PhIcons.RocketLaunch) { onInfo(AssistantInfo.Launcher) } }
+            }
             pages.forEach { page -> more {
                 JRow(page.label, onClick = { onPage(page.key) }, leading = { JIcon(page.icon, null) },
                     trailing = {
@@ -955,7 +965,8 @@ internal fun AssistantDrawer(
                         else if (page.dot) JStatusDot(Status.NeedsYou)
                     })
             } }
-            item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
+            if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
+            if (!drawer || searchVisible || query.isNotBlank()) item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
             if (groups.pinned.isNotEmpty()) item(key = "pinned-header") {
                 var pinMenu by remember { mutableStateOf(false) }
                 JSectionHeader(stringResource(R.string.assistant_pinned), count = groups.pinned.size, action = if (onUnpinAll != null) ({
@@ -1020,10 +1031,11 @@ internal fun AssistantDrawer(
             }
 
         }
-        Row(Modifier.padding(vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-            JButton(stringResource(R.string.assistant_new_conversation), onNew, Modifier.weight(1f), icon = PhIcons.NotePencil)
+        Row(Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
+            .padding(vertical = if (drawer) Tokens.Space.m else Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+            JSidebarNewChat(stringResource(R.string.assistant_new_conversation), onNew, Modifier.weight(1f))
             Box {
-                JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings)
+                JIconButton(PhIcons.Gear, stringResource(R.string.assistant_open_settings), onSettings, raised = drawer)
                 when {
                     settingsBadge != null -> JTag(settingsBadge, Modifier.align(Alignment.TopEnd))
                     settingsCount > 0 -> JBadge(settingsCount, Modifier.align(Alignment.TopEnd))
@@ -1049,7 +1061,11 @@ private fun ConversationRow(
     val channels = LocalChannels.current
     val channel = remember(session.channels, channels) { ChannelSources.latest(session.channels, channels) }
     val title = session.conversationTitle(conversationWords())
-    JGroupItem(position, modifier) {
+    if (LocalHomeDrawer.current) {
+        JSidebarHistoryRow(title, session.conversationStatus(), selected, onOpen, { menu = true },
+            stringResource(R.string.assistant_conversation_actions),
+            titleAccessory = channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } })
+    } else JGroupItem(position, modifier) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
         JRow(title, onClick = onOpen, onLongClick = { menu = true },
