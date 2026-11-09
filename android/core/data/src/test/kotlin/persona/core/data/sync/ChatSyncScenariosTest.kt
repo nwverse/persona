@@ -54,10 +54,6 @@ class ChatSyncScenariosTest(private val name: String, private val case: JsonObje
                 "#2768: an answer refused with 503 `assistant_offline` is retried as a cut-off for up to a minute " +
                     "(HubChatTransport.cutOff), so the card stays locked instead of coming back at once",
                 Regex("""open cards \[], want \[ix1]""")),
-            "send_failed_stays_above_later" to Known(
-                "#2769: ChatScreen draws the outbox's bubbles below every transcript line, so a failed message drops " +
-                    "below the ones sent after it",
-                Regex("""got {2}\[.*If it rains: the aquarium\., user\[failed] Find a dinner place\.]""")),
             "restart_resumable_send_in_flight" to Known(
                 "#2770: the case wants the send posted again; Android looks the unanswered send up by its op id instead " +
                     "(GET /ops/{id}, OutboxMessageSender.reconcile) and gets the same receipt",

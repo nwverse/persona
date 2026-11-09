@@ -30,6 +30,7 @@ import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.lines.isLiveStatus
+import persona.core.domain.lines.placeFailed
 import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
 import persona.core.domain.sort.canChangeEffortOnly
@@ -134,6 +135,7 @@ private fun ChatPage(
     val machines by sessions.machines.collectAsStateWithLifecycle()
     val allRequests by interactions.pending.collectAsStateWithLifecycle()
     val allMessages by sender.outbox.collectAsStateWithLifecycle()
+    val writtenAt by sender.writtenAt.collectAsStateWithLifecycle()
     val parent = sessionList.firstOrNull { it.machineId == key.machineId && it.subagents.orEmpty().any { child -> child.sessionId == key.sessionId } }
     val child = parent?.subagents?.firstOrNull { it.sessionId == key.sessionId }
     // A workflow's agent reads like a subagent (`<session>@<agent id>`, #2935).
@@ -594,7 +596,17 @@ private fun ChatPage(
     val unreadEntry = if (session?.agentState == AgentState.Unread) lines.firstOrNull { line ->
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
-    ChatListEffects(chatList, messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
+    val placed = remember(lines, messages, writtenAt) { placeFailed(lines.asReversed(), messages, writtenAt) }
+    val listKeys = remember(lines, placed) {
+        buildList {
+            placed.rest.asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            for (line in lines) {
+                add(line.contentKey)
+                placed.before[line.id].orEmpty().asReversed().forEach { add("outbox-${it.clientMessageId}") }
+            }
+        }
+    }
+    ChatListEffects(chatList, listKeys,
         ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty()) &&
             (unreadEntry == null || markdownReadyFor == snapshot.items), entry = unreadEntry,
         rowAliases = lines.associate { it.id to it.contentKey },
@@ -808,30 +820,34 @@ private fun ChatPage(
                         if (search.selected != null) ReturnChip { search.returnToOrigin(chatList) }
                         search.notice?.let { Text(it, Modifier.padding(horizontal = horizontalPadding), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
                         Box(Modifier.weight(1f)) {
+                            val outboxBubble: @Composable (OutboxMessage) -> Unit = { message ->
+                                val delivery = composerDeliveries[message.clientMessageId]
+                                val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
+                                    delivery?.state ?: message.state else message.state
+                                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                                    UserBubble(composerMessagePreview(message.text))
+                                    OutboxStatus(message.copy(state = deliveryState,
+                                        error = delivery?.refusal?.code ?: message.error),
+                                        busy = message.clientMessageId in deliveryActions.busyIds,
+                                        onAction = if (readOnly) null else { action -> deliveryAction(message, action) },
+                                        onDetails = { statusSheet = true })
+                                    if (!readOnly && (deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused)) {
+                                        ComposerRefusalActions(message, composerService, delivery, terminal,
+                                            edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
+                                    }
+                                }
+                            }
                             ChatList(state = chatList, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(
                                 start = horizontalPadding, end = horizontalPadding,
                                 top = padding.calculateTopPadding() + 12.dp,
                                 bottom = padding.calculateBottomPadding() + 12.dp,
                             )) {
-                                items(messages.asReversed(), key = { "outbox-${it.clientMessageId}" }, contentType = { "outbox" }) { message ->
-                                    val delivery = composerDeliveries[message.clientMessageId]
-                                    val deliveryState = if (message.state in setOf(DeliveryState.Refused, DeliveryState.Rejected))
-                                        delivery?.state ?: message.state else message.state
-                                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                        UserBubble(composerMessagePreview(message.text))
-                                        OutboxStatus(message.copy(state = deliveryState,
-                                            error = delivery?.refusal?.code ?: message.error),
-                                            busy = message.clientMessageId in deliveryActions.busyIds,
-                                            onAction = if (readOnly) null else { action -> deliveryAction(message, action) },
-                                            onDetails = { statusSheet = true })
-                                        if (!readOnly && (deliveryState == DeliveryState.Rejected || deliveryState == DeliveryState.Refused)) {
-                                            // Edit puts the words back in the box and drops the refused bubble (nothing reached the computer).
-                                            ComposerRefusalActions(message, composerService, delivery, terminal,
-                                                edit = { deliveryAction(message, DeliveryAction.Edit) }, notice = { notice = it })
-                                        }
-                                    }
+                                // Newest at the bottom (reverse layout). A failed send sits above the first line written after it.
+                                placed.rest.asReversed().forEach { message ->
+                                    item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                 }
-                                items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
+                                for (line in lines) {
+                                item(key = line.contentKey, contentType = line.contentType()) {
                                     ChatSearchHighlight(search, line.contentKey) {
                                         androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
                                         ChatLineContent(line, key, loader,
@@ -854,6 +870,10 @@ private fun ChatPage(
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
                                         showSourceLabel = line.id in contentSourceLabels)
                                         }
+                                    }
+                                }
+                                    placed.before[line.id].orEmpty().asReversed().forEach { message ->
+                                        item(key = "outbox-${message.clientMessageId}", contentType = "outbox") { outboxBubble(message) }
                                     }
                                 }
                                 if (snapshot.loadingOlder) item(key = "loading-older", contentType = "loading") { JLoading() }
