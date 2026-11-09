@@ -1296,8 +1296,8 @@ separate server decision, not a fabricated field or operation in the client.
 Regression tests: `ExtensionSettingsStateTest`, `ExtensionSettingsShotsTest`, `CatalogExtensionManagerTest` and
 `ExtensionCatalogRouteCompatibilityTest`. Screenshots render actual `ExtensionPage` instances for built-in realtime voice, installed Example
 Notes and configured Example Weather, in all three styles × light/dark, using Robolectric native graphics. They are Compose/JVM evidence,
-not emulator, physical-device or production deployment evidence. Images go to feature/settings `build/extension-settings-shots/`
-and are attached to the PR, not committed.
+not emulator, physical-device or production deployment evidence. Images go to the settings module's generated build output, in the
+`extension-settings-shots` subdirectory, and are attached to the PR, not committed.
 
 ### Extension model and declarative contributions (#2226)
 
