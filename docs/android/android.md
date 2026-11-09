@@ -322,7 +322,7 @@ shrinking stays off (below), and debug builds are not shrunk.
 - **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it was 32,358,397
   bytes. At 0357a0117 the shrunk APK is 33,205,885 bytes, 3 dex files, 33,620 classes and 179,163 method references;
   optimized it is 19,459,663 bytes (-41%), one dex file, 13,412 classes and 59,890 method references, and an update
-  download, which the hub sends gzipped ([protocol.md](../protocol/protocol.md) "Android app updates"), is about 10.3 MB
+  download, which the hub sends gzipped ([protocol.md](../protocol/protocol.md) "Android packages"), is about 10.3 MB
   instead of 33.2 MB. Most of the removed code is library code. The build's
   `app/build/outputs/mapping/release/usage.txt` lists every removed class and member.
 - **Error reports** ("Error reports" above): exception types and breadcrumbs keep their source names. Class merging folded
@@ -353,8 +353,8 @@ shrinking stays off (below), and debug builds are not shrunk.
   ```
 
 - **Rollback**: `-dontoptimize` in `proguard-rules.pro` goes back to shrinking only (a 33 MB APK; the name rules can
-  stay). `isMinifyEnabled = false` in `android/app/build.gradle.kts` turns R8 off; change the assertion that pins it in
-  `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
+  stay). `isMinifyEnabled = false` in `android/app/build.gradle.kts` turns R8 off. Either way, change the assertion that
+  pins it in `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
   release worker before it builds, so a merge or an edit that turns shrinking off or drops a name rule by mistake stops
   there instead of publishing a 93 MB APK or renamed exceptions. After `isMinifyEnabled = false` the rules file is
   unused, and the check reads only the APK.

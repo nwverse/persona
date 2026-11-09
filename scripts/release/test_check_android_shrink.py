@@ -140,6 +140,8 @@ class ShrinkGuardTests(unittest.TestCase):
                      "-keepattributes InnerClasses,EnclosingMethod",
                      "-keepnames class persona.** extends java.lang.Throwable"):
             self.assertIn(rule, rules)
+        # Optimizing saves 13.7 MB: with -dontoptimize the APK is 33.2 MB again (#2840).
+        self.assertNotIn("-dontoptimize", rules)
         builds = [android / "gradle/libs.versions.toml", *android.glob("*/build.gradle.kts"),
                   *android.glob("*/*/build.gradle.kts")]
         self.assertEqual([p.name for p in builds if "material-icons-extended" in p.read_text()], [])
