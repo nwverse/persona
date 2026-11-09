@@ -1571,9 +1571,12 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     /// The task lists the run's calls left (docs/protocol/protocol.md「折叠的工作」 `fold.tasks`), in order: the chat's plan
     /// while its TodoWrite is folded away (`ChatPlan.latest`, #5602).
     var tasks: [FoldTasks]? = nil
+    /// The hub proved this supervision round is user-visible, even while its visibility tools are folded away.
+    var supervisionUser: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case items, tools, thoughts, until, images, tasks
+        case supervisionUser = "supervision_user"
         case throughSeq = "through_seq", throughID = "through_id"
     }
 }
@@ -1734,11 +1737,14 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     /// User text Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md「Persona 注入的消息」):
     /// drawn as one line, not a bubble. Set by the hub; nil from older hubs, which `Injected.of` reads off the text.
     var injected: Injected? = nil
+    /// Client-retained evidence of user-visible supervision. Survives overlap replacing a promoted work fold and is
+    /// encoded in the chat cache, not a request to change the hub's visibility.
+    var supervisionUser: Bool? = nil
     /// Additive display provenance; kept as JSON so future kinds and malformed optional fields remain readable.
     var source: JSONValue? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, supervisionUser, source
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",
              clientMsgID = "client_msg_id"
     }
