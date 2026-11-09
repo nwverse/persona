@@ -689,13 +689,19 @@ func (s *Service) inboxRoutes() {
 			apierr.WriteJSON(w, it)
 		}
 	})
-	// A pull to refresh: the hub reads every source now and hands it over before it answers.
+	// A pull to refresh: the hub reads every source now and hands it over before it answers. When that fails nothing
+	// was read now: 502 inbox_refresh_failed, the collect's error as the detail, so the apps say the refresh did not
+	// happen instead of showing the list as it was for a fresh one (#1849).
 	s.handle("POST /api/v1/inbox/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
 			return
 		}
 		if err := s.appCall(r.Context(), AppInbox, assistantwire.InboxCollect, map[string]any{"round": assistantwire.RoundFull}, nil); err != nil {
 			s.logf("inbox: refresh: %v", err)
+			l := i18n.OfWriter(w)
+			apierr.WriteBody(w, http.StatusBadGateway, map[string]any{"code": assistantwire.CodeInboxRefreshFailed,
+				"error": i18n.T(l, "assistant-inbox.refresh_failed"), "detail": i18n.Localize(err, l), "retryable": true})
+			return
 		}
 		items, asOf := s.inboxListAt(r.URL.Query().Get("sources") == "all")
 		apierr.WriteJSON(w, map[string]any{"items": items, "as_of": asOf, "triage": s.inboxTriage()})

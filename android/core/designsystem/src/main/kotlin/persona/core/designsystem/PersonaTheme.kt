@@ -52,7 +52,10 @@ data class PersonaMotion(val quick: Int, val standard: Int, val springy: Boolean
 }
 
 internal object Shapes {
-    val Glass = PersonaShapes(card = 28.dp, panel = 32.dp, control = 18.dp, chip = 50.dp, button = 50.dp, sheet = 34.dp)
+    val Glass = PersonaShapes(
+        card = Tokens.Radius.card, panel = Tokens.Radius.panel, control = Tokens.Radius.control,
+        chip = 50.dp, button = 50.dp, sheet = Tokens.Radius.panel,
+    )
     val Brief = PersonaShapes(card = 24.dp, panel = 28.dp, control = 16.dp, chip = 50.dp, button = 50.dp, sheet = 28.dp)
     val Board = PersonaShapes(card = 10.dp, panel = 10.dp, control = 8.dp, chip = 6.dp, button = 8.dp, sheet = 14.dp)
     fun of(style: AppStyle) = when (style) { AppStyle.Glass -> Glass; AppStyle.Brief -> Brief; AppStyle.Board -> Board }

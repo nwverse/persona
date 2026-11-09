@@ -730,6 +730,30 @@ class InboxRepositoryTest {
     }
 
     /**
+     * A Moments post linked in another manager's chat is read through that manager; the default's names none ("", sent
+     * as no manager), and with no manager known the read is as it was.
+     */
+    @Test fun aMomentsLinkIsReadThroughTheManagerItWasOpenedUnder() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-managers-moments-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport()
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            assertEquals("p1", repository.momentsPost("p1", "m-2").id)
+            repository.momentsComments("p1", "m-2")
+            repository.momentsPost("p1", "assistant")
+            repository.momentsPost("p1")
+            assertEquals(listOf("post" to "m-2", "comments" to "m-2", "post" to "", "post" to null), transport.momentsReads)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    /**
      * A chat's send (ReplyTarget.Lark) names the manager of the one item of that chat; with none known it names nothing,
      * so the chat page's pin still decides (an empty manager would send it to the default).
      */
@@ -1251,6 +1275,12 @@ class InboxRepositoryTest {
         override suspend fun pins() = JsonObject(emptyMap())
         override suspend fun mutes() = JsonObject(emptyMap())
         override suspend fun media(ref: String) = byteArrayOf(1).also { mediaRefs += ref }
+        /** Each Moments read with the manager its request names (RequestManager). */
+        val momentsReads = mutableListOf<Pair<String, String?>>()
+        override suspend fun momentsPost(postId: String) =
+            buildJsonObject { put("id", postId) }.also { momentsReads += "post" to currentCoroutineContext()[RequestManager]?.id }
+        override suspend fun momentsComments(postId: String) =
+            buildJsonObject { put("comments", JsonArray(emptyList())) }.also { momentsReads += "comments" to currentCoroutineContext()[RequestManager]?.id }
         val avatarRefs = mutableListOf<String>()
         override suspend fun avatar(ref: String) = media(ref).also { avatarRefs += ref }
         var onMute: suspend (String, String) -> JsonObject = { _, _ -> JsonObject(emptyMap()) }

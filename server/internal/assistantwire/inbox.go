@@ -116,6 +116,9 @@ const (
 	// CodeAssistantInDoubt: the hub's link to the manager dropped while a request was with it: it may have been done
 	// (a reply may have gone out). The apps get it with delivered "unknown"; sending the same reply again is safe.
 	CodeAssistantInDoubt = "assistant_in_doubt"
+	// CodeInboxRefreshFailed: a pull to refresh could not collect the sources (the inbox.collect call failed): nothing
+	// was read now and the list is as it was. POST /api/v1/inbox/refresh answers 502 with it; pulling again is safe.
+	CodeInboxRefreshFailed = "inbox_refresh_failed"
 )
 
 // Rounds of InboxRound.Round.
