@@ -134,8 +134,14 @@ func TestPushLocalizedWithoutPayloadsIsRefused(t *testing.T) {
 
 func TestSendFromSkipsALanguageWithoutPayload(t *testing.T) {
 	h, f, attempts := localizedHub(t)
-	if err := h.push.register(Device{DeviceID: "tablet", Name: "tablet", APNSToken: "tok-tablet", Topic: "app.example", Locale: "en"}); err != nil {
-		t.Fatal(err)
+	// A second Japanese device: the language's payload is already known to be missing when sendBuiltWith reaches it.
+	for _, d := range []Device{
+		{DeviceID: "watch", Name: "watch", APNSToken: "tok-watch", Topic: "app.example", Locale: "ja"},
+		{DeviceID: "tablet", Name: "tablet", APNSToken: "tok-tablet", Topic: "app.example", Locale: "en"},
+	} {
+		if err := h.push.register(d); err != nil {
+			t.Fatal(err)
+		}
 	}
 	build := func(l i18n.Lang) map[string]any {
 		if l != i18n.En {
