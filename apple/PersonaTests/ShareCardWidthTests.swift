@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import Persona
 
 /// How wide Export as Image draws a message (#2216, `ShareCardWidth`, `ShareCardBlocks`).
