@@ -52,5 +52,10 @@
   "no_sources_hint": "Connect mail or Lark and new messages land here, with AI sorting out what needs you and what is just for your information.",
   "no_sources_connect": "Connect {name}",
   "rules_list": "Rules",
-  "mutes_offline": "Offline: its mutes show here once it is back."
+  "mutes_offline": "Offline: its mutes show here once it is back.",
+  "selection": "Selected items",
+  "select_all": "Select all",
+  "deselect_all": "Deselect all",
+  "selected_count_one": "{count} selected",
+  "selected_count_other": "{count} selected"
 }

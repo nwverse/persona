@@ -1,6 +1,6 @@
 // The inbox list (docs/assistant/inbox.md"App"): filters by source and kind, search, then Needs you (agents waiting on you first),
 // FYI, Collapsed and Done, each a section that opens / closes from its title.
-import { Fragment, memo, useEffect, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   agentDraft, agentWorking, conversationRoute, fromLine, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
   itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
@@ -28,6 +28,7 @@ import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { EventMark } from "./InboxEvent";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
+import { CheckMark } from "../settings/ProviderFields";
 
 function useStored(key: string): [string, (v: string) => void] {
   const [v, setV] = useState(() => localStorage.getItem(key) ?? "");
@@ -41,8 +42,11 @@ function useStored(key: string): [string, (v: string) => void] {
 /** The sections open at first (in every manager's group): Needs you and FYI. */
 const OPEN_AT_FIRST = new Set(["action", "fyi"]);
 
-/** `selected`: the item opened (its id and manager). */
-export function InboxList({ selected }: { selected?: { id: string; manager?: string } }) {
+/** Selecting (#2059): the picked items' keys (itemKey), null when not selecting. */
+type Picked = Set<string> | null;
+
+/** `selected`: the item opened (its id and manager). `picked` / `onPicked`: selecting, from the page's "Select". */
+export function InboxList({ selected, picked = null, onPicked }: { selected?: { id: string; manager?: string }; picked?: Picked; onPicked?: Dispatch<SetStateAction<Picked>> }) {
   const items = useInbox((s) => s.items);
   const loaded = useInbox((s) => s.loaded);
   const loading = useInbox((s) => s.loading);
@@ -108,6 +112,26 @@ export function InboxList({ selected }: { selected?: { id: string; manager?: str
     KIND_FILTERS.find((k) => k.key === kind)?.label ?? "",
   ];
   const scope = bulkScope(filterNames, query, openInView.length);
+  // Selecting (#2059): the open items in sight can be picked (in the sections shown open; In progress is always open); the
+  // agents waiting and the done items cannot. What is picked counts and is acted on only while the list shows it.
+  const picking = picked !== null;
+  const shownOpen = kind === "agent" ? [] : (byManager ?? [{ manager: null, sec: s }]).flatMap(({ manager, sec }) =>
+    TIERS.filter((tier) => tier.key === "working" || isOpen(manager?.id ?? "", tier.key)).flatMap((tier) => sec.tiers[tier.key]));
+  const chosen = picking ? openInView.filter((it) => picked.has(itemKey(it))) : [];
+  const allChosen = shownOpen.length > 0 && shownOpen.every((it) => picked?.has(itemKey(it)));
+  const pick = useCallback((it: InboxItem) => onPicked?.((p) => {
+    if (!p) return p;
+    const n = new Set(p);
+    if (n.has(itemKey(it))) n.delete(itemKey(it));
+    else n.add(itemKey(it));
+    return n;
+  }), [onPicked]);
+  const pickAll = () => onPicked?.(allChosen ? new Set() : new Set(shownOpen.map(itemKey)));
+  // Mark as done: one bulk request per manager, then the toast with Undo (setAllDone); selecting ends.
+  const markChosenDone = () => {
+    void setAllDone(chosen, "done");
+    onPicked?.(null);
+  };
   // Clean up all files them as Dismiss (dismiss): the user set them aside, they did not handle them.
   const runBulk = () => {
     if (!openInView.length) return;
@@ -132,7 +156,8 @@ export function InboxList({ selected }: { selected?: { id: string; manager?: str
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="min-h-0 flex-1 overflow-y-auto" data-picking={picking || undefined}>
       <div className="mx-auto max-w-[760px] px-3 pt-3 pb-16 sm:px-4">
         <label className="flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
@@ -156,7 +181,7 @@ export function InboxList({ selected }: { selected?: { id: string; manager?: str
           ))}
           <button
             type="button"
-            disabled={!openInView.length}
+            disabled={!openInView.length || picking}
             title={t("inbox-inboxlist.clean_all_scope", { scope })}
             onClick={runBulk}
             className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-control bg-surface px-2.5 text-[12px] whitespace-nowrap text-ink-2 shadow-btn transition-colors duration-150 hover:bg-hover hover:text-ink disabled:pointer-events-none disabled:opacity-45 max-sm:hidden"
@@ -237,15 +262,15 @@ export function InboxList({ selected }: { selected?: { id: string; manager?: str
                 const clear = tier.key === "fyi" ? t("inbox-inboxlist.clear_fyi") : tier.key === "noise" ? t("inbox-inboxlist.clear_noise") : undefined;
                 return (
                   <Section key={tier.key} k={tier.key} title={tier.title} count={sectionCount(list.length, waiting.length)} open={tier.key === "working" || isOpen(group, tier.key)} onToggle={tier.key === "working" ? undefined : () => toggle(group, tier.key)}
-                    action={clear && list.length ? { label: clear, run: () => setAllDone(list, true) } : undefined}>
-                    {waiting.map((ix) => <AgentRow key={ix.id} ix={ix} />)}
-                    {list.map((it) => <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} />)}
+                    action={clear && list.length && !picking ? { label: clear, run: () => setAllDone(list, true) } : undefined}>
+                    {waiting.map((ix) => <AgentRow key={ix.id} ix={ix} off={picking} />)}
+                    {list.map((it) => <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} pick={picking ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} />)}
                   </Section>
                 );
               })}
               {ready && sec.done.length > 0 && (
                 <Section k="done" title={t("inbox-inboxlist.done")} count={sectionCount(sec.done.length, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}>
-                  {sec.done.map((it) => <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} />)}
+                  {sec.done.map((it) => <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} onEdit={setEditing} off={picking} />)}
                 </Section>
               )}
             </Fragment>
@@ -254,6 +279,16 @@ export function InboxList({ selected }: { selected?: { id: string; manager?: str
         {loading && loaded && <span className="sr-only">{t("inbox-inboxlist.refreshing")}</span>}
       </div>
       {editing && <DraftDialog item={editing} onClose={() => setEditing(null)} />}
+    </div>
+    {picking && (
+      <div role="toolbar" aria-label={t("inbox-inboxlist.selection")} data-pick-bar className="shrink-0 border-t border-line bg-inset px-3 py-2.5 sm:px-4 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">
+        <div className="mx-auto flex max-w-[760px] items-center gap-2">
+          <Button tone="quiet" onClick={pickAll} disabled={!shownOpen.length}>{allChosen ? t("inbox-inboxlist.deselect_all") : t("inbox-inboxlist.select_all")}</Button>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3 tabular-nums" aria-live="polite">{t("inbox-inboxlist.selected_count", { count: chosen.length })}</span>
+          <Button tone="primary" icon="check" disabled={!chosen.length} onClick={markChosenDone}>{t("inbox-inboxlist.mark_done_title")}</Button>
+        </div>
+      </div>
+    )}
     </div>
   );
 }
@@ -313,8 +348,11 @@ export async function markFromRow(it: InboxItem, done: boolean, touch = isNoHove
   if (ok && done && touch) toast(t("inbox-inboxlist.marked_done"), "ok", { label: t("lib-inbox.undo"), run: () => void setDone(it, false) });
 }
 
-/** Memoized: a push that leaves this item's object as it was (or one for sessions and machines) skips the row. */
-const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit }: { it: InboxItem; selected: boolean; showAccount: boolean; onEdit: (it: InboxItem) => void }) {
+/**
+ * Memoized: a push that leaves this item's object as it was (or one for sessions and machines) skips the row. Selecting
+ * (#2059): with `pick` the row is a checkbox that picks it instead of opening it; `off`: it cannot be picked (a done item).
+ */
+const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit, pick, picked = false, off = false }: { it: InboxItem; selected: boolean; showAccount: boolean; onEdit: (it: InboxItem) => void; pick?: (it: InboxItem) => void; picked?: boolean; off?: boolean }) {
   const to = itemRoute(it);
   const done = isDone(it);
   const label = kindLabel(it);
@@ -329,9 +367,10 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit }: { i
   // a right click: "Done" / "Move back", then what it can be muted by (iOS: the row's long press)
   // (the menu key / Shift+F10 open it next to the row, see ui/context-menu.ts)
   const [menu, setMenu] = useState<MenuAt | null>(null);
-  return (
-    <div data-item={it.id} data-manager={it.manager} {...contextMenuProps((at) => setMenu(at))} className={cx("group relative scroll-my-3 rounded-[14px] transition-[background-color,box-shadow] duration-150 hover:bg-inset", selected ? "bg-inset shadow-[0_0_0_1.5px_var(--accent)]" : "bg-surface shadow-card")}>
-      <a href={href(to)} onClick={(e) => onLinkClick(e, to)} aria-current={selected ? "page" : undefined} className="flex gap-3 rounded-[14px] p-3 outline-offset-[-2px]">
+  const picking = Boolean(pick) || off;
+  const head = (
+    <>
+        {pick && <CheckMark on={picked} className="mt-3" />}
         <ItemAvatar it={it} />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -357,9 +396,22 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit }: { i
             {it.count > 1 && !done && <Count n={it.count} accent={it.kind === "mention"} />}
           </span>
         </span>
-      </a>
+    </>
+  );
+  return (
+    // selecting: a click anywhere on the card picks it (its draft and the rest under it are inert, so clicks there land here)
+    <div data-item={it.id} data-manager={it.manager} data-picked={picked || undefined} onClick={pick ? () => pick(it) : undefined} {...(picking ? {} : contextMenuProps((at) => setMenu(at)))}
+      className={cx("group relative scroll-my-3 rounded-[14px] transition-[background-color,box-shadow,opacity] duration-150", !off && "hover:bg-inset", off && "opacity-45",
+        picked ? "bg-accent-tint shadow-[0_0_0_1.5px_var(--accent)]" : selected && !picking ? "bg-inset shadow-[0_0_0_1.5px_var(--accent)]" : "bg-surface shadow-card")}>
+      {pick ? (
+        <button type="button" role="checkbox" aria-checked={picked} className="flex w-full gap-3 rounded-[14px] p-3 text-left outline-offset-[-2px]">{head}</button>
+      ) : off ? (
+        <div inert className="flex gap-3 rounded-[14px] p-3">{head}</div>
+      ) : (
+        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} aria-current={selected ? "page" : undefined} className="flex gap-3 rounded-[14px] p-3 outline-offset-[-2px]">{head}</a>
+      )}
       {(first || draft || working || mark) && (
-        <div className="-mt-1 flex flex-col gap-2 pr-3 pb-3 pl-[64px]">
+        <div inert={picking} className={cx("-mt-1 flex flex-col gap-2 pr-3 pb-3", pick ? "pl-[92px]" : "pl-[64px]")}>
           {first && (
             <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-2">
               <Glyph name="reply" size={12} className="shrink-0 -scale-y-100 text-ink-3" />
@@ -375,7 +427,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit }: { i
       )}
       {/* Shown on hover with a mouse; on a touch screen (no hover, #4141) always there as a check beside the time, so an
           item is marked without opening it, with "Undo" in the toast in case the tap was a slip. */}
-      <button
+      {!picking && <button
         type="button"
         onClick={() => void markFromRow(it, !done)}
         aria-label={done ? t("inbox-inboxlist.move_back_title") : t("inbox-inboxlist.mark_done_title")}
@@ -384,7 +436,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, onEdit }: { i
       >
         {done ? <Glyph name="undo" size={12} stroke={2.2} /> : <Icon name="check" size={12} stroke={2.6} />}
         <span className="[@media(hover:none)]:hidden">{done ? t("inbox-inboxlist.move_back") : t("inbox-inboxlist.done")}</span>
-      </button>
+      </button>}
       {menu && <Menu anchor={menu.anchor ?? null} point={menu.point} onClose={() => setMenu(null)} width={224} items={rowMenu(it, done)} />}
     </div>
   );
@@ -510,14 +562,14 @@ const IX_GLYPH: Record<Interaction["kind"], GlyphName | "list" | "terminal"> = {
  * from the store only its route and its place, whose fields are strings: a sessions or machines push renders it again
  * only when one of those changed.
  */
-const AgentRow = memo(function AgentRow({ ix }: { ix: Interaction }) {
+const AgentRow = memo(function AgentRow({ ix, off = false }: { ix: Interaction; off?: boolean }) {
   const to = useStore((s) => conversationRoute(ix.machine_id, ix.session_id, s.sessions, s.assistant));
   const persona = to.name === "persona";
   const where = useStore((s) => (persona ? "Persona" : machineWithHub(ix.machine_id, s.machines)));
   const ask = interactionAsk(ix);
   const glyph = IX_GLYPH[ix.kind];
   return (
-    <a href={href(to)} onClick={(e) => onLinkClick(e, to)} className="flex gap-3 rounded-[14px] bg-surface p-3 shadow-card transition-colors duration-150 hover:bg-inset">
+    <a href={href(to)} onClick={(e) => onLinkClick(e, to)} inert={off} className={cx("flex gap-3 rounded-[14px] bg-surface p-3 shadow-card transition-[background-color,opacity] duration-150 hover:bg-inset", off && "opacity-45")}>
       <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-field text-attention">
         {glyph === "list" || glyph === "terminal" ? <Icon name={glyph} size={18} stroke={2} /> : <Glyph name={glyph} size={18} stroke={2} />}
       </span>

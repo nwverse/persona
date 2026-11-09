@@ -46,5 +46,9 @@
   "no_sources_hint": "接上邮箱或飞书，新消息会收到这里，AI 先帮你分好要你处理的和知悉即可的。",
   "no_sources_connect": "接入{name}",
   "rules_list": "规则",
-  "mutes_offline": "离线中：它回来后这里会显示它的静音。"
+  "mutes_offline": "离线中：它回来后这里会显示它的静音。",
+  "selection": "选中的条目",
+  "select_all": "全选",
+  "deselect_all": "取消全选",
+  "selected_count": "已选 {count} 项"
 }

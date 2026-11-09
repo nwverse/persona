@@ -46,5 +46,9 @@
   "no_sources_hint": "メールや Lark をつなぐと新しいメッセージがここに届き、AI が対応が必要なものと確認だけでよいものに分けます。",
   "no_sources_connect": "{name}をつなぐ",
   "rules_list": "ルール",
-  "mutes_offline": "オフラインです。戻るとここにミュートが表示されます。"
+  "mutes_offline": "オフラインです。戻るとここにミュートが表示されます。",
+  "selection": "選択した項目",
+  "select_all": "すべて選択",
+  "deselect_all": "選択を解除",
+  "selected_count": "{count}件を選択"
 }
