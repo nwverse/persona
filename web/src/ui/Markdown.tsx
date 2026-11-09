@@ -8,7 +8,8 @@ import { fileDownloadURL } from "../lib/api";
 import { isMachineRef, resolveRef } from "../lib/files";
 import { openPanel } from "../lib/panel";
 import remarkMath from "remark-math";
-import { copyText } from "./atoms";
+import { copyText, toast } from "./atoms";
+import { tableHtml, tableToTsv, writeTableClipboard } from "./tableCopy";
 import { t } from "../i18n";
 import { Icon } from "./icons";
 import { MermaidBlock } from "./Mermaid";
@@ -378,6 +379,7 @@ export const markdownComponents: Components = {
         {children}
       </code>
     ),
+  table: ({ children, node: _node, ...rest }) => <TableBlock {...rest}>{children}</TableBlock>,
 };
 
 /** The class of a block's <code>. */
@@ -413,6 +415,63 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
         title={t("ui-markdown.copy")}
         onClick={() => copyText(textOf(children).replace(/\n$/, ""))}
         className="absolute top-1.5 right-1.5 flex size-6 touch-hit items-center justify-center rounded-[6px] bg-surface text-ink-3 opacity-0 shadow-btn transition-opacity duration-150 group-hover/code:opacity-100 hover:text-ink focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+      >
+        <Icon name="copy" size={13} />
+      </button>
+    </div>
+  );
+}
+
+// The same hover button as a code block, on the table's corner. The wrap is only a positioning box: the table
+// keeps its width, scroll and margin (styles.css passes the prose edge rule through). The button is out of the
+// table, so a copy does not pick it up as a cell, and it stays put while a wide table scrolls. It is the control's
+// own 24px, not the 44px touch pad: it sits on a cell, and that pad would take the tap meant for a corner link.
+function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"table">) {
+  const tableRef = useRef<HTMLTableElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const table = tableRef.current;
+    const button = buttonRef.current;
+    if (!table || !button) return;
+    const place = () => {
+      const host = button.parentElement;
+      if (!host) return;
+      const gap = Math.max(0, host.clientWidth - table.offsetWidth);
+      // 0.375rem is top-1.5 / right-1.5, so the inset matches a code block's button at any root font size.
+      button.style.top = `calc(${table.offsetTop}px + 0.375rem)`;
+      button.style.right = `calc(${gap}px + 0.375rem)`;
+    };
+    place();
+    if (typeof ResizeObserver === "undefined") return;
+    const obs = new ResizeObserver(place);
+    obs.observe(table);
+    if (button.parentElement) obs.observe(button.parentElement);
+    return () => obs.disconnect();
+  }, []);
+  return (
+    <div className="md-table group/table relative">
+      <table {...rest} ref={tableRef}>
+        {children}
+      </table>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label={t("ui-markdown.copy_table")}
+        title={t("ui-markdown.copy_table")}
+        onClick={() => {
+          const table = tableRef.current;
+          if (!table) return;
+          const tsv = tableToTsv(table);
+          if (tsv === undefined) {
+            toast(t("ui-atoms.copy_failed"), "error");
+            return;
+          }
+          const html = tableHtml(table);
+          void writeTableClipboard(tsv, html).then((ok) => {
+            toast(ok ? t("ui-atoms.copied") : t("ui-atoms.copy_failed"), ok ? "ok" : "error");
+          });
+        }}
+        className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-[6px] bg-surface text-ink-3 opacity-0 shadow-btn pointer-events-none transition-opacity duration-150 group-hover/table:pointer-events-auto group-hover/table:opacity-100 hover:text-ink focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
       >
         <Icon name="copy" size={13} />
       </button>

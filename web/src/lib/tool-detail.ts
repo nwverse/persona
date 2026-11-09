@@ -34,8 +34,8 @@ export interface ToolQuestion {
 
 const s = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
-/** The assistant's password card (`secret_run`, #1137): commands run on one of your computers with a password typed on
- *  the iPhone. The web never takes the password: it shows what would run and can only decline. */
+/** The assistant's password card (`secret_run`, #1137): commands run on one of your computers with a password typed into
+ *  the card. */
 export function isSecretRun(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
   return ix.kind === "permission" && ix.tool_name === "secret_run";
 }

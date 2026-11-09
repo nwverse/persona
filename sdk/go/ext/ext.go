@@ -121,40 +121,55 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, prog Program) error
 
 // Main runs prog as the hub starts it: the protocol on stdin / stdout (unless the manifest says rpc: none, when
 // the hub sends nothing there), HTTP on the hub's socket when prog has HTTP. It returns only to exit: when the hub
-// closes stdin or stops the program.
+// closes stdin or stops the program, after the HTTP requests in flight are answered (see ServeHTTP).
 func Main(prog Program) {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sig, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if len(os.Args) > 1 && os.Args[1] == "manifest" && len(prog.Manifest) > 0 {
 		_, _ = os.Stdout.Write(append(answeredManifest(prog.Manifest), '\n'))
 		return
 	}
-	errs := make(chan error, 2)
+	// ctx also ends when stdin closes. Not through stop: the hub's SIGTERM would then kill the program while it
+	// drains its HTTP requests.
+	ctx, cancel := context.WithCancel(sig)
+	defer cancel()
+	var httpDone chan error
 	if prog.HTTP != nil {
 		sock := Env().Socket
 		if sock == "" {
 			fmt.Fprintln(os.Stderr, "no PERSONA_EXTENSION_SOCKET: runtime.http is not set in the manifest")
 			os.Exit(2)
 		}
-		go func() { errs <- ServeHTTP(ctx, sock, prog.HTTP) }()
+		httpDone = make(chan error, 1)
+		go func() { httpDone <- ServeHTTP(ctx, sock, prog.HTTP) }()
 	}
 	in := &counting{r: os.Stdin}
-	go func() { errs <- Serve(ctx, in, os.Stdout, prog) }()
-	for {
+	rpcDone := make(chan error, 1)
+	go func() { rpcDone <- Serve(ctx, in, os.Stdout, prog) }()
+	var err error
+	for running := true; running; {
 		select {
 		case <-ctx.Done():
-			return
-		case err := <-errs:
+			running = false
+		case err = <-rpcDone:
 			// rpc: none (only HTTP): the hub sends nothing on stdin; serve until it stops the program.
-			if err == io.EOF && prog.HTTP != nil && in.n == 0 {
-				continue
-			}
-			if err != nil && err != io.EOF && ctx.Err() == nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
-			}
-			return
+			running = err == io.EOF && httpDone != nil && in.n == 0
+		case err = <-httpDone:
+			httpDone, running = nil, false
 		}
+	}
+	failed := err != nil && err != io.EOF && ctx.Err() == nil
+	if failed {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	cancel()
+	if httpDone != nil {
+		if err := <-httpDone; err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}
+	if failed {
+		os.Exit(1)
 	}
 }
 

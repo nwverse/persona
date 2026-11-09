@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Per-chat rules (#5278): from a row of the sent-as-user ledger the user can say "don't ask again in this chat", which
@@ -52,12 +53,12 @@ var larkCreationRoutes = []string{larkMessages, "images", "files", "attachments"
 var (
 	// larkConversation is a conversation id fit for a rule's path: letters, digits and a few separators, no "/", no
 	// space and no character a pattern uses (* ? [ \), and not "." or "..".
-	larkConversation = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:@=+-]{0,199}$`)
+	larkConversation = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:@=+-]{0,199}$`)
 	// githubRepo is "owner/name" (the connector's own check, without "..": githubRepoOK adds that); githubRef is a
 	// row's target.ref, "owner/name#12": a whole number from 1 and at most nine digits, so a JSON number holds it
 	// exactly.
-	githubRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-	githubRef  = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,8})$`)
+	githubRepo = lazyre.New(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	githubRef  = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,8})$`)
 )
 
 // githubRepoOK is "owner/name" with nothing a pattern uses and nothing that changes an API path ("..", as the

@@ -127,7 +127,7 @@ struct TodosView: View {
                     creatingNotes = ""
                     showCreate = true
                 } label: {
-                    Image(systemName: Theme.Icon.add)
+                    ThemedIcon(Theme.Icon.add)
                 }
                 .accessibilityLabel("New To-Do")
             }
@@ -154,14 +154,14 @@ struct TodosView: View {
 
     private var searchRow: some View {
         HStack(spacing: Theme.Space.s) {
-            Image(systemName: Theme.Icon.search)
+            ThemedIcon(Theme.Icon.search)
                 .font(Theme.Font.secondaryMedium)
                 .foregroundStyle(.secondary)
             TextField(String(localized: "Search to-dos"), text: $query)
                 .textFieldStyle(.plain)
             if !query.isEmpty {
                 Button { query = "" } label: {
-                    Image(systemName: Theme.Icon.clear).foregroundStyle(.tertiary)
+                    ThemedIcon(Theme.Icon.clear).foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
             }
@@ -242,10 +242,11 @@ struct TodoRow: View {
         let status = TodosLogic.todoStatus(todo, lookup: lookup)
         let urgent = TodosLogic.mostUrgentAgent(todo, lookup: lookup)
         let activeAgents = todo.agents.filter { $0.releasedAt == nil }
+        let ultracode = Ultracode.todoShown(todo, lookup: lookup)
 
         HStack(alignment: .top, spacing: Theme.Space.m) {
             Button(action: onToggleDone) {
-                Image(systemName: todo.isDone ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                ThemedIcon(todo.isDone ? Theme.Icon.successFilled : Theme.Icon.unchecked)
                     .font(Theme.Font.title)
                     .foregroundStyle(todo.isDone ? Theme.positive : .secondary)
             }
@@ -254,11 +255,12 @@ struct TodoRow: View {
 
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(todo.title)
+                    UltracodeMark.after(todo.title, on: ultracode, font: Theme.Font.labelStrong)
                         .font(Theme.Font.bodyStrong)
                         .foregroundStyle(todo.isDone ? Color.secondary : Color.primary)
                         .strikethrough(todo.isDone)
                         .lineLimit(2)
+                        .animation(UltracodeMark.motion, value: ultracode)
                     Spacer(minLength: Theme.Space.xs)
                     if let d = todo.updatedAt ?? todo.createdAt {
                         Text(Fmt.relative(d))
@@ -281,6 +283,8 @@ struct TodoRow: View {
                     }
                     if !todo.isDone { ReviewChip(todo: todo, compact: true) }
                 }
+
+                TodoPlanLine(todo: todo)
 
                 if let reason = todo.closedReason {
                     Text(reason)

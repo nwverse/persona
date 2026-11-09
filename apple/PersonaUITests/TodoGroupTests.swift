@@ -9,7 +9,7 @@ final class TodoGroupTests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-ui.oldLayout", "NO", "-dev.grouping", "space",
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-dev.grouping", "space",
                                "-dev.folded", "macbook/w1\nstudio/w2\nstudio/w3\nserver/w1"]
         app.launchPinned()
         let working = app.buttons["agents.filter.working"]

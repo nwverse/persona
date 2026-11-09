@@ -19,12 +19,21 @@ vi.hoisted(() => {
 
 // What sits around a chat and is not about its sync: the avatar, the assistant's menus and task cards, the side panel.
 vi.mock("../../../lib/panel", async (importOriginal) => ({ ...await importOriginal<typeof import("../../../lib/panel")>(), usePanel: () => null }));
-vi.mock("../../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
+vi.mock("../../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }), PersonaAvatar: () => null }));
 vi.mock("../../assistant/AssistantChat", () => ({
   AssistantFace: () => null,
   AssistantLauncherChip: () => null,
   CompactionStrip: () => null,
+  StarterLauncherChip: () => null,
   useAssistantMenu: () => ({ items: [], dialogs: null }),
+}));
+// The new-conversation page's setup checks: ready, as a hub without readiness reports it. A refused start still shows
+// its card (FailureCard), with the words back in the box.
+vi.mock("../../assistant/Readiness", () => ({
+  useReadinessGate: () => ({ readiness: null, step: null, blocked: undefined, dialog: null, help() {}, confirm() {} }),
+  ReadinessCard: () => null,
+  ChatOnlyNote: () => null,
+  FailureCard: () => <div data-start-failure />,
 }));
 vi.mock("../../assistant/Tasks", () => ({
   DayLine: () => null,
@@ -39,31 +48,22 @@ const store = await import("../../../lib/store");
 const { setToken } = await import("../../../lib/api");
 const { t } = await import("../../../i18n");
 const { ChatView } = await import("../ChatView");
+const { PersonaAssistant } = await import("../../PersonaAssistant");
+const { navigate, useRoute } = await import("../../../lib/router");
+const { resetOutboxClaimsForTests } = await import("../../../lib/outbox");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtures/sync/*.json", { eager: true, import: "default" });
 
 /** Cases this page does not pass yet: the bug, and what every failure of the case must say. A known case that fails
  *  for another reason, or passes, fails the suite: the fixed bug comes off this list, and a new one is not hidden. */
-const CARD_STAYS_LIVE = { issue: "#1120", because: /card ix\d is answerable again|open cards \["ix\d"\], want \[\]|open cards \["ix1"\], want \["ix2"\]/ };
+const STARTING_GAP = /^step \d+ \([a-z+]+\): (sent message c1 shows 0 times|messages \[\], want \["user:pending:Plan a weekend trip\."\])$/;
 const KNOWN: Record<string, { issue: string; because: RegExp }> = {
-  card_answer_then_resolved: CARD_STAYS_LIVE,
-  card_tap_then_reconnect_snapshot: CARD_STAYS_LIVE,
-  card_old_list_after_answer: CARD_STAYS_LIVE,
-  card_answer_fails_card_back: CARD_STAYS_LIVE,
-  card_prompt_changed_only_new_card: CARD_STAYS_LIVE,
-  "card_answered_on_other_device as b": CARD_STAYS_LIVE,
-  "both_devices_answer_once as a": CARD_STAYS_LIVE,
-  "both_devices_answer_once as b": CARD_STAYS_LIVE,
   catch_up_over_cap_asks_rest: { issue: "#1118", because: /after_seq":12\}|want \[.*Question 6/ },
-  send_accepted_transcript_late: { issue: "#1119", because: /m1 shows 0 times|want \[.*Add a picnic on Saturday/ },
-  send_unknown_then_transcript_has_it: { issue: "#1121", because: /m1 shows 2 times|failed \["Reserve two bikes."\], want \[\]/ },
-  send_failed_stays_above_later: { issue: "#1122", because: /m1 shows 0 times|failed \[\], want \["Find a dinner place."\]/ },
+  // the new-conversation page shows nothing while its start is on the way: the first message is not pending there
+  start_answer_cut_then_receipt: { issue: "#1697", because: STARTING_GAP },
+  start_refused_then_resent_new_op: { issue: "#1697", because: STARTING_GAP },
 };
-// a new conversation's first message (chat.new, user.start): the runner does not play it yet, so every such case is
-// this one known failure
-const NO_START = "the web runner does not play a new conversation's start yet";
-const START_KNOWN = { issue: "#1382", because: new RegExp(NO_START) };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -83,6 +83,7 @@ afterEach(async () => {
   host.remove();
   store.disconnect();
   store.reset();
+  resetOutboxClaimsForTests();
   FakeSocket.hub = null;
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -98,13 +99,28 @@ async function settle(ms = 0) {
   }
 }
 
+/** The composer: the chat's, or the new-conversation page's before the chat exists. */
+const BOX = "[data-chat-dock] textarea, [data-new-conversation] textarea";
+
 function typeAndSend(words: string) {
-  const box = host.querySelector<HTMLTextAreaElement>("[data-chat-dock] textarea");
+  const box = host.querySelector<HTMLTextAreaElement>(BOX);
   if (!box) throw new Error("no composer");
   const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
   set.call(box, words);
   box.dispatchEvent(new Event("input", { bubbles: true }));
   box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+}
+
+/** Taps a failed bubble's Retry or Delete for the message with these words. */
+function onFailed(words: string, button: "retry" | "delete") {
+  const label = t(`chat-outboxbubbles.${button}`);
+  const entry = [...host.querySelectorAll<HTMLElement>("[data-outbox]")].find(
+    (el) => el.querySelector('[data-user-bubble][data-send-state="failed"] [data-bubble-text]')?.textContent?.trim() === words,
+  );
+  if (!entry) throw new Error(`no failed bubble for ${JSON.stringify(words)}`);
+  const el = [...entry.querySelectorAll("button")].find((b) => b.textContent === label);
+  if (!el) throw new Error(`no ${label} on the failed bubble for ${JSON.stringify(words)}`);
+  el.click();
 }
 
 function answer(id: string, resolution: Record<string, unknown>) {
@@ -135,15 +151,12 @@ function matchRequests(want: Request[], seen: Seen[], ops: (key: string) => Set<
   return null;
 }
 
-/** Compares the page with a view: failed messages back in the composer have no place in the list (README "Allowed
- *  differences"), so they are compared apart from the order. */
+/** Compares the page with a view: every message in its place, failed ones too. */
 function differences(got: ReturnType<typeof project> & { status?: string }, want: View): string[] {
   const out: string[] = [];
   if (want.messages) {
-    const placed = (ms: Message[]) => ms.filter((m) => m.state !== "failed").map((m) => `${m.from}:${m.state ?? ""}:${m.text}`);
-    const failed = (ms: Message[]) => ms.filter((m) => m.state === "failed").map((m) => m.text).sort();
-    if (JSON.stringify(placed(got.messages)) !== JSON.stringify(placed(want.messages))) out.push(`messages ${JSON.stringify(placed(got.messages))}, want ${JSON.stringify(placed(want.messages))}`);
-    if (JSON.stringify(failed(got.messages)) !== JSON.stringify(failed(want.messages))) out.push(`failed ${JSON.stringify(failed(got.messages))}, want ${JSON.stringify(failed(want.messages))}`);
+    const listed = (ms: Message[]) => ms.map((m) => `${m.from}:${m.state ?? ""}:${m.text}`);
+    if (JSON.stringify(listed(got.messages)) !== JSON.stringify(listed(want.messages))) out.push(`messages ${JSON.stringify(listed(got.messages))}, want ${JSON.stringify(listed(want.messages))}`);
   }
   if (want.cards) {
     const open = (cs: Record<string, string>) => Object.keys(cs).filter((id) => cs[id] === "open").sort();
@@ -154,9 +167,14 @@ function differences(got: ReturnType<typeof project> & { status?: string }, want
   return out;
 }
 
+/** A `new` chat: the new-conversation page, then the conversation it starts, where the page goes once it knows it. */
+function NewConversation() {
+  const r = useRoute();
+  if (r.name === "persona" && r.sid) return <PersonaAssistant sid={r.sid} onToggleSidebar={() => {}} />;
+  return <PersonaAssistant fresh onToggleSidebar={() => {}} />;
+}
+
 async function run(c: SyncCase, device: string): Promise<string[]> {
-  // the new-conversation page and its start are not driven here yet (#1382)
-  if (c.chat.new) return [NO_START];
   hub = new SyncHub(c, device);
   FakeSocket.hub = hub;
   vi.stubGlobal("fetch", hub.fetch);
@@ -164,10 +182,11 @@ async function run(c: SyncCase, device: string): Promise<string[]> {
   store.connect();
   await settle();
   root = createRoot(host);
-  await act(async () => root.render(<ChatView mid={mid} sid={sid} assistant={assistant} />));
+  if (c.chat.new) navigate({ name: "persona-new" }, true);
+  await act(async () => root.render(c.chat.new ? <NewConversation /> : <ChatView mid={mid} sid={sid} assistant={assistant} />));
   await settle(100);
 
-  const sent: { id: string; text: string; discarded?: boolean }[] = [];
+  const sent: { id: string; text: string; discarded?: boolean; start?: boolean }[] = [];
   const ended = new Set<string>();
   const answering = new Set<string>();
   let checked = 0;
@@ -216,7 +235,7 @@ async function run(c: SyncCase, device: string): Promise<string[]> {
   return failures;
 }
 
-async function step(st: Step, device: string, t: { sent: { id: string; text: string; discarded?: boolean }[]; ended: Set<string>; answering: Set<string> }) {
+async function step(st: Step, device: string, t: { sent: { id: string; text: string; discarded?: boolean; start?: boolean }[]; ended: Set<string>; answering: Set<string> }) {
   if (st.hub) hub.apply(st.hub);
   if (st.socket && st.socket.device === device) {
     if (st.socket.drop) await act(async () => hub.drop());
@@ -239,14 +258,23 @@ async function step(st: Step, device: string, t: { sent: { id: string; text: str
       hub.expectSend(u.send.id, u.send.text);
       t.sent.push({ id: u.send.id, text: u.send.text });
       await act(async () => typeAndSend(u.send!.text));
+    } else if (u.start) {
+      // the first message on the new-conversation page; it counts as a sent message (README "Steps")
+      hub.expectStart(u.start.id);
+      t.sent.push({ id: u.start.id, text: u.start.text, start: true });
+      await act(async () => typeAndSend(u.start!.text));
+    } else if (u.retry && t.sent.find((s) => s.id === u.retry)?.start && !hub.started) {
+      // a refused start is sent again from the new-conversation page, where its words are back in the box
+      await act(async () => typeAndSend(t.sent.find((s) => s.id === u.retry)!.text));
     } else if (u.answer) {
       t.answering.add(u.answer.id);
       await act(async () => answer(u.answer!.id, u.answer!.resolution));
     } else if (u.retry) {
-      const words = t.sent.find((s) => s.id === u.retry)!.text;
-      await act(async () => typeAndSend(words));
+      await act(async () => onFailed(t.sent.find((s) => s.id === u.retry)!.text, "retry"));
     } else if (u.discard) {
-      t.sent.find((s) => s.id === u.discard)!.discarded = true;
+      const s = t.sent.find((x) => x.id === u.discard)!;
+      s.discarded = true;
+      await act(async () => onFailed(s.text, "delete"));
     }
   }
   const r = st.reply;
@@ -267,7 +295,7 @@ for (const [path, file] of Object.entries(files)) {
     for (const c of file.cases) {
       for (const device of c.devices) {
         const name = c.devices.length > 1 ? `${c.name} as ${device}` : c.name;
-        const known = KNOWN[name] ?? (c.chat.new ? START_KNOWN : undefined);
+        const known = KNOWN[name];
         it(known ? `${name} (known: ${known.issue})` : name, async () => {
           const failures = await run(c, device);
           if (!known) return expect(failures, `${name}; requests this hub does not answer: ${hub.unknown.join(", ")}`).toEqual([]);

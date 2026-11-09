@@ -3,9 +3,9 @@ package node
 import (
 	"errors"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -29,8 +29,8 @@ type MemoryFile struct {
 }
 
 var (
-	projectKeyRe = regexp.MustCompile(`[^a-zA-Z0-9]`)
-	memoryNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.md$`)
+	projectKeyRe = lazyre.New(`[^a-zA-Z0-9]`)
+	memoryNameRe = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._-]{0,100}\.md$`)
 )
 
 // memoryDir is where Claude Code keeps auto-memory for cwd (it encodes the resolved path).

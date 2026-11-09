@@ -96,7 +96,7 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	}
 	if t, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && (t.Origin == self || t.Supervision != nil && t.Supervision.Supervisor == self) {
 		// The conversation shows what it told its task, as for agent_send to a task (routed); marked when it cut in.
-		if _, err := s.appendFeed(ctx, self, feedRouted, t.ID, map[string]any{"text": then, "interrupted": working}); err != nil {
+		if _, err := s.appendFeed(ctx, self, feedRouted, t.ID, map[string]any{"text": then, "interrupted": working, "from": routedFromAssistant}); err != nil {
 			s.logf("task %s: routed feed: %v", t.ID, err)
 		}
 	}
@@ -321,7 +321,7 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 			h.todo.Supervision = &v
 		}
 	}
-	if _, err := s.appendFeed(ctx, h.self, feedRouted, h.todo.ID, map[string]string{"text": text}); err != nil {
+	if _, err := s.appendFeed(ctx, h.self, feedRouted, h.todo.ID, map[string]string{"text": text, "from": routedFromAssistant}); err != nil {
 		s.logf("task %s: routed feed: %v", h.todo.ID, err)
 	}
 	if !h.made {

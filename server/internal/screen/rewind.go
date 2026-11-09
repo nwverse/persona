@@ -1,10 +1,11 @@
 package screen
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Claude Code's /rewind (recorded on 2.1.318, testdata/claude-2.1.318-rewind-*): a full-width panel under a ▔ rule,
@@ -71,10 +72,10 @@ type RewindScreen struct {
 const rewindListQuestion = "Restore the code and/or conversation to the point before…"
 
 var (
-	rewindHeadRE   = regexp.MustCompile(`^\s{2,4}Rewind\s*$`)
-	rewindMoreRE   = regexp.MustCompile(`^([↑↓]) (\d+) more$`)
-	rewindChoiceRE = regexp.MustCompile(`^\s{0,4}(❯|↑|↓)?\s*(\d)\.\s+(\S.*)$`)
-	rewindAgeRE    = regexp.MustCompile(`^\(.+\)$`)
+	rewindHeadRE   = lazyre.New(`^\s{2,4}Rewind\s*$`)
+	rewindMoreRE   = lazyre.New(`^([↑↓]) (\d+) more$`)
+	rewindChoiceRE = lazyre.New(`^\s{0,4}(❯|↑|↓)?\s*(\d)\.\s+(\S.*)$`)
+	rewindAgeRE    = lazyre.New(`^\(.+\)$`)
 )
 
 // Selected returns the row the ❯ is on, nil when there is none.

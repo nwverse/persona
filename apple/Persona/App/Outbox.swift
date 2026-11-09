@@ -25,8 +25,11 @@ extension AppModel {
 
     /// A message the hub already has, on screen as sent until its transcript copy arrives: a new Persona conversation's
     /// first one went with the start request, and the node shows no transcript until claude has written it (#511).
-    func showSent(_ key: SessionKey, text: String, images: [ImagePayload]) {
-        let msg = PendingMessage(text: text, images: images)
+    /// `id`: the message id the hub sent it under (an inbox hand-off's client id), which its transcript copy carries; no
+    /// bubble when that copy is in already (a retried hand-off the hub answered from its receipt).
+    func showSent(_ key: SessionKey, text: String, images: [ImagePayload], id: UUID = UUID()) {
+        guard !chat(key).items.contains(where: { PendingMessage.tied($0, to: id) == true }) else { return }
+        let msg = PendingMessage(id: id, text: text, images: images)
         chat(key).pending.append(msg)
         settleSend(key, msg.id, .sent)
     }
@@ -42,9 +45,9 @@ extension AppModel {
             Task {
                 // Normally the transcript shows it within a second or two. Behind a long turn it may only be written
                 // when that turn ends (Codex keeps its queue to itself): stay while the agent works, then go.
-                try? await Task.sleep(for: .seconds(60))
+                try? await clock.sleep(for: .seconds(60))
                 for _ in 0..<90 where store.pending.contains(where: { $0.id == id }) && session(key)?.status.isActive == true {
-                    try? await Task.sleep(for: .seconds(10))
+                    try? await clock.sleep(for: .seconds(10))
                 }
                 store.pending.removeAll { $0.id == id }
             }
@@ -98,7 +101,7 @@ extension AppModel {
         outboxWriter.run { [weak self] in // one write at a time, the latest last
             guard let self else { return }
             let list = self.chats.flatMap { key, store in store.pending.map { OutboxEntry(key: key, message: $0) } }
-            StateCache.save(Self.outboxName, list)
+            StateCache.save(Self.outboxName, list, in: self.stateFolder)
         }
     }
 
@@ -108,7 +111,7 @@ extension AppModel {
     /// (#1455). One whose copy is already in the chat's cache does not come back: copies are looked for only among
     /// the items that arrive from now on, and it showed twice until its wait ran out.
     func restoreOutbox() {
-        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self) ?? [] {
+        for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self, in: stateFolder) ?? [] {
             var msg = e.message
             switch msg.state {
             case .failed: // a failed one stays failed, the user decides; not forever

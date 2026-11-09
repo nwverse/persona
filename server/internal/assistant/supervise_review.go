@@ -230,6 +230,7 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 		row = db.TodoRow{ID: t.ID, Title: t.Title, Notes: t.Notes, CreatedAt: t.CreatedAt, Origin: t.Origin, PlanID: t.PlanID,
 			ReopenedAt: t.ReopenedAt, Quiet: t.Quiet}
 		row.DoneAt, row.DoneBy, row.DoneReason, row.UpdatedAt = &now, db.DoneByReview, reason, now
+		t.keepPlan(&row)
 	}
 	var before Todo
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
@@ -271,8 +272,8 @@ func pickTaskAgent(agents []proto.Session) proto.Session {
 	return list[0]
 }
 
-// sendToTask sends text to task t's agent (pickTaskAgent) and keeps it in the conversation's feed, as a message on the
-// task's card does; an agent closed after a stretch of work is resumed first (that can take minutes: it goes on in
+// sendToTask sends text to task t's agent (pickTaskAgent) and keeps it in the conversation's feed as Persona's
+// (routedFromAssistant); an agent closed after a stretch of work is resumed first (that can take minutes: it goes on in
 // the background). What it says about it: "sent to the agent" or "being sent".
 func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, error) {
 	agents := s.taskAgents(ctx, t)
@@ -287,7 +288,7 @@ func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, 
 		if err := s.call(ctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 			return err
 		}
-		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text})
+		_, err := s.appendFeed(ctx, t.Origin, feedRouted, t.ID, map[string]string{"text": text, "from": routedFromAssistant})
 		return err
 	}
 	if c.Status == proto.StatusOffline {

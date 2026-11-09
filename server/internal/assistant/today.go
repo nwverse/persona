@@ -76,7 +76,7 @@ func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedIte
 	now := time.Now().In(loc)
 	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	date := day.Format("2006-01-02")
-	items, _, err := s.feed(ctx, conversation, day.Add(-time.Second))
+	items, err := s.feedItems(ctx, conversation, day.Add(-time.Second))
 	if err != nil {
 		return FeedItem{}, false, err
 	}
@@ -87,7 +87,7 @@ func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedIte
 	}
 	body := todayBody{Date: date}
 	since := day.Add(-6 * time.Hour) // yesterday from 18:00: what finished overnight
-	if done, _, err := s.feed(ctx, conversation, since); err == nil {
+	if done, err := s.feedItems(ctx, conversation, since); err == nil {
 		// A task gets a receipt per stretch of work: it is listed once, by its latest one (done, not cut off after).
 		var order []string
 		latest := map[string]receiptBody{}
@@ -167,13 +167,7 @@ func (s *Service) todayFailures(ctx context.Context, conversation string, since 
 			Why: clip(oneLine(t.StartError), 60)})
 	}
 	if sc, err := s.lockedSchedule(ctx); err == nil {
-		for _, r := range sc.runs { // appended as runs end, not by At: read them all (sorted below)
-			if r.At.Before(since) {
-				continue
-			}
-			if r.Status != runFailed && r.Status != runSkipped {
-				continue
-			}
+		for _, r := range sc.missedRuns(since) {
 			out = append(out, todayFailed{Kind: "routine", ID: r.RefID, Ref: r.ID, Title: clip(r.Title, 60),
 				At: r.At.In(loc), Why: clip(oneLine(r.Error), 60), Skipped: r.Status == runSkipped})
 		}

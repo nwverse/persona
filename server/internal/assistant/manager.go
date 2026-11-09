@@ -13,13 +13,13 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/update"
@@ -53,7 +53,7 @@ type ManagerConfig struct {
 }
 
 // managerID is the shape of a manager's id (the hub's busManagerID).
-var managerID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+var managerID = lazyre.New(`^[a-z][a-z0-9-]{0,31}$`)
 
 func (c *ManagerConfig) check() error {
 	switch {

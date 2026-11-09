@@ -1,8 +1,12 @@
 package proto
 
 import (
+	"bytes"
 	"encoding/json"
+	"reflect"
+	"slices"
 	"testing"
+	"time"
 )
 
 func TestPreCutoverSessionSourceContract(t *testing.T) {
@@ -35,6 +39,33 @@ func TestPreCutoverSessionSourceContract(t *testing.T) {
 		}
 	}
 }
+
+// A session is sent as the bytes the struct-copying MarshalJSON gave before MarshalJSONTo: through MarshalJSON (a
+// value in an interface), MarshalJSONTo (a pointer, a slice element) and an encoder that leaves HTML alone.
+func TestSessionWireBytesUnchanged(t *testing.T) {
+	at := time.Unix(1700000000, 5)
+	s := Session{SessionID: "s1", Title: "<b>&</b> \u2028", LastText: "\xff", StartedByPersona: true, UpdatedAt: at,
+		ActivityAt: &at, Queued: []string{}, Efforts: []string{"<hi>"}, Subagents: []Subagent{{}}}
+	before, err := json.Marshal(struct {
+		sessionJSON
+		LegacyStarted bool `json:"started_by_jarvis"`
+	}{sessionJSON(s), s.StartedByPersona})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _ := json.Marshal(s)
+	pointer, _ := json.Marshal(&s)
+	var noHTML bytes.Buffer
+	enc := json.NewEncoder(&noHTML)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode([]Session{s})
+	for name, c := range map[string][2]string{"value": {string(value), string(before)}, "pointer": {string(pointer), string(before)},
+		"no-HTML encoder": {noHTML.String(), "[" + string(before) + "]\n"}} {
+		if c[0] != c[1] {
+			t.Errorf("%s:\n got %s\nwant %s", name, c[0], c[1])
+		}
+	}
+}
 func TestSourceAdapterPreservesPartialAndNullDecode(t *testing.T) {
 	s := Session{SessionID: "s", Title: "keep", StartedByPersona: true}
 	if err := json.Unmarshal([]byte(`{"status":"idle"}`), &s); err != nil || s.Title != "keep" || !s.StartedByPersona {
@@ -48,6 +79,58 @@ func TestSourceAdapterPreservesPartialAndNullDecode(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`{"started_by_jarvis":"yes"}`), &s); err == nil {
 		t.Fatal("wrong known field type accepted")
+	}
+}
+
+// decodeTwice is how a session was decoded before UnmarshalJSONFrom: its bytes into a copy of it, then the started
+// key used decoded again.
+func decodeTwice(data []byte, s *Session) error {
+	v := struct {
+		sessionJSON
+		LegacyStarted  json.RawMessage `json:"started_by_jarvis"`
+		CurrentStarted json.RawMessage `json:"started_by_persona"`
+	}{sessionJSON: sessionJSON(*s)}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	raw := v.LegacyStarted
+	if len(v.CurrentStarted) > 0 {
+		raw = v.CurrentStarted
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &v.sessionJSON.StartedByPersona); err != nil {
+			return err
+		}
+	}
+	*s = Session(v.sessionJSON)
+	return nil
+}
+
+// A session decodes in one pass to what the two-pass decoding gave, into a fresh or a filled-in session; one that
+// fails is left as it was.
+func TestSessionDecodeMatchesTwoPass(t *testing.T) {
+	at := time.Unix(1700000000, 5).UTC()
+	full, _ := json.Marshal(Session{SessionID: "s1", Title: "<b>&</b>", StartedByPersona: true, UpdatedAt: at, ActivityAt: &at,
+		Efforts: []string{"low"}, Subagents: []Subagent{{}}, Capabilities: &SessionCapabilities{}})
+	filled := Session{SessionID: "old", Title: "keep", StartedByPersona: true, Efforts: []string{"high", "max"}}
+	for _, raw := range []string{
+		string(full), `null`, `{}`, `{"status":"idle"}`, `{"started_by_jarvis":true}`, `{"started_by_jarvis":false}`,
+		`{"started_by_persona":false,"started_by_jarvis":true}`, `{"started_by_persona":null,"started_by_jarvis":false}`,
+		`{"started_by_persona":true,"started_by_persona":null}`, `{"Session_ID":"x","STARTED_BY_PERSONA":true}`,
+		`{"started_by_jarvis":"yes","started_by_persona":true}`, `{"started_by_jarvis":"yes"}`, `{"started_by_persona":[1]}`,
+		`{"efforts":["xhigh"],"unknown":{"a":[1,{}]},"title":"\u00e9\ud83d\ude00"}`, "{\"title\":\"\xff\"}", `{"title":"\q"}`,
+		`{"session_id":"new","status":5,"title":"t"}`, `{"session_id":"new","started_by_persona":"no"}`,
+	} {
+		for _, start := range []Session{{}, filled} {
+			want, got := start, start
+			want.Efforts, got.Efforts = slices.Clone(start.Efforts), slices.Clone(start.Efforts)
+			wantErr, gotErr := decodeTwice([]byte(raw), &want), json.Unmarshal([]byte(raw), &got)
+			if (wantErr == nil) != (gotErr == nil) || !reflect.DeepEqual(got, want) {
+				g, _ := json.Marshal(got)
+				w, _ := json.Marshal(want)
+				t.Errorf("%s into %q:\n got %s, %v\nwant %s, %v", raw, start.SessionID, g, gotErr, w, wantErr)
+			}
+		}
 	}
 }
 func TestLauncherSourceAdapterIsTyped(t *testing.T) {

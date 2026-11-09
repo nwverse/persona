@@ -37,8 +37,10 @@ class ReadmeLanguageTests(unittest.TestCase):
         self.assertEqual(heads(en), heads(zh))
         for lang in READMES:
             with self.subTest(lang=lang):
-                features = re.findall(r"^- \*\*", section(read(lang), 0), re.M)
-                self.assertEqual(FEATURES, len(features), "the first section lists the eight features")
+                video, features = section(read(lang), 0), section(read(lang), 1)
+                self.assertRegex(video, r"(?m)^https://github\.com/user-attachments/assets/\S+$", "the video tour comes first")
+                features = re.findall(r"^- \*\*", features, re.M)
+                self.assertEqual(FEATURES, len(features), "the section after the video tour lists the eight features")
 
     def test_each_language_uses_its_own_pictures(self):
         for lang, suffix in ASSETS.LANGS.items():

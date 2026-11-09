@@ -36,7 +36,7 @@ final class NativeStateUpgradeUITests: XCTestCase {
     @MainActor func testHandleUpgradeSystemAlerts() async throws {
         try requireUpgradeFixture()
         let app = XCUIApplication()
-        app.launchArguments = ["-runtimeCLI", "19252", "-ui.oldLayout", "YES", "-tab", "settings"]
+        app.launchArguments = ["-runtimeCLI", "19252", "-tab", "settings"]
         app.launchPinned()
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let ready = URL(string: "http://127.0.0.1:19253/mock/ui-driver?ready=1")!
@@ -63,7 +63,7 @@ final class NativeStateUpgradeUITests: XCTestCase {
     @MainActor func testAcceptUpgradeNotificationPermission() throws {
         try requireUpgradeFixture()
         let app = XCUIApplication()
-        app.launchArguments = ["-runtimeCLI", "19252", "-ui.oldLayout", "YES", "-tab", "settings"]
+        app.launchArguments = ["-runtimeCLI", "19252", "-tab", "settings"]
         app.launchPinned()
         allowNotifications()
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -123,7 +123,7 @@ final class NativeStateUpgradeUITests: XCTestCase {
     @MainActor func testCaptureRetainedPersonalPreferences() throws {
         try requireUpgradeFixture()
         let app = XCUIApplication()
-        app.launchArguments = ["-runtimeCLI", "19252", "-ui.oldLayout", "YES", "-tab", "dev"]
+        app.launchArguments = ["-runtimeCLI", "19252", "-tab", "dev"]
         app.launchPinned()
         allowNotifications()
         let personal = app.buttons.matching(NSPredicate(format: "label == 'Personal Agents' OR label == '个人 Agent'")).firstMatch

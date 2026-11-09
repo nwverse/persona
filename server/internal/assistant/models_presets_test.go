@@ -57,11 +57,11 @@ func postLauncher(t *testing.T, s *Service, lang, body string) (int, map[string]
 }
 
 func TestBuiltinPresetsAreComplete(t *testing.T) {
-	if len(builtinPresets) == 0 {
+	if len(builtinPresets()) == 0 {
 		t.Fatal("no built-in presets")
 	}
 	seen := map[string]bool{}
-	for _, b := range builtinPresets {
+	for _, b := range builtinPresets() {
 		p := b.LauncherPreset
 		if !strings.HasPrefix(p.ID, builtinPlugin+"/") || seen[p.ID] {
 			t.Errorf("%q: the id is builtin/<vendor> and unique", p.ID)
@@ -130,7 +130,7 @@ func TestPresetsMergeBuiltinAndPluginsInTheRequestLanguage(t *testing.T) {
 	}
 	zh := presetsIn(t, s, "zh-CN")
 	en := presetsIn(t, s, "en-US")
-	if len(zh) != len(builtinPresets)+1 || len(en) != len(zh) {
+	if len(zh) != len(builtinPresets())+1 || len(en) != len(zh) {
 		t.Fatalf("built-in plus the plugin's new one: %v / %v", presetIDs(zh), presetIDs(en))
 	}
 	if en[0].ID != "builtin/anthropic" {

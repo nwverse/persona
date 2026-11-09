@@ -53,7 +53,7 @@ WebSocket ──decode (background thread)──▶ AppModel.handle(_:) (main th
 | --- | --- | --- |
 | `allSessions` | Agents list (via `AgentsFeed` after #215), chat page, assistant page, space page, machine's space page, Inbox actions, session panel (7 files) | Yes |
 | `sessionsByMachine` | Assistant profile, machine details, port presence (`PortPresence`), `AgentSync` | Yes |
-| `pendingInteractions` / `interactions` | Agents list, Inbox, Old Layout tab badge, new shell home page | When someone asks / answers |
+| `pendingInteractions` / `interactions` | Agents list, Inbox, shared root-tab badges, shell home page | When someone asks / answers |
 | `machines` | Settings, Machines page, new chat, Dynamic Island settings, assistant page | Connect / disconnect / `last_seen` |
 | `namedMachine(_:)` / `namedMachines` (unobserved `machinesNow`, follows only `machineChoices`) | Chat page (subtitle, computer-control progress), session info | Add / delete / rename |
 | `siblings(of:)` (one `SpaceCell` per space) | Chat page, space tab strip | When tabs in that space change |
@@ -62,15 +62,16 @@ WebSocket ──decode (background thread)──▶ AppModel.handle(_:) (main th
 ### Cost of one push
 
 `RenderBudgetTests` (mock, page at rest, average of 5 pushes per type): each push is that machine's entire session list, with only one field of one session changed.
+The tables retain historical measurements of shell and tab navigation; they are not selectable iPhone modes today. Current compact iPhone screens always use the shell, and regular-width iPad screens retain their sidebar.
 - `rev`: the chat grew, but nothing on screen changed (most pushes on the real hub are like this);
 - `last`: an Agent's last line changed.
 
 | Page | Layout | One `rev` | One `last` | Views recomputed |
 | --- | --- | --- | --- | --- |
 | Agents list | New shell | 5 | 5 | `AgentsList`, `SpaceHeader`, `SlotRow`, `StateCounts`, `AssistantSidebar` |
-| Agents list | Old Layout | 4 | 4 | Same, without the sidebar |
+| Agents list | Historical tab navigation | 4 | 4 | Same, without the sidebar |
 | Agent chat | New shell | 5 | 5 | `ChatView`, `ChromeHeader`, `SessionModeBar`, `Composer`, `AssistantSidebar` |
-| Agent chat | Old Layout | 4 | 4 | Same, without the sidebar |
+| Agent chat | Historical tab navigation | 4 | 4 | Same, without the sidebar |
 | Persona chat | Both | 1 | 1 | `AssistantSidebar` (the assistant's session sidebar reads all sessions; in the new shell it exists on the Agents page too) |
 
 How to read this:
@@ -85,12 +86,12 @@ After step 1 (same test):
 | Page | Layout | One `rev` | One `last` | Views recomputed |
 | --- | --- | --- | --- | --- |
 | Agents list | New shell | 2–2.6 | 2–2.6 | Changed `SlotRow`, `AssistantSidebar`; one list reorder on the push crossing a whole-minute boundary (below) |
-| Agents list | Old Layout | 1–1.6 | 1–1.6 | Changed row; one list reorder on the push crossing a whole-minute boundary |
+| Agents list | Historical tab navigation | 1–1.6 | 1–1.6 | Changed row; one list reorder on the push crossing a whole-minute boundary |
 
 - Remaining list reorder: the mock sends `updated_at` as "now" every time; crossing a whole-minute boundary changes the space header's "n minutes ago", requiring structure computation (see "Step 1").
-  Exactly 1 of 5 pushes does this. Whether it lands in `rev` or `last` depends on the second of the run, so both columns are 2–2.6 (Old Layout 1–1.6).
+  Exactly 1 of 5 pushes does this. Whether it lands in `rev` or `last` depends on the second of the run, so both columns are 2–2.6 (Historical tab navigation 1–1.6).
 - `AssistantSidebar` reads all sessions and exists on every new-shell page; left for step 3.
-- Chat pages are unchanged from step 0 (new shell 5, Old Layout 4; step 2's work). One isolated run measured 7 Agent chat bubble redraws on a `rev` push (Old Layout 1.4),
+- Chat pages are unchanged from step 0 (new shell 5, Historical tab navigation 4; step 2's work). One isolated run measured 7 Agent chat bubble redraws on a `rev` push (Historical tab navigation 1.4),
   but the full matrix rerun was 0 and it didn't recur. Chat pages don't read `AgentsFeed`; step 2 adds a bubble-count limit and checks again.
 
 After step 2 (same test; wait until the page stops redrawing before measuring, see "Step 2" below; two runs per layout):
@@ -175,7 +176,22 @@ Truthfulness: time updates on every push (`AgentTime` lands with `show()` and is
 - badges computed in the model: `AppModel.badges` (`TabBadges`: Persona and Agents counts) recounts when pending items, sessions, or mutes change, publishing only when the numbers change;
   `RootView`, `MacRootView`, and the new shell's `WaitingBadge` read only these two numbers. `LiveUpdateTests.testTheAgentsBadgeIsTheHubs` checks that the badge matches the hub,
   adds one within 2 s of a question, and subtracts one when answered.
-- The original plan moved all of `AgentListOrder` into `AgentsFeed`; measurements showed list body already runs only on structure changes, so moving it would merely make that one run cheaper. Not done.
+- The original plan to move all of `AgentListOrder` into `AgentsFeed` was deferred at the earlier measurement checkpoint.
+  Retained shell tabs can also re-evaluate the body on selection or environment changes without a structural revision;
+  #1231 below separates projection lifetime from those body evaluations.
+
+- The list's derived data is an immutable `AgentListProjection` (#1231): filters and counts, pins, the Repository/Project tree,
+  repository headers, quiet flags and those sections' row entries, built once per published key (`AgentListProjectionCache.Key`:
+  the feed's structural `revision`, every hub group's link identity, address and token, and small settings such as grouping,
+  filter, search, pins, mutes and the held row). An unchanged retained page reads the published value without touching the
+  inventory. The first value, settings changes, critical landings, appended pages and credential changes are derived at once
+  on the main actor. Ordinary structural revisions, including what a released hold lands, are derived off the main actor from
+  a value snapshot by one serial worker. One derivation runs at a time and only the newest request waits behind it, so a
+  stream of revisions faster than one derivation still converges. A result publishes only if no immediate change or
+  credential switch superseded it, nothing newer has published, its partitions and settings are still the live ones, and
+  the list is not held, or the same scrolling activity authorized a capped landing; a later gesture or visibility edge
+  revokes that permission. `ReaderAnchor.willChange` runs just before it publishes.
+  Paging counts are overlaid when headers are drawn, so their arrival does not derive the inventory again.
 
 ### Step 4: one policy for "user is interacting": `Hold`
 
@@ -238,7 +254,7 @@ The user's requirement: fewer redraws must not come at the expense of correctnes
 `Hold` owns what waits and for how long ("Step 4" above). A critical update during a hold lands only its critical portion (`AgentsFeed.landCritical`):
 - Land: states of the Agents starting / stopping needing you or going offline, updating already-listed rows; questions; machines;
 - don't land: last lines, times, order; still wait for the finger to stop or the 5 s cap;
-- why: initially everything held landed together; changed last lines altered row heights and re-laid out the whole list while scrolling, producing a measured 104 pt jump in Old Layout (`ScrollUnderPushTests` failed, 10 list redraws during scrolling).
+- why: initially everything held landed together; changed last lines altered row heights and re-laid out the whole list while scrolling, producing a measured 104 pt jump in Historical tab navigation (`ScrollUnderPushTests` failed, 10 list redraws during scrolling).
 
 Why wait 0.5 s after stopping:
 - consecutive flicks pause only half a second to a second between them;
@@ -256,6 +272,20 @@ After any push sequence combined with any actions ends, the screen returns to hu
 - Actions include scrolling, dragging, opening menus, switching pages, entering / leaving chats, foreground / background, disconnect / reconnect.
 - Missed updates have a fallback: refetch sessions after reconnect (`refresh` after `hello`). Things happening on the hub while offline must appear after reconnect too.
 
+### Snapshot refresh ownership (#1634)
+
+Todo and session invalidations use `apple/Persona/App/CoalescedRefresh.swift`: one active read and one latest dirty follow-up, without a fixed cooldown or a new freshness delay. Hints received during a read merge; the trailing read reconciles them. A fast read that finishes before the next hint may still produce one GET per hint. Single-flight is not a request-rate quota, and reducing full todo bodies further depends on a compatibility-preserving manager-side delta/conditional protocol.
+
+Manual reads share an eligible active or queued read. Post-write confirmation cannot join a GET started before the write; todo publication is fenced by hub generation and local mutation revision. A cancelled UI waiter does not cancel another owner's shared read. Reset ends old waits and rejects late old-generation data. Session refresh preserves its frozen paging window and delta checkpoint; a manual refresh absorbs the existing short hint-merging task without swallowing its last invalidation.
+
+Critical paths and the timeliness table above remain unchanged. Unmarked hints are not guessed critical or discarded. Request metadata uses a bounded execution-surface/version header, not a device/account/bundle identifier or authentication claim. Default URLSession gzip negotiation remains enabled; video byte-range requests retain their intentional identity encoding.
+
+### Display work and foreground polling (#1634)
+
+Display-only clocks and decorative frames run only while mounted, scroll-visible, on the selected tab and in an active iOS/visionOS scene. Return uses the current timestamp, not a frozen business clock. Status-ring interpolation belongs to Core Animation, while the built-in face keeps its original drawing and nominal cadence with a periodic schedule. Relative-time/elapsed labels do not keep hidden periodic timers alive. Recording, transfer and other explicitly background-capable operations use their own lifecycle.
+
+`tabActiveTask` also cancels foreground polling at scene inactivity. `onTabVisibility` deliberately retains its original tab semantics: changing every disappearance callback to scene-driven disappearance would clear voice-call continuation state. Mac window-focus behavior is not treated as phone backgrounding.
+
 ### No swallowed actions
 
 - During a deferred reorder, a tap must target the row the user saw: order stays unchanged while held, and the tap acts on the displayed row.
@@ -270,7 +300,7 @@ After any push sequence combined with any actions ends, the screen returns to hu
   - keep the same reader row until the user scrolls: choosing the center row again for every consecutive reorder can select a neighbor and drag the list away.
 - Don't preserve it at the very top: new arrivals should be visible there. Don't preserve it with a finger down or while sliding either (only critical updates land then, above).
 - Why (#339): after reordering, `List` preserves scroll offset, not content. Earlier spaces change rank and the reader's whole screen becomes a different space; the order is true, but what they were reading is gone.
-- Acceptance: `LiveUpdateTests.testScrolledListHoldsStillThroughUpdates` prints `TRUTH reader row moved … pt`; both layouts must stay within 2 pt (before the fix, the row disappeared entirely in Old Layout).
+- Acceptance: `LiveUpdateTests.testScrolledListHoldsStillThroughUpdates` prints `TRUTH reader row moved … pt`; both layouts must stay within 2 pt (before the fix, the row disappeared entirely in Historical tab navigation).
 
 ### Visible staleness
 
@@ -322,9 +352,7 @@ So each chat keeps a structure-only record (`apple/Persona/App/ChatTrace.swift`)
   - following-state transitions (`hold back` / `let go`, with mode, near, touching), plus chat opens and closes.
 - No message text, names, links, or item ids.
 - Keeps the last 4 chats, latest 240 lines each, in `Caches/state/chat-trace.json`. Survives the App being killed.
-- Copy it out:
-  - new shell: long-press a chat in the drawer › **Copy Diagnostics**;
-  - Old Layout: assistant top-bar menu › **Copy Diagnostics**.
+- Copy it out: long-press a chat in the shell drawer or regular-width sidebar › **Copy Diagnostics**.
 
 Reading it:
 - Last row contains `a<reply line number>`: the reply was drawn.
@@ -370,7 +398,7 @@ Below are the old behavior, measured problems, and a single-source-of-truth plan
 | 1 | Drag upward 40 pt during streaming, then release | **Wrong**: immediately stops following, `frozen`, ↓ appears, 34 pt from latest. All later streaming text and steps are held until dragged exactly to bottom or ↓ tapped. Same in both layouts |
 | 2 | Read several screens up, then flick downward | Stops 1332 pt from latest, ↓ visible, not following: correct. "Flick nearly to bottom" not tested: mock history too long to reach in one flick |
 | 3 | At latest, expand a running work row, then collapse | Expand: heading stays under the finger, steps push latest 1820 pt away, ↓ appears, stops following, **withholds**—later steps in this turn no longer enter the list; the open work row freezes at expansion time (**wrong**: this is the turn being read). Collapse: returns to latest and follows, correct |
-| 4 | Keyboard opens / closes | New shell: stays latest, following, no ↓ or flash: correct. Old Layout + Liquid Glass: composer missing from accessibility tree (#1006), not tested |
+| 4 | Keyboard opens / closes | New shell: stays latest, following, no ↓ or flash: correct. Historical tab navigation + Liquid Glass: composer missing from accessibility tree (#1006), not tested |
 | 5 | Send a message while reading above | **Not tested**: after scrolling up, tests couldn't find the Agent chat composer in either layout; cause not investigated |
 | 6 | Push while reading above, then tap ↓ | While reading, ↓ stays visible, not following, items arrive in the background but are held: correct. 0.11 s after tapping ↓, at latest, following, ↓ gone: correct |
 | 7 | Leave and reopen chat | **Not tested**: after returning to the list, tests couldn't find a tappable Agent row (selector issue), skipped |
@@ -432,7 +460,7 @@ Differences from the plan above:
 - **Expanding a work row while following stays `holding` (anchored), without resuming following** (user decision 2026-11-04): #1173 moves an expanded heading at latest below the top bar, with steps below it;
   resuming following would scroll the heading offscreen after 1.5 s, while withholding would freeze the turn. So neither follow nor withhold: `ChatPin.hold(keep:)` keeps the heading pinned, new steps grow below it, and ↓ appears when they extend offscreen.
   - In the inverted list, growth newer than the heading pushes it upward; pinning adjusts offset every time. When many cached steps lay out together, the lazy list later measures them taller than estimated, pushes the heading outside the list, and it stops reporting position,
-    so offset can no longer be calculated (#1173's own test also failed on master with Old Layout + BeautifulUI). Recovery: if the heading stops reporting, move by content growth (`ChatPin.watch`);
+    so offset can no longer be calculated (#1173's own test also failed on master with Historical tab navigation + BeautifulUI). Recovery: if the heading stops reporting, move by content growth (`ChatPin.watch`);
     if still lost, scroll to its id (`ChatView.keepHeader`, making the lazy list lay that row out accurately), then pin from there.
   - Expanding a step below a persistently pinned heading initially replaced the heading's pin with that step's short 1.5 s pin; afterward neither was pinned. Now rows newer than the heading don't get separate pins (the pinned heading keeps the interval stable);
     older rows pin normally, then resume the heading pin; collapsing or expanding another row converts the persistent pin to 1.5 s from now (`ChatPin.unkeep`).

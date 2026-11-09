@@ -134,7 +134,31 @@ func TestInjectedTemplatesKeepTheirHead(t *testing.T) {
 	}
 }
 
+// The continue after a usage limit reset (#1710) is one line, as a wake is.
+func TestParseInjectedLimitContinue(t *testing.T) {
+	got := ParseInjected(RenderAgentLimitContinue())
+	if got == nil || got.Kind != proto.InjectedFollowup || got.State != "limit_continue" || got.Line != "用量额度重置了，Persona 让它接着做" {
+		t.Fatalf("ParseInjected = %+v", got)
+	}
+	if ParseInjected("⏰（Persona 叫你接着做）") != nil {
+		t.Fatal("a bare head taken for the continue")
+	}
+}
+
 // A follow-up (supervision) message (#3124) is a system line, read off its head and marker; a user's line that looks like its head is not.
+func TestParseInjectedSupervisionLevels(t *testing.T) {
+	for _, level := range []string{"info", "triage", "user"} {
+		text := RenderSupervise(Supervise{Level: level, Entries: []SuperviseEntry{{ID: "todo_example", Title: "Example task", Kind: "idle"}}})
+		if got := ParseInjected(text); got == nil || got.Level != level {
+			t.Fatalf("level %s: %+v", level, got)
+		}
+	}
+	legacy := "📋 督办：你派出去的任务有 1 个要你处理\n（这是 Persona 的督办消息，不是用户发的。）"
+	if got := ParseInjected(legacy); got == nil || got.Level != "triage" {
+		t.Fatalf("legacy default: %+v", got)
+	}
+}
+
 func TestParseInjectedSupervise(t *testing.T) {
 	text := RenderSupervise(Supervise{Entries: []SuperviseEntry{{ID: "todo_1", Title: "部署", Kind: "review"}, {ID: "todo_2", Title: "修崩溃", Kind: "idle"}}})
 	got := ParseInjected("<persona-context>快照</persona-context>\n" + text)
