@@ -77,6 +77,47 @@ class InboxMutesModelTest {
         assertEquals(listOf("new"), model.mutes?.map { it.id })
     }
 
+    @Test fun aFailedReadOverTakenByANewerOneSaysNothing() = runBlocking {
+        val first = CompletableDeferred<Unit>()
+        var calls = 0
+        val repository = object : InboxRepository by Mutes() {
+            override suspend fun inboxMutes(manager: String?): List<InboxMute> {
+                if (calls++ == 0) {
+                    first.await()
+                    throw IllegalStateException("timeout")
+                }
+                return listOf(InboxMute("new", "github", tag = "repo", value = "o/new", name = "o/new"))
+            }
+        }
+        val model = InboxMutesModel(repository)
+        var thrown: Throwable? = null
+        val before = launch { try { model.load(null) } catch (e: IllegalStateException) { thrown = e } }
+        yield()
+        model.load(null)
+        first.complete(Unit)
+        before.join()
+        assertNull(thrown)
+        assertEquals(listOf("new"), model.mutes?.map { it.id })
+    }
+
+    @Test fun anUnmuteStaysGoneWhenAReloadReadBeforeItLands() = runBlocking {
+        val answer = CompletableDeferred<Unit>()
+        val repository = object : InboxRepository by Mutes() {
+            override suspend fun unmute(id: String, manager: String?) = answer.await()
+        }
+        val model = InboxMutesModel(repository)
+        model.load(managers)
+        val gone = checkNotNull(model.shares)[1].group.items.single()
+        val unmuting = launch { model.unmute(gone) }
+        yield()
+        model.load(managers) // read while the unmute was on its way: it still has the mute
+        assertEquals(listOf("o/two", "o/one"), model.mutes?.map { it.name })
+        answer.complete(Unit)
+        unmuting.join()
+        assertEquals(listOf("o/one"), model.mutes?.map { it.name })
+        assertEquals(listOf(listOf("o/one"), emptyList(), emptyList()), model.shares?.map { s -> s.group.items.map { it.name } })
+    }
+
     @Test fun withOneManagerTheMutesAreOneListAsBefore() = runBlocking {
         val model = InboxMutesModel(Mutes())
         model.load(ManagerRoster(listOf(managers.managers.first()), "assistant"))

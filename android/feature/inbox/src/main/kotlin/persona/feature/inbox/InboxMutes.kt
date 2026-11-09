@@ -96,7 +96,9 @@ class InboxMutesModel(private val repository: InboxRepository) {
             mutes = each.flatMap { it.group.items }.newestFirst()
             return
         }
-        val list = repository.inboxMutes()
+        val list = try { repository.inboxMutes() }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { if (read != reads) return; throw e }
         if (read != reads) return
         mutes = list
         shares = null
@@ -107,7 +109,12 @@ class InboxMutesModel(private val repository: InboxRepository) {
         val same = { x: InboxMute -> x.id == m.id && x.manager == m.manager }
         mutes = mutes?.filterNot(same)
         shares = shares?.map { it.withItems { list -> list.filterNot(same) } }
-        try { repository.unmute(m.id, m.manager) }
+        try {
+            repository.unmute(m.id, m.manager)
+            // A reload read before the unmute reached the hub may have brought it back.
+            mutes = mutes?.filterNot(same)
+            shares = shares?.map { it.withItems { list -> list.filterNot(same) } }
+        }
         catch (e: Exception) {
             // Put back only this one: another unmute that went through meanwhile stays gone.
             fun back(list: List<InboxMute>) = (list.filterNot(same) + m).newestFirst()

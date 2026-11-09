@@ -91,6 +91,8 @@ struct InboxMutesView: View {
     /// Several managers: each one's mutes, or why they couldn't be read, the default first; nil with one.
     private(set) var shares: [ManagerShare<InboxMute>]?
     @ObservationIgnored private let deps: Deps
+    /// The latest load: an older one that answers after it doesn't land.
+    @ObservationIgnored private var reads = 0
 
     init(deps: Deps = .live) { self.deps = deps }
 
@@ -105,18 +107,21 @@ struct InboxMutesView: View {
 
     func load() async {
         guard let api = deps.api() else { return }
+        reads += 1
+        let read = reads
         if let roster = deps.roster(), roster.isMulti {
-            guard let read = await roster.readEach(api, said: Self.said, { try await $0.inboxMutes() }) else { return }
-            shares = read.map { var s = $0; s.items = Self.newestFirst(s.items); return s }
-            state = .loaded(Self.newestFirst(read.flatMap(\.items)))
+            guard let each = await roster.readEach(api, said: Self.said, { try await $0.inboxMutes() }), read == reads else { return }
+            shares = each.map { var s = $0; s.items = Self.newestFirst(s.items); return s }
+            state = .loaded(Self.newestFirst(each.flatMap(\.items)))
             return
         }
         do {
             let list = Self.newestFirst(try await api.inboxMutes())
+            guard read == reads else { return }
             shares = nil
             state = .loaded(list)
         } catch {
-            if error.isCancellation { return } // the sheet closed: not a failure
+            if error.isCancellation || read != reads { return } // the sheet closed, or a newer load answers: not a failure
             if case .loaded = state { deps.show(error) } else { state = .failed(Self.said(error)) }
         }
     }
@@ -132,6 +137,9 @@ struct InboxMutesView: View {
         }
         do {
             try await api.manager(deps.roster().map { $0.naming(m.manager) } ?? m.manager).unmuteInbox(m.id)
+            // A reload read before the unmute reached the hub may have brought it back.
+            if case .loaded(let now) = state { state = .loaded(now.filter { !gone($0) }) }
+            shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }
         } catch {
             // Only this mute: what changed meanwhile (another unmute, a reload) stays.
             state = .loaded(Self.newestFirst((state.value ?? []).filter { !gone($0) } + [m]))

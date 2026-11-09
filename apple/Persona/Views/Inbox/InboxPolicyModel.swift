@@ -166,6 +166,8 @@ extension InboxPolicy {
     /// Several managers: each one's rules, or why they couldn't be read, the default first; nil with one.
     private(set) var shares: [ManagerShare<InboxPolicy>]?
     @ObservationIgnored private let deps: Deps
+    /// The latest load: an older one that answers after it doesn't land.
+    @ObservationIgnored private var reads = 0
 
     init(deps: Deps = .live) { self.deps = deps }
 
@@ -181,18 +183,21 @@ extension InboxPolicy {
     /// Reads the list; a failure after it showed once is a toast and the list stays.
     func load() async {
         guard let api = deps.api() else { return }
+        reads += 1
+        let read = reads
         if let roster = deps.roster(), roster.isMulti {
-            guard let read = await roster.readEach(api, said: Self.said, { try await $0.inboxPolicies() }) else { return }
-            shares = read.map { var s = $0; s.items = InboxPolicy.newestFirst(s.items); return s }
-            state = .loaded(InboxPolicy.newestFirst(read.flatMap(\.items)))
+            guard let each = await roster.readEach(api, said: Self.said, { try await $0.inboxPolicies() }), read == reads else { return }
+            shares = each.map { var s = $0; s.items = InboxPolicy.newestFirst(s.items); return s }
+            state = .loaded(InboxPolicy.newestFirst(each.flatMap(\.items)))
             return
         }
         do {
             let list = InboxPolicy.newestFirst(try await api.inboxPolicies())
+            guard read == reads else { return }
             shares = nil
             state = .loaded(list)
         } catch {
-            if error.isCancellation { return } // the sheet closed: not a failure
+            if error.isCancellation || read != reads { return } // the sheet closed, or a newer load answers: not a failure
             let said = String(localized: "Couldn't load the rules: \(InboxPolicy.said(error))")
             if case .loaded = state { deps.toast(Toast(said, style: .error)) } else { state = .failed(said) }
         }
@@ -213,6 +218,9 @@ extension InboxPolicy {
         shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }
         do {
             try await api.manager(deps.roster().map { $0.naming(p.manager) } ?? p.manager).deleteInboxPolicy(p.id)
+            // A reload read before the removal reached the hub may have brought it back.
+            if case .loaded(let now) = state { state = .loaded(now.filter { !gone($0) }) }
+            shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }
             deps.toast(Toast(String(localized: "Rule removed for “\(p.name)”."), style: .success))
         } catch {
             // Only this rule: what changed meanwhile (another removal, a reload) stays.

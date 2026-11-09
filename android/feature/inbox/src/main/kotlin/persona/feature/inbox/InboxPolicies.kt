@@ -300,7 +300,12 @@ class InboxRulesModel(private val repository: InboxRepository) {
         val same = { p: InboxPolicy -> p.id == policy.id && p.manager == policy.manager }
         rules = rules?.filterNot(same)
         shares = shares?.map { it.withItems { list -> list.filterNot(same) } }
-        try { repository.removePolicy(policy.id, policy.manager) }
+        try {
+            repository.removePolicy(policy.id, policy.manager)
+            // A reload read before the removal reached the hub may have brought it back.
+            rules = rules?.filterNot(same)
+            shares = shares?.map { it.withItems { list -> list.filterNot(same) } }
+        }
         catch (e: Exception) {
             // Back only this one: another remove that went through meanwhile stays gone.
             fun back(list: List<InboxPolicy>) = (list.filterNot(same) + policy).newestFirst()

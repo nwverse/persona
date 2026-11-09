@@ -5,7 +5,8 @@ import Testing
 /// The Inbox's Rules and Muted lists with several managers (docs/assistant/managers.md "Grouping"): each manager's own
 /// list is read with it named and shown under its name, the default first; one that can't be read says so in its place;
 /// Remove and Unmute go to the manager whose it is (still after another became the default), a rule or mute with the same
-/// id elsewhere stays, and one that fails to go comes back alone.
+/// id elsewhere stays, and one that fails to go comes back alone. A reload read before a removal landed doesn't bring it
+/// back, and only the newest load lands.
 @MainActor
 struct InboxManagerListsTests {
     private static let roster = ManagerRoster(managers: [
@@ -25,6 +26,45 @@ struct InboxManagerListsTests {
             }
         }
         return hub
+    }
+
+    /// The hub's client, with the first request `held` picks kept back until `gate` opens.
+    private static func holdingClient(_ hub: FakeHub, _ gate: Gate, _ held: @escaping @Sendable (LocalRequest) -> Bool) -> APIClient {
+        var client = hub.client
+        let answer = client.transport!
+        client.transport = { req in
+            if held(req) { await gate.pass() }
+            return try await answer(req)
+        }
+        return client
+    }
+
+    /// Keeps the first request through it back until `open()`; later ones pass.
+    private actor Gate {
+        private var passed = 0
+        private var held: CheckedContinuation<Void, Never>?
+        private var watching: [CheckedContinuation<Void, Never>] = []
+
+        func pass() async {
+            passed += 1
+            guard passed == 1 else { return }
+            await withCheckedContinuation { c in
+                held = c
+                watching.forEach { $0.resume() }
+                watching = []
+            }
+        }
+
+        /// Returns once the first request is held.
+        func holding() async {
+            if held != nil { return }
+            await withCheckedContinuation { watching.append($0) }
+        }
+
+        func open() {
+            held?.resume()
+            held = nil
+        }
     }
 
     @Test func eachManagersRulesAreReadUnderItsNameAndRemovedOnIt() async throws {
@@ -79,6 +119,44 @@ struct InboxManagerListsTests {
         #expect(m.shownShares?.map(\.manager.id) == ["m-2", "m-3"])
     }
 
+    @Test func aRemovedRuleStaysGoneWhenAReloadReadBeforeItLands() async throws {
+        let hub = Self.hub("/api/v1/inbox/policies", "policies", mine: "",
+                           work: #"{"id":"p9","source":"mail","tag":"sender","value":"b@example.com","name":"乙","tier":"noise"}"#)
+        hub.on("DELETE", "/api/v1/inbox/policies/p9") { _ in Data(#"{"ok":true}"#.utf8) }
+        let gate = Gate()
+        let client = Self.holdingClient(hub, gate) { $0.method == "DELETE" }
+        let m = InboxRulesModel(deps: .init(api: { client }, toast: { _ in }, roster: { Self.roster }))
+        await m.load()
+        let work = try #require(m.shares?[1].items.first)
+        let removing = Task { await m.remove(work) }
+        await gate.holding()
+        await m.load() // read while the removal was on its way: the hub still had it
+        #expect(m.shares?[1].items.map(\.id) == ["p9"])
+        await gate.open()
+        await removing.value
+        #expect(m.state.value?.isEmpty == true)
+        #expect(m.shownShares?.map(\.manager.id) == ["m-3"])
+    }
+
+    @Test func aLoadOvertakenByANewerOneDoesntLand() async throws {
+        let hub = Self.hub("/api/v1/inbox/policies", "policies",
+                           mine: #"{"id":"p1","source":"mail","tag":"sender","value":"a@example.com","name":"甲","tier":"action"}"#,
+                           work: #"{"id":"p9","source":"mail","tag":"sender","value":"b@example.com","name":"乙","tier":"noise"}"#)
+        let gate = Gate()
+        let client = Self.holdingClient(hub, gate) { $0.headers["X-Persona-Manager"] == "m-2" }
+        var roster = Self.roster
+        let m = InboxRulesModel(deps: .init(api: { client }, toast: { _ in }, roster: { roster }))
+        let first = Task { await m.load() } // m-2's rules hang
+        await gate.holding()
+        roster = ManagerRoster(managers: [Self.roster.managers[0], Self.roster.managers[2]], defaultID: "assistant") // m-2 was removed meanwhile
+        await m.load()
+        #expect(m.shares?.map(\.manager.id) == ["assistant", "m-3"])
+        await gate.open()
+        await first.value
+        #expect(m.shares?.map(\.manager.id) == ["assistant", "m-3"], "the older load, with m-2, doesn't land")
+        #expect(m.state.value?.map(\.name) == ["甲"])
+    }
+
     @Test func theDefaultsRulesGoToItAfterAnotherBecameTheDefault() async throws {
         let hub = Self.hub("/api/v1/inbox/policies", "policies",
                            mine: #"{"id":"p1","source":"mail","tag":"sender","value":"a@example.com","name":"甲","tier":"action"}"#, work: "")
@@ -130,5 +208,45 @@ struct InboxManagerListsTests {
         #expect(named == ["m-2", nil])
         #expect(m.shares?[0].items.map(\.name) == ["example-org/one"]) // the default's failed: back
         #expect(m.shares?[1].items.isEmpty == true && shown.count == 1)
+    }
+
+    @Test func anUnmuteStaysGoneWhenAReloadReadBeforeItLands() async throws {
+        let hub = Self.hub("/api/v1/inbox/mutes", "mutes", mine: "",
+                           work: #"{"id":"m9","source":"github","tag":"repo","value":"example-org/two","name":"example-org/two"}"#)
+        hub.on("DELETE", "/api/v1/inbox/mutes/m9") { _ in Data(#"{"ok":true}"#.utf8) }
+        let gate = Gate()
+        let client = Self.holdingClient(hub, gate) { $0.method == "DELETE" }
+        let m = InboxMutesModel(deps: .init(api: { client }, roster: { Self.roster }, show: { _ in }))
+        await m.load()
+        let work = try #require(m.shares?[1].items.first)
+        let unmuting = Task { await m.unmute(work) }
+        await gate.holding()
+        await m.load() // read while the unmute was on its way: the hub still had it
+        #expect(m.shares?[1].items.map(\.id) == ["m9"])
+        await gate.open()
+        await unmuting.value
+        #expect(m.state.value?.isEmpty == true)
+        #expect(m.shownShares?.map(\.manager.id) == ["m-3"])
+    }
+
+    @Test func aFailedLoadOvertakenByANewerOneSaysNothing() async throws {
+        let hub = FakeHub()
+        var answers = 0
+        hub.on("GET", "/api/v1/inbox/mutes") { _ in
+            answers += 1
+            if answers == 2 { throw APIError(status: 503, message: "超时") } // the first load's, answered last
+            return Data(#"{"mutes":[{"id":"m1","source":"github","tag":"repo","value":"example-org/one","name":"example-org/one"}]}"#.utf8)
+        }
+        let gate = Gate()
+        let client = Self.holdingClient(hub, gate) { $0.method == "GET" }
+        var shown: [String] = []
+        let m = InboxMutesModel(deps: .init(api: { client }, roster: { nil }, show: { shown.append("\($0)") }))
+        let first = Task { await m.load() }
+        await gate.holding()
+        await m.load()
+        await gate.open()
+        await first.value
+        #expect(m.state.value?.map(\.name) == ["example-org/one"])
+        #expect(shown.isEmpty)
     }
 }
