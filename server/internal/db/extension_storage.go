@@ -58,7 +58,10 @@ func storageOwner(ctx context.Context, tx pgx.Tx, scope extension.StorageScope) 
 		}
 		return err
 	}
-	if publicID != scope.PublicID || !installed.Equal(scope.InstalledAt) || !updated.Equal(scope.UpdatedAt) || !enabled && !scope.Owner {
+	// pgx/Postgres persist timestamptz at microsecond precision. Registry records
+	// can still carry time.Now's nanoseconds before a reload; compare the actual
+	// persisted precision, without dropping a representable epoch/revision change.
+	if publicID != scope.PublicID || installed.UnixMicro() != scope.InstalledAt.UnixMicro() || updated.UnixMicro() != scope.UpdatedAt.UnixMicro() || !enabled && !scope.Owner {
 		return extension.ErrStorageScope
 	}
 	var permission extension.Permissions
@@ -200,7 +203,7 @@ func (d *DB) RestoreExtensionStorage(ctx context.Context, scope extension.Storag
 		return err
 	}
 	if !retained {
-		if plugin == scope.Plugin && installed != nil && installed.Equal(scope.InstalledAt) && previousRequest == requestID && previousFingerprint == fingerprint {
+		if plugin == scope.Plugin && installed != nil && installed.UnixMicro() == scope.InstalledAt.UnixMicro() && previousRequest == requestID && previousFingerprint == fingerprint {
 			return extensionCommitResult(tx.Commit(ctx))
 		}
 		return extension.ErrStorageScope
@@ -248,7 +251,7 @@ func (d *DB) DeleteExtensionRecordRetainingData(ctx context.Context, row extensi
 	if err = tx.QueryRow(ctx, `SELECT COALESCE(NULLIF(public_id,''),id),version,installed_at FROM plugins WHERE id=$1 FOR UPDATE`, row.StorageKey()).Scan(&publicID, &version, &installed); err != nil {
 		return err
 	}
-	if publicID != row.ID || version != row.Version || !installed.Equal(row.InstalledAt) {
+	if publicID != row.ID || version != row.Version || installed.UnixMicro() != row.InstalledAt.UnixMicro() {
 		return extension.ErrIdentity
 	}
 	if err = storageBudget(ctx, tx); err != nil {

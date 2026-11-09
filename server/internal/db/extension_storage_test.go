@@ -14,7 +14,7 @@ import (
 
 func storageFixture(t *testing.T, d *DB, id string) (extension.Record, extension.StorageScope) {
 	t.Helper()
-	at := time.Now().UTC().Truncate(time.Microsecond)
+	at := time.Now().UTC()
 	grant := &extension.StoragePermission{Patterns: []string{"state/*", "queue/*", "media/*"}, Queues: true, Blobs: true}
 	r := extension.Record{ID: id, Source: extension.SourceInstalled, Version: "1.0.0", Manifest: json.RawMessage(`{"id":"` + id + `"}`), Granted: extension.Permissions{Storage: grant}, Enabled: true, InstalledAt: at, UpdatedAt: at}
 	if err := d.PutExtension(t.Context(), r); err != nil {
@@ -232,5 +232,40 @@ func TestStorageConcurrentTransformsSerializeAcrossPools(t *testing.T) {
 	}
 	if value, err := d.ExtensionStorage(t.Context(), scope, fixtureInitial(), fixtureStorageUpdate("read")); err != nil || value != "12" {
 		t.Fatal("concurrent durable updates were lost", value, err)
+	}
+}
+
+func TestStorageTimestampPrecisionMatchesPostgresWithoutLosingFences(t *testing.T) {
+	d := open(t)
+	row, scope := storageFixture(t, d, "fixture-storage-nanoseconds")
+	cleanupStorageFixture(t, d, row.ID)
+	row.InstalledAt = row.InstalledAt.Truncate(time.Microsecond).Add(731 * time.Nanosecond)
+	row.UpdatedAt = row.InstalledAt
+	scope.InstalledAt, scope.UpdatedAt = row.InstalledAt, row.UpdatedAt
+	if err := d.PutExtension(t.Context(), row); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExtensionStorage(t.Context(), scope, fixtureInitial(), fixtureStorageUpdate("committed")); err != nil {
+		t.Fatal("fresh nanosecond registry record could not bind its real Postgres row", err)
+	}
+	scope.Start = false
+	for _, field := range []string{"installation", "revision"} {
+		t.Run(field, func(t *testing.T) {
+			stale := scope
+			if field == "installation" {
+				stale.InstalledAt = stale.InstalledAt.Add(time.Microsecond)
+			} else {
+				stale.UpdatedAt = stale.UpdatedAt.Add(time.Microsecond)
+			}
+			if _, err := d.ExtensionStorage(t.Context(), stale, fixtureInitial(), fixtureStorageUpdate("must not commit")); !errors.Is(err, extension.ErrStorageScope) {
+				t.Fatal("a representable changed timestamp crossed the lifecycle fence", err)
+			}
+		})
+	}
+	if value, err := d.ExtensionStorage(t.Context(), scope, fixtureInitial(), fixtureStorageUpdate("read")); err != nil || value != "committed" {
+		t.Fatal("refused stale operation changed committed state", value, err)
+	}
+	if err := d.DeleteExtensionRecordRetainingData(t.Context(), row, true); err != nil {
+		t.Fatal("nanosecond uninstall record could not match persisted precision", err)
 	}
 }

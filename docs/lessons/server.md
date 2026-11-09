@@ -19,6 +19,13 @@ business validation, so the DB package must not import a manager implementation.
 A recreated pool is not a database-server restart, and a canceled precommit update
 is not an injected unknown commit. Name and report those tests accurately.
 
+Do not pre-truncate every database fixture's timestamps: that masks an actual
+install's nanosecond registry record failing authorization against Postgres's
+microsecond `timestamptz`. Compare at the persisted precision in start, restore
+replay and uninstall, and test that a one-microsecond epoch/revision difference
+still rejects the stale operation. Real installed-source acceptance catches this
+edge even when synthetic transport fixtures all pass.
+
 ## Finish a revocation's activity push before forgetting its target (#1864)
 
 Push registration IDs differ from credential IDs: select the registrations bound
