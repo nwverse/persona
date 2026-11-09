@@ -22,14 +22,47 @@ type codexAbandonedStart struct {
 	workspace string
 }
 
-// closeAbandonedCodex is called with the directory/launcher's typing lock held.
+// closeAbandonedCodex serializes cleanup only when failed panes are pending. Independent starts do not hold
+// this lock while creating their tabs or waiting for threads, and can add failures while a cleanup is in flight.
 func (n *Node) closeAbandonedCodex(ctx context.Context, key string) error {
 	n.mu.Lock()
-	start, ok := n.codexAbandoned[key]
+	pending := len(n.codexAbandoned[key]) > 0
 	n.mu.Unlock()
-	if !ok {
+	if !pending {
 		return nil
 	}
+	defer n.typing.lock("codex-cleanup:" + key)()
+	for {
+		n.mu.Lock()
+		starts := slices.Clone(n.codexAbandoned[key])
+		n.mu.Unlock()
+		if len(starts) == 0 {
+			return nil
+		}
+		var failures []error
+		for _, start := range starts {
+			if err := closeCodexStart(ctx, start); err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			n.mu.Lock()
+			n.codexAbandoned[key] = slices.DeleteFunc(n.codexAbandoned[key], func(s codexAbandonedStart) bool {
+				return s.created == start.created
+			})
+			if len(n.codexAbandoned[key]) == 0 {
+				delete(n.codexAbandoned, key)
+			}
+			n.mu.Unlock()
+		}
+		if len(failures) > 0 {
+			return errors.Join(failures...)
+		}
+		// A concurrent start may have added another failed cleanup while these panes were closing.
+	}
+}
+
+// closeCodexStart stops one abandoned start independently of other starts in the same directory.
+func closeCodexStart(ctx context.Context, start codexAbandonedStart) error {
 	org, ok := start.launch.(host.Organizer)
 	var err error
 	if !ok {
@@ -59,9 +92,6 @@ func (n *Node) closeAbandonedCodex(ctx context.Context, key string) error {
 		return &rpc.Error{Code: proto.CodeAgentStartStalled,
 			Message: i18n.T(i18n.Default, "node-codex-start.cleanup_failed", map[string]any{"pane": start.created.Pane.String(), "reason": err.Error()})}
 	}
-	n.mu.Lock()
-	delete(n.codexAbandoned, key)
-	n.mu.Unlock()
 	return nil
 }
 

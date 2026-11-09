@@ -118,7 +118,6 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		return nil, refusal("codex_needs_prompt", "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", nil)
 	}
 	key := cwd + "\x00" + launcher
-	defer n.typing.lock("codex-start:" + key)()
 	if err := n.closeAbandonedCodex(ctx, key); err != nil {
 		return nil, err
 	}
@@ -166,13 +165,16 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	id, err := n.waitCodexThread(ctx, pane, cwd, prompt, began)
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
-		n.mu.Lock()
-		if n.codexAbandoned == nil {
-			n.codexAbandoned = map[string]codexAbandonedStart{}
+		start := codexAbandonedStart{launch: launch, created: created, workspace: ws}
+		cleanupErr := closeCodexStart(ctx, start)
+		if cleanupErr != nil {
+			n.mu.Lock()
+			if n.codexAbandoned == nil {
+				n.codexAbandoned = map[string][]codexAbandonedStart{}
+			}
+			n.codexAbandoned[key] = append(n.codexAbandoned[key], start)
+			n.mu.Unlock()
 		}
-		n.codexAbandoned[key] = codexAbandonedStart{launch: launch, created: created, workspace: ws}
-		n.mu.Unlock()
-		cleanupErr := n.closeAbandonedCodex(ctx, key)
 		message := fmt.Sprintf("%v\n%s", err, lastLines(screen, 12))
 		if cleanupErr != nil {
 			return nil, &rpc.Error{Code: proto.CodeAgentStartStalled, Message: message + "\n" + cleanupErr.Error()}
