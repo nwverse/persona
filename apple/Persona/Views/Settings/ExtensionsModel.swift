@@ -93,10 +93,13 @@ nonisolated struct ExtensionUpgrade: Codable, Hashable, Sendable, Identifiable {
     var state: String
     var addedPermissions: [ExtensionPermission]?
     var detail: String?
+    /// "user" when a skipped version is one the user rolled back from (nil: it didn't start).
+    var skippedBy: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, market, from, to, state, detail
         case addedPermissions = "added_permissions"
+        case skippedBy = "skipped_by"
     }
 }
 
@@ -389,6 +392,8 @@ enum ExtensionText {
         case "waiting_idle": return String(localized: "Updates automatically when the extension is idle")
         case "available": return String(localized: "Updates automatically later")
         case "off": return String(localized: "Auto-update is off")
+        case "skipped" where u.skippedBy == "user":
+            return String(localized: "You rolled back from this version to \(u.from), so it won't auto-update to it")
         case "skipped": return String(localized: "It didn't start after the last update, so it went back to \(u.from) and won't auto-update to this version")
         case "failed": return why.map { String(localized: "Didn't install: \($0)") } ?? String(localized: "Didn't install")
         case "incompatible": return why.map { String(localized: "Can't install on this hub: \($0)") } ?? String(localized: "Can't install on this hub")
