@@ -153,6 +153,11 @@ func (e *Engine) Find(query string, limit int) []Result {
 		return nil
 	}
 	ws := words(query)
+	// A file whose text folds to itself (nearly every one) has lines that do too, so they are matched as written
+	// instead of folded one by one: lowercasing works rune by rune, and NFC neither composes nor reorders across a
+	// line break or a space (no canonical decomposition holds one), so trimming a line does not change how it folds.
+	// The two spaces NFC does change (U+2000, U+2001) cannot be in such a file: they would have changed its fold.
+	matchFolded := func(t string) bool { return hasAll(t, ws) }
 	// Files are looked at in parallel (the archive is ~25 MB); what each found is added in file order, so the lines
 	// kept for an entry are its profile's first, then the newest days'. The app searches as the user types, so a
 	// file unchanged since the last search is not read again (findCache): one stat each instead of read + lowercase.
@@ -161,7 +166,8 @@ func (e *Engine) Find(query string, limit int) []Result {
 	type fileHits struct {
 		key   string
 		stat  fileStat
-		found []Found
+		found []Found // what fileFound keeps
+		count int
 	}
 	per := make([]fileHits, len(all))
 	gen := e.find.begin()
@@ -186,11 +192,11 @@ func (e *Engine) Find(query string, limit int) []Result {
 				c, st, ok := e.find.text(p, gen)
 				fh.stat = st
 				if ok && hasAll(c.lower, ws) {
-					for n, l := range strings.Split(c.raw, "\n") {
-						if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "# ") && match(t) {
-							fh.found = append(fh.found, Found{Path: filepath.ToSlash(rel), Line: clip(t, 300), N: n + 1})
-						}
+					m := match
+					if c.same {
+						m = matchFolded
 					}
+					fh.found, fh.count = fileFound(c.raw, rel, m)
 				}
 				per[i] = fh
 			}
@@ -215,25 +221,24 @@ func (e *Engine) Find(query string, limit int) []Result {
 		return known
 	})
 	by := map[string]*Result{}
-	add := func(key string, f Found) {
-		r := by[key]
-		if r == nil {
-			r = &Result{Entry: known[key]}
-			by[key] = r
-		}
-		if r.Count < foundCap {
-			r.Count++
-		}
-		if len(r.Hits) < hitsPerResult && !hasLine(r.Hits, f.Line) {
-			r.Hits = append(r.Hits, f)
-		}
-	}
 	for _, fh := range per {
-		if _, ok := known[fh.key]; !ok {
+		if fh.count == 0 {
+			continue
+		}
+		en, ok := known[fh.key]
+		if !ok {
 			continue // an entry the lists do not show (a doc without a title yet): nothing to open
 		}
+		r := by[fh.key]
+		if r == nil {
+			r = &Result{Entry: en}
+			by[fh.key] = r
+		}
+		r.Count = min(foundCap, r.Count+fh.count)
 		for _, f := range fh.found {
-			add(fh.key, f)
+			if len(r.Hits) < hitsPerResult && !hasLine(r.Hits, f.Line) {
+				r.Hits = append(r.Hits, f)
+			}
 		}
 	}
 	// Names: an entry whose name matches is found even when no file line does.
@@ -350,6 +355,32 @@ func hasLine(h []Found, line string) bool {
 		}
 	}
 	return false
+}
+
+// fileFound is what Find keeps of one file (rel, relative to the data dir): its first hitsPerResult distinct lines
+// that match, clipped as results show them and numbered as in the file, and how many lines match, at most foundCap.
+// No other line of the file can be shown: an entry already holding h lines takes at most hitsPerResult-h more, and
+// at most h of the file's distinct lines repeat those.
+func fileFound(raw, rel string, match func(string) bool) (found []Found, count int) {
+	path := filepath.ToSlash(rel)
+	for n, rest, more := 1, raw, true; more; n++ {
+		var l string
+		l, rest, more = strings.Cut(rest, "\n")
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "# ") || !match(t) {
+			continue
+		}
+		count++
+		if len(found) < hitsPerResult {
+			if line := clip(t, 300); !hasLine(found, line) {
+				found = append(found, Found{Path: path, Line: line, N: n})
+			}
+		}
+		if count >= foundCap && len(found) == hitsPerResult {
+			break
+		}
+	}
+	return found, min(count, foundCap)
 }
 
 // Match is one place in an entry that matched: the line, and for a message the ones around it.
@@ -501,6 +532,7 @@ type findText struct {
 	stat  fileStat
 	raw   string
 	lower string // raw folded (fold): the same string unless raw has upper case or decomposed text
+	same  bool   // lower == raw, so Find matches the lines as written (see matchFolded)
 	gen   uint64 // the last search that saw the file (prune drops the ones no search saw since)
 }
 
@@ -590,6 +622,7 @@ func (c *findCache) text(p string, gen uint64) (*findText, fileStat, bool) {
 	}
 	s := string(raw)
 	t = &findText{stat: st, raw: s, lower: fold(s), gen: gen}
+	t.same = t.lower == t.raw
 	if int64(len(raw)) != st.size || settling(st) {
 		return t, st, true // changing while read, or just now: used once, not kept
 	}

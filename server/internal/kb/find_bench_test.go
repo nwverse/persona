@@ -27,8 +27,8 @@ var (
 	benchErr  error
 )
 
-func benchStore(b *testing.B) *Store {
-	b.Helper()
+func benchStore(tb testing.TB) *Store {
+	tb.Helper()
 	benchOnce.Do(func() {
 		benchDir, benchErr = os.MkdirTemp("", "kb-find-bench-")
 		if benchErr != nil {
@@ -37,11 +37,11 @@ func benchStore(b *testing.B) *Store {
 		benchErr = fillBenchStore(benchDir)
 	})
 	if benchErr != nil {
-		b.Fatal(benchErr)
+		tb.Fatal(benchErr)
 	}
 	st, err := NewStore(benchDir)
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	return st
 }
@@ -121,16 +121,29 @@ func TestMain(m *testing.M) {
 }
 
 // BenchmarkFind is search-as-you-type: the same engine answers one query after another (the app sends one per
-// keystroke), the archive unchanged in between.
+// keystroke), the archive unchanged in between. typing is the keystrokes of a rare word; the others repeat one query:
+// a rare word (about 1% of the days), a word on every message line (every chat far past foundCap) and a word no file
+// has (only the whole-file check runs).
 func BenchmarkFind(b *testing.B) {
 	e := &Engine{Store: benchStore(b)}
 	if res := e.Find("周报", 80); len(res) == 0 {
 		b.Fatal("the rare word is not found")
 	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; b.Loop(); i++ {
-		e.Find([]string{"周", "周报", "周报 draft"}[i%3], 80)
+	for _, c := range []struct {
+		name    string
+		queries []string
+	}{
+		{"typing", []string{"周", "周报", "周报 draft"}},
+		{"rare", []string{"周报 draft"}},
+		{"every", []string{"build"}},
+		{"none", []string{"nowhere"}},
+	} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; b.Loop(); i++ {
+				e.Find(c.queries[i%len(c.queries)], 80)
+			}
+		})
 	}
 }
 
