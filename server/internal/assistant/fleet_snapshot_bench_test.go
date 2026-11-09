@@ -38,6 +38,9 @@ func fleetOf300(logf func(string, ...any)) *Service {
 // items it shows: 56 allocations and 502 KB measured (3,066 and 3.06 MB in BenchmarkFleetSnapshot when each agent was
 // a copy of its session and every one got its item). Most of what is left is the decorated copy of the list itself.
 func TestFleetSnapshotAllocations(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race instrumentation allocates")
+	}
 	if !isolated(t) {
 		return
 	}
