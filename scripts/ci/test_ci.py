@@ -73,6 +73,19 @@ class PathTests(unittest.TestCase):
         self.assertTrue(all(paths.apply_event_policy(selected, "workflow_dispatch").values()))
         self.assertTrue(all(selected.values()))
 
+    def test_event_policy_preserves_unselected_lanes_and_returns_independent_mappings(self):
+        selected = paths.select_lanes([], "server,web")
+        original = dict(selected)
+        for event in ("pull_request", "merge_group", "workflow_dispatch"):
+            with self.subTest(event=event):
+                result = paths.apply_event_policy(selected, event)
+                self.assertTrue(result["web"])
+                self.assertFalse(result["runtimes"])
+                self.assertEqual(result["server"], event == "workflow_dispatch")
+                self.assertIsNot(result, selected)
+                result["web"] = False
+                self.assertEqual(selected, original)
+
     def test_unrelated_client_screens_do_not_start_server(self):
         for filename in ("android/feature/settings/Screen.kt", "android/app/build.gradle.kts", "apple/Mac/Screen.swift"):
             self.assertFalse(paths.select([filename])["server"], filename)
