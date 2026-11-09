@@ -227,15 +227,34 @@ func pollingTool(name string, input json.RawMessage) bool {
 	} else {
 		_ = json.Unmarshal(input, &command)
 	}
-	command = strings.ToLower(command)
-	if loopWaitCommand.MatchString(command) || loopLogCommand.MatchString(command) || loopCICommand.MatchString(command) {
-		return true
+	return pollingCommand(strings.ToLower(command))
+}
+
+// Only exempt a compound command when every part is recognizably observation
+// or waiting. Shell expansion and redirection make that impossible to tell
+// without evaluating the command, so leave those calls eligible for triage.
+func pollingCommand(command string) bool {
+	if strings.ContainsAny(command, "'\"`$\\\\<>(){}#") {
+		return false
 	}
-	if loopTailCommand.MatchString(command) && (strings.Contains(command, ".log") || strings.Contains(command, "/log/") || strings.Contains(command, "/logs/") || strings.Contains(command, "syslog")) {
-		return true
+	observed := false
+	for _, part := range strings.FieldsFunc(command, func(r rune) bool {
+		return r == ';' || r == '&' || r == '|' || r == '\n'
+	}) {
+		part = strings.TrimSpace(part)
+		if part == "while true" || part == "done" {
+			continue
+		}
+		if loopWaitCommand.MatchString(part) || loopLogCommand.MatchString(part) || loopCICommand.MatchString(part) ||
+			loopTailCommand.MatchString(part) && (strings.Contains(part, ".log") || strings.Contains(part, "/log/") || strings.Contains(part, "/logs/") || strings.Contains(part, "syslog")) ||
+			loopCIView.MatchString(part) && strings.Contains(part, "statuscheckrollup") ||
+			loopCIApi.MatchString(part) && !loopCIWrite.MatchString(part) && (strings.Contains(part, "check-runs") || strings.Contains(part, "check-suites") || strings.Contains(part, "/actions/runs")) {
+			observed = true
+			continue
+		}
+		return false
 	}
-	return loopCIView.MatchString(command) && strings.Contains(command, "statuscheckrollup") ||
-		loopCIApi.MatchString(command) && !loopCIWrite.MatchString(command) && (strings.Contains(command, "check-runs") || strings.Contains(command, "check-suites") || strings.Contains(command, "/actions/runs"))
+	return observed
 }
 
 func (d *LoopDetector) call(id, name string, input json.RawMessage, at time.Time) {
