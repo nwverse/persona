@@ -192,9 +192,6 @@ func withoutEnv(environ, clear []string) []string {
 	})
 }
 
-// withoutProviderEnv is environ without what providerEnvClear names (the Agent SDK bridge's env).
-func withoutProviderEnv(environ []string) []string { return withoutEnv(environ, providerEnvClear) }
-
 const (
 	// oneMillionSuffix: Claude Code runs a model with a 1M context window only when its name says so.
 	oneMillionSuffix = "[1m]"
@@ -404,4 +401,3 @@ func launcherDefaultEffort(l proto.ManagedLauncher) string {
 	pm, _ := providerModel(l, l.Model)
 	return cmp.Or(l.Effort, pm.DefaultEffort)
 }
-
