@@ -105,6 +105,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
 	// (#2820, #1618); the tab is named from the title.
 	prompt = s.withProjectContext(ctx, m.ID, t.Cwd, s.withTodoDecisions(ctx, t.TodoID, prompt))
+	// The user's attachments end it, copied here when this is not the assistant's computer (#2437): last, so the
+	// pictures' <attached_images> block ends the message as it does one sent straight to an agent.
+	if len(t.Attachments)+len(t.Mentioned) > 0 {
+		prompt = withAttachments(prompt, s.handAttachments(ctx, t.AttachFrom, m.ID, t.Attachments, t.Mentioned))
+	}
 	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
 	if t.Model != "" {
 		params["model"] = t.Model
