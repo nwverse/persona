@@ -1,5 +1,15 @@
 # Lessons: Android
 
+## Host-owned lifecycle controls need real application wiring (#2397)
+
+A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
+unsupported default. Forward both per-extension and global preferences. A manager-bound detail page must also bind catalog/global reads
+and carry its owner into upgrade consent and operation filtering; an extension-ID-only pin does not cover `extensions/-/catalog`.
+Keep a persisted preference separate from its pause reason. HTTP operation receipts belong to the captured request owner even when
+older responses omit `manager`; broadcasts must still be filtered by their explicit hub-stamped owner. Treating both alike loses a
+non-default manager's start/retry receipt. Finally, `HubExtension.kind` is a contribution point, not a declared runtime:
+missing runtime metadata must say **Not provided**, never infer execution details from a UI category.
+
 ## Register new native wire examples, not just generated models (#1187)
 
 A generated permission DTO can compile while `ExtensionWireTest.examplesRoundTrip` cannot select its serializer.
@@ -110,6 +120,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - `./gradlew --stop` stops all daemons of that Gradle version on the machine. Shared lanes (worktrees) therefore stop other people's builds too. To stop only yours, use Ctrl-C or kill your own command.
 
 ## Testing
+
+- A screenshot test's fake image loader is global state (#2546). `SingletonImageLoader.setUnsafe` survives into later Robolectric classes using the same sandbox. Reset the singleton and shut down the test-owned loader in teardown. Otherwise a later image-fallback assertion can fail because it receives a successful synthetic bitmap; running only that later class hides the leak. Reproduce with the showcase and native-stream classes together, and retain the original fallback assertion.
 
 - `OkHttpHubConnection` publishes `Revoked` before it reports the last refusing hub through `onMemberRevoked`, outside the lock (HubGroupConnectionTest). A test that reads the callback list right after seeing `Revoked` can miss that last entry under load; one hosted run failed `theConnectionIsRevokedOnlyWhenNoHubOfTheGroupIsLeft` this way while main passed. Widening the gap with a temporary sleep before that report fails the old test every time (`but was:<[(hub-a, true), (hub-b, true)]>`). Production consumers launch their cleanup asynchronously and reach the same end state in either order, so the test now waits for the report it asserts, then checks the exact list.
 
@@ -381,3 +393,5 @@ After sending SIGINT to `screenrecord`, wait for the recording process on the de
 An update card can retain metadata for hours. A content-addressed file on disk is not enough if the download route always resolves the latest manifest: publishing another release makes the cached checksum reject the new bytes before installation. Return a hash-pinned `download_url` (older clients already preserve the query), retain those APKs, and refresh metadata before a new install attempt. Keep the unpinned route for bootstrap downloads. Test publication between discovery and download.
 
 Separate metadata, download, verification, permission and installer failures. Log the stage and exception class without transport messages that could contain credentials. Returning from unknown-source settings requires checking the actual grant before continuing; a result code alone does not establish permission. A committed PackageInstaller session only proves handoff, never installation success. A signing receipt or publication message also does not prove the online verifier ran: retain and inspect its terminal result.
+
+- A renderer version bump also changes negative fixtures: a newly supported field, chart or icon can no longer stand for an unknown value. Assert its concrete v6 meaning and retain a separate unknown-value rejection case; keep the advertised device version pinned to the delivered contract (#828).

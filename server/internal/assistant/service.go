@@ -421,7 +421,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Partial = snap.Partial || !ok
 	for id, o := range origins {
 		v := view(id, o.machine)
-		v.Origin, v.OriginRef = o.origin, o.ref
+		v.Origin, v.OriginRef, v.OpenedBy = o.origin, o.ref, o.ext
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
