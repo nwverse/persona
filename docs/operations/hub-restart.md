@@ -159,7 +159,7 @@ Previously clients received a string of "machine offline" and "interaction ended
 
 ### Machines and sessions (`devices/warm.go`; on the hub side `startDevices` in `hub/devices_reports.go`)
 
-Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
+Since 2026-11-04 computers are connected by the manager ([machines.md](../server/machines.md) ("Who connects to computers")): the manager is a child process of the hub and also receives SIGTERM when the hub stops.
 It first hands the `NodeInfo` and session lists of the machines online at this moment to its next process (its own settings `hub.warm_machines`, plus each machine's engines `engines`), then disconnects them (without reporting them offline).
 When the hub shuts down it waits for the manager to exit (as it used to wait for node connections, within the shutdown budget).
 

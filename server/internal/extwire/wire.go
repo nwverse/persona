@@ -225,6 +225,9 @@ const (
 	// AuditPermissionModeRefused: {machine_id, session_id, reason}: a permission mode change it may not make (not a
 	// conversation it opened, without agents.permission_mode, or with more than the permission mode).
 	AuditPermissionModeRefused = "permission_mode_refused"
+	// AuditTerminalControlRefused: {route, path}: a request with terminal control characters, which an extension may
+	// not send (hub's terminal_controls.go).
+	AuditTerminalControlRefused = "terminal_control_refused"
 )
 
 // Audit is HubAudit's params: what extension Extension's token was refused. Detail holds ids and reasons only.
@@ -241,6 +244,10 @@ const (
 	HubPushLocalized = "push.localized"
 	// HubMailTargets: {} → {targets}: the languages the devices want mail translated into.
 	HubMailTargets = "push.mail_targets"
+	// HubTokenRevoked: {hash} → {}: the manager dropped its extension token of that hash (Authorize's): the hub ends at
+	// once what the token has open through it (the calls and WebSockets on the relay streams to the manager), as for a
+	// revoked device.
+	HubTokenRevoked = "extensions.token_revoked"
 )
 
 // MethodAccept: {id} → {}: the hub holds a request for the manager (a relayed route): it dials the relay with the id.

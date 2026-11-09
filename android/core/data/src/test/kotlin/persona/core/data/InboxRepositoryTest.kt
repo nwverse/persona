@@ -561,7 +561,8 @@ class InboxRepositoryTest {
             val calls = transport.inboxCalls.get()
             val result = repository.bulk(listOf(InboxDoneTarget("a", "va"), InboxDoneTarget("b", "vb"), InboxDoneTarget("c", "vc")), InboxBulkAction.Done)
             assertEquals(listOf("a"), result.changed)
-            // Nothing took new messages, yet the hub's own state for b and c is asked for once.
+            // Reconciliation is deferred; it must not hold up this accepted action.
+            withTimeout(5_000) { repository.snapshot.first { it.error != null } }
             assertEquals(calls + 1, transport.inboxCalls.get())
             // Already done elsewhere stays done; one the hub no longer has leaves the list; neither comes back open.
             assertEquals(mapOf("a" to true, "b" to true), repository.snapshot.value.records.associate { it.item.id to it.item.isDone })
@@ -729,6 +730,30 @@ class InboxRepositoryTest {
     }
 
     /**
+     * A Moments post linked in another manager's chat is read through that manager; the default's names none ("", sent
+     * as no manager), and with no manager known the read is as it was.
+     */
+    @Test fun aMomentsLinkIsReadThroughTheManagerItWasOpenedUnder() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-managers-moments-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport()
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            assertEquals("p1", repository.momentsPost("p1", "m-2").id)
+            repository.momentsComments("p1", "m-2")
+            repository.momentsPost("p1", "assistant")
+            repository.momentsPost("p1")
+            assertEquals(listOf("post" to "m-2", "comments" to "m-2", "post" to "", "post" to null), transport.momentsReads)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    /**
      * A chat's send (ReplyTarget.Lark) names the manager of the one item of that chat; with none known it names nothing,
      * so the chat page's pin still decides (an empty manager would send it to the default).
      */
@@ -782,7 +807,8 @@ class InboxRepositoryTest {
             val calls = transport.inboxCalls.get()
             repository.bulk(listOf(InboxDoneTarget("a", "va")), InboxBulkAction.Done)
             assertNull(repository.snapshot.value.records.first { it.item.id == "a" }.item.doneAt)
-            // The hub's own state is asked for, as for the other ids it did not move.
+            // The reconciliation runs after the action returns, without blocking the next swipe.
+            withTimeout(5_000) { repository.snapshot.first { it.error != null } }
             assertEquals(calls + 1, transport.inboxCalls.get())
             repository.bulk(listOf(InboxDoneTarget("b")), InboxBulkAction.Reopen)
             assertEquals("2026-11-06T07:00:00Z", repository.snapshot.value.records.first { it.item.id == "b" }.item.doneAt)
@@ -825,7 +851,8 @@ class InboxRepositoryTest {
             assertEquals(listOf(listOf(InboxDoneTarget("a", "va"), InboxDoneTarget("b", "vb")) to true), transport.bulk)
             assertEquals(listOf("a"), result.changed)
             assertEquals(listOf("b"), result.changedSince)
-            // Refreshed for b's new mail: its new version is what the next bulk sends.
+            // The follow-up refresh is asynchronous; b remains open while it loads the new version.
+            withTimeout(5_000) { repository.snapshot.first { state -> state.records.any { it.item.version == "vb2" } } }
             val after = repository.snapshot.value.records.associate { it.item.id to (it.item.isDone to it.item.version) }
             assertEquals(mapOf("a" to (true to "va"), "b" to (false to "vb2"), "c" to (false to "vc")), after)
             // A fresh server read must retain the accepted filing, not resurrect the optimistic row.
@@ -1024,7 +1051,32 @@ class InboxRepositoryTest {
             val d = repository.snapshot.value.records.single { it.hubItemId == "d" }
             repository.inboxPolicies(d)
             repository.removePolicy("p1")
-            assertEquals(listOf("GET null", "GET m-3", "DELETE p1"), transport.policyCalls.takeLast(3))
+            assertEquals(listOf("GET null", "GET m-3", "DELETE p1 null"), transport.policyCalls.takeLast(3))
+
+            // From another manager's "Rules" and "Muted": read and changed on it, moving only its items. A stamped rule or
+            // mute names its manager even when it is the default's.
+            val during = mutableListOf<Map<String, String>>()
+            transport.onUpdatePolicy = { _, _, _ -> during += sections(); buildJsonObject { put("applied", 1) } }
+            repository.inboxPolicies(manager = "m-3")
+            repository.savePolicy(InboxPolicyTarget.of(checkNotNull(saved).copy(manager = "m-3")), InboxPolicyTier.Fyi, InboxPolicyTwin.None)
+            repository.removePolicy("p1", "m-3")
+            repository.removePolicy("p1", "assistant")
+            repository.inboxMutes("m-3")
+            repository.unmute("u1", "m-3")
+            repository.unmute("u1")
+            assertEquals(listOf("GET m-3", "PATCH p1 fyi  m-3", "DELETE p1 m-3", "DELETE p1 assistant", "GET mutes m-3", "DELETE mute u1 m-3",
+                "DELETE mute u1 null"), transport.policyCalls.takeLast(7))
+            assertEquals("fyi/fyi/false" to "noise/noise/false", during.single().let { it["d"] to it["a"] })
+
+            // m-3 became the default after its lists were read: Remove and Unmute still name it.
+            AssistantManagerChoice.choose(null, null, "m-3")
+            try {
+                repository.removePolicy("p1", "m-3")
+                repository.unmute("u1", "m-3")
+                assertEquals(listOf("DELETE p1 m-3", "DELETE mute u1 m-3"), transport.policyCalls.takeLast(2))
+            } finally {
+                AssistantManagerChoice.reset()
+            }
         } finally {
             owner.coroutineContext[Job]!!.cancelAndJoin()
             directory.deleteRecursively()
@@ -1234,6 +1286,12 @@ class InboxRepositoryTest {
         override suspend fun pins() = JsonObject(emptyMap())
         override suspend fun mutes() = JsonObject(emptyMap())
         override suspend fun media(ref: String) = byteArrayOf(1).also { mediaRefs += ref }
+        /** Each Moments read with the manager its request names (RequestManager). */
+        val momentsReads = mutableListOf<Pair<String, String?>>()
+        override suspend fun momentsPost(postId: String) =
+            buildJsonObject { put("id", postId) }.also { momentsReads += "post" to currentCoroutineContext()[RequestManager]?.id }
+        override suspend fun momentsComments(postId: String) =
+            buildJsonObject { put("comments", JsonArray(emptyList())) }.also { momentsReads += "comments" to currentCoroutineContext()[RequestManager]?.id }
         val avatarRefs = mutableListOf<String>()
         override suspend fun avatar(ref: String) = media(ref).also { avatarRefs += ref }
         var onMute: suspend (String, String) -> JsonObject = { _, _ -> JsonObject(emptyMap()) }
@@ -1253,6 +1311,8 @@ class InboxRepositoryTest {
             policyCalls += "PATCH $id $tier $twin ${manager()}"
             return onUpdatePolicy(id, tier, twin)
         }
-        override suspend fun removeInboxPolicy(id: String) { policyCalls += "DELETE $id" }
+        override suspend fun removeInboxPolicy(id: String) { policyCalls += "DELETE $id ${manager()}" }
+        override suspend fun inboxMutes(): JsonObject { policyCalls += "GET mutes ${manager()}"; return buildJsonObject { put("mutes", JsonArray(emptyList())) } }
+        override suspend fun unmuteInbox(id: String) { policyCalls += "DELETE mute $id ${manager()}" }
     }
 }

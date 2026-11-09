@@ -316,8 +316,9 @@ $(unit_forms "${DEST#"$HOME"}/$1" | sed 's/^/%h/')" ;; esac
 		/usr/lib/systemd/system/*.service.d/*.conf \
 		"$HOME"/Library/LaunchAgents/*.plist /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
 		[ -f "$f" ] || continue
-		# The paths go in through the environment: awk -v would read backslashes in them as escapes.
-		if SERVICE_FORMS="$forms" awk '
+		# The paths go in through the environment: awk -v would read backslashes in them as escapes. In bytes (LC_ALL=C):
+		# macOS awk stops on a binary property list in a UTF-8 locale and prints its bytes; a byte match is the same here.
+		if SERVICE_FORMS="$forms" LC_ALL=C awk '
 			function names(s, p,  i, c) {
 				i = index(s, p)
 				if (p == "" || !i) return 0

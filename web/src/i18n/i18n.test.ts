@@ -1,5 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { currentLanguage, formatList, formatLocale, LANG_MATCHES, LANG_NAMES, LANGS, initI18n, interpolate, resolveLanguage, t, type CatalogLoaders, type CatalogModule } from "./index";
+import { currentLanguage, formatList, formatLocale, hasKey, i18nRest, LANG_MATCHES, LANG_NAMES, LANGS, initI18n, interpolate, resolveLanguage, startI18n, t, type CatalogLoaders, type CatalogModule } from "./index";
+import { flatten } from "./locales/flatten";
+import startupNamespaces from "./startup-namespaces.json";
+
+// First in the file: en's rest is not loaded yet here (the setup loads zh-Hans), so it is still on its way when
+// startI18n resolves.
+describe("startI18n", { timeout: 30_000 }, () => {
+  afterEach(() => initI18n("zh-Hans"), 30_000);
+
+  it("starts on the first screen's part of the catalog, and reads the rest once it is in", async () => {
+    const files = import.meta.glob<Record<string, string>>("./locales/en/*.json", { import: "default" });
+    const file = Object.keys(files).find((p) => !/\/(?:_|admin-)/.test(p) && !startupNamespaces.includes(p.slice("./locales/en/".length, -".json".length)))!;
+    const key = Object.keys(flatten({ [`./${file.split("/").pop()}`]: await files[file]() }))[0];
+    await startI18n("en");
+    const rest = i18nRest();
+    expect(rest).toBeInstanceOf(Promise);
+    expect(t("common.cancel")).toBe("Cancel");
+    // In the build, a module reading it now would have run ahead of its lazy import's wait.
+    expect(() => t(key)).toThrow(/startup-namespaces\.json/);
+    expect(() => hasKey(key)).toThrow(/startup-namespaces\.json/);
+    await rest;
+    expect(i18nRest()).toBeUndefined();
+    expect(t(key)).not.toBe(key);
+  });
+});
 
 describe("resolveLanguage (docs/protocol/i18n.md)", () => {
   it("maps any Chinese to zh-Hans, any Japanese to ja, the rest to en", () => {

@@ -129,12 +129,13 @@ extension AppModel {
     /// The group hub-level pages (Persona, Inbox, the hub's settings) show: the one picked, else the first.
     var hub: HubLink? { link(hubGroup) ?? links.first }
 
-    /// A client for the group a session, machine or interaction is from.
+    /// A client for the group a session, machine or interaction is from; the assistant's routes go to the manager its
+    /// Persona page shows (`APIClient.showing`).
     func api(_ group: String) -> APIClient? {
         #if DEBUG
         if let apiForTests { return apiForTests }
         #endif
-        return link(group)?.api
+        return link(group)?.api.showing(assistantPick(in: group))
     }
 
     /// Back in the app: every group's socket opens again.
@@ -341,7 +342,10 @@ extension AppModel {
         registry = r
         saveRegistry(r)
         buildLinks()
-        if let link = link(hub.group), link.live.currentConfig == hub.config {
+        // A socket on that hub's credential moves to the group's other hubs: at its address, or at an address only the
+        // mesh listed (those go with the first hub's credential). Disconnect This Hub has revoked it (HubSignOut.swift).
+        if let link = link(hub.group), let on = link.live.currentConfig,
+           DeviceCredentialTrade.current(on, traded: tradedTokens).token == DeviceCredentialTrade.current(hub.config, traded: tradedTokens).token {
             link.live.disconnect()
             link.live.connect(link.fallback)
         }

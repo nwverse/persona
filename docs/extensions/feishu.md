@@ -15,7 +15,7 @@ Three optional hub integrations: Lark gateway (third-party user-authenticated we
 | Capability | Location | Notes |
 | --- | --- | --- |
 | Messages | Inbox (`docs/assistant/inbox.md`), optional Messages | Unread / mentions / direct chats mixed with mail, event-grouped / AI-sorted; opens `LarkChatView` |
-| Document links | `FeishuDocReader` (`Views/Feishu/Docs/`) | Native in-app rendering from any link, `LinkSheet` / message. With `lark_doc_comments`, comments reply threads / whole doc, resolve / reopen, mention people (#1290, `FeishuDocsComments.swift`; web `docs/web/web.md` “Lark document comments”, `docs/protocol/protocol.md` Lark APIs) |
+| Document links | `FeishuDocReader` (`Views/Feishu/Docs/`) | Native in-app rendering from any link, `LinkSheet` / message. With `lark_doc_comments`, comments reply threads / whole doc, resolve / reopen, mention people (#1290, `FeishuDocsComments.swift`; web `docs/web/web.md` “Links open inside the page” (**Lark doc comments**), `docs/protocol/protocol.md` Lark APIs) |
 | Moments links | `LarkMomentsCard` / `LarkMomentsPostView` | Shared-post preview opens one post / comments; no browsable feed |
 | User-related Moments | Inbox via extension, formerly hub inbox_moments.go; knowledge | Comments on own post, replies / mentions: one event per post, AI sorting / comment drafts, Send posts comment back (`docs/assistant/inbox.md` “Moments”) |
 | Other links | `LinkSheet` WebView | Minutes / events / tasks / approvals in in-app web cards |
@@ -27,7 +27,7 @@ Three optional hub integrations: Lark gateway (third-party user-authenticated we
 ## Data paths
 
 - `GET /api/v1/lark/raw/<path>` = gateway `GET /agent/v1/<path>`, read-only; JSON `/api/...` media rewritten to hub. POST only `search/page` / `search/mention-history` (large-body read search). Assistant `lark_*` MCP same `lark.Read` allowlist.
-- **Assistant calls gateway itself** (2026-10-30), gateway skill from extension since #1571, no repo copy. Commands directly call agent API for reads / writes; node gate confirms externally visible writes on phone. `docs/assistant/assistant.md` “Lark: extension-provided skill”. Quick reference below supplements local tests; gateway skill references more complete and authoritative.
+- **Assistant calls gateway itself** (2026-10-30), gateway skill from extension since #1571, no repo copy. Commands directly call agent API for reads / writes; node gate confirms externally visible writes on phone. `docs/assistant/assistant.md` “Lark: skill supplied by the Lark extension”. Quick reference below supplements local tests; gateway skill references more complete and authoritative.
 - Chats / messages / read / send / reactions / card buttons use dedicated hub routes (`docs/protocol/protocol.md` Lark APIs).
 - **Without gateway, official `lark-cli`** (`docs/plans/plan-lark-cli.md`,#273): assistant integration done, `lark.cli` in the manager's manager.json, assistant PATH, same write gate (`docs/assistant/assistant.md` “Lark: `lark-cli`”). Inbox / knowledge / `/agent` / app Lark pages still gateway-only; add L2–L6 progressively.
 
@@ -92,10 +92,6 @@ Gateway x-multi-account `GET /agent/v1/accounts`; choose account via gateway hea
 
 ### Topic pagination limit (H06)
 
-Read-only gateway source review 2026-10-31, version `2da814b1da1fd2ddd0cb9df05c419f7c87421739`. `GET /agent/v1/messages/:messageId/thread` supports latest page / `beforePosition` older, **not newer forward page**:
-
-- `src/server/routes/api.ts` reads only `beforePosition` / limit, passes to `hydrateThread` / threadPage. `afterPosition` ignored; absent `beforePosition` latest.
-- `src/server/lark/domains/im-domain.ts` `pullThread` only `beforePosition`, retrieves from end / before position; `src/server/services/messenger-service.ts` also one direction.
-- `src/server/repositories/messenger-repository.ts` `threadPage` queries `threadPosition < beforeThreadPosition`, descending then reverse; items / `hasOlder` / `nextOlderCursor`, no `hasNewer` / nextNewerCursor.
+Topic replies (`GET /agent/v1/messages/:messageId/thread`) page only backward: the gateway returns the latest page or the one before `beforePosition`, never a newer page (source review: `docs/archive/extensions/feishu-records.md`).
 
 Hub topic route therefore has no after yet. Ordinary messages support `afterPosition`, but topic replies use independent `threadPosition`; cannot borrow ordinary cursor or append latest page as continuous. Android ↓ Latest Replies reloads / replaces current window; older pagination / post-reply refresh unchanged. Add newer pagination once upstream fetch / query / cursor contract exists. No real Lark / live hub accessed; conclusions from source review.

@@ -271,7 +271,7 @@ func (h *Manager) shortcutCall(ctx context.Context, id, sid string, in wire.Shor
 		}
 		return out, err
 	}
-	out.Text = clipRunes(out.Text, extension.StringMost)
+	out.Text = clip(out.Text, extension.StringMost)
 	if out.View != nil {
 		if _, err := extension.FitWidget(out.View, "large", params.UIVersion, h.uiFallbackLang(ctx, params.Locale)); err != nil {
 			return wire.ShortcutResult{}, i18n.Err("hub-extension_system.result_unsupported", i18n.Args{"err": err.Error()})

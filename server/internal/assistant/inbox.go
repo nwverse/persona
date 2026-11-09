@@ -31,8 +31,12 @@ import (
 const (
 	inboxWindow   = 7 * 24 * time.Hour // older unread chats / mail are history, not inbox
 	inboxKeepDone = 3 * 24 * time.Hour // done items stay listed (for undo) this long
-	inboxForget   = 8 * 24 * time.Hour // and are remembered (so old unread messages don't come back) this long
-	inboxText     = 600                // characters of one message kept for triage
+	inboxForget   = 8 * 24 * time.Hour // and are held in memory (so old unread messages don't come back) this long
+	// inboxKeepHistory: done items stay in the database this long, paged by GET /api/v1/inbox/done (inbox_history.go);
+	// inboxPurgeEvery is how often the rounds delete those past it.
+	inboxKeepHistory = 90 * 24 * time.Hour
+	inboxPurgeEvery  = time.Hour
+	inboxText        = 600 // characters of one message kept for triage
 )
 
 // Item kinds.
@@ -311,13 +315,17 @@ type inboxBook struct {
 	batch     *inboxBatch          // while a collection runs: the items it starts, which enter once triaged
 	held      map[string]inboxHeld // by source: the new items its last collection held back (inbox_admit.go)
 	// readErrs: the sources the last round could not read, by id, as a short code (assistantwire.ReadFailed…): the
-	// apps say which one is behind (InboxTriage.Sources). Memory only.
-	readErrs map[string]string
-	grouping inboxGrouping // the batches being related to events (inbox_group.go)
+	// apps say which one is behind (InboxTriage.Sources). mailReadErrs: the same of the mail accounts the last mail
+	// round could not read, by account id. Memory only.
+	readErrs     map[string]string
+	mailReadErrs map[string]assistantwire.InboxMailFailed
+	grouping     inboxGrouping // the batches being related to events (inbox_group.go)
 
 	cfgMu sync.Mutex
 	cfg   assistantwire.InboxConfig // the hub's (InboxConfigMethod), as last read
 	cfgAt time.Time
+
+	purgedAt time.Time // the last purge of the done items past inboxKeepHistory (purgeInboxHistory), under mu
 }
 
 func (b *inboxBook) init() {
@@ -529,6 +537,7 @@ func (s *Service) inboxRoutes() {
 	s.inboxBulkRoutes()
 	s.inboxSuggestionRoutes()
 	s.inboxHandoffRoutes()
+	s.inboxHistoryRoutes()
 	s.translateRoutes()
 	// Items of connectors (GitHub…) only go to apps that draw them (?sources=all): an older app would show a PR as
 	// a mail and send a reply as one. triage says how many new items wait for the model, and why (inbox_admit.go).
@@ -552,6 +561,14 @@ func (s *Service) inboxRoutes() {
 			c.Context = it.Context
 		}
 		b.mu.Unlock()
+		if !ok { // a done item of the history memory no longer holds (inbox_history.go)
+			var err error
+			if c, ok, err = s.storedInboxItem(r.Context(), r.PathValue("id")); err != nil {
+				s.logf("inbox: read a done item: %v", err)
+				apierr.WriteCode(w, http.StatusServiceUnavailable, assistantwire.CodeInboxUnavailable, errInboxUnavailable)
+				return
+			}
+		}
 		if !ok {
 			apierr.Write(w, http.StatusNotFound, errNoInboxItem)
 			return
@@ -674,13 +691,19 @@ func (s *Service) inboxRoutes() {
 			apierr.WriteJSON(w, it)
 		}
 	})
-	// A pull to refresh: the hub reads every source now and hands it over before it answers.
+	// A pull to refresh: the hub reads every source now and hands it over before it answers. When that fails nothing
+	// was read now: 502 inbox_refresh_failed, the collect's error as the detail, so the apps say the refresh did not
+	// happen instead of showing the list as it was for a fresh one (#1849).
 	s.handle("POST /api/v1/inbox/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
 			return
 		}
 		if err := s.appCall(r.Context(), AppInbox, assistantwire.InboxCollect, map[string]any{"round": assistantwire.RoundFull}, nil); err != nil {
 			s.logf("inbox: refresh: %v", err)
+			l := i18n.OfWriter(w)
+			apierr.WriteBody(w, http.StatusBadGateway, map[string]any{"code": assistantwire.CodeInboxRefreshFailed,
+				"error": i18n.T(l, "assistant-inbox.refresh_failed"), "detail": i18n.Localize(err, l), "retryable": true})
+			return
 		}
 		items, asOf := s.inboxListAt(r.URL.Query().Get("sources") == "all")
 		apierr.WriteJSON(w, map[string]any{"items": items, "as_of": asOf, "triage": s.inboxTriage()})
@@ -756,6 +779,9 @@ func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
 }
 
 func (s *Service) setInboxDone(ctx context.Context, id string, done, dismiss bool) (InboxItem, error) {
+	if !done {
+		s.restoreInbox(ctx, []string{id}) // done past inboxForget: its row comes back to be reopened (inbox_history.go)
+	}
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -812,7 +838,8 @@ func (s *Service) InboxItemJSON(ctx context.Context, id string) (json.RawMessage
 	return raw, true
 }
 
-// InboxForget is inbox.forget: the user deleted a source's data; its items go too. It says how many went.
+// InboxForget is inbox.forget: the user deleted a source's data; its items go too, those kept only as history (done
+// past inboxForget) included. It says how many went.
 func (s *Service) InboxForget(ctx context.Context, source string) (int, error) {
 	if err := s.inboxReady(ctx); err != nil {
 		return 0, err
@@ -827,17 +854,25 @@ func (s *Service) InboxForget(ctx context.Context, source string) (int, error) {
 		}
 	}
 	b.mu.Unlock()
-	if len(ids) == 0 {
-		b.saving.Unlock()
-		return 0, nil
+	gone := map[string]bool{}
+	for _, id := range ids {
+		gone[id] = true
 	}
 	// Persist the deletion first: if it fails the items stay in memory, so a retry collects the same ids and
 	// finishes the job (the connector delete contract relies on a retry cleaning up what is left).
 	if st := s.inboxDB(); st != nil {
-		if err := st.DeleteInboxItems(ctx, ids); err != nil {
+		deleted, err := st.DeleteInboxSource(ctx, source, ids)
+		if err != nil {
 			b.saving.Unlock()
 			return 0, err
 		}
+		for _, id := range deleted {
+			gone[id] = true
+		}
+	}
+	if len(gone) == 0 {
+		b.saving.Unlock()
+		return 0, nil
 	}
 	b.mu.Lock()
 	for _, id := range ids {
@@ -846,7 +881,7 @@ func (s *Service) InboxForget(ctx context.Context, source string) (int, error) {
 	b.mu.Unlock()
 	b.saving.Unlock()
 	s.inboxChanged(ctx, nil)
-	return len(ids), nil
+	return len(gone), nil
 }
 
 // inboxReport is what the hub shows of the inbox (the snapshot's inbox): the AI twin's conversations; nil while the

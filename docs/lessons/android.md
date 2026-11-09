@@ -1,5 +1,30 @@
 # Lessons: Android
 
+## Latest chat text needs both a stable slot and fresh Markdown (#2602)
+
+Changing only default-open flags leaves Agent running-step previews visible. Remove the preview and tool-card exceptions, keep every call in the manual trace, and key the outside reply by its turn slot rather than its changing message ID. Preserve the actual ID for menus, jumps and receipts. `produceState` retains its previous value when keys change: a stable slot can therefore briefly draw the predecessor's parsed Markdown even after the text has changed. Carry the parse's source identity and render it only when it matches the current source; show the new plain text while parsing. A regression must render running → new text → completed under the same key, not just compare pure line lists. Test every conversation type × style × appearance, manual toggles, completion folding and restored hub-fold loading. A background wake continues the same genuine user exchange: do not truncate ordered/process rows after its latest reply or divert tail tools into a noninteractive drawer. A wake after an away recap must mark the real reopened turn live, not add a second empty working placeholder.
+
+## `-dontobfuscate` does not keep every method name (#2441)
+
+When D8 or R8 desugars a Kotlin lambda, it may rename the implementation method to `$r8$lambda$<hash>`, whatever the
+obfuscation flags say: about a third of persona's lambda methods carry such names in an unshrunk build and about half in
+the shrunk release. Error-report frames inside Compose callbacks and coroutine blocks then need `mapping.txt`; the
+release build is reproducible, so rebuilding the reported commit regenerates it. State what shrinking keeps from the built
+dex or `mapping.txt`, not from the flags' names. And pin the switch itself: the shrink check passes an unshrunk APK by
+design and hosted CI builds no release, so `scripts/release/test_check_android_shrink.py` asserts `isMinifyEnabled = true`.
+
+## Inbox writes must not wait behind full-list reads (#2545)
+
+A grouped conversation swipe used the explicit bulk-cleanup path, so each success emitted its own Undo notice (deliberately exempt
+from feedback deduplication). Use silent completion for row gestures and a stable inline retry for failed writes; retain Undo for explicit
+bulk cleanup. A failure of the subsequent read must not turn an accepted write into a failed action. Keep writes independent of the
+full-refresh lock, bound concurrent requests, serialize overlapping item targets, and conflate invalidations and ambiguous responses.
+Record local write generations so a list captured before a write cannot resurrect its rows. A different incoming message version must
+still win over both a write response and rollback. Persist confirmed results with their manager identity, never speculative marks.
+Test delayed reads, delayed writes, new messages during writes, pairing replacement, duplicate manager IDs and cache-only restoration.
+Virtual-clock request timings prove ordering and request counts, not phone frame times or production latency. Run filesystem-backed
+restoration waits with a real timeout: a virtual timeout can fire before the IO dispatcher gets a turn.
+
 ## Host-owned lifecycle controls need real application wiring (#2397)
 
 A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
@@ -51,6 +76,16 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- A settings sheet must register every settings child, including Assistant configuration (#2589). Otherwise that row closes the sheet and returns to the home instead of Settings. Accepted external links must dismiss shell overlays before navigating, so their destination is actually visible. A drawer's accessibility semantics fence does not block hardware-keyboard focus; prevent focus from entering the obscured main content as well.
+- System-font TextStyle can leave lineHeight unspecified (#2589). Converting it directly through Density throws before the composer renders. Measure the actual font line with TextMeasurer when no Sp line height is provided; retain explicit style line heights where present, and test normal and large system text. Do not invent a global content line-height multiplier merely to satisfy a layout calculation.
+- Same navigation labels do not establish iPhone visual parity (#2589). Pin the iPhone default style, language, appearance, text size and source revision; distinguish custom app chrome from system List, sheet, font and icon behavior. Own the side drawer and settings sheet at shell scope, and distinguish closing Settings from popping a settings child. Keep Android's legal assets and contrast floors; adjust text hues rather than weakening tests to copy a lower-contrast system accent.
+- Native reference capture must prove which page is visible (#2589). Retained off-screen pages can expose matching accessibility controls; `exists` and `isHittable` alone are not page-state evidence. Use the shell's actual-page probe and observed visible control coordinates, drive the welcome-to-Demo transition explicitly, and inspect the exported image before labeling it as a home/sidebar/settings reference. A successful compile or an incorrectly named image is not screenshot acceptance.
+
+- A shared sidebar must own its data/view lifetime outside the Assistant page (#2589). Navigation 3 can dispose the Assistant root while one of its secondary pages is open; publishing a composable lambda from that root and popping hidden pages to recover it silently discards drafts. Render the sidebar from the shell snapshot, keep its saveable state at shell scope, and only change navigation after an explicit destination selection.
+- After moving Settings/Inbox from tabs into secondary pages, wide-pane collapse policy must follow the visible list, not the originating primary tab (#2589). Otherwise an Agents list hidden beside a chat can also hide a later Settings subpage. Update the splitter's policy dynamically, mask the saved collapse choice for non-collapsible lists, and preserve it when returning to Agents.
+- Removing a navigation enum does not necessarily reject old saved state (#2589): `JsonCodec` coerces unknown enum values to field defaults, so an old Inbox/Settings tab can become Assistant while restoring the rest of the old shell. Use a strict codec for navigation positions when the whole old position must be ignored, and assert that loading does not rewrite the file.
+- Home-navigation removal includes appearance previews and screenshot fixtures (#2589). Hiding a dock in the app still leaves misleading four-tab previews if they build their own old navigation. Remove the obsolete dock/rail components and tab-only strings, render the real shared switcher in previews, and verify Settings by tapping the sidebar gear from both primary pages.
+
 - `activity-alias` does not inherit its target Activity's metadata (2026-11-03, #758). After retaining the old launcher alias, reading `componentName` returned empty alias metadata, so the DEBUG launch adapter did not load and mock hub, style, and light / dark arguments were ignored. Query canonical `MainActivity` metadata, retaining the original key and single launcher; Release still must not register the DEBUG adapter. Screenshot scripts must verify pairing, actual mock requests, and every subprocess exit code. A welcome page or a successful later `printf` exit is not screenshot acceptance.
 
 - Android's `AndroidView` does not clip to its layout bounds. A View calling `drawColor` in `onDraw` covers siblings above it (the terminal toolbar was entirely covered by the background); add `Modifier.clipToBounds()`.
@@ -95,6 +130,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - In an anonymous `BaseInputConnection`, `override fun getEditable() = editable` with an outer field also named `editable` resolves first to the object's own `getEditable()` (the property corresponding to the Java getter). It recurses, causing stack-overflow crashes as soon as the IME connects (`finishComposingText` → `getEditable`; terminal keyboard, 2026-11-02). Do not give outer fields framework-getter names (renamed to `buffer`). JVM unit tests cannot catch this; tap the keyboard on an emulator.
 - A status card above the terminal ("Taking over…") changes terminal height on both appearance and disappearance, causing two extra pane reflows during takeover and duplicating buffered scrollback. Put changing status in one line below the title; terminal height should change only with the keyboard.
 - Keep a field out of Autofill on the text field's own semantics node (2026-11-09, #1581). Compose's `AndroidAutofillManager` reads each node's own configuration, so `contentDataType = ContentDataType.None` on a wrapping `Column` leaves the `BasicTextField` node autofillable: the service still fills it and offers to save what was typed. Set it through the `BasicTextField` modifier (`JTextField(autofill = false)`, `JSecretField`). On that node it stops the autofill session (no view-entered or value-change notifications, autofill type NONE in the view structure); the save-on-removal commit follows only nodes with a `ContentType`, which such a field must not set. Assert `SemanticsProperties.ContentDataType == ContentDataType.None` on the `hasSetTextAction()` node.
+- The `BackHandler` registered last wins, and handlers register in composition order, not by nesting (2026-11-09, #2481). `SettingsScreen` composes its routed-back handler after `when (page)`, so on a destination that opens straight on a page (Settings › Pairing, `initialPage = "pair"`) it outranked that page's own steps, and Back from the manual form or the confirm page left the page with the typed address. Add hub worked only because its page is switched in later and registers after the host. A host fallback that should yield to a page goes before the page or is turned off for it. Test the host the way the shell wires it (`onBack` set): in place (no `onBack`) the fallback is composed before the page and the bug does not show.
 
 ## Native extension streams (#5956)
 

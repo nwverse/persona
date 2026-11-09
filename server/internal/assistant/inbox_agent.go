@@ -17,7 +17,7 @@ import (
 
 // The inbox's AI twin (docs/assistant/inbox.md): model 1 triages every new item (inbox_triage.go), every "Needs you" item
 // (and what an inbox policy hands it, inbox_policies.go) goes to an agent, model 2 links it to one of the user's
-// tasks (linkTask), and the agent (model 3, a headless Claude Code in the assistant's
+// tasks (linkTaskFor), and the agent (model 3, a headless Claude Code in the assistant's
 // directory, with its tools: a conversation the assistant starts itself, untitled) looks into it and drafts the reply
 // (inbox_draft). The draft waits in the inbox; nothing is sent until the user taps "Send" (POST /api/v1/inbox/{id}/reply).
 
@@ -505,20 +505,6 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 	}
 	// Undone, a settled conversation is still running in memory: the next sweep settles it again.
 	s.saveWrites(ctx, changed, "its settled conversation")
-}
-
-// inboxAgentPrompt is the AI twin's first message for an item (prompts/inbox/agent.md).
-func (b *inboxBook) inboxAgentPrompt(it *InboxItem, owner string, kbc *prompts.KBContext) string {
-	return b.inboxAgentPromptFor(it, owner, kbc, nil, 1, time.UTC)
-}
-
-// inboxAgentPromptFor is inboxAgentPrompt for an item about one of the user's tasks (linked: its progress).
-// larkDefault is lark.account: the Feishu account lark_messages reads unless the prompt names another.
-// loc: the user's time zone, which the chain's times are read in.
-func (b *inboxBook) inboxAgentPromptFor(it *InboxItem, owner string, kbc *prompts.KBContext, linked *prompts.InboxTask, larkDefault int, loc *time.Location) string {
-	a := b.inboxAgentFor(it, owner, linked, larkDefault, loc)
-	a.KB = kbc
-	return prompts.RenderInboxAgent(a)
 }
 
 // inboxAgentFor is what the AI twin's first message is made of, but the knowledge base's part.
