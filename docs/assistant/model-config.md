@@ -116,6 +116,7 @@ so creating or resuming sessions is impossible without it and returns `503 assis
 - Stored in the binding of `model_config.assistant` (`runtime`), independent of provider and model: changing providers, temporarily choosing a launcher or model in the chat menu, or prewarming another launcher still uses this runtime.
 - `finishModel` puts it in params sent to node (`runtime: "agentsdk"`; omitted for CLI) and includes it in `model_fingerprint`. A change makes node restart the process and resume the original session with `--resume`. Explicit `cli` and omission produce the same fingerprint, avoiding unnecessary restarts.
 - If node cannot run the SDK (no Node 22+, bridge, or claude), it falls back to CLI and includes `runtime_fallback` in session status.
+- A binding without a model means the launcher's default, on a resume too (#2487). Claude Code resumes a session on the model it last ran on unless `--model` or a model variable (`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_*_MODEL`) names one; a `model` in its settings does not. So when node resumes a conversation the hub resolved with no model, it passes what a new session of that launcher would use: the `model` from Claude Code's settings, else `default`. It passes nothing when the launcher names a model itself or when its start cannot be seen (a managed launcher, a wrapper script); see `node/assistant_resume_model.go`.
 
 ## Importing providers from ~/.zshrc (#2455)
 
