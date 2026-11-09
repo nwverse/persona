@@ -78,7 +78,7 @@ func TestToolLoopCeilingAndReset(t *testing.T) {
 
 func TestToolLoopPollingAndPrivateData(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for _, command := range []string{"gh pr checks 42", "gh run view 1", "tail -n 10 server.log", "sleep 1", "while true; do sleep 1; done", "journalctl -f", "docker logs job", "gh api repos/demo/repo/check-runs"} {
+	for _, command := range []string{"gh pr checks 42", "gh run view 1", "tail -n 10 server.log", "sleep 1", "while true; do sleep 1; done", "while true; do gh pr checks 42; done", "while true; do tail -n 10 server.log; done", "journalctl -f", "docker logs job", "gh api repos/demo/repo/check-runs"} {
 		var d LoopDetector
 		for i := 0; i < 5; i++ {
 			loopMessage(&d, i, "Bash", map[string]any{"command": command}, "same", start.Add(time.Duration(i)*time.Second))

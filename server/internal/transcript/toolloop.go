@@ -180,11 +180,11 @@ func safeToolName(name string) bool {
 
 var (
 	loopWaitCommand = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:do[\t ]+)?(?:sleep|wait)(?:[\t ]|$)`)
-	loopTailCommand = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:sudo[\t ]+)?tail(?:[\t ]|$)`)
-	loopLogCommand  = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:journalctl|docker[\t ]+logs|kubectl[\t ]+logs)(?:[\t ]|$)`)
-	loopCICommand   = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+(?:pr[\t ]+checks|run[\t ]+(?:watch|view|list))(?:[\t ]|$)`)
-	loopCIView      = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+pr[\t ]+view(?:[\t ]|$)`)
-	loopCIApi       = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+api(?:[\t ]|$)`)
+	loopTailCommand = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:do[\t ]+)?(?:sudo[\t ]+)?tail(?:[\t ]|$)`)
+	loopLogCommand  = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:do[\t ]+)?(?:journalctl|docker[\t ]+logs|kubectl[\t ]+logs)(?:[\t ]|$)`)
+	loopCICommand   = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:do[\t ]+)?gh[\t ]+(?:pr[\t ]+checks|run[\t ]+(?:watch|view|list))(?:[\t ]|$)`)
+	loopCIView      = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:do[\t ]+)?gh[\t ]+pr[\t ]+view(?:[\t ]|$)`)
+	loopCIApi       = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*(?:do[\t ]+)?gh[\t ]+api(?:[\t ]|$)`)
 	loopCIWrite     = lazyre.New(`(?:^|[\t ])(?:-x[\t ]*(?:post|put|patch|delete)|--method(?:=|[\t ]+)(?:post|put|patch|delete)|-f(?:[\t ]|=)|--(?:field|raw-field|input)(?:=|[\t ]))`)
 )
 
