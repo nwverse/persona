@@ -44,8 +44,8 @@ personad notify "title" [body] [--silent] [--error] [--strict]
 personad ask / notify
   └─ node.sock  {"kind":"ask"|"notify","input":{…},"pane":"…","attempt":"…"}   one request / one reply per connection, one JSON line each
        └─ node (node/scriptcli.go)
-            ├─ ask    → hub request interaction.create (same path as hook) → blocks until answered / expired
-            └─ notify → hub request notify (deliverNotify in hub/notify_api.go, shared with POST /api/v1/notify)
+            ├─ ask    → manager request interaction.create (assistant/fleet_events.go, same path as hook) → blocks until answered / expired
+            └─ notify → passed on by the manager to the hub's notify (deliverNotify in hub/notify_api.go, shared with POST /api/v1/notify)
 ```
 
 node's replies:
