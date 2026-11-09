@@ -103,7 +103,7 @@ func engineHostsFor(c proto.EngineChoice, logf func(format string, args ...any))
 					logf("herdr: this node's data directory has its own herdr session (%s), but its environment points at %s: using that, so its Agents belong to whichever node started that server", own, hc.Socket)
 				}
 			}
-			hs = append(hs, &herdrHost{c: hc})
+			hs = append(hs, newHerdrHost(hc, logf))
 		case proto.EngineHerdrCore:
 			cc := herdrcore.New()
 			cc.Log = logf
@@ -244,6 +244,7 @@ func (n *Node) useEngineChoice(ctx context.Context, c proto.EngineChoice) error 
 	n.hostAgents, n.layouts, n.agents, n.panePIDs, n.lastList = nil, nil, map[string]host.Agent{}, map[string]panePID{}, ""
 	n.lastPanes, n.onAgentsList = nil, nil
 	n.mu.Unlock()
+	n.sent.forget() // the new engine's list goes once even when the old one's was the same (sessions_sent.go)
 	n.endTermStreams("the machine's terminal engine changed")
 	traexCache.Lock()
 	traexCache.panes, traexCache.status = map[int]string{}, map[string]traexState{}

@@ -22,6 +22,7 @@ import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-termina
 import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
+import { KnowledgeSelection } from "./settings/KnowledgeSelection";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
@@ -41,7 +42,6 @@ import { extensionsRoute, routeSub } from "../lib/extension-market";
 import { ownedSub, parseOwnedSub } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
-import { SentSettings } from "./settings/SentSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
@@ -50,7 +50,7 @@ import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
-import { FROM_LIST, NAV_GROUPS, openedFromList, redirectLegacySettings, searchSettings, settingsAt, settingsHref, TAB_INFO, TABS, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
+import { FROM_LIST, NAV_GROUPS, openedFromList, redirectLegacySettings, searchSettings, settingsAt, settingsHref, SENT_SUB, TAB_INFO, TABS, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { formatList, t } from "../i18n";
 
@@ -117,6 +117,12 @@ export function tokens(n: number): string {
 
 // ── page ────────────────────────────────────────────────
 
+function readSettingsLocation() {
+  const redirect = redirectLegacySettings(location.search, location.hash, stripBase(location.pathname));
+  if (redirect) history.replaceState(history.state, "", BASE + redirect);
+  return settingsAt(location.search, location.hash);
+}
+
 export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const phone = useMedia(SHEET_QUERY);
   // list pages (channels / connectors / extensions) keep their list beside the open item from this width
@@ -135,16 +141,13 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     };
   }, []);
   // The category (null: none named, the phone's list) and the purpose (model configuration) or extension ("Extensions") it has open.
-  const [at, setAt] = useState(() => {
-    const redirect = redirectLegacySettings(location.search, location.hash);
-    if (redirect) history.replaceState(history.state, "", BASE + redirect);
-    return settingsAt(location.search, location.hash);
-  });
+  const [at, setAt] = useState(readSettingsLocation);
   // Back from a category opened from the list: the URL went back, the page follows it.
   useEffect(() => {
     const back = () => {
-      if (stripBase(location.pathname) !== "/settings") return;
-      const now = settingsAt(location.search, location.hash);
+      const path = stripBase(location.pathname);
+      if (path !== "/settings" && path !== "/settings/sent" && path !== "/settings/sent/") return;
+      const now = readSettingsLocation();
       setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
     };
     addEventListener("popstate", back);
@@ -177,7 +180,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const pick = (k: Tab, id: string | null = null, section?: SettingsSection) => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
     setAt({ tab: k, sub: id, section: section ?? null });
-    const to = settingsHref(k, id, phone, k === "persona" || k === "models" || k === "hub" ? configurationOwner.current : null, section);
+    const to = settingsHref(k, id, phone, k === "persona" || k === "models" || k === "hub" || k === "knowledge" ? configurationOwner.current : null, section);
     // from the phone's list the category goes on top of it, so Back returns to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
     else history.replaceState(openedFromList(history.state) ? history.state : null, "", BASE + to);
@@ -246,6 +249,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "general" && <General onModel={() => pick("models", "translate", "model-config")} />}
               {tab === "persona" && <PersonaSettings onTriageModel={() => pick("models", "agent.triage", "model-config")} onExtensions={() => pick("extensions")} />}
               {tab === "notifications" && <NotificationSettings />}
+              {tab === "knowledge" && <KnowledgeSelection />}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
@@ -277,7 +281,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               )) : (
                 <ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} />
               ))}
-              {tab === "connectors" && (sub && sub !== "feishu-bot" && twoCol ? (
+              {tab === "connectors" && (sub && sub !== SENT_SUB && sub !== "feishu-bot" && twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><Connectors open={null} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
                   <div className="min-w-0 flex-1"><Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} /></div>
@@ -285,7 +289,6 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               ) : (
                 <Connectors open={sub} onOpen={(id) => pick("connectors", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} />
               ))}
-              {tab === "sent" && <SentSettings />}
               {tab === "extensions" && (extensionsRoute(sub).kind === "extension" && twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><Extensions open={null} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>

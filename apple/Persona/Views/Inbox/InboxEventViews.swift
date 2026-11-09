@@ -429,11 +429,11 @@ struct InboxChainSection: View {
         case .url(let u):
             Button { openURL(u) } label: { label() }.buttonStyle(.plain)
         case .session(let key, let manager):
-            Button { InboxEventOpen.session(key, manager: manager, model: model) } label: { label() }
+            Button { InboxEventOpen.session(key, manager: manager, owner: item.manager, model: model) } label: { label() }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("inbox.chain.session")
         case .item(let id):
-            if let it = InboxStore.shared.items.first(where: { $0.id == id }) {
+            if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: id, manager: item.manager) }) {
                 if let openItem {
                     Button { openItem(it) } label: { label() }.buttonStyle(.plain)
                 } else {
@@ -504,7 +504,7 @@ struct InboxRelatedSection: View {
                     }
                     .padding(.vertical, Theme.Space.xs)
                     .contentShape(.rect)
-                    if let it = InboxStore.shared.items.first(where: { $0.id == r.id }) {
+                    if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: r.id, manager: item.manager) }) {
                         if let openItem {
                             Button { openItem(it) } label: { label }.buttonStyle(.plain)
                         } else {
@@ -522,10 +522,10 @@ struct InboxRelatedSection: View {
 /// Opening a chain's conversation: the processing one is the assistant's (Persona's own conversations), a sub-session
 /// an Agent's.
 @MainActor enum InboxEventOpen {
-    static func session(_ key: SessionKey, manager: Bool, model: AppModel) {
+    /// `owner`: the item's manager, whose Persona the processing conversation is.
+    static func session(_ key: SessionKey, manager: Bool, owner: String?, model: AppModel) {
         if manager && model.session(key) == nil {
-            model.assistantCurrent = model.inHub(key)
-            model.selectedTab = .assistant
+            model.openAssistantConversation(model.inHub(key), manager: owner)
         } else {
             model.open(key)
         }
@@ -608,7 +608,7 @@ struct InboxEventPage: View {
         self.item = item
         self.accounts = accounts
         self.draft = draft
-        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id))
+        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id, manager: item.manager))
     }
 
     var body: some View {

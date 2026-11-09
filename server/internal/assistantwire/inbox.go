@@ -19,6 +19,7 @@ import (
 // and these (assistant.TestRoutesAreTheWireOnes).
 var InboxRoutes = []string{
 	"GET /api/v1/inbox",
+	"GET /api/v1/inbox/done",
 	"GET /api/v1/inbox/{id}",
 	"POST /api/v1/inbox/{id}/done",
 	"POST /api/v1/inbox/{id}/draft",
@@ -27,6 +28,9 @@ var InboxRoutes = []string{
 	"POST /api/v1/inbox/{id}/handoff",
 	"POST /api/v1/inbox/{id}/doc/status",
 	"PUT /api/v1/inbox/{id}/parent",
+	"PUT /api/v1/inbox/{id}/folder",
+	"GET /api/v1/inbox/folders",
+	"PUT /api/v1/inbox/folders",
 	"GET /api/v1/inbox/tree/{kind}/{id...}",
 	"POST /api/v1/inbox/refresh",
 	"POST /api/v1/inbox/done",

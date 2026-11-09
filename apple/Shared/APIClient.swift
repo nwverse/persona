@@ -125,6 +125,9 @@ nonisolated struct APIClient: Sendable {
     /// The manager every request names (`X-Persona-Manager`, docs/protocol/protocol.md "Per-manager routing"): another
     /// manager's extension or connector. nil: none named, so the hub asks the default manager, as before.
     var managerID: String?
+    /// The manager the Persona page shows (its switcher, docs/assistant/managers.md "Clients"), named on the assistant's
+    /// own routes only (`assistantRoute`). nil: the default's, and nothing is named, as before.
+    var shownManager: String?
     /// The hub has the extension routes (`features` has `extensions`, #1844): extension requests go to
     /// /api/v1/extensions and answer with the new keys; an older hub only has /api/v1/plugins (docs/extensions/extensions.md「命名和兼容」).
     var extensionsAPI = false
@@ -181,16 +184,39 @@ nonisolated struct APIClient: Sendable {
     static let managerHeader = "X-Persona-Manager"
 
     /// This client for one manager's things (an item a merged list stamped with that manager): every request names it.
-    /// nil or empty: the default manager's, and nothing is named, as before. Each page makes its requests through its own
-    /// copy, so a request that goes out after the page moved on still names the manager it was made for.
+    /// nil or empty: the default manager's, and nothing is named, as before, whichever manager the Persona page shows.
+    /// Each page makes its requests through its own copy, so a request that goes out after the page moved on still names
+    /// the manager it was made for.
     func manager(_ id: String?) -> APIClient {
         var c = self
         c.managerID = id?.isEmpty == false ? id : nil
+        c.shownManager = nil
         return c
     }
 
-    /// What every request carries besides the caller's own headers: the manager it names.
-    private var routing: [String: String] { managerID.map { [Self.managerHeader: $0] } ?? [:] }
+    /// This client for the Persona page while it shows manager `id` (nil or empty: the default's).
+    func showing(_ id: String?) -> APIClient {
+        var c = self
+        c.shownManager = id?.isEmpty == false ? id : nil
+        return c
+    }
+
+    /// Whether a request goes by the manager the Persona page shows: the assistant's routes (`/api/v1/assistant…`), but
+    /// not one conversation's (`/api/v1/assistant/conversations/{id}…`), which the hub sends to the conversation's own
+    /// manager and a named one would override, nor the health space's (`space`), which stays the default's.
+    nonisolated static func assistantRoute(_ path: String, query: [String: String]) -> Bool {
+        let base = "/api/v1/assistant"
+        guard path == base || path.hasPrefix(base + "/") || path.hasPrefix(base + "?"),
+              query["space"]?.isEmpty != false, !path.contains("space=") else { return false }
+        let parts = path.dropFirst(base.count).split(separator: "?", maxSplits: 1).first?.split(separator: "/") ?? []
+        return !(parts.count > 1 && parts[0] == "conversations")
+    }
+
+    /// What a request to `path` carries besides the caller's own headers: the manager it names.
+    private func routing(_ path: String, _ query: [String: String]) -> [String: String] {
+        let named = managerID ?? (Self.assistantRoute(path, query: query) ? shownManager : nil)
+        return named.map { [Self.managerHeader: $0] } ?? [:]
+    }
 
     /// `query` with the Feishu account a `/api/v1/lark` request is about, unless it names one already (a media URL
     /// the hub handed out for that account).
@@ -208,7 +234,7 @@ nonisolated struct APIClient: Sendable {
                  timeout: TimeInterval = 30, opID: UUID? = nil) async throws -> Data {
         let query = larkScoped(path, query)
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
-            .merging(routing) { _, manager in manager }
+            .merging(routing(path, query)) { _, manager in manager }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
                                                      body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers))
@@ -275,7 +301,7 @@ nonisolated struct APIClient: Sendable {
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         if let etag { req.setValue(etag, forHTTPHeaderField: "If-None-Match") }
-        for (name, value) in routing { req.setValue(value, forHTTPHeaderField: name) }
+        for (name, value) in routing(path, query) { req.setValue(value, forHTTPHeaderField: name) }
         let (data, resp) = try await Self.uncachedSession.data(for: req) // our own cache: URLSession's would hide the 304
         let http = resp as? HTTPURLResponse
         if http?.statusCode == 304 { return (nil, etag) }
@@ -288,7 +314,7 @@ nonisolated struct APIClient: Sendable {
         if config.isDemo { throw APIError(status: 403, message: DemoText.notSent) }
         if let transport {
             return try await transport(LocalRequest(method: "POST", path: path, query: query, body: Data(contentsOf: file),
-                                                    headers: clientMetadata.headers.merging(routing) { _, manager in manager }))
+                                                    headers: clientMetadata.headers.merging(routing(path, query)) { _, manager in manager }))
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
         req.httpMethod = "POST"
@@ -298,7 +324,7 @@ nonisolated struct APIClient: Sendable {
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
-        for (name, value) in routing { req.setValue(value, forHTTPHeaderField: name) }
+        for (name, value) in routing(path, query) { req.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await session.upload(for: req, fromFile: file)
         return try checked(data, response, requestID: requestID)
     }
@@ -352,7 +378,7 @@ nonisolated struct APIClient: Sendable {
         clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
-        for (name, value) in routing { req.setValue(value, forHTTPHeaderField: name) }
+        for (name, value) in routing(path, query) { req.setValue(value, forHTTPHeaderField: name) }
         let (temp, response) = try await Self.uncachedSession.download(for: req, delegate: DownloadProgress(progress))
         defer { try? FileManager.default.removeItem(at: temp) }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -787,10 +813,12 @@ nonisolated struct APIClient: Sendable {
     func createToken(name: String, kind: String) async throws -> NewToken {
         try JSON.decoder.decode(NewToken.self, from: try await request("POST", "/api/v1/auth/tokens", body: ["name": name, "kind": kind]))
     }
-    func deviceTokens() async throws -> DeviceTokens {
-        try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens"))
+    func deviceTokens(timeout: TimeInterval = 30) async throws -> DeviceTokens {
+        try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens", timeout: timeout))
     }
-    func revokeToken(_ id: String) async throws { _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)") }
+    func revokeToken(_ id: String, timeout: TimeInterval = 30) async throws {
+        _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)", timeout: timeout)
+    }
 
     /// A QR code's modules as the hub draws them: rows of "0" / "1".
     struct QRRows: Decodable, Hashable, Sendable { var size: Int; var rows: [String] }
@@ -992,7 +1020,20 @@ nonisolated struct APIClient: Sendable {
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
         }
     }
-    func assistant() async throws -> AssistantState { try await get("/api/v1/assistant") }
+    func assistant() async throws -> AssistantState { owned(try await get("/api/v1/assistant")) }
+    /// `st` with its conversations stamped with the manager this client named: the hub relays another manager's answer as
+    /// it came, without the `manager` its own lists put on each session. Nothing named: the default's, left as they came.
+    private func owned(_ st: AssistantState) -> AssistantState {
+        var st = st
+        st.conversations = st.conversations.map { owned($0) }
+        return st
+    }
+    private func owned(_ s: Session) -> Session {
+        guard s.manager == nil, let m = managerID ?? shownManager else { return s }
+        var s = s
+        s.manager = m
+        return s
+    }
     /// The health space's conversations (docs/assistant/health.md): `GET /api/v1/assistant?space=health`, the same body with the
     /// health directory as `cwd`. The plain list never holds them.
     func healthConversations() async throws -> [Session] {
@@ -1017,8 +1058,8 @@ nonisolated struct APIClient: Sendable {
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
                       mainTasksQuiet: Bool? = nil) async throws -> AssistantState {
-        try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
-            body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet)))
+        owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
+            body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).
@@ -1313,9 +1354,11 @@ nonisolated struct APIClient: Sendable {
                            effort: String? = nil, main: Bool = false, space: String? = nil, opID: UUID? = nil) async throws -> Session {
         let body = NewConversation(prompt: HubNaming.outbound(prompt, canonical: personaNaming), images: images.isEmpty ? nil : images,
                                    launcher: launcher, permissionMode: permissionMode, effort: effort, main: main ? true : nil, space: space)
-        var s = try JSON.decoder.decode(SessionResponse.self, from: try await post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session
+        // The health space is the default manager's (docs/assistant/health.md), whichever the Persona page shows.
+        let api = space == nil ? self : showing(nil)
+        var s = try JSON.decoder.decode(SessionResponse.self, from: try await api.post("/api/v1/assistant/conversations", body: body, timeout: 110, opID: opID)).session
         if s.assistantSpace == nil { s.assistantSpace = space }
-        return stamp(s)
+        return stamp(api.owned(s))
     }
 
     struct ClaudeSetting: Codable, Identifiable, Sendable {
@@ -1392,7 +1435,9 @@ nonisolated struct APIClient: Sendable {
     }
 
     func interactions() async throws -> [Interaction] {
-        stamp(try await get("/api/v1/interactions", as: InteractionsResponse.self).interactions)
+        let data = try await request("GET", "/api/v1/interactions")
+        // An MCP form's fields in their server's order, which the decoded dictionaries don't keep.
+        return stamp(Elicitation.withFieldOrders(try JSON.decoder.decode(InteractionsResponse.self, from: data).interactions, from: data))
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
@@ -1514,6 +1559,14 @@ nonisolated struct APIClient: Sendable {
     }
     func setNotifyPrefs(device: String, _ prefs: NotifyPrefs) async throws -> NotifyPrefs {
         try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: prefs))
+    }
+    /// The managers this device mutes, alone (the PUT merges): the hub keeps only those of its roster.
+    func setMutedManagers(device: String, _ ids: [String]) async throws -> NotifyPrefs {
+        try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: MutedManagersPut(ids: ids)))
+    }
+    /// Quiet hours alone (the PUT merges); the hub refuses bad times or an unknown zone (400).
+    func setQuietHours(device: String, _ quiet: QuietHours) async throws -> NotifyPrefs {
+        try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: QuietHoursPut(quiet: quiet)))
     }
 }
 

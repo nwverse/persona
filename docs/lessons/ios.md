@@ -2,6 +2,23 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A relay push keeps the fallback's sound unless the service extension sets it (#1862)
+
+- The relay writes the outer `aps` itself, `"sound":"default"` included, so the "New message" fallback rings. The notification service extension starts from `request.content.mutableCopy()`, which keeps that sound: replacing the texts, category and interruption level from the sealed payload is not enough. `PushCrypto.apply` sets the sound from the sealed `aps` and clears it when there is none; a silent notification that rings through the relay but not with direct APNs points here.
+- `apple/Shared` compiles for watchOS 10 too, and some UserNotifications APIs don't exist there: `UNNotificationSound(named:)` builds for iOS and the Mac and fails only in the watch build (hosted "iOS and Watch" job). A Mac unit test of shared code does not catch it.
+
+## Nested settings navigation (#2522)
+
+- A nested settings page must keep its parent in programmatic paths too. Apple Connectors was an inline section, not a page: moving the sent ledger required a real Connectors destination and `[.connectors, .sent]` for legacy launches. A generic `connectors/<id>` parser needs a distinct ledger sentinel: use `connectors/-sent` as the web does, retain a connector whose ID is `sent`, keep unrelated URL/security rules unchanged, and test Back in compact and Mac split layouts.
+
+- When refreshing a disposable Apple build snapshot, mirror removed Swift inputs as well as additions (#2522). A file-list `rsync` leaves a deleted settings page behind; XcodeGen still compiles that stale file against the new immutable preference type. Remove only the stale files in the owned snapshot, retain the failure evidence, and rerun against the actual checkout before blaming a merged product change.
+
+## Retiring a conversation preference (#2477)
+
+- Removing an Appearance row also requires removing its destination case, DEBUG deep link and localized strings. Ignore the retired `openAppearance chat` value rather than falling through to the Avatar page. The Appearance section is on the settings root, not a separate overview page.
+- Fixed defaults must not read legacy UserDefaults values, including the argument domain used by UI launches. Test stored disabled/folded/expanded modes and old line counts; keep other platforms' presentation branches when they still serve Mac, Vision Pro or Agent conversations. Per-message Expand / Collapse remains independent of the retired preference.
+- A text truncated by `lineLimit` retains its full accessibility label. Combine a three-line policy unit assertion with real folded screenshots and Expand controls; an accessibility assertion about the hidden last line alone is not evidence of folding.
+
 ## Idle-energy profiling and caller attribution (#1634)
 
 - Use an isolated mock hub and keep the build, simulator profile, data and visible-page history identical. Frame-count probes and frozen animations change the workload. A runtime-CLI root rebuild can pin `scenePhase`; use a cold launch and real tab actions instead. Home is asynchronous: verify the background transition before starting its window.
@@ -902,6 +919,19 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
   - Initially ignored, pre-appearance rows never redrew or attached gestures, failing 2–3/10.
   - Recognizer logs showed no touches in failures; observing the switch gave 10/10.
 
+## An edge gesture the list waits for needs a hold (2026-11-09, #2615)
+
+- **What happened**: the chat list's scroll pan waits for the right-edge navigator to fail (`shouldBeRequiredToFailBy`). The navigator began after 8 pt of vertical movement in the 16 pt band at the list's right edge, which is where a right thumb often lands for an ordinary scroll.
+  - The list stopped following the finger, and letting go jumped to the user message under the finger's last position.
+  - In the flipped list, a push up from low on the screen ends over an older message, so it looked like a jump back toward the top.
+- **Direction is not enough**: a recognizer that the list's scrolling waits for must begin on something a scroll never does. If it begins on vertical movement, it takes ordinary scrolls in the same direction.
+  - Begin only after a hold without movement (`Theme.Motion.edgeScrubHold`), and fail at once on any movement past the slop during the hold. The list then scrolls as anywhere else, and the pager and drawer still get sideways swipes.
+  - Cancel the hold's timer in `reset()`, and check that the recognizer is still `.possible` when the timer fires.
+- **A release commits only a choice**: opening on the tick under the finger is not a pick. `EdgeScrubState.moved` is set only when the finger goes past the slop to another tick than the one it opened on, and a release without it only closes the navigator.
+  - A tick change alone is not enough: a finger held still trembles by a point or two, and with many messages the ticks are `Theme.Size.edgeTickGapMin` (5 pt) apart, so a tremble over the line between two ticks would count as a pick.
+- **Tests**: UI tests that drive the navigator hold first (`press(forDuration: 0.5, thenDragTo:…)`). `testEdgeSwipeScrollsTheList` swipes quickly in the band and checks that nothing jumps and the list follows the finger.
+  - `thenHoldForDuration` after a fast synthesized drag does not stop the list from coasting once the finger lifts: the list was where the finger left it, then moved on by more than the drag itself. Measure a lower bound in the finger's direction, and tap to stop the coasting before reading frames.
+
 ## Context compaction as a divider (2026-11-04, #1064)
 
 Claude Code writes three things: `system/compact_boundary` (`compactMetadata.trigger` `manual` / `auto`; idle compaction also `auto`), a following `isCompactSummary` user line,
@@ -935,6 +965,18 @@ which calls `access(keyPath:)` before mutation, registering a body dependency; m
 (runtime CLI ping fails, XCUITest query timeout). `sample <pid>` shows the chain.
 For write-only records (trace / counts), mark storage `@ObservationIgnored`, manually `access` in computed reads and `withMutation` around writes,
 so calling bodies do not observe. `@State` initializer expressions must have no side effects; they run more than once.
+
+## A page drawn while `@Observable` tells its observers reads the old value (2026-11-09, #2189)
+
+New Chat in a long main conversation sometimes left the conversation on screen (TestFlight 213, about one tap in five in the
+simulator); #1749's "the current conversation changed but the page did not redraw" was the same. Observation tells observers in
+`willSet`, before the new value is stored. SwiftUI's `ObservationCenter.invalidate` can flush at that moment
+(`GraphHost.asyncTransaction` → `flushTransactions()`, seen when a button action's `withAnimation` change meets a pending update),
+so the page's body ran inside the setter, read the old conversation and watched it again; the store that followed told nobody.
+A page that chooses what to show from a model property set in actions: store the value first, then call `withMutation(keyPath:) {}`
+(`AppModel.assistantCurrent`), so a body drawn while observers are told reads the new value. Keep `@Observable`'s own rules: an
+equal value notifies no one, and what the property's `didSet` did runs whether or not it notified. Finding it: a DEBUG note in the
+body that comes between the action's note and the setter's, with the old value, and `Thread.callStackSymbols` from that body.
 
 ## Gray outside sidebar card corners: overlay after mask is not masked (2026-11-04, #1247)
 

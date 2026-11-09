@@ -148,6 +148,8 @@ struct ChatView: View {
     @Environment(\.shell) private var shell
     /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
     @Environment(\.shellRailEdge) private var railEdge
+    /// The Persona page's manager switcher under its top bar (several managers).
+    @Environment(\.managerSwitcherRoom) private var switcherRoom
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091). Other platforms retain `ComposerRow` / `PromptComposer` and their mode chips. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -773,6 +775,9 @@ struct ChatView: View {
         .onChange(of: scenePhase) { _, phase in if phase == .background { rememberReadPosition() } }
         .onDisappear {
             ChatTrace.shared.note(shownKey, "close")
+            #if DEBUG
+            ShellTrace.shared.note("chat disappeared \(style == .assistant ? "assistant" : "agents")")
+            #endif
         }
         // Kept shell pages do not disappear. Only the visible chat owns its
         // transcript stream; the Agent keeps working on the hub while hidden.
@@ -1589,7 +1594,7 @@ struct ChatView: View {
                 try? await Task.sleep(for: .milliseconds(60))
                 if n == 1 { hideChrome() } // once the header has measured itself
                 guard let bottom = scratch.landingMaxY, scratch.listFrame.height > 0 else { continue }
-                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.room(railEdge)) + Self.inputTail
+                let want = scratch.listFrame.minY + (style == .dev ? (sideBars ? sideHeaderHeight : chrome.settledHeight) : AssistantTopBar.room(railEdge) + switcherRoom) + Self.inputTail
                 let off = want - bottom // > 0: too high; the flipped list scrolls toward older to lower it
                 if abs(off) < 1 { break }
                 scrollList(to: chrome.offset + off)
@@ -1868,9 +1873,9 @@ struct ChatView: View {
     private var headerRoom: CGFloat {
         #if os(macOS)
         // The Mac has no header over the chat (`chrome` stays empty): the row over it is `macChrome`.
-        style == .dev ? macChromeHeight : AssistantTopBar.height
+        style == .dev ? macChromeHeight : AssistantTopBar.height + switcherRoom
         #else
-        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge)
+        style == .dev ? (sideBars ? sideHeaderHeight : chrome.height) : AssistantTopBar.room(railEdge) + switcherRoom
         #endif
     }
 
@@ -1960,8 +1965,8 @@ struct ChatView: View {
     /// How the chat draws (#1666): the new conversation layout in Persona's conversations on iPhone and iPad.
     private var layout: ChatLayout { ChatLayoutSettings.shared.layout(assistant: style == .assistant) }
 
-    /// Where a slide opens the right-edge navigator (window coordinates): the band along the list's right edge,
-    /// below the top bar floating over it.
+    /// Where a finger held still opens the right-edge navigator (window coordinates): the band along the list's right
+    /// edge, below the top bar floating over it.
     private var scrubBand: () -> CGRect {
         let room = headerRoom
         return { [scratch] in
@@ -1972,7 +1977,7 @@ struct ChatView: View {
 
     #if os(iOS)
     /// The right-edge navigator's finger (`EdgeScrubGesture`): opens on the messages the user typed, picks as it moves,
-    /// goes to the picked one as it lets go.
+    /// goes to the picked one as it lets go, if it moved to one (#2615).
     private func scrubbed(_ p: CGPoint, _ phase: UIGestureRecognizer.State) {
         let y = p.y - scratch.listFrame.minY
         switch phase {
@@ -1984,7 +1989,9 @@ struct ChatView: View {
         case .changed:
             if scrub.move(to: y) { EdgeScrubHaptics.tick() }
         case .ended:
-            if let mark = withAnimation(Theme.Motion.state, { scrub.close() }) { jumpToLine(mark.id) }
+            // The tick it opened on is only where the finger happened to be: letting go there is no choice.
+            let chosen = scrub.moved
+            if let mark = withAnimation(Theme.Motion.state, { scrub.close() }), chosen { jumpToLine(mark.id) }
         default:
             withAnimation(Theme.Motion.state) { _ = scrub.close() }
         }
@@ -2528,7 +2535,8 @@ struct ChatView: View {
                 setFollow { $0.touched() } // nothing changes until the finger lets go
             }
         }
-        return list
+        // Two expressions: as one, Xcode 26.0 could not type-check it in time (#2571).
+        let base = list
         .environment(menu)
         .environment(\.chatPin, pin)
         #if os(iOS)
@@ -2537,6 +2545,7 @@ struct ChatView: View {
             FullPageAnchor { [fullPage] in fullPage.setAnchor($0) }
         }
         #endif
+        return base
         .onAppear {
             pin.letGo = { [position = $position] in position.wrappedValue = ScrollPosition(idType: String.self) }
             pin.onRising = { [rising = $pinRising] in rising.wrappedValue = $0 }
@@ -4100,7 +4109,10 @@ struct Composer: View, Equatable {
         return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex
     }
 
-    private var allowsSend: Bool { model.session(key)?.canSend == true }
+    private var allowsSend: Bool { model.session(key)?.canSend == true && offlineManager == nil }
+    /// The manager whose conversation this is, while a hub with several has it offline: nothing goes to it until it is
+    /// back; its history reads.
+    private var offlineManager: HubManager? { model.offlineManager(of: model.session(key)) }
     /// A health conversation's files go to the health space's reports/ (docs/assistant/health.md「体检报告」), not the temp directory.
     private var uploadDest: String? { model.session(key)?.isHealth == true ? Session.healthSpace : nil }
 
@@ -4194,6 +4206,43 @@ struct Composer: View, Equatable {
         focused = true
     }
 
+    /// The `@word` before the caret, for the @ list (`ComposerMentionMenu`, #2319): in the shell's composer while it has
+    /// the keyboard, an agent's chat and Persona's alike, as on the web.
+    private var mentionToken: MentionToken? {
+        guard usesShellComposer, focused else { return nil }
+        #if os(iOS) || os(visionOS)
+        if TypedText.composingFocused { return nil } // Pinyin still marked: the list waits for the confirmed words
+        #endif
+        return MentionToken.at(text, selection: selection)
+    }
+
+    /// What the @ list offers here: this chat's files and its session's folder, then the other sessions.
+    private var mentionSource: MentionSource {
+        MentionSource(machine: key.machineRef, cwd: model.session(key)?.cwd,
+                      files: { MentionRows.usedPaths(model.chat(key).items) }, except: key)
+    }
+
+    /// The + menu's Mention: `@` at the caret, which opens the @ list (the web's @ button beside +).
+    private var mentionMenuItem: some View {
+        Button { typeMention() } label: { Label("Mention a File or Session", systemImage: Theme.Icon.mention).lineLimit(1) }
+            .accessibilityIdentifier("composer-menu-mention")
+    }
+
+    private func typeMention() {
+        // An unfocused field's selection is stale (`PathInsert.edit`): then at the end.
+        let caret = focused ? PathInsert.range(selection, in: text)?.lowerBound : nil
+        let r = MentionToken.typing(in: text, caret: caret ?? text.utf16.count)
+        text = r.text
+        selection = .cursor(utf16: r.caret)
+        focused = true
+    }
+
+    /// A session picked in the @ list: quoted over the box, once.
+    private func quoteMention(_ ref: ContextRef) {
+        guard !contexts.wrappedValue.contains(where: { $0.url == ref.url }) else { return }
+        contexts.wrappedValue.append(ref)
+    }
+
     /// Effort and permission mode can change: Claude Code and the assistant (`SessionModeBar` shows them for the same).
     private var setsModes: Bool {
         guard let s = model.session(key) else { return false }
@@ -4252,7 +4301,10 @@ struct Composer: View, Equatable {
         let call = voiceCall
         let inCall = call.map { !$0.isOver } ?? false
         return VStack(spacing: Theme.Space.s) {
-            if let s = model.session(key), s.starting == true || s.startError != nil {
+            if let m = offlineManager {
+                ManagerOfflineNote(manager: m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let s = model.session(key), s.starting == true || s.startError != nil {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
@@ -4312,6 +4364,10 @@ struct Composer: View, Equatable {
                     SlashMenu(rows: slash, pick: pickSlash)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
+                if let token = mentionToken {
+                    ComposerMentionMenu(token: token, text: textBinding, selection: $selection, source: mentionSource, quote: quoteMention)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             // A call that ended by itself: 「语音已结束 · 继续」 over the box, until the page goes (docs/assistant/voice.md 1.2 L).
             if let call, call.isOver, case .ended(let end) = call.phase, let note = VoiceEndNote.make(end, extensionID: call.extensionID) {
@@ -4343,6 +4399,7 @@ struct Composer: View, Equatable {
                         Button { showGlasses = true } label: { Label("Glasses Photo", systemImage: Theme.Icon.glasses).lineLimit(1) }
                     }
                     Button { showFiles = true } label: { Label("Files", systemImage: Theme.Icon.file) }
+                    mentionMenuItem
                     voiceMenuItem
                     extensionPrompts
                     if !shellChat { quickCommands } // an agent's, as its composer offered them before the shell's
@@ -4452,6 +4509,13 @@ struct Composer: View, Equatable {
             try? await Task.sleep(for: .seconds(4))
             text = "/"
         }
+        .task { // `-openMentionMenu @Sources/`: that draft ("@" for any other value) with the keyboard up and its @ list open (#2319, screenshots)
+            guard let draft = UserDefaults.standard.string(forKey: "openMentionMenu") else { return }
+            try? await Task.sleep(for: .seconds(4))
+            text = draft.hasPrefix("@") ? draft : "@"
+            selection = .cursor(utf16: text.utf16.count)
+            focused = true
+        }
         .task { // `-showLoopDraft "/loop 10m check CI"`: that draft in the box, with its line (#2601, screenshots)
             guard let draft = UserDefaults.standard.string(forKey: "showLoopDraft") else { return }
             try? await Task.sleep(for: .seconds(4))
@@ -4467,6 +4531,7 @@ struct Composer: View, Equatable {
         #endif
         .animation(Theme.Motion.standard, value: suggestion)
         .animation(Theme.Motion.standard, value: slashRows.isEmpty)
+        .animation(Theme.Motion.standard, value: mentionToken == nil)
         .onChange(of: focused) { _, f in onFocus?(f) }
         .onDisappear { if focused { onFocus?(false) } } // gone with the keyboard (a subagent opened, another pane)
         .modifier(CompactionTracking(key: key))
@@ -4579,10 +4644,7 @@ struct Composer: View, Equatable {
         .fullScreenCover(item: Binding(get: { editingIndex.map(EditIndex.init) }, set: { if $0 == nil { editingIndex = nil } })) { e in
             if images.indices.contains(e.id) {
                 ImageEditor(image: images[e.id].0) { edited in
-                    let scaled = edited.scaledDown(maxSide: 1600)
-                    if let jpeg = scaled.jpegData(compressionQuality: 0.75), images.indices.contains(e.id) {
-                        images[e.id] = (scaled, ImagePayload(mime: "image/jpeg", data: jpeg.base64EncodedString()))
-                    }
+                    if let p = MessagePhotos.payload(edited), images.indices.contains(e.id) { images[e.id] = p }
                 }
             }
         }
@@ -4640,32 +4702,11 @@ struct Composer: View, Equatable {
     private func load(_ items: [PhotosPickerItem]) async {
         let movies = items.filter(PickedMovie.isVideo) // sent as files (VideoAttach.swift)
         if !movies.isEmpty { videos.start(movies, machine: key.machineRef, model: model) }
-        var failed = 0
-        for item in items where !PickedMovie.isVideo(item) {
-            // iCloud-only photos are downloaded here; HEIC and others are re-encoded to JPEG below.
-            guard let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) else {
-                failed += 1
-                continue
-            }
-            add(img)
-        }
+        await MessagePhotos.load(items.filter { !PickedMovie.isVideo($0) }, model: model) { add($0) }
         picks = []
-        if failed > 0 {
-            model.toast = Toast(String(localized: "Couldn't read \(failed) photos (they may still be downloading from iCloud) [Chat View 5712c0]"), style: .error)
-        }
     }
 
-    private func add(_ img: UIImage) {
-        guard images.count < 4 else {
-            model.toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
-            return
-        }
-        let scaled = img.scaledDown(maxSide: 1600)
-        if let jpeg = scaled.jpegData(compressionQuality: 0.75) {
-            images.append((scaled, ImagePayload(mime: "image/jpeg", data: jpeg.base64EncodedString())))
-            Haptics.tap()
-        }
-    }
+    private func add(_ img: UIImage) { MessagePhotos.add(img, to: &images, model: model) }
 }
 
 /// The composer's "/" menu: Claude Code's own commands, and Persona' quick messages under a short word. Picking one
