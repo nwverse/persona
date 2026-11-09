@@ -13,6 +13,14 @@ describe("baseOf", () => {
     expect(baseOf("/persona/")).toBe("/persona");
     expect(baseOf("/a/b/")).toBe("/a/b");
   });
+  it("uses only the pathname of an absolute URL and removes every trailing slash", () => {
+    expect(baseOf("https://hub.example.com/a/b///?view=chat#latest")).toBe("/a/b");
+    expect(baseOf("https://hub.example.com/?view=chat#latest")).toBe("");
+  });
+  it("falls back to the root for an invalid URL", () => {
+    expect(baseOf("https://[invalid")).toBe("");
+    expect(baseOf(undefined)).toBe("");
+  });
 });
 
 describe("stripBase", () => {
