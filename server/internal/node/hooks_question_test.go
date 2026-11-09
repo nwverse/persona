@@ -313,6 +313,75 @@ func TestClaudeQuestionReplayAheadStillKeepsTerminalAnswer(t *testing.T) {
 	}
 }
 
+// A delayed replay is older than a live PreToolUse even though it arrives later; it must not take the live call's id.
+func TestClaudeQuestionReplayDoesNotTakeLivePendingID(t *testing.T) {
+	n := codexTestNode(t)
+	fh := withFakeHub(t, n)
+	fh.answer = func(proto.Interaction) proto.Resolution {
+		return proto.Resolution{Answers: map[string]string{"Which?": "A"}}
+	}
+	n.logger = log.New(io.Discard, "", 0)
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	oldPre := questionHookInput("PreToolUse", input, "toolu_old", "")
+	oldPermission := questionHookInput("PermissionRequest", input, "", "")
+	postInput, _ := json.Marshal(map[string]any{"questions": questions, "answers": map[string]string{"Which?": "A"}})
+	oldPost := questionHookInput("PostToolUse", postInput, "toolu_old", "")
+	sp := openSpool(filepath.Join(t.TempDir(), spoolFile))
+	for i, raw := range []json.RawMessage{oldPre, oldPermission, oldPost} {
+		if _, err := sp.add(spoolEntry{ID: string(rune('a' + i)), At: time.Now().Add(-time.Minute), Kind: "hook",
+			Request: sockRequest{Kind: "hook", Input: raw, Attempt: "a1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	livePre := questionHookInput("PreToolUse", input, "toolu_live", "")
+	if _, err := n.handleHook(context.Background(), sockRequest{Input: livePre}); err != nil {
+		t.Fatal(err)
+	}
+	n.ahead.note(sockRequest{Kind: "hook", Input: livePre})
+	n.replayed, n.stateReady = make(chan struct{}), make(chan struct{})
+	close(n.stateReady)
+	n.replaySpool(context.Background(), sp)
+	livePermission := questionHookInput("PermissionRequest", input, "", "")
+	out, err := n.handleHook(context.Background(), sockRequest{Input: livePermission, Attempt: "a2"})
+	if err != nil || out == nil {
+		t.Fatalf("the old replay consumed the live question's id: %v, %v", out, err)
+	}
+	cards := fh.interactions()
+	if len(cards) != 1 || cards[0].ToolUseID != "toolu_live" {
+		t.Fatalf("the live question was paired to a replayed call: %+v", cards)
+	}
+}
+
+// Without a PreToolUse pairing, an id-less PostToolUse is not evidence about any waiting question.
+func TestClaudeQuestionEmptyPostIDDoesNotCancelUnknownWaiter(t *testing.T) {
+	n := codexTestNode(t)
+	h := withCancelHub(t, n)
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	permission := questionHookInput("PermissionRequest", input, "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan any, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		out, _ := n.handleHook(ctx, sockRequest{Input: permission, Attempt: "a1"})
+		done <- out
+	}()
+	defer func() { cancel(); <-finished }()
+	waitFor(t, "the unpaired card", func() bool { asked, _ := h.counts(); return asked == 1 })
+	postInput, _ := json.Marshal(map[string]any{"questions": questions, "answers": map[string]string{"Which?": "A"}})
+	post := questionHookInput("PostToolUse", postInput, "", "")
+	if _, err := n.handleHook(context.Background(), sockRequest{Input: post}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case out := <-done:
+		t.Fatalf("an empty PostToolUse id cancelled an unknown waiter: %v", out)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestClaudeQuestionLateReceiptDoesNotCancelNextIdenticalQuestion(t *testing.T) {
 	fakeAgent(t)
 	n := codexTestNode(t)

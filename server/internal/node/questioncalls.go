@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -95,6 +96,8 @@ func (q *questionCalls) before(in hookInput, now time.Time) {
 		q.pending = map[string][]questionID{}
 	}
 	q.pending[key] = append(q.pending[key], questionID{id: in.ToolUseID, at: now})
+	// A delayed replay carries the event's original time: it belongs before a live PreToolUse that arrived first.
+	sort.SliceStable(q.pending[key], func(i, j int) bool { return q.pending[key][i].at.Before(q.pending[key][j].at) })
 }
 
 // pair returns this PermissionRequest's id. A resumed attempt reuses its assignment and never consumes the next
@@ -224,6 +227,9 @@ func (q *questionCalls) watch(ctx context.Context, in hookInput, attempt string,
 // complete records PostToolUse by exact id, canceling every overlapping waiter of that call. The receipt is also kept for a PermissionRequest
 // or replay that has not arrived yet; a different identical question has a different id and is unaffected.
 func (q *questionCalls) complete(in hookInput, now time.Time) {
+	if in.ToolUseID == "" {
+		return // no id is never evidence about an unpaired waiter
+	}
 	key, id := permissionKey(in), in.ToolUseID
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -234,10 +240,8 @@ func (q *questionCalls) complete(in hookInput, now time.Time) {
 			w.cancel()
 		}
 	}
-	if id != "" {
-		if q.completed == nil {
-			q.completed = map[string]time.Time{}
-		}
-		q.completed[key+"\x00"+id] = now
+	if q.completed == nil {
+		q.completed = map[string]time.Time{}
 	}
+	q.completed[key+"\x00"+id] = now
 }

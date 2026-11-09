@@ -93,17 +93,46 @@ func TestClaudeQuestionResumeAfterNodeReplacementUsesTranscript(t *testing.T) {
 // If the terminal answered while no manager was available, Resume sees the result and creates no stale card.
 func TestClaudeQuestionResumeAfterNodeReplacementSeesTerminalResult(t *testing.T) {
 	n := codexTestNode(t)
-	fh := withFakeHub(t, n)
-	fh.answer = func(proto.Interaction) proto.Resolution {
-		return proto.Resolution{Answers: map[string]string{"Which?": "A"}}
-	}
+	h := withCancelHub(t, n)
 	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
 	input, _ := json.Marshal(map[string]any{"questions": questions})
 	path := writeQuestionTranscript(t, input, "toolu_finished", true)
 	permission := questionHookInput("PermissionRequest", input, "", path)
 	out, err := n.handleHook(context.Background(), sockRequest{Input: permission, Attempt: "a1", Resume: true})
-	if err != nil || out != nil || len(fh.interactions()) != 0 {
-		t.Fatalf("the transcript's terminal result was ignored: %v, %v (cards=%d)", out, err, len(fh.interactions()))
+	waitFor(t, "the restored card to be withdrawn", func() bool { _, cancelled := h.counts(); return cancelled == 1 })
+	asked, cancelled := h.counts()
+	if err != nil || out != nil || asked != 0 || cancelled != 1 {
+		t.Fatalf("the restored card was not withdrawn without a new card: %v, %v (asked=%d cancelled=%d)", out, err, asked, cancelled)
+	}
+}
+
+// A completed older question and an outstanding identical one do not say which call a resumed attempt belongs to.
+func TestClaudeQuestionResumeWithIdenticalTranscriptCallsDoesNotGuess(t *testing.T) {
+	n := codexTestNode(t)
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	path := writeQuestionTranscript(t, input, "toolu_old", true)
+	record := map[string]any{
+		"type": "assistant", "sessionId": decidedSession, "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"message": map[string]any{"role": "assistant", "content": []any{map[string]any{
+			"type": "tool_use", "id": "toolu_new", "name": "AskUserQuestion", "input": json.RawMessage(input),
+		}}},
+	}
+	line, _ := json.Marshal(record)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.Write(append(line, '\n'))
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := hookInput{HookEventName: "PermissionRequest", SessionID: decidedSession, ToolName: "AskUserQuestion",
+		ToolInput: input, TranscriptPath: path}
+	n.rememberTranscript(in)
+	if id, completed := n.questionFromTranscript(in); id != "" {
+		t.Fatalf("ambiguous identical calls were attributed to %q (completed=%v)", id, completed)
 	}
 }
 

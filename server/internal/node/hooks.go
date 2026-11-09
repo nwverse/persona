@@ -469,6 +469,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		answered := func() bool { return otherAnswered() || questionAnswered() }
 		ix.ToolUseID = toolUseID
 		if n.decided.grace(ctx, answered) {
+			if questionAnswered() {
+				// No new ask means askOnce cannot withdraw the resumable card retained by the hub (#2382).
+				_ = n.peer.Notify("interaction.cancel", map[string]any{"id": ix.ID})
+			}
 			return nil, nil
 		}
 		res, ok, err := n.ask(ctx, ix)
