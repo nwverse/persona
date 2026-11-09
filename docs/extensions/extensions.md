@@ -2385,7 +2385,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   Extensions awaiting consent append "· New version needs approval" to their status. Mock hub `MOCK_PLUGIN_UPGRADE` (`needs_permission` (default) / `waiting_idle` / `skipped` / `upgraded`)
   determines `example-gateway`'s state; UI tests `ExtensionMarketTests.testAutoUpgrade`, `testAutoUpgradeForAll`, unit test `ExtensionUpgradeTests`.
 - Screenshots: the `MOCK_EXTENSIONS=1` mock hub (like a new hub: reports `extensions` and `extension_*`, returns new keys on `/api/v1/extensions/…`; add `MOCK_EXTENSIONS_LEGACY=1` for a pre-rename hub) has five sample extensions with different states, plus `example-gateway` pages and a launcher section (and one always returning unsupported),
-  two marketplaces and their catalogs; `-tab settings -openExtensions YES` (`-openExtension <id>` opens details directly, add `-openExtensionPage <ui>` for its page; old `-openPlugin…` forms still work),
+  two marketplaces and their catalogs; `-tab settings -openExtensions YES` (`-openExtension <id>` opens details directly, add `-openExtensionPage <ui>` for its page and `-openExtensionManager <id>` for another manager's copy; old `-openPlugin…` forms still work),
   `-openExtensionMarket YES` (catalog), `-openExtensionMarkets YES` (marketplace management), `-openMarketExtension <marketplace id>/<extension id>`, `-openLauncherPage <launcher>`.
   UI slots: `-tab settings` shows cards and entries; `-openExtension example-gateway -openExtensionPage usage` opens usage; `-openMachines YES -openMachineDetail macbook`
   shows the machine section. Mac uses `scripts/app/mac_shot.sh` (`DEMO=0` plus `-pairURL`); `-openMacExtensionPage example-gateway/usage` opens that sidebar page.
