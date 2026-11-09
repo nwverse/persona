@@ -14,9 +14,11 @@ Regression tests must observe the state while the request is blocked as well as
 after success or failure; checking only the final state misses a transient
 `checking` event that already hid the progress in every client.
 
-In timer tests, `synctest.Wait` synchronizes completed work, but a counter read
-before the next timer still needs synchronization with that timer's write. Use an
-atomic request counter and run the regression tests with the race detector.
+In timer tests, wait on a request channel with a timeout and assert the request's
+timestamp, then use `synctest.Wait` before inspecting the completed result. This
+synchronizes the observation without fixed sleeps or a shared request counter.
+Even inside `synctest`, new `time.Sleep` calls fail the repository's sleep ratchet;
+run `scripts/ci/guards.sh` as well as the server build and race checks.
 
 ## Model connection tests must match the runtime (#1732)
 

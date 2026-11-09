@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -57,9 +56,9 @@ func TestUpdateCheckLoopPreservesInstall(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					var calls atomic.Int32
+					checks := make(chan time.Time, 4)
 					u.client = &http.Client{Transport: updateLoopTransport(func(r *http.Request) (*http.Response, error) {
-						calls.Add(1)
+						checks <- time.Now()
 						if r.URL.Path != "/dl/latest.json" {
 							t.Errorf("check started another install: %s", r.URL.Path)
 						}
@@ -69,18 +68,25 @@ func TestUpdateCheckLoopPreservesInstall(t *testing.T) {
 						}
 						return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(data))), Request: r}, nil
 					})}
+					wantCheck := time.Now()
 					go u.loop(ctx)
 					synctest.Wait()
 					for i, wait := range []time.Duration{updateFirstCheck, updateCheckEvery} {
-						time.Sleep(wait - time.Nanosecond)
-						synctest.Wait()
-						if got := calls.Load(); got != int32(i) {
-							t.Fatalf("check %d ran early: %d requests", i+1, got)
+						wantCheck = wantCheck.Add(wait)
+						// Waiting for the request lets synctest advance time to the loop's timer.
+						select {
+						case at := <-checks:
+							if !at.Equal(wantCheck) {
+								t.Fatalf("check %d ran at %v, want %v", i+1, at, wantCheck)
+							}
+						case <-time.After(wait + updateRequestLimit):
+							t.Fatalf("check %d did not run", i+1)
 						}
-						time.Sleep(time.Nanosecond)
 						synctest.Wait()
-						if got := calls.Load(); got != int32(i+1) {
-							t.Fatalf("check %d: got %d requests", i+1, got)
+						select {
+						case at := <-checks:
+							t.Fatalf("unexpected extra check at %v", at)
+						default:
 						}
 						v := u.view()
 						assertUpdateInstallView(t, v, before)
