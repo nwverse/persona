@@ -226,10 +226,13 @@ func TestAttachedPackageKeepsItsPackageAndGetsAScopedToken(t *testing.T) {
 
 // The details say where an extension's data is on the manager's machine, the directory its program is given there, to
 // the master token over loopback and to the admin UI, and still while its package is attached; never to a device or to
-// the master token from another machine, and not for one installed from remote:, which the manager never runs.
+// the master token from another machine, and not for one the manager never gives one: installed from remote:, from
+// hub.json, or with no program.
 func TestExtensionDetailsDataDirForTheOwnerOnly(t *testing.T) {
 	shortHostTimings(t)
-	h, _ := extensionTestHub(t)
+	h := newTestManager(t)
+	h.store = newExtensionStore()
+	startTestExtensions(t, h, ExtensionConfig{ID: "voice", Name: "Voice", Kind: "voice", Socket: "/nonexistent/data-dir-test.sock"})
 	mux := adminRoutes(h)
 	master := h.cfg.Token
 	manifest := installAttachable(t, h, mux)
@@ -295,6 +298,19 @@ func TestExtensionDetailsDataDirForTheOwnerOnly(t *testing.T) {
 	}
 	if got := dataDir(call(t, mux, "GET", "/api/v1/extensions/example-remote/-/", master, "")); got != nil {
 		t.Fatalf("installed from remote: %v", got)
+	}
+
+	if got := dataDir(call(t, mux, "GET", "/api/v1/extensions/voice/-/", master, "")); got != nil {
+		t.Fatalf("hub.json's: %v", got)
+	}
+	declarative := t.TempDir()
+	if err := os.WriteFile(filepath.Join(declarative, extension.ManifestFile), []byte(`{"manifest_version": 1, "id": "example-models", "name": "Example Models", "version": "1.0.0",
+		"contributes": {"providers": [{"id": "fast", "name": "Fast", "base_url": "https://fast.example.com"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	installForTest(t, h, declarative)
+	if got := dataDir(call(t, mux, "GET", "/api/v1/extensions/example-models/-/", master, "")); got != nil {
+		t.Fatalf("no program: %v", got)
 	}
 }
 
