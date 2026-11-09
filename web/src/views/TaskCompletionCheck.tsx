@@ -94,9 +94,11 @@ export function CompletionCheckResult({ check, at }: { check: TaskDoneCheck; at:
         ? t(labelKey(skipKeys, check.skip, "todos.check_skip_unknown"))
         : t(check.verdict === "done" && check.would_close ? "todos.check_would_close" : "todos.check_would_not_close")}</p>
       {delivery && <div className="space-y-1">
-        <p>{t("todos.check_delivery", { state: t(labelKey(deliveryKeys, delivery.state, "todos.check_delivery_unknown")) })}</p>
+        {/* Who can clear it reads as the list row does ("Stopped at a PR · needs your OK"); an unknown owner is a sentence of its own. */}
+        <p>{t("todos.check_delivery", { state: t(labelKey(deliveryKeys, delivery.state, "todos.check_delivery_unknown")) })}
+          {delivery.unblock && Object.hasOwn(unblockKeys, delivery.unblock) && <> · {t(unblockKeys[delivery.unblock])}</>}</p>
         {delivery.gate && <p className="whitespace-pre-wrap select-text">{t("todos.check_blocker", { gate: delivery.gate })}</p>}
-        {delivery.unblock && <p>{t(labelKey(unblockKeys, delivery.unblock, "todos.check_unblock_unknown"))}</p>}
+        {delivery.unblock && !Object.hasOwn(unblockKeys, delivery.unblock) && <p>{t("todos.check_unblock_unknown")}</p>}
       </div>}
     </div>
   );

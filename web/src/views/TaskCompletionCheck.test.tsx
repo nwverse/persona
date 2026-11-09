@@ -120,9 +120,8 @@ describe("task detail completion check with the real REST client", () => {
     ["merged", "Merged, not live"], ["off", "Live, off by default"], ["future_state", "Not established"], ["__proto__", "Not established"],
   ])("shows diagnostic delivery %s and its blocker", async (state, label) => {
     await render(); await click(); await answer({ ...completed, delivery: { state, gate: "Synthetic review gate", unblock: "other" } });
-    expect(result()?.textContent).toContain(`Delivery: ${label}`);
+    expect(result()?.textContent).toContain(`Delivery: ${label} · waiting on others`); // as the list row reads it
     expect(result()?.textContent).toContain("Blocked on: Synthetic review gate");
-    expect(result()?.textContent).toContain("waiting on others");
   });
 
   it.each([["user", "needs your OK"], ["agent", "the agent can go on"], ["future_owner", "not established"], ["toString", "not established"]])("explains blocker owner %s", async (unblock, text) => {

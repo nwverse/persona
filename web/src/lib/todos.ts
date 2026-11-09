@@ -35,8 +35,6 @@ export interface TodoSpace {
 
 export interface Todo {
   id: string;
-  /** Owner stamped on the hub's merged task list; absent means the default manager. */
-  manager?: string;
   title: string;
   notes?: string;
   /** The manager that owns this to-do on a multi-manager hub. */
