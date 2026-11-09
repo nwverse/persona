@@ -22,7 +22,7 @@ import (
 // scan, sums it per minute and model for the last usageWindow, and reports changed minutes to the hub as "usage".
 // A node starts with the hub connection, so a fresh meter re-reads the window from the files and sends it whole
 // ("full"): nothing is stored, and restarting either side recounts the same numbers; the manager keeps the week
-// (docs/server/machines.md「Token 用量」).
+// (docs/server/machines.md "Token usage").
 //
 // Each bucket also says which launcher ran it (the session's, as Persona started it; "" for one typed in a terminal),
 // and a reply is counted once in the window even when it is in more than one file: a fork (Claude Code's

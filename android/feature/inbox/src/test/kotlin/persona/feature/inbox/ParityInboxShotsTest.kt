@@ -82,7 +82,7 @@ class ParityInboxShotsTest {
         override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) = Unit
         override suspend fun reply(target: ReplyTarget, request: ReplyRequest) = Unit
         override suspend fun downloadFile(file: LarkPart.File): String = error("not used")
-        override suspend fun inboxMutes() = listOf(
+        override suspend fun inboxMutes(manager: String?) = listOf(
             InboxMute("m1", "github", "GitHub", "repo", "example-org/example-repo", "example-org/example-repo", "2026-11-04T09:00:00Z"),
             InboxMute("m2", "lark", "飞书", "chat", "oc_1", "周末徒步群", "2026-11-03T09:00:00Z"),
             InboxMute("m3", "mail", "me@example.com", "sender", "news@example.com", "news@example.com"))
@@ -92,9 +92,9 @@ class ParityInboxShotsTest {
             LarkChatPin("p3", "m3", null, deleted = true),
         ), nextCursor = "c2", total = 5)
         var policies = rules
-        override suspend fun inboxPolicies(record: InboxRecord?) = policies
+        override suspend fun inboxPolicies(record: InboxRecord?, manager: String?) = policies
         override suspend fun savePolicy(target: InboxPolicyTarget, tier: InboxPolicyTier, twin: InboxPolicyTwin): InboxPolicy? = null
-        override suspend fun removePolicy(id: String) = Unit
+        override suspend fun removePolicy(id: String, manager: String?) = Unit
     }
 
     private val rules = listOf(

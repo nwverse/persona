@@ -50,6 +50,10 @@
   "try_anyway": "それでも使う",
   "close_help": "閉じる",
   "forget_failed": "「{id}」を削除できませんでした：{error}",
+  "recent_setups": "最近",
+  "recent_options": "最近の設定のオプション",
+  "recent_remove": "最近から削除",
+  "recent_clear": "最近の設定を消去",
   "preset": "プリセット",
   "preset_hint": "{profile} から：ランチャー、モデル、思考の強さをまとめて入力します。あとから変更できます。",
   "preset_left_out": "ここでは使えません：{what}。ランチャーやモデル自身の設定で動きます。"

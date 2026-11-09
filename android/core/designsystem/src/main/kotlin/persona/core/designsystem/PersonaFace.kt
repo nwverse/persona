@@ -351,5 +351,5 @@ fun JPersonaButton(state: PersonaState, contentDescription: String, onClick: () 
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { this.contentDescription = contentDescription; stateDescription = stateText },
         contentAlignment = Alignment.Center,
-    ) { PersonaFace(state, size = 40.dp) }
+    ) { PersonaFace(state, size = if (LocalHomeChrome.current != null && PersonaTheme.style == AppStyle.Glass) HomeTokens.homeFaceSize else 40.dp) }
 }

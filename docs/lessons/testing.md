@@ -1,5 +1,10 @@
 # Lessons: testing and validation
 
+- UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
+  notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
+  language's permission button, assert that the summary and reply are hittable, check for system alerts before
+  capturing, and actually inspect every image before publication.
+
 - A second failed start inside the automatic launcher-health throttle does not schedule another probe (#2600). A retry fixture that models recovery must invoke the supported explicit health check and observe its passing record; polling the record alone cannot create recovery. Keep the production throttle, terminal-only failure rules, and retry assertions unchanged.
 
 - On Linux, replacing a running executable requires a new file and rename; direct writes fail with `ETXTBSY`. Use a ready handshake and reap the fixture process to test the real overlap.
@@ -570,6 +575,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 ## Lazy timelines: unscrolled rows do not exist, and identical text may occur elsewhere (2026-11-04, #1055)
 
 - GitHub thread timelines use `LazyVStack`; the bottom comment is absent from accessibility until scrolled into view, so `waitForExistence` alone waits in vain.
+  Settings forms are the same: an extension's field below the fold (cua's no-auto-lock list, #2446) exists only once scrolled to, so scroll first, then assert.
 - Retained navigation pages may keep Inbox in the tree, whose comment preview has the same text. Text waits accidentally passed in Liquid Glass but failed in BeautifulUI's different previews.
 - Wait for page-specific elements (header), then search row identifiers (`github.entry.<id>`) while swiping up. Before screenshots, move the target into the upper half;
   otherwise "one row barely visible" counts as found and several screenshots capture the same screen.
@@ -586,6 +592,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 
 - **Container `accessibilityIdentifier` overrides its children's identifiers**: identifying a row `VStack` made its `Menu` `market-menu-…` unfindable. Identify only clickable controls,
   or first apply `.accessibilityElement(children: .contain)` to the container.
+  Again in an extension's machine list (#2446): the field row's `plugin-field-…` replaced each Mac's `extension-machine-setup-<id>`; the row now leaves the identifier to the list's title and switches.
 - **A `lineLimit`-cut `Text` still reads in full to XCUITest**: its label is the whole string, so "the last line is not there" never proves folding (#1666, `NewChatLayoutTests`). Assert the fold's control (Expand) and look at the screenshot.
 - **First taps just after sheet dismissal can be swallowed** (keyboard focus is still settling). Immediately tapping a list button after form Add does nothing, with no confirmation dialog.
   Wait for sheet-field `waitForNonExistence`, tap a harmless button (Refresh) first, then the target button.
@@ -711,6 +718,10 @@ The Mac-only `test_hub_restart_mac.py` fixture used an empty, non-executable `pe
 
 Use an executable fixture that logs calls and returns the documented result: 0 for a successful switch, 3 for no edge to switch. Assert that success avoids launchd and that the no-edge case restarts only the hub agent, skipping node agents. Run this Mac-only suite on macOS; Linux CI skips it: `cd scripts/test && python3 -B -m unittest -v test_hub_restart_mac`.
 
+## macOS awk stops on bytes that are not UTF-8 (2026-11-10, #2722)
+
+In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first invalid byte sequence with `towc: multibyte conversion failure`, prints the record's raw bytes and exits 2; gawk and mawk on Linux read on, so CI never sees it. `install.sh` read every launchd file with awk, and vendors often ship binary property lists: each printed its bytes, and the Python tests reading the script's output with `text=True` crashed with `UnicodeDecodeError`. An awk that reads files it did not write runs with `LC_ALL=C`; plain substring matches mean the same in bytes. The Mac in hand may have no binary plist at all: the regression test writes one with `plistlib` (`FMT_BINARY`) into its own home.
+
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 
 `go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use `-tags public`) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
@@ -776,3 +787,5 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - `MOCK_INBOX_EVENTS=1` replaces the whole `INBOX` fixture list, including the sample mail `mail:acc1:t1:501` used by `NewConversationEntryTests`. Do not combine it with `MOCK_SOURCES=1` for those tests: the cached page may still open, but every `GET /api/v1/inbox/{id}` then returns 404. Check that direct GET before debugging the sheet.
 - On iOS 27 a SwiftUI sheet need not appear as an accessibility `Sheet`; `app.sheets.firstMatch` can be empty while its Send button exists. An app-wide label `firstMatch` can instead hit the same Agent title in the inbox behind the sheet. Pick a unique visible fixture title, terminate the app after each case, and inspect the actual hierarchy rather than assuming the sheet type.
 - The mock must implement the same single-item `POST /api/v1/inbox/{id}/done` route as the hub when a test asserts filing. A 404 makes `InboxStore` roll back its optimistic Done; polling cannot turn that into a pass. Reset the item before each case and poll the server after the successful send because filing is asynchronous.
+
+- Presence tests wait for the existing state notification or report-request counter before checking the result (#2820). A negative observation keeps its entire window and fails immediately on an early result; it does not prove an unobservable internal wait has started. A wall-clock-seeded connection number needs a bounded check of that actual clock boundary, not a fixed startup delay.

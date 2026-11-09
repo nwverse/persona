@@ -1116,6 +1116,7 @@ func weekdayText(ds []int) string {
 // Run runs what the assistant does on its own until ctx ends: the scheduled tasks, closing finished tasks' agents, the
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
+	s.running.Store(&ctx)
 	go s.taskCloseLoop(ctx)    // the agents of finished tasks (tasks_close.go)
 	go s.superviseLoop(ctx)    // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)

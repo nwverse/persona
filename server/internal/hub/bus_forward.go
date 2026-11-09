@@ -25,8 +25,8 @@ import (
 //
 // header maps a name to its values; body is base64 (JSON []byte); status 0 is 200, and one outside 200-599 reaches the
 // app as a 502. X-Persona-Role carries the role of the device that asked, as the hub's auth found it (any the app sent
-// is replaced). forwardHTTP is the codec of the assistant's Handler.ServeHTTP over the bus, relayBroadcast the hub's
-// side of its Broadcast.
+// is replaced). forwardHTTP is the codec of the assistant's Handler.ServeHTTP over the bus, relayBroadcastFrom the
+// hub's side of its Broadcast.
 
 func init() { handleBusEvent(assistantwire.EventBroadcast, (*Hub).busBroadcast) }
 
