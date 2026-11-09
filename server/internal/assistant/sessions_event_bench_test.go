@@ -14,6 +14,14 @@ import (
 // BenchmarkSessionsChangedEvent: a node's sessions.changed for 300 sessions as the assistant takes it (the devices
 // have the list already, as in production).
 func BenchmarkSessionsChangedEvent(b *testing.B) {
+	s, params := sessionsChangedOf()
+	b.ReportAllocs()
+	for b.Loop() {
+		s.NodeEvent("mac", "sessions.changed", params)
+	}
+}
+
+func sessionsChangedOf() (*Service, []byte) {
 	f := newFakeHub()
 	d := newFleetDevs()
 	d.add("mac", "Mac")
@@ -26,9 +34,28 @@ func BenchmarkSessionsChangedEvent(b *testing.B) {
 	}
 	params, _ := json.Marshal(map[string]any{"sessions": list})
 	d.setSessions("mac", list)
-	b.ReportAllocs()
-	for b.Loop() {
+	return s, params
+}
+
+// The manager keeps of each list only what it reads again (#2472): about 995 KB an event measured, where copies of the
+// previous list, the reply reminders' rows and the herdr marks' list made it 1.92 MB.
+func TestSessionsChangedEventKeepsLittle(t *testing.T) {
+	if !isolated(t) {
+		return
+	}
+	s, params := sessionsChangedOf()
+	s.NodeEvent("mac", "sessions.changed", params)
+	const runs = 200
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
 		s.NodeEvent("mac", "sessions.changed", params)
+	}
+	runtime.ReadMemStats(&after)
+	per := (after.TotalAlloc - before.TotalAlloc) / runs
+	if per > 1025000 {
+		t.Fatalf("one sessions.changed allocated %d bytes, want at most 1025000", per)
 	}
 }
 
@@ -119,6 +146,9 @@ func BenchmarkDecoratedSession(b *testing.B) {
 // A finished turn's push decorates only its own row, not its machine's whole list (#2472): about 680 bytes a lookup
 // measured, where decorating the 50 sessions was 85.7 KB.
 func TestDecoratedSessionDecoratesOneRow(t *testing.T) {
+	if !isolated(t) {
+		return
+	}
 	s, sid := decoratedOf(t)
 	const runs = 2000
 	runtime.GC()
