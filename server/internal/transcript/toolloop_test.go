@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func loopClaude(d *LoopDetector, n int, tool string, input any, result string, at time.Time) {
+func loopMessage(d *LoopDetector, n int, tool string, input any, result string, at time.Time) {
 	call, _ := json.Marshal(map[string]any{"type": "assistant", "timestamp": at, "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "id": fmt.Sprint(n), "name": tool, "input": input}}}})
 	out, _ := json.Marshal(map[string]any{"type": "user", "timestamp": at, "message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "tool_use_id": fmt.Sprint(n), "content": result}}}})
 	d.Line(call)
@@ -40,7 +40,7 @@ func TestToolLoopPatterns(t *testing.T) {
 				if tc.results != nil {
 					result = tc.results[i]
 				}
-				loopClaude(&d, i, tool, map[string]any{"file_path": "file.go"}, result, start.Add(time.Duration(i)*tc.step))
+				loopMessage(&d, i, tool, map[string]any{"file_path": "file.go"}, result, start.Add(time.Duration(i)*tc.step))
 			}
 			got := d.Candidate()
 			if tc.count == 0 {
@@ -60,7 +60,7 @@ func TestToolLoopCeilingAndReset(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var d LoopDetector
 	for i := 0; i < 120; i++ {
-		loopClaude(&d, i, "Read", map[string]any{"file_path": "a"}, "same", start.Add(time.Duration(i)*time.Second))
+		loopMessage(&d, i, "Read", map[string]any{"file_path": "a"}, "same", start.Add(time.Duration(i)*time.Second))
 	}
 	if got := d.Candidate(); got == nil || got.Count != 120 || !got.Since.Equal(start) {
 		t.Fatalf("candidate = %+v", got)
@@ -81,7 +81,7 @@ func TestToolLoopPollingAndPrivateData(t *testing.T) {
 	for _, command := range []string{"gh pr checks 42", "gh run view 1", "tail -n 10 server.log", "sleep 1", "while true; do sleep 1; done", "journalctl -f", "docker logs job", "gh api repos/demo/repo/check-runs"} {
 		var d LoopDetector
 		for i := 0; i < 5; i++ {
-			loopClaude(&d, i, "Bash", map[string]any{"command": command}, "same", start.Add(time.Duration(i)*time.Second))
+			loopMessage(&d, i, "Bash", map[string]any{"command": command}, "same", start.Add(time.Duration(i)*time.Second))
 		}
 		if got := d.Candidate(); got != nil {
 			t.Fatalf("polling %q: %+v", command, got)
@@ -89,7 +89,7 @@ func TestToolLoopPollingAndPrivateData(t *testing.T) {
 	}
 	var d LoopDetector
 	for i := 0; i < 4; i++ {
-		loopClaude(&d, i, "Read", map[string]any{"file_path": "private-input"}, "private-output", start.Add(time.Duration(i)*time.Second))
+		loopMessage(&d, i, "Read", map[string]any{"file_path": "private-input"}, "private-output", start.Add(time.Duration(i)*time.Second))
 	}
 	b, _ := json.Marshal(d.Candidate())
 	if string(b) != `{"tool":"Read","count":4,"since":"2026-01-01T00:00:00Z"}` {
@@ -114,7 +114,7 @@ func TestToolLoopOrdinaryCallsAreNotPolling(t *testing.T) {
 		t.Run(tc.tool+fmt.Sprint(tc.input), func(t *testing.T) {
 			var d LoopDetector
 			for i := 0; i < 4; i++ {
-				loopClaude(&d, i, tc.tool, tc.input, "same", start.Add(time.Duration(i)*time.Second))
+				loopMessage(&d, i, tc.tool, tc.input, "same", start.Add(time.Duration(i)*time.Second))
 			}
 			if got := d.Candidate(); got == nil || got.Count != 4 {
 				t.Fatalf("ordinary call classified as polling: %+v", got)
@@ -127,7 +127,7 @@ func TestToolLoopChangedInputAndQueuedPrompt(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var d LoopDetector
 	for i := 0; i < 4; i++ {
-		loopClaude(&d, i, "Read", map[string]any{"path": "one"}, "ok", start.Add(time.Duration(i)*time.Second))
+		loopMessage(&d, i, "Read", map[string]any{"path": "one"}, "ok", start.Add(time.Duration(i)*time.Second))
 	}
 	if d.Candidate() == nil {
 		t.Fatal("candidate missing")
@@ -139,7 +139,7 @@ func TestToolLoopChangedInputAndQueuedPrompt(t *testing.T) {
 	}
 	d.Line([]byte(`{"type":"user","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"next","content":"ok"}]}}`))
 	for i := 5; i < 9; i++ {
-		loopClaude(&d, i, "Read", map[string]any{"path": "one"}, "ok", start.Add(time.Duration(i)*time.Second))
+		loopMessage(&d, i, "Read", map[string]any{"path": "one"}, "ok", start.Add(time.Duration(i)*time.Second))
 	}
 	if d.Candidate() == nil {
 		t.Fatal("new candidate missing")
@@ -196,7 +196,7 @@ func TestToolLoopRotationSinceStaysStable(t *testing.T) {
 	for _, names := range [][]string{{"Read", "Grep"}, {"Read", "Grep", "Edit"}} {
 		var d LoopDetector
 		for i := 0; i < 120; i++ {
-			loopClaude(&d, i, names[i%len(names)], map[string]any{"path": "a"}, "ok", start.Add(time.Duration(i)*time.Second))
+			loopMessage(&d, i, names[i%len(names)], map[string]any{"path": "a"}, "ok", start.Add(time.Duration(i)*time.Second))
 			if i+1 >= 3*len(names) {
 				if got := d.Candidate(); got == nil || got.Count != i+1 || got.Tool != names[0] || !got.Since.Equal(start) {
 					t.Fatalf("rotation %v step %d: %+v", names, i, got)
@@ -221,7 +221,7 @@ func TestToolLoopHashesWholeInputAndOutput(t *testing.T) {
 						output += "x"
 					}
 				}
-				loopClaude(&d, i, "Read", map[string]any{"path": input}, output, start.Add(time.Duration(i)*time.Second))
+				loopMessage(&d, i, "Read", map[string]any{"path": input}, output, start.Add(time.Duration(i)*time.Second))
 			}
 			if got := d.Candidate(); got != nil {
 				t.Fatalf("different content after clipping boundary matched: %+v", got)
@@ -230,7 +230,7 @@ func TestToolLoopHashesWholeInputAndOutput(t *testing.T) {
 	}
 }
 
-func TestToolLoopCodex(t *testing.T) {
+func TestToolLoopResponseItems(t *testing.T) {
 	var d LoopDetector
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 4; i++ {

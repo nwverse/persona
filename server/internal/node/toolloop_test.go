@@ -116,7 +116,7 @@ func TestToolLoopPollPush(t *testing.T) {
 	}
 }
 
-func TestToolLoopHeadlessClaudeSession(t *testing.T) {
+func TestToolLoopHeadlessSession(t *testing.T) {
 	n, _, home := herdrNode(t)
 	const cwd = "/tmp/loop-headless"
 	at := time.Now().UTC().Add(-time.Minute)
@@ -144,7 +144,7 @@ func TestToolLoopHeadlessClaudeSession(t *testing.T) {
 	}
 	s := row()
 	if s.Agent != "" || s.Status != proto.StatusWorking || s.ToolLoop == nil || s.ToolLoop.Count != 4 {
-		t.Fatalf("working headless Claude session: agent=%q status=%q loop=%+v", s.Agent, s.Status, s.ToolLoop)
+		t.Fatalf("working headless session: agent=%q status=%q loop=%+v", s.Agent, s.Status, s.ToolLoop)
 	}
 	p.mu.Lock()
 	p.busy = false

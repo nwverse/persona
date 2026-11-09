@@ -61,8 +61,8 @@ func loopHash(raw json.RawMessage) [32]byte {
 	return sha256.Sum256(raw)
 }
 
-// Line reads Claude messages or Codex response items, avoiding the duplicated
-// Codex item_completed representation of the same calls.
+// Line reads message and response-item transcripts, avoiding duplicate
+// item_completed representations of the same calls.
 func (d *LoopDetector) Line(line []byte) {
 	var l struct {
 		Type, Subtype                         string
