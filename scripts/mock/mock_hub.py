@@ -13092,8 +13092,14 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    h.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                                    {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default})
+    out = {"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+                                              {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default}
+    if pid == "agent.new":
+        # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
+        out["tiers"] = [{"name": "quick", "launcher": "sonnetcc", "description": "Small, quick fixes"},
+                        {"name": "review", "launcher": "claude", "model": "opus", "effort": "high", "description": "Code review and design"}]
+        out["tiers_profile"] = {"id": "performance", "name": "Performance"}
+    h.send_json(out)
     return True
 
 

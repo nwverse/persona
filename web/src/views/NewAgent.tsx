@@ -1,5 +1,6 @@
-// Start an agent on one of your computers: machine, folder (recent ones first), launcher, model and effort for this
-// start, Claude Code's ultracode switch (#3428: off each time, never remembered), the first message.
+// Start an agent on one of your computers: machine, folder (recent ones first), a preset (a tier of the model profile in use,
+// #2225) or launcher, model and effort for this start, Claude Code's ultracode switch (#3428: off each time, never
+// remembered), the first message.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { hubLabel } from "../lib/mesh";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
@@ -10,7 +11,7 @@ import { AttachmentTray } from "../ui/AttachmentTray";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import {
   defaultLabel, effortChoices, fitEffort, followedBinding, launcherAgent, launcherModels, machineLaunchers, modelName, oneOff, pickerLauncher, startPicks,
-  takesEffort, takesTypedModel, forgetCustomModel, typedModelOffered, withoutCustom, type LauncherDefault,
+  takesEffort, takesTypedModel, tierLeftOut, forgetCustomModel, typedModelOffered, withoutCustom, type LauncherDefault, type PickerTier,
 } from "../lib/launcher-models";
 import { BYPASS_MODE, BYPASS_WARNING, EFFORTS, effortTitle, PERMISSION_MODES } from "../lib/session-actions";
 import { baseName, shortPath } from "../lib/format";
@@ -63,6 +64,13 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const [models, setModels] = useState<ModelList>({ status: "idle" });
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
+  // the presets this computer offers (tiers of the profile in use, from `tiersProfile`), and the one picked: it fills the
+  // launcher, model and effort as picking them by hand would; a pick by hand after it unmarks it. Never saved.
+  const [tiers, setTiers] = useState<PickerTier[]>([]);
+  const [tiersProfile, setTiersProfile] = useState("");
+  const [tier, setTier] = useState<PickerTier | null>(null);
+  // a preset's model, put in once its launcher's list starts over (a new launcher clears the model, below)
+  const tierModel = useRef<{ launcher: string; model: string } | null>(null);
   // ultracode for this start: off whenever the sheet opens, never saved (the server's rule: no choice carries over)
   const [ultracode, setUltracode] = useState(false);
   const features = useStore((s) => s.features);
@@ -109,6 +117,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     if (!open) return;
     submitted.current = false;
     setEffort("");
+    setTier(null);
     setUltracode(false);
     setInWorktree(false);
     setWtBranch("");
@@ -179,6 +188,9 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     setHelpFor("");
     const controller = new AbortController();
     setLauncher("");
+    setTiers([]);
+    setTier(null);
+    tierModel.current = null;
     setModelDefault("");
     setHubDefault(undefined);
     setConfigured(null);
@@ -195,6 +207,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
         const ls = r.launchers ?? [];
         setLaunchers(ls);
         setHubDefault(r.default);
+        setTiers(r.tiers ?? []);
+        setTiersProfile(r.tiers_profile?.name ?? "");
         setLaunchersOf(mid);
         setUnified(config !== null);
         if (config) {
@@ -235,10 +249,20 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const followed = followedBinding(launcher, unified ? configured : null);
   const listLauncher = launchersOf === mid ? pickerLauncher(launcher, followed) : "";
   useEffect(() => {
-    setModel("");
+    const kept = tierModel.current;
+    tierModel.current = null;
+    setModel(kept && kept.launcher === listLauncher ? kept.model : "");
     setPicking(false);
     setQuery("");
   }, [open, mid, listLauncher]);
+  const pickTier = (x: PickerTier) => {
+    setHelpFor("");
+    setTier(x);
+    setLauncher(x.launcher);
+    setModel(x.model ?? "");
+    setEffort(x.effort ?? "");
+    tierModel.current = { launcher: x.launcher, model: x.model ?? "" };
+  };
   useEffect(() => {
     if (!open || !mid || !listLauncher) {
       setModels({ status: "idle" });
@@ -303,6 +327,8 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   useEffect(() => { setEffort((e) => fitEffort(e, effortsKey ? effortsKey.split(" ") : [])); }, [effortsKey]);
   // offered with Claude Code whose effort can be set here; grayed when this computer's Claude Code is known to be too old
   const ultracodeShown = !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
+  // what of the picked preset this launcher can't take, said once its list is in
+  const tierMissed = tier && listLauncher === tier.launcher && models.status === "ready" ? tierLeftOut(tier, { agent, list: models.list, followed }) : [];
   const ultracodeBlocked = ultracodeShown ? startBlocked(picked?.claude_version) : "";
 
   const start = () => {
@@ -522,11 +548,31 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             </Field>
           )}
 
+          {tiers.length > 0 && (
+            <Field label={t("newagent.preset")}>
+              <div role="radiogroup" aria-label={t("newagent.preset")} className="flex flex-wrap gap-1.5">
+                {tiers.map((x) => (
+                  <Choice key={x.name} radio mono selected={tier?.name === x.name} onClick={() => pickTier(x)}
+                    title={[x.description, [x.launcher, x.model, x.effort].filter(Boolean).join(" · ")].filter(Boolean).join("\n")}>
+                    {x.name}
+                  </Choice>
+                ))}
+              </div>
+              <p data-testid="new-agent-preset-hint" className={cx("mt-1.5 min-w-0 text-[11.5px] [overflow-wrap:anywhere]", tierMissed.length ? "text-orange" : "text-ink-3")}>
+                {tierMissed.length
+                  ? t("newagent.preset_left_out", { what: tierMissed.join(" · ") })
+                  : tier
+                    ? tier.description || [tier.launcher, tier.model, tier.effort].filter(Boolean).join(" · ")
+                    : t("newagent.preset_hint", { profile: tiersProfile })}
+              </p>
+            </Field>
+          )}
+
           {(unified || launchers.length > 1 || blocked.length > 0) && (
             <Field label={unified ? t("newagent.launcher_override") : t("newagent.launcher")}>
               <div className="flex flex-wrap gap-1.5">
                 {unified && (
-                  <Choice selected={launcher === ""} onClick={() => setLauncher("")} title={defaultBlock ? `${modelDefault} · ${defaultBlock.reason}` : modelDefault}>
+                  <Choice selected={launcher === ""} onClick={() => { setTier(null); setLauncher(""); }} title={defaultBlock ? `${modelDefault} · ${defaultBlock.reason}` : modelDefault}>
                     {defaultBlock ? (
                       // what the default runs can't start here (#1643): marked, still the default, said in the list below
                       <span data-testid="new-agent-default-blocked" className="flex items-center gap-1.5">
@@ -549,7 +595,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                       selected={launcher === l.name}
                       // grayed out with why, never hidden (#1643): choosing it shows how to fix it instead of picking it
                       blocked={Boolean(block)}
-                      onClick={() => (block ? setHelpFor((open) => (open === l.name ? "" : l.name)) : setLauncher(l.name))}
+                      onClick={() => (block ? setHelpFor((open) => (open === l.name ? "" : l.name)) : (setTier(null), setLauncher(l.name)))}
                       title={block ? block.reason : l.model}
                     >
                       <span className="flex items-center gap-1.5">
@@ -594,6 +640,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
                   name={help.l.name}
                   block={help.block}
                   onTryAnyway={() => {
+                    setTier(null);
                     setLauncher(help.l.name);
                     setHelpFor("");
                   }}
@@ -625,6 +672,7 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
               onQuery={setQuery}
               search={search}
               onPick={(id) => {
+                setTier(null);
                 setModel(id);
                 setPicking(false);
                 setQuery("");
@@ -657,9 +705,9 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
             <Field label={t("newagent.effort")}>
               {efforts.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
-                  <Choice selected={effort === ""} onClick={() => setEffort("")}>{followed.effort ? t("newagent.follow_model_settings") : t("newagent.follow_launcher")}</Choice>
+                  <Choice selected={effort === ""} onClick={() => { setTier(null); setEffort(""); }}>{followed.effort ? t("newagent.follow_model_settings") : t("newagent.follow_launcher")}</Choice>
                   {efforts.map((id) => (
-                    <Choice key={id} selected={effort === id} onClick={() => setEffort(id)} title={EFFORTS.find((e) => e.id === id)?.detail}>
+                    <Choice key={id} selected={effort === id} onClick={() => { setTier(null); setEffort(id); }} title={EFFORTS.find((e) => e.id === id)?.detail}>
                       {effortTitle(id)}
                     </Choice>
                   ))}

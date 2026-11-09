@@ -45,10 +45,26 @@ export interface LauncherDefault {
   runtime?: string;
 }
 
+/** One of "New agent"'s presets (#2225, docs/assistant/model-profiles.md "Agent presets"): a tier of the model profile in use
+ *  whose launcher this computer starts. Picking it fills launcher, model and effort as picking them by hand would. */
+export interface PickerTier {
+  name: string;
+  launcher: string;
+  /** "" or absent: the launcher's default (the model settings' when the launcher is theirs). */
+  model?: string;
+  effort?: string;
+  /** When to use it. */
+  description?: string;
+}
+
 export interface MachineLaunchers {
   launchers: Launcher[];
   /** Absent from an older hub; null when the purpose is not a launcher use. */
   default?: LauncherDefault | null;
+  /** "New agent" only: absent from an older hub, with no profile in use, or none whose launcher this computer has. */
+  tiers?: PickerTier[];
+  /** The profile the presets come from (they follow its switches). */
+  tiers_profile?: { id: string; name: string };
 }
 
 /** The launchers on `mid` with the default of `purpose` (the hub's own when absent: "New agent"). */
@@ -222,5 +238,16 @@ export function startPicks(o: { agent: string; list: LauncherModels | null | und
     out.model = o.model;
   }
   if (o.effort && takesEffort(o.agent) && effortChoices(o.list, out.model ?? "", o.followed).includes(o.effort)) out.effort = o.effort;
+  return out;
+}
+
+/** What of a preset a start with this launcher's list would not pass on: its model when the launcher fixes its own --model
+ *  or takes no typed ID, its effort when the model doesn't take it. Empty: all of it (or the list is not in yet). */
+export function tierLeftOut(tier: PickerTier, o: { agent: string; list: LauncherModels | null | undefined; followed?: ModelBinding }): string[] {
+  const picks = startPicks({ agent: o.agent, list: o.list, model: tier.model ?? "", effort: tier.effort ?? "", followed: o.followed });
+  const out: string[] = [];
+  // the list's default is what runs with no model sent: nothing left out
+  if (tier.model && picks.model !== tier.model && !o.list?.models.some((m) => m.id === tier.model && m.default)) out.push(tier.model);
+  if (tier.effort && picks.effort !== tier.effort) out.push(tier.effort);
   return out;
 }

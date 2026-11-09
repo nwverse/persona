@@ -297,12 +297,27 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
+		// The tier is resolved before the user is asked: the card says what the agent runs on, and an unknown tier
+		// asks nothing.
+		tier := strings.TrimSpace(a.Tier)
+		if tier != "" {
+			picks := map[string]any{"tier": tier, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+			if err := s.applyStartTier(ctx, picks); err != nil {
+				return "", fmt.Errorf("%w; no agent was started", err)
+			}
+			a.Launcher, _ = picks["launcher"].(string)
+			a.Model, _ = picks["model"].(string)
+			a.Effort, _ = picks["effort"].(string)
+		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
 		}
-		if a.Model != "" { // the user sees what it will run on before saying yes
+		switch { // the user sees what it will run on before saying yes
+		case tier != "":
+			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": ModelTier{Launcher: a.Launcher, Model: a.Model, Effort: a.Effort}.runs()})
+		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		}
 		if a.Ultracode {
@@ -322,10 +337,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
-		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tier": a.Tier, "tab_name": s.tabName(sctx, a.Prompt)}
-		if err := s.applyStartTier(sctx, params); err != nil {
-			return "", err
-		}
+		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, a.Prompt)
 		if a.Ultracode {
 			params["ultracode"] = true

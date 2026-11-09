@@ -148,5 +148,6 @@
   "auto_review_findings_one": "{count} 条发现",
   "auto_review_findings_other": "{count} 条发现",
   "auto_review_show": "展开报告",
-  "auto_review_hide": "收起报告"
+  "auto_review_hide": "收起报告",
+  "preset": "预设 {tier}"
 }

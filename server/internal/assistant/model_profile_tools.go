@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
+
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // Profile tools expose the same operations as settings, without copying credentials into model context.
@@ -80,30 +81,43 @@ func (s *Service) applyTaskTier(ctx context.Context, t *PlanTask) error {
 	return nil
 }
 
-// Read this outside the ordinary source cache so every turn observes a switch, including a rollback to no profile.
-func (s *Service) modelProfileContext(ctx context.Context) string {
-	s.models.mu.Lock()
-	defer s.models.mu.Unlock()
+// modelProfileContext is the snapshot's model profile line: read outside the ordinary source cache so every turn
+// observes a switch, including a rollback to no profile, and a tier edited in the profile in use.
+func (s *Service) modelProfileContext(ctx context.Context) *prompts.SnapshotProfile {
+	s.models.mu.Lock() // the profiles and the state of one switch, not one from either side of it
+	p, err := s.activeModelProfile(ctx)
+	s.models.mu.Unlock()
+	if err != nil {
+		return &prompts.SnapshotProfile{Unreadable: true}
+	}
+	if p == nil {
+		return nil
+	}
+	out := &prompts.SnapshotProfile{ID: p.ID, Name: p.Name}
+	for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
+		t := p.Tiers[name]
+		out.Tiers = append(out.Tiers, prompts.SnapshotTier{Name: name, Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Description: t.Description})
+	}
+	return out
+}
+
+// activeModelProfile is the profile in use (nil: none; a profile named in use that is gone is one with only its
+// id), read without making the templates.
+func (s *Service) activeModelProfile(ctx context.Context) (*ModelProfile, error) {
 	ps, _, err := s.readModelProfiles(ctx)
 	if err != nil {
-		return "unavailable (model_profiles_list to retry)"
+		return nil, err
 	}
 	st, err := s.readModelProfileState(ctx)
 	if err != nil {
-		return "unavailable (model_profiles_list to retry)"
+		return nil, err
 	}
 	if st.Active == "" {
-		return ""
+		return nil, nil
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == st.Active })
 	if i < 0 {
-		return st.Active
+		return &ModelProfile{ID: st.Active}, nil
 	}
-	p := ps.Profiles[i]
-	parts := []string{p.Name + " (" + p.ID + ")"}
-	for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
-		t := p.Tiers[name]
-		parts = append(parts, name+"="+t.Launcher+"/"+t.Model)
-	}
-	return strings.Join(parts, "; ")
+	return &ps.Profiles[i], nil
 }
