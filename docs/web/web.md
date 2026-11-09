@@ -1144,8 +1144,8 @@ The page reports its own errors to `POST /api/v1/error-reports` (`lib/error-repo
 On a Mac, Windows or Linux computer, the web app is Persona's interface. The native Mac app is frozen ([mac.md](../apple/mac.md)).
 
 - **In the browser**: open the hub's address and sign in.
-- **As an app**: in Chrome or Edge, use **Install** in **Settings › General › This browser › Install as app** when the browser offers it, otherwise the browser's own install menu; Safari on a Mac adds it with **File › Add to Dock**.
-  It then opens in its own window with Persona's icon. Installing needs a secure context: https, or localhost ("Install as an App" below).
+- **As an app**: in Chrome or Edge, use **Install** in **Settings › General › This browser › Install as app** when the browser offers it, otherwise the browser's own install menu; these need https, or localhost.
+  Safari on a Mac adds it with **File › Add to Dock**. Either way it opens in its own window with Persona's icon ("Install as an App" below).
 - **Needs-you signals** (tab count, icon badge, alert sound, system notifications) work only while a Persona page is open in some tab or window. There is no Web Push, so nothing arrives once every Persona page is closed ("Attention signals" below).
 - **The phone keeps getting pushes** while the web app is open: the web app does not register as a desktop client (`register_desktop`), so the phone's **Phone Muted** does not apply ("Attention signals" below).
 - **Persona Link**, on a computer whose Agents the hub should reach, connects it to the hub and does what a browser cannot ([link.md](../operations/link.md), "On computers: the web app and Persona Link"). A computer you only browse from does not need it.

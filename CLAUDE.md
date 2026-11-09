@@ -96,8 +96,7 @@ This is a public open-source repository; everyone and every Agent maintains it t
   open, presence and local integrations. The native Mac app (`apple/Mac/`) is frozen: bug fixes, security fixes and keeping it building
   only; new features skip it. Never start another desktop client (Electron, Tauri, a WebView shell): a desktop need goes into the web app
   first, and into Persona Link only when the browser cannot meet it (`docs/apple/mac.md`, `docs/operations/link.md`). Why: the web app
-  already runs and installs in every desktop browser, and Persona Link already sits on the computers that run Agents with a live link to
-  the hub, so a second desktop UI only doubles the work.
+  already is the desktop UI and Persona Link already holds the native connection on computers that run Agents, so a second UI only adds upkeep.
 
 ## Development workflow
 
