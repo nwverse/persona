@@ -591,7 +591,8 @@ A stash index is a reflog position, not an identity. Carry the full object ID fr
 that ID. Checking it before an unguarded `git stash drop` leaves the same deletion race: terminal Git does not
 share the node mutex. For files storage, own the common-directory stash reference lock while validating,
 applying a pop and rewriting the reflog/reference, with packed-reference coordination for final deletion.
-Refuse unsupported storage or reference hooks before applying content. Preserve foreign locks on refusal,
+Refuse unsupported storage or reference hooks before applying content; Git before 2.45 echoes
+`--show-ref-format` back instead of naming the backend, and only has the files backend. Preserve foreign locks on refusal,
 keep conflicts retryable, preserve existing storage modes and honor repository sharing for new loose refs,
 and require refresh/reselection after stale identities. Test the real JSON dispatcher
 against disposable Git with an independent writer at the last read before removal.

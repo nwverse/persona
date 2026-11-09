@@ -37,7 +37,7 @@ func mutateStash(ctx context.Context, root, op string, index int, oid string) er
 	if err != nil {
 		return unsupportedStash()
 	}
-	if b := strings.TrimSpace(backend); b != "files" {
+	if stashRefBackend(backend) != "files" {
 		return unsupportedStash()
 	}
 	common, err := git(ctx, root, "rev-parse", "--git-common-dir")
@@ -224,6 +224,17 @@ func mutateStash(ctx context.Context, root, op string, index int, oid string) er
 		return &rpc.Error{Code: gitCodeFailed, Message: prefix + " " + err.Error()}
 	}
 	return nil
+}
+
+// stashRefBackend reads `git rev-parse --show-ref-format`. Git before 2.45 does not know the
+// option and echoes it back; those versions have only the files backend and refuse to open a
+// repository whose extensions.refStorage names another one, so the echo means files.
+func stashRefBackend(out string) string {
+	out = strings.TrimSpace(out)
+	if out == "--show-ref-format" {
+		return "files"
+	}
+	return out
 }
 
 // stashFileLock owns only a lock created by O_EXCL. Git sees the same path; cleanup

@@ -573,3 +573,12 @@ func TestStashStoragePermissions(t *testing.T) {
 		})
 	}
 }
+
+// Git before 2.45 echoes the unknown --show-ref-format option; pop and drop must still work there.
+func TestStashRefBackendOlderGit(t *testing.T) {
+	for out, want := range map[string]string{"files\n": "files", "reftable\n": "reftable", "--show-ref-format\n": "files"} {
+		if got := stashRefBackend(out); got != want {
+			t.Errorf("stashRefBackend(%q) = %q, want %q", out, got, want)
+		}
+	}
+}
