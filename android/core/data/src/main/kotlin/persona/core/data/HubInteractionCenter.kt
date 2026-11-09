@@ -51,8 +51,10 @@ class HubInteractionCenter(
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             connection.events.collect { event -> restored.await(); lock.withLock {
                 when (event) {
-                    is InteractionEvent -> if (event.interaction.id !in discarded) {
-                        ended.remove(event.interaction.id); change(event.interaction.id, event.interaction)
+                    is InteractionEvent -> if (event.interaction.id !in discarded && event.interaction.id !in ended) {
+                        // A resumed snapshot and a replay send the card again. Ending it here would make an
+                        // answered card clickable (#2767). A new card uses a new id; the web store does the same.
+                        change(event.interaction.id, event.interaction)
                     }
                     is InteractionResolvedEvent -> { withdrew(event.id); end(event.id) }
                     else -> Unit
