@@ -1023,7 +1023,7 @@ Not carried over: Moshi's Mod+Alt+1–3 (choose Web / Files / Diff in the right 
 Every node in the sidebar's Agents tree and the `/terminal` page tree (machine, workspace / space, tab, pane / Agent row) has the same kind of context menu, following Moshi: right-click opens it at the pointer; the ⋯ at the end of the row, the Menu key and Shift+F10 open it next to the row
 (on touch screens the entry point is still ⋯, not long press; the sidebar's machine headers only have right-click / Menu key, with no ⋯ added, so they look the same). The menu engine is `Menu` in `ui/atoms.tsx` (old usage unchanged); the pure logic is in `ui/menu-model.ts`:
 
-- Keyboard: ↑ ↓ / Home End move, → opens a submenu, ← goes back up a level, Enter selects, Esc closes. The letter at the end of a row selects that row directly (either case; keys with Ctrl / ⌘ / Alt are left to the page, and typing in other input boxes on the page doesn't trigger it). ⌫ / Delete selects the "Close" row.
+- Keyboard: ↑ ↓ / Home End move, → opens a submenu, ← goes back up a level, Enter selects, Esc closes, Tab / Shift+Tab close the menu and move on from its button (#2434). The letter at the end of a row selects that row directly (either case; keys with Ctrl / ⌘ / Alt are left to the page, and typing in other input boxes on the page doesn't trigger it). ⌫ / Delete selects the "Close" row.
   Hovering a submenu row expands it after about 100 ms; the position flips to stay on screen (opens leftward near the right edge, upward near the bottom); on narrow screens it still isn't covered by the soft keyboard.
 - Dangerous rows (`confirm`) need a second action: the first click / key press turns the row into a confirmation (for example "Close"), and only the second runs it. Moving to another row, or 4 seconds without input, reverts it.
 - Rename (`rename`): once selected the row becomes an input box; Enter submits, Esc cancels back to the menu; unchanged or empty values are not submitted.
@@ -1067,7 +1067,7 @@ Requests carry only these fields (anything else is dropped) and cannot specify a
   When off, this line is absent ("Needs you" and "Unread" rows have a separate line saying what it is asking / what it did; see "Second line on Agent rows" above, #3195).
 - **Command palette**: `lib/node-palette.ts` registers with `registerContextCommands` and lists the current node's menu items first in `>` command mode (two sections, "Workspace · pane title" and "Workspace · workspace name");
   rename opens a small dialog asking for the name, dangerous items ask for confirmation once more, and failures show a toast. The current node comes from the session page's chat (`ctx.pane`) or the terminal page's pane (the terminal page hands it the tree it read).
-- Tests: `ui/menu-model.test.ts` (keys, letters, confirm, rename, right-click position), `ui/atoms.test.tsx`, `ui/overlay.test.ts`, `lib/node-actions.test.ts`, `lib/node-palette.test.ts`. In a browser use the mock hub with
+- Tests: `ui/menu-model.test.ts` (keys, letters, confirm, rename, right-click position), `ui/menu-tab.test.tsx` (Tab closes, the focus moves on), `ui/dialog-focus.test.tsx` (a dialog opened from a row gives the focus back to the menu's button), `ui/atoms.test.tsx`, `ui/overlay.test.ts`, `lib/node-actions.test.ts`, `lib/node-palette.test.ts`. In a browser use the mock hub with
   `MOCK_TERMINAL_STREAM=1 MOCK_TERMINAL_CONTROL=1 MOCK_TERMINAL_PANES=1` (optionally `MOCK_SPLIT_TAB=1`, which adds a two-pane tab to the sidebar); actions are recorded at `/mock/node_actions`.
 
 ### Links open inside the page
