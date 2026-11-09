@@ -211,7 +211,7 @@ it("serializes saves and does not erase an observable change while a write is pe
 it("clears its own change echo only after confirming the saved document through GET", async () => {
   await render(); type(input(), "10");
   let canonical = fixture();
-  vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+  vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
     if (init?.method === "PUT") {
       canonical = JSON.parse(String(init.body));
       events.get("kb_selection")!({ manager: "assistant" });
