@@ -1,7 +1,7 @@
 # Generating Office files (`personad office`, #1300)
 
 The command the assistant and Agents use to generate Word, PowerPoint and Excel files; it is M9 of #1289. The file is generated on that machine. When the reply contains its absolute path, the App shows it as a card under the reply
-(a thumbnail of the first page, the file name, a type such as "Word document", #1543, see `docs/apple/ios.md` ("Image and document cards seen in this turn")); tapping it opens the M1–M3 preview.
+(a thumbnail of the first page, the file name, a type such as "Word document", #1543, see `docs/apple/ios.md` ("File viewer (2026-10-31)", **Images viewed this turn and document cards**)); tapping it opens the M1–M3 preview.
 The assistant and Agents started by Persona use it through the skill `persona-office` (see "skill" below).
 
 ## Why it lives in personad
