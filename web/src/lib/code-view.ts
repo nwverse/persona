@@ -304,7 +304,7 @@ const waiting = new Set<() => void>();
 
 function loadLowlight(): Promise<Lowlight> {
   // Destructured so Rollup drops the entry's `all` re-export (every grammar, ~780 kB) and shares the common-grammar
-  // chunk rehype-highlight loads.
+  // chunk the chat's code blocks load (ui/stream/highlight.ts).
   loading ??= import("lowlight").then(({ createLowlight, common }) => {
     lowlight = createLowlight(common) as unknown as Lowlight;
     waiting.forEach((f) => f());
