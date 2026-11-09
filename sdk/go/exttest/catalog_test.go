@@ -3,6 +3,7 @@ package exttest_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -61,5 +62,40 @@ func TestCatalogThroughSDKMethodsAndConformance(t *testing.T) {
 				t.Fatal("SDK conformance accepted an invalid catalog")
 			}
 		})
+	}
+}
+
+// Exercise both opaque payloads through the public SDK host and typed Methods,
+// rather than validating the generated catalog type in isolation.
+func TestCatalogOpaqueKeysThroughSDKConformance(t *testing.T) {
+	for _, location := range []string{"input_schema", "recipe_args"} {
+		t.Run(location, func(t *testing.T) {
+			source := wire.ConnectorCatalogSource{ID: "notices", Name: "Notices", Tools: []wire.ConnectorCatalogTool{{Name: "list", Description: "Read notices", ReadOnly: true, InputSchema: json.RawMessage(`{"type":"object"}`)}}}
+			if location == "input_schema" {
+				source.Tools[0].InputSchema = json.RawMessage(`{"type":"object","properties":{"pageToken":{"type":"string"}}}`)
+			} else {
+				source.Recipes = []wire.ConnectorSubscriptionRecipe{{Mode: "items", Tool: "list", Args: json.RawMessage(`{"pageToken":"next"}`), Kind: "sub_notice", GroupBy: "source"}}
+			}
+			exttest.CheckConnectors(t, []byte(catalogManifest), exttest.Serve(t, *catalogSDKProgram(wire.ConnectorCatalog{Sources: []wire.ConnectorCatalogSource{source}})))
+		})
+	}
+}
+
+func (r *catalogRecorder) Fatalf(f string, a ...any) { panic(fmt.Sprintf(f, a...)) }
+
+func TestCatalogProtocolEnvelopeKeysRemainStrict(t *testing.T) {
+	raw := json.RawMessage(`{"sources":[{"id":"notices","name":"Notices","tools":[{"name":"list","description":"Read notices","input_schema":{"type":"object"},"read_only":true,"readOnly":true}]}]}`)
+	program := catalogSDKProgram(wire.ConnectorCatalog{})
+	program.Namespaces[ext.ConnectorNamespace] = ext.Methods{
+		"catalog.list": ext.Method(func(context.Context, wire.ConnectorParams) (json.RawMessage, error) { return raw, nil }),
+	}.For("examplecatalog")
+	rec := &catalogRecorder{TB: t}
+	var refused any
+	func() {
+		defer func() { refused = recover() }()
+		exttest.CheckConnectors(rec, []byte(catalogManifest), exttest.Serve(t, *program))
+	}()
+	if message, ok := refused.(string); !ok || !strings.Contains(message, `key "readOnly" is not snake_case`) {
+		t.Fatalf("protocol envelope was not refused: %v", refused)
 	}
 }
