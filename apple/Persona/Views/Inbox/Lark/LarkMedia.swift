@@ -111,10 +111,28 @@ final class LarkMedia {
         #endif
     }
 
-    private func cacheKey(_ url: String, size: Int?) -> String {
+    private func cacheKey(_ url: String, size: Int?) -> String { Self.cacheKey(url, size: size) }
+
+    /// The name the bytes of `url` are kept under: a URL that names a manager (`url(_:manager:)`) is its own entry.
+    nonisolated static func cacheKey(_ url: String, size: Int?) -> String {
         let digest = SHA256.hash(data: Data((url + "#" + String(size ?? 0)).utf8))
         return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// `url` as manager `manager` reads it (docs/assistant/managers.md "Clients"): a hub path gets `manager=`, as a picture
+    /// or file loaded by URL can't send the header. As it is for nil (the default's, nothing named), a full URL (a CDN's)
+    /// and one that names a manager already.
+    nonisolated static func url(_ url: String, manager: String?) -> String {
+        guard let manager, !manager.isEmpty, url.hasPrefix("/"), !url.hasPrefix("//"),
+              URLComponents(string: url)?.queryItems?.contains(where: { $0.name == "manager" }) != true else { return url }
+        let hash = url.firstIndex(of: "#") ?? url.endIndex
+        var head = String(url[..<hash])
+        head += head.contains("?") ? "&" : "?"
+        let value = manager.addingPercentEncoding(withAllowedCharacters: unreserved) ?? manager
+        return head + "manager=" + value + String(url[hash...])
+    }
+
+    private nonisolated static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     // MARK: Emoji
 

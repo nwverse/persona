@@ -41,12 +41,11 @@ const (
 // are the user's; without Rev and WebURL: the devices fill them in for each computer. The same input in any order gives the same
 // summary: cards and items of the same time are ordered by their ids.
 func linkAttention(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, told map[string]bool) link.Attention {
-	key := func(machine, session string) string { return machine + "/" + session }
 	handed := func(ix proto.Interaction) bool { return told[ix.ID] && !ix.Delegating } // the user's to answer
-	ready := map[string]bool{}
+	ready := map[agentKey]bool{}
 	for _, ix := range ixs {
 		if handed(ix) {
-			ready[key(ix.MachineID, ix.SessionID)] = true
+			ready[agentKey{ix.MachineID, ix.SessionID}] = true
 		}
 	}
 	cards := slices.Clone(ixs)
@@ -62,7 +61,7 @@ func linkAttention(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, to
 	// announce has not decided on, or a question the assistant is still deciding on). Beside a handed card that does
 	// not stand (an elicitation), the agent is a screen item.
 	stands := func(ix proto.Interaction) bool {
-		return cardStands(ix) && (handed(ix) || !ready[key(ix.MachineID, ix.SessionID)])
+		return cardStands(ix) && (handed(ix) || !ready[agentKey{ix.MachineID, ix.SessionID}])
 	}
 	needs := needsYou(agents, cards, counts, stands)
 	// The newest first: past the cap the oldest go to More, so an agent that just started waiting is always listed,
@@ -80,7 +79,7 @@ func linkAttention(l i18n.Lang, agents []fleetInput, ixs []proto.Interaction, to
 		it := linkItem(l, n)
 		// Notifies once a card of the agent is the user's, as the phone is pushed then: not before its card (a terminal
 		// dialog is pushed by the screen card made for it), nor after the last one was answered.
-		it.Notify = !n.agent.Muted && ready[key(it.MachineID, it.SessionID)]
+		it.Notify = !n.agent.Muted && ready[agentKey{it.MachineID, it.SessionID}]
 		out.Items = append(out.Items, it)
 	}
 	return out
