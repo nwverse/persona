@@ -196,6 +196,12 @@ func TestVMStat(t *testing.T) {
 	if n, ok := abbreviated("12456M"); !ok || n != 12456<<20 {
 		t.Fatalf("abbreviated = %d", n)
 	}
+	// A header cut off after "page size of " is not a header (it used to index an empty field list and panic).
+	for _, line := range []string{"Mach Virtual Memory Statistics: (page size of ", "page size of    "} {
+		if n, ok := parseVMStatHeader(line); ok || n != 0 {
+			t.Fatalf("parseVMStatHeader(%q) = %d, %v", line, n, ok)
+		}
+	}
 }
 
 func TestIostat(t *testing.T) {

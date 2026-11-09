@@ -315,7 +315,11 @@ func parseVMStatHeader(line string) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	n, err := strconv.ParseUint(strings.Fields(rest)[0], 10, 64)
+	f := strings.Fields(rest)
+	if len(f) == 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(f[0], 10, 64)
 	return n, err == nil && n > 0
 }
 
