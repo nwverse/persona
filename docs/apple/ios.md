@@ -1112,6 +1112,38 @@ Apple clients do not draw them as user bubbles or show the model's instructions:
 - Chat-list previews use the assistant's words (`last_text`), which already exclude these messages.
 - `ChatCache` bumped to v9: old cached items lack `injected`.
 
+## Briefing card (#2320)
+
+A morning or evening routine with `facts` on writes a `brief` item into its own conversation (`docs/extensions/bots.md`
+("Morning and evening briefings")). iOS and iPadOS draw it as `BriefCard` (`Persona/Views/Assistant/Tasks/BriefCard.swift`)
+with the web's sections, order and totals: waiting for you, the last hours (failed, then done, then "and N more"), to verify,
+and can wait and in progress when there are any.
+
+- **Reading**: `FeedItem.brief` decodes `BriefBody` (`Shared/Brief.swift`) when the card is drawn, as `today` is. Every
+  section and field is optional (hubs since 2026-11-07 wrote different shapes), a row without an id is left out on its own,
+  a total never counts fewer than the rows listed, and `outcome` and `stage` stay strings: an outcome this build doesn't
+  know gets Got It, a stage it doesn't know shows the hub's word. A body that can't be read leaves out that card only.
+  Builds before this one decode the kind as `unknown` and skip it.
+- **Folding**: in compact width the done and failed rows fold into the heading's totals until it is tapped. Regular width
+  (iPad, and the frozen Mac app through the shared view) shows them, as the web does.
+- **Buttons** (`BriefActions`, one for the app, keyed by row and round: a card drawn again, or the same round in another
+  briefing, keeps what happened): Accept / Got It / Take Recommendation post the row's `asked_at` exactly as the hub sent it
+  (`APIClient.acceptTodo`, for #2056 to reuse), Handled posts the question's id (`APIClient.laterHandled`). Taken, they
+  say Accepted, Noted, Recommendation taken or Marked as handled; a 409 says Already handled; a 404 (a hub rolled back past
+  the routes) puts "The hub is too old for this button" in the button's place; any other failure (a 502 for a
+  recommendation that didn't reach its Agent, a 503) shows the hub's message as a toast and leaves the button usable. A tap
+  while a request is out does nothing. A decision with nothing recommended has no button, and a row without `asked_at` has
+  it disabled.
+- **Opening**: rows to verify, rows in progress and done rows open the to-do (`TasksStore.detailTask`). A waiting card or a
+  question opens the chat it came from (`machine_id` / `session_id`, which the hub adds from #2320). From an older hub, a
+  waiting card the app still has among its pending cards opens its chat, and otherwise the row has no Open. Failed rows open
+  nothing, as on the web.
+- **Not drawn**: the watch reads only assistant view cards from the feed, so it gets nothing.
+- **Tests**: `BriefCardTests` (the first, the current and a newer body; a feed with unreadable bodies; opening; every answer
+  the buttons can get, with `FakeHub`) and `BriefCardUITests` against the mock's `brief` item (`MOCK_TASKS=1
+  MOCK_TASKS_NO_ASKS=1`; `TEST_RUNNER_PERSONA_SHOTS` / `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE` save it folded, unfolded and
+  answered).
+
 ## Quiet supervision rounds (#2092)
 
 Persona conversations on iOS, iPadOS and macOS share the web's whole-round visibility contract. A `system` / `supervise`
