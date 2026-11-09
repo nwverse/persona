@@ -154,7 +154,7 @@ func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, ver
 		return nil, nil, err
 	}
 	var out []Todo
-	made := map[string]string{}
+	made, byTask := map[string]string{}, map[string]string{}
 	note := s.minutesTodoNotes(ctx, rec, m)
 	for _, aid := range dedupe(actions) {
 		a := byID[aid]
@@ -163,7 +163,7 @@ func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, ver
 			tid = minutesTodoID(rid, version, aid)
 		}
 		if t, ok := s.todoNow(tid); ok {
-			out, made[aid] = append(out, t), tid
+			out, made[aid], byTask[kb.MinutesTaskKey(a)] = append(out, t), tid, tid
 			continue
 		}
 		if a.TodoID != "" { // made before and deleted since: the user's choice stands
@@ -176,17 +176,15 @@ func (s *Service) minutesTodos(ctx context.Context, e *kb.Engine, id string, ver
 		}
 		if err != nil {
 			// Those made so far are recorded all the same: a retry after the user deleted one must not make it again.
-			if _, serr := e.SetMinutesTodos(rid, version, made); serr != nil && !errors.Is(serr, kb.ErrMinutesStale) {
+			if _, serr := e.SetMinutesTodos(rid, version, made, byTask); serr != nil {
 				s.logf("assistant: minutes to-dos of %s: %v", rid, serr)
 			}
 			return out, nil, err
 		}
-		out, made[aid] = append(out, t), tid
+		out, made[aid], byTask[kb.MinutesTaskKey(a)] = append(out, t), tid, tid
 	}
-	m, err = e.SetMinutesTodos(rid, version, made)
-	if errors.Is(err, kb.ErrMinutesStale) {
-		err = nil // the to-dos are made; the minutes written meanwhile are the app's to read
-	}
+	// Minutes written again meanwhile get the to-dos by task, so confirming the same task there makes none twice.
+	m, err = e.SetMinutesTodos(rid, version, made, byTask)
 	if out == nil {
 		out = []Todo{}
 	}

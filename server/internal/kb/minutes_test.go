@@ -356,15 +356,24 @@ func TestMinutesDeleteRevisionAndTodos(t *testing.T) {
 	now := time.Now()
 	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "写计划", "发邮件"), now)
 	e.WriteMinutes(context.Background(), 2)
-	if _, err := e.SetMinutesTodos(recID, 2, map[string]string{"a1": "todo_x"}); !errors.Is(err, ErrMinutesStale) {
+	if _, err := e.SetMinutesTodos(recID, 2, map[string]string{"a1": "todo_x"}, nil); !errors.Is(err, ErrMinutesStale) {
 		t.Fatalf("stale version: %v", err)
 	}
-	mm, err := e.SetMinutesTodos(recID, 1, map[string]string{"a1": "todo_x"})
+	mm, err := e.SetMinutesTodos(recID, 1, map[string]string{"a1": "todo_x"}, nil)
 	if err != nil || mm.Actions[0].TodoID != "todo_x" || mm.Actions[1].TodoID != "" {
 		t.Fatalf("set: %v %+v", err, mm)
 	}
 	if again, _ := e.Store.ReadMinutes(recID); again.Actions[0].TodoID != "todo_x" {
 		t.Fatal("not stored")
+	}
+	// Confirmed from version 1 while version 2 was written: linked by task in version 2.
+	mm.Version, mm.Actions[0].TodoID = 2, ""
+	if _, err := e.Store.putMinutes(recID, mm); err != nil {
+		t.Fatal(err)
+	}
+	mm, err = e.SetMinutesTodos(recID, 1, map[string]string{"a1": "todo_x"}, map[string]string{MinutesTaskKey(mm.Actions[0]): "todo_x"})
+	if err != nil || mm.Version != 2 || mm.Actions[0].TodoID != "todo_x" || mm.Actions[1].TodoID != "" {
+		t.Fatalf("by task: %v %+v", err, mm)
 	}
 	putRecording(t, e, recID, meetingUpload(2, now.Add(-time.Hour), "写计划", "发邮件", "补一句"), now)
 	r := recordingNow(t, e, recID)
@@ -499,7 +508,7 @@ func TestMinutesRemade(t *testing.T) {
 	if m == nil || len(m.Actions) != 3 {
 		t.Fatalf("actions %+v", m)
 	}
-	if _, err := e.SetMinutesTodos(recID, 1, map[string]string{"a2": "todo_bo"}); err != nil {
+	if _, err := e.SetMinutesTodos(recID, 1, map[string]string{"a2": "todo_bo"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// minutes.json one version ahead of meta.json.
@@ -606,8 +615,11 @@ func TestMinutesNoLongerMeetingAndRoundBound(t *testing.T) {
 	e.WriteMinutes(context.Background(), 2)
 	u := recUpload(2, now.Add(-time.Hour), true, "一句", "又一句")
 	putRecording(t, e, recID, u, now)
-	if r := recordingNow(t, e, recID); r.MinutesState != MinutesReady {
+	if r := recordingNow(t, e, recID); r.MinutesState != "" {
 		t.Fatalf("no longer a meeting: %q", r.MinutesState)
+	}
+	if m, err := e.Store.ReadMinutes(recID); err != nil || m.Version != 1 {
+		t.Fatalf("its minutes: %+v %v", m, err)
 	}
 	calls := len(model.calls)
 	e.WriteMinutes(context.Background(), 2)

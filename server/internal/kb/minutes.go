@@ -107,10 +107,7 @@ func (r *Recording) isMeeting() bool {
 func (r *Recording) planMinutes() {
 	switch {
 	case !r.isMeeting():
-		r.MinutesState = ""
-		if r.MinutesVersion > 0 { // minutes made while it was one: they stay, nothing more to make
-			r.MinutesState = MinutesReady
-		}
+		r.MinutesState = "" // minutes made while it was one stay readable; nothing more is made
 	case r.MinutesRev > 0 && r.MinutesRev >= r.Revision:
 		r.MinutesState = MinutesReady
 	case r.MinutesFailRev == r.Revision && r.MinutesFails >= minutesTries:
@@ -193,9 +190,10 @@ func (e *Engine) AskMinutes(rawID string) error {
 	return st.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
 }
 
-// SetMinutesTodos records the to-dos made of actions (action id → to-do id) in version of recording id's minutes:
-// ErrMinutesStale when they were written again since, ErrNotFound without minutes.
-func (e *Engine) SetMinutesTodos(rawID string, version int, todos map[string]string) (*Minutes, error) {
+// SetMinutesTodos records the to-dos made of actions (action id → to-do id) in version of recording id's minutes;
+// ErrNotFound without minutes. Minutes written again since get them by task instead (byTask: MinutesTaskKey → to-do
+// id), on their actions without one; without byTask that is ErrMinutesStale.
+func (e *Engine) SetMinutesTodos(rawID string, version int, todos, byTask map[string]string) (*Minutes, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
@@ -207,13 +205,21 @@ func (e *Engine) SetMinutesTodos(rawID string, version int, todos map[string]str
 	if err != nil {
 		return nil, err
 	}
-	if m.Version != version {
-		return m, ErrMinutesStale
-	}
 	changed := false
-	for i := range m.Actions {
-		if t, ok := todos[m.Actions[i].ID]; ok && t != "" && m.Actions[i].TodoID != t {
-			m.Actions[i].TodoID, changed = t, true
+	switch {
+	case m.Version == version:
+		for i := range m.Actions {
+			if t, ok := todos[m.Actions[i].ID]; ok && t != "" && m.Actions[i].TodoID != t {
+				m.Actions[i].TodoID, changed = t, true
+			}
+		}
+	case byTask == nil:
+		return m, ErrMinutesStale
+	default:
+		for i, a := range m.Actions {
+			if t := byTask[MinutesTaskKey(a)]; t != "" && a.TodoID == "" {
+				m.Actions[i].TodoID, changed = t, true
+			}
 		}
 	}
 	if !changed {
@@ -831,15 +837,18 @@ func keepTodos(m, old *Minutes) {
 	made := map[string]string{}
 	for _, a := range old.Actions {
 		if a.TodoID != "" {
-			made[a.Who+"\x00"+a.What] = a.TodoID
+			made[MinutesTaskKey(a)] = a.TodoID
 		}
 	}
 	for i, a := range m.Actions {
-		if t, ok := made[a.Who+"\x00"+a.What]; ok {
+		if t, ok := made[MinutesTaskKey(a)]; ok {
 			m.Actions[i].TodoID = t
 		}
 	}
 }
+
+// MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
+func MinutesTaskKey(a MinutesAction) string { return a.Who + "\x00" + a.What }
 
 // renderMinutes is minutes.md: the minutes with clock times, sections without anything left out.
 func renderMinutes(m *Minutes, start time.Time, zone *time.Location) string {
