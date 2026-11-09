@@ -204,6 +204,11 @@ struct ShellPageSlide: ViewModifier {
     let shell: ShellState
     /// 0 = Assistant, 1 = Agents.
     let index: Int
+    /// iPhone Duo's bars down the side (`shellRailEdge`): the pages cross-fade in place there instead of sliding. A page
+    /// that moved sideways under those bars, by any means (an offset, a render-only transform, under a mask), made both
+    /// pages' navigation controllers lay out again on every frame: about 27 ms a frame, 140 ms of hitches a second through
+    /// a switch on the simulator; in place it is 58 ms and 2.8 ms, as on any iPhone (2026-11-09). A drag fades with the finger.
+    @Environment(\.shellRailEdge) private var railEdge
 
     func body(content: Content) -> some View {
         let pager = shell.pager
@@ -215,8 +220,8 @@ struct ShellPageSlide: ViewModifier {
             // tells its polling and read reports to stop (docs/apple/ios.md「只在前台做的事」). The page in front, so a drag
             // that does not settle on the other page does not restart them.
             .environment(\.tabIsActive, index == shell.page)
-            .offset(x: pager.moving ? (CGFloat(index) - p) * pager.width : 0)
-            .opacity(shown ? 1 : 0)
+            .offset(x: pager.moving && railEdge == nil ? (CGFloat(index) - p) * pager.width : 0)
+            .opacity(railEdge != nil && pager.moving ? max(0, 1 - abs(CGFloat(index) - p)) : (shown ? 1 : 0))
             .allowsHitTesting(inReach)
             .accessibilityHidden(!inReach)
             .zIndex(index == pager.page ? 1 : 0)

@@ -149,7 +149,7 @@ var nodeActions = map[string]nodeAction{
 // paneRoutes are the terminal browser's (panes, tabs) and the "New worktree…" dialog's.
 func (h *Hub) paneRoutes(api *http.ServeMux) {
 	// The terminal browser (docs/integrations/terminal.md "Standalone terminals"): a machine's workspaces, tabs and panes with plain shells, and
-	// "New terminal". A pane is full shell access on the computer: full devices only (paneRoutesFullOnly).
+	// "New terminal". A pane is full shell access on the computer: full devices only (allowed in devicetokens.go).
 	api.HandleFunc("GET /api/v1/machines/{mid}/panes", h.proxy("panes.list", nil))
 	api.HandleFunc("POST /api/v1/machines/{mid}/panes", h.withMachine(h.newShell))
 	// close / split / run an agent / git in a pane, close / rename a tab: full devices only (panes.go)

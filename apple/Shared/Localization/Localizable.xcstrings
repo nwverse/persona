@@ -36,6 +36,72 @@
         }
       }
     },
+    "%@ stopped, not done yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ stopped, not done yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@は止まりました（未完了）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 停下了，还没完成"
+          }
+        }
+      }
+    },
+    "Interrupted by a model service error" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Interrupted by a model service error"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルサービスのエラーで中断しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型服务出错，中断了"
+          }
+        }
+      }
+    },
+    "Interrupted by a model service error: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Interrupted by a model service error: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルサービスのエラーで中断しました：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型服务出错，中断了：%1$@"
+          }
+        }
+      }
+    },
     "Avatar [Agent Row Style]": {
       "extractionState": "manual",
       "localizations": {
@@ -3701,6 +3767,7 @@
       }
     },
     "Open Persona on iPhone to sync extension capabilities.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Persona on iPhone to sync extension capabilities." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "在 iPhone 上打开 Persona 同步扩展能力。" } }, "ja": { "stringUnit": { "state": "translated", "value": "iPhone の Persona を開いて拡張機能の情報を同期してください。" } } } },
+    "Open Persona to sync extension capabilities.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Persona to sync extension capabilities." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "打开 Persona 同步扩展能力。" } }, "ja": { "stringUnit": { "state": "translated", "value": "Persona を開いて拡張機能の情報を同期してください。" } } } },
     "Extension Widget": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Extension Widget" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "扩展小组件" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張ウィジェット" } } } },
     "Push the fix to beta?": {
       "extractionState": "manual",
@@ -59405,6 +59472,28 @@
       },
       "extractionState" : "manual"
     },
+    "Last New Chat Check" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last New Chat Check"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回の新しいチャットのチェック"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近一次新对话检查"
+          }
+        }
+      }
+    },
     "Last Received" : {
       "localizations" : {
         "en" : {
@@ -77168,6 +77257,52 @@
       },
       "extractionState" : "manual"
     },
+    "Offline: its mutes show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its mutes show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにミュートが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的静音。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its rules show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its rules show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにルールが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的规则。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Offline: starts once connected" : {
       "localizations" : {
         "en" : {
@@ -87875,6 +88010,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Clear Recent Setups" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Recent Setups"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近の設定をすべて消去"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除最近配置"
+          }
+        }
+      }
+    },
+    "Remove from Recent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Recent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近から削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从最近中移除"
+          }
+        }
+      }
     },
     "Recent" : {
       "localizations" : {
@@ -112398,6 +112579,29 @@
           }
         }
       }
+    },
+    "The message couldn't be sent to the agent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message couldn't be sent to the agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージをエージェントに送信できませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息没能发给这个 Agent"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "The message source can't send encrypted messages right now" : {
       "localizations" : {
@@ -139769,25 +139973,25 @@
         }
       }
     },
-    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. They're in %@, where they were set; changing them here puts them in this device's time zone.": {
+    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. They're in %@, where they were set; changing them here puts them in this device's time zone.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. They're in %@, where they were set; changing them here puts them in this device's time zone."
+            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. They're in %@, where they were set; changing them here puts them in this device's time zone."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。目前按设置时所在的 %@ 计算，在这里改动后改按这台设备的时区计算。"
+            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。只要你有一台设备在免打扰时段内，聊天机器人对未回答卡片的提醒也会顺延。目前按设置时所在的 %@ 计算，在这里改动后改按这台设备的时区计算。"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。現在は設定した場所の %@ で判断します。ここで変更すると、このデバイスのタイムゾーンで判断します。"
+            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。現在は設定した場所の %@ で判断します。ここで変更すると、このデバイスのタイムゾーンで判断します。"
           }
         }
       }
@@ -139861,25 +140065,25 @@
         }
       }
     },
-    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. In this device's time zone.": {
+    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. In this device's time zone.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. In this device's time zone."
+            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. In this device's time zone."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。按这台设备的时区计算。"
+            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。只要你有一台设备在免打扰时段内，聊天机器人对未回答卡片的提醒也会顺延。按这台设备的时区计算。"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。このデバイスのタイムゾーンで判断します。"
+            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。このデバイスのタイムゾーンで判断します。"
           }
         }
       }
@@ -139915,6 +140119,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@。%2$lld件は変更できませんでした：%3$@"
+          }
+        }
+      }
+    },
+    "%@, offline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, offline"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，离线"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@、オフライン"
+          }
+        }
+      }
+    },
+    "%@ is offline. Messages can be sent once it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is offline. Messages can be sent once it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不在线，回来后才能发消息。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はオフラインです。戻ったらメッセージを送れます。"
+          }
+        }
+      }
+    },
+    "%@ · last synced %@. Messages can be sent once it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · last synced %2$@. Messages can be sent once it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 最后同步于 %2$@。回来后才能发消息。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 最終同期 %2$@。戻ったらメッセージを送れます。"
           }
         }
       }
