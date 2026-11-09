@@ -2,7 +2,8 @@ import XCTest
 
 /// A long press lifts the message over the dimmed chat with its bar next to it (#603), against scripts/mock/mock_hub.py
 /// with MOCK_MESSAGE_LIFT=1: a short message, the newest one just above the composer, and the middle of an answer taller
-/// than the screen, whose bar must be on screen without scrolling. PERSONA_LIFT_SCHEME: light or dark.
+/// than the screen, whose bar must be on screen without scrolling; and an answer in Persona's conversation, in its box.
+/// PERSONA_LIFT_SCHEME: light or dark.
 final class MessageLiftUITests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
@@ -57,6 +58,19 @@ final class MessageLiftUITests: XCTestCase {
         launch(short)
         press("收到，都提交了")
         shot("bottom")
+    }
+
+    /// An answer in Persona's own conversation, which draws it in a box (the new conversation layout, on by default):
+    /// lifted in that box, with no card around it.
+    @MainActor func testAnAnswerInPersonasConversation() throws {
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant",
+                               "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001", "-openChatsFresh", "YES",
+                               "-ui.scheme", scheme]
+        app.launchPinned()
+        press("博客迁移已经做完")
+        XCTAssertTrue(app.staticTexts["复制"].firstMatch.exists, "no bar")
+        shot("persona")
     }
 
     /// The middle of an answer taller than the screen: the bar is on screen.
