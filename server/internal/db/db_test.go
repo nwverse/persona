@@ -37,7 +37,7 @@ func open(t testing.TB) *DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Close)
-	openCascade.once.Do(func() { openCascade.tables, openCascade.err = d.truncateCascade(context.Background(), openTables) })
+	openCascade.once.Do(func() { openCascade.tables, openCascade.err = cascadeOfOpenTables(d) })
 	if openCascade.err != nil {
 		t.Fatal(openCascade.err)
 	}
@@ -90,6 +90,21 @@ var openCascade struct {
 	once   sync.Once
 	tables []string
 	err    error
+}
+
+// cascadeOfOpenTables is openCascade's tables. Each of openTables must be there: TRUNCATE naming a table the database
+// lacks fails, and truncateCascade alone would leave a renamed or dropped one out without a word.
+func cascadeOfOpenTables(d *DB) ([]string, error) {
+	tables, err := d.truncateCascade(context.Background(), openTables)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range openTables {
+		if !slices.Contains(tables, name) {
+			return nil, fmt.Errorf("open clears %s, which the migrated database does not have", name)
+		}
+	}
+	return tables, nil
 }
 
 // templates are the databases migratedDatabase copies: one per sets, migrated once per test binary.
