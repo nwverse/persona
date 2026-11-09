@@ -191,10 +191,13 @@ struct InboxPage: View {
                     // `-showInboxDone YES`: the first group's Done open and scrolled to, its groups' titles sticking (#2059 screenshots).
                     if UserDefaults.standard.bool(forKey: "showInboxDone") {
                         for _ in 0..<20 where store.items.isEmpty || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
-                        let first = shares.first?.manager?.id
-                        if !folds.isOpen("done", manager: first) { folds.toggle("done", manager: first) }
-                        try? await Task.sleep(for: .milliseconds(300))
-                        scrollTarget = "\(first ?? "")|done"
+                        if let share = shares.first {
+                            let first = share.manager?.id
+                            if !folds.isOpen("done", manager: first) { folds.toggle("done", manager: first) }
+                            let done = doneAll(share.mine(itemProjection.sortedDoneItems, model.managerRoster), share: share)
+                            try? await Task.sleep(for: .milliseconds(300))
+                            scrollTarget = done.first?.key // a row: Done's title and its group's stick above it
+                        }
                     }
                     // `-showInboxPickGroups YES`: Select with the mail group folded and picked whole and the Lark group picked.
                     if UserDefaults.standard.bool(forKey: "showInboxPickGroups") {
@@ -557,7 +560,7 @@ struct InboxPage: View {
             if groups.count > 1 {
                 Menu {
                     ForEach(groups) { g in
-                        Button { jump(to: g.key, manager: manager, proxy: proxy) } label: { Text(g.title); Text(verbatim: "\(g.items.count)") }
+                        Button { jump(to: g, manager: manager, proxy: proxy) } label: { Text(g.title); Text(verbatim: "\(g.items.count)") }
                     }
                     Divider()
                     Button("Collapse All") { for g in groups { setGroupOpen("done", g.key, manager: manager, false) } }
@@ -573,13 +576,15 @@ struct InboxPage: View {
         .id("\(manager ?? "")|done")
     }
 
-    /// Jump To one of Done's groups: Done and the group open, then scrolled to its title.
-    private func jump(to key: String, manager: String?, proxy: ScrollViewProxy) {
+    /// Jump To one of Done's groups: Done and the group open, then scrolled to its first row (its title sticks above it;
+    /// a List scrolls to rows, which are identified by `InboxItem.key`, not to section headers).
+    private func jump(to g: InboxGroups.Group, manager: String?, proxy: ScrollViewProxy) {
         if !folds.isOpen("done", manager: manager) { folds.toggle("done", manager: manager) }
-        setGroupOpen("done", key, manager: manager, true)
+        setGroupOpen("done", g.key, manager: manager, true)
+        guard let first = g.items.first?.key else { return }
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(80))
-            withAnimation(Theme.Motion.standard) { proxy.scrollTo(Self.groupID("done", key, manager: manager), anchor: .top) }
+            try? await Task.sleep(for: .milliseconds(120))
+            withAnimation(Theme.Motion.standard) { proxy.scrollTo(first, anchor: .top) }
         }
     }
 
