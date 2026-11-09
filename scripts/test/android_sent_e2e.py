@@ -15,6 +15,7 @@ class Device:
     def __init__(self, args):
         self.args = args
         self.prefix = [args.adb, "-s", args.serial]
+        self.paired = False
 
     def adb(self, *args, binary=False):
         result = subprocess.run(self.prefix + list(args), check=True, capture_output=True, timeout=30)
@@ -67,7 +68,10 @@ class Device:
             return
         command = ["shell", "am", "start", "-W", "-n", f"{self.args.package}/persona.android.debug.DebugEntryActivity",
                    "--es", "debug.automation", "true", "--es", "debug.style", style,
-                   "--es", "debug.theme", theme, "--es", "debug.mockAddress", self.args.mock]
+                   "--es", "debug.theme", theme]
+        if not self.paired:
+            command += ["--es", "debug.mockAddress", self.args.mock]
+            self.paired = True
         if page:
             command += ["--es", "debug.openPage", page]
         else:
@@ -87,11 +91,15 @@ def run(args):
     device = Device(args)
     device.adb("shell", "cmd", "locale", "set-app-locales", args.package, "--locales", "zh-CN")
     title = "以你的名义发出的记录"
-    intro = "Persona 通过连接器以你的名义发出的内容，新的在前。点一行看全文。"
+    ledger_marker = "全部"
     args.out.mkdir(parents=True, exist_ok=True)
     for style in ("glass", "brief", "board"):
         for theme in ("light", "dark"):
             device.launch(style, theme)
+            device.wait("设置")
+            settings_tab = device.find("设置", clickable=True)
+            if settings_tab is not None:
+                device.tap(settings_tab)
             # Traverse the real Settings list, rather than directly opening the new page.
             for _ in range(10):
                 assert device.find(title) is None, "Ledger still appears on Settings home"
@@ -109,7 +117,7 @@ def run(args):
             device.wait(title)
             device.screenshot(f"{style}-{theme}-connectors")
             device.tap(device.wait(title))
-            device.wait(intro)
+            device.wait(ledger_marker)
             device.screenshot(f"{style}-{theme}-ledger")
             device.back()
             device.wait(title)
@@ -120,7 +128,7 @@ def run(args):
                 link = f"persona://open?target=settings&page={page}"
                 for cold in (True, False):
                     device.launch(style, theme, link=link, cold=cold)
-                    device.wait(intro)
+                    device.wait(ledger_marker)
                     device.back()
                     device.wait(title)
                 print(f"PASS legacy/canonical cold/warm {page} {style}/{theme}", flush=True)
