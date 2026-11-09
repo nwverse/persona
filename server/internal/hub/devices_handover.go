@@ -15,9 +15,6 @@ import (
 
 // ---- the handover ----
 
-// devicesConfig is what the hub hands the manager now.
-func (h *Hub) devicesConfig() devicewire.Config { return h.devicesConfigFor(devicesOwner) }
-
 // devicesConfigFor is what the hub hands manager id: the machines it carries (ownership.go); the mesh's members
 // only to the carrier.
 func (h *Hub) devicesConfigFor(id string) devicewire.Config {
