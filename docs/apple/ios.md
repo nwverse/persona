@@ -228,6 +228,8 @@ Chat page:
   no dictation), with permission/effort capsules above (`SessionModeBar`).
 - **One dictation and stop button** (#1079): `DesignSystem/ComposerButtons.swift` `ComposerMicButton` (outline mic, solid red pulsing while dictating),
   `ComposerRoundButton.stop` (stop in solid ink circle), 44pt tap target, one shell scaling step (`shellScaled`), used by `ShellComposerBar` and iOS `PromptComposer`.
+  A text field outside the composer (a to-do's notes, #2188) uses `FieldMicButton`: the same tap (`Dictation.toggle(into:)`: what is heard goes
+  after what was typed, a second tap ends it, why it could not start is a toast), drawn in the font and color of the text buttons beside it.
 - BeautifulUI style (Settings › Appearance › Style, `AppStyle.beautiful`, 2026-10-30) uses `PromptComposer` (new assistant `BeautifulStarterComposer`),
   BeautifulUI Prompt Bar (`layout: .stacked`); other styles unchanged above (CLAUDE.md: new appearance as new theme):
   rounded multiline input, toolbar below: + (Photos / Camera / Files), @, /, model, dictation, Send right; working Agent with empty text gets Interrupt.
@@ -1155,21 +1157,22 @@ announcement or per-message avatar.
 
 ## New conversation layout (#1666)
 
-Settings › Appearance › New Conversation Layout (`ui.newChatLayout`, on by default; a key of its own, not the shell's Layout switch) tidies Persona's main conversation on iPhone and iPad.
-Off, the conversation is drawn exactly as before. The Agents chat, the Mac and Vision Pro never use it (`ChatLayoutSettings.layout(assistant:)` returns `ChatLayout.off` there).
-`ChatView` reads the choice once and hands rows `\.chatLayout` through the environment, so no row observes UserDefaults (`Persona/Views/Chat/ChatLayout.swift`).
+Persona's main conversation on iPhone and iPad always uses this layout (#2477); there is no settings entry or switch.
+Legacy `ui.newChatLayout`, `ui.newChatLayout.fold` and `ui.newChatLayout.lines` values are ignored, including launch arguments. They are not rewritten, so older versions retain their preferences.
+The Agents chat, the Mac and Vision Pro keep their platform-specific presentation (`ChatLayoutSettings.layout(assistant:)` returns `ChatLayout.off` there).
+`ChatView` hands rows `\.chatLayout` through the environment; no row observes UserDefaults (`Persona/Views/Chat/ChatLayout.swift`).
 
-- **Who talks to whom**, from the hub's existing fields only: feed `routed` that Persona wrote (`from` `assistant`, #1542) reads "Persona → @task" (`RoutedExchange`; off, #1542's folded `AgentSentLine`), what the user sent a task (`routed` without `from`) "Me → @task" in the user's box (`UserRoutedExchange`), feed `report` reads "task → @Persona" (`ReportExchange`),
+- **Who talks to whom**, from the hub's existing fields only: feed `routed` that Persona wrote (`from` `assistant`, #1542) reads "Persona → @task" (`RoutedExchange`; other platforms retain #1542's folded `AgentSentLine`), what the user sent a task (`routed` without `from`) "Me → @task" in the user's box (`UserRoutedExchange`), feed `report` reads "task → @Persona" (`ReportExchange`),
   while supervision, scheduled runs, follow-ups and wake-ups use the source mentions above, on the source's side, never where the user's messages are.
   Task notices, node-restart and Inbox lines keep their centered line. The addressee is in the accent; there is no group name, member list or avatar per speaker.
 - **Boxes**: every message sits in a box, the user's pale blue (`Theme.ChatBox.user`) and Persona's, its exchanges' and its notes' pale gray (`Theme.ChatBox.persona`), words in the primary color in both modes (`ChatLayoutTests` checks the contrast). The answer streams in the box it settles in.
-- **Folding**: what Persona and a task say to each other shows its first N lines (3 by default) with Expand / Collapse under it (`ExchangeText`, measured against the whole text, so a short one has no button); the setting offers Folded / Show N Lines / Expand All.
+- **Folding**: what Persona and a task say to each other always starts with its first three lines and Expand / Collapse under it (`ExchangeText`, measured against the whole text, so a short one has no button). Expanding one message does not change the default for other exchanges.
   No evidence list under a report (it was not tappable); web links in the words are links (`ExchangeText.linked`).
 - **Right-edge navigator** (`ChatEdgeScrub.swift`), like the ChatGPT desktop app's: a slide up or down that starts in the band along the list's right edge (`Theme.Size.edgeBand`, inside the list's side margin, below the top bar) shows one tick per message the user typed
   (not injected lines, other conversations' messages or /loop ticks), a light tap as it opens and a selection tick per message passed, with the picked message's first two lines beside it; letting go brings it to the middle of the list and lights it up.
   It is a UIKit recognizer: it fails at once for a touch outside the band and for a slide more sideways than up-and-down (the shell's pager and the drawer keep those, `DrawerPan`), and the list's scroll view pan waits for it to fail (`shouldBeRequiredToFailBy`); the system's back swipe is at the other edge.
-  With more messages than fit, the newest that fit are shown. `-showEdgeScrub N` holds it open on the Nth newest message for screenshots; `-openAppearance chat` opens the settings page.
-- Tests: `ChatLayoutTests` (unit: default, launch-argument off, old look outside Persona's conversations, folding, patrol kinds, tick placement, links, contrast); `NewChatLayoutTests` (UI, mock `MOCK_EXCHANGES=1`, see `docs/operations/testing.md`): headers, folding, no evidence list, baseline conversation presentation with `-ui.newChatLayout NO`, a slide along the edge; `ChatFollowTests.testPersonaReopensWhereItWasLeft`: the reading position after a restart.
+  With more messages than fit, the newest that fit are shown. `-showEdgeScrub N` holds it open on the Nth newest message for screenshots.
+- Tests: `ChatLayoutTests` (unit: fixed defaults, ignored legacy preferences and launch arguments, platform presentation outside Persona's conversations, patrol kinds, tick placement, links, contrast); `NewChatLayoutTests` (UI, mock `MOCK_EXCHANGES=1`, see `docs/operations/testing.md`): headers, three-line folding despite legacy preferences, no evidence list, removed settings entry and deep link, a slide along the edge; `ChatFollowTests.testPersonaReopensWhereItWasLeft`: the reading position after a restart.
 
 ## Connection status (slow / offline networks)
 
@@ -1199,6 +1202,9 @@ Like Telegram: network trouble shows no banner; **the page title becomes "small 
     with no error alert. After reconnect and "Updating…" completion, send automatically in composition order (for unopened chats, first fetch one page of latest messages; delivered ones appear in the transcript and are removed automatically).
     Resends use the same `client_msg_id`, preventing duplicates. Waiting messages persist (`Outbox.swift`) and survive App termination;
     so do sent ones still waiting for their transcript copy (back as sent, not sent again), unless the chat's cache already has the copy (#1455).
+    Waiting has no limit while the link is down. While it is up, a message whose sends keep coming back waiting (no answer, or its chat missing from the session list)
+    fails after a minute (`OutboxWait`), and one retry per group runs every 10 seconds until then; when the hub still does not list the chat, all its waiting messages fail with one toast.
+    Waiting messages older than a week do not come back at launch.
   - **Op id**: messages carry `X-Persona-Op-Id` (the message id, equal to `client_msg_id`); each answer / approval tap gets one;
     the hub executes it once (`docs/protocol/protocol.md` ("Operation receipts")). A duplicate request returning `202 {"state":"pending"|"unknown"}` is not success: pending keeps retrying, unknown is treated as "May already have been delivered".
     Retrying a "May already have been delivered" message first checks `GET /api/v1/ops/{old id}`: `done` means sent, no resend; otherwise resend with a new id as before.
