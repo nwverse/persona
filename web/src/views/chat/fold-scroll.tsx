@@ -46,8 +46,9 @@ export function useFoldScroll(ref: RefObject<HTMLElement | null>, folded: boolea
     const m = moreBelow(el);
     setMore((v) => (v === m ? v : m));
   }, [ref]);
+  // only while folded: an open block draws no fade (reading every bubble's height on a chat's first draw forced a layout)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useLayoutEffect(measure, [measure, folded, ...deps]);
+  useLayoutEffect(() => void (folded && measure()), [measure, folded, ...deps]);
   useEffect(() => {
     const el = ref.current;
     if (!el || !folded) return;

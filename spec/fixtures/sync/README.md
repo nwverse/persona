@@ -111,7 +111,7 @@ The clients draw the same states differently. A consumer maps what it draws onto
 | Go (the files themselves) | `server/internal/proto/sync_scenarios_test.go` | — |
 | Web | `web/src/views/chat/sync/sync-scenarios.test.tsx`: the real store, `useTranscript`, chat page, composer and cards; a fake hub (`sync/fake-hub.ts`) answers reads from the case and holds writes; the page is read back through `data-*` marks (`sync/project.ts`) | `KNOWN` in the test, each with its issue and the reason it must fail for |
 | iOS / Mac | #1112 | |
-| Android | #1111 | |
+| Android | `android/core/data/src/test/kotlin/persona/core/data/sync/ChatSyncScenariosTest.kt` (#1111): the real `HubChatRepository`, `HubInteractionCenter`, `OutboxMessageSender` and `HubSessionsRepository`, and the chat page's own taps and bubbles (`ChatTaps`); a fake hub answers reads from the case and holds writes (`sync/SyncDevice.kt`, `sync/SyncHub.kt`) | `KNOWN` in the test, each with the reason it must fail for |
 
 ## Checks
 
@@ -130,6 +130,7 @@ cd server && go test ./internal/proto/ -run SyncScenarios
 The clients replay the cases against their own state code:
 
 - iOS / Mac: `apple/PersonaTests/Sync/` (`SyncScenarioTests`, #1112) plays each case through the real `AppModel`, its frames over the demo config's socket and its requests over the demo config's transport, and projects the chat page onto the view after every step. Cases it cannot play yet, and cases failing on a filed bug, are listed in its `known` table with the issue; `TEST_RUNNER_SYNC_TRACE=1` prints every step's view.
+- Android: `ChatSyncScenariosTest` in `core:data` (#1111) plays each case once per device, as the web does, in virtual time. The app pages its session list (`features=sessions_list`), so a `sessions_delta` frame reaches it as the list's `sessions_list` hint and the list is read from the hub's state. `SYNC_TRACE=1` prints every step's view.
 
 ## Adding a case
 
