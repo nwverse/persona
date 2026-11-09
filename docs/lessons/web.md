@@ -1,5 +1,10 @@
 # Lessons: web UI and interactions
 
+## Sessionless requests are cards, not missing sessions (#1882)
+
+- Only an explicitly empty `session_id` bypasses session approval capability checks. A nonempty id whose session is absent or restricted must still refuse. Use the same decision for card forms, quick answers and notification actions.
+- A script request has no conversation to open. Route it by interaction id from Overview, Inbox and notifications, and reuse the existing card renderer and answer receipt. Give each sessionless request its own notification identity so answering one cannot close another's notification; retain initial-snapshot suppression and device preferences.
+
 ## Message provenance is independent of model roles (#2125)
 
 - An automatic or relayed input can legitimately have model role `user` without belonging in a user bubble, pending-message echo matching or the user-input navigator. Carry structured provenance through display parsing and cached pages; test these consumers together. Legacy relay inference requires the complete machine template, and an app user's protected quotation must suppress inference. Use transcript-backed metadata for long-lived history rather than a short-lived echo record.
