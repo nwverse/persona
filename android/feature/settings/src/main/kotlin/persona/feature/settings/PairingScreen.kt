@@ -67,7 +67,12 @@ fun PairingScreen(
     val scope = rememberCoroutineScope()
     val paired by pairing.isPaired.collectAsState()
     val records = remember(context) { ReadinessRecords(context) }
-    var readiness by rememberSaveable { mutableStateOf(paired && needsOnboardingReadiness(context)) }
+    // The first-run checklist comes back only on the root page (no link to confirm): Settings › Pairing and Add hub
+    // (skipWelcome) are for connecting, so they start at the connect choices even while that checklist is unfinished.
+    // A pairing made on any page is still followed by it (nextStep).
+    var readiness by rememberSaveable {
+        mutableStateOf(paired && !skipWelcome && initialLink == null && needsOnboardingReadiness(context))
+    }
     // The machine whose engine must be chosen first; kept on disk so a restarted app asks again rather than skipping.
     var engineStep by rememberSaveable { mutableStateOf(if (paired && machines != null) records.enginePending() else null) }
     var welcome by rememberSaveable { mutableStateOf(initialLink == null && !skipWelcome) }

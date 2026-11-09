@@ -190,6 +190,27 @@ class PairingFlowTest {
         assertFalse(rule.activity.isFinishing)
     }
 
+    /**
+     * A first checklist left with Back stays unfinished; Settings › Pairing and Add hub still open on the connect choices,
+     * and a pairing link opened then goes to its confirm page instead of being dropped for the checklist.
+     */
+    @Test fun aPairingPageInSettingsStartsAtTheConnectChoicesWhileTheFirstChecklistIsUnfinished() {
+        rule.activity.getSharedPreferences("settings-readiness", Context.MODE_PRIVATE).edit().putBoolean("onboarding-pending", true).commit()
+        var link by mutableStateOf<String?>(null)
+        show {
+            key(link) {
+                PairingScreen(FakePairing(paired = true), sessions, onReady = {}, onDiagnostics = {}, skipWelcome = link == null, initialLink = link)
+            }
+        }
+        rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertExists()
+        rule.onNodeWithText(text(R.string.settings_pairing_manual)).assertExists()
+        rule.onAllNodesWithText(text(R.string.settings_ready_title)).assertCountEquals(0)
+        link = "persona://pair?url=http%3A%2F%2F127.0.0.1%3A18760&token=mock"
+        rule.waitForIdle()
+        rule.onAllNodesWithText(text(R.string.settings_pairing_confirm)).onFirst().assertExists()
+        rule.onAllNodesWithText(text(R.string.settings_ready_title)).assertCountEquals(0)
+    }
+
     @Config(qualifiers = "en-w400dp-h4000dp-xhdpi")
     @Test fun theFirstChecklistHasOneDone() {
         firstChecklist {}
