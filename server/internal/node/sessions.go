@@ -43,8 +43,15 @@ func (n *Node) hostNotices(id string, s *proto.Session, a host.Agent) {
 	}
 }
 
-// sessionList returns live herdr sessions plus recent offline transcripts.
+// sessionList returns live herdr sessions plus recent offline transcripts. One lookup pass (codexListPass) serves the
+// whole rebuild: the rows' decoration and the Codex threads take each rollout's stat and the assistant's project name
+// from it, instead of once per row every second.
 func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Session {
+	return n.sessionListIn(ctx, refreshAgents, newCodexListPass())
+}
+
+// sessionListIn is sessionList looking up through pass (nil: each time).
+func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *codexListPass) []proto.Session {
 	if refreshAgents {
 		_ = n.refreshHosts(ctx)
 	}
@@ -190,7 +197,7 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 		if n.codexBlocked(id) {
 			markCodexConflict(&s)
 		}
-		n.decorate(&s)
+		n.decorateIn(&s, pass)
 		out = append(out, s)
 		seen[id] = true
 	}
@@ -198,7 +205,7 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	n.forgetDialogs(livePanes)
 
 	for _, s := range n.starts.listed(seen) { // starting.go
-		n.decorate(&s)
+		n.decorateIn(&s, pass)
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
@@ -227,7 +234,7 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
-	for _, s := range n.codexSessions(seen) {
+	for _, s := range n.codexSessionsIn(seen, pass) {
 		out = append(out, s)
 	}
 	for _, s := range n.codexAssistantsAtRest(seen) {
@@ -237,7 +244,7 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	offlineRows := n.offline(seen)
 	n.markInterrupted(offlineRows, seen) // the restart cut these off (#1917)
 	for _, s := range offlineRows {
-		n.decorate(&s)
+		n.decorateIn(&s, pass)
 		out = append(out, s)
 	}
 	// Terminal-owned Codex parents were already seen before history was added.
@@ -263,7 +270,10 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	return out
 }
 
-func (n *Node) decorate(s *proto.Session) {
+func (n *Node) decorate(s *proto.Session) { n.decorateIn(s, nil) }
+
+// decorateIn is decorate looking up through a list pass (codexListPass; nil: each time).
+func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	s.AlsoOpenIn = n.alsoOpenIn(s.SessionID) // live in another host too (ownership.go)
 	if s.PaneID != "" && s.Host == "" {
 		s.Host = host.ParsePane(s.PaneID).Kind // the host it runs in (#2576)
@@ -284,7 +294,7 @@ func (n *Node) decorate(s *proto.Session) {
 	if s.Title == "" {
 		s.Title = filepath.Base(s.Cwd)
 	}
-	n.ultracodeRow(s)
+	n.ultracodeRow(s, pass)
 }
 
 func snippet(s string) string {

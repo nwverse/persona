@@ -343,9 +343,10 @@ func (n *Node) ultracodeHook(req sockRequest, in hookInput) {
 }
 
 // ultracodeRow fills a Claude row's ultracode fields and runs a queued switch once its turn is over. Only a running
-// row reads its transcript: an offline one shows what was last seen of its process, and no version of the past.
-func (n *Node) ultracodeRow(s *proto.Session) {
-	if s.Agent != "claude" || n.isAssistantSession(s.SessionID) {
+// row reads its transcript: an offline one shows what was last seen of its process, and no version of the past. pass
+// is the list's (codexListPass; nil: each lookup made again).
+func (n *Node) ultracodeRow(s *proto.Session, pass *codexListPass) {
+	if s.Agent != "claude" || n.isAssistantSessionIn(s.SessionID, pass) {
 		return
 	}
 	running := s.PaneID != "" && s.Status != proto.StatusOffline
