@@ -6,8 +6,8 @@
     python3 scripts/privacy_check.py --staged --commit-msg .git/COMMIT_EDITMSG   # the commit-msg hook (commit_msg_lines)
     python3 scripts/privacy_check.py --range origin/main..HEAD   # what those commits change, and their messages;
                                                      # all of HEAD when the two share no history (an orphan branch)
-    python3 scripts/privacy_check.py --range origin/<base>..<head> --message <file>   # plus text recorded as it is,
-                                                     # every line (merge-pr.sh: the PR's title and body, the squash message)
+    python3 scripts/privacy_check.py --range <base sha>..<head> --message <file>   # plus text recorded as it is, every
+                                                     # line (merge-pr.sh: the fetched base sha, the squash message)
 
 Every mode reads what Git records: a symlink is scanned as its link text, never the file it points to; --staged and
 --range take added, copied, modified, renamed and type-changed files (a file turned into a symlink); the tracked-files

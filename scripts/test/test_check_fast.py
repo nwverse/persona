@@ -342,15 +342,18 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertEqual(1, code, out)
         self.assertIn("FAIL     scripts/test/test_privacy_check.py", out)
 
-    def test_a_privacy_check_change_also_runs_the_bundle_privacy_suite(self):
-        # scripts/release/check_bundle_privacy.py imports privacy_check.
+    def test_a_privacy_check_change_also_runs_the_suites_that_load_it(self):
+        # scripts/release/check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py copies it into its temp
+        # repositories, where merge-pr.sh runs it.
         self.commit_on_top("scripts/test/test_privacy_check.py", PASSING, "base")
         self.commit_on_top("scripts/release/test_check_bundle_privacy.py", FAILING, "base")
+        self.commit_on_top("scripts/test/test_merge_pr_sh.py", FAILING, "base")
         self.write("scripts/privacy_check.py", "print('clean')\n# changed\n")
         code, out = self.check_fast()
         self.assertEqual(1, code, out)
         self.assertIn("PASS     scripts/test/test_privacy_check.py", out)
         self.assertIn("FAIL     scripts/release/test_check_bundle_privacy.py", out)
+        self.assertIn("FAIL     scripts/test/test_merge_pr_sh.py", out)
 
     def test_a_migration_edit_runs_the_freeze_check(self):
         self.write("scripts/ci/migration_freeze.py", "print('freeze-ran')\n")

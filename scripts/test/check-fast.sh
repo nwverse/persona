@@ -745,10 +745,12 @@ else
     esac
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
     # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp
-    # repositories and runs the hooks there; check_bundle_privacy.py imports privacy_check.
+    # repositories and runs the hooks there; check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py
+    # copies privacy_check.py into its temp repositories, where merge-pr.sh runs it.
     case "$f" in
       scripts/hooks/*) script_test_add scripts/test/test_privacy_check.py ;;
-      scripts/privacy_check.py) script_test_add scripts/release/test_check_bundle_privacy.py ;;
+      scripts/privacy_check.py)
+        script_test_add scripts/release/test_check_bundle_privacy.py; script_test_add scripts/test/test_merge_pr_sh.py ;;
     esac
     case "$f" in deploy/docker/*|docs/operations/docker.md|Dockerfile) script_test_add scripts/test/test_docker_entrypoint.py ;; esac
   done <<< "$CHANGED"
