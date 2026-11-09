@@ -51,7 +51,7 @@ On `PUT /api/v1/recordings/{id}`:
 ```
 
 - `kind` is `meeting` when the user explicitly started a meeting recording, or when the device matched an event happening now. Anything else, including omitted, is `note`.
-- `calendar` is whatever the device already knows. It is a hint, not the source of truth: the hub prefers a `meetings` or `events` item in the knowledge base whose time overlaps the recording. The device does not send a calendar event id, because the hub cannot see the device's calendar. Other keys in `calendar` are ignored; a title over 200 characters, or more than 100 attendees or one over 100 characters, is `400`.
+- `calendar` is whatever the device already knows. It is a hint, not the source of truth: the hub prefers a `meetings` or `events` item in the knowledge base whose time overlaps the recording. The device does not send a calendar event id, because the hub cannot see the device's calendar. Other keys in `calendar` are ignored; a title or location over 200 characters, or more than 100 attendees or one over 100 characters, is `400`.
 - The phone keeps owning the transcript. These fields travel with the full-state upload, so a later upload replaces them like everything else.
 
 Stored on the recording, and returned by `GET /api/v1/kb/recordings/{id}` inside `detail.meta` (alongside the fields already there):
@@ -61,7 +61,7 @@ Stored on the recording, and returned by `GET /api/v1/kb/recordings/{id}` inside
 | `kind` | `meeting` or `note` |
 | `calendar` | The hint above, when one was sent |
 | `meeting` | The matched knowledge-base item, when one was found: `{kind, id, name}` (`kind` is `meetings` or `events`) |
-| `minutes_state` | `pending` (a meeting whose minutes for the current revision are not written yet: waiting for the transcript, the model, or regenerating), `ready`, `failed`, or absent when the recording is not a meeting |
+| `minutes_state` | `pending` (a meeting whose minutes for the current revision are not written yet: waiting for the transcript, the model, or regenerating), `ready`, `failed`, or absent when the recording is not a meeting (minutes it got while it was one stay in `detail.minutes`) |
 | `minutes_asked` | `true` once the user asked for minutes (`POST …/minutes`), which makes the recording a meeting whatever its `kind` |
 
 `GET /api/v1/recordings` (reconciliation) carries the same `minutes_state` on each recording when it is set, so the phone knows when to fetch a detail.
@@ -104,7 +104,7 @@ The minutes themselves are `detail.minutes`, present once minutes have been writ
 Reading it back:
 
 - `GET /api/v1/kb/recordings/{id}` returns `detail.minutes` and the meta fields above. `detail.summary` stays the short summary, for a meeting as well, so existing clients keep working.
-- `kb_get` on a recording returns the minutes in the same shape, and `kb_search` matches the minutes text as well as the transcript, so "the minutes of the meeting just now" resolves without a new tool.
+- `kb_get` on a recording prints the minutes (`minutes.md`: the same items, each at its clock time) before the transcript, and `kb_search` matches the minutes text as well as the transcript, so "the minutes of the meeting just now" resolves without a new tool.
 
 Regenerating: `POST /api/v1/recordings/{id}/minutes` asks for a fresh generation. It also works on a recording that is not a meeting (an older app, the watch, a forgotten mark), which becomes one (`minutes_asked`). `202 {"state":"pending"}` when it is queued, `409` when the transcript is not `complete`, `404` when there is no such recording. It does not change the transcript or the revision.
 
