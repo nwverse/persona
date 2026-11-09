@@ -1,5 +1,19 @@
 # Lessons: hub / node and networking
 
+## Runtime policy and publisher-owned node packages (#2566)
+
+A persisted node-update choice must override startup configuration everywhere:
+API readback, manager handshakes, downloads and busy checks. Preserve an explicit
+false with a nullable stored value; publish a changed choice only after the
+database accepts it. Package activation is not consumer notification. A repeated
+explicit enable can request the existing package-check RPC after configuration,
+without pretending that a deployment has finished.
+
+Treat a node binary directory symlink as publisher-owned. Swapping files or
+removing version markers through it corrupts the immutable release manifest.
+Protect both enabled installs and disabled-policy cleanup, and let the publisher
+activate its verified directory after Hub health confirmation.
+
 ## Durable storage receipts do not extend authority (#1187)
 
 Check current declared keys and queue/blob flags before replay lookup, including
@@ -1395,12 +1409,19 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`, `isolatedSessionAllocation` in `hub/sessions_push_test.go`, #2050). Repeated garbage collection clears pools but does not stop unrelated goroutines; a synchronized allocation in another goroutine is still included in the measured callback's `TotalAlloc` delta. Rerun the whole test in the child, preserving its fixtures, functional assertions, collection cadence and allocation ceilings. Bound and reap the child, propagate its failures, and verify a child receipt rather than treating an early return as isolation. Check the source revision before attributing two failures to the same missing guard: a newer revision may already isolate one of them.
 - A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
 - Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
+- The paged index rebuilt every row's item (a summary marshalled, the full row and search text joined) on each list update and `sessions.revs`, for one changed row: 2.65 MB for 150 rows. The index's own item is the memo: when its stored full row is the row's new encoding with the same suffix, its summary is the row's too, since the summary is cut from the fields that encoding holds (`indexedRow`, 0.10 MB). Text read from the row itself is still compared, because the encoding folds every invalid UTF-8 byte into the same escape. The keys must line up: a list with two rows under one id pairs one row's summary with the other's bytes, so after such a list, and for the list after it, compute every row. Prove it with the full computation run beside it on changing lists, step for step (`TestIndexRowReuseMatchesFullPath`), and let `Replace` keep a payload that is the stored slice itself without walking it by reflection (`sessionlist.sameItem`).
 
 ## Hot paths: compressing the same file on every request, a privacy scan that cannot read gzip (2026-11-09, #2219)
 
 - A response compressed as it is sent costs the same CPU for every client: the hub's gzip at level 6 over the web client's hashed assets was about 38 ms of CPU per cold first screen, 1.2 ms when the gzip bytes are stored. Files that never change under one name (Vite's `assets/`) are compressed once at build time (`webasset.Precompress`) and sent as stored; a request that must not get gzip (no `Accept-Encoding`, `HEAD`, `Range`, the admin paths) gets them decompressed, so its answer is the plain file's. Decompress such a file as it is read (`gunzipSeeker`: the size from the gzip trailer, a seek forward skips, a seek back starts again), not into memory first: a `HEAD` or a 304 then inflates nothing. A client without gzip pays the inflate (about 22 ms per first screen, against 0.9 ms for plain files); browsers always take gzip. Prove it against the plain site behind the same middleware for each kind of request, comparing status, headers and decoded bytes (`TestWebAppServesPrecompressedAssetsAsThePlainFiles`), and check that the stored bytes go out unchanged, not compressed again.
 - A stored file's own name must not become a second way to fetch it: the built-in copy answers `assets/<name>.gz` with a 404, as the plain site did.
 - `check_bundle_privacy.py` reads printable strings, and gzip turns a file's strings into noise: scan the plain web copy before precompressing it, or the scan of the binaries silently stops covering the web client.
+
+## Fixed heap: a lazy value evaluated as an argument, a whole set built for one member (2026-11-09, #2475)
+
+- A value made on first use is made anyway when it is passed as an argument to a call that may not need it: `writeIfMissing(p, prompts.RenderKBReadme())` parsed every prompt template on each manager start for a README that was already there. Pass the function (`writeIfMissing(p, prompts.RenderKBReadme)`) and call it after the check; a `heap?gc=1` profile of an idle process shows such frames.
+- A catalog or template set built whole on first use holds every member once any is needed: the deployment, inbox and computer indexes compiled every template of theirs (624 regexps, 2.9 MB live for the three) the first time they translated a text, and one prompt render parsed all 139 templates (1.56 MB). Keep each member's source and build it on first use (`i18n.templatePattern`, `prompts.templateSet` parsing a template with the ones its tree includes), and keep a test that builds every member, so a broken one still fails there (`TestEveryTemplateCompiles`, `Names()`).
+- A receive buffer sized for a worst case that cannot happen is kept for the life of a watch: the kernel never sends a netlink datagram over 32 KiB, so `netaddr` uses 64 KiB and retries a truncated dump with the old 1 MiB.
 
 ## Hot paths: a whole list decoded again for one changed row, one message projected per app (2026-11-09, #2250)
 
@@ -1423,3 +1444,9 @@ A catalog's recipe contains the upstream tool's argument object. Protocol field 
 ## Bound read-state snapshots by recorded entries (#2400)
 
 When decorating a large session list, reserve the timestamp snapshot by the smaller of the list and the recorded read-state table, under the same lock used to copy it. Reserving for every row wastes memory when few or no sessions have been read. The unchanged isolated publication budget can expose this cost even after workspace discovery allocations are fixed; identify the failing subcase rather than treating all session-reader failures as the same regression. Keep the original budgets and seen-state semantics.
+
+## Publication follows the explicit node policy (#1175)
+
+A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.
+
+After activating matching native and downloadable packages, reapply an enabled runtime node policy through its existing settings route so managers recheck the new pointer. A filesystem pointer change has no consumer watcher. Check the current policy first so an intervening disable is respected; a failed recheck must not produce a completed publication receipt.
