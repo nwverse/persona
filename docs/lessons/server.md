@@ -1474,3 +1474,7 @@ field, so `-race` reports it, and it may end up serving the new peer too. Pass w
 records the node's lines) into the constructor, and serve the peer through a local variable. A rule test also needs
 steps that differ only in the guarded rule: revs followed by a list that differs anyway, or a `call` that waits for the
 pending count to drop, pass with the rule deleted.
+
+## Optional filesystem labels must not gate inventory (2026-11-10, #2750)
+
+A regular Git HEAD can block in open despite stat succeeding. Keep project labels outside authoritative session discovery, cap concurrent metadata readers, and deduplicate pending paths across cache refreshes. Return all discovered session identities and busy states even when labels are unavailable; never replace a failed session read with an empty idle inventory. Test with a HEAD whose read cannot complete until after the inventory response, and retain a synchronous negative control.
