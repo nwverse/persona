@@ -659,7 +659,9 @@ const (
 // answered, and drops one that can never be sent; it does not remove a sent one.
 func (n *Node) replayNotify(ctx context.Context, sp *spool, e spoolEntry) notifyOutcome {
 	cctx, cancel := context.WithTimeout(ctx, replayNotifyTimeout)
-	rep, err := n.notifyCall(cctx, e.Request, e.ID)
+	req := e.Request
+	req.Pane = n.ownPane(req.Pane) // kept as the client sent it (serveSock translates live ones)
+	rep, err := n.notifyCall(cctx, req, e.ID)
 	timedOut := cctx.Err() != nil && ctx.Err() == nil
 	cancel()
 	if err == nil && rep.Error != "" { // refused before the manager was asked (empty, not JSON): never sendable

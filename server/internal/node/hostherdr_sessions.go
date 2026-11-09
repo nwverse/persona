@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -352,14 +353,13 @@ func (n *Node) ownPane(pane string) string {
 	if own == "" {
 		return pane
 	}
-	session, bare := herdr.SplitID(pane)
-	switch session {
-	case own:
+	if bare, ok := strings.CutPrefix(pane, "@"+own+":"); ok && bare != "" { // whatever the name: HERDR_SESSION is not checked
 		return bare
-	case "":
-		return herdr.PaneOf(pane, "", own)
 	}
-	return pane
+	if strings.HasPrefix(pane, "@") { // another session's
+		return pane
+	}
+	return herdr.PaneOf(pane, "", own)
 }
 
 // envPane is the herdr pane a process's environment names (HERDR_PANE_ID, its session from HERDR_SESSION or

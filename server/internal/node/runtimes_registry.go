@@ -524,7 +524,8 @@ func (b *runtimeRegistry) sessionInPane(pane string, own func(string) string) st
 	for _, h := range b.conns {
 		h.mu.Lock()
 		for _, s := range h.sessions {
-			if p := h.panes[s.SessionID]; p != "" && own(p) == pane && s.Status != proto.StatusOffline {
+			// The hint as the node writes panes, or bare as an extension that does not name the session sends it.
+			if p := h.panes[s.SessionID]; p != "" && (p == pane || own(p) == pane) && s.Status != proto.StatusOffline {
 				h.mu.Unlock()
 				return s.SessionID
 			}

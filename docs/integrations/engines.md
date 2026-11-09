@@ -186,9 +186,11 @@ of them at once. A node on the default herdr server drives every **running** nam
 - **Left alone**: stopped sessions, the `persona-<hash>` sessions of other nodes' data directories (`herdr/session.go`), names that cannot stand in an
   id, and every other session on a node that runs on a session of its own or on a socket `HERDR_SOCKET_PATH` moved. Windows drives the default server only.
 - **Pane identity from processes**: hooks, MCP calls, the pi extension (`herdrPaneOf`) and the process scans read `HERDR_SESSION` (or the session
-  directory in `HERDR_SOCKET_PATH`) with `HERDR_PANE_ID` (`nodeclient.HookPane`, `herdr.PaneOf`), so a hook in a named session's `w4:p1` never binds
-  the default server's `w4:p1`. They write panes as the default server sees them; a node whose own server is a named session translates
-  (`node ownPane`): its own session's panes bare, the default server's `@default:<id>`, which it does not drive.
+  directory in `HERDR_SOCKET_PATH`) with `HERDR_PANE_ID` (`herdr.EnvSession`, `herdr.PaneOf`), so a hook in a named session's `w4:p1` never binds
+  the default server's `w4:p1`. Hooks, MCP calls and the pi extension write panes as the default server sees them (`nodeclient.HookPane`), and the
+  node translates them where they come in (`node ownPane`: the node socket, the standby spool, runtime hints); the node's own process scans write
+  them as its herdr host does (`node envPane`). The two differ only on a node whose own server is a named session: its own session's panes are bare
+  there, and the default server's are `@default:<id>`, which it does not drive.
 - **Never in the default server's way**: `herdr session list` runs in the background, again once the list is 5 s old; an id of a session the list
   does not have makes the node ask again (at most once a second) and wait up to 6 s for the answer. Each listing asks the named sessions alongside
   the default server and waits at most 2 s from its start for them (and, the first time, for the list); what a session has not answered by then
@@ -198,7 +200,10 @@ of them at once. A node on the default herdr server drives every **running** nam
 - **Pane-less work stays on the default server**: new workspaces, and new sessions started without naming a workspace (a named session's labels
   never match a start's directory name). A start, a new tab or a worktree in a named session's workspace opens there.
 - **Focus** following (`herdr.client.focus`) is the default server's: it is the computer's own herdr window. Focusing a named session's pane works
-  but brings no echo back.
+  but brings no echo back. A full herdr view is attached to one server (the session of the pane it opened on): asked to show a pane of another
+  session it ends, and opening it again attaches to that session.
+- **Known gap**: the iPhone and Android apps rename a space optimistically under the name typed; for a named session's space the name shown
+  (`<session> · <name>`) differs, so they show the typed name until the app reloads. The web and the hub use the name `space.rename` answers.
 
 ## When herdr is not running
 

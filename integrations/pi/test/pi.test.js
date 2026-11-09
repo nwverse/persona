@@ -585,4 +585,6 @@ test('the herdr pane comes with its named session', () => {
   assert.equal(herdrPaneOf({ HERDR_PANE_ID: 'w4:p1', HERDR_SESSION: 'build' }), '@build:w4:p1')
   assert.equal(herdrPaneOf({ HERDR_PANE_ID: 'w4:p1', HERDR_SOCKET_PATH: '/h/.config/herdr/sessions/build/herdr.sock' }), '@build:w4:p1')
   assert.equal(herdrPaneOf({ HERDR_PANE_ID: 'w4:p1', HERDR_SOCKET_PATH: '/h/.config/herdr/herdr.sock' }), 'w4:p1')
+  assert.equal(herdrPaneOf({ HERDR_PANE_ID: 'w4:p1', HERDR_SOCKET_PATH: '/h/.config/herdr/sessions/a b/herdr.sock' }), 'w4:p1')
+  assert.equal(herdrPaneOf({ HERDR_PANE_ID: 'w4:p1', HERDR_SOCKET_PATH: '/h/.config/herdr/sessions/../herdr.sock' }), 'w4:p1')
 })

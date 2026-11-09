@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Named herdr sessions (#2196): the herdr host drives every running named session next to its own server, with the
@@ -596,6 +599,14 @@ func TestHookPanesOfNamedSessions(t *testing.T) {
 			t.Errorf("node on session work: ownPane(%q) = %q, want %q", in, got, want)
 		}
 	}
+	// A session name herdr took from HERDR_SESSION as it is, one that could not stand in another node's id.
+	n.hosts = herdrHosts(&herdr.Client{Socket: "/tmp/x/h.sock", Session: "a b"})
+	for in, want := range map[string]string{"@a b:w1:p1": "w1:p1", "w1:p1": "@default:w1:p1", "@build:w1:p1": "@build:w1:p1"} {
+		if got := n.ownPane(in); got != want {
+			t.Errorf("node on session %q: ownPane(%q) = %q, want %q", "a b", in, got, want)
+		}
+	}
+	n.hosts = herdrHosts(&herdr.Client{Socket: "/tmp/x/h.sock", Session: "work"})
 	// A pane of the default server never resolves on such a node: it does not drive that server.
 	if err := n.sendKeys(context.Background(), "@default:w1:p1", "esc"); !errors.Is(err, errNoSuchSession) {
 		t.Errorf("keys to the default server from a node on another session: %v", err)
@@ -776,6 +787,18 @@ func TestRuntimePanesOfNamedSessions(t *testing.T) {
 			t.Errorf("sessionInPane(%q) = %q, want %q", pane, got, want)
 		}
 	}
+	// An extension that does not name the session sends HERDR_PANE_ID bare: on a node of its own session (where a bare
+	// pane from a client is the default server's) it still joins the pane of the same id.
+	reg.conns[1].panes = map[string]string{"s1": "w4:p1"}
+	ownSession := func(p string) string {
+		if rest, ok := strings.CutPrefix(p, "@work:"); ok {
+			return rest
+		}
+		return "@default:" + p
+	}
+	if got := reg.sessionInPane("w4:p1", ownSession); got != "s1" {
+		t.Errorf("a bare hint on a node of its own session: %q, want s1", got)
+	}
 }
 
 // The engine's herdr host on the default server drives the named sessions; tests' plain hosts do not.
@@ -838,4 +861,105 @@ func TestNamedSessionStreamsUseItsServer(t *testing.T) {
 	if calls := fs.own.calls(); len(calls) != 0 {
 		t.Errorf("the own server was asked: %v", calls)
 	}
+}
+
+// A notification kept while the manager was away and sent later names the session of the pane it came from, on a node
+// whose own herdr server is a named session too (its pane comes as the client sent it).
+func TestReplayedNotifyNamesTheSessionOfAnOwnSessionPane(t *testing.T) {
+	n, _ := testNode(t)
+	n.logger = log.New(io.Discard, "", 0)
+	n.hosts = herdrHosts(&herdr.Client{Socket: "/tmp/x/h.sock", Session: "work"})
+	n.panes = map[string]string{"w1:p1": sidA}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n2hR, n2hW := io.Pipe()
+	h2nR, h2nW := io.Pipe()
+	n.peer = rpc.New("n", n2hW)
+	hub := rpc.New("h", h2nW)
+	got := make(chan map[string]any, 1)
+	hub.OnRequest = func(_ context.Context, _ string, params json.RawMessage) (any, error) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		got <- p
+		return map[string]any{"ok": true}, nil
+	}
+	go func() { _ = hub.Serve(ctx, n2hR) }()
+	go func() { _ = n.peer.Serve(ctx, h2nR) }()
+	sp := openSpool(filepath.Join(t.TempDir(), spoolFile))
+	e := spoolEntry{ID: "n1", At: time.Now(), Kind: "notify",
+		Request: sockRequest{Kind: "notify", Pane: "@work:w1:p1", Input: json.RawMessage(`{"title":"t"}`)}}
+	_, _ = sp.add(e)
+	n.replayNotify(ctx, sp, e)
+	select {
+	case p := <-got:
+		if p["session_id"] != sidA {
+			t.Errorf("replayed notification %v, want session_id %s", p, sidA)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("not sent")
+	}
+}
+
+// The own server's stream ending ends Watch at once, even while herdr's list of sessions is slow to come.
+func TestWatchEndsWithTheOwnStreamWhileTheListIsSlow(t *testing.T) {
+	dead := filepath.Join(t.TempDir(), "none.sock") // nothing listens: the own stream ends at once
+	c := &herdr.Client{Socket: dead}
+	h := &herdrHost{c: c, named: &herdrSessions{own: c, list: func(ctx context.Context) ([]herdr.SessionInfo, error) {
+		select {
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+		}
+		return nil, nil
+	}}}
+	start := time.Now()
+	err := h.Watch(context.Background(), []host.PaneRef{{Kind: host.Herdr, ID: "@build:w4:p1"}}, func(bool) {})
+	if err == nil {
+		t.Error("Watch on a server that is not there: want its error")
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("Watch ended %s after the own stream: the list held it up", took)
+	}
+}
+
+// A full herdr view shows one herdr server: asked to show a pane of another session it ends (opening it again
+// attaches to that session) instead of moving a focus it does not show.
+func TestFullViewEndsForAPaneOfAnotherSession(t *testing.T) {
+	n, f, _ := herdrNode(t)
+	h, fs := namedHerdr(t, f)
+	n.hosts = host.NewRegistry(h)
+	f.reply("session.snapshot", sessionSnapshot(sidA))
+	fs.build.reply("session.snapshot", sessionSnapshot(sidB))
+	fs.review.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	listSessions(t, n)
+	open := func(id, session string) *fullClient {
+		ctx, cancel := context.WithCancel(context.Background())
+		fc := &fullClient{n: n, id: id, ctx: ctx, end: cancel, gone: make(chan struct{}), session: session}
+		n.mu.Lock()
+		if n.fulls == nil {
+			n.fulls = map[string]*fullClient{}
+		}
+		n.fulls[id] = fc
+		n.mu.Unlock()
+		return fc
+	}
+	own, named := open("own-view", ""), open("build-view", "build")
+	n.focusSession("own-view", sidB) // build's agent in a view of the own server
+	select {
+	case <-own.gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the own server's view was not ended for a pane of build")
+	}
+	if tr := fs.build.trace("pane.focus"); len(tr) != 0 {
+		t.Errorf("focus moved in build for a view that does not show it: %v", tr)
+	}
+	n.focusSession("build-view", sidB) // the view of build shows it
+	if tr := fs.build.trace("pane.focus"); len(tr) != 1 {
+		t.Errorf("build focus %v", tr)
+	}
+	select {
+	case <-named.gone:
+		t.Error("the view of build ended for one of its own panes")
+	default:
+	}
+	named.stop("", false)
 }

@@ -601,9 +601,9 @@ export function herdrPaneOf(env = process.env) {
   const pane = env.HERDR_PANE_ID
   if (!pane) return undefined
   let session = env.HERDR_SESSION || ''
-  if (!session) {
+  if (!session) { // as the node reads it (herdr.SocketSession): only a name that can stand in an id
     const m = /[/\\]sessions[/\\]([^/\\]+)[/\\]herdr\.sock$/.exec(env.HERDR_SOCKET_PATH || '')
-    session = m ? m[1] : ''
+    session = m && /^[A-Za-z0-9._-]{1,128}$/.test(m[1]) && m[1] !== '.' && m[1] !== '..' ? m[1] : ''
   }
   return session && session !== 'default' ? `@${session}:${pane}` : pane
 }

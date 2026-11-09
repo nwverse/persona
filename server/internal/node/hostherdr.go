@@ -404,9 +404,23 @@ func (h *herdrHost) Watch(ctx context.Context, panes []host.PaneRef, changed fun
 			}()
 		}
 	}
+	// reconcile may wait for herdr's list of sessions: it runs beside the loop (one at a time), so the own stream
+	// ending is seen at once.
+	var reconciling sync.Mutex
+	again := func() {
+		if !reconciling.TryLock() {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer reconciling.Unlock()
+			reconcile()
+		}()
+	}
 	defer wg.Wait()
 	defer cancel()
-	reconcile()
+	again()
 	tick := time.NewTicker(sessionsEvery)
 	defer tick.Stop()
 	for {
@@ -414,7 +428,7 @@ func (h *herdrHost) Watch(ctx context.Context, panes []host.PaneRef, changed fun
 		case err := <-own:
 			return err
 		case <-tick.C:
-			reconcile()
+			again()
 		}
 	}
 }
