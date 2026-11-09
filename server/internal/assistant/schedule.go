@@ -1120,6 +1120,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.remindLoop(ctx)       // the todos' reminders (todo_plan.go)
 	go s.channelLoop(ctx)      // the channels' runs that lost their watcher (channels.go)
 	go s.kbLoop(ctx)           // the knowledge base (kb.go)
+	go s.kbHistoryLoop(ctx)    // importing chats' older history into it, off by default (kb_history.go)
 	go s.viewActionLoop(ctx)   // durable card reply outbox
 	go s.acceptLoop(ctx)       // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)

@@ -133,6 +133,9 @@ type KBSettings struct {
 	// AttachmentDaysBySource: attachment_days for the chats of one source (kb.attachment_days_by_source); the sources
 	// not in it, and non-positive values, keep attachment_days.
 	AttachmentDaysBySource map[string]int `json:"attachment_days_by_source,omitempty"`
+	// History is kb.history, the history import (KBHistory; nil: off). Only manager.json sets it, and a change never
+	// reopens the knowledge base: the import reads it afresh before every call.
+	History *KBHistory `json:"history,omitempty"`
 }
 
 // CodeKBUnavailable: the knowledge base is not open yet (the user's time zone not known yet, another assistant process
