@@ -31,6 +31,21 @@ const (
 // Signals are every signal an item may carry, in the selection's default order.
 var Signals = []string{SignalMentions, SignalCommentMentions, SignalAuthored, SignalViewed}
 
+// CanonicalSignals is a source's signals as the knowledge base keeps them: each known one once, in Signals' order, and
+// nil for none. A source may list them in any order or repeat one; an unknown one is left out.
+func CanonicalSignals(in []string) []string {
+	var out []string
+	for _, s := range Signals {
+		for _, v := range in {
+			if v == s {
+				out = append(out, s)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // Tagging is how an entity is tagged, as the knowledge base writes it into the entity's metadata.
 type Tagging struct {
 	Importance string    `json:"importance,omitempty"` // P0 (critical) … P3 (ignorable)

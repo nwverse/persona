@@ -401,8 +401,7 @@ func checkHistoryChats(raw json.RawMessage) ([]connectorwire.HistoryChat, error)
 	if res.Chats == nil {
 		is.add("no chats list (an empty one is [])")
 	}
-	kinds := []string{connectorwire.HistoryKindDM, connectorwire.HistoryKindGroup, connectorwire.HistoryKindBot,
-		connectorwire.HistoryKindOfficial, connectorwire.HistoryKindSystem}
+	kinds := connectorwire.HistoryKinds
 	seen := map[string]bool{}
 	for i, c := range res.Chats {
 		switch {

@@ -32,7 +32,7 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource) error {
 		old, ok := e.Store.Item(it.Kind, it.ID)
 		if ok {
 			if old.Title == it.Title && old.At.Equal(it.At) {
-				if !slices.Equal(old.Signals, it.Signals) {
+				if !slices.Equal(kbwire.CanonicalSignals(old.Signals), it.Signals) { // canonical: a reordering is no change
 					// Only why it concerns the owner moved: keep them as the source says now, without tagging it again.
 					old.Signals = it.Signals
 					if err := e.Store.PutItem(old); err != nil {

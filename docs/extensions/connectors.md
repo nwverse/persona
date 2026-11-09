@@ -142,9 +142,10 @@ are still dispatched to connectors by the hub (the manager asks through `app.cal
 - `Archive`: one cursor per account; `Changes(cursor)` returns changed conversations. The hub stores the cursor in `cursors/<id>.json`; conversation ids are `<connector id>-<conversation id>`.
 - **What the knowledge base's selection reads** (#1523): the selection decides which chats and documents are kept by
   what the connector reports, so every connector that reports it behaves the same. A batch's chat (`kbwire.SourceChat`)
-  has a kind (dm / group / bot / official / system) and the owner's flags `muted`, `collapsed` and `done`; a message has
-  `mine` and `mentioned` (on `Changes` batches as on history pages: the connector decides what counts as a mention of
-  the owner, an @all included); a document (`kbwire.Item`) has `signals`, the ones it can tell of `mentions`,
+  has a kind (the kind rules match dm / group / bot / official / system; other kinds such as mail, issue or pr match
+  none) and the owner's flags `muted`, `collapsed` and `done`; a message has `mine`, `mentioned` (the owner by name: the
+  connector decides what counts) and `mentioned_all` (an @all / @everyone, reported apart so the selection's
+  `include_all` can decide), on `Changes` batches as on history pages; a document (`kbwire.Item`) has `signals`, the ones it can tell of `mentions`,
   `comment_mentions`, `authored` and `viewed`. All of them are optional: a connector that cannot tell one leaves it out,
   and its chats or documents never match that rule.
 - `Chats`: for sources like Lark with per-conversation cursors and attachments, provide `kb.Source` directly; archiving, compression and tagging stay unchanged. Older history is imported separately (`docs/assistant/knowledge.md`, "History import").

@@ -3642,7 +3642,10 @@ export interface ConnectorChatBatch {
 export interface ConnectorArchiveChat {
   id: string;
   name: string;
-  /** dm, group, bot, official (an official or service account) or system (the service's own notices). */
+  /**
+   * The selection's kind rules match dm, group, bot, official (an official or service account) and system (the
+   * service's own notices); a source may report other kinds (mail, issue, pr…), which match no kind rule.
+   */
   kind: string;
   topic?: boolean;
   /** The owner muted it (a source's automatic muting of large groups included). */
@@ -3664,10 +3667,15 @@ export interface ConnectorArchiveMessage {
   sender_name?: string;
   mine?: boolean;
   /**
-   * The owner is mentioned in it (an @-mention, an @all, or the owner's display names): the program decides, on
-   * archive.changes batches and history pages alike.
+   * The owner is mentioned by name in it (an @-mention of the owner, or the owner's display names): the program
+   * decides, on archive.changes batches and history pages alike. An @all alone is mentioned_all.
    */
   mentioned?: boolean;
+  /**
+   * It mentions everyone in the chat (an @all / @everyone). Reported apart from mentioned: whether it counts as a
+   * mention is the knowledge base's selection (include_all).
+   */
+  mentioned_all?: boolean;
   /** TEXT, POST, IMAGE, FILE, CARD, SYSTEM… */
   type?: string;
   text?: string;

@@ -3482,7 +3482,8 @@ type ConnectorChatBatch struct {
 type ConnectorArchiveChat struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// dm, group, bot, official (an official or service account) or system (the service's own notices).
+	// The selection's kind rules match dm, group, bot, official (an official or service account) and system (the
+	// service's own notices); a source may report other kinds (mail, issue, pr…), which match no kind rule.
 	Kind  string `json:"kind"`
 	Topic bool   `json:"topic,omitempty"`
 	// The owner muted it (a source's automatic muting of large groups included).
@@ -3502,9 +3503,12 @@ type ConnectorArchiveMessage struct {
 	SenderID   string `json:"sender_id,omitempty"`
 	SenderName string `json:"sender_name,omitempty"`
 	Mine       bool   `json:"mine,omitempty"`
-	// The owner is mentioned in it (an @-mention, an @all, or the owner's display names): the program decides, on
-	// archive.changes batches and history pages alike.
+	// The owner is mentioned by name in it (an @-mention of the owner, or the owner's display names): the program
+	// decides, on archive.changes batches and history pages alike. An @all alone is mentioned_all.
 	Mentioned bool `json:"mentioned,omitempty"`
+	// It mentions everyone in the chat (an @all / @everyone). Reported apart from mentioned: whether it counts as a
+	// mention is the knowledge base's selection (include_all).
+	MentionedAll bool `json:"mentioned_all,omitempty"`
 	// TEXT, POST, IMAGE, FILE, CARD, SYSTEM…
 	Type string    `json:"type,omitempty"`
 	Text string    `json:"text,omitempty"`

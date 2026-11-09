@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/serve"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
 const schemaDir = "../../../../schema/extension"
@@ -514,5 +515,29 @@ func TestManifestSchemaContributesAreTheHubsPoints(t *testing.T) {
 		if item["additionalProperties"] != false {
 			t.Errorf("contributes.%s: %s does not refuse unknown fields (additionalProperties: false), the hub does", name, def)
 		}
+	}
+}
+
+// The connector schema's enums for what the knowledge base's selection matches on are the hub's own lists: an item's
+// signals are kbwire.Signals (in that order) and a history chat's kinds the connectorwire.HistoryKind* ones, so a
+// value added on one side only makes the SDK and the hub's conformance disagree.
+func TestConnectorSchemaSelectionEnumsAreTheHubsLists(t *testing.T) {
+	s := loadSchemas(t)
+	enum := func(def, field string, items bool) []string {
+		node := s.def(t, def)["properties"].(map[string]any)[field].(map[string]any)
+		if items {
+			node = node["items"].(map[string]any)
+		}
+		var out []string
+		for _, v := range asSlice(node["enum"]) {
+			out = append(out, v.(string))
+		}
+		return out
+	}
+	if got := enum("ConnectorKBItem", "signals", true); !slices.Equal(got, kbwire.Signals) {
+		t.Errorf("connector.schema.json ConnectorKBItem.signals enum %v, kbwire.Signals %v", got, kbwire.Signals)
+	}
+	if got := enum("ConnectorHistoryChat", "kind", false); !slices.Equal(got, connectorwire.HistoryKinds) {
+		t.Errorf("connector.schema.json ConnectorHistoryChat.kind enum %v, connectorwire.HistoryKinds %v", got, connectorwire.HistoryKinds)
 	}
 }

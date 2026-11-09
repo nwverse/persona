@@ -98,7 +98,7 @@ Taking back a sent message (#5278): a connector that declares the capability `re
 
 Since 2026-11-04, assistant-manager process groups / sorts Inbox (`docs/assistant/inbox.md` “Who owns what”). Connectors still talk only to hub; hub forwards `inbox.collect` unchanged and proxies `inbox.reply`, `inbox.settle`, `group.*` for manager. **Protocol unchanged**.
 
-Each messages entry: id, position, `sender_id`, `sender_name`, mine, mentioned, type, text, at, media, `sender_handles: [{kind, value}]` (raw identity clues; hub stores HMAC only, `docs/assistant/knowledge.md` “Identity clues”).
+Each messages entry: id, position, `sender_id`, `sender_name`, mine, mentioned, `mentioned_all`, type, text, at, media, `sender_handles: [{kind, value}]` (raw identity clues; hub stores HMAC only, `docs/assistant/knowledge.md` “Identity clues”).
 For `archive.changes`, nonempty `id` is stable within the batch source and chat: live ingestion keeps its first durable version and ignores replay, including edited
 bodies with that ID. Distinct IDs remain distinct even when their text is identical. `position` is pagination only. Missing IDs retain legacy append behavior
 without replay protection; existing Markdown cannot reconstruct old IDs (`docs/assistant/knowledge.md` "Connector replay and recovery").
@@ -141,14 +141,18 @@ The knowledge base's selection (#1523) decides what it keeps of a chat or a docu
 same way for every connector. Every field here is optional and additive (no version change): a program that cannot tell
 one leaves it out, and its chats or documents never match that rule; a hub that does not know one ignores it.
 
-- **A chat** (an `archive.changes` batch's `chat`, a `history.chats` entry): `kind` is dm (a person), group, bot (bots,
-  apps, agents), official (an official or service account) or system (the service's own notices). `muted`: the owner
+- **A chat** (an `archive.changes` batch's `chat`, a `history.chats` entry): the selection's kind rules match `kind` dm
+  (a person), group, bot (bots, apps, agents), official (an official or service account) and system (the service's own
+  notices). `history.chats` allows only these; a batch's chat may have another kind (`mail`, `issue`, `pr`…), which
+  matches no kind rule. `muted`: the owner
   muted it, a source's automatic muting of large groups included; `collapsed`: the owner folded it away (a chat box,
   folded groups); `done`: the owner marked it done. A batch carries them every time it reports the chat, so a change at
   the source reaches the knowledge base with the next message.
-- **A message** (batches and history pages alike): `mine` is the owner's own; `mentioned` says the owner is mentioned in
-  it. The program decides: an @-mention of the owner, an @all / @everyone, or, for a source without mention data, a match
-  of the owner's display names in the text.
+- **A message** (batches and history pages alike): `mine` is the owner's own; `mentioned` says the owner is mentioned by
+  name in it (the program decides: an @-mention of the owner or, for a source without mention data, a match of the
+  owner's display names in the text); `mentioned_all` says it mentions everyone in the chat (an @all / @everyone). A
+  message can carry both. Report an @all as `mentioned_all` alone: whether it counts as a mention is the selection's
+  `include_all`, decided by the hub.
 - **A document** (`items.list`): `signals` are why it concerns the owner, each at most once: `mentions` (the document
   mentions the owner), `comment_mentions` (a comment or reply on it does), `authored` (the owner owns it), `viewed`
   (the owner opened it recently). Only what the program can list read-only; no other value.
@@ -159,7 +163,7 @@ one leaves it out, and its chats or documents never match that rule; a hub that 
 through three read-only calls, one conversation and one page at a time, at the pace the program sets. The hub asks
 only a connector that declares the capability, and the knowledge base drives the import through the hub
 (`connectors.history_chats`, `connectors.history`, `connectors.history_anchors`, only while "Add to knowledge base" is on).
-Messages have the `archive.changes` shape (plus `mentioned`, below) and are filed under the chat `<source>-<id>` like a batch.
+Messages have the `archive.changes` shape (see `mentioned` below) and are filed under the chat `<source>-<id>` like a batch.
 
 - **`history.chats`** lists the conversations: `kind` is dm, group, bot, official (an official or service account) or
   system (the service's own notices); `muted`, `collapsed` and `done` are the owner's flags at the source (“Chat flags
@@ -186,8 +190,8 @@ Messages have the `archive.changes` shape (plus `mentioned`, below) and are file
   whole conversation. `message` is the hit itself: the only way to keep one from an unreadable conversation. `source`
   is the name its conversation is filed under, as in `history.chats` (one the account left is often missing there). A
   search hit may carry no `sender_id`.
-- **`mentioned`** on a message (here and in `archive.changes`): the owner is mentioned in it. The program decides (an
-  @-mention of the owner, an @all, or a match of the owner's display names).
+- **`mentioned`** on a message (here and in `archive.changes`): the owner is mentioned by name in it. The program decides
+  (an @-mention of the owner, or a match of the owner's display names); an @all alone is `mentioned_all`, not `mentioned`.
 - **Pace**: an answer may carry `pace: {retry_after_ms?, stop?, reason?}`. `retry_after_ms` asks the caller to wait that
   long before the next read (a 429 and its Retry-After); `stop` asks it not to go on until a person did something (an
   expired sign-in, a 401, a policy refusal), with `reason` for people and never a secret. A page with pace is still read
