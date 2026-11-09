@@ -461,8 +461,10 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 // Session: (machine_id, session_id) is unique. session_id is Claude Code's session uuid.
 {"machine_id":"server","session_id":"uuid","title":"AI-generated title or directory name","cwd":"<project directory>",
  "workspace_cwd":"<physical directory verified by the node>",   // optional; used for workspace association, falls back to cwd when missing, doesn't replace the original cwd
- "repo_root":"<main checkout of the repo cwd belongs to>",   // optional (#2840): only when the host knows the repo (the Paseo bridge: its worktrees live under Paseo's own directory, so the repo can't be recognized from the path);
+ "repo_root":"<main checkout of the repo cwd belongs to>",   // optional (#2840): named by the host (the Paseo bridge: its worktrees live under Paseo's own directory), else read by the node off git (#1805);
                    // "By Repository" groups by it: cwd inside it is the main checkout, otherwise one of its worktrees. When absent, clients infer from the cwd path as before
+ "worktree":"<top of the git working tree cwd is in>",         // optional (#1805): the node reads it, and repo_root when no host names it, off git's files (node/gitplace.go): repo_root is the main checkout, a linked worktree resolves to its main repository
+ "branch":"<branch checked out in worktree>",                // optional (#1805): "" / absent when detached or not a git checkout; the apps group machine → project (repo_root) → worktree (labelled branch) → sessions
  "status":"idle|working|blocked|done|unknown|offline",   // offline = not running in herdr, only a transcript, can be resumed
  "pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1","agent_name":"j-3f2a",
  "pane_index":0,   // optional (#2320): this pane's positional index within its tab, from 0, top-left is 0 (the other panes were all split from it; with Agents, it's the group's initiator);
@@ -1434,7 +1436,7 @@ The direct lookup/count path does not build, scan or sort unrelated session view
 Runtime summaries keep the existing snake_case names and decode as a `Session` with optional detail fields absent. They contain:
 
 - Identity/ownership: `machine_id`, `session_id`, `manager`; source/runtime and hierarchy fields (`source_kind`, `source_thread_id`, `source_instance_id`, `parent_thread_id`, `parent_session_id`, `root_session_id`, `is_subagent`).
-- Display/grouping: `title`, `cwd`, `workspace_cwd`, `repo_root`, `agent`, `agent_label`, `agent_surface`, `agent_name`; space, parent-space, slot, pane, tab and workspace identifiers/names/indices; `todo {id,title}`.
+- Display/grouping: `title`, `cwd`, `workspace_cwd`, `repo_root`, `worktree`, `branch`, `agent`, `agent_label`, `agent_surface`, `agent_name`; space, parent-space, slot, pane, tab and workspace identifiers/names/indices; `todo {id,title}`.
 - State/freshness: `state`, `status`, `updated_at`, `state_since`, `seen_at`, `pending_interactions`, `rev`, `quiet`, `awaits_reply`, `background_working`, `background_waiting`, `starting`, `start_error`, turn-error fields.
 - Row content/progress: `last_text`, `activity`, `activity_at`, `model`, context-token/window counts; bounded `work` (phase/on/line/wait/then/wake/attempts/agent/deferred), `plan`, `goal`, and `loop` timing with its prompt omitted.
 - Routing/action safety: `capabilities`, `attached`, `can_fork`, `read_only_reason`, `started_by_persona`, `assistant`, `archived`, `space`, `origin`, `origin_ref`.
