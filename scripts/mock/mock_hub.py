@@ -1520,6 +1520,11 @@ def save_task(old, new):
     # "Notify after a run" (#2396): left out of an edit it stays; "asked" runs in the task's own conversation; "" is the default.
     if t.get("push") == "asked": t.pop("session_id", None)
     if not t.get("push"): t.pop("push", None)
+    # End time: left out it stays, null clears it, and a one-off never has one (the hub's until).
+    if t.get("repeat") == "once" or ("until" in new and not new.get("until")):
+        t.pop("until", None)
+    elif "until" in new:
+        t["until"] = new["until"]
     if t.get("repeat") == "daily":
         t["next_run"] = next_at(t.get("time", "09:00"), t.get("weekdays") or [])
     elif t.get("repeat") == "interval":
@@ -2710,6 +2715,23 @@ if MOCK_WORKFLOW_CARDS:
         for _a in _w["agents"]:
             ITEMS[_a["session_id"]] = [it("user", "text", 9, text="%s：审这一块，列出问题" % _a["label"]),
                                        it("assistant", "text", 8, text=_a.get("last_text") or "这一块看完了，没有发现问题。")]
+# MOCK_BACKGROUND_WAITING=1 (#6045): an agent whose turn ended with only a `gh run watch` left in the background: Waiting
+# in the Background, apart from Working.
+BGWAIT = "a1f3c2d4-0000-4000-8000-0000000000f1"
+if os.environ.get("MOCK_BACKGROUND_WAITING") == "1":
+    SESSIONS.append(sess("macbook", BGWAIT, "等 CI 跑完再合并", "/Users/me/code/weather", "done", "working", "weather", 1, "ci", 6, 3,
+                         "PR 已推上去，CI 在跑，我在后台盯着，绿了就合并。", state_since=ago(minutes=3), background_working=True,
+                         background_waiting=True,
+                         background=[{"id": "b9", "kind": "shell", "description": "等 CI 结果", "command": "gh run watch --exit-status",
+                                      "started_at": ago(minutes=3)}]))
+    ITEMS[BGWAIT] = (
+        [it("user", "text", 6, text="推上去，CI 绿了就合并")]
+        + tool("Bash", {"command": "git push -u origin feat/widget", "description": "推送分支"},
+               "branch 'feat/widget' set up to track 'origin/feat/widget'.", 5)
+        + tool("Bash", {"command": "gh run watch --exit-status", "description": "等 CI 结果", "run_in_background": True},
+               "Command running in background with ID: b9.", 3)
+        + [it("assistant", "text", 3, text="PR 已推上去，CI 在跑，我在后台盯着，绿了就合并。")]
+    )
 ITEMS[TESTS] = (
     [it("user", "text", 5, text="给网络层补单元测试，覆盖重试和超时")]
     + tool("Glob", {"pattern": "Sources/Weather/API/*.swift"}, "Sources/Weather/API/Client.swift\nSources/Weather/API/Retry.swift\nSources/Weather/API/Forecast.swift", 4)
@@ -3208,6 +3230,35 @@ if MOCK_TASKS:
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
 
+
+# MOCK_USAGE_LIMIT=1: two agents stopped on a subscription usage limit (docs/assistant/agent-work.md "Usage limits").
+# One the CLI continues, one nothing continues. With MOCK_TASKS=1 the first is also a task card in the main chat.
+if os.environ.get("MOCK_USAGE_LIMIT") == "1":
+    _limit_resumes = "a9e0c000-0000-4000-8000-000000000001"
+    _limit_resets = "a9e0c000-0000-4000-8000-000000000002"
+    _reset_soon = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _reset_later = (datetime.now(timezone.utc) + timedelta(days=2, hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _limit_error = "You've hit your usage limit."
+    SESSIONS += [
+        sess("macbook", _limit_resumes, "等用量重置后继续修登录", "/Users/me/code/weather", "done", "idle", "weather", 1, "limit", 8, 2,
+             _limit_error, turn_error=_limit_error, turn_error_kind="usage_limit", turn_error_resets_at=_reset_soon,
+             turn_error_resumes=True, work={"phase": "blocked", "on": "external", "resets_at": _reset_soon,
+                                            "line": "用量额度用完了，重置后自己接着做"}),
+        sess("macbook", _limit_resets, "导出周报", "/Users/me/code/weather", "done", "idle", "weather", 1, "weekly", 9, 5,
+             _limit_error, turn_error=_limit_error, turn_error_kind="usage_limit", turn_error_resets_at=_reset_later,
+             work={"phase": "blocked", "on": "external", "wait": "用量重置", "resets_at": _reset_later,
+                   "line": "用量额度用完了，重置后再继续"}),
+    ]
+    ITEMS[_limit_resumes] = [it("assistant", "text", 2, text="API Error: 429 You've hit your usage limit.")]
+    if MOCK_TASKS:
+        _limit_todo = {"id": "todo_usage_limit", "title": "等用量重置后继续修登录", "notes": "", "done_at": None,
+                       "created_at": ago(minutes=3), "updated_at": ago(minutes=1), "origin": ASK1, "plan_id": "",
+                       "spaces": [], "agents": [{"machine_id": "macbook", "session_id": _limit_resumes,
+                       "linked_at": ago(minutes=3), "released_at": None, "title": "等用量重置后继续修登录",
+                       "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "", "source": "manual", "via": ""}]}
+        TODOS.append(_limit_todo)
+        TASK_FEED.setdefault(ASK1, []).append(
+            {"id": "feed_usage_limit", "conversation": ASK1, "at": ago(minutes=2), "kind": "task", "ref": "todo_usage_limit", "body": {}})
 
 RETRY_TASK_STARTED = "a1f3c2d4-0000-4000-8000-0000000000a1"
 RETRY_MODE = {"mode": os.environ.get("MOCK_RETRY", "")}

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/update/updatetest"
@@ -411,6 +412,7 @@ func TestWatchdogTimeoutRestoresAndStopsFailedProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.ProcessPrecise = osproc.Identify(p.PID).Start
 	p.Deadline = time.Now().Add(-time.Second)
 	if err := savePending(p); err != nil {
 		t.Fatal(err)
@@ -435,6 +437,29 @@ func TestWatchdogTimeoutRestoresAndStopsFailedProcess(t *testing.T) {
 	}
 }
 
+func replaceExternally(t *testing.T, path string, data []byte) {
+	t.Helper()
+	f, err := os.CreateTemp(filepath.Dir(path), ".external-deploy-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Chmod(0755); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStartupCrashRecoveryAndExternalReplacement(t *testing.T) {
 	for _, external := range []bool{false, true} {
 		t.Run(fmt.Sprint(external), func(t *testing.T) {
@@ -453,17 +478,16 @@ func TestStartupCrashRecoveryAndExternalReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			if external {
-				if err := os.WriteFile(m.exe, []byte("independent deployment"), 0755); err != nil {
-					t.Fatal(err)
-				}
+				replaceExternally(t, m.exe, []byte("independent deployment"))
 			}
 			fresh := &Manager{exe: m.exe, version: "next", startWatch: func(string, string, string) error { return nil }}
 			if err := fresh.recover(); err != nil {
 				t.Fatal(err)
 			}
 			if external {
-				if hash(t, m.exe) == oldHash || fresh.RestartRequired() {
-					t.Fatal("overwrote external deployment")
+				got, err := os.ReadFile(m.exe)
+				if err != nil || string(got) != "independent deployment" || hash(t, m.exe) == oldHash || fresh.RestartRequired() {
+					t.Fatalf("overwrote external deployment: %q, %v", got, err)
 				}
 			} else {
 				if hash(t, m.exe) != oldHash || !fresh.RestartRequired() {
@@ -505,6 +529,7 @@ func TestSupervisorReplacementLoadedBeforeRollbackMustExecRestoredBinary(t *test
 		t.Fatal(err)
 	}
 	p.ProcessStart = "the previously crashed process"
+	p.ProcessPrecise = "not the test process"
 	p.Deadline = time.Now().Add(-time.Second)
 	if err := savePending(p); err != nil {
 		t.Fatal(err)
@@ -557,6 +582,7 @@ func TestRealIndependentWatchdogSurvivesNodeStartupCrash(t *testing.T) {
 			return err
 		}
 		p.ProcessStart = "not the test process"
+		p.ProcessPrecise = "not the test process"
 		p.Deadline = time.Now().Add(100 * time.Millisecond)
 		return savePending(p)
 	})
