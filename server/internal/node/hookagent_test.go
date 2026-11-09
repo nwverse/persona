@@ -99,7 +99,7 @@ func runHookAsync(t *testing.T, n *Node, in map[string]any) <-chan any {
 // process group): the node sees the claude gone and withdraws the card instead of holding it until nodeclient.HookTimeout (#4344).
 func TestHookCardEndsWithItsClaude(t *testing.T) {
 	question := map[string]any{
-		"hook_event_name": "PreToolUse", "session_id": decidedSession, "tool_name": "AskUserQuestion",
+		"hook_event_name": "PermissionRequest", "session_id": decidedSession, "tool_name": "AskUserQuestion",
 		"tool_input": map[string]any{"questions": []any{map[string]any{"question": "Which?", "header": "Pick",
 			"options": []any{map[string]any{"label": "A"}, map[string]any{"label": "B"}}}}},
 	}
