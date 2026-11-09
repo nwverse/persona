@@ -279,12 +279,16 @@ func (p *Pusher) signedOut(credential string) {
 	}
 }
 
-// forget drops a device, whatever token it has now (signedOut).
+// forget drops a device, whatever token it has now (signedOut), with all of its push bookkeeping: a push accepted
+// just before still marked dirty would have maintenance write a row for a device that is gone.
 func (p *Pusher) forget(d Device) {
 	p.saveMu.Lock()
 	defer p.saveMu.Unlock()
 	p.mu.Lock()
 	delete(p.devices, d.DeviceID)
+	delete(p.failed, d.DeviceID)
+	delete(p.replaced, d.DeviceID)
+	delete(p.acceptedDirty, d.DeviceID)
 	p.mu.Unlock()
 	p.deleteRow(d)
 }
