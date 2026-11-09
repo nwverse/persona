@@ -374,13 +374,21 @@ func TestAnswer(t *testing.T) {
 		{"other class", []question{{s.typ, typePTR, 3}}, nil, nil},
 		{"other type", []question{{s.typ, typeSRV, classIN}}, nil, nil},
 	} {
-		ans, add := s.answer(c.q, addrs, recordTTL)
+		w := s.match(c.q)
+		ans, add := s.build(w, addrs, recordTTL)
 		if !slices.Equal(types(ans), c.ans) || !slices.Equal(types(add), c.add) {
 			t.Errorf("%s: answers %v additionals %v, want %v %v", c.desc, types(ans), types(add), c.ans, c.add)
 		}
+		// Skipping the address read must not change the answer.
+		if !w.needsAddrs() {
+			bare, bareAdd := s.build(w, nil, recordTTL)
+			if !slices.Equal(types(bare), c.ans) || !slices.Equal(types(bareAdd), c.add) {
+				t.Errorf("%s: needs no addresses, but without them: answers %v additionals %v", c.desc, types(bare), types(bareAdd))
+			}
+		}
 	}
 	// Meta answer points at the type.
-	ans, _ := s.answer([]question{{metaName, typePTR, classIN}}, nil, recordTTL)
+	ans, _ := s.build(s.match([]question{{metaName, typePTR, classIN}}), nil, recordTTL)
 	if !ans[0].target.equal(s.typ) {
 		t.Errorf("meta target = %s", ans[0].target)
 	}
