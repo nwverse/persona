@@ -28,11 +28,12 @@ import (
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
-	"cancel_followup", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
+	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
 	"kb_search", "kb_list", "kb_get", "kb_update", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review"}
+	"conversation_new", "conversation_send", "task_plan", "task_review",
+	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -106,12 +107,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolModelProfile(ctx, self, name, args)
 	case "task_review":
 		return s.toolTaskReview(ctx, self, args) // supervise_review.go
+	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
+		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
 		return s.toolKB(ctx, name, args)
 	case "interaction_answer":
 		return s.toolInteractionAnswer(ctx, self, args)
 	case "secret_run":
 		return s.toolSecretRun(ctx, machine, self, args) // secret_run.go
+	case "list_places":
+		return s.toolListPlaces(ctx) // places.go
+	case "save_place":
+		return s.toolSavePlace(ctx, args)
 	case "inbox_draft":
 		return s.toolInboxDraft(ctx, self, args)
 	case "inbox_suggest":
@@ -165,6 +172,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "Deleted.", nil
 		}
 		return "Cancelled.", nil
+	case "machines_list":
+		return s.toolMachinesList(ctx)
 	case "agents_list":
 		var a struct{ State, Machine, Query string }
 		_ = json.Unmarshal(args, &a)
@@ -258,11 +267,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if !ok {
 			return "", fmt.Errorf("unknown machine %q (machines: %s)", a.Machine, s.machineIDs(ctx))
 		}
+		// Refused before the user is asked: a model goes to the agent as --model (#1644).
+		if a.Model = strings.TrimSpace(a.Model); a.Model != "" && !proto.ValidModelID(a.Model) {
+			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
+		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
+		}
+		if a.Model != "" { // the user sees what it will run on before saying yes
+			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -328,6 +344,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			return "", err
 		}
+		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
 		if s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID) {
 			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+

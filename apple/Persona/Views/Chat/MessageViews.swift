@@ -240,10 +240,12 @@ struct PeerMessage: View {
     var item: Item
     var from: String
     @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.subagentsByCall) private var agents
 
     var body: some View {
         card
             .padding(.trailing, Theme.Space.xxl)
+            .chatPinned(pinKey)
             .messageLongPress(id: item.id) { card }
             .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
     }
@@ -256,17 +258,28 @@ struct PeerMessage: View {
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Markdown(d.markdown)
-                .markdownSoftBreakMode(.lineBreak)
-                .markdownTheme(.persona)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                #if os(macOS)
-                .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
-                #endif
+            if Self.isHandback(from: from, agents: agents.values) {
+                // A subagent's report that came as a message: one line until opened, as in its card.
+                FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
+            } else {
+                words(d)
+            }
         }
         .padding(Theme.Space.m)
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+    }
+
+    private var pinKey: String { "peer-" + item.id }
+
+    private func words(_ d: AssistantRowText) -> some View {
+        Markdown(d.markdown)
+            .markdownSoftBreakMode(.lineBreak)
+            .markdownTheme(.persona)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(macOS)
+            .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
+            #endif
     }
 }
 
@@ -473,14 +486,20 @@ struct AssistantText: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.quiet == b.quiet }
     @Environment(\.openFile) private var openFile
     @Environment(\.rowMemoScope) private var memoScope
+    /// The new conversation layout (#1666, `ChatLayout`): Persona's answer in its pale gray box.
+    @Environment(\.chatLayout) private var layout
 
-    /// The answer's words (also what a long press lifts).
+    /// In the new layout's box (not the words between an agent's steps).
+    private var boxed: Bool { layout.on && !quiet }
+
+    /// The answer's words, in their box when there is one (also what a long press lifts).
     private func answer(_ d: AssistantRowText) -> some View {
         AssistantRichMarkdown(text: item.text ?? "", itemID: item.id, memo: d, memoKey: RowMemo.key(memoScope, item.id))
             // Inside the theme (applied first), or the theme's text style wins (docs/lessons/ios.md).
             .modifier(QuietMarkdown(on: quiet))
             .markdownTheme(.persona)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .chatBoxed(Theme.ChatBox.persona, on: boxed)
     }
 
     var body: some View {
@@ -496,7 +515,8 @@ struct AssistantText: View, Equatable {
                 .textSelection(.enabled)
                 #endif
                 .contentShape(.rect)
-                .messageLongPress(id: item.id, card: true) { answer(d) }
+                // A boxed answer is lifted in its own box, a bare one on a card.
+                .messageLongPress(id: item.id, card: !boxed) { answer(d) }
             if let openFile {
                 // Documents as cards with their first page (#1543), the rest as chips.
                 FileChips(paths: d.chips, open: openFile)

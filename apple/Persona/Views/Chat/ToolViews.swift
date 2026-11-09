@@ -82,9 +82,9 @@ enum ToolPresentation {
     }
 
     /// Where a tool's subject gives way when it does not fit: a path keeps its file name (the middle goes), a Mac's
-    /// steps or a browser script read from their start (the end goes).
+    /// steps, a browser script or a plan (which step it is on) read from their start (the end goes).
     static func truncation(_ name: String) -> Text.TruncationMode {
-        ComputerSteps.isComputerTool(name) || ["browser_run", "browser_look"].contains(baseName(name)) ? .tail : .middle
+        ComputerSteps.isComputerTool(name) || ["browser_run", "browser_look", "TodoWrite"].contains(baseName(name)) ? .tail : .middle
     }
 
     /// `machines`: who the computer tools' `machine` is (AppModel's when nil).
@@ -119,7 +119,7 @@ enum ToolPresentation {
         // ask_user is the Persona assistant's own question tool (docs/assistant/assistant.md); it takes the same questions.
         case "AskUserQuestion", "ask_user": return i["questions"]?.array?.first?["question"]?.string ?? ""
         case "ExitPlanMode": return PlanText.title(s("plan") ?? "")
-        case "TodoWrite": return PlanProgress.text(i["todos"]?.array ?? [])
+        case "TodoWrite": return PlanProgress.summary(ChatPlan(callID: call.id, todos: ChatPlan.todos(i["todos"]?.array ?? [])))
         default:
             if n.hasPrefix("phone_") || n.hasPrefix("mail_") { return n.split(separator: "_").dropFirst().joined(separator: " ") }
             return i.object?.values.compactMap(\.string).first.map(firstLine) ?? ""
@@ -363,7 +363,15 @@ struct ToolCallRow: View {
     }
 
     @Environment(\.chatPin) private var pin
+    @Environment(\.openPlan) private var openPlan
     private var pinKey: String { "call-" + call.id }
+
+    /// A tap on its head: a plan opens the plan sheet, any other call opens or folds its details.
+    private func tapped() {
+        Haptics.tap()
+        if ToolPresentation.baseName(call.name) == "TodoWrite", let openPlan { return openPlan() }
+        toggleInPlace(pin, pinKey, animation: Theme.Motion.state, unfold: $unfold, closing: isOpen) { setOpen(!isOpen) }
+    }
     @State private var unfold = Unfolding()
 
     var body: some View {
@@ -372,7 +380,14 @@ struct ToolCallRow: View {
             Group { if AppStyle.current.usesBeautifulUI { chipHeader } else { header(base) } }
                 .chatPinned(pinKey)
 
-            if base == "TodoWrite" {
+            if base == "TodoWrite", openPlan != nil {
+                // The plan in one line: how far along, as a thin bar; its whole list in the plan sheet (#5602).
+                let todos = ChatPlan.todos(call.input["todos"]?.array ?? [])
+                PlanBar(done: todos.filter { $0.status == "completed" }.count, total: todos.count)
+                    .padding(.leading, AppStyle.current.usesBeautifulUI ? pad : detailLeading)
+                    .padding(.trailing, pad)
+                    .padding(.bottom, Theme.Space.m)
+            } else if base == "TodoWrite" {
                 if AppStyle.current.usesBeautifulUI {
                     TodoList(todos: call.input["todos"]?.array ?? []).padding(.horizontal, pad).padding(.bottom, Theme.Space.m)
                 } else {
@@ -405,10 +420,7 @@ struct ToolCallRow: View {
 
     /// The row's head: a round kind icon, the verb, the subject, a background task's badge and the chevron.
     private func header(_ base: String) -> some View {
-        Button {
-            Haptics.tap()
-            toggleInPlace(pin, pinKey, animation: Theme.Motion.state, unfold: $unfold, closing: isOpen) { setOpen(!isOpen) }
-        } label: {
+        Button(action: tapped) {
             HStack(spacing: Theme.Space.m) {
                 ZStack {
                     // On the timeline the icon sits on the rail: the page under its tint hides the line behind it.
@@ -445,10 +457,7 @@ struct ToolCallRow: View {
 
     /// The row's head: BeautifulUI's tool row — kind icon (a chevron once open), the verb, the subject in a chip.
     private var chipHeader: some View {
-        ToolChipRow(chip, isOpen: isOpen, isRunning: call.isRunning) {
-            Haptics.tap()
-            toggleInPlace(pin, pinKey, animation: Theme.Motion.state, unfold: $unfold, closing: isOpen) { setOpen(!isOpen) }
-        } accessory: {
+        ToolChipRow(chip, isOpen: isOpen, isRunning: call.isRunning, action: tapped) {
             taskBadge
             if call.isError { ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(Theme.danger).font(Theme.Font.label) }
         }
@@ -1043,6 +1052,13 @@ enum PlanProgress {
             return String(localized: "All \(todos.count) steps done [Plan Progress]")
         }
         return String(localized: "Step \(at + 1) of \(todos.count) [Plan Progress]")
+    }
+
+    static func text(_ plan: ChatPlan) -> String { text(plan.todos.map { .object(["status": .string($0.status)]) }) }
+
+    /// "Step 3 of 4 · Make both sizes' layouts", the step it is on after how far along; once all are done, that alone.
+    static func summary(_ plan: ChatPlan) -> String {
+        [text(plan), plan.allDone ? nil : plan.current?.content].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

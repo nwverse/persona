@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -142,15 +143,19 @@ func missingFrom(launcher string, lines []string, notFound bool) string {
 	}
 	code, other := "", false
 	for _, l := range lines {
-		m := zshNotFound.FindStringSubmatch(l)
-		if m == nil {
-			m = bashNotFound.FindStringSubmatch(l)
+		word := ""
+		if m, ok := parseShellMiss(l); ok { // any shell's whole line (shellmiss.go): dash, ksh and fish too
+			word = m.Word
+		} else if m := zshNotFound.FindStringSubmatch(l); m != nil {
+			word = m[1]
+		} else if m := bashNotFound.FindStringSubmatch(l); m != nil {
+			word = m[1]
 		}
 		switch {
-		case m == nil:
-		case m[1] == "claude":
+		case word == "":
+		case filepath.Base(word) == "claude":
 			code = proto.CodeClaudeMissing
-		case launcher != "" && m[1] == launcher:
+		case launcher != "" && word == launcher:
 			code = proto.CodeLauncherMissing
 		default:
 			other = true

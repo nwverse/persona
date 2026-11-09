@@ -87,6 +87,15 @@ continues to work; an interrupted queued transfer requires another explicit
 Redeploy while the policy is off. Already installed candidates still receive their
 confirmation, so disabling upgrades cannot strand them.
 
+With the policy off, a confirmed update to another version sets aside the node builds
+the Hub leaves in `bin/nodes/`: each `personad-<os>-<arch>` with no `.version` file
+beside it becomes `personad-<os>-<arch>.prev`. The manager takes an unlabelled
+personad there for a build of the Hub's own version, so left in place it would put
+the previous version back on every computer that Redeploy reaches (#1825). Set
+aside, Redeploy fetches the Hub's version from the release (`docs/operations/node-update.md`,
+"Node packages"). A build with a `.version` file says which one it is and stays; the
+directory is never created.
+
 The manager receives this policy in `devices.config`. An old external manager that
 does not understand it must be updated separately before relying on that gate;
 the built-in manager changes together with the Hub. Existing package containment
@@ -391,6 +400,7 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
 - **Which program the hub goes on as** (`run` in `pending.json`, `Pending.RunPath`): a hub run as `persona-hub` restarts, hands over and rolls back as the `persona-hub` the update swapped, so it stays on its own program; a hub run as `personad` stays on `personad` (no `run`).
   `target` stays `personad`, the release's main download and what the watchdog runs as `personad.prev`. A build that predates `run` (an older edge or watchdog) reads only `target` and brings the hub back as `personad hub run`, which serves the same hub; a `pending.json` an older build wrote has no `run` and goes back to `target` as before.
   A release without `persona-hub` for this platform leaves a hub run as `persona-hub` by hand on `personad` (which the update did replace), not on a `persona-hub` it did not.
+- **Which program a service runs** is its unit's (or agent's) to say: an update replaces the files and never edits a service. On Linux `hub setup` writes the hub's unit to run `persona-hub run` and the built-in manager's to run `persona-manager assistant` when each is beside `personad` and its build ([../server/server.md](../server/server.md) ("Programs")); a Mac's agents stay on `personad` for now. A unit it wrote earlier runs `personad` until setup runs again (the install command with `--hub` runs it), which moves the unit to the program and restarts it; `PERSONA_SPLIT_PROGRAMS=0` in setup's environment keeps it on `personad`, and the unit keeps the variable until setup runs again without it. A self-update alone never moves a hub between `personad` and `persona-hub`.
 - **A release without `persona-hub` or `persona-manager` for this platform** (`hub.unreplaced`) leaves that file as it was. That is fine while nothing runs it, and the update goes ahead.
   It is not installed while a service runs that program, because the service would go on starting the old build beside the new `personad` (`hub/selfupdate_services.go`). A service here is one of:
   - A systemd unit whose `ExecStart` runs it: the last one in `[Service]`, drop-ins read after the unit, read as systemd and `hub-systemd.sh` read it. The user's units come from `~/.config/systemd/user`, `/etc/systemd/user`, `~/.local/share/systemd/user` and `/usr/lib/systemd/user`, the machine's from `/etc/systemd/system` and `/usr/lib/systemd/system`. A unit in an earlier directory shadows one by the same name in a later one, and drop-ins come from all of them. It counts when systemd says it is enabled (or static, generated…) or active; when `systemctl` cannot answer (no user manager to ask, say), every such unit counts.
@@ -408,12 +418,13 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
 - **Release build**:
   - The hub checks 1 minute after startup, then every hour (every 6 hours until 2026-11-07, when the user asked for hourly so a release reaches hubs sooner); the App can "Check now" (`POST /api/v1/hub/update/check`);
   - It only fetches the manifest (a few KB): there is an update only if the build number is larger than its own and not in the bad-version list; the result is broadcast to open Apps.
+  - While an install is running or the new process has not confirmed the update, checks refresh `latest` and `last_check` without changing `state`, `progress` or `error`. This applies to manual checks, the first check after startup and hourly checks, including responses to requests started before the install. A failed check advances `last_check` and keeps the previous `latest`; it still returns an error to the caller. Confirmation also prevents a check from starting another automatic install.
 - **Docker build**:
   - Every hour, query the image repository's tags (anonymous GHCR `tags/list`), take the highest stable semver, and show a notice if it is newer;
   - The hub installs nothing; Docker pulls the image and verifies by digest;
   - CI writes the image name into the binary at build time; it is not hard-coded in the source.
 - **dev**: no checks, only shows the version.
-- Network unavailable or bad manifest: log it and show the reason under **Check for Updates** in the App; do not hammer retries (keep the hourly interval).
+- Network unavailable or bad manifest: show the reason under **Check for Updates** in the App when no install or confirmation is in progress; otherwise keep the update's progress and error. Do not hammer retries (keep the hourly interval).
 
 ## 8. Updating (release build; automatic and manual use the same flow)
 
@@ -454,7 +465,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      (the program the hub runs as: `persona-hub` for a hub run as `persona-hub`, see "Programs swapped together with personad").
      Carry the socket passed by systemd along (`LISTEN_FDS`, `execListenEnv` in `listen.go`; this step used to be missing, so the new process failed because the port was occupied);
      restart under the same process id, without relying on the service manager.
-   - The local node is a child process of the hub and exits with it; the new hub starts it with the new binary.
+   - The local node is a child process of the hub and exits with it; the new hub starts it with the new binary. It runs as the `personad` beside the manager's program (or as that program when no `personad` of its build is there), and as `persona-node` only when one of the new build is beside it, which the update does not put there ([../server/server.md](../server/server.md) ("Programs")).
 7. **Confirm**: on startup the new hub sees `pending.json`; success requires all three conditions below (delete pending, write update history, broadcast "Updated to …"):
    - HTTP is up;
    - The database is connected;
@@ -562,6 +573,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   - Retry after interrupted download; delete without replacing on a sha256 mismatch;
   - New version cannot start: compile a deliberately unstartable binary in the test; verify both the new process's self-check and the watchdog can roll back, record the bad version and do not retry it automatically;
   - Wait for idle: do not restart while the assistant or any Agent is busy (automatic and manual alike); `now` skips the wait;
+  - Checks during installation or confirmation preserve the update state, progress and error on success and failure, including when an install starts while the manifest request is in flight;
   - Skills: symlink creation and cleanup, automatic migration of old installs, user precedence on a name collision, gate command only present with its skill; built-in skill directory contains only redistributable skills;
   - dev / docker channels never install, however new the manifest is (API 409);
   - **No downgrade** (`TestNoDowngrade`): a directly deployed binary (build number = build time) does not install a manifest with a smaller or equal build number; only larger ones install;

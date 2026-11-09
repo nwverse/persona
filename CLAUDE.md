@@ -118,7 +118,8 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
   old Xcode reports errors that look like someone else's breakage.
 - Android: `scripts/app/android.sh [install|apk|test|lint|shots]` (`docs/android/android.md`).
 - Web: `cd web && npm test && npm run build`; deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
-- Docs: `python3 scripts/test/test_doc_paths.py` and `python3 scripts/test/test_doc_go_paths.py`. Every change: `python3 scripts/privacy_check.py`.
+- Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py` and `python3 scripts/test/test_doc_wire.py`
+  (every WebSocket type, feature flag, extension point and manifest field has its row). Every change: `python3 scripts/privacy_check.py`.
 - Releases: `docs/operations/release.md`. After `scripts/release/release.sh` uploads, run `python3 scripts/release/asc_testflight.py wait 45 <build number>`:
   it adds the build to the internal group and to the external group with Beta App Review. Report the build number and review status only after both.
 
@@ -169,6 +170,7 @@ Tokens live in `apple/Shared/Design` (also compiled for the watch and widgets); 
 | Spacing | `Theme.Space` (4 pt grid; `page` is the side margin) |
 | Corner radius | `Theme.Radius` |
 | Size | `Theme.Size` + `.scaledFrame(…)` (scales with the font size); plain `frame` only for lines of 4 pt or less |
+| Sidebar rows | `Theme.Sidebar` (web `--sidebar-row`): HIG row height + padding, same in every language (`docs/apple/sidebar.md`) |
 | Animation | `Theme.Motion`; chat content unfolds with `.unfolding` |
 | Color | `Theme` role colors, `Theme.Fill`, `Theme.Diff`, `Theme.Hue`, `Palette`, `AgentState.tone` |
 | Icons, logos | `Theme.Icon` (one SF Symbol per meaning) drawn with `ThemedIcon` / `IconTile` in the style's icon language (`docs/apple/icons.md`); `Theme.Brand` drawn through `BrandMark` / `BrandTile` / `BrandBadge` |
@@ -214,7 +216,7 @@ Every maintained doc under `docs/` (lessons excluded) must be listed here.
 | Agents and runtimes | `docs/integrations/engines.md` herdr / Orca / Paseo · `docs/integrations/claude-integration.md` · `docs/integrations/codex.md` · `docs/integrations/codex-app-server.md` · `docs/integrations/runtimes.md` runtime spec · `docs/integrations/daemons.md` · `docs/integrations/dsh.md` · `docs/integrations/pi.md` · `docs/integrations/opencode.md` · `docs/integrations/paseo.md` · `docs/integrations/agent-goal.md` · `docs/integrations/terminal.md` · `docs/integrations/launchers.md` model providers · `docs/integrations/script-cli.md` `personad ask` / `notify` |
 | Assistant | `docs/assistant/assistant.md` main chat · `docs/assistant/managers.md` · `docs/assistant/assistant-views.md` rich UI · `docs/assistant/unified-entry.md` · `docs/assistant/agent-work.md` work state and triage · `docs/assistant/todos.md` · `docs/assistant/voice.md` · `docs/assistant/health.md` · `docs/assistant/knowledge.md` knowledge base · `docs/assistant/inbox.md` · `docs/assistant/model-config.md` · `docs/assistant/model-profiles.md` · `docs/assistant/prompts.md` · `docs/assistant/office.md` Word / PowerPoint / Excel |
 | Extensions and sources | `docs/extensions/extensions.md` extension system · `docs/extensions/connectors.md` · `docs/extensions/channels.md` · `docs/extensions/extension-messaging.md` · `docs/extensions/computer-use.md` · `docs/extensions/mail.md` · `docs/extensions/wechat.md` · `docs/extensions/bots.md` Lark bot · `docs/extensions/feishu.md` · `docs/extensions/lark-agent.md` · `docs/extensions/lark-migration.md` · `docs/extensions/lark-attachments.md` · `docs/extensions/lark-encryption.md` |
-| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/icons.md` icons · `docs/apple/ios-state.md` state and redraws · `docs/apple/shell.md` · `docs/apple/mac.md` · `docs/apple/mac-design.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/meta-glasses.md` |
+| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/icons.md` icons · `docs/apple/sidebar.md` sidebar rows · `docs/apple/ios-state.md` state and redraws · `docs/apple/shell.md` · `docs/apple/mac.md` · `docs/apple/mac-design.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/meta-glasses.md` |
 | Android and web | `docs/android/android.md` · `docs/android/android-design.md` · `docs/web/web.md` · `docs/web/workspace-board.md` · `docs/web/review.md` reviewing a session's changes · `docs/web/preview.md` dev server previews |
 | Plans (open decisions) | `docs/plans/plan-extensions.md` · `docs/plans/plan-connectors.md` · `docs/plans/plan-orca-support.md` · `docs/plans/plan-tmux-support.md` · `docs/plans/plan-lark-cli.md` · `docs/plans/plan-discord.md` · `docs/plans/plan-x.md` · `docs/plans/plan-ego-browser.md` · `docs/plans/plan-antigravity.md` |
 | Lessons and archive | `docs/lessons/` pitfalls by topic (index `docs/lessons/README.md`) · `docs/archive/` dated records, evidence only (index `docs/archive/README.md`) |

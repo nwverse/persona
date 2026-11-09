@@ -668,8 +668,9 @@ data class Interaction(
         }
 
     /**
-     * The assistant's password card (`secret_run`, #1137): commands run on one of the user's computers with a password
-     * typed on the iPhone. This app never takes the password; it shows what would run and offers only Deny.
+     * The assistant's password card (`secret_run`, #1137, #1581): commands run on one of the user's computers with a
+     * password the user types into the card. Only the card's own form in the conversation or the Agents tab takes the
+     * password (Run); every quick entry offers only Deny.
      */
     val isSecretRun: Boolean get() = kind == "permission" && toolName == "secret_run"
 
@@ -709,7 +710,12 @@ data class Interaction(
 }
 
 /** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, and the commands. */
-data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>)
+data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>) {
+    companion object {
+        /** The card's one field, declared by the hub: Run sends the typed password under this key in [Resolution.values]. */
+        const val PASSWORD = "password"
+    }
+}
 
 @Serializable
 data class Resolution(
@@ -728,6 +734,8 @@ data class Resolution(
     @SerialName("option") val option: String? = null,
     /** A multi-select dialog's checked option keys. */
     @SerialName("options") val options: List<String>? = null,
+    /** A permission card's field values; only a password card's Run sends one ([SecretRunRequest.PASSWORD]). */
+    @SerialName("values") val values: Map<String, String>? = null,
     /** Who answered when it was not the user in the app (`assistant`); only in a resolution the hub hands back. */
     @SerialName("answered_by") val answeredBy: String? = null,
     val action: String? = null,

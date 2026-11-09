@@ -979,17 +979,18 @@ struct AssistantSidebar: View {
                 }
             } else {
                 Button(action: run) {
-                    HStack(spacing: Theme.Space.l) {
+                    HStack(spacing: Theme.Sidebar.gap) {
                         Image(systemName: symbol).resizable().scaledToFit().fontWeight(isShell ? .medium : .regular)
                             .foregroundStyle(Color.primary)
-                            .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                            .scaledFrame(width: Theme.Size.icon)
+                            .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                            .scaledFrame(width: Theme.Sidebar.glyphColumn)
                         Text(p.title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                         Spacer(minLength: 0)
                         if let b = p.badge { ExtensionBadgeView(badge: b) }
                     }
                     .padding(.horizontal, Theme.Space.m)
-                    .scaledFrame(minHeight: isShell ? Theme.Size.box50 : Theme.Size.avatarL)
+                    .padding(.vertical, Theme.Sidebar.rowPadding)
+                    .scaledFrame(minHeight: Theme.Sidebar.row)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -1010,16 +1011,17 @@ struct AssistantSidebar: View {
     /// A place to go at the top of the Mac's list: a conversation row's size, its symbol where a conversation has its mark.
     private func macPlace(_ title: String, _ symbol: String, run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            HStack(spacing: Theme.Space.m) {
+            HStack(spacing: Theme.Sidebar.gap) {
                 Image(systemName: symbol).resizable().scaledToFit().foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    .scaledFrame(width: Theme.Size.wellM)
+                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                    .scaledFrame(width: Theme.Sidebar.mark)
                 Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: Theme.Size.box50)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1037,11 +1039,11 @@ struct AssistantSidebar: View {
         let key = model.assistantMain
         let main = all.first { $0.key == key }
         let selected = key != nil && key == current
-        let radius = isShell ? Theme.Radius.panel : Theme.Radius.card
+        let radius = Theme.Sidebar.radius
         return Button { if let key { open(key) } else { newConversation() } } label: {
-            HStack(spacing: macPlacesGroup ? Theme.Space.m : Theme.Space.l) {
+            HStack(spacing: Theme.Sidebar.gap) {
                 // Where the places below have their symbol, the same width (on the Mac's plain list, `macPlace`'s).
-                AppGlyph(size: macPlacesGroup ? Theme.Size.wellM : Theme.Size.icon, scaled: true)
+                AppGlyph(size: macPlacesGroup ? Theme.Sidebar.mark : Theme.Sidebar.glyphColumn, scaled: true)
                 // The small "Main Chat" under the name keeps the row readable as a conversation, not a heading (#6328, as the web, #6293).
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(Self.mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
@@ -1051,7 +1053,8 @@ struct AssistantSidebar: View {
                 if let main { mark(main) }
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell || macPlacesGroup ? Theme.Size.box50 : Theme.Size.avatarL)
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
                 if selected { RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Self.selectedFill) }
             }
@@ -1099,17 +1102,18 @@ struct AssistantSidebar: View {
 
     private func plainAction(_ title: String, _ symbol: String, id: String? = nil, count: Int = 0, run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            HStack(spacing: Theme.Space.l) {
+            HStack(spacing: Theme.Sidebar.gap) {
                 // One box for every symbol: a wide one (Knowledge's books) scales down into it instead of pushing its words.
                 Image(systemName: symbol).resizable().scaledToFit().fontWeight(isShell ? .medium : .regular).foregroundStyle(Color.primary)
-                    .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    .scaledFrame(width: Theme.Size.icon)
+                    .scaledFrame(width: Theme.Sidebar.glyph, height: Theme.Sidebar.glyph)
+                    .scaledFrame(width: Theme.Sidebar.glyphColumn)
                 Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Spacer(minLength: 0)
                 if count > 0 { CountBadge(count: count, look: .solid(Theme.needsYou)) }
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell ? Theme.Size.box50 : Theme.Size.avatarL)
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1183,7 +1187,7 @@ struct AssistantSidebar: View {
             HStack(spacing: Theme.Space.m) {
                 if !isShell {
                     ThemedIcon(Theme.Icon.autoConversations).font(Theme.Font.label).foregroundStyle(.secondary)
-                        .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
+                        .scaledFrame(width: Theme.Sidebar.mark, height: Theme.Sidebar.mark)
                 }
                 Text("Auto Chats").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Text("\(split.auto.count)").font(Theme.Font.secondary.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
@@ -1193,8 +1197,9 @@ struct AssistantSidebar: View {
                     .font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell ? Theme.Size.avatarXL : Theme.Size.box50)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: isShell ? Theme.Radius.panel : Theme.Radius.card, style: .continuous))
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1228,10 +1233,11 @@ struct AssistantSidebar: View {
                 stateMark(needsYou: needsYou, working: working, unread: 0)
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
             }
-            .padding(.leading, isShell ? Theme.Space.xl : Theme.Space.m + Theme.Size.wellM + Theme.Space.m)
+            .padding(.leading, isShell ? Theme.Space.xl : Theme.Space.m + Theme.Sidebar.mark + Theme.Space.m)
             .padding(.trailing, Theme.Space.m)
-            .scaledFrame(minHeight: Theme.Size.tapTarget)
-            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1357,7 +1363,7 @@ struct AssistantSidebar: View {
                 // The shell's list is ChatGPT's: titles only, all in one column (the marks made it busy); the main
                 // conversation (only in search results here) keeps the app's logo, as its first row has it (#2004).
                 if isMain {
-                    AppGlyph(size: isShell ? Theme.Size.icon : Theme.Size.wellM, scaled: true)
+                    AppGlyph(size: isShell ? Theme.Sidebar.glyphColumn : Theme.Sidebar.mark, scaled: true)
                 } else if isShell {
                     EmptyView()
                 } else {
@@ -1369,14 +1375,14 @@ struct AssistantSidebar: View {
                 mark(s)
             }
             .padding(.horizontal, Theme.Space.m)
-            .scaledFrame(minHeight: isShell ? Theme.Size.avatarXL : Theme.Size.box50)
+            .padding(.vertical, Theme.Sidebar.rowPadding)
+            .scaledFrame(minHeight: Theme.Sidebar.row)
             .background {
                 if selected {
-                    // Rounder in the shell: a pill, like ChatGPT's selected chat.
-                    RoundedRectangle(cornerRadius: isShell ? Theme.Radius.panel : Theme.Radius.card, style: .continuous).fill(Self.selectedFill)
+                    RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous).fill(Self.selectedFill)
                 }
             }
-            .macHoverShade(in: RoundedRectangle(cornerRadius: isShell ? Theme.Radius.panel : Theme.Radius.card, style: .continuous))
+            .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Sidebar.radius, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1638,7 +1644,7 @@ struct ConversationMark: View {
         Circle()
             .fill(hue.opacity(0.14))
             .overlay(Circle().stroke(hue.opacity(0.25), lineWidth: Theme.Size.hairline))
-            .scaledFrame(width: Theme.Size.wellM, height: Theme.Size.wellM)
+            .scaledFrame(width: Theme.Sidebar.mark, height: Theme.Sidebar.mark)
             .overlay(ThemedIcon(Theme.Icon.conversation).font(Theme.Font.label).foregroundStyle(hue))
             .accessibilityHidden(true)
     }

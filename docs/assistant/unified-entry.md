@@ -112,6 +112,8 @@ lines, and in the user's own color and alignment they read as something the user
   tapping one opens its whole text with Copy (the web's text is also selectable). Tapping these rows does not open the task.
 - **The hand-off sent with the card** (Persona's message to the same task in the same conversation at most 60 seconds after
   the card's `task` entry; `agent_send` with `task` writes the card and then the text) is drawn only on the card, not as a line.
+  Only a card drawn in full (from today) takes it in: a task card from another day is a one-line row with no list, so its
+  hand-off stays a folded line under it (#1668).
 - **Any other message of Persona's** (a rework, a later instruction, one whose task has no card in this chat) is one folded
   line on the left, styled like the answered and review lines: a send icon (a stop when Persona cut the turn short first),
   "Sent to ‘xx’" (tap to open the task) and the first line; tapping the line opens the whole text with Copy.
@@ -213,11 +215,11 @@ Add two columns to `todos`:
 
 ### Plans
 
-Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `notes`, `machine`, `cwd`, `launcher`, `model`, `permission`, `ultracode`, `readonly`, `user_requested`, `why`),
+Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `notes`, `machine`, `machine_policy`, `cwd`, `launcher`, `model`, `permission`, `ultracode`, `readonly`, `user_requested`, `why`),
 `state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`.
 
 - MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled), or matched by `tasks.trust`; otherwise save an `open` plan and emit chat activity.
-  Return the plan ID and each task's state (text).
+  Return the plan ID and each task's state (text). Automatic dispatch is reported as queued, not as proof of an Agent start. `machine_policy` defaults to `fixed` (including old saved plans); only explicit `flexible` tasks may move off an unhealthy machine. The policy survives storage, card edits and retry. Fixed tasks fail on their own target and can retry there after health recovery.
 - `POST /api/v1/task-plans/{id}/start`: may include user-edited fields. Create a to-do per task (`origin`, `plan_id`), then start its Agent (`startSession` with `todo_id`).
   With `remember: true`, record this kind in `tasks.trust`. `POST …/dismiss`: do not start.
 - `ultracode` (#12): the assistant sets it per task, as on `agent_start`, rather than writing the word into the prompt; the Agent starts with Claude Code's ultracode on (`session.start` `ultracode: true`). On start, `true` / `false` from the card overrides it and leaving it out keeps the assistant's choice.

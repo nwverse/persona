@@ -123,6 +123,8 @@ export interface WorkState {
   then?: string;
   /** When the hub acts next on its own: "Continue" (transient) or a wake (external, agent). */
   wake_at?: string;
+  /** When a subscription usage limit that stopped the turn resets (docs/assistant/agent-work.md "Usage limits"). */
+  resets_at?: string;
   attempts?: number;
   max?: number;
   agent?: { machine_id: string; session_id: string; label?: string };
@@ -170,6 +172,9 @@ export interface Session {
   status: string;
   starting?: boolean;
   start_error?: string;
+  /** The failed start's coded refusal (launcher_missing, claude_missing…) and its details; start_error is the hub's sentence for it. */
+  start_error_code?: string;
+  start_error_args?: Record<string, string>;
   state?: AgentState;
   state_since?: string;
   agent?: string;
@@ -239,11 +244,16 @@ export interface Session {
   activity_at?: string;
   /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
   turn_error?: string;
-  /** What the agent's record says of turn_error: "transient" (worth a "Continue") or "user" (the user must act). */
+  /** What the agent's record says of turn_error: "transient" (worth a "Continue"), "user" (the user must act),
+   *  or "usage_limit" (a subscription limit, until it resets). */
   turn_error_kind?: string;
   /** What is wrong, when the hub can tell from turn_error (docs/assistant/onboarding.md 5.2): not_logged_in / auth_failed /
    *  model_route / rate_limited. */
   turn_error_code?: string;
+  /** When turn_error_kind is "usage_limit": when that subscription limit resets. Absent when it is not known. */
+  turn_error_resets_at?: string;
+  /** The CLI continues by itself once the usage limit resets. */
+  turn_error_resumes?: boolean;
   /** Where it stands in its work (docs/assistant/agent-work.md): set by the hub once it triaged a stopped turn. */
   work?: WorkState;
   pending_interactions?: number;
@@ -613,6 +623,20 @@ export interface Launcher {
   /** What it starts when not Claude Code ("codex"); agent_type: what the hub's machine config says it runs. */
   agent?: string;
   agent_type?: string;
+  /** How its last check or start went on the computer the list is for (GET /machines/{mid}/launchers,
+   *  docs/server/launcher-health.md); absent: never checked, a failure too old to count, or an older hub. */
+  health?: LauncherHealth;
+}
+
+/** A launcher's health record on one computer (#1643). */
+export interface LauncherHealth {
+  /** ok | failing | repairing | blocked */
+  state: string;
+  /** The failure's class: not_in_terminal, auth, model_route, cli_outdated, timeout, other. */
+  kind?: string;
+  /** The redacted raw text of the failure. */
+  error?: string;
+  checked_at?: string;
 }
 
 export interface AssistantInfo {

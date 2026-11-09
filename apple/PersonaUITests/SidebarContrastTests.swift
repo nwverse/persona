@@ -14,7 +14,7 @@ final class SidebarContrastTests: XCTestCase {
 
     @MainActor private func launch(_ extra: [String] = []) {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-newAssistant", "YES"] + extra
+        app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES"] + extra
         // Settings › Appearance › Light & Dark set against the system's (`-ui.scheme light` on a dark simulator).
         if let scheme = ProcessInfo.processInfo.environment["PERSONA_SCHEME"] { app.launchArguments += ["-ui.scheme", scheme] }
         app.launchPinned()

@@ -162,6 +162,105 @@ func (f *fakeAPNs) calls(t *testing.T, n int) []apnsCall {
 	return nil
 }
 
+// fleetStartStore models durable state shared by independently reconstructed hubs.
+// Real transaction/row-lock behavior is covered by db.TestLiveActivityStartBudget.
+type fleetStartStore struct {
+	Store
+	mu   sync.Mutex
+	rows map[string]db.LiveActivity
+	due  map[string]time.Time
+	fail bool
+}
+
+func newFleetStartStore() *fleetStartStore {
+	return &fleetStartStore{rows: map[string]db.LiveActivity{}, due: map[string]time.Time{}}
+}
+
+func (s *fleetStartStore) SaveLiveActivity(_ context.Context, v db.LiveActivity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rows[v.DeviceID] = v
+	return nil
+}
+
+func (s *fleetStartStore) LiveActivities(context.Context) ([]db.LiveActivity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var rows []db.LiveActivity
+	for _, r := range s.rows {
+		rows = append(rows, r)
+	}
+	return rows, nil
+}
+
+func (s *fleetStartStore) ClaimLiveActivityStart(_ context.Context, device, token string, at time.Time, cooldown, maxAge time.Duration) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fail {
+		return time.Time{}, false, fmt.Errorf("injected claim persistence failure")
+	}
+	r := s.rows[device]
+	if r.PushToStartToken != token || (r.PushToken != "" && at.Sub(r.StartedAt) < maxAge) {
+		return time.Time{}, false, nil
+	}
+	if due := s.due[device]; at.Before(due) {
+		return due, false, nil
+	}
+	s.due[device] = at.Add(cooldown)
+	return s.due[device], true, nil
+}
+
+type fleetClaimHookStore struct {
+	Store
+	afterClaim func()
+}
+
+func (s *fleetClaimHookStore) ClaimLiveActivityStart(ctx context.Context, device, token string, at time.Time, cooldown, maxAge time.Duration) (time.Time, bool, error) {
+	due, claimed, err := s.Store.ClaimLiveActivityStart(ctx, device, token, at, cooldown, maxAge)
+	if claimed {
+		s.afterClaim()
+	}
+	return due, claimed, err
+}
+
+func TestFleetStartRechecksAfterSlowClaim(t *testing.T) {
+	for _, change := range []string{"empty", "update_token", "foreground", "disabled", "rotated_start"} {
+		t.Run(change, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h, sink, stop := localFleetLoop(t)
+				stop()
+				h.live.update("phone", func(v *db.LiveActivity) { v.PushToken = "" })
+				working := FleetState{Phase: "working", Working: 1}
+				reportLive(t, h, working, FleetStats{})
+				h.store = &fleetClaimHookStore{Store: h.store, afterClaim: func() {
+					switch change {
+					case "empty":
+						reportLive(t, h, FleetState{}, FleetStats{})
+					case "update_token":
+						h.live.update("phone", func(v *db.LiveActivity) { v.PushToken, v.StartedAt = "fresh", time.Now() })
+					case "foreground":
+						h.mu.Lock()
+						h.clients[&client{out: make(chan []byte, 64), phone: true, pushDevice: "phone"}] = struct{}{}
+						h.mu.Unlock()
+					case "disabled":
+						_ = h.push.setPrefs("phone", NotifyPrefs{LiveActivity: false})
+					case "rotated_start":
+						h.live.update("phone", func(v *db.LiveActivity) { v.PushToStartToken = "rotated" })
+					}
+				}}
+				due := h.live.flush(working, true, true)
+				synctest.Wait()
+				if got := sink.count("phone", "liveactivity", "start"); got != 0 {
+					t.Fatalf("%s during claim still pushed: %d", change, got)
+				}
+				if !due.Equal(time.Now().Add(fleetRefresh)) {
+					t.Fatalf("spent claim lost retry deadline: %s", due)
+				}
+			})
+		})
+	}
+}
+
 func testLive(t *testing.T) (*Hub, *fakeAPNs) {
 	h := newTestHub(t)
 	f := &fakeAPNs{gone: map[string]bool{}}
@@ -171,7 +270,175 @@ func testLive(t *testing.T) (*Hub, *fakeAPNs) {
 	h.push.direct = apns.NewWithKey(apnsConfig{KeyID: "K", TeamID: "T", Topic: "app.example"}, key)
 	h.push.direct.Base = srv.URL
 	h.push.register(Device{DeviceID: "phone", Name: "phone", APNSToken: "devtok", Topic: "app.example"})
+	h.store = newFleetStartStore()
 	return h, f
+}
+
+func TestFleetStartAcrossFiveEpisodes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, sink, stop := localFleetLoop(t)
+		stop() // manual flushes must not race the single-owner coalescer run loop
+		h.live.update("phone", func(v *db.LiveActivity) { v.PushToken = "" })
+		for i := range 5 {
+			h.live.flush(FleetState{}, false, false)
+			h.live.flush(FleetState{Phase: "working", Working: i + 1}, false, false)
+			time.Sleep(time.Second)
+			synctest.Wait()
+		}
+		if got := sink.count("phone", "liveactivity", "start"); got != 1 {
+			t.Fatalf("after: five episodes produced %d starts, want 1", got)
+		}
+		// The timer reads the newest active state, not any of the five old ones.
+		h.live = newLiveActivities(h)
+		reportLive(t, h, FleetState{Phase: "working", Working: 9}, FleetStats{})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); h.live.run(ctx) }()
+		defer func() { cancel(); <-done }()
+		time.Sleep(fleetRefresh - 5*time.Second)
+		synctest.Wait()
+		if got := sink.count("phone", "liveactivity", "start"); got != 2 {
+			t.Fatalf("at expiry: got %d starts, want 2 total", got)
+		}
+		sink.mu.Lock()
+		var last FleetState
+		for _, call := range sink.got {
+			if call.device == "phone" && call.event == "start" {
+				last = call.state
+			}
+		}
+		sink.mu.Unlock()
+		if last.Working != 9 {
+			t.Fatalf("deferred start used old state: %+v", last)
+		}
+		time.Sleep(fleetRefresh)
+		synctest.Wait()
+		if got := sink.count("phone", "liveactivity", "start"); got != 2 {
+			t.Fatalf("unchanged episode repeated: %d", got)
+		}
+		t.Log("after: five episodes yielded one start; expiry sent only the latest state once")
+	})
+}
+
+func TestFleetDeferredStartCancellation(t *testing.T) {
+	for _, change := range []string{"empty", "done", "foreground", "update_token", "disabled"} {
+		t.Run(change, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h, sink, stop := localFleetLoop(t)
+				defer stop()
+				h.live.update("phone", func(v *db.LiveActivity) { v.PushToken = "" })
+				reportLive(t, h, FleetState{Phase: "working", Working: 1}, FleetStats{})
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				reportLive(t, h, FleetState{Phase: "done"}, FleetStats{})
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				reportLive(t, h, FleetState{Phase: "working", Working: 2}, FleetStats{})
+				time.Sleep(fleetCoalesce)
+				synctest.Wait()
+				switch change {
+				case "empty":
+					reportLive(t, h, FleetState{}, FleetStats{})
+				case "done":
+					reportLive(t, h, FleetState{Phase: "done"}, FleetStats{})
+				case "foreground":
+					h.mu.Lock()
+					h.clients[&client{out: make(chan []byte, 64), phone: true, pushDevice: "phone"}] = struct{}{}
+					h.mu.Unlock()
+				case "update_token":
+					h.live.update("phone", func(v *db.LiveActivity) { v.PushToken, v.StartedAt = "fresh", time.Now() })
+				case "disabled":
+					putFleetPrefs(t, h, "phone", `{"live_activity":false}`)
+				}
+				time.Sleep(fleetRefresh)
+				synctest.Wait()
+				if got := sink.count("phone", "liveactivity", "start"); got != 1 {
+					t.Fatalf("%s failed to cancel deferred start: %d", change, got)
+				}
+			})
+		})
+	}
+}
+
+func TestFleetStartRestartAndConcurrentInstances(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, sink, stop := localFleetLoop(t)
+		stop()
+		h.live.update("phone", func(v *db.LiveActivity) { v.PushToken = "" })
+		working := FleetState{Phase: "working", Working: 1}
+		// Two fresh instances load the same persisted token and claim concurrently.
+		one, two := newLiveActivities(h), newLiveActivities(h)
+		one.load(context.Background())
+		two.load(context.Background())
+		var wg sync.WaitGroup
+		for _, la := range []*liveActivities{one, two} {
+			wg.Go(func() { la.flush(working, true, true) })
+		}
+		wg.Wait()
+		synctest.Wait()
+		if got := sink.count("phone", "liveactivity", "start"); got != 1 {
+			t.Fatalf("concurrent instances started %d times", got)
+		}
+		// Reconstruct all ephemeral state and run with no further fleet changes:
+		// startup must recover the due time from Postgres and eventually flush.
+		h.live = newLiveActivities(h)
+		reportLive(t, h, FleetState{Phase: "working", Working: 7}, FleetStats{})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); h.live.run(ctx) }()
+		defer func() { cancel(); <-done }()
+		time.Sleep(fleetRefresh - time.Second)
+		synctest.Wait()
+		if got := sink.count("phone", "liveactivity", "start"); got != 1 {
+			t.Fatalf("restart reset rolling budget: %d", got)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if got := sink.count("phone", "liveactivity", "start"); got != 2 {
+			t.Fatalf("restart lost deferred start at expiry: %d", got)
+		}
+	})
+}
+
+func TestFleetStartPersistenceFailsClosedWithoutLimitingAlertsOrUrgentUpdates(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no_store=%v", unavailable), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h, sink, stop := localFleetLoop(t)
+				defer stop()
+				h.live.update("phone", func(v *db.LiveActivity) { v.PushToken = "" })
+				store := h.store.(*fleetStartStore)
+				store.fail = true
+				if unavailable {
+					h.store = nil
+				}
+				reportLive(t, h, FleetState{Phase: "working", Working: 1}, FleetStats{})
+				time.Sleep(fleetCoalesce + fleetMinGap)
+				synctest.Wait()
+				if got := sink.count("phone", "liveactivity", "start"); got != 0 {
+					t.Fatalf("failed persistence authorized %d starts", got)
+				}
+				h.notifyInteraction("", proto.Interaction{ID: "ordinary", Kind: proto.IxPermission, Summary: "Approve the operation"}, "computer")
+				synctest.Wait()
+				if got := sink.count("", "alert", ""); got != 2 {
+					t.Fatalf("start claim failure swallowed ordinary alerts: %d", got)
+				}
+				h.live.update("phone", func(v *db.LiveActivity) { v.PushToken, v.StartedAt = "fresh", time.Now() })
+				reportLive(t, h, FleetState{Phase: "needsYou", NeedsYou: 1}, FleetStats{})
+				synctest.Wait()
+				if got := sink.count("phone", "liveactivity", "update"); got != 1 {
+					t.Fatalf("urgent update was delayed by start budget: %d", got)
+				}
+				sink.mu.Lock()
+				for _, call := range sink.got {
+					if call.device == "phone" && call.event == "update" && call.priority != "10" {
+						t.Errorf("urgent update lost high priority: %+v", call)
+					}
+				}
+				sink.mu.Unlock()
+			})
+		})
+	}
 }
 
 func TestLiveActivityFlush(t *testing.T) {
@@ -216,7 +483,8 @@ func TestLiveActivityFlush(t *testing.T) {
 		t.Fatalf("row after end %+v", r)
 	}
 
-	// A new episode starts again; turning the activity off stops everything.
+	// A new episode starts only after the rolling cooldown; turning it off stops everything.
+	la.now = func() time.Time { return time.Now().Add(fleetRefresh) }
 	la.flush(working, false, false)
 	f.calls(t, 4)
 	_ = h.push.setPrefs("phone", NotifyPrefs{Input: true, Done: DoneLong, LiveActivity: false})
@@ -371,6 +639,7 @@ func (s *fleetPushSink) count(device, kind, event string) int {
 func localFleetLoop(t *testing.T) (*Hub, *fleetPushSink, func()) {
 	t.Helper()
 	h := newTestHub(t)
+	h.store = newFleetStartStore()
 	sink := &fleetPushSink{}
 	h.push.relay = &http.Client{Transport: sink}
 	key, err := ecdh.P256().GenerateKey(rand.Reader)

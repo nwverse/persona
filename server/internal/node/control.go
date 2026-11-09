@@ -164,7 +164,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, fmt.Errorf("run launcher: %w", err)
 	}
 
-	a, err := n.waitReady(ctx, pane)
+	a, err := n.waitReady(ctx, pane, n.probeFor(ctx, id, launcher, shells))
 	if err != nil {
 		screen, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
 		// Close the tab: a claude that comes up after we gave up would sit there unbound, and a retry opens another.
@@ -176,6 +176,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			_ = org.Close(cctx, created.Pane, space, created.SlotID)
 			cancel()
+		}
+		if rpcCode(err) != "" { // the tab's shell said why (shellmiss.go): its tail would only repeat the command
+			return nil, err
 		}
 		return nil, fmt.Errorf("%v\n%s", err, lastLines(screen, 12))
 	}

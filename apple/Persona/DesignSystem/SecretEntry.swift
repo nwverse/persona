@@ -29,6 +29,10 @@ struct SecretField: View {
     @Binding var text: String
     var identifier: String?
     var onSubmitAction: (() -> Void)?
+    var onFocusAction: ((Bool) -> Void)?
+    #if os(macOS)
+    @FocusState private var focused: Bool
+    #endif
 
     init(_ placeholder: String, filled: String = String(localized: "Filled in"), text: Binding<String>, identifier: String? = nil) {
         self.placeholder = placeholder
@@ -44,16 +48,25 @@ struct SecretField: View {
         return copy
     }
 
+    /// Runs `action` with true when the field takes the keyboard (on a Mac, the focus) and false when it gives it up.
+    func onFocusChange(_ action: @escaping (Bool) -> Void) -> SecretField {
+        var copy = self
+        copy.onFocusAction = action
+        return copy
+    }
+
     var body: some View {
         #if os(iOS) || os(visionOS)
         SecretTextField(placeholder: placeholder, filled: filled, identifier: identifier, text: $text,
-                        onSubmit: onSubmitAction)
+                        onSubmit: onSubmitAction, onFocus: onFocusAction)
         #else
         // The standard field on a Mac.
         SecureField(placeholder, text: $text)
             .secretEntry()
             .accessibilityIdentifier(identifier ?? "")
             .onSubmit { onSubmitAction?() }
+            .focused($focused)
+            .onChange(of: focused) { _, now in onFocusAction?(now) }
         #endif
     }
 }
@@ -65,6 +78,7 @@ private struct SecretTextField: UIViewRepresentable {
     var identifier: String?
     @Binding var text: String
     var onSubmit: (() -> Void)?
+    var onFocus: ((Bool) -> Void)?
 
     func makeUIView(context: Context) -> EmptyingSecureTextField {
         let f = EmptyingSecureTextField()
@@ -82,6 +96,8 @@ private struct SecretTextField: UIViewRepresentable {
         f.addTarget(c, action: #selector(Coordinator.refresh(_:)), for: [.editingDidBegin, .editingDidEnd])
         f.addTarget(c, action: #selector(Coordinator.refresh(_:)), for: .editingDidEndOnExit) // return closes the keyboard
         f.addTarget(c, action: #selector(Coordinator.submit(_:)), for: .editingDidEndOnExit) // return runs onSubmit
+        f.addTarget(c, action: #selector(Coordinator.began(_:)), for: .editingDidBegin)
+        f.addTarget(c, action: #selector(Coordinator.ended(_:)), for: .editingDidEnd)
         // Show / hide while typing, to check what was just typed or pasted (a token cut short is a common mistake). The
         // field goes back to hidden, and empty, whenever it gives the keyboard up (EmptyingSecureTextField); what was
         // typed before is not put back, since pasting into a hidden field that still holds text can add to it.
@@ -124,6 +140,16 @@ private struct SecretTextField: UIViewRepresentable {
         @objc func changed(_ f: UITextField) { field.text = f.text ?? "" }
 
         @objc func submit(_ f: UITextField) { field.onSubmit?() }
+
+        @objc func began(_: UITextField) { report(true) }
+
+        @objc func ended(_: UITextField) { report(false) }
+
+        /// Reported a moment later, in order: UIKit also ends editing as SwiftUI takes the field out of the window,
+        /// inside a view update, where the owner's state must not change.
+        private func report(_ focused: Bool) {
+            Task { @MainActor [weak self] in self?.field.onFocus?(focused) }
+        }
 
         @objc func refresh(_ f: UITextField) {
             f.placeholder = f.isFirstResponder || field.text.isEmpty ? field.placeholder : field.filled

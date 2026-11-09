@@ -159,7 +159,7 @@ final class LeftDragRecognizer: UIPanGestureRecognizer {
 
     // It waits for no one but the scroll views. The message's long press (the action bar) is a child's gesture, which
     // SwiftUI makes this one wait for, and the navigation stack's back pans (the edge, and on iOS 26 anywhere in the
-    // content) are around it in the old layout: now and then the drag lost those races and never started. A drag
+    // content) are around it in a navigation stack: now and then the drag lost those races and never started. A drag
     // that goes left has moved past the press's allowance and is not a way back, so they never both happen.
     private static func standsAside(_ other: UIGestureRecognizer) -> Bool {
         other is UILongPressGestureRecognizer || (other is UIPanGestureRecognizer && !(other.view is UIScrollView))

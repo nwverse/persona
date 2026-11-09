@@ -66,7 +66,10 @@ func (n *Node) assistantGuestPrepare(params json.RawMessage) (any, error) {
 	if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") || filepath.IsAbs(a.Dir) {
 		return nil, errors.New("bad guest dir")
 	}
-	dir := n.assistantDirOf(a.Dir)
+	dir, err := n.preparedDir(a.Dir)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -98,14 +101,53 @@ func (n *Node) guestMCPAndTools(id string, tools []string) (mcpJSON string, tool
 }
 
 // assistantDirOf is where a directory the hub names relative to HOME for the assistant (".persona/assistant",
-// ".persona/health", ".persona/guest") is on this node. Under a custom PERSONA_HOME it is in that root, the data_dir the
-// hub reports the assistant's directory in (#5505); on the default layouts (~/.persona, ~/.persona) it stays at the
-// path it always had, which Claude Code knows the assistant's sessions and memory by (docs/operations/rename.md).
+// ".persona/health", ".persona/guest", or the former name's spelling of them, which a hub sends for older nodes) is on
+// this node: in the state directory the node runs on (stateRoot), whichever spelling it came in. Joined to HOME as
+// written, the former spelling recreated the former directory once its alias was gone (#1681).
 func (n *Node) assistantDirOf(rel string) string {
-	if sub, ok := compat.StateSubpath(filepath.ToSlash(rel)); ok && n.customDataDir() {
-		return filepath.Join(n.dir, filepath.FromSlash(sub))
+	sub, ok := compat.StateSubpath(filepath.ToSlash(rel))
+	if !ok || n.dir == "" {
+		return filepath.Join(n.home, rel)
 	}
-	return filepath.Join(n.home, rel)
+	return filepath.Join(n.stateRoot(), filepath.FromSlash(sub))
+}
+
+// stateRoot is the node's state directory as its assistant's sessions run in it. A custom PERSONA_HOME is that root, the
+// data_dir the hub reports the assistant's directory in (#5505). On the default layouts it is whichever of ~/.persona and
+// the former state directory (compat.StateDir) is a directory rather than an alias of the other and is the node's: an
+// installation still kept under the former name keeps the path Claude Code knows its sessions and memory by
+// (docs/operations/rename.md), and a migrated one never gets the former directory back. n.dir as it is when it is
+// neither (not made yet).
+func (n *Node) stateRoot() string {
+	dir := filepath.Clean(n.dir)
+	if n.customDataDir() {
+		return dir
+	}
+	want, err := os.Stat(dir)
+	if err != nil {
+		return dir
+	}
+	for _, name := range []string{".persona", compat.StateDir} {
+		p := filepath.Join(n.home, name)
+		if st, err := os.Lstat(p); err == nil && st.IsDir() && os.SameFile(st, want) {
+			return p
+		}
+	}
+	return dir
+}
+
+// preparedDir is assistantDirOf(rel) for assistant.prepare and assistant.guest_prepare, which make it: below the node's
+// state directory only, never the state directory itself (#1681). A state directory that is not there (moved or removed
+// under a running node) is refused rather than made again empty, which would split the assistant's files in two.
+func (n *Node) preparedDir(rel string) (string, error) {
+	dir := n.assistantDirOf(rel)
+	if _, ok := compat.StateSubpath(filepath.ToSlash(rel)); ok && n.dir != "" {
+		root := n.stateRoot()
+		if st, err := os.Stat(root); err != nil || !st.IsDir() {
+			return "", fmt.Errorf("the state directory %s is not there: not making the assistant's directory in a new one", root)
+		}
+	}
+	return dir, nil
 }
 
 // customDataDir: the node's data directory is a root of its own (PERSONA_HOME), not one of the default ones.

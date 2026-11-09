@@ -123,19 +123,45 @@ type MessageCard struct {
 var APIErrorMarkers = []string{"API Error:", "There's an issue with the selected model", "Failed to authenticate",
 	"OAuth token has expired", "Invalid API key", "Not logged in ·"}
 
+// refusalMarkers start the other lines Claude Code writes itself instead of an answer when the request was refused
+// before the model ran: a sign-in that is gone ("Please run /login · API Error: 403", "Login expired · Please run
+// /login"); a subscription's usage limit is its own line (UsageLimitText). Newer versions mark every such
+// line in their record (isApiErrorMessage, read by the node into proto.Session.TurnError); these read an older node's
+// list. Only as the start of the answer, never inside one (a reply may quote them).
+var refusalMarkers = []string{"Please run /login", "Login expired ·", "OAuth token revoked ·", "Login reached its time limit ·"}
+
 // InterruptedSummary is what is said of a turn the model service cut off, instead of its last words (the error is no
 // conclusion, #1516): an interrupted task's receipt, the push.
 const InterruptedSummary = "模型服务出错，中断了"
 
-// CutOff: an agent's answer is the model API error that ended its turn (it starts with one).
+// CutOff: an agent's answer is the model API error that ended its turn (it starts with one, APIErrorMarkers or
+// refusalMarkers, or is Claude Code's usage-limit line).
 func CutOff(answer string) bool {
 	answer = strings.TrimSpace(answer)
-	for _, marker := range APIErrorMarkers {
-		if strings.HasPrefix(answer, marker) {
+	return startsWithAny(answer, APIErrorMarkers) || startsWithAny(answer, refusalMarkers) || UsageLimitText(answer)
+}
+
+func startsWithAny(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// StartEnded is session.start_ended's params: how an app's start that the node ran before answering went (a resume, a
+// Codex, an older app; one answered at once is followed in the session lists), for launcher health
+// (docs/server/launcher-health.md). Launcher is the one the start ran ("" : claude); Error and Code, Data are the
+// node's answer when it failed (its rpc.Error's code and data, when it had them).
+type StartEnded struct {
+	MachineID string          `json:"machine_id"`
+	SessionID string          `json:"session_id,omitempty"`
+	Launcher  string          `json:"launcher,omitempty"`
+	OK        bool            `json:"ok"`
+	Error     string          `json:"error,omitempty"`
+	Code      string          `json:"code,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
 }
 
 // DeviceSessions is sessions.changed's params: the list as the node sent it, and when the node's connection to the hub
