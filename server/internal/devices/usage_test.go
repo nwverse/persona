@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
@@ -213,41 +214,46 @@ func TestUsageIsStoredInOrder(t *testing.T) {
 // gatherUsage takes what is queued, and waits for more only while another machine wrote in the last usageActive: one
 // busy machine's writes are not held back.
 func TestUsageGatherWaitsOnlyForOthers(t *testing.T) {
-	d := New(Options{Hub: &fakeHost{}})
-	w := func(machine string) usageWrite { return usageWrite{machine: machine} }
-	gather := func(active map[string]time.Time) []string {
-		t.Helper()
-		d.usageWrites <- w("a") // queued already
-		got := make(chan []usageWrite, 1)
-		go func() { got <- d.gatherUsage(context.Background(), w("a"), active) }()
-		select {
-		case writes := <-got:
-			var machines []string
-			for _, w := range writes {
-				machines = append(machines, w.machine)
+	synctest.Test(t, func(t *testing.T) {
+		d := New(Options{Hub: &fakeHost{}})
+		d.usageWait = time.Minute
+		w := func(machine string) usageWrite { return usageWrite{machine: machine} }
+		// gather starts gatherUsage with a's write queued already, and returns once it has ended or is blocked on its
+		// wait (synctest.Wait); done is when it ended (the bubble's clock moves only while everything waits) and what
+		// it took.
+		gather := func(active map[string]time.Time) (done func() (time.Duration, []string)) {
+			t.Helper()
+			d.usageWrites <- w("a")
+			start := time.Now()
+			got := make(chan []usageWrite, 1)
+			go func() { got <- d.gatherUsage(context.Background(), w("a"), active) }()
+			synctest.Wait()
+			return func() (time.Duration, []string) {
+				var machines []string
+				for _, w := range <-got {
+					machines = append(machines, w.machine)
+				}
+				return time.Since(start), machines
 			}
-			return machines
-		case <-time.After(5 * time.Second):
-			t.Fatal("gatherUsage waited")
-			return nil
 		}
-	}
 
-	d.usageWait = time.Hour // alone (or b wrote long ago): nothing to wait for
-	active := map[string]time.Time{"a": time.Now(), "b": time.Now().Add(-usageActive - time.Second)}
-	if got := gather(active); !slices.Equal(got, []string{"a", "a"}) {
-		t.Fatalf("alone: %v", got)
-	}
-	if _, ok := active["b"]; ok {
-		t.Fatal("a machine quiet for longer than usageActive is still active")
-	}
+		// Alone (b wrote long ago): it takes what is queued and does not wait.
+		active := map[string]time.Time{"a": time.Now(), "b": time.Now().Add(-usageActive - time.Second)}
+		if took, got := gather(active)(); took != 0 || !slices.Equal(got, []string{"a", "a"}) {
+			t.Fatalf("alone: %v after %v, want a's two at once", got, took)
+		}
+		if _, ok := active["b"]; ok {
+			t.Fatal("a machine quiet for longer than usageActive is still active")
+		}
 
-	d.usageWait = 200 * time.Millisecond // b wrote lately: wait for it
-	active["b"] = time.Now()
-	go func() { time.Sleep(50 * time.Millisecond); d.usageWrites <- w("b") }()
-	if got := gather(active); !slices.Equal(got, []string{"a", "a", "b"}) {
-		t.Fatalf("with b: %v", got)
-	}
+		// b wrote lately: it waits usageWait, and takes b's write that comes meanwhile.
+		active["b"] = time.Now()
+		done := gather(active)
+		d.usageWrites <- w("b")
+		if took, got := done(); took != d.usageWait || !slices.Equal(got, []string{"a", "a", "b"}) {
+			t.Fatalf("with b: %v after %v, want a's two and b's after %v", got, took, d.usageWait)
+		}
+	})
 }
 
 // GET /api/v1/machines/{id}/usage: the range, the filters, an unknown machine and range.
