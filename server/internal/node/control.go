@@ -38,6 +38,9 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, err
 	}
 	if resume != "" && validID(resume) && n.codexPath(resume) != "" && !n.isAssistantSession(resume) {
+		if mode == "plan" {
+			return nil, readonlyStartUnsupported()
+		}
 		if _, live := n.agent(resume); !live { // a Codex thread nothing runs (codex_resume.go)
 			return n.resumeCodexSession(ctx, resume, launcher, prompt)
 		}
@@ -55,6 +58,13 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	if kind != "claude" && kind != "codex" && kind != traexAgent {
 		return nil, fmt.Errorf("unsupported agent type %q", kind)
+	}
+	if mode == "plan" {
+		// Codex terminal starts use launcher arguments, not the assistant's codexPolicy mapping.
+		// Refuse before creating a workspace or tab rather than silently dropping the read-only mode.
+		if _, codex := n.codexLauncher(ctx, launcher); codex || kind != "claude" {
+			return nil, readonlyStartUnsupported()
+		}
 	}
 	if err := n.checkUltracodeStart(ctx, execution.Ultracode, kind); err != nil {
 		return nil, err

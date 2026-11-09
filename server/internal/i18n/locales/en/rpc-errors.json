@@ -1,4 +1,5 @@
 {
+  "readonly_unsupported": "This launcher cannot enforce read-only mode for task starts. Choose a Claude Code terminal launcher on herdr or Orca.",
   "timeout": "The request timed out. The computer may be busy or the network unstable. Check whether it went through, then try again later.",
   "unreachable": "The connection to this computer dropped. Reconnect it, check whether your last action went through, then try again.",
   "failed": "The request could not be completed. Open details for the diagnostic.",
