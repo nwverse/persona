@@ -2,7 +2,7 @@ import SwiftUI
 
 #if os(iOS)
 /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents, each choice showing two agents as the
-/// list would draw them; and the conversation's layout (`ChatLayoutSettingsPage`), which this page holds now.
+/// list would draw them.
 struct LayoutSettingsPage: View {
     private let choice = AgentListDisplayChoice()
 
@@ -25,15 +25,6 @@ struct LayoutSettingsPage: View {
                 } else {
                     Text("By Repository keeps its own tree of worktrees and agents.")
                 }
-            }
-            Section {
-                NavigationLink(value: SettingsPage.chatLayout) {
-                    SettingsRow(title: String(localized: "New Conversation Layout"), symbol: Theme.Icon.conversation, tint: Theme.Hue.orange,
-                                value: ChatLayoutSettings.shared.on ? String(localized: "On") : String(localized: "Off"), look: .oneLine)
-                }
-                .accessibilityIdentifier("settings-chat-layout")
-            } header: {
-                Text("Conversation [Layout]")
             }
         }
         .themedGroupedPage()
