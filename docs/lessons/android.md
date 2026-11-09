@@ -1,5 +1,14 @@
 # Lessons: Android
 
+## `-dontobfuscate` does not keep every method name (#2441)
+
+When D8 or R8 desugars a Kotlin lambda, it may rename the implementation method to `$r8$lambda$<hash>`, whatever the
+obfuscation flags say: about a third of persona's lambda methods carry such names in an unshrunk build and about half in
+the shrunk release. Error-report frames inside Compose callbacks and coroutine blocks then need `mapping.txt`; the
+release build is reproducible, so rebuilding the reported commit regenerates it. State what shrinking keeps from the built
+dex or `mapping.txt`, not from the flags' names. And pin the switch itself: the shrink check passes an unshrunk APK by
+design and hosted CI builds no release, so `scripts/release/test_check_android_shrink.py` asserts `isMinifyEnabled = true`.
+
 ## Host-owned lifecycle controls need real application wiring (#2397)
 
 A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's

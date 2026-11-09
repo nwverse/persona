@@ -283,20 +283,28 @@ The app's crashes and ANRs go to the hub's `error_reports` (format and rules: [p
 ## Release shrinking
 
 The release build runs R8 in shrink-only mode (`android/app/build.gradle.kts`, `android/app/proguard-rules.pro`, #2441): it
-removes the classes and members nothing reaches, and with `-dontobfuscate` and `-dontoptimize` it renames, optimizes and
-merges nothing. Resource shrinking stays off, and debug builds are not shrunk.
+removes the classes and members nothing reaches, and with `-dontobfuscate` and `-dontoptimize` it obfuscates, optimizes
+and merges nothing; only lambda bodies' method names change ("Error reports" below). Resource shrinking stays off, and
+debug builds are not shrunk.
 
 - **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it is 32,358,397
-  bytes, 3 dex files and 32,796 classes (-65%). Most of the removed code is library code; of persona's own, 1,090 classes
-  nothing used went (unused contract models, generated factories, `R` classes). The build's
-  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member.
-- **Error reports** ("Error reports" above): class, method and source file names are the source's, so frames
-  keep `in_app` for `persona.*`, and breadcrumbs keep route type names. Lines are the source's too, except inside bodies
-  kotlinc inlined from an `inline` function (Compose's `remember` and `Layout`, collection helpers): an unshrunk build
-  already numbers those past the end of the file, and R8 gives them new numbers that its `mapping.txt` resolves to the
-  inlined function and the calling line. In `:feature:settings`, 13,501 methods keep exactly the unshrunk lines, 985
-  differ only inside such bodies, and 5 lost a line no instruction was left on. The release worker does not keep
-  `mapping.txt` yet; keep it from a release build when its frames need resolving.
+  bytes, 3 dex files and 32,796 classes (-65%). Most of the removed code is library code. The build's
+  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member; by that list, 1,090 of persona's
+  own classes went whole (unused contract models, generated factories, `R` classes).
+- **Error reports** ("Error reports" above): class and source file names are the source's, so frames keep `in_app`
+  for `persona.*`, and breadcrumbs keep route type names. Method names are the source's except in lambda bodies: when a
+  lambda is desugared, its implementation method may be renamed `$r8$lambda$<hash>` (in one build,
+  `PersonaApp.onCreate$lambda$0` became `$r8$lambda$Dco_yZEW5o_ibRoRPfpTRYJvUSI`). D8 already does this in an unshrunk build (5,027 of persona's
+  15,484 lambda methods, 32%); R8 does it to more (7,899 of 15,194, 52%), so a frame inside a Compose callback or a
+  coroutine block more often carries a hashed `function`, which `mapping.txt` maps back. Lines are the source's too,
+  except inside bodies kotlinc inlined from an `inline` function (Compose's `remember` and `Layout`, collection
+  helpers): an unshrunk build already numbers those past the end of the file, and R8 gives them new numbers that its
+  `mapping.txt` resolves to the inlined function and the calling line. In `:feature:settings`, 13,501 methods keep
+  exactly the unshrunk lines, 985 differ only inside such bodies, and 5 lost a line no instruction was left on. The
+  release worker does not keep `mapping.txt` yet, but the release build is reproducible: the same commit and toolchain
+  give a byte-identical APK (six rebuilds of one commit matched). Running `:app:assembleRelease` at the commit in a
+  report's release (`0.1.<versionCode>-<commit>`) regenerates its `mapping.txt`, and `retrace` from the SDK
+  command-line tools applies it.
   R8 also adds `$$ExternalSyntheticApiModelOutline` / `$$ExternalSyntheticBUOutline` classes (source file
   `R8$$SyntheticClass`), which put one extra frame between app code and a newer platform API or a backport.
 - **Reached by name**: R8 keeps what code references, the libraries' own rules (AndroidX, WorkManager, Room, Hilt,
