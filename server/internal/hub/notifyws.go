@@ -73,8 +73,12 @@ func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine stri
 	if ix.Kind == proto.IxElicitation {
 		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
 	} else {
-		h.push.sendCard(owner, build, ix.ID, wants.fn(), wants.quiet())
-		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet())
+		// A card is the one alert a Persona Link desktop shows, for its own manager's agents only, so "Phone Muted" holds
+		// it back while one of owner's is there too (desktops.go); the desktop app's online check follows in sendCard and
+		// notifyWSFrom.
+		fn := alertWanted(wants.fn(), h.linkDesktopOnline(owner))
+		h.push.sendCard(owner, build, ix.ID, fn, wants.quiet())
+		h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
 	}
 }
 

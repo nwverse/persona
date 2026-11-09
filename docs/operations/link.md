@@ -472,6 +472,45 @@ persona-link only relays the summary into its status: it shows nothing itself, a
 - Old persona-link: no `features` in its hello, so the manager sends nothing (an unknown type would be ignored anyway). Old connector: no `features` in its `info`, so it is never posted to.
 - Old manager: ignores `features` and the extra `info` fields and sends nothing; persona-link's status has no `attention`.
 
+## Presence
+
+While you are at a computer whose menu bar App can notify you, the hub counts that computer as a desktop: a phone with "Phone Muted" on leaves the "Needs you" cards to it (#2214).
+This takes over what the native Mac App's `register_desktop` did (`docs/apple/mac.md`), for Persona Link.
+
+**Who decides**
+- The menu bar App, by what it sees on this Mac; the conditions and the lines it writes are under "Menu bar App" › "Presence".
+- The command-line Link reports no presence (nothing writes its stdin): it cannot show notifications, so muting the phone for it would lose alerts. Nor does the Windows tray yet.
+
+**persona-link** (`internal/link/presence.go`)
+- `run --parent` reads stdin line by line; a line that is not presence is skipped, and the end of stdin still means the App went away.
+- It keeps the latest line and forwards every one, the App's repeats included; it never repeats one by itself, so presence lapses when the App goes quiet.
+  An active line older than 120 seconds counts as inactive.
+- Active mode: `{"type":"presence","active","notifies","ttl_ms"}` on the link, as the link comes up and for every line; `ttl_ms` is what is left of the 120 seconds since the App wrote it.
+- Passive mode: the `info` answer carries the same `presence`; the hub reads `info` every 30 seconds, so a change reaches it up to 30 seconds late.
+
+**The manager** (`internal/devices/presence.go`)
+- Keeps the presence until `active_until` = when it heard it + `ttl_ms` (120 seconds when missing, at most 5 minutes), and reports its desktops to the hub in `devices.desktops`: on every presence it hears (each renewal), after a `devices.state` when the list changed, and in full after each handshake.
+  A separate event, so a renewal once a minute does not resend the apps' machine list.
+- Counts only a computer that gets the "Needs you" summary as it is (see "Needs you" above): its Persona Link takes the summary, it is not waiting to be confirmed and not a work computer.
+  While the hub cannot say which computers wait to be confirmed, none counts: the summary freezes then, so a new card would reach neither the computer nor the phone. A work computer never counts.
+- The presence ends when the link drops (active mode), when `info` stops answering or answers without it (passive mode), and when its time runs out.
+
+**The hub** (`internal/hub/desktops.go`)
+- A computer of the sending manager's own, with `notifies` and an `active_until` ahead, is a Persona Link desktop; a mesh member's computer does not count yet.
+- "Phone Muted" while only Persona Link desktops are active holds back the "Needs you" cards (the APNs card push and the `interaction` WebSocket alert), the one alert Persona Link shows, of the managers whose computers they are: a Persona Link shows only its own manager's summary.
+  "Agent finished", reply reminders, decisions, `POST /api/v1/notify` alerts and the Live Activity's start alert still go to the phone. A connected native Mac App mutes as before.
+- `active_until` is checked when an alert goes out, so a computer whose manager or App went quiet stops muting the phone once it passes (2 minutes after the App last spoke); the `desktops` event follows when it lapses.
+- The `desktops` event lists a Persona Link desktop as `{"kind":"link","machine_id","device":"","name","since"}`, only to clients that list `desktops_link` (`docs/protocol/protocol.md`); others get the list as before.
+
+**Old and new**
+- Old menu bar App: writes nothing, so a new persona-link reports nothing. New App with an old persona-link: the old one discards its stdin.
+- Old manager: ignores the `presence` message and the `info` field. Old hub: ignores `devices.desktops`. Either way the phone is never muted for a Persona Link computer.
+- Clients that do not list `desktops_link` (the iOS App until it does, Android, the web app) do not show Persona Link desktops; a phone with "Phone Muted" on still has the cards held back while one is active.
+
+**Not yet**
+- Focus on the Mac is not checked.
+- The web app still shows its own notifications while a Persona Link desktop is active.
+
 ## Credentials (active mode)
 
 - A kind of device credential: kind `link`, role `link`, bound to that machine in hub.json (`device_tokens.machine_id`, migration 0131).
@@ -600,7 +639,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
   (the hub's https public URL; in active mode without one, the hub address the link went to, which may have a self-signed certificate and is another origin than the one you signed in to).
   Set the web address when the hub has no https public URL. Without either (passive mode, no public URL), the section says so, and a row or a notification opens the **Web Address** window; saving an address there opens what was clicked, unless a later click already opened it. A typed address without a scheme is saved as https.
 
-**Presence** (`Presence.swift`: whether you are at this Mac, for the phone's "Phone Muted")
+**Presence** (`Presence.swift`: the App's part of "Presence" above)
 - `active` is true only while all of these hold:
   1. Keyboard, mouse or trackpad input within the last 5 minutes, as the HID system sees it (`CGEventSource`, no permission needed).
      Reading, a call or a long build without touching the keyboard keeps the phone quiet; a Mac left unlocked hands the alerts back to the phone 5 minutes later.
@@ -616,8 +655,6 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
   - Written at once when either field changes, again every 60 s while `active`, and once to every helper as it starts (inactive too).
   - Idle time is checked when it would pass the limit; while only input is missing, every 10 s; while notifications do not show, once a minute. While locked, asleep or switched away, nothing runs until the next notification.
   - The pipe does not block: a helper that stops reading loses lines instead of stalling the App, and a helper that has gone fails the write (`EPIPE`; SIGPIPE is ignored).
-- The helper does not forward presence yet: today's helper reads its stdin only to notice the App's exit and discards the lines. Sending it to the hub, and the hub muting phones while a Link Mac is active, are tracked in #2214.
-- The command-line Link reports no presence: it cannot show notifications, so muting the phone for it would lose alerts.
 
 **Pairing window**
 - Select **Connect to hub (active)** or **Let hub connect (passive)** at the top, defaulting to the current mode; viewing doesn't switch. Switching happens when pairing (active: paste and pair; passive: generate link),
