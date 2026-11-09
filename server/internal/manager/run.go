@@ -149,7 +149,7 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 			return ConfigError{err}
 		}
 		// A new binary (an update): once it runs and nothing is going on, it stops and starts again on that one, as
-		// the hub's child would with the hub (watchBinary).
+		// the hub's child would with the hub (binaryWatch).
 		run, stop := context.WithCancel(ctx)
 		var idle atomic.Pointer[assistant.Idle]
 		var renew atomic.Bool

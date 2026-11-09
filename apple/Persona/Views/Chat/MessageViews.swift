@@ -262,7 +262,8 @@ struct PeerMessage: View {
                 // A subagent's report that came as a message: one line until opened, as in its card.
                 FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
             } else {
-                words(d)
+                // A long one: its first lines until opened, as many as an exchange shows (#2010).
+                LineFold(lines: ChatLayoutSettings.defaultLines, id: pinKey) { words(d) }
             }
         }
         .padding(Theme.Space.m)
@@ -813,7 +814,7 @@ struct NoticeRow: View {
     private var wake: some View {
         let w = Self.wakeSummary(item)
         return HStack(spacing: Theme.Space.sm) {
-            ThemedIcon(w.failed ? Theme.Icon.errorFilled : "bell.fill")
+            ThemedIcon(w.failed ? Theme.Icon.errorFilled : Theme.Icon.notification)
                 .foregroundStyle(w.failed ? Theme.danger : Theme.accent)
             Text(w.text).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
         }
@@ -874,7 +875,7 @@ struct WakeChip: View {
                 if live {
                     ProgressView().controlSize(.mini)
                 } else {
-                    ThemedIcon(failed ? Theme.Icon.errorFilled : "bell.fill")
+                    ThemedIcon(failed ? Theme.Icon.errorFilled : Theme.Icon.notification)
                         .foregroundStyle(failed ? Theme.danger : Theme.accent)
                 }
                 Text(live ? String(localized: "Background task done · Processing") : summary?.text ?? String(localized: "\(notices.count) background tasks done"))
