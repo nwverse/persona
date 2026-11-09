@@ -150,7 +150,7 @@ func (s *Service) publishList(machine string) []proto.Session {
 // decorated returns a machine's sessions as the apps get them: the unified states, the pending interaction counts,
 // what the assistant says of its conversations, the work and todos.
 func (s *Service) decoratedUnarchived(machine string) []proto.Session {
-	return s.decorateInventory(machine, slices.Clone(s.nodeSessions(machine)), true)
+	return s.decorateInventory(machine, s.nodeSessions(machine), true) // a copy already: the devices' list stays as it is
 }
 
 // decorateInventory owns list. A subset gets the same live fields as the full
@@ -180,10 +180,11 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	shown, via := r.sessions, r.marks
 	r.mu.RUnlock()
 	lang := s.lang(context.Background())
+	dir := m.assistantCwd() // once, not a path.Join for each row
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
-		list[i].Assistant = m.isAssistant(list[i])
+		list[i].Assistant = isAssistantSession(&list[i], dir, m.manager)
 		if list[i].Assistant {
 			list[i].Space = identity.SpaceOf(list[i].Cwd)
 		}

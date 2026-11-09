@@ -18,19 +18,34 @@ import (
 
 // ---- comparing with the configuration ----
 
-// modelProfileChanges is what switching to p would change now: the categories whose choice differs (ids) and the
-// launcher fields (<launcher>.<field>). For the profile in use: where the configuration has moved away from it.
-func (s *Service) modelProfileChanges(ctx context.Context, p ModelProfile, stored []storedLauncher) ([]string, error) {
-	changes := []string{}
+// profileRecords reads the records of the categories any of ps names, each once: the view compares every profile
+// with them while it holds models.mu.
+func (s *Service) profileRecords(ctx context.Context, ps []ModelProfile) (map[string]modelRecord, error) {
+	records := map[string]modelRecord{}
 	for _, id := range modelCategoryIDs {
-		b, ok := p.Purposes[id]
-		if !ok {
+		if !slices.ContainsFunc(ps, func(p ModelProfile) bool { _, ok := p.Purposes[id]; return ok }) {
 			continue
 		}
 		r, err := s.modelRecord(ctx, id)
 		if err != nil {
 			return nil, err
 		}
+		records[id] = r
+	}
+	return records, nil
+}
+
+// modelProfileChanges is what switching to p would change now: the categories whose choice differs from their records
+// (profileRecords) as ids, and the launcher fields (<launcher>.<field>). For the profile in use: where the
+// configuration has moved away from it.
+func modelProfileChanges(p ModelProfile, records map[string]modelRecord, stored []storedLauncher) []string {
+	changes := []string{}
+	for _, id := range modelCategoryIDs {
+		b, ok := p.Purposes[id]
+		if !ok {
+			continue
+		}
+		r := records[id] // a copy: the runtime is cleared on it only
 		r.Binding.Runtime = ""
 		if r.Binding != b {
 			changes = append(changes, id)
@@ -49,7 +64,7 @@ func (s *Service) modelProfileChanges(ctx context.Context, p ModelProfile, store
 			}
 		}
 	}
-	return changes, nil
+	return changes
 }
 
 // ---- the view ----
@@ -96,17 +111,17 @@ func (s *Service) modelProfilesView(ctx context.Context) (ModelProfilesView, err
 		return ModelProfilesView{}, err
 	}
 	ctx = withManagedSnapshot(ctx, stored)
+	records, err := s.profileRecords(ctx, ps.Profiles)
+	if err != nil {
+		return ModelProfilesView{}, err
+	}
 	v := ModelProfilesView{Revision: ps.Revision, Active: state.Active, Profiles: []ModelProfileView{}, Events: []ModelProfileEvent{}}
 	if state.Active != "" {
 		at, by := state.At, state.By
 		v.At, v.By = &at, &by
 	}
 	for _, p := range ps.Profiles {
-		changes, err := s.modelProfileChanges(ctx, p, stored)
-		if err != nil {
-			return ModelProfilesView{}, err
-		}
-		v.Profiles = append(v.Profiles, ModelProfileView{ModelProfile: p, Active: p.ID == state.Active, Changes: changes})
+		v.Profiles = append(v.Profiles, ModelProfileView{ModelProfile: p, Active: p.ID == state.Active, Changes: modelProfileChanges(p, records, stored)})
 	}
 	if prev := state.Previous; prev != nil {
 		undo := &ModelProfileUndo{To: prev.Profile, At: prev.At, Changes: slices.Sorted(maps.Keys(prev.Purposes))}

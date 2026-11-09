@@ -1,0 +1,10 @@
+{
+  "remind_subtitle": "To-do reminder",
+  "remind_body": "Time to do this",
+  "remind_due": "Due {when}",
+  "remind_overdue": "Was due {when}",
+  "remind_late": "Meant for {when}",
+  "delete_card": "Delete the to-do “{title}”",
+  "complete_card": "Mark the task “{title}” done (its agents are closed once they are idle)",
+  "reopen_card": "Reopen the task “{title}”"
+}
