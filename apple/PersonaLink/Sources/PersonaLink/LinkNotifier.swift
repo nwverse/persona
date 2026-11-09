@@ -13,18 +13,19 @@ import UserNotifications
     /// The work of each change, in order: each waits for the one before, so a post never lands after a later take-back.
     private var last: Task<Void, Never>?
     private var open: (_ route: String, _ webURL: String?) -> Void = { _, _ in }
-    private var report: (_ allowed: Bool) -> Void = { _ in }
+    private var report: (_ access: NotificationAccess) -> Void = { _ in }
     private var center: UNUserNotificationCenter { .current() }
     /// `UNUserNotificationCenter.current()` raises in a process outside an app bundle (`swift run`, the package's
     /// executable run from Xcode): there this does nothing.
     private let bundled = Bundle.main.bundleURL.pathExtension == "app"
 
     /// Called at launch, before any summary. `open`: a clicked notification's route and the hub's web address when it
-    /// was posted. `allowed`: whether notifications are allowed, whenever that is checked.
-    func start(open: @escaping (_ route: String, _ webURL: String?) -> Void, allowed: @escaping (_ allowed: Bool) -> Void) {
+    /// was posted. `access`: what notifications may do, whenever that is checked.
+    func start(open: @escaping (_ route: String, _ webURL: String?) -> Void,
+               access: @escaping (_ access: NotificationAccess) -> Void) {
         guard bundled else { return }
         self.open = open
-        report = allowed
+        report = access
         center.delegate = self
         // Notifications an earlier run left shown go when the summary no longer has their session.
         run {
@@ -67,11 +68,13 @@ import UserNotifications
         }
     }
 
-    /// Whether notifications are allowed now, for the menu (System Settings may have changed it meanwhile).
+    /// What notifications may do now, for the menu and presence (System Settings may have changed it meanwhile).
     func refreshAuthorization() async {
         guard bundled else { return }
-        allowed = await center.notificationSettings().authorizationStatus != .denied
-        report(allowed)
+        let settings = await center.notificationSettings()
+        let access = NotificationAccess(status: settings.authorizationStatus, style: settings.alertStyle)
+        allowed = access.allowed
+        report(access)
     }
 
     private func run(_ work: @escaping @MainActor () async -> Void) {
@@ -129,5 +132,19 @@ import UserNotifications
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .list, .sound])
+    }
+}
+
+/// What System Settings lets this app's notifications do.
+struct NotificationAccess {
+    /// Not turned off: posts go out, also before the user was asked (the menu says when they are off).
+    var allowed: Bool
+    /// Allowed and shown as banners or alerts, so someone at this Mac sees one as it comes: presence's `notifies`.
+    /// Quiet (provisional) delivery and the None style reach only Notification Center.
+    var shows: Bool
+
+    init(status: UNAuthorizationStatus, style: UNAlertStyle) {
+        allowed = status != .denied
+        shows = status == .authorized && style != .none
     }
 }

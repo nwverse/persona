@@ -490,6 +490,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - Stderr appends to `~/.persona/link.log`; if over 1 MB, it is cleared on the next helper start.
 - Uses the resident node's data directory: if the App environment lacks `PERSONA_HOME` / `PERSONA_HOME`, it reads the directory from `~/Library/LaunchAgents/com.persona.node.plist` and passes it to the helper; otherwise defaults to `~/.persona` (`~/.persona` on machines that used the old version) (`LinkStatePaths.swift`).
 - `--parent` exits the helper when stdin closes, so any App exit, including a crash, also exits the helper.
+  The App also writes presence lines to that stdin (see "Presence" below).
 - If the helper exits, the App restarts it: exponential delay from 1 second to 30 seconds; after running for a full minute, restart delay resets to 1 second.
 
 **Icons**: template images remain clear on light and dark menu bars.
@@ -530,6 +531,25 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - A row or a notification opens `<web address> + route` in the default browser. The web address is **Set Web Address…** if set, else the summary's `web_url`
   (the hub's https public URL; in active mode without one, the hub address the link went to, which may have a self-signed certificate and is another origin than the one you signed in to).
   Set the web address when the hub has no https public URL. Without either (passive mode, no public URL), the section says so, and a row or a notification opens the **Web Address** window; saving an address there opens what was clicked, unless a later click already opened it. A typed address without a scheme is saved as https.
+
+**Presence** (`Presence.swift`: whether you are at this Mac, for the phone's "Phone Muted")
+- `active` is true only while all of these hold:
+  1. Keyboard, mouse or trackpad input within the last 5 minutes, as the HID system sees it (`CGEventSource`, no permission needed).
+     Reading, a call or a long build without touching the keyboard keeps the phone quiet; a Mac left unlocked hands the alerts back to the phone 5 minutes later.
+  2. The screen is not locked (`com.apple.screenIsLocked` / `com.apple.screenIsUnlocked`, distributed notifications macOS posts without documenting them).
+  3. The displays are awake (`NSWorkspace` `screensDidSleep` / `screensDidWake`).
+  4. This user's session is on screen, not switched away from (`NSWorkspace` `sessionDidResignActive` / `sessionDidBecomeActive`).
+  5. `notifies` is true.
+- `notifies`: Persona Link's notifications are allowed and shown as banners or alerts. Quiet delivery and the None style reach only Notification Center, so they do not count;
+  neither does a permission not asked yet (the App asks when the first "Needs you" summary arrives). Focus on this Mac is not checked.
+- The lock and session state at launch come from `CGSessionCopyCurrentDictionary`, the displays' from `CGDisplayIsAsleep`; the notifications keep them current. Notification settings are read again at most once a minute.
+  The lock notifications are observed with `deliverImmediately`: AppKit otherwise holds distributed notifications back while the App is not active, which a menu bar App almost never is.
+- One JSON object per line on the helper's stdin: `{"presence":{"active":true,"notifies":true}}`.
+  - Written at once when either field changes, again every 60 s while `active`, and once to every helper as it starts (inactive too).
+  - Idle time is checked when it would pass the limit; while only input is missing, every 10 s; while notifications do not show, once a minute. While locked, asleep or switched away, nothing runs until the next notification.
+  - The pipe does not block: a helper that stops reading loses lines instead of stalling the App, and a helper that has gone fails the write (`EPIPE`; SIGPIPE is ignored).
+- The helper does not forward presence yet: today's helper reads its stdin only to notice the App's exit and discards the lines. Sending it to the hub, and the hub muting phones while a Link Mac is active, are tracked in #2214.
+- The command-line Link reports no presence: it cannot show notifications, so muting the phone for it would lose alerts.
 
 **Pairing window**
 - Select **Connect to hub (active)** or **Let hub connect (passive)** at the top, defaulting to the current mode; viewing doesn't switch. Switching happens when pairing (active: paste and pair; passive: generate link),

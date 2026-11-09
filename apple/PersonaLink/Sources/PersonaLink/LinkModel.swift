@@ -264,6 +264,8 @@ enum LinkText {
     @ObservationIgnored private var quitting = false
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var sawFirstPath = false
+    /// Presence for the helper's stdin (Presence.swift); started with the app, never in snapshots or tests.
+    @ObservationIgnored private let presence = PresenceMonitor()
 
     nonisolated static let helperURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/persona-link")
     /// The device's program the app carries (persona-node), for the resident node when this Mac has none
@@ -308,9 +310,13 @@ enum LinkText {
     func start() {
         webAddress = defaults.string(forKey: Self.webAddressKey) ?? ""
         LinkNotifier.shared.start(open: { [weak self] route, webURL in self?.open(route: route, webURL: webURL) },
-                                  allowed: { [weak self] in self?.notificationsOff = !$0 })
+                                  access: { [weak self] access in
+                                      self?.notificationsOff = !access.allowed
+                                      self?.presence.receive(.notifies(access.shows))
+                                  })
         readConfig()
         startHelper()
+        presence.start(write: { [weak self] line in self?.writePresence(line) })
         Task { await setUpNodeOnce() }
         monitor.pathUpdateHandler = { _ in
             Task { @MainActor in LinkModel.shared.networkChanged() }
@@ -340,6 +346,7 @@ enum LinkText {
         p.environment = Self.helperEnvironment
         p.arguments = ["run", "--parent"] // exits when its stdin closes: when this app goes away, however it does
         let input = Pipe(), output = Pipe()
+        Self.dontBlock(input.fileHandleForWriting)
         p.standardInput = input
         p.standardOutput = output
         p.standardError = logHandle()
@@ -358,6 +365,7 @@ enum LinkText {
             keepStdin = input
             startedAt = Date()
             helperDown = nil
+            presence.helperStarted()
         } catch {
             helperDown = "后台程序启动不了：\(error.localizedDescription)"
             scheduleRestart()
@@ -407,6 +415,18 @@ enum LinkText {
     private func setStatus(_ s: LinkStatus?) {
         if s?.attention != status?.attention { LinkNotifier.shared.apply(s?.attention) }
         status = s
+    }
+
+    /// A presence line for the helper's stdin; none goes out while there is no helper, and the next one gets the state
+    /// as it starts. The pipe does not block (`dontBlock`); a line is far shorter than PIPE_BUF, so it goes whole or not
+    /// at all.
+    private func writePresence(_ line: Data) {
+        guard let input = keepStdin else { return }
+        do {
+            try Self.writeAll(input.fileHandleForWriting, line)
+        } catch {
+            NSLog("Persona Link: presence not written to the helper: %@", error.localizedDescription)
+        }
     }
 
     private func scheduleRestart() {
@@ -710,7 +730,17 @@ enum LinkText {
         Darwin.signal(SIGPIPE, SIG_IGN)
     }()
 
-    /// Writes every byte to a pipe.
+    /// Writes to `handle` fail at once (EAGAIN) while its pipe is full, instead of waiting for the reader: a helper that
+    /// stopped reading loses presence lines but never stalls the app. `writeAll` on it may then stop part way through
+    /// anything longer than PIPE_BUF (512 bytes).
+    nonisolated static func dontBlock(_ handle: FileHandle) {
+        let fd = handle.fileDescriptor
+        if fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == -1 {
+            NSLog("Persona Link: pipe left blocking: %@", String(cString: strerror(errno)))
+        }
+    }
+
+    /// Writes every byte to a pipe (a non-blocking one, `dontBlock`: until it is full, then EAGAIN).
     ///
     /// `FileHandle.write` raises an uncatchable ObjC exception on EPIPE (with SIGPIPE ignored, the write fails
     /// with EPIPE rather than raising a signal), so go through `write(2)` and let a helper that exits before
