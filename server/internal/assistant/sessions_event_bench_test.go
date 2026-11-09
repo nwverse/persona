@@ -40,6 +40,9 @@ func sessionsChangedOf() (*Service, []byte) {
 // The manager keeps of each list only what it reads again (#2472): about 995 KB an event measured, where copies of the
 // previous list, the reply reminders' rows and the herdr marks' list made it 1.92 MB.
 func TestSessionsChangedEventKeepsLittle(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race instrumentation allocates")
+	}
 	if !isolated(t) {
 		return
 	}
@@ -146,6 +149,9 @@ func BenchmarkDecoratedSession(b *testing.B) {
 // A finished turn's push decorates only its own row, not its machine's whole list (#2472): about 680 bytes a lookup
 // measured, where decorating the 50 sessions was 85.7 KB.
 func TestDecoratedSessionDecoratesOneRow(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race instrumentation allocates")
+	}
 	if !isolated(t) {
 		return
 	}
@@ -162,3 +168,6 @@ func TestDecoratedSessionDecoratesOneRow(t *testing.T) {
 		t.Fatalf("one decorated session allocated %d bytes, want at most 700", per)
 	}
 }
+
+// raceEnabled is set by race_test.go: the race detector's instrumentation allocates, so allocation budgets skip.
+var raceEnabled bool
