@@ -9,12 +9,14 @@ import (
 	"math"
 	"math/big"
 	"path"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // The schemas (schema/extension, copied here by the generator) are the one truth of what a view, a manifest or a
@@ -33,6 +35,9 @@ var (
 	// the ref and the file it stands in. Filled once with files, read-only after,
 	// so no lock: a view visits the same handful of refs once per component.
 	refs map[refSite]refTarget
+	// siblings holds, for each schema node with a $ref, its other keywords
+	// but description (refSiblings). Filled with refs, read-only after.
+	siblings map[unsafe.Pointer]map[string]any
 )
 
 type refSite struct{ ref, here string }
@@ -63,6 +68,7 @@ func loadSchemas() {
 		files[e.Name()] = doc
 	}
 	refs = map[refSite]refTarget{}
+	siblings = map[unsafe.Pointer]map[string]any{}
 	for name, doc := range files {
 		collectRefs(doc, name)
 	}
@@ -74,6 +80,9 @@ func loadSchemas() {
 func collectRefs(node any, here string) {
 	switch value := node.(type) {
 	case map[string]any:
+		if _, ok := value["$ref"].(string); ok {
+			siblings[mapKey(value)] = refSiblingsOf(value)
+		}
 		for key, member := range value {
 			if key == "$ref" {
 				if ref, ok := member.(string); ok {
@@ -93,6 +102,31 @@ func collectRefs(node any, here string) {
 		}
 	}
 }
+
+// refSiblings is the keywords of s other than $ref and description, which the
+// value must hold to as well as to what $ref names. Those of the loaded
+// schemas were found once by collectRefs; a node they do not carry is read
+// here.
+func refSiblings(s map[string]any) map[string]any {
+	if rest, ok := siblings[mapKey(s)]; ok {
+		return rest
+	}
+	return refSiblingsOf(s)
+}
+
+func refSiblingsOf(s map[string]any) map[string]any {
+	rest := map[string]any{}
+	for k, x := range s {
+		if k != "$ref" && k != "description" {
+			rest[k] = x
+		}
+	}
+	return rest
+}
+
+// mapKey is the identity of a map, which the loaded schemas keep for the life
+// of the process.
+func mapKey(m map[string]any) unsafe.Pointer { return reflect.ValueOf(m).UnsafePointer() }
 
 // ValidationError is what a value does not hold to, each "<where>: <what>" ($ is the value itself).
 type ValidationError struct {
@@ -274,13 +308,7 @@ func (c *checker) check(s map[string]any, v any, here string) {
 			return
 		}
 		c.check(target, v, f)
-		rest := map[string]any{}
-		for k, x := range s {
-			if k != "$ref" && k != "description" {
-				rest[k] = x
-			}
-		}
-		if len(rest) > 0 {
+		if rest := refSiblings(s); len(rest) > 0 {
 			c.check(rest, v, here)
 		}
 		return
