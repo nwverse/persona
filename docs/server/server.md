@@ -1,6 +1,6 @@
 # Server: personad
 
-`personad` is the new name; `personad` remains a compatibility alias. New default runtime directory: `~/.persona`; old `~/.persona` remains supported. Existing systemd / launchd, database / container / volume, and release-file identities in this document are retained rather than rebuilt for the rename. Migration-version differences: [Configuration and compatibility](../operations/config.md#命名与兼容).
+The default runtime directory is `~/.persona`; what the old names (commands, directories, variables) still reach is in [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md). Existing systemd / launchd, database / container / volume, and release-file identities in this document are retained rather than rebuilt for the rename. Migration-version differences: [Configuration and compatibility](../operations/config.md#命名与兼容).
 
 Go, single binary, `server/cmd/personad`. Modes: `docs/server/architecture.md`; protocol: docs/protocol/protocol.md.
 
