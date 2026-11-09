@@ -22,6 +22,17 @@ func TestHistoryWireRoundTrip(t *testing.T) {
 		{HistoryChat{ID: "c1", Name: "Example team", Kind: HistoryKindGroup, Muted: true, Bot: true, Estimate: 1200, Source: "examplefeed"},
 			`{"id":"c1","name":"Example team","kind":"group","muted":true,"bot":true,"estimate":1200,"source":"examplefeed"}`},
 		{HistoryChat{ID: "c2", Name: "Example A", Kind: HistoryKindDM}, `{"id":"c2","name":"Example A","kind":"dm"}`},
+		{HistoryChat{ID: "c3", Name: "Example box", Kind: HistoryKindOfficial, Collapsed: true, Done: true},
+			`{"id":"c3","name":"Example box","kind":"official","collapsed":true,"done":true}`},
+		{ChatBatch{Chat: kbwire.SourceChat{ID: "c1", Name: "Example team", Kind: "group", Topic: true, Muted: true, Collapsed: true, Done: true, UpdatedAt: at},
+			Messages: []kbwire.SourceMessage{hit}},
+			`{"chat":{"id":"c1","name":"Example team","kind":"group","topic":true,"muted":true,"collapsed":true,"done":true,` +
+				`"updated_at":"2026-11-04T08:24:00Z"},"messages":[{"id":"m9","position":"9","sender_name":"Example B","mentioned":true,` +
+				`"text":"a mention","at":"2026-11-04T08:24:00Z"}]}`},
+		{ChatBatch{Chat: kbwire.SourceChat{ID: "c1", Name: "Example team", Kind: "group", UpdatedAt: at},
+			Messages: []kbwire.SourceMessage{{ID: "m10", Text: "to everyone", At: at, MentionedAll: true}, {ID: "m11", Text: "both", At: at, Mentioned: true, MentionedAll: true}}},
+			`{"chat":{"id":"c1","name":"Example team","kind":"group","updated_at":"2026-11-04T08:24:00Z"},"messages":[{"id":"m10","mentioned_all":true,"text":"to everyone",` +
+				`"at":"2026-11-04T08:24:00Z"},{"id":"m11","mentioned":true,"mentioned_all":true,"text":"both","at":"2026-11-04T08:24:00Z"}]}`},
 		{HistoryQuery{Chat: "c1", Around: "17", Limit: 20}, `{"chat":"c1","around":"17","limit":20}`},
 		{HistoryQuery{Chat: "c1"}, `{"chat":"c1"}`},
 		{HistoryPage{Messages: []kbwire.SourceMessage{hit}, Older: "8", Newer: "10", More: true,

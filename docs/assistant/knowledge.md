@@ -225,6 +225,14 @@ remains described below. No public message wire fields or Markdown line format c
 instants keep them correct across timezone changes). Pruning does not decrement `messages` or `pending`, matching existing behavior. Forgetting a source removes
 its entire chat directories, including receipts and any completed recovery state, so importing it again is allowed.
 
+### What sources report for the selection (#1523)
+
+Which chats and documents the knowledge base keeps is decided by one selection config with priority rules (the issue has the design). The rules read only what the
+connector reports (`docs/protocol/connector-protocol.md` "Chat flags and document signals"): a chat's kind (dm, group, bot, official, system; a source's other kinds such as mail match no kind rule) and the
+owner's flags `muted`, `collapsed` and `done` (`kbwire.SourceChat` on every `archive.changes` batch, `connectorwire.HistoryChat` on every `history.chats` entry); a message's
+`mine`, `mentioned` (the owner by name) and `mentioned_all` (an @all, which counts only with the mentions rule's `include_all`), daily batches and history pages alike; a document's `signals` (`mentions`, `comment_mentions`, `authored`, `viewed`; `kbwire.Item.Signals`, kept with the item as the source last reported them). A connector that does
+not report one never matches its rule.
+
 ### History import
 
 A chat source that can read a conversation backwards hands its older history to the knowledge base page by page: the live archive only reads forward from each connector's cursor,

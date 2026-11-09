@@ -622,12 +622,16 @@
       }
     },
     "ConnectorArchiveChat": {
+      "description": "A batch's conversation. The flags are what the owner set at the source (none: not set, or the program cannot tell); the knowledge base's selection matches its rules on them and on kind, and a flag a program never reports never matches its rule.",
       "type": "object",
       "properties": {
         "id": {"type": "string"},
         "name": {"type": "string"},
-        "kind": {"type": "string", "description": "dm, group or bot."},
+        "kind": {"type": "string", "description": "The selection's kind rules match dm, group, bot, official (an official or service account) and system (the service's own notices); a source may report other kinds (mail, issue, pr…), which match no kind rule."},
         "topic": {"type": "boolean"},
+        "muted": {"type": "boolean", "description": "The owner muted it (a source's automatic muting of large groups included)."},
+        "collapsed": {"type": "boolean", "description": "The owner folded it away (a chat box, folded groups)."},
+        "done": {"type": "boolean", "description": "The owner marked it done."},
         "updated_at": {"type": "string", "format": "date-time"}
       },
       "required": ["id", "name", "kind"]
@@ -641,7 +645,8 @@
         "sender_id": {"type": "string"},
         "sender_name": {"type": "string"},
         "mine": {"type": "boolean"},
-        "mentioned": {"type": "boolean", "description": "The owner is mentioned in it (an @-mention, or the owner's display names): the program decides."},
+        "mentioned": {"type": "boolean", "description": "The owner is mentioned by name in it (an @-mention of the owner, or the owner's display names): the program decides, on archive.changes batches and history pages alike. An @all alone is mentioned_all."},
+        "mentioned_all": {"type": "boolean", "description": "It mentions everyone in the chat (an @all / @everyone). Reported apart from mentioned: whether it counts as a mention is the knowledge base's selection (include_all)."},
         "type": {"type": "string", "description": "TEXT, POST, IMAGE, FILE, CARD, SYSTEM…"},
         "text": {"type": "string"},
         "at": {"type": "string", "format": "date-time"},
@@ -665,7 +670,9 @@
         "id": {"type": "string"},
         "name": {"type": "string"},
         "kind": {"type": "string", "enum": ["dm", "group", "bot", "official", "system"]},
-        "muted": {"type": "boolean"},
+        "muted": {"type": "boolean", "description": "As an archive chat's muted, collapsed and done."},
+        "collapsed": {"type": "boolean"},
+        "done": {"type": "boolean"},
         "bot": {"type": "boolean"},
         "estimate": {"type": "integer", "minimum": 0},
         "source": {"type": "string"}
@@ -764,6 +771,7 @@
         "projects": {"type": "array", "items": {"type": "string"}},
         "note": {"type": "string"},
         "seen": {"type": "string", "format": "date-time"},
+        "signals": {"type": "array", "items": {"type": "string", "enum": ["mentions", "comment_mentions", "authored", "viewed"]}, "uniqueItems": true, "description": "Why it concerns the owner, as far as the program can tell: mentions (the document mentions the owner), comment_mentions (a comment or reply on it does), authored (the owner owns it), viewed (the owner opened it recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell."},
         "importance": {"type": "string"},
         "relevance": {"type": "integer"},
         "tags": {"type": "array", "items": {"type": "string"}},

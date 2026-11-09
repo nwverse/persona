@@ -21,6 +21,10 @@ const (
 	HistoryKindSystem   = "system"   // the service's own notices
 )
 
+// HistoryKinds are every HistoryKind*, in the order the protocol lists them: the kinds the knowledge base's selection
+// matches its kind rules on.
+var HistoryKinds = []string{HistoryKindDM, HistoryKindGroup, HistoryKindBot, HistoryKindOfficial, HistoryKindSystem}
+
 // HistoryMost is the largest page limit the hub passes on (HistoryQuery.Limit, HistoryAnchorsQuery.Limit): a larger
 // one is cut to it. A limit is a hint, not a count: a source may return more (one returns limit+10 around a position,
 // limit+5 paging back), and callers go on from the cursors it answers, never from how many they asked for.
@@ -31,8 +35,11 @@ type HistoryChat struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Kind string `json:"kind"` // HistoryKind*
-	// Muted: the owner muted it at the source (a hint for which ones to import; it is still offered).
-	Muted bool `json:"muted,omitempty"`
+	// Muted, Collapsed, Done: the owner muted it, folded it away or marked it done at the source, as SourceChat's flags
+	// (the selection's rules match on them; a conversation is offered either way).
+	Muted     bool `json:"muted,omitempty"`
+	Collapsed bool `json:"collapsed,omitempty"`
+	Done      bool `json:"done,omitempty"`
 	// Bot: the other side is a bot (a dm with a bot, or a group that is only bots).
 	Bot bool `json:"bot,omitempty"`
 	// Estimate is roughly how many messages it has (0: the source cannot tell), to size the import.

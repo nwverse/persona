@@ -434,6 +434,9 @@ func TestCheckProgramCatchesHistoryDrift(t *testing.T) {
 		{"an unreadable chat with more", "archive.history.unreadable.json", "unreadable, with more or a cursor", func(v map[string]any) {
 			v["more"], v["older"] = true, "5"
 		}},
+		{"a chat flag the protocol does not have", "history.chats.json", `unknown field "starred"`, func(v map[string]any) {
+			v["chats"].([]any)[0].(map[string]any)["starred"] = true
+		}},
 		{"one id under two sources", "history.chats.json", "listed twice", func(v map[string]any) {
 			c := v["chats"].([]any)
 			c[1].(map[string]any)["id"] = c[0].(map[string]any)["id"]

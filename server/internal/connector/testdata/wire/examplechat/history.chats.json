@@ -16,7 +16,9 @@
     {
       "id": "primary.group_example_gone",
       "name": "Example group the account left",
-      "kind": "group"
+      "kind": "group",
+      "collapsed": true,
+      "done": true
     },
     {
       "id": "primary.bot_example_notices",

@@ -140,10 +140,18 @@ are still dispatched to connectors by the hub (the manager asks through `app.cal
 ### Knowledge-base ingestion
 
 - `Archive`: one cursor per account; `Changes(cursor)` returns changed conversations. The hub stores the cursor in `cursors/<id>.json`; conversation ids are `<connector id>-<conversation id>`.
+- **What the knowledge base's selection reads** (#1523): the selection decides which chats and documents are kept by
+  what the connector reports, so every connector that reports it behaves the same. A batch's chat (`kbwire.SourceChat`)
+  has a kind (the kind rules match dm / group / bot / official / system; other kinds such as mail, issue or pr match
+  none) and the owner's flags `muted`, `collapsed` and `done`; a message has `mine`, `mentioned` (the owner by name: the
+  connector decides what counts) and `mentioned_all` (an @all / @everyone, reported apart so the selection's
+  `include_all` can decide), on `Changes` batches as on history pages; a document (`kbwire.Item`) has `signals`, the ones it can tell of `mentions`,
+  `comment_mentions`, `authored` and `viewed`. All of them are optional: a connector that cannot tell one leaves it out,
+  and its chats or documents never match that rule.
 - `Chats`: for sources like Lark with per-conversation cursors and attachments, provide `kb.Source` directly; archiving, compression and tagging stay unchanged. Older history is imported separately (`docs/assistant/knowledge.md`, "History import").
 - `History` (capability `history`, requires `archive`): a conversation's older history, which `Changes` never reaches.
-  `HistoryChats` lists the conversations that can be imported (kind dm / group / bot / official / system, muted, a
-  rough message count; a conversation id is unique across the connector's archive sources, since a query names it by
+  `HistoryChats` lists the conversations that can be imported (kind dm / group / bot / official / system, the
+  `muted` / `collapsed` / `done` flags, a rough message count; a conversation id is unique across the connector's archive sources, since a query names it by
   id alone); `History` reads one page of one conversation (before / after / around a position, or the
   newest page). Optional `HistoryAnchors` (capability `history_anchors`) searches for the messages the owner sent or
   was mentioned in, so a conversation can be imported as windows around them (each anchor says the source its
