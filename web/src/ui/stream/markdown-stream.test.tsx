@@ -5,6 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Markdown } from "../Markdown";
 import { codeHighlight, loadHighlight } from "./highlight";
 import { forgetShown } from "./wordFade";
+// The grammars and the plugin loaded while the file is collected, outside the test timeout (as highlight-lazy.test.tsx,
+// #4955): the lazy imports in the tests then find them loaded instead of loading them under the full suite's load.
+import "rehype-highlight";
+import "lowlight";
 
 const motion = vi.hoisted(() => ({ on: true }));
 vi.mock("./motion", async (importOriginal) => ({
