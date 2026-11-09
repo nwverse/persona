@@ -180,11 +180,24 @@ func (s *Service) publishList(machine string) []proto.Session {
 	if f.shown == nil {
 		f.shown = map[string][]proto.Session{}
 	}
-	f.shown[machine] = list
+	f.shown[machine] = awaitingReply(list)
 	f.shownMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetSessions, json.RawMessage(b))
 	s.liveChanged(false)
 	return list
+}
+
+// awaitingReply are the rows of list the reply reminders can pick (replyWaits' first check), copied: only those are read
+// of the list told last, and the whole decorated list is several KB a session. Never nil, even when none qualifies:
+// a machine told once is not decorated again for the reminders (shownList).
+func awaitingReply(list []proto.Session) []proto.Session {
+	out := []proto.Session{}
+	for i := range list {
+		if list[i].AwaitsReply && list[i].State == proto.StateIdle {
+			out = append(out, list[i])
+		}
+	}
+	return out
 }
 
 // changedWriter takes an encoding and compares it with old as it comes, copying it out only once it differs.

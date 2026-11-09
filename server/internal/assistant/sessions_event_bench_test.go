@@ -75,3 +75,16 @@ func hasKeys[V any](m map[string]V, keys ...string) bool {
 	}
 	return true
 }
+
+// Of the decorated list told last, the manager keeps only the rows the reply reminders read: none when nobody waits
+// for a reply, though the machine stays told (shownList does not decorate it again).
+func TestShownKeepsOnlyRowsAwaitingReply(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	ft.sessions("mac", proto.Session{SessionID: "s1", Status: proto.StatusDone, LastText: "All tests pass."})
+	ft.s.fleet.shownMu.Lock()
+	kept, told := ft.s.fleet.shown["mac"]
+	ft.s.fleet.shownMu.Unlock()
+	if !told || kept == nil || len(kept) != 0 {
+		t.Fatalf("kept %+v (told %v), want an empty list", kept, told)
+	}
+}

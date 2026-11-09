@@ -69,8 +69,8 @@ type fleetBook struct {
 	// decorated and told (publishList), so the lists reach the hub in the order they were made.
 	sentMu sync.Mutex
 	sent   map[string][]byte
-	// shown: the list last told the hub for each machine, decorated (the reminders of agents awaiting a reply read it
-	// instead of decorating every list each minute, agents_reply.go).
+	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
+	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
