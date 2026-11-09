@@ -1133,6 +1133,17 @@ The page reports its own errors to `POST /api/v1/error-reports` (`lib/error-repo
 - **Console**: whatever the hub's features say, an error a boundary catches is logged with its component stack (`createRoot`'s `onCaughtError`, `lib/caught-error.ts`; React's own handler logs the error alone). Production names are minified; the frames map back with a source-mapped build of the same commit.
 - **Queue**: `localStorage` `persona.errorReports`, at most 50, none older than 7 days; what an earlier page load left is sent with `previous_launch`. Sent on the hello with the feature and 2 seconds after a new report, 20 a request; a 2xx removes them, a network failure, 5xx, 408 or 429 keeps them for the next try, any other 4xx drops them. The same message and top frame within 5 seconds is kept once. Reporting never throws, and an error while reporting is not reported.
 
+## On computers
+
+On a Mac, Windows or Linux computer, the web app is Persona's interface. The native Mac app is frozen ([mac.md](../apple/mac.md)).
+
+- **In the browser**: open the hub's address and sign in.
+- **As an app**: in Chrome or Edge, use **Install** in **Settings › General › This browser › Install as app** when the browser offers it, otherwise the browser's own install menu; Safari on a Mac adds it with **File › Add to Dock**.
+  It then opens in its own window with Persona's icon. Installing needs a secure context: https, or localhost ("Install as an App" below).
+- **Needs-you signals** (tab count, icon badge, alert sound, system notifications) work only while a Persona page is open in some tab or window. There is no Web Push, so nothing arrives once every Persona page is closed ("Attention signals" below).
+- **The phone keeps getting pushes** while the web app is open: the web app does not register as a desktop client (`register_desktop`), so the phone's **Phone Muted** does not apply ("Attention signals" below).
+- **Persona Link**, on a computer whose Agents the hub should reach, connects it to the hub and does what a browser cannot ([link.md](../operations/link.md), "On computers: the web app and Persona Link"). A computer you only browse from does not need it.
+
 ## Install as an App (PWA, #1772)
 
 The web app can be installed on a phone's home screen / a computer's desktop and opens in its own window, with the same icon and name as the iOS App.

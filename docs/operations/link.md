@@ -11,6 +11,72 @@ instead, the client on the computer connects to the hub and reconnects on its ow
 The user decided again on 2026-11-02 ([plan-hub-center.md](../archive/operations/plan-hub-center.md), sections 0 and 4): hubs and computers always connect through a preinstalled service on the computer, not SSH (too much permission);
 the computer can connect to the hub or accept a connection from it. The recommendation is one hub for the whole household, with a **node service** on every other computer: resident node plus persona-link, installed by one command or one App.
 
+## On computers: the web app and Persona Link
+
+On a computer, Persona has two parts. The native Mac app is frozen and no other desktop client takes its place ([mac.md](../apple/mac.md)).
+
+- **The web app** is the interface, in the browser or installed as an app ([web.md](../web/web.md), "On computers").
+- **Persona Link** runs on a computer whose Agents the hub should reach, and does only what a browser cannot. Today that is the connection to the hub and the resident node service.
+  A computer you only use the web app from does not need it.
+  Its menu bar App (Mac) and tray (Windows) show the link's state and handle pairing, reconnecting, renaming, the background service and starting at sign-in.
+  Neither tells you about Agents: the menu bar App posts no notifications, and the Windows tray posts only about its own link ([windows.md](windows.md), "Tray").
+
+A desktop need goes into the web app first, and into Persona Link only when the browser cannot meet it (for example notifications while no Persona page is open, presence, local integrations).
+
+### Menu bar App or command-line Link
+
+Both run the same persona-link with the `link.json` in their data directory; they differ in how that directory is chosen, what starts persona-link and how you see it.
+
+| | Menu bar App (Mac) | Command-line Link |
+| --- | --- | --- |
+| Program | `/Applications/Persona Link.app`, with persona-link and persona-node in `Contents/Helpers/` (`./scripts/app/mac-link.sh install`) | `persona-link`; the installers put it in the data directory's `bin/` (`install.sh --node`, or `persona-link install` on Linux) |
+| Data directory | `PERSONA_HOME` in the App's own environment, else the one the node service file names, else the default ("Helper" under "Menu bar App" below) | `PERSONA_HOME` in the environment it starts in, else the default (`~/.persona`, [rename.md](rename.md)) |
+| What keeps it running | The App runs `persona-link run --parent` and restarts it when it exits; **Launch at login** starts the App | Linux: the systemd user service `persona-link.service` (`persona-link install`). Mac: nothing from this repository: `persona-link install` refuses on a Mac, and `install.sh --node` installs only the node service and the pairing, leaving `persona-link run` to you |
+| State and pairing | Menu bar icon, menu and pairing window | `persona-link status`, `persona-link pair`, `persona-link logs` |
+| Where | Mac | Linux (headless or desktop); a Mac without the App |
+
+Windows has one program for both: `persona-link install` sets up the sign-in task and the tray ([windows.md](windows.md)). Linux has no menu bar App, so the command-line Link stays there.
+
+### Move a Mac from the command-line Link to the menu bar App
+
+The App takes over the pairing, the computer's name on the hub and the node service, provided it runs on the data directory the command-line Link used.
+One persona-link runs per data directory (the `link.json.run` lock beside `link.json`): while the command-line one runs there, the App's helper exits at once and the App keeps restarting it.
+The steps name the command-line program `<link>` and the data directory `<dir>`, as step 1 records them. The App's menu is in Chinese only for now; the bold menu names below are English renderings of its items.
+
+1. Record how the command-line Link runs:
+   - `pgrep -fl 'link run'` prints its process id and command line; the pattern also finds the program under its former name.
+     The command's first word is `<link>`. When that is a relative path or a bare name, use the program's full path instead.
+   - How it starts: from a terminal, or from something you set up yourself (your own launch agent, a terminal multiplexer). This repository installs nothing that starts it on a Mac.
+   - `<dir>`, the directory the App will use: `<link> node status --json` gives the node service file (`file`), and `/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables' '<file>'` lists its variables.
+     `<dir>` is its `PERSONA_HOME`, or the same variable under its former name ([rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), environment variables).
+     With neither, or no node service, `<dir>` is the default: the directory of `config` in `<link> status --json`, run in a shell that sets neither `PERSONA_HOME` nor its former name.
+2. Check that the command-line Link runs on `<dir>`: `PERSONA_HOME=<dir> <link> status --json` shows `config` as `<dir>/link.json`, `running: true`, and a `link.pid` equal to the process id from step 1.
+   If not, the command-line Link and the node service use different data directories, and the App would open a `link.json` without this pairing. Change how one of them starts so both name the same directory, then check again. Pairing again does not fix this.
+3. Stop the command-line Link: Ctrl-C in its terminal or `kill <pid>`, and stop or remove whatever you set up to start it again.
+   `PERSONA_HOME=<dir> <link> status --json` then shows `running: false`. Do not run `persona-link uninstall --purge`: it deletes `link.json`, the pairing the App takes over.
+4. Install the App: `./scripts/app/mac-link.sh install`. It builds, copies the App to `/Applications/Persona Link.app` and opens it.
+   Use only "Prerequisites" and "Build and install" in [persona-link-install.md](persona-link-install.md); skip its "Pairing".
+5. Do not pair again: the App opens `<dir>` and connects with the pairing there. If its menu says the Mac is not connected to a hub yet, it opened another directory: quit it and go back to step 1.
+6. Leave the node service as it is. On first launch the App checks for a node service and installs one only when there is none. An existing one, under the current or the former name, stays unchanged.
+7. Check the result:
+   - The menu says the local node is online (**Local node online**) and names this computer on the hub.
+   - `pgrep -fl 'link run'` lists only `…/Persona Link.app/Contents/Helpers/persona-link run --parent`.
+   - `PERSONA_HOME=<dir> "/Applications/Persona Link.app/Contents/Helpers/persona-link" status --json` shows `config` as `<dir>/link.json`, `running: true`, `link.state` `connected`,
+     and a `link.pid` equal to the helper's process id from `pgrep`. Another `link.pid` means another persona-link still holds the lock: go back to step 3.
+   - The computer is online in the web app's **Machines**.
+8. Turn on **Launch at login** in the menu.
+
+**Optional, later: the device's program.** The App works with the node service on either program. When `node status --json` shows it runs personad (`runs`) and this Mac runs no hub or manager,
+`PERSONA_HOME=<dir> "/Applications/Persona Link.app/Contents/Helpers/persona-link" node switch`, in Terminal on the Mac, moves it to persona-node.
+The switch restarts the node and cuts off an answer the assistant is writing on this computer; conditions and recovery are in "The device's program" below.
+
+**To go back**:
+
+1. In the App's menu, turn off **Launch at login** and choose **Quit Persona Link**; its helper exits with it. `PERSONA_HOME=<dir> <link> status --json` shows `running: false`.
+2. Start `<link> run` the way step 1 recorded, with `PERSONA_HOME=<dir>`; put back anything you removed in step 3. `status --json` shows `running: true` and `config` as `<dir>/link.json`.
+3. To remove the App, delete only `/Applications/Persona Link.app`. Keep `<dir>` (pairing, passive-mode TLS identity, logs), the node service and its program, and the computer on the hub.
+   Do not follow "Uninstall" in [persona-link-install.md](persona-link-install.md): it removes those shared files and the computer on the hub.
+
 ## Two modes
 
 The same persona-link supports both, selected during pairing and changeable anytime (`persona-link mode active|passive`, or the pairing window of the Mac menu bar App or the Windows tray). Each mode stores its pairing separately, so switching back doesn't require pairing again.
