@@ -98,7 +98,7 @@ final class PerfSettingsTests: PerfTestCase {
     /// Scheduled tasks scrolled.
     @MainActor func testRoutinesScroll() throws {
         launch(["-dev.openChat", "", "-app.tab", "assistant", "-tab", "assistant"]
-               + (shell ? ["-openShellPage", "routines"] : ["-openAssistantPage", "routines"]))
+               + ["-openShellPage", "routines"])
         sleep(3)
         measureScroll(mainScroller(), flicks: 2)
     }
@@ -106,7 +106,7 @@ final class PerfSettingsTests: PerfTestCase {
     /// The run history scrolled.
     @MainActor func testRunsScroll() throws {
         launch(["-dev.openChat", "", "-app.tab", "assistant", "-tab", "assistant", "-openAssistantPage", "runs"]
-               + (shell ? ["-openShellPage", "profile"] : []))
+               + ["-openShellPage", "profile"])
         sleep(3)
         measureScroll(mainScroller(), flicks: 2)
     }

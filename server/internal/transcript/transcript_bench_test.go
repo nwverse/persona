@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -48,5 +49,26 @@ func BenchmarkRefreshCold(b *testing.B) {
 		if items, err := NewFile(path).Refresh(); err != nil || len(items) == 0 {
 			b.Fatal(len(items), err)
 		}
+	}
+}
+
+// A tool's own copy of its output (toolUseResult) is skipped, not copied: a line carrying 1 MB there and a short
+// tool_result allocates about 2.6 KB measured, where copying the field took over 1 MB.
+func TestToolUseResultNotCopied(t *testing.T) {
+	line := []byte(`{"type":"user","uuid":"r1","message":{"role":"user","content":[{"type":"tool_result",` +
+		`"tool_use_id":"toolu_1","content":"ok"}]},"toolUseResult":{"stdout":"` + strings.Repeat("x", 1<<20) + `"}}`)
+	if items := parseLine(1, line, &Meta{}); len(items) != 1 {
+		t.Fatalf("items = %+v, want the tool result", items)
+	}
+	const runs = 20
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		parseLine(1, line, &Meta{})
+	}
+	runtime.ReadMemStats(&after)
+	if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 2718 {
+		t.Fatalf("parsing the line allocated %d bytes, want at most 2718", per)
 	}
 }

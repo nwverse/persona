@@ -8,7 +8,7 @@ final class LarkAccountsFlowTests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-demo.on", "NO", "-ui.oldLayout", "NO", "-integrations.lark.enabled", "YES",
+        app.launchArguments = ["-pairURL", pair, "-demo.on", "NO", "-integrations.lark.enabled", "YES",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"] + extra
         app.launchPinned()
         return app

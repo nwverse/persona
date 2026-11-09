@@ -57,6 +57,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
 -                    DELETE /api/v1/machines/{mid}/computer/apps/{bundle}
 -                    DELETE /api/v1/machines/{mid}/health/reports/{name}
+-                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
 -                    DELETE /api/v1/model-profiles/{id}
 -                    DELETE /api/v1/recordings/{id}

@@ -258,7 +258,7 @@ struct SessionModeBar: View {
 
 /// The shell composer's model menu for a running conversation (#1091): the model (a choice where Claude Code takes
 /// `/model`, otherwise the one it runs), the effort, and the permission mode a level down. Effort and mode are the same
-/// choices as `SessionModeBar`, which the old layout keeps above its composer.
+/// choices as the `SessionModeBar` used above platform composers.
 struct SessionModesMenu: View {
     @Environment(AppModel.self) private var model
     let key: SessionKey

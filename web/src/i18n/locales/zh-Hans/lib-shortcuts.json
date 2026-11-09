@@ -19,6 +19,7 @@
   "cmd_terminal_chat": "终端 ⇄ 对话",
   "cmd_right_panel": "显示 / 隐藏右侧面板",
   "cmd_focus_input": "聚焦输入框",
+  "cmd_focus_card": "聚焦等待中的卡片",
   "cmd_prev_tab": "本机上一个标签页",
   "cmd_next_tab": "本机下一个标签页",
   "cmd_sidebar_grouping": "切换侧边栏的分组方式",

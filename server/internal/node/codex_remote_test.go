@@ -43,6 +43,7 @@ type remoteFixture struct {
 	archive func(method, thread string)
 	// backgroundReply overrides the versioned inventory fixture's terminal response.
 	backgroundReply map[string]any
+	backgroundPages map[string]map[string]any
 }
 
 func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +70,7 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		drop, reject, code, ephemeral, hangup := f.drop, f.reject, f.rejectCode, f.ephemeral, f.hangup
 		models, model, effort, archive := f.models, f.threadModel, f.threadEffort, f.archive
 		background := f.backgroundReply
+		backgroundPages := f.backgroundPages
 		f.mu.Unlock()
 		if code == 0 {
 			code = -32600
@@ -132,6 +134,10 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 			result = map[string]any{"data": []any{}}
 			if background != nil {
 				result = background
+			}
+			if backgroundPages != nil {
+				cursor, _ := p["cursor"].(string)
+				result = backgroundPages[cursor]
 			}
 		case "thread/resume":
 			result = map[string]any{"thread": d}

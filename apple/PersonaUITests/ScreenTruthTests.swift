@@ -13,11 +13,10 @@ import XCTest
 /// - stale is visible: with the hub out of reach the title says so.
 ///   PORT=18797 MOCK_AGENTS=1 MOCK_CHURN=1 MOCK_LONG_HISTORY=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_CHURN_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/ScreenTruthTests
-/// Both layouts (TEST_RUNNER_PERSONA_LAYOUT=shell) and both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
+/// Both styles (TEST_RUNNER_PERSONA_UI_STYLE=beautiful).
 final class ScreenTruthTests: XCTestCase {
     private var hub = ""
     private var app: XCUIApplication!
-    private var shell: Bool { ProcessInfo.processInfo.environment["PERSONA_LAYOUT"] == "shell" }
 
     /// What `probe.agents-list` and `/mock/truth` hold.
     private struct Shown: Decodable {
@@ -91,15 +90,15 @@ final class ScreenTruthTests: XCTestCase {
         var reply: [String: Any] = [:]
     }
 
-    private var page: String? { shell ? "agents" : nil }
+    private var page: String? { "agents" }
 
     /// Back on the Agents list, by the controls a user would use: the chat's back button (or a drag from the left edge,
     /// only while a chat is open), the drawer's close, a drag to the left from Assistant in the shell. (A drag from the left
     /// edge with no chat open is not it: in the shell it pages to Assistant, and there it opens the drawer.)
     private func backToList() {
         // The filter bar scrolls away with the list: a row or a card that needs you in reach says it as well. Any of its
-        // chips: BeautifulUI's floating menu button covers All in the old layout, while the cards that need you keep the
-        // rows out of sight; scrolled into those cards, neither chips nor rows are on screen (#836, #926).
+        // chips or cards that need you keep the rows out of sight; scrolled into those cards,
+        // neither chips nor rows are on screen (#836, #926).
         func onList() -> Bool {
             app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "agents.filter.")).allElementsBoundByIndex.contains { $0.isHittable }
                 || app.descendants(matching: .any).matching(identifier: "agents.interaction").allElementsBoundByIndex.contains { $0.isHittable }
@@ -121,12 +120,9 @@ final class ScreenTruthTests: XCTestCase {
                     .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
             } else if app.descendants(matching: .any)["assistant-drawer-close"].firstMatch.exists {
                 app.descendants(matching: .any)["assistant-drawer-close"].firstMatch.tap()
-            } else if shell {
+            } else {
                 w.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.45))
                     .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.45)))
-            } else {
-                w.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
-                    .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
             }
             sleep(1)
         }
@@ -300,7 +296,7 @@ final class ScreenTruthTests: XCTestCase {
             var opened: String?
             let until = Date.now.addingTimeInterval(8)
             while opened == nil, Date.now < until {
-                opened = app.probe("chat", as: Chat.self, page: shell ? "agents" : nil)?.key
+                opened = app.probe("chat", as: Chat.self, page: "agents")?.key
                 if opened == nil { usleep(300_000) }
             }
             guard let opened,

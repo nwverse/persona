@@ -188,7 +188,7 @@ func (h *screenHost) Read(context.Context, host.PaneRef, host.ReadOpts) (string,
 func TestUnrecognisedClaudeIsSaidOnlyOfHerdr(t *testing.T) {
 	n := &Node{hosts: host.NewRegistry(&screenHost{bareHost: bareHost{kind: host.Orca}, screen: screenFixture(t, "claude-2.1.312-empty-162.txt")})}
 	withStartWaits(n, time.Second, time.Minute)
-	_, err := n.waitReady(context.Background(), "orca:t1:l1")
+	_, err := n.waitReady(context.Background(), "orca:t1:l1", nil)
 	if err == nil || !strings.Contains(err.Error(), "the tab's shell had not run it yet") || strings.Contains(err.Error(), "herdr") {
 		t.Fatalf("wait: %v", err)
 	}

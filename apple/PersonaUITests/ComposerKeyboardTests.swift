@@ -1,7 +1,7 @@
 import XCTest
 
 /// Only the app's composer controls are inspected, not the system keyboard's buttons. Synthetic chats on a private
-/// mock hub (`scripts/mock/composer_hub.py`) cover both layouts, the shared assistant/Agents composer, multiline drafts
+/// mock hub (`scripts/mock/composer_hub.py`) cover the shared assistant/Agents composer, multiline drafts
 /// and drag dismissal (#2200).
 final class ComposerKeyboardTests: XCTestCase {
     private var app: XCUIApplication!
@@ -25,17 +25,16 @@ final class ComposerKeyboardTests: XCTestCase {
         super.tearDown()
     }
 
-    @MainActor private func openChat(oldLayout: Bool, isAssistant: Bool, sideBars: Bool = false) {
+    @MainActor private func openChat(isAssistant: Bool, sideBars: Bool = false) {
         let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"]!
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app = XCUIApplication()
         // Pair separately: a first pairing resets the route arguments, and must never point at a real hub.
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", oldLayout ? "YES" : "NO"]
+        app.launchArguments = ["-pairURL", pair]
         app.launchPinned()
         XCTAssertTrue(app.buttons["Persona"].waitForExistence(timeout: 15) || field.waitForExistence(timeout: 15))
         app.terminate()
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", oldLayout ? "YES" : "NO",
-                               "-holdChromeOpen", "YES", "-sideBars", sideBars ? "YES" : "NO",
+        app.launchArguments = ["-pairURL", pair, "-holdChromeOpen", "YES", "-sideBars", sideBars ? "YES" : "NO",
                                "-dev.openChat", "", "-app.tab", isAssistant ? "assistant" : "chats",
                                "-tab", isAssistant ? "assistant" : "dev"]
         app.launchArguments += isAssistant ? ["-openAssistant", assistant] : ["-openSession", agent]
@@ -141,27 +140,17 @@ final class ComposerKeyboardTests: XCTestCase {
     }
 
     @MainActor func testAgentInTheShell() {
-        openChat(oldLayout: false, isAssistant: false)
+        openChat(isAssistant: false)
         typeAndDismiss("agent-shell", shell: true)
     }
 
     @MainActor func testAssistantInTheShell() {
-        openChat(oldLayout: false, isAssistant: true)
+        openChat(isAssistant: true)
         typeAndDismiss("assistant-shell", shell: true)
     }
 
-    @MainActor func testAgentInTheOldLayout() {
-        openChat(oldLayout: true, isAssistant: false)
-        typeAndDismiss("agent-old", shell: false)
-    }
-
-    @MainActor func testAssistantInTheOldLayout() {
-        openChat(oldLayout: true, isAssistant: true)
-        typeAndDismiss("assistant-old", shell: false)
-    }
-
     @MainActor func testModelLabelMatchesTheMenu() {
-        openChat(oldLayout: false, isAssistant: true)
+        openChat(isAssistant: true)
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let button = app.buttons["shell-composer-modes"]
@@ -173,7 +162,7 @@ final class ComposerKeyboardTests: XCTestCase {
     }
 
     @MainActor func testSideBarsHeaderFoldsWhileTyping() {
-        openChat(oldLayout: true, isAssistant: false, sideBars: true)
+        openChat(isAssistant: false, sideBars: true)
         typeAndDismiss("side-bars", shell: false, sideBars: true)
     }
 }

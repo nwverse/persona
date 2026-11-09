@@ -31,6 +31,8 @@ import (
 type fakeHub struct {
 	mu            sync.Mutex
 	inboxHook     func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
+	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
+	itemReads     int                       // session.items reads since the hooks were set
 	hello         Hello
 	settings      *Settings
 	launcherList  []proto.Launcher                   // the nodes' launchers.list (nil: the list fails, so it can't be told)
@@ -38,6 +40,7 @@ type fakeHub struct {
 	rcFiles       map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers map[string]bool                    // a machine whose launchers.list answers only when the call gives up
 	agentModels   map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
+	modelsLocked  map[string]string                  // launchers.models's locked, by launcher
 	managed       map[string][]proto.ManagedLauncher // what each node was given (launchers.managed)
 	presets       []assistantwire.LauncherPreset
 	voice         []assistantwire.VoicePlugin
@@ -158,6 +161,24 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 }
 
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method != DeviceSessionItems {
+		return f.deviceCall(ctx, p)
+	}
+	f.mu.Lock()
+	f.itemReads++
+	read, hooks := f.itemReads, f.readHooks
+	f.mu.Unlock()
+	if hooks.before != nil {
+		hooks.before(read)
+	}
+	result, err := f.deviceCall(ctx, p)
+	if hooks.after != nil {
+		hooks.after(read)
+	}
+	return result, err
+}
+
+func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
@@ -273,7 +294,7 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if models == nil {
 			models = []proto.AgentModel{}
 		}
-		return json.Marshal(proto.LauncherModels{Agent: launcherAgent(name), Models: models})
+		return json.Marshal(proto.LauncherModels{Agent: launcherAgent(name), Models: models, Locked: f.modelsLocked[name]})
 	case assistantwire.DeviceLaunchersManaged:
 		var m struct {
 			Launchers []proto.ManagedLauncher `json:"launchers"`
@@ -443,13 +464,18 @@ func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) error {
 }
 
 func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	var ev struct {
-		Type string `json:"type"`
+		Type string   `json:"type"`
+		Item FeedItem `json:"item"`
 	}
 	_ = json.Unmarshal(b.Message, &ev)
+	f.mu.Lock()
 	f.events = append(f.events, ev.Type)
+	receipt := f.readHooks.receipt
+	f.mu.Unlock()
+	if receipt != nil && ev.Type == "assistant_feed" && ev.Item.Kind == feedReceipt {
+		receipt(ev.Item)
+	}
 }
 
 func (f *fakeHub) InboxChanged(ctx context.Context, c assistantwire.InboxChanged) {
@@ -588,6 +614,9 @@ func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
 }
 func (noPlans) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
+	return nil, errors.New("no task_plans here")
+}
+func (noPlans) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
 }
 func (noPlans) UpdateTaskPlan(context.Context, string, string, string, json.RawMessage, time.Time) (bool, error) {

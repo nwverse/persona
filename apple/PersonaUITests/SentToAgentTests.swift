@@ -31,7 +31,9 @@ final class SentToAgentTests: XCTestCase {
     @MainActor func testPersonasMessagesFoldAndTheHandOffIsOnTheCard() throws {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main]
+        // The folded line is the previous look's (`AgentSentLine`); the new conversation layout draws Persona's message as
+        // "Persona → @task" instead (#1666, NewChatLayoutTests).
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main, "-ui.newChatLayout", "NO"]
         app.launchPinned()
 
         let any = app.descendants(matching: .any)

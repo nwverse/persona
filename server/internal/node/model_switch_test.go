@@ -17,6 +17,9 @@ func TestModelCommand(t *testing.T) {
 		"claude-opus-4-1":      "/model claude-opus-4-1",
 		"gateway/model-x:free": "/model gateway/model-x:free",
 		"gpt-5.1-codex":        "/model gpt-5.1-codex",
+		"claude-x@20250101":    "/model claude-x@20250101", // a typed id (#1644): the same rule as a start's
+		"qwen3:32b":            "/model qwen3:32b",
+		"~vendor/model-latest": "/model ~vendor/model-latest", // a gateway's latest alias
 	} {
 		got, err := modelCommand(in)
 		if err != nil || got != want {
@@ -24,7 +27,7 @@ func TestModelCommand(t *testing.T) {
 		}
 	}
 	// Nothing that is more than one word, a flag, another command, or a bare /model (which opens the picker).
-	for _, bad := range []string{"", "  ", "-p", "--model", "/clear", "opus; rm -rf ~", "opus\n/clear", "a b", "opus\x1b[A", strings.Repeat("a", 129), "$(id)", "`id`"} {
+	for _, bad := range []string{"", "  ", "-p", "--model", "/clear", "opus; rm -rf ~", "opus\n/clear", "a b", "opus\x1b[A", strings.Repeat("a", proto.MaxModelIDLen+1), "$(id)", "`id`", "~", "~/x"} {
 		if got, err := modelCommand(bad); err == nil {
 			t.Errorf("modelCommand(%q) = %q, want an error", bad, got)
 		}

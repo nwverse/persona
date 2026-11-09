@@ -670,6 +670,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// the hub on a Unread or Seen one; an Seen one is listed as Awaiting Reply, not folded with the idle ones. False from
     /// older hubs.
     var awaitsReply: Bool = false
+    /// Its turn has ended and all it still runs in the background only waits (`sleep`, `gh … --watch`, `tail -f`; the
+    /// hub's `background_waiting`, #6045): set only with `state` working, never while a subagent or workflow runs. False
+    /// from older hubs. The rule is `waitsInBackground`.
+    var backgroundWaiting: Bool = false
     /// What it is doing when its latest step is a tool call no words came after (「在跑测试」「在读 tasks.go」), and since
     /// when; nil once it writes again. The hub's `activity` / `activity_at` (docs/protocol/protocol.md); older hubs send neither.
     var activity: String? = nil
@@ -728,6 +732,12 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// for the lists' order and folds (`AgentListOrder.awaitsReply`) and for every word, color and question a row shows:
     /// a muted one is plain Seen everywhere, so callers say whether it is muted.
     func awaitsYourReply(muted: Bool) -> Bool { state == .idle && awaitsReply && !muted }
+    /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
+    /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
+    var waitsInBackground: Bool { state == .working && backgroundWaiting }
+    /// The state counts and the quick filters go by: one that only waits in the background is counted with the quiet
+    /// ones, not as Working (#6045).
+    var countedState: AgentState { waitsInBackground ? .idle : state }
     /// Unique across groups; for the default group exactly what it always was.
     var id: String { (hubGroup.map { $0 + "|" } ?? "") + machineID + "/" + sessionID }
     /// What lists sort by, newest first: a working agent's updated_at moves on every step, so working ones keep
@@ -803,6 +813,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Claude Code (or an older hub that does not name the agent): what the Claude-only controls (modes, /clear,
     /// /model) are for. Any other agent — named or not yet known to this app — does not get them.
     var isClaude: Bool { !isCodex && (agent == nil || agent == "" || agent == "claude") }
+    /// Its queue can be sent now and reordered (#6088): a Claude Code in a terminal pane, whose own send-now ("ctrl+x
+    /// ctrl+s to send now") the node presses. Other agents refuse it (`send_now_unsupported`).
+    var steersQueue: Bool { isClaude && !assistant && !hasSource && paneID != nil && canSend }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
     /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
     var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !(efforts ?? []).isEmpty }
@@ -841,7 +854,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              assistantSpace = "space",
              spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
-             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
+             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
              starting, startError = "start_error", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
@@ -922,6 +935,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         lastText = try c.decodeIfPresent(String.self, forKey: .lastText)
         asks = (try? c.decodeIfPresent(String.self, forKey: .asks)).flatMap { $0 } // an odd one never drops the session
         awaitsReply = (try? c.decodeIfPresent(Bool.self, forKey: .awaitsReply)).flatMap { $0 } ?? false
+        backgroundWaiting = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundWaiting)).flatMap { $0 } ?? false
         activity = try c.decodeIfPresent(String.self, forKey: .activity)
         activityAt = try c.decodeIfPresent(Date.self, forKey: .activityAt)
         pendingInteractions = try c.decodeIfPresent(Int.self, forKey: .pendingInteractions) ?? 0
@@ -1493,10 +1507,34 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     /// The images the run's calls looked at (docs/protocol/protocol.md「这一轮看过的图片」): its turn shows them before the answer
     /// while the run stays folded.
     var images: [FoldImage]? = nil
+    /// The task lists the run's calls left (docs/protocol/protocol.md「折叠的工作」 `fold.tasks`), in order: the chat's plan
+    /// while its TodoWrite is folded away (`ChatPlan.latest`, #5602).
+    var tasks: [FoldTasks]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case items, tools, thoughts, until, images
+        case items, tools, thoughts, until, images, tasks
         case throughSeq = "through_seq", throughID = "through_id"
+    }
+}
+
+/// A task list a folded run's call left (`Fold.tasks`): a TodoWrite's whole list (`replace` "todo") or a task tool's.
+nonisolated struct FoldTasks: Codable, Hashable, Sendable {
+    nonisolated struct Entry: Codable, Hashable, Sendable {
+        var id: String
+        var subject: String?
+        var description: String?
+        /// pending, in_progress, completed, unknown or deleted.
+        var status: String?
+    }
+
+    var replace: String?
+    var entries: [Entry]
+    /// The call's item.
+    var sourceItemID: String
+
+    enum CodingKeys: String, CodingKey {
+        case replace, entries
+        case sourceItemID = "source_item_id"
     }
 }
 

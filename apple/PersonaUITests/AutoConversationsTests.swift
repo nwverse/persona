@@ -16,11 +16,10 @@ final class AutoConversationsTests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch(shell: Bool = false) {
+    @MainActor private func launch() {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES", "-dev.openChat", ""]
-            + (shell ? ["-ui.oldLayout", "NO"] : [])
         app.launchPinned()
         openSidebar(timeout: 20)
     }
@@ -115,7 +114,7 @@ final class AutoConversationsTests: XCTestCase {
 
     /// The new shell's drawer: the same group, in its own rows (no marks, rounder).
     @MainActor func testInTheShell() {
-        launch(shell: true)
+        launch()
         let group = app.buttons["sidebar-auto"].firstMatch
         XCTAssertTrue(group.waitForExistence(timeout: 10), "no 自动对话 row in the shell:\n\(app.debugDescription)")
         if !app.buttons["sidebar-auto-inbox"].exists { group.tap() }

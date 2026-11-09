@@ -85,20 +85,26 @@ func sessionHiddenByDeletion(s proto.Session, deleted map[string]time.Time) bool
 	return ok && !s.ArchiveChangedAt.After(at) && stillDeleted(s, at)
 }
 
-// shown is list (a machine's decorated sessions) without the ones the user deleted: what the apps get.
+// shown is list (a machine's decorated sessions) without the ones the user deleted: what the apps get. When none is
+// left out, as on most pushes, it is list itself: a session is ~1.4 KB and a busy machine lists 150, so a copy was
+// ~200 KB on every push. list is never changed.
 func (h *Hub) shown(machine string, list []proto.Session) []proto.Session {
 	del := h.deletedAt(machine)
-	out := make([]proto.Session, 0, len(list))
-	for _, s := range list {
-		if s.Archived && !s.Assistant {
+	hidden := func(s *proto.Session) bool { return s.Archived && !s.Assistant || sessionHiddenByDeletion(*s, del) }
+	for i := range list {
+		if !hidden(&list[i]) {
 			continue
 		}
-		if sessionHiddenByDeletion(s, del) {
-			continue
+		out := make([]proto.Session, i, len(list)-1)
+		copy(out, list[:i])
+		for j := i + 1; j < len(list); j++ {
+			if !hidden(&list[j]) {
+				out = append(out, list[j])
+			}
 		}
-		out = append(out, s)
+		return out
 	}
-	return out
+	return list
 }
 
 var (
@@ -114,14 +120,7 @@ func (h *Hub) deleteSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 		return
 	}
 	id := r.PathValue("sid")
-	var s proto.Session
-	found := false
-	for _, x := range h.decorated(m) {
-		if x.SessionID == id {
-			s, found = x, true
-			break
-		}
-	}
+	s, found := h.decoratedSession(m, id)
 	switch {
 	case !found:
 		writeErr(w, http.StatusNotFound, errDeleteUnknown)

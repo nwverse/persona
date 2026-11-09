@@ -41,6 +41,7 @@ type principal struct {
 	ID          string
 	Name        string
 	Role        string
+	Kind        string // persisted enrollment kind; diagnostic fallback only
 	PairHash    string
 	PairExpires time.Time
 	Machine     string // roleLink, roleLinkPair: the machine in hub.json it is bound to; rolePeer: the peer's hub_id
@@ -159,7 +160,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 		}
 		c = cachedToken{at: time.Now(), used: time.Now()}
 		if dt != nil {
-			c.p = &principal{ID: dt.ID, Name: dt.Name, Role: dt.Role, Machine: dt.MachineID}
+			c.p = &principal{ID: dt.ID, Name: dt.Name, Role: dt.Role, Kind: dt.Kind, Machine: dt.MachineID}
 		}
 		t.mu.Lock()
 		if c.p != nil && t.isRevoked(c.p.ID) {

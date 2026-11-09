@@ -136,8 +136,7 @@ final class SecretFieldTests: XCTestCase {
 
     /// A terminal asking for a password (sudo): typed on the card, sent, then back to the list.
     @MainActor func testATerminalPassword() throws {
-        let app = try launch(["-tab", "dev", "-app.tab", "chats", "-ui.oldLayout", "YES",
-                              "-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000006"])
+        let app = try launch(["-tab", "dev", "-app.tab", "chats",                               "-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000006"])
         let field = secret(app, "terminal.secret", "输入密码（不会保存）")
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no password field:\n\(app.debugDescription)")
         let password = "example-\(Int.random(in: 1000...9999))"

@@ -82,7 +82,7 @@ func (h *Hub) devicesWarmEnded() {
 		m.mu.Lock()
 		if m.managed && !m.warmUntil.IsZero() && m.snap == nil {
 			m.endWarmLocked()
-			markUnknownLocked(m.sessions)
+			m.markUnknownLocked()
 			changed = true
 		}
 		m.mu.Unlock()

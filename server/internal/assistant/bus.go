@@ -691,6 +691,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.SessionsChanged(ctx, p)
+	case assistantwire.EventStartEnded:
+		var p StartEnded
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.StartEnded(context.WithoutCancel(ctx), p)
 	case assistantwire.EventInteractionResolved:
 		var p InteractionResolved
 		if err := decode(&p); err != nil {
@@ -727,6 +733,12 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 			return err
 		}
 		s.SessionSeen(ctx, p)
+	case assistantwire.EventModelUsed: // a typed model id ran (models_custom.go); may ask the node for its list
+		var p assistantwire.ModelUsed
+		if err := decode(&p); err != nil {
+			return err
+		}
+		go s.ModelUsed(context.WithoutCancel(ctx), p)
 	case assistantwire.EventTodoSpaceRenamed:
 		var p TodoSpaceRenamed
 		if err := decode(&p); err != nil {
