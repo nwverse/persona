@@ -26,6 +26,7 @@ import Testing
         #expect(!NodeMenu.offersPaneActions(session("a", pane: nil)), "no pane: nothing to split")
         #expect(!NodeMenu.offersPaneActions(session("a", pane: "orca:x")), "Orca does not split or close")
         #expect(!NodeMenu.offersPaneActions(session("a", pane: "botmux:x")))
+        #expect(!NodeMenu.offersPaneActions(session("a", pane: "tern:5", kind: "tern")), "Tern is not asked to split, run git or close")
         #expect(!NodeMenu.offersPaneActions(session("a", state: "offline")))
         #expect(!NodeMenu.offersPaneActions(session("a", extra: #","source_kind":"runtime""#)), "a runtime's session has no terminal")
     }
@@ -34,6 +35,8 @@ import Testing
         #expect(NodeMenu.offersSpaceActions(group([session("a")])))
         #expect(!NodeMenu.offersSpaceActions(group([session("a", workspace: nil, space: "-")], space: "-")))
         #expect(!NodeMenu.offersSpaceActions(group([session("a", pane: "orca:x")])))
+        #expect(!NodeMenu.offersSpaceActions(group([session("a", pane: "tern:5", kind: "tern")])))
+        #expect(NodeMenu.kind(group([session("a", pane: "tern:5", kind: "tern")])) == "tern")
         #expect(NodeMenu.workspaceID(group([session("a", workspace: nil)])) == "w1", "falls back to the space id")
     }
 

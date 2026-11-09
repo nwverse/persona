@@ -181,9 +181,12 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let herdrApp = Self(rawValue: "herdr-core")
     static let herdrBoth = Self(rawValue: "herdr-both")
     static let orca = Self(rawValue: "orca")
+    /// Tern's terminals (docs/integrations/engines.md): its sessions are spaces, its tabs slots, its blocks panes
+    /// (`tern:<block id>`).
+    static let tern = Self(rawValue: "tern")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo]
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -191,6 +194,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrApp: "Herdr App"
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
+        case .tern: "Tern"
         case .paseo: "Paseo"
         default: rawValue
         }
@@ -201,6 +205,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrApp: String(localized: "Terminals in the desktop app")
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
+        case .tern: String(localized: "Terminals in Tern")
         case .paseo: String(localized: "Agents in Paseo")
         default: nil
         }
@@ -841,21 +846,21 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         return canSend ? label : String(localized: "\(label) · View only: \(reason)", comment: "A session's source, and why it can only be viewed")
     }
 
-    /// The host tool it lives in, from its pane ref: `botmux:…`, `orca:…`, `herdr-core:…`; any other pane is herdr's
-    /// (its ids go bare and may hold a colon); nil without a pane. Keep the kinds in step with Kinds in
+    /// The host tool it lives in, from its pane ref: `botmux:…`, `orca:…`, `herdr-core:…`, `tern:…`; any other pane is
+    /// herdr's (its ids go bare and may hold a colon); nil without a pane. Keep the kinds in step with Kinds in
     /// server/internal/host/host.go.
     var hostKind: String? {
         guard let paneID, !paneID.isEmpty else { return nil }
         let kind = paneID.firstIndex(of: ":").map { String(paneID[..<$0]) } ?? ""
-        return ["orca", "herdr-core", "botmux"].contains(kind) ? kind : "herdr"
+        return ["orca", "herdr-core", "botmux", "tern"].contains(kind) ? kind : "herdr"
     }
 
-    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr pane a terminal; nil for the
-    /// rest (Orca, runtimes, apps), which carry no source label.
+    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr or Tern pane a terminal; nil
+    /// for the rest (Orca, runtimes, apps), which carry no source label.
     var source: SessionSource? {
         switch hostKind {
         case "botmux": .feishu
-        case "herdr", "herdr-core": .terminal
+        case "herdr", "herdr-core", "tern": .terminal
         default: nil
         }
     }

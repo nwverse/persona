@@ -85,7 +85,8 @@ extension APIClient {
 // MARK: - What the menus offer
 
 nonisolated enum NodeMenu {
-    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core and botmux are not asked.
+    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core, Tern and botmux are not
+    /// asked.
     static func canChange(hostKind: String?) -> Bool { hostKind == "herdr" }
 
     /// The pane items of an agent row: a live herdr pane the app may drive.

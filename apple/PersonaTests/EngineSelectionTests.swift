@@ -32,7 +32,7 @@ import Testing
         #expect(!EngineSelectionModel.canSelect(future, on: m))
         m.engines = []
         #expect(!EngineSelectionModel.canSelect(future, on: m))
-        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "paseo"])
+        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo"])
     }
 
     @Test func combinedEngineIsAKnownChoice() throws {
@@ -53,6 +53,20 @@ import Testing
         #expect(EngineSelectionModel.canSelect(paseo, on: try machine()), "selectable offline, as the other engines")
         let m = try machine(",\"engine\":\"paseo\",\"engines\":[{\"id\":\"paseo\",\"name\":\"Paseo\",\"available\":true,\"version\":\"0.14.0\"}]")
         #expect(m.engine == .paseo && m.engines.first?.version == "0.14.0")
+    }
+
+    /// Tern (#2154): a terminal engine between Orca and Paseo, chosen like the others, also offline.
+    @Test func ternIsAKnownChoice() throws {
+        let tern = MachineEngine.tern
+        #expect(tern.rawValue == "tern" && tern.name == "Tern")
+        #expect(tern.detail == "Tern 里的终端")
+        #expect(EngineSelectionModel.canSelect(tern, on: try machine()), "selectable offline, as the other engines")
+        #expect(MachineEngine.allCases.firstIndex(of: .tern) == MachineEngine.allCases.firstIndex(of: .orca).map { $0 + 1 })
+        let m = try machine(",\"engine\":\"tern\",\"engines\":[{\"id\":\"herdr\",\"name\":\"herdr\",\"available\":false},{\"id\":\"tern\",\"name\":\"Tern\",\"available\":true,\"version\":\"0.4.1\"}]")
+        #expect(m.engine == .tern && m.engineName == "Tern")
+        #expect(EngineSelectionModel.initialChoice(m, pairing: true) == .tern)
+        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "tern"], "the node's list as it reports it")
+        #expect(try JSON.decoder.decode(Machine.self, from: JSON.encoder.encode(m)) == m)
     }
 
     @Test func pairingTargetAndPreselection() throws {
