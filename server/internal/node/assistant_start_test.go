@@ -84,6 +84,7 @@ func TestSockGoneTellsADeadReplacementFromALiveOne(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	t.Setenv("HOME", dir)
 	t.Setenv("USERPROFILE", dir)
+	clearPersonaHome(t)
 	if err := os.MkdirAll(filepath.Dir(nodeclient.SocketPath()), 0o700); err != nil {
 		t.Fatal(err)
 	}

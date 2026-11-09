@@ -528,6 +528,14 @@
           "type": "boolean",
           "description": "Press Enter first to close a notice that only says \"Enter to continue\" (no options). Any other dialog still refuses the send."
         },
+        "attachments": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string"
+          },
+          "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+        },
         "task": {
           "type": "object",
           "description": "new work: make it your supervised task first (main conversation only)",
@@ -601,6 +609,14 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string"
+          },
+          "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
         },
         "launcher": {
           "type": "string",
@@ -1190,7 +1206,7 @@
   },
   {
     "name": "persona_settings",
-    "description": "Read and change Persona's own settings for the user: their inbox sorting rules, how their inbox items link to their tasks, 关于我 (what you know about them), your default launcher (model), their mail accounts, which Claude Code config directories each machine keeps out of Agents. Start with action list (what there is, what each takes); get reads one. set / add / remove put a card on the user's phone that says what changes (before → after) and nothing changes until they approve; what the card needs filled in, like a mail password, the user types there, so never ask for passwords in the conversation. Change only what the user asked for.",
+    "description": "Read and change Persona's own settings for the user: their inbox sorting rules, how their inbox items link to their tasks, 关于我 (what you know about them), your default launcher (model), their mail accounts, which Claude Code config directories each machine keeps out of Agents, and each extension's settings (extension.\u003cid\u003e: what Settings › Extensions shows, like turning one of its features on). Start with action list (what there is, what each takes); get reads one. set / add / remove put a card on the user's phone that says what changes (before → after) and nothing changes until they approve; what the card needs filled in, like a mail password, the user types there, so never ask for passwords in the conversation. Change only what the user asked for.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1207,7 +1223,7 @@
         },
         "key": {
           "type": "string",
-          "description": "the setting, from list (inbox.rules, mail.accounts…)"
+          "description": "the setting, from list (inbox.rules, mail.accounts, extension.\u003cid\u003e…)"
         },
         "value": {
           "description": "set: the new value; add: the item (each setting's list entry says what)"
@@ -1557,6 +1573,14 @@
                 },
                 "description": "what done means: results you will check before you accept it (Chinese, one each), e.g. 「PR 合并到 master」「浅色 / 深色截图贴进 PR」「线上 hub 已部署并验证」; the agent is told them"
               },
+              "attachments": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                  "type": "string"
+                },
+                "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+              },
               "expect_minutes": {
                 "type": "integer",
                 "minimum": 0,
@@ -1839,7 +1863,7 @@
   },
   {
     "name": "jarvis_settings",
-    "description": "Read and change Persona's own settings for the user: their inbox sorting rules, how their inbox items link to their tasks, 关于我 (what you know about them), your default launcher (model), their mail accounts, which Claude Code config directories each machine keeps out of Agents. Start with action list (what there is, what each takes); get reads one. set / add / remove put a card on the user's phone that says what changes (before → after) and nothing changes until they approve; what the card needs filled in, like a mail password, the user types there, so never ask for passwords in the conversation. Change only what the user asked for.",
+    "description": "Read and change Persona's own settings for the user: their inbox sorting rules, how their inbox items link to their tasks, 关于我 (what you know about them), your default launcher (model), their mail accounts, which Claude Code config directories each machine keeps out of Agents, and each extension's settings (extension.\u003cid\u003e: what Settings › Extensions shows, like turning one of its features on). Start with action list (what there is, what each takes); get reads one. set / add / remove put a card on the user's phone that says what changes (before → after) and nothing changes until they approve; what the card needs filled in, like a mail password, the user types there, so never ask for passwords in the conversation. Change only what the user asked for.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1856,7 +1880,7 @@
         },
         "key": {
           "type": "string",
-          "description": "the setting, from list (inbox.rules, mail.accounts…)"
+          "description": "the setting, from list (inbox.rules, mail.accounts, extension.\u003cid\u003e…)"
         },
         "value": {
           "description": "set: the new value; add: the item (each setting's list entry says what)"

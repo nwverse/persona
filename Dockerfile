@@ -23,6 +23,8 @@ COPY web/ ./
 # The shared cases a web test imports (src/lib/injected.test.ts reads ../../../spec/fixtures/injected): tsc -b in the
 # build checks the tests too. Only this folder, so other fixtures' changes keep the cache.
 COPY spec/fixtures/injected/ /src/spec/fixtures/injected/
+# Likewise src/lib/attention-fixture.test.ts reads ../../../spec/fixtures/attention.
+COPY spec/fixtures/attention/ /src/spec/fixtures/attention/
 # The extension schema, which the web app builds in: src/lib/extension-ui-stream.ts imports its *.schema.json (?raw),
 # the admin page's assistant card preview and the showcase glob its examples (import.meta.glob, which comes out empty
 # without them), and tests import example JSON (TS2307 in tsc -b without it).
@@ -48,6 +50,8 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=web /src/web/dist/ internal/hub/webdist/
+# Its hashed assets kept gzipped, as the hub sends them (docs/web/web.md "Precompressed assets").
+RUN go run ./internal/webasset/precompress internal/hub/webdist
 # The runtime packages personad carries and keeps its runtimes on (docs/integrations/runtimes.md "Auto-update"): the DSH plugin's and
 # the pi extension's, the Paseo bridge's and the Agent SDK bridge's code.
 COPY integrations/agent-sdk/ /src/integrations/agent-sdk/
