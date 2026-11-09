@@ -4,7 +4,7 @@
 -- - data is json instead of jsonb. Every reader unmarshals the bytes in Go (assistant/inbox_store.go and
 --   inbox_history.go), and the manager's start reads every open item and those done in the last 8 days: jsonb turned
 --   each one back into text first. json keeps the text the manager wrote.
--- - lz4 instead of pglz for the documents that are toasted (most of them): faster to decompress. It goes in the same
+-- - lz4 instead of pglz for the documents large enough to be compressed: faster to decompress. It goes in the same
 --   ALTER as the type change, which recomputes every value: SET COMPRESSION on its own, or a rewrite that copies the
 --   values as they are, leaves every stored value pglz. A server built without lz4 (feature_not_supported) or a
 --   Postgres before 14 (syntax_error) takes the same rewrite without it. EXECUTE, because a statement written in the
