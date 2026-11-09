@@ -379,7 +379,14 @@ func (n *Node) gitShow(ctx context.Context, cwd, hash string) (*GitShow, error) 
 		return nil, fmt.Errorf("commit %s not found", hash)
 	}
 	res := &GitShow{Commit: cs[0], Files: []GitFile{}}
-	if o, err := git(ctx, dir, "show", "--numstat", "-z", "--format=", hash); err == nil {
+	// The three show calls below take the same flags, whatever the user's config says: -M pairs renames (diff.renames),
+	// and a merge is diffed against its first parent, the changes it brought in (-m --first-parent, with log.diffMerges
+	// pinned for the gits that read it). git's default for a merge, the combined diff, is empty for a clean merge while
+	// numstat lists the first parent's files.
+	show := func(args ...string) []string {
+		return append([]string{"-c", "log.diffMerges=first-parent", "show", "-M", "-m", "--first-parent"}, args...)
+	}
+	if o, err := git(ctx, dir, show("--numstat", "-z", "--format=", hash)...); err == nil {
 		for path, c := range parseNumstat(o) {
 			f := GitFile{Path: path, Index: "M", Worktree: "."}
 			if c[0] < 0 {
@@ -393,9 +400,9 @@ func (n *Node) gitShow(ctx context.Context, cwd, hash string) (*GitShow, error) 
 	sortFiles(res.Files)
 	// The diff is the content of every file the commit touched: the ones file.read refuses (either side of a rename
 	// or copy) are left out of it, by name. Without the names, or without a working tree to check them against (a
-	// bare repository, cwd inside .git), the commit and its files are shown without the diff. -M: renames are paired
-	// the same way in both commands, whatever diff.renames says.
-	o, err = git(ctx, dir, "show", "-M", "--name-status", "-z", "--format=", hash)
+	// bare repository, cwd inside .git), the commit and its files are shown without the diff. Renames and a merge's
+	// files are named the same way here as in the patch (show).
+	o, err = git(ctx, dir, show("--name-status", "-z", "--format=", hash)...)
 	if err != nil {
 		return res, nil
 	}
@@ -445,7 +452,7 @@ func (n *Node) gitShow(ctx context.Context, cwd, hash string) (*GitShow, error) 
 			res.Files[i].Index = k
 		}
 	}
-	diff, err := git(ctx, dir, append([]string{"show", "-M", "--no-color", "--format=", hash, "--"}, exclude...)...)
+	diff, err := git(ctx, dir, append(show("--no-color", "--format=", hash, "--"), exclude...)...)
 	if err == nil {
 		res.Truncated = len(diff) > maxDiffBytes
 		if res.Truncated {
