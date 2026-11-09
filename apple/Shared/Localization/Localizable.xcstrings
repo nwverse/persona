@@ -1,6 +1,179 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "While you're using a computer with Persona Link, this iPhone stops sending “Needs you” notifications and Persona Link shows them there. “Agent done” and reminders you asked Persona to set still come to this iPhone. Lock each of these computers or quit Persona Link on it, and this iPhone sends “Needs you” again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "While you're using a computer with Persona Link, this iPhone stops sending “Needs you” notifications and Persona Link shows them there. “Agent done” and reminders you asked Persona to set still come to this iPhone. Lock each of these computers or quit Persona Link on it, and this iPhone sends “Needs you” again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你在装有 Persona Link 的电脑前使用时，这台 iPhone 不再推送「需要你处理」的通知，由 Persona Link 在电脑上提醒你；「Agent 做完」和你让 Persona 定的提醒照常推送到这台 iPhone。这些电脑都锁定或退出 Persona Link 后，这台 iPhone 才恢复推送「需要你处理」。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona Link が入ったコンピューターを使っている間、このiPhoneには「要対応」の通知が届かず、Persona Link がそのコンピューターで知らせます。「エージェント完了」とPersonaに設定を頼んだリマインダーは通常どおりこのiPhoneに届きます。これらのコンピューターをすべてロックするか、それぞれで Persona Link を終了すると、「要対応」は再びこのiPhoneに届きます。"
+          }
+        }
+      }
+    },
+    "Using “%@”": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Using “%1$@”"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在使用「%1$@」"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」を使用中"
+          }
+        }
+      }
+    },
+    "Using %lld computers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Using %1$lld computer"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Using %1$lld computers"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在使用 %1$lld 台电脑"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 台を使用中"
+          }
+        }
+      }
+    },
+    "Computers in Use": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Computers in Use"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在使用的电脑"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用中のコンピューター"
+          }
+        }
+      }
+    },
+    "While you're using a computer with Persona Link, this iPhone stops sending “Needs you” notifications and Persona Link shows them there. “Agent done” and reminders you asked Persona to set still come to this iPhone. Lock that computer or quit Persona Link, and this iPhone sends “Needs you” again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "While you're using a computer with Persona Link, this iPhone stops sending “Needs you” notifications and Persona Link shows them there. “Agent done” and reminders you asked Persona to set still come to this iPhone. Lock that computer or quit Persona Link, and this iPhone sends “Needs you” again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你在装有 Persona Link 的电脑前使用时，这台 iPhone 不再推送「需要你处理」的通知，由 Persona Link 在电脑上提醒你；「Agent 做完」和你让 Persona 定的提醒照常推送到这台 iPhone。锁定那台电脑或退出 Persona Link 后，这台 iPhone 恢复推送「需要你处理」。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona Link が入ったコンピューターを使っている間、このiPhoneには「要対応」の通知が届かず、Persona Link がそのコンピューターで知らせます。「エージェント完了」とPersonaに設定を頼んだリマインダーは通常どおりこのiPhoneに届きます。そのコンピューターをロックするか Persona Link を終了すると、「要対応」は再びこのiPhoneに届きます。"
+          }
+        }
+      }
+    },
+    "Persona Link · since %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona Link · since %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona Link · %1$@ 起"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona Link · %1$@ から"
+          }
+        }
+      }
+    },
+    "Persona Link tells the hub you're at this computer while it's unlocked and in use. This stops when you lock the computer or quit Persona Link.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona Link tells the hub you're at this computer while it's unlocked and in use. This stops when you lock the computer or quit Persona Link."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑解锁且你在用时，Persona Link 会告诉 hub 你在电脑前。锁定电脑或退出 Persona Link 后停止。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピューターのロックが解除され使用中の間、Persona Link はあなたがこのコンピューターの前にいることを hub に伝えます。コンピューターをロックするか Persona Link を終了すると止まります。"
+          }
+        }
+      }
+    },
     "Show Full Text": {
       "extractionState": "manual",
       "localizations": {
