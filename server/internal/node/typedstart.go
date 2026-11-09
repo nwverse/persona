@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // A start types its command into a fresh pane a moment after the tab is made, often before the shell's line editor
@@ -23,7 +24,7 @@ import (
 
 // terminalNotReady is the refusal for a start whose pane would not take the typed command: nothing ran, the tab is
 // closed, a retry may work.
-const terminalNotReady = "terminal_not_ready"
+const terminalNotReady = proto.CodeTerminalNotReady
 
 // startScriptPrefix names the files a start writes in the node's directory.
 const startScriptPrefix = "agent-start-"
@@ -68,18 +69,15 @@ func writeStartScript(dir, cmd string) (string, error) {
 }
 
 // runAgentCommand types cmd, built with agentCommand for shells, into the new pane created: through a start file in
-// a herdr pane whose shells source one (takesAssign), with anchor on the typed line (startLine), else as it is. When the pane does not take it, the tab is
+// the node's directory, for a herdr pane whose shells source one (takesAssign), with anchor on the typed line
+// (startLine); else as it is. When the pane does not take it, the tab is
 // closed (closeNewTab) and pane_send_failed comes back as terminalNotReady. done removes the file if the shell has
 // not read it yet; call it once the start is over.
 func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, created *host.Created, ws, anchor, cmd string, shells ...string) (done func(), err error) {
 	done = func() {}
 	line := cmd
-	if _, isHerdr := launch.(*herdrHost); isHerdr && takesAssign(shells...) {
-		dir := n.dir
-		if dir == "" {
-			dir = os.TempDir()
-		}
-		path, err := writeStartScript(dir, cmd)
+	if _, isHerdr := launch.(*herdrHost); isHerdr && n.dir != "" && takesAssign(shells...) {
+		path, err := writeStartScript(n.dir, cmd)
 		if err != nil {
 			n.closeNewTab(ctx, launch, created, ws)
 			return done, err
