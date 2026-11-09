@@ -57,6 +57,20 @@ struct ChatLayoutTests {
         #expect(ChatLayout(on: true, fold: .expanded).shownLines == nil)
     }
 
+    /// A long message from another session folds to the same lines in every chat, new layout or not (#2010).
+    @Test func messagesFromOtherSessionsFoldLikeTheExchanges() {
+        let s = ChatLayoutSettings(defaults: defaults())
+        #expect(s.messageLines == 3)
+        s.lines = 5
+        #expect(s.messageLines == 5)
+        s.on = false
+        #expect(s.messageLines == 5)
+        s.fold = .folded
+        #expect(s.messageLines == 0)
+        s.fold = .expanded
+        #expect(s.messageLines == nil)
+    }
+
     @Test func outOfRangeLinesFallBackToThree() {
         let d = defaults()
         d.set(40, forKey: ChatLayoutSettings.linesKey)
