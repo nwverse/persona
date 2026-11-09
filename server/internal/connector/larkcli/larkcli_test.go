@@ -224,14 +224,22 @@ func TestInboxReplyUsesBot(t *testing.T) {
 
 func TestInboxAllChatsOptionIsOptIn(t *testing.T) {
 	c := inboxTestConnector(t, "inbox")
-	if got := string(c.Options()); got != `{"inbox_all_chats":[]}` {
-		t.Fatalf("default options = %s", got)
+	var defaults InboxOptions
+	if err := json.Unmarshal(c.Options(), &defaults); err != nil {
+		t.Fatal(err)
+	}
+	if len(defaults.InboxAllChats) != 0 || len(defaults.Documents) != 0 || len(defaults.WikiSpaces) != 0 {
+		t.Fatalf("default options = %+v", defaults)
 	}
 	if err := c.SetOptions(json.RawMessage(`{"inbox_all_chats":["oc_example_group"]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if got := string(c.Options()); got != `{"inbox_all_chats":["oc_example_group"]}` {
-		t.Fatalf("options = %s", got)
+	var options InboxOptions
+	if err := json.Unmarshal(c.Options(), &options); err != nil {
+		t.Fatal(err)
+	}
+	if len(options.InboxAllChats) != 1 || options.InboxAllChats[0] != "oc_example_group" || len(options.Documents) != 0 || len(options.WikiSpaces) != 0 {
+		t.Fatalf("options = %+v", options)
 	}
 	if _, err := c.Poll(context.Background()); err != nil {
 		t.Fatal(err)

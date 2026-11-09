@@ -88,8 +88,9 @@ func (c *Connector) SetPollInterval(interval time.Duration) {
 	c.inboxPoll = interval
 }
 
-// Poll performs one bounded Inbox round. It is exported for focused connector
-// tests and for embedders that already own a scheduler.
+// Poll performs one bounded Inbox round for both chat messages and watched
+// document comments. It is exported for focused connector tests and for
+// embedders that already own a scheduler.
 func (c *Connector) Poll(ctx context.Context) (bool, error) {
 	if c == nil || c.runner == nil {
 		return false, &adapter.Error{Kind: adapter.KindNotInstalled}
@@ -99,8 +100,20 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 		c.inboxThings = map[string]connector.InboxThing{}
 		c.inboxCollecting = false
 		c.inboxMu.Unlock()
+		c.clearDocumentThings()
 		return false, nil
 	}
+	chatMoved, chatErr := c.pollChat(ctx)
+	docMoved := c.pollDocumentsRound(ctx)
+	if chatErr != nil {
+		return chatMoved || docMoved, chatErr
+	}
+	return chatMoved || docMoved, nil
+}
+
+// pollChat performs the bounded chat Inbox round. Source selection is handled
+// by Poll so the document poller and chat poller share one primary-source rule.
+func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	auth, err := c.runner.AuthStatus(ctx)
 	if err != nil {
 		return false, err
@@ -231,19 +244,19 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 	return changed, nil
 }
 
-// Watch owns the two-minute background poll and emits the protocol's inbox
-// change event only when a round produced a new or updated item.
+// Watch owns the background poll and emits the protocol's inbox change event
+// only when either poller produced a new or updated item.
 func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) error {
 	for {
 		moved, err := c.Poll(ctx)
+		if moved && changed != nil {
+			changed(connector.ScopeInbox)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
-		}
-		if moved && changed != nil {
-			changed(connector.ScopeInbox)
 		}
 		c.inboxMu.Lock()
 		wait := c.inboxPoll
@@ -267,14 +280,21 @@ func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) er
 // method never invokes lark-cli, matching inbox.collect's protocol semantics.
 func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 	c.inboxMu.Lock()
-	defer c.inboxMu.Unlock()
-	if !c.inboxCollecting {
-		return []connector.InboxThing{}, nil
-	}
 	out := make([]connector.InboxThing, 0, len(c.inboxThings))
-	for _, thing := range c.inboxThings {
+	if c.inboxCollecting {
+		for _, thing := range c.inboxThings {
+			out = append(out, thing)
+		}
+	}
+	c.inboxMu.Unlock()
+
+	c.ensureDocuments()
+	c.docs.mu.Lock()
+	for _, thing := range c.docs.things {
 		out = append(out, thing)
 	}
+	c.docs.mu.Unlock()
+
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].At.Equal(out[j].At) {
 			return out[i].Thread < out[j].Thread
@@ -289,6 +309,9 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 // the L4 plan. A message id lets us preserve a topic reply; a chat-only thing
 // falls back to messages-send.
 func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
+	if strings.HasPrefix(r.Thread, "doc:") {
+		return fmt.Errorf("lark-cli document comments are read-only")
+	}
 	if c == nil || c.runner == nil {
 		return &adapter.Error{Kind: adapter.KindNotInstalled}
 	}
@@ -317,6 +340,9 @@ func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 }
 
 func (c *Connector) inboxShouldCollect(ctx context.Context) bool {
+	if c == nil || c.runner == nil {
+		return false
+	}
 	c.inboxMu.Lock()
 	prefer, available := c.inboxPrefer, c.gatewayAvailable
 	c.inboxMu.Unlock()

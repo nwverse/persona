@@ -15,5 +15,8 @@
   "expiry_reminder": "Login expires in {count} day(s); run lark-cli auth login on the hub machine",
   "larkcli_message": "Lark message",
   "larkcli_direct_message": "Direct Lark message",
-  "larkcli_mention": "Lark mention"
+  "larkcli_mention": "Lark mention",
+  "watched_doc_unreadable": "Watched document \u201c{title}\u201d can no longer be read; remove it in Settings \u203a Connectors",
+  "doc_comment_label": "Document comment",
+  "doc_comment_rule": "Rule: a document comment mentions you or replies to your comment."
 }
