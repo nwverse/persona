@@ -6,9 +6,9 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
-	"regexp"
 	"sort"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -344,7 +344,7 @@ func (f *File) seeded(fh *os.File, w *window, b int, end int64, window []byte) M
 		Ultracode: ultra.Ultracode, UltracodeAt: ultra.UltracodeAt, UltracodeSince: ultra.UltracodeSince, ultracodeCommand: ultra.ultracodeCommand}
 }
 
-var taskIDRe = regexp.MustCompile(`<task-id>([^<]{1,200})</task-id>`)
+var taskIDRe = lazyre.New(`<task-id>([^<]{1,200})</task-id>`)
 
 // parseLines parses complete lines in data (starting at file offset pos, line number n) into meta: the stored (light)
 // items go to kept, the ones to send (light, images kept) to sent when it is not nil. Callers hold f.mu.

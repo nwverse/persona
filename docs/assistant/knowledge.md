@@ -113,6 +113,8 @@ Every chat, person, project, document, meeting and event has three fields, gener
 | `relevance` | 0–100 | Relevance to me: directly addressed / my responsibility → high; merely seen in a group → low |
 | `tags` | String array | No preset list; AI generates 2–6 short terms, preferring existing tags (`kb_tags` returns existing tags and counts) |
 
+A value the model writes that doesn't fit is dropped on its own, not with the rest of its answer. An `importance` other than `P0`–`P3` is ignored. A `relevance` written as a numeric string (`"80"`) or a fraction counts as that number, rounded. Anything else, including a number outside 0–100, is ignored and the existing score stays (`server/internal/kb/score.go`, #1099). Before this, a quoted score failed the chat's whole summary, a project's rewrite, a recording's title and summary, or a batch of up to 40 tagged items.
+
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.

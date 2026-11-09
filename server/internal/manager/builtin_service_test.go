@@ -28,7 +28,7 @@ func TestBuiltinServiceNames(t *testing.T) {
 	if unitName(assistantwire.AssistantID) != managerconf.BuiltinService+".service" || launchdLabel(assistantwire.AssistantID) != managerconf.BuiltinLabel {
 		t.Fatalf("%s %s", unitName(assistantwire.AssistantID), launchdLabel(assistantwire.AssistantID))
 	}
-	unit := builtinUnit("/home/someone/.persona/bin/personad", "/home/someone/.persona")
+	unit := builtinUnit("/home/someone/.persona/bin/personad", "/home/someone/.persona", false)
 	for _, line := range []string{`ExecStart="/home/someone/.persona/bin/personad" assistant`, `Environment="PERSONA_ASSISTANT_DEPLOY=service"`,
 		`Environment="PERSONA_HOME=/home/someone/.persona"`, "Restart=always", "RestartPreventExitStatus=2", "WantedBy=default.target"} {
 		if !strings.Contains(unit, line+"\n") {

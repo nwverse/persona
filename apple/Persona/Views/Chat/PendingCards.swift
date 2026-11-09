@@ -49,6 +49,10 @@ struct PendingCards: View {
     @State private var containerLength: CGFloat = 0
     /// 「N 个待处理」's height, once it showed (the cards' room in a voice call).
     @State private var countHeight: CGFloat = 0
+    /// What the footer holds besides the cards' area (`room.footer - shown`): the keyboard's cap is the page less it. It does
+    /// not move with the cap, so a cap made from it settles at once; held while it moves less than a point, so the float
+    /// noise of the subtraction never reaches the cap and redraws the page every frame (#1580).
+    @State private var footerRest: CGFloat = 0
     @State private var position = ScrollPosition(edge: .top)
 
     /// The share of the page the cards may take before they scroll.
@@ -112,6 +116,9 @@ struct PendingCards: View {
         .onChange(of: cards.map(\.id)) { old, new in
             if over, !Set(new).isSubset(of: Set(old)) { withAnimation(Theme.Motion.standard) { position.scrollTo(edge: .top) } }
         }
+        .onChange(of: room.footer - shown, initial: true) { _, o in
+            if abs(o - footerRest) >= 1 { footerRest = o }
+        }
     }
 
     /// The cards' mask: while they scroll, clear at the area's top and bottom edges and opaque from the cards' margins
@@ -149,7 +156,9 @@ struct PendingCards: View {
             let fits = room.height - room.fixedHeader - room.listFloor - Theme.Size.voiceThreadRoom - others
             return max(Theme.Size.tapTarget, min(half, fits))
         }
-        return max(Theme.Size.tapTarget, shown + room.height - room.footer - room.header - room.listFloor)
+        // Before the first measure (a card arriving with the keyboard up), the footer as it stands: the cards are not in it yet.
+        let rest = footerRest > 0 ? footerRest : room.footer - shown
+        return max(Theme.Size.tapTarget, room.height - rest - room.header - room.listFloor)
     }
 
     /// A voice call is on in the cards' conversation (docs/assistant/voice.md 6.2).

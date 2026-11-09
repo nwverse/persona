@@ -37,7 +37,7 @@ final class ShellSwitchTests: XCTestCase {
         } else {
             app.launchArguments = ["-demo.on", "YES"]
         }
-        app.launchArguments += ["-ui.oldLayout", "NO", "-probes", "YES", "-newAssistant", "YES", "-tab", "assistant"]
+        app.launchArguments += ["-probes", "YES", "-newAssistant", "YES", "-tab", "assistant"]
         app.launchPinned()
         finger = ShellFinger(app)
     }

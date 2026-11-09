@@ -109,6 +109,7 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	snap.Approvals = s.snapshotApprovals(ctx, web)
 	snap.Unaccepted, snap.UnacceptedTotal = s.snapshotUnaccepted(ctx, loc)
 	snap.Plans, snap.PlansTotal = s.snapshotPlans(ctx, loc, now)
+	snap.Asked = s.snapshotAsked(ctx)
 	if e, err := s.kbGet(ctx); err == nil {
 		snap.KB = e.Prompt(6, 8)
 	}
@@ -120,6 +121,14 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	cs.snap, cs.at, cs.snapping = &snap, time.Now(), nil
 	cs.mu.Unlock()
 	close(done)
+}
+
+// snapshotStale makes the next message take a new snapshot (what it holds just changed).
+func (s *Service) snapshotStale() {
+	cs := &s.live
+	cs.mu.Lock()
+	cs.at = time.Time{}
+	cs.mu.Unlock()
 }
 
 // ProfileChanged makes the next message take a new snapshot (the time zone changed), and the settings be read again

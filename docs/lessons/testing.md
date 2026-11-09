@@ -1,8 +1,12 @@
 # Lessons: testing and validation
 
+- On Linux, replacing a running executable requires a new file and rename; direct writes fail with `ETXTBSY`. Use a ready handshake and reap the fixture process to test the real overlap.
+
 - Run standalone release-worker tests on the oldest supported Python, including receipt verification and verified-artifact retries (#1077). Python 3.9 has no `hashlib.file_digest`; bounded reads into `hashlib.sha256` keep hashing portable without loading an APK into memory. Cover empty files and binary inputs spanning multiple chunks.
 
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`, "Lessons"; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
+
+- Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
 
 - Test authoring realm comparisons as a matrix, not just default-export shape (#1200). `structuredClone`, Response JSON, iterators, streams and WebCrypto can return host objects during initialization; compare Object/Array, containers, regexps, dates and binary families in both native ESM and the probe. Preserve cycles, transfers, real subclass negatives and native null-prototype records. State the supported `instanceof` contract separately from exact cross-realm prototype identity. EventTarget listener methods must be synchronous and return undefined: observe nonconforming ordinary promise/thenable rejections before returning OPTIONS, and keep secondary cleanup errors alongside the primary failure. If caller constructor/species machinery prevents handler installation, report the observation error and attempt owned-worker cleanup, but do not claim that the original rejection was handled or alter caller promises/global rejection policy. Ready must precede `module.evaluate()`, which can block synchronously forever; recorded SIGINT/SIGTERM exit priority survives a late or failed cleanup without inventing reaping evidence.
 
@@ -118,6 +122,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   For pure SwiftUI symbol/text/geometry layouts, use public `ImageRenderer.render(rasterizationScale:renderer:)` to draw directly into the test's CGContext, explicitly preserving point-to-pixel scale. Retain nonempty, radius, bounds, and four-digit overflow assertions; calibrate with rectangles of known sizes/offsets. No production UI changes or loosened thresholds.
   Parameterized-case xcresult summaries count methods, not expanded arguments. Verify completeness from test-tree Arguments nodes, ensuring every digit range executed. If postprocessing counts are wrong, fix reading only; retain original script exit code separately from actual XCTest results.
 
+- `xcrun simctl privacy <udid> grant` can take about a minute on a just-booted stock simulator (2026-11-08, #1402). On the hosted
+  iOS lane it needed 54.5 s on a passing run and passed 60 s on a failing one, after `simctl bootstatus -b` had already returned.
+  Give the step room in `scripts/ci/apple.sh` (300 s) rather than retrying it, and read a grant timeout as slowness, not a refused permission.
+
 - Validate display names separately from persisted identity during compatible renaming (2026-11-04, #1189). After `persona-link` / `Persona Link` shipped, compressed-install regressions still asserted old display names, causing full release exit 1. Update only display contracts, while verifying real `persona-link` files, legacy download names, old/new executable commands, and actual installer calls; never blindly rename compatibility identities. Script tests must discover `scripts/test`, `release`, `deploy`, `mock`, and `app` separately; rename-only subsets miss old assertions elsewhere. Preserve original failed freeze/exit code; after merge, rerun with a new build number.
 
 - Do not use computer-use to click simulators for screenshots (Mac lock screen hides windows; unlocked it steals the user's mouse). Use DEBUG launch arguments (`docs/apple/ios.md`) to open pages directly, then capture.
@@ -132,7 +140,12 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   an immediate dark run fails at the start of `testSetUpAnExtension` because "Needs setup" is absent, looking like broken code. Restart the mock by port between modes/reruns (like `MOCK_WECHAT`).
 - All UI tests launch with `app.launchPinned()` (`UITestStyle`). The app remembers prior test styles; BeautifulUI looks different, so unspecified tests inherit someone else's appearance
   (LongSessionTests failed after BeautifulStyleTests). Default is Liquid Glass; `TEST_RUNNER_PERSONA_UI_STYLE=beautiful` runs the whole suite in BeautifulUI.
-  Style-specific tests pass `-ui.style` themselves. It launches through `launchPersona()`; tests without a layout choice still use the old four-tab layout. `UITestStyleTests` scans source (`launch()` and `launchPersona()` both count as omissions).
+  Style-specific tests pass `-ui.style` themselves. It launches through `launchPersona()`, which only performs a clean Demo Mode start and never overrides navigation. `UITestStyleTests` scans source (`launch()` and `launchPersona()` both count as omissions).
+- On compact screens, SwiftUI can inherit `assistant-sidebar` onto the drawer footer buttons, replacing their individual identifiers in XCUITest even though they remain visible. Query the actual exported tree: the shared test helpers first try the individual identifier, then the drawer-container identifier plus the exact localized label. Do not weaken the visibility or tap assertions, or use an app-wide Settings label that can match a hidden page.
+- Drawer-close swipes start on the visible pushed-aside page, not a fixed screen fraction: conversation rows deliberately own left swipes for Archive, and sidebar sizing can move a row under that fraction. Intersect the close surface with the window before choosing the start point; its full frame can extend offscreen. Keep the real swipe and the closed-drawer assertion.
+- Runtime CLI `defaults --set` uses the registration domain, not persisted preferences. Upgrade tests must seed a disposable app's real preferences while its simulator is shut down, verify the baseline reads them, then install in place and inspect persistence after startup cleanup. Resolve the app container before shutdown; `simctl get_app_container` cannot look it up in the Shutdown state. CFPreferences writes asynchronously: terminating the app does not make an immediate disk read authoritative. Resolve its preferences path, shut down the owned simulator to let writes finish, then inspect that file; do not add synchronous writes to production startup just to satisfy the test.
+- Tests using `ShellFinger` must launch with `-probes YES`; its page/selection assertions deliberately require the real shell probe. Migrating a test from platform tabs requires adding that probe argument, not weakening the helper to infer state from controls that remain mounted offscreen. An empty Shell composer exposes dictation instead of Send until text is entered; check the initial dictation/interrupt control and still require an enabled Send after typing.
+- Model switching coverage must follow the chosen UI's actual transport: the Shell sends `/model <alias>` to the conversation, while platform mode chips can use the modes endpoint. Assert the destination and command receipt in the mock log rather than applying a retired control's disabled-state or endpoint assumptions to the default UI. UI-test runners can have a separate protected pasteboard; verify copy payloads by pasting back into the owning app, not by reading the runner's clipboard.
 - Do not run PersonaTests on a simulator paired to a real hub (the one paired by `persona-sim` / `sim.sh`). iOS test hosts do not skip keychain (only Mac does, `Shared/Keychain.swift`),
   so launch uses pairing to connect to hub, registers phone tools as that simulator, and shows notification permission. On 2026-11-02 three consecutive runs reported "test runner hung before establishing connection"
   (not locked, same after simulator restart); a simulator that had never installed the app passed first try. Exact hang cause was not pursued. Pick a simulator never used for Persona from `simctl list devices`.
@@ -140,6 +153,13 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   English-language simulators label system-permission buttons "Allow"; UI tests must recognize both languages.
 - XCUITest typeText switches simulators to "hardware keyboard" mode, after which the software keyboard no longer appears (keyboard button says shown, but no keyboard is visible), failing all height-dependent tests.
   This machine has no Simulator.app, and `defaults write com.apple.iphonesimulator …ConnectHardwareKeyboard` cannot restore it. Create a new simulator with `scripts/app/sim-boot.sh "<new-name>"`.
+- So a test that taps a field and types at once never runs keyboard-dependent layout (`KeyboardState.isUp`, the pending cards' keyboard cap) (2026-11-09, #1580):
+  `SecretRunUITests` passed while tapping the password card's field froze the app as soon as the on-screen keyboard came up. Focus tests assert `app.keyboards.count > 0`
+  after the tap and that the cards' area then holds one frame (a busy app stays in the foreground), and run on a fresh stock simulator before any test that types
+  (`PasswordFieldFocusTests`). A tap followed by "App event loop idle notification not received" means the main thread is busy: `sample <pid>` the simulator's
+  app process to see where.
+- On the iOS 27.0 simulator `app.screenshot()` and `XCUIScreen.main.screenshot()` leave the keyboard's place blank (2026-11-09, #1580). Take keyboard screenshots with
+  `xcrun simctl io <udid> screenshot` while it is up.
 - XCUITest misses the key bar during keyboard animation (the bar is moving with it); wait for the keyboard, pause, then tap.
 - XCUITest `typeText` inserts text directly, bypassing the input method, so it cannot test pinyin marked text. Tap onscreen keys (`app.keys["y"].tap()`, space selects the first candidate).
   Third-party keyboards (2026-11-03, #909): outside the repository, build a tiny app with only a keyboard extension whose buttons use `textDocumentProxy` `setMarkedText` / `unmarkText` / `insertText` to enter fixed text.
@@ -153,8 +173,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - If `-pairURL` points at a different hub from the simulator's prior pairing, the app starts over on the assistant page; `-app.tab`, `-dev.openChat`, and `-tab dev` have no effect (2026-11-01).
   Old tests always used the same mock address and missed it; changing port/hub reveals it. For reliability, launch once with only `-pairURL`, quit, then launch with page arguments (`ScrollUnderPushTests`).
 - `-tab` recognizes only values listed in `PersonaApp`; unknown values do nothing, leaving stored `app.tab` from the previous run (2026-11-04, #1664). `-tab feishu` was never recognized,
-  so four Lark suites (encrypted messages, multiple accounts, pinned bar, pinned chats) depended on prior state. UI tests default to the old layout: `-tab settings` tests (`SecretFieldTests`) saved `settings` without the shell resetting it.
-  The next new-shell test opens a settings sheet that covers Messages, looking like "Messages cannot find chats". After one failure, the shell writes `app.tab` back to `assistant` and the rerun passes.
+  so four Lark suites (encrypted messages, multiple accounts, pinned bar, pinned chats) depended on prior state. Earlier helpers forced tab navigation: `-tab settings` tests (`SecretFieldTests`) saved `settings` without the shell resetting it.
+  The next shell test opens a settings sheet that covers Messages, looking like "Messages cannot find chats". After one failure, the shell writes `app.tab` back to `assistant` and the rerun passes.
   Add a `-tab` value with every new page. To reproduce "passes alone, fails after other tests", inspect `Library/Preferences/<bundle-id>.plist` in the app container first
   (`simctl spawn … defaults write` does not write into the app container).
 - "Push does not interrupt" must push while the finger is still down or momentum is active. Pushing after scrolling stops misses whole-screen jumps: `LiveUpdateTests` "middle row stays still" was always green,
@@ -246,6 +266,10 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - `deadcode -test ./...` only analyzes the selected platform and build tags. A default Linux run reports `sysmon.ptr`, the Windows tray notification helpers and `DevelopmentLimits.valid` as unreachable, but macOS, Windows and the `persona_dev_resources` build respectively call them.
 - Before deleting a reported function, use repository-wide `git grep` to check callers, tests, scripts, docs and string-based references, including files excluded from the current build. Keep candidates whose reachability is uncertain; a clean build on one platform cannot establish that they are unused everywhere.
 
+## Keep service proxy routing out of server fixtures (2026-11-08, #1175)
+
+- Server test children must not inherit service proxy routing (#1175). An ambient HTTPS proxy redirected a local Git clone and synthetic voice DNS fixtures, and remained visible outside an extension sandbox. A local rejecting proxy reproduced all four failures; isolating only the test child's upper/lowercase HTTP, HTTPS, ALL and NO proxy variables made the unchanged fixtures pass. `server_test_env.clean_environment` removes that routing at launch; explicit fixture proxy setup still works. Preserve the parent's route for toolchain resolution, dependency preparation and publishing, rather than changing production proxy settings or increasing test deadlines.
+
 ## When Go on the hub is older than the repository (2026-11-03, #984)
 
 - `test-server.sh` only says "server test environment preparation failed; tests were not started". `server_test_env.py` first runs `go env`;
@@ -269,7 +293,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - **Two existing Xcode 26.3 issues (also on master)**:
   - `FileViewerTests.pathsAreLinkedOnlyWhenThereAndAskedInOneBatch` triggers a Swift concurrency isolation assertion in `FakeHub` callbacks, crashing/restarting the test host and failing xcodebuild;
     totals stop at the crash (576, actually 766). The test struct is `@MainActor`, making the closure main-thread-only, but `FakeHub` invokes it on a background thread. `{ @Sendable req in` fixes it.
-  - The new shell assistant drawer (`AssistantDrawerLayout`) continuously recomputes views on the main thread, starving queued work: avatar lists never refresh and runtime CLI answers ping once only. Use `-ui.oldLayout YES` for screenshots.
+  - The shell assistant drawer (`AssistantDrawerLayout`) continuously recomputed views on the main thread, starving queued work: avatar lists never refreshed and runtime CLI answered ping once only. Reproduce and fix the default tree; changing navigation for screenshots hides the user's failure.
 - **Uninstalling does not clear keychain**: simulator pairing survives reinstall, so the app launches paired directly into the new shell and the runner reports "timed out while preparing". First `xcrun simctl keychain <udid> reset`.
 - **Mac app deployment target is macOS 26**: macOS 15 can build only, not run the app or `PersonaMacTests`.
 
@@ -527,10 +551,14 @@ Use separate simulators for unit tests and screenshots; delete/recreate contamin
 - Classic-layout + Liquid Glass chat input uses `layoutIsland`, which once omitted "+" / Send from accessibility, forcing coordinate taps (#995, fixed; see `lessons/ios.md`).
   Find by label now; do not add island identifiers for coordinate taps again.
 
+## UI launch helpers must exercise default navigation (#1653)
+
+Pin the visual style, not an alternate navigation tree. A shared launch helper that forces tab navigation can keep hundreds of tests green while compact iPhone users run an untested shell. Keep only the clean Demo Mode reset in `launchPersona()`; `launchPinned()`, runtime CLI cases, performance runners and README captures must use the app's default navigation. Test compact shell and regular-width sidebar by choosing the appropriate device / width, not by setting a navigation preference. Preserve page-specific waits and interaction assertions when moving tests to the default tree; do not route around a shell failure just to capture screenshots.
+
 ## Lazy timelines: unscrolled rows do not exist, and identical text may occur elsewhere (2026-11-04, #1055)
 
 - GitHub thread timelines use `LazyVStack`; the bottom comment is absent from accessibility until scrolled into view, so `waitForExistence` alone waits in vain.
-- Old layouts retain Inbox in the tree, whose comment preview has the same text. Text waits accidentally passed in Liquid Glass but failed in BeautifulUI's different previews.
+- Retained navigation pages may keep Inbox in the tree, whose comment preview has the same text. Text waits accidentally passed in Liquid Glass but failed in BeautifulUI's different previews.
 - Wait for page-specific elements (header), then search row identifiers (`github.entry.<id>`) while swiping up. Before screenshots, move the target into the upper half;
   otherwise "one row barely visible" counts as found and several screenshots capture the same screen.
 - Do not reuse keys other tests look for when recording `/mock/sent` (this quoted reply used `"item": "github:review12"`, picked up by Inbox tests).
@@ -546,6 +574,7 @@ Use separate simulators for unit tests and screenshots; delete/recreate contamin
 
 - **Container `accessibilityIdentifier` overrides its children's identifiers**: identifying a row `VStack` made its `Menu` `market-menu-…` unfindable. Identify only clickable controls,
   or first apply `.accessibilityElement(children: .contain)` to the container.
+- **A `lineLimit`-cut `Text` still reads in full to XCUITest**: its label is the whole string, so "the last line is not there" never proves folding (#1666, `NewChatLayoutTests`). Assert the fold's control (Expand) and look at the screenshot.
 - **First taps just after sheet dismissal can be swallowed** (keyboard focus is still settling). Immediately tapping a list button after form Add does nothing, with no confirmation dialog.
   Wait for sheet-field `waitForNonExistence`, tap a harmless button (Refresh) first, then the target button.
 - Icon-sized `Menu` (20 pt) often does not expand under XCUITest. Put row actions in a row of `.borderless` text buttons, clearer on both phone and Mac.
@@ -692,3 +721,32 @@ Walking files has pitfalls of its own. Reviews of `server/plugins/guard_test.go`
 - Shortcut 先由旧 App 在系统 UI 中创建，再检查持久化 action 的 `AppIntentDescriptor.AppIntentIdentifier`。不能搜索整个记录中的旧命名空间来认定旧类型：必须保留的 `BundleIdentifier` 也可能匹配。测试标题只能用于定位，不能替代 action 身份检查。
 - 带一次性配对码的 mock 不能在独立 suite 或深浅色轮次之间复用。每组配对 UI 测试启动自己的新 mock；保存原始失败，再记录修正隔离后的重跑结果。
 - Debug 的主程序可能只是加载 `.debug.dylib` 的壳；检查 Swift 类型时同时看实际动态库。模拟器的授权信息可以放在 Mach-O 的 `__entitlements` 中，`codesign` 输出为空不等于缺失；正式签名和 production APNs 仍需单独检查。
+
+## Scenarios through AppModel: make the model first, then hook up the test hub (2026-11-08, #1112)
+
+`AppModel()`'s init calls `DemoHub.install()`, which points `APIClient.local` and `LiveConnection.makeLocal` at Demo Mode's hub. A test that hooks up its own fake hub first and then makes the model sends every request to DemoHub (`DemoHub miss: …` in the log), and some assertions still pass, which hides it. Make the model, then hook up the test's hub, and again for the new model a `relaunch` makes (`SyncDevice.connect`).
+
+Two more from the same harness:
+
+- The scenarios' times are fixed (`2026-01-02T…`), and the app ties a sent bubble to its transcript line partly by time. Lines the hub writes during a case get the time they were written (`SyncHub.writtenNow`).
+- A failed message is placed before later ones by the whole second it was written (`ChatLines.placeFailed`). Two sends in a row in a test land in the same second, so the harness spaces sends more than a second apart, as typing does.
+
+## Simulator screenshots for an agent's live reply (2026-11-09, #1309)
+
+- `mock_hub.py` is one long module: `REVIEW` is the PR #42 review agent's session id near the top, and the `MOCK_REVIEW` block much later rebound it to a bool, so `/mock/agent_live` (MOCK_AGENT_LIVE) and the later fixtures that use the session id looked up `False` (the step answered with a 500 and a `StopIteration` in the mock's log). The flag is `GIT_REVIEW` now; give a mock flag a name of its own, and when a mock step fails, read the mock's log before the app's.
+- `xcrun simctl status_bar … --time` on Xcode 27.1 takes only an ISO date with fractional seconds: `"$(date +%H:%M)"` and `…T10:24:00+08:00` fail with "Invalid, non-ISO date/time string"; `"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"` works and shows the local time.
+- A notification permission dialog left by a launch without `-pairURL` stays over every later launch, also after the app is uninstalled. Restarting SpringBoard clears it without shutting the simulator down: `xcrun simctl spawn <udid> launchctl stop com.apple.SpringBoard`, wait a few seconds, then launch with `-pairURL` (or `personactl.py launch --hub`).
+
+## A model made in a unit test starts with what the simulator last saved (2026-11-09, #1638, #1637)
+
+`AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.
+
+- A test that only needs the model empty calls `forgetRestoredForTests()` after making it.
+- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). Nothing it writes reaches the app's files.
+
+To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
+
+## Playwright's "visible" counts a drawer parked off the screen (2026-11-09, #1643)
+
+- At phone width the web sidebar is a drawer moved off the screen with a transform, not hidden: `getByRole(…).filter({ visible: true })` and `isVisible()` still count its buttons, and a click on one waits out its timeout. Reach a control at that width from the page that shows it (the Agents page's New agent, `web/e2e/launcher-health.mjs`), or scope the locator to `main`.
+- `?token=mock` pairs asynchronously: wait for something only a paired page has (`main textarea`) before setting `localStorage` and reloading, or the reload lands on the sign-in page.

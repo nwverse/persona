@@ -119,6 +119,7 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 			n.pushItems(id, fresh, span)
 		}
 	}
+	n.liveRecheck(id) // a reply Claude is showing now, after what the transcript has (livereply.go)
 	mu.Unlock()
 	go n.watchLoop(ctx, id, f, w)
 	go n.watchLive(ctx, id) // claudestatus.go
@@ -147,6 +148,7 @@ func (n *Node) pushItems(id string, items []proto.Item, span transcript.Span) {
 	n.mu.Unlock()
 	items = n.echoed(id, f, items)
 	_ = n.peer.Notify("session.items", withSpan(map[string]any{"session_id": id, "items": nonNil(items)}, span, true))
+	n.liveRecheck(id) // the words these items brought replace their live copy, right after them (livereply.go)
 }
 
 // pushLock serializes reading a session's new lines with pushing them, so its batches reach the hub in order.
@@ -176,6 +178,7 @@ func (n *Node) unwatch(id string) {
 	if pw != nil {
 		pw.cancel()
 	}
+	n.liveUnwatched(id)
 }
 
 // refresh parses new transcript lines and pushes them to the hub when the session is watched — also when the new
@@ -199,10 +202,12 @@ func (n *Node) refresh(id string, f *transcript.File) {
 
 // watchLoop pushes new transcript lines four times a second. (It used to read the pane's screen every 400 ms too, a
 // herdr call per watched session, for a live preview no view showed; the terminal pane reads the screen itself.)
+// About once a second it follows the copy the session list reads (followCopy): a stream that only refreshed the file
+// it opened kept pushing an old copy while the list's rev went on with the new one (#1423).
 func (n *Node) watchLoop(ctx context.Context, id string, f *transcript.File, w *watch) {
 	t := time.NewTicker(250 * time.Millisecond)
 	defer t.Stop()
-	for {
+	for tick := 1; ; tick++ {
 		select {
 		case <-ctx.Done():
 			// Drop the entry so the session is not left looking watched; a watch that ended with its connection has
@@ -215,6 +220,9 @@ func (n *Node) watchLoop(ctx context.Context, id string, f *transcript.File, w *
 			n.mu.Unlock()
 			return
 		case <-t.C:
+			if tick%4 == 0 { // the path is cached: a lookup and a stat, a search at most every 30 s
+				n.followCopy(id, f)
+			}
 			n.refresh(id, f)
 		}
 	}

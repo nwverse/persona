@@ -77,10 +77,10 @@ struct CodeBlockStack: View {
             if case .gap(let id) = b, id == CodePageBlocks.openMainSlot, let openMain {
                 Button(action: openMain) {
                     HStack(spacing: Theme.Space.s) {
-                        Image(systemName: Theme.Icon.code).foregroundStyle(Theme.accent)
+                        ThemedIcon(Theme.Icon.code).foregroundStyle(Theme.accent)
                         Text(mainTitle).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                         Spacer(minLength: 0)
-                        Image(systemName: Theme.Icon.disclosure).font(Theme.Font.caption).foregroundStyle(.tertiary)
+                        ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.caption).foregroundStyle(.tertiary)
                     }
                     .padding(.horizontal, Theme.Space.m)
                     .scaledFrame(minHeight: Theme.Size.box50)
@@ -254,8 +254,9 @@ struct CodeBlockStack: View {
 
     private func inlineThread(id: String, _ t: ExtensionThread) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if t.outdated == true || t.resolved == true {
+            if t.pending == true || t.outdated == true || t.resolved == true {
                 HStack(spacing: Theme.Space.s) {
+                    if t.pending == true { Chip(text: String(localized: "Draft"), look: .neutral).lineLimit(1) }
                     if t.outdated == true { Chip(text: String(localized: "Outdated [Extension Code Stack 1148b6]"), look: .neutral).lineLimit(1) }
                     if t.resolved == true { Chip(text: String(localized: "Resolved"), look: .tint(Theme.positive)).lineLimit(1) }
                 }
@@ -367,7 +368,7 @@ struct CodeHeaderView: View {
                 CodeFlow(spacing: Theme.Space.m) {
                     ForEach(Array(facts.prefix(8).enumerated()), id: \.offset) { _, f in
                         HStack(spacing: Theme.Space.xs) {
-                            if let i = f.icon { Image(systemName: ExtensionUIStyle.icon(i)).foregroundStyle(.secondary) }
+                            if let i = f.icon { ThemedIcon(ExtensionUIStyle.icon(i)).foregroundStyle(.secondary) }
                             if let l = f.label, !l.isEmpty, f.icon == nil { Text(l).foregroundStyle(.secondary) }
                             Text(f.value).foregroundStyle(Color.primary)
                         }
@@ -656,7 +657,7 @@ struct CodeBackRow: View {
     var body: some View {
         Button(action: back) {
             HStack(spacing: Theme.Space.xs) {
-                Image(systemName: Theme.Icon.back)
+                ThemedIcon(Theme.Icon.back)
                 Text(title).lineLimit(1)
                 Spacer(minLength: 0)
             }

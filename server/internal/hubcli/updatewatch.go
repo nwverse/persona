@@ -31,7 +31,7 @@ func runUpdateWatch(ctx context.Context, args []string) error {
 }
 
 // restartHub stops the hub that would not come up; a service manager (systemd, launchd) starts it again on the
-// binary just restored, otherwise this starts it with the arguments it had.
+// binary just restored, otherwise this starts the program it ran as (Pending.RunPath) with the arguments it had.
 func restartHub(p update.Pending) error {
 	if p.PID > 1 {
 		stopHub(p.PID, 10*time.Second, 500*time.Millisecond)
@@ -39,7 +39,8 @@ func restartHub(p update.Pending) error {
 	if supervised() {
 		return nil
 	}
-	cmd := exec.Command(p.Target, update.TargetArgs(p.Args, p.Target)...) // `hub …` for a hub that ran as persona-hub
+	run := p.RunPath()
+	cmd := exec.Command(run, update.TargetArgs(p.Args, run)...) // `hub …` when a hub that ran as persona-hub comes back as personad
 	if log, err := os.OpenFile(filepath.Join(filepath.Dir(p.Target), "..", "update", "hub.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
 		defer log.Close() // the started hub has its own copy
 		cmd.Stdout, cmd.Stderr = log, log

@@ -10,11 +10,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // What a client may look at by a path a conversation names (fs.stat, file.read, fs.list, downloads): anything the
@@ -48,7 +48,7 @@ var keyNames = map[string]bool{"id_rsa": true, "id_dsa": true, "id_ecdsa": true,
 
 // hubKeyExt matches key files in the hub's folder, including backup suffixes. The list of the data folder's secrets is
 // shared with the agent sandbox (identity/secrets.go).
-var hubKeyExt = regexp.MustCompile(identity.DataKeyPattern)
+var hubKeyExt = lazyre.New(identity.DataKeyPattern)
 
 // procSecrets are what Linux's /proc holds besides the processes' own folders that hands out a secret: the kernel's
 // memory, its log, its symbols' addresses, the keyrings' entries and the page tables (#4172).

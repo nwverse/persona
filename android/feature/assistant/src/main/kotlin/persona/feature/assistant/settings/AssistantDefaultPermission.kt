@@ -8,14 +8,6 @@ import androidx.compose.ui.res.stringResource
 import persona.core.designsystem.*
 import persona.feature.assistant.R
 
-@Composable
-internal fun AssistantSettingsOwner(owner: String) {
-    val name = LocalManagerRoster.current?.manager(owner)?.shownName ?: owner
-    JGroupItem(GroupPosition.Single) {
-        JRow(stringResource(R.string.assistant_settings_target), value = name, chevron = false)
-    }
-}
-
 /** The manager's future-session default, distinct from the current main conversation's mode. */
 @Composable
 internal fun AssistantDefaultPermission(mode: String, enabled: Boolean, supported: Boolean, onPick: (String) -> Unit) {

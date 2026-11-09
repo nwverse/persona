@@ -39,6 +39,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/conversations/{id}/always/{hash}
 -                    DELETE /api/v1/assistant/followups/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
+-                    DELETE /api/v1/assistant/places/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
@@ -57,6 +58,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
 -                    DELETE /api/v1/machines/{mid}/computer/apps/{bundle}
 -                    DELETE /api/v1/machines/{mid}/health/reports/{name}
+-                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
 -                    DELETE /api/v1/model-profiles/{id}
 -                    DELETE /api/v1/recordings/{id}
@@ -101,6 +103,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/followups
 -                    GET /api/v1/assistant/memory
+-                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/routines
@@ -170,6 +173,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/browser
 -                    GET /api/v1/machines/{mid}/browser/cookies
 -                    GET /api/v1/machines/{mid}/claude-dirs
+-                    GET /api/v1/machines/{mid}/claude-live-replies
 -                    GET /api/v1/machines/{mid}/claude-settings
 -                    GET /api/v1/machines/{mid}/codex-settings
 -                    GET /api/v1/machines/{mid}/computer
@@ -287,6 +291,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/followups/{id}/run
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
+-                    POST /api/v1/assistant/places
 -                    POST /api/v1/assistant/readiness/dismiss
 -                    POST /api/v1/assistant/routines/{id}/run
 -                    POST /api/v1/assistant/tasks
@@ -354,6 +359,10 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/deploy
 -                    POST /api/v1/machines/{mid}/doctor/fix
 -                    POST /api/v1/machines/{mid}/files
+-                    POST /api/v1/machines/{mid}/files/move
+-                    POST /api/v1/machines/{mid}/files/rename
+-                    POST /api/v1/machines/{mid}/files/restore
+-                    POST /api/v1/machines/{mid}/files/trash
 -                    POST /api/v1/machines/{mid}/git/commit
 -                    POST /api/v1/machines/{mid}/git/pr
 -                    POST /api/v1/machines/{mid}/git/pr/merge
@@ -363,6 +372,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/git/stash
 -                    POST /api/v1/machines/{mid}/git/switch
 -                    POST /api/v1/machines/{mid}/herdr/start
+-                    POST /api/v1/machines/{mid}/node-update/{action}
 -                    POST /api/v1/machines/{mid}/panes
 -                    POST /api/v1/machines/{mid}/panes/agent
 -                    POST /api/v1/machines/{mid}/panes/close
@@ -434,6 +444,7 @@ todos.write          POST /api/v1/todos
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
 -                    PUT /api/v1/assistant/memory/{name}
+-                    PUT /api/v1/assistant/places/{id}
 -                    PUT /api/v1/assistant/routines
 -                    PUT /api/v1/assistant/tasks/{id}
 -                    PUT /api/v1/bots/feishu
@@ -460,6 +471,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/botmux
 -                    PUT /api/v1/machines/{mid}/browser
 -                    PUT /api/v1/machines/{mid}/claude-dirs/blocked
+-                    PUT /api/v1/machines/{mid}/claude-live-replies
 -                    PUT /api/v1/machines/{mid}/claude-settings
 -                    PUT /api/v1/machines/{mid}/codex-settings
 -                    PUT /api/v1/machines/{mid}/computer

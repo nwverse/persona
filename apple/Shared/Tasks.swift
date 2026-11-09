@@ -13,6 +13,9 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var launcher: String?
     var model: String?
     var permission: String?
+    /// Claude Code's ultracode for this task (#12): the assistant's choice; on start, true / false replaces it and left
+    /// out keeps it (PlanUltracode.swift).
+    var ultracode: Bool?
     var readonly: Bool?
     var why: String?
     /// Set once started: the todo the task is, and why its agent did not start.
@@ -20,7 +23,7 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var error: String?
 
     enum CodingKeys: String, CodingKey {
-        case title, prompt, machine, cwd, launcher, model, permission, readonly, why, error
+        case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error
         case todoID = "todo_id"
     }
 
@@ -146,6 +149,9 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var steps: Int? { if case .object(let o)? = body { o["steps"]?.int } else { nil } }
     /// `routed`: Persona stopped the agent's turn first and then told it (agent_interrupt with then, #5112).
     var interrupted: Bool { if case .object(let o)? = body { o["interrupted"]?.bool == true } else { false } }
+    /// `routed`: Persona wrote it to the task's agent (agent_send with a task, agent_interrupt's then, a rework; #1542), so
+    /// it is drawn folded as Persona's (`AgentSentLine`), never as the user's bubble. What the user sent has no `from`.
+    var sentByPersona: Bool { kind == .routed && string("from") == "assistant" }
 
     /// `today`: the day's card (TodayBody).
     var today: TodayBody? {
@@ -157,6 +163,51 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var prLabel: String? {
         guard let pr, let n = pr.split(separator: "/").last, Int(n) != nil else { return nil }
         return "PR #\(n)"
+    }
+}
+
+/// What Persona sent to its tasks' agents in a conversation's feed (#1542, docs/assistant/unified-entry.md "Messages to agents"):
+/// a task's card lists them, the hand-off sent with the card is drawn only there, a later one is a folded line.
+nonisolated enum SentToAgents {
+    /// How long after its task's card a message of Persona's counts as the card's hand-off: agent_send with a task writes
+    /// the card and, right after it, what it sent.
+    static let handOff: TimeInterval = 60
+
+    /// The hand-offs the task cards take in (not drawn on their own): Persona's messages within `handOff` after their own
+    /// task's card in the same conversation. Only a card drawn in full (from today, `FeedLine`) has the list: from another
+    /// day it is one line (`TaskLine`), and its hand-off stays a folded line under it (#1668).
+    static func takenIn(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> Set<String> {
+        var cards: [String: [Date]] = [:]
+        for item in feed where item.kind == .task && calendar.isDate(item.at, inSameDayAs: now) {
+            if let ref = item.ref { cards[item.conversation + "/" + ref, default: []].append(item.at) }
+        }
+        guard !cards.isEmpty else { return [] }
+        var out: Set<String> = []
+        for item in feed where item.sentByPersona {
+            guard let ref = item.ref, let ats = cards[item.conversation + "/" + ref] else { continue }
+            if ats.contains(where: { $0 <= item.at && item.at.timeIntervalSince($0) <= handOff }) { out.insert(item.id) }
+        }
+        return out
+    }
+
+    /// The feed without the hand-offs the cards take in: what the chat draws among its lines.
+    static func shown(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> [FeedItem] {
+        let hidden = takenIn(feed, now: now, calendar: calendar)
+        return hidden.isEmpty ? feed : feed.filter { !hidden.contains($0.id) }
+    }
+
+    /// Persona's messages to task `todo`, oldest first: what its card lists.
+    static func sent(_ feed: [FeedItem], todo: String) -> [FeedItem] {
+        feed.filter { $0.sentByPersona && $0.ref == todo }.sorted { ($0.at, $0.id) < ($1.at, $1.id) }
+    }
+
+    /// The first line with words in it, trimmed: what a folded message shows.
+    static func firstLine(_ text: String) -> String {
+        for line in text.split(whereSeparator: \.isNewline) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty { return t }
+        }
+        return ""
     }
 }
 
@@ -566,7 +617,7 @@ nonisolated extension APIClient {
     }
 
     private struct PlanResponse: Decodable { var plan: TaskPlan }
-    private struct TodosResponse: Decodable { var todos: [TodoItem] }
+    nonisolated private struct TodosResponse: Decodable, Sendable { var todos: [TodoItem] }
     private struct ItemResponse: Decodable { var item: FeedItem }
 
     /// A conversation's feed after `since` (nil: all of it), with the plans its `plan` items name.
@@ -578,7 +629,7 @@ nonisolated extension APIClient {
     }
 
     func todos() async throws -> [TodoItem] {
-        try await get("/api/v1/todos", as: TodosResponse.self).todos
+        try await getDecodedOffMain("/api/v1/todos", as: TodosResponse.self).todos
     }
 
     /// Starts an open plan; `edits` replace the fields the user changed (by index), `remember` lets this kind start

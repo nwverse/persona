@@ -332,7 +332,8 @@ func (cs *connectorSettings) feeds(f connector.Feed) *map[string]bool {
 }
 
 // setConnectorOptions gives a connector the user's settings and keeps them for the next start; the inbox is
-// collected again under them. GitHub's muted repositories go to the inbox's mutes (the manager's, inbox.go).
+// collected again under them. GitHub's muted repositories go to the inbox's mutes (the manager's,
+// inbox_github_mutes.go).
 func (h *Manager) setConnectorOptions(ctx context.Context, id string, raw json.RawMessage) error {
 	if id == "github" {
 		var err error

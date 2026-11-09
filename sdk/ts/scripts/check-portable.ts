@@ -23,4 +23,7 @@ try {
   writeFileSync(join(output, "package.json"), '{"type":"module"}\n');
   run(["node", resolve(root, "scripts/portable-ui.mjs"), join(output, "src/ui.js")]);
   run(["node", resolve(root, "scripts/portable-transport.mjs"), join(output, "src/index.js")]);
+  run([process.execPath, "build", resolve(root, "src/testdata/exact-program.ts"), "--target=browser",
+    "--outfile", join(output, "exact-program.mjs")]);
+  run(["node", resolve(root, "scripts/portable-exact.mjs"), join(output, "src/index.js"), join(output, "exact-program.mjs")]);
 } finally { rmSync(output, { recursive: true, force: true }); }
