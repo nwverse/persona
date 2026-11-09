@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 HUB = Path(__file__).with_name("mock_hub.py")
@@ -125,6 +125,35 @@ class VoiceMockTests(unittest.TestCase):
         self.assertEqual(self.get("/api/v1/plugins")["plugins"][0]["status"], "running")
         purpose = self.get("/api/v1/model-config/purposes/plugin.voice")["purpose"]
         self.assertEqual(purpose["id"], "plugin.voice")
+
+    def status(self, path):
+        """The status and JSON body of a GET that may fail."""
+        try:
+            with urlopen("http://127.0.0.1:%d%s" % (self.port, path), timeout=3) as r:
+                return r.status, json.load(r)
+        except HTTPError as e:
+            return e.code, json.load(e)
+
+    def test_voices_fail_on_demand(self):
+        # #2411: the pickers' failed, retry and stale states.
+        base = "/api/v1/extensions/voice/voices?model=voice-deep"
+        self.assertEqual(self.status(base + "&mock=fail")[0], 502)
+        code, body = self.status(base + "&mock=stale")
+        self.assertEqual((code, body["stale"], body["default"]), (200, True, "soft"))
+        try:
+            self.assertEqual(self.get("/mock/voice2?voices=fail")["voices_mode"], "fail")
+            self.assertEqual(self.status(base)[0], 502)
+            self.get("/mock/voice2?voices=flaky")
+            self.assertEqual([self.status(base)[0] for _ in range(3)], [502, 502, 200])
+        finally:
+            self.assertEqual(self.get("/mock/voice2?voices=ok")["voices_mode"], "ok")
+        code, body = self.status(base)
+        self.assertEqual((code, "stale" in body), (200, False))
+        self.assertGreaterEqual(self.get("/mock/voice2")["voices"], 7)
+        # The extension's settings page.
+        page = self.get("/api/v1/extensions/voice/-/")
+        self.assertEqual((page["id"], page["kind"], page["status"]), ("voice", "voice", "running"))
+        self.assertTrue(page["form"]["fields"])
 
     def test_protocol_2_script(self):
         ws = Socket(self.port, "/api/v1/extensions/voice/ws")

@@ -228,6 +228,10 @@ struct ExtensionDetailView: View {
                         Text("When off, it stops running and the connectors and other things it provides turn off too; its settings and secrets stay.")
                     }
                 }
+                // The voice extension: the voice this device's calls speak with (#2411), whoever's settings the rest are.
+                if VoiceTimbreSection.shows(d.plugin, manager: page.manager) {
+                    VoiceTimbreSection(extensionID: d.plugin.id, group: AppModel.shared.api?.group ?? "")
+                }
                 if d.plugin.autoUpgrade != nil { upgrades(d.plugin) }
                 pages(d)
                 connectorSections(d)
