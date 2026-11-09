@@ -325,7 +325,7 @@
     <string name="settings_ready_open">Open settings</string>
     <string name="settings_ready_open_failed">Couldn\'t open system settings. Open Persona\'s app info from the phone\'s Settings.</string>
     <string name="settings_ready_undo_confirm">Undo</string>
-    <string name="settings_ready_mark_done">Done</string>
+    <string name="settings_ready_mark_done">Mark done</string>
     <string name="settings_ready_unskip">Unskip</string>
     <string name="settings_ready_skip">Skip</string>
     <string name="settings_ready_no_machines">No machine info yet</string>

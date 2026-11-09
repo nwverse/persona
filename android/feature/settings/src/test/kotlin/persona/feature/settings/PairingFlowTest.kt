@@ -168,6 +168,15 @@ class PairingFlowTest {
         assertFalse(rule.activity.isFinishing)
     }
 
+    @Config(qualifiers = "en-w400dp-h4000dp-xhdpi")
+    @Test fun theFirstChecklistHasOneDone() {
+        firstChecklist {}
+        // The items' own confirm buttons are named apart from the page's finish button.
+        val markDone = hasText(text(R.string.settings_ready_mark_done)) and hasClickAction()
+        rule.waitUntil(5_000) { rule.onAllNodes(markDone).fetchSemanticsNodes().isNotEmpty() }
+        rule.onAllNodes(hasText(text(R.string.settings_done)) and hasClickAction()).assertCountEquals(1)
+    }
+
     @Test fun settingsPairingStartsAtTheConnectChoices() {
         val services = SettingsServices(
             pairing = FakePairing(paired = true),

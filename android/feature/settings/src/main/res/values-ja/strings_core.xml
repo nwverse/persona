@@ -324,7 +324,7 @@
     <string name="settings_ready_open">設定を開く</string>
     <string name="settings_ready_open_failed">システムの設定を開けません。スマートフォンの設定からPersonaのアプリ情報を開いてください。</string>
     <string name="settings_ready_undo_confirm">確認を取り消し</string>
-    <string name="settings_ready_mark_done">完了</string>
+    <string name="settings_ready_mark_done">完了にする</string>
     <string name="settings_ready_unskip">スキップを解除</string>
     <string name="settings_ready_skip">スキップ</string>
     <string name="settings_ready_no_machines">マシンの情報はまだありません</string>
