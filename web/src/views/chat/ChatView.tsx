@@ -582,8 +582,14 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       ro.unobserve(view);
     };
   }, [scrollEl, sizes]);
+  // Its height as this commit's layout effects see it is where its changes count from: an earlier page landing keeps
+  // the view still by that layout (the guessed heights), and the browser may draw the new exchanges later in the same
+  // frame, before the observer's first look at them. Read in the layout effects, where the chat reads its own height
+  // anyway; nothing in between writes to the page, so it is one layout for all of them.
   const watchSegment = useCallback((section: HTMLElement) => {
     const ro = sizes();
+    const h = section.getBoundingClientRect().height;
+    if (h > 0) heights.current.set(section, h);
     ro.observe(section);
     return () => ro.unobserve(section);
   }, [sizes]);

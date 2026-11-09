@@ -10,8 +10,9 @@ export interface SizeChange {
   now: number;
 }
 
-/** The exchanges among `entries` whose height changed since the last time (`heights`, kept up to date here). The
- *  first size of one just watched only counts from then on. */
+/** The exchanges among `entries` whose height changed since the last time (`heights`, kept up to date here; ChatView
+ *  puts in the height each one had when it started being watched). One without a height there yet counts from its
+ *  first size on. */
 export function segmentChanges(entries: readonly ResizeObserverEntry[], heights: WeakMap<Element, number>): SizeChange[] {
   const out: SizeChange[] = [];
   for (const e of entries) {
