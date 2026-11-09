@@ -1,15 +1,15 @@
-import { managedProvider, storedCredentials } from "../lib/compatibility";
+import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
 import { href } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, enc, errorText, handleUnauthorized, setToken } from "../lib/api";
+import { api, enc, errorText } from "../lib/api";
 import { splitDevices } from "../lib/devices";
 import { ago } from "../lib/format";
 import { install, useInstall, type InstallState } from "../lib/pwa";
-import { reset, useStore } from "../lib/store";
+import { useStore } from "../lib/store";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
@@ -21,6 +21,7 @@ import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motio
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
 import { HubList } from "./Hubs";
+import { useDisconnect } from "./DisconnectBrowser";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
@@ -364,15 +365,7 @@ function About() {
   // interconnected hubs (docs/archive/operations/plan-hub-mesh.md 2.6): this page talks to one hub and sees its whole group
   const mesh = useStore((s) => s.mesh);
   const others = mesh.filter((h) => !h.self);
-  const logout = async () => {
-    // signing out on purpose: a request that gets a 401 meanwhile must not show "this browser was signed out"
-    handleUnauthorized(() => {});
-    const id = storedCredentials().tokenId;
-    if (id) await api(`/auth/tokens/${enc(id)}`, { method: "DELETE" }).catch(() => {});
-    setToken("");
-    reset();
-    location.href = BASE + "/";
-  };
+  const disconnect = useDisconnect();
   return (
     <Group title={t("settings.this_browser")} footer={t("settings.this_browser_footer")}>
       <Row label={t("settings.hub_address")} mono>
@@ -392,10 +385,11 @@ function About() {
       <Row label={t("settings.computers")}>{t("settings.computers_online", { online: machines.filter((m) => m.online).length, total: machines.length })}</Row>
       <InstallRow />
       <div className="flex justify-end px-4 py-2.5">
-        <Button tone="quiet" icon="logout" onClick={() => void logout()} className="text-red enabled:hover:text-red">
+        <Button tone="quiet" icon="logout" onClick={disconnect.start} busy={disconnect.busy} className="text-red enabled:hover:text-red">
           {t("settings.disconnect_browser")}
         </Button>
       </div>
+      {disconnect.dialog}
     </Group>
   );
 }
