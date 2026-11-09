@@ -187,6 +187,20 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		}
 		return
 	}
+	if e.Work.CI != nil {
+		closed, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID)
+		if err != nil || closed {
+			current := e
+			if err != nil {
+				at := now.Add(time.Minute).UTC()
+				current.WakeAt, current.Work.WakeAt = &at, &at
+			} else {
+				current.WakeAt, current.Work.WakeAt, current.Work.CI = nil, nil, nil
+			}
+			s.replaceCI(e, current)
+			return
+		}
+	}
 	if e.Work.CI != nil && e.Work.CI.Message != "" {
 		_, guest, err := s.guestOf(ctx, e.MachineID, e.SessionID)
 		if err != nil || guest || s.isWorkMachine(e.MachineID) {

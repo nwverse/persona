@@ -309,6 +309,34 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 	return workT(s.lang(ctx), "ci_failed", i18n.Args{"checks": ciCheckNames(result.failures)}), false
 }
 
+// ciClosedTodo detects a durable retirement even if its work-state write failed
+// before a restart. A later locally observed turn start or a reopened todo wins.
+func (s *Service) ciClosedTodo(ctx context.Context, machine, sid string) (bool, error) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return false, err
+	}
+	key := [2]string{machine, sid}
+	s.work.mu.Lock()
+	started := s.work.started[key]
+	s.work.mu.Unlock()
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	if _, open := s.todos.activeBySession[key]; open {
+		return false, nil
+	}
+	for _, todo := range s.todos.todos {
+		if todo.DoneAt == nil || started.After(*todo.DoneAt) {
+			continue
+		}
+		for _, agent := range todo.Agents {
+			if agent.MachineID == machine && agent.SessionID == sid && agent.ReleasedAt == nil && agent.DismissedAt == nil {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // ciCheckNames are untrusted external data. Quote and escape each bounded name
 // so it cannot add lines or close a markup delimiter in the wake message.
 func ciCheckNames(names []string) string {
@@ -400,6 +428,9 @@ func (s *Service) deliverCI(ctx context.Context, e db.SessionWork, now time.Time
 	}
 	_, guest, err := s.guestOf(ctx, e.MachineID, e.SessionID)
 	if err != nil || guest || s.isWorkMachine(e.MachineID) {
+		return
+	}
+	if closed, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID); err != nil || closed {
 		return
 	}
 	sum := sha256.Sum256([]byte(e.MachineID + "\x00" + e.SessionID + "\x00" + e.TurnAt.UTC().Format(time.RFC3339Nano)))

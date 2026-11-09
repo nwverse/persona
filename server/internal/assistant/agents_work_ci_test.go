@@ -1053,3 +1053,76 @@ func TestCIActiveWatchViewIgnoresNodeClockSkew(t *testing.T) {
 		})
 	}
 }
+
+func TestCICompletedTodoGuardsAfterRetirementWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub()
+	st := &restoredTodoCIStore{doneAt: time.Now().UTC().Add(-time.Second)}
+	c := stopped("ci", "PR #12 CI")
+	c.UpdatedAt = time.Now().UTC().Add(-time.Minute)
+	f.sessions["box"] = []proto.Session{c}
+	s := newServiceOn(t, f, st)
+	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Add(-time.Second)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: c.UpdatedAt, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at, CI: &proto.WorkCI{Number: 12, Message: "CI finished"}}}
+	s.putWork(ctx, e)
+	// Simulate the todo row committing while the separate work-state writes fail.
+	st.fail = true
+	s.retireTodoWork([2]string{"box", "ci"})
+	st.fail = false
+	restarted := newServiceOn(t, f, st)
+	if !restarted.loadWork(ctx) {
+		t.Fatal("work not restored")
+	}
+	if got := entryOf(t, restarted, "ci"); got.Work.CI == nil {
+		t.Fatal("expected old persisted wake after failed write")
+	}
+	sends := 0
+	f.answerNode(DeviceSessionSendOnce, func(_ string, _ json.RawMessage) (any, error) { sends++; return map[string]any{}, nil })
+	restarted.workWake(ctx, restarted.newWorkView(ctx), [2]string{"box", "ci"}, time.Now())
+	if got := entryOf(t, restarted, "ci"); sends != 0 || got.Work.CI != nil || got.WakeAt != nil {
+		t.Fatalf("closed todo woke: sends %d, %+v", sends, got)
+	}
+	// A later local TurnStarted can work independently, even if the old todo
+	// remains closed and the node clock differs.
+	restarted.workStarted(ctx, "box", "ci", time.Now().UTC())
+	closed, err := restarted.ciClosedTodo(ctx, "box", "ci")
+	if err != nil || closed {
+		t.Fatalf("new local turn blocked: %v %v", closed, err)
+	}
+	restarted.work.mu.Lock()
+	delete(restarted.work.started, [2]string{"box", "ci"})
+	restarted.work.mu.Unlock()
+	restarted.todos.mu.Lock()
+	restarted.todos.activeBySession[[2]string{"box", "ci"}] = "reopened"
+	restarted.todos.mu.Unlock()
+	if closed, err = restarted.ciClosedTodo(ctx, "box", "ci"); err != nil || closed {
+		t.Fatalf("reopened todo blocked: %v %v", closed, err)
+	}
+}
+
+// restoredTodoCIStore keeps the completed todo and its agent separately from
+// work-state writes, as the production database does across a restart.
+type restoredTodoCIStore struct {
+	failingDeferredWorkStore
+	todoStore
+	doneAt time.Time
+}
+
+func (s *restoredTodoCIStore) ListTodos(context.Context) ([]db.TodoRow, error) {
+	return []db.TodoRow{{ID: "done", DoneAt: &s.doneAt}}, nil
+}
+func (*restoredTodoCIStore) ListAllTodoSpaces(context.Context) ([]db.TodoSpaceRow, error) {
+	return nil, nil
+}
+func (*restoredTodoCIStore) ListAllTodoAgents(context.Context) ([]db.TodoAgentRow, error) {
+	return []db.TodoAgentRow{{TodoID: "done", MachineID: "box", SessionID: "ci"}}, nil
+}
+func (*restoredTodoCIStore) ListTodoThreads(context.Context) (map[string]db.TodoThread, error) {
+	return nil, nil
+}
+func (*restoredTodoCIStore) ListTodoSources(context.Context) (map[string]db.TodoSource, error) {
+	return nil, nil
+}
