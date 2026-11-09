@@ -12,6 +12,7 @@ const captured = vi.hoisted(() => ({
   session: { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle" } as Session,
   items: [] as Item[],
   error: "",
+  loading: false,
 }));
 
 vi.mock("./Composer", async (importOriginal) => ({
@@ -22,7 +23,7 @@ vi.mock("./Composer", async (importOriginal) => ({
   },
 }));
 vi.mock("./useTranscript", () => ({
-  useTranscript: () => ({ items: captured.items, loading: false, error: captured.error, hasMore: false, streaming: "" }),
+  useTranscript: () => ({ items: captured.items, loading: captured.loading, error: captured.error, hasMore: false, streaming: "" }),
 }));
 vi.mock("../../lib/store", async (importOriginal) => {
   const store = await importOriginal<typeof import("../../lib/store")>();
@@ -73,6 +74,7 @@ beforeEach(() => {
   captured.onSend = undefined;
   captured.items = [];
   captured.error = "";
+  captured.loading = false;
   delete captured.session.source_kind;
   delete captured.session.capabilities;
   vi.mocked(toast).mockClear();
@@ -158,5 +160,31 @@ describe("composer footer rows (#3533)", () => {
     expect(footerRows(s, true)).toEqual([]);
     expect(footerRows(s).every((r) => r.wrap)).toBe(true);
     expect(footerRows({ machine_id: "m", session_id: "s" } as Session)).toEqual([]);
+  });
+});
+
+describe("ChatView opening line over an empty chat (#2450)", () => {
+  const opening = t("chat-chatview.started_in", { path: "/code" });
+  const markup = () => renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
+
+  it("shows where the chat started once an empty first page has loaded", () => {
+    expect(markup()).toContain(opening);
+  });
+
+  it("stays away while the first page is loading or failed to load", () => {
+    captured.loading = true;
+    expect(markup()).not.toContain(opening);
+    captured.loading = false;
+    captured.error = "boom";
+    expect(markup()).not.toContain(opening);
+  });
+
+  it("stays away when the chat could not start", () => {
+    captured.session.start_error = "no such folder";
+    try {
+      expect(markup()).not.toContain(opening);
+    } finally {
+      delete captured.session.start_error;
+    }
   });
 });

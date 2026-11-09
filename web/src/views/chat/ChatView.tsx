@@ -1041,7 +1041,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 <Loading label={t("chat-chatview.loading_earlier")} />
               </div>
             )}
-            {((!tr.hasMore && !tr.loading && tr.items.length > 0) || opening) && <div className="text-center text-[11.5px] text-ink-3">{session?.cwd && !assistant ? t("chat-chatview.started_in", { path: shortPath(session.cwd) }) : t("chat-chatview.chat_start")}</div>}
+            {/* also over a chat whose first page came back empty (#2450): it reads as loaded and empty, not as still loading */}
+            {((!tr.hasMore && !tr.loading && (tr.items.length > 0 || (!tr.error && !starting && !session?.start_error))) || opening) && <div className="text-center text-[11.5px] text-ink-3">{session?.cwd && !assistant ? t("chat-chatview.started_in", { path: shortPath(session.cwd) }) : t("chat-chatview.chat_start")}</div>}
             {opening && <DayLine date={startOfDay(Date.now())} />}
             {tr.loading && !tr.items.length && !opening && (
               <div className="flex justify-center py-16">
