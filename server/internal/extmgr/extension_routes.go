@@ -17,7 +17,7 @@ import (
 // The plugin API (docs/extensions/extensions.md "The hub's API"). /api/v1/plugins/<id>/… is relayed to the plugin, so the hub's own
 // routes live under the reserved "-" segment: /api/v1/plugins/-/… and /api/v1/plugins/<id>/-/….
 
-// PluginDetail is one plugin with its form, settings and permissions (GET /api/v1/plugins/{id}/-/).
+// ExtensionDetail is one plugin with its form, settings and permissions (GET /api/v1/plugins/{id}/-/).
 type ExtensionDetail struct {
 	ExtensionView
 	Publisher       string                     `json:"publisher,omitempty"`
@@ -47,7 +47,7 @@ type ExtensionDetail struct {
 	SecretsCleared []string `json:"secrets_cleared,omitempty"`
 }
 
-// PluginSecretView is a declared secret and whether it has a value (never the value).
+// ExtensionSecretView is a declared secret and whether it has a value (never the value).
 type ExtensionSecretView struct {
 	Name        string `json:"name"`
 	Title       string `json:"title"`
@@ -368,11 +368,16 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		if !marketOr(w, r, fromMarket(r)) {
 			return
 		}
+		var left string // the version rolled back from
+		if cur := ps().reg.Get(r.PathValue("id")); cur != nil {
+			left = cur.Record.Version
+		}
 		p, err := ps().reg.Rollback(r.Context(), r.PathValue("id"), actorOr(r, "personad extension"))
 		if err != nil {
 			writeExtensionResponseError(w, r, http.StatusBadRequest, "rollback_failed", err)
 			return
 		}
+		h.extensionUpgrades().rolledBackByUser(r.Context(), p.Record.ID, left)
 		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
 	})
 	api.HandleFunc("DELETE /api/v1/extensions/{id}/-/{$}", func(w http.ResponseWriter, r *http.Request) {
