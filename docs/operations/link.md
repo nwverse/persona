@@ -479,7 +479,7 @@ This takes over what the native Mac App's `register_desktop` did (`docs/apple/ma
 
 **Who decides**
 - The menu bar App, by what it sees on this Mac; the conditions and the lines it writes are under "Menu bar App" › "Presence".
-- The App confirms a card only once it handed the card's notification to Notification Center, on the connection the card came on: `{"rang":{"interaction_id":"<card id>"}}` on persona-link's stdin, the id as the "Needs you" summary names it.
+- The App confirms a card only once it handed the card's notification to Notification Center, on the connection the card came on: `{"rang":{"conn":<link>,"interaction_id":"<card id>"}}` on persona-link's stdin, the id as the "Needs you" summary names it and `conn` that of the status line whose summary listed the card.
   A notification dropped before it was handed over (the card left a capped summary or was answered while it waited, the connection went), one Notification Center refused, or any while notifications are off, is not confirmed.
   A notification handed over is not always shown: Focus or Do Not Disturb on the Mac may still hold it back (see "Not yet").
 - The command-line Link reports nothing (nothing writes its stdin): it cannot show notifications, so muting the phone for it would lose alerts. Nor does the Windows tray yet.
@@ -489,19 +489,22 @@ This takes over what the native Mac App's `register_desktop` did (`docs/apple/ma
 - It keeps the latest presence line and forwards every one, the App's repeats included; it never repeats one by itself, so presence lapses when the App goes quiet.
   An active line older than 120 seconds counts as inactive.
 - On the link: `{"type":"presence","active","notifies","ttl_ms"}` as the link comes up and for every presence line (`ttl_ms` is what is left of the 120 seconds since the App wrote it),
-  and `{"type":"rang","interaction_id"}` for every confirmation that comes while this link is up (one queued before it was the earlier link's, and is dropped).
+  and `{"type":"rang","interaction_id"}` for every confirmation that names this link (`conn`): persona-link numbers its links in the status line, rising with each link and not reused by a restarted persona-link, so a confirmation for an earlier link, still in the pipe when the link changed or persona-link restarted, is dropped.
+  The number stays between the App and persona-link; the hub never sees it.
 
 **The manager** (`internal/devices/presence.go`)
 - Keeps the presence until when it heard it + `ttl_ms` (120 seconds when missing, at most 4 minutes), and reports its desktops to the hub in `devices.desktops`: one report at a time from one task, in order, a run of requests making one;
-  on every presence it hears (each renewal), when a delivery may change which computers count (a confirmation never does), after a `devices.state` when the list changed, and in full after each handshake (after the `devices.state`).
+  on every presence it hears (each renewal), when a delivery may change which computers count (a confirmation never does: it only wakes the pushes waiting for it), after a `devices.state` when the list changed, and in full after each handshake.
+  On a new connection to the hub none goes before that connection's first `devices.state` (the hub takes a computer's desktop only once it has the computer): requests meanwhile wait, and the list as it is once the state went out follows it.
   Each says the TTL left, which the hub counts on its own clock. A separate event, so a renewal once a minute does not resend the apps' machine list.
 - Counts only a computer that gets the "Needs you" summary as it is (see "Needs you" above): its Persona Link takes the summary, it is not waiting to be confirmed and not a work computer.
   While the hub cannot say which computers wait to be confirmed, none counts: the summary freezes then, so a new card would reach neither the computer nor the phone. A work computer never counts.
 - Counts only while its link keeps up with the summary: it took one (each change then goes out at once), and no send failed since; only a summary taken again brings it back.
 - The presence ends when the link drops or another link of the computer takes over, and when its time runs out.
-- Keeps the confirmations on the link they came on: a new link starts with none; only cards the summary that link holds (or the one on its way to it) lists are kept.
+- Keeps the confirmations on the link they came on: a new link starts with none; only cards the summary that link holds (or the one on its way to it) lists are kept. A confirmation changes no computer's being a desktop.
 - **Which cards it leaves to Persona Link.** When it pushes a card, it works out with the summary's own rule whether the card is the one that stands for its agent, notifying, among the listed items (not in More).
-  If so, the push waits until one of its Persona Link desktops with `notifies` confirmed that card on its current link, and the desktops as they are then went out to the hub; only then does it say `link_covered` (the hub mutes only for a desktop it knows of, so a report it did not take leaves the card with the phone).
+  If so, the push waits until one of its Persona Link desktops with `notifies` confirmed that card on its current link, then until the desktops as they are then were reported, and then checks that the same link still is such a desktop with that confirmation; only then does it say `link_covered`.
+  A link replaced or stopping meanwhile does not count, and the wait goes on for a confirmation that does. The App's confirmation is what lets the hub mute the phone at all; the hub then mutes only for a Persona Link desktop it still has a valid record of, and pushes the phone when it has none.
   The whole wait has one deadline, 2 seconds, and ends with the manager: past it, or without a desktop, the push goes to the phone. Another card of the same agent, a card past the cap (also one handed to the user late), and a card the App did not confirm go to the phone.
 
 **The hub** (`internal/hub/desktops.go`)
@@ -665,7 +668,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
   - Written at once when either field changes, again every 60 s while `active`, and once to every helper as it starts (inactive too).
   - Idle time is checked when it would pass the limit; while only input is missing, every 10 s; while notifications do not show, once a minute. While locked, asleep or switched away, nothing runs until the next notification.
   - The pipe does not block: a helper that stops reading loses lines instead of stalling the App, and a helper that has gone fails the write (`EPIPE`; SIGPIPE is ignored).
-- `{"rang":{"interaction_id":"<card id>"}}` on the same stdin once a card's notification went to Notification Center (`UNUserNotificationCenter.add` succeeded), on the connection it was for; nothing for a notification that was dropped, refused or not allowed.
+- `{"rang":{"conn":<link>,"interaction_id":"<card id>"}}` on the same stdin once a card's notification went to Notification Center (`UNUserNotificationCenter.add` succeeded), on the connection it was for, `conn` being the status line's `conn` that brought the card's summary; nothing for a notification that was dropped, refused or not allowed, nor with a helper whose status line has no `conn`.
   A confirmation lost (no helper, a full pipe) leaves the card to the phone.
 
 **Pairing window**
@@ -705,6 +708,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - `machine_name`: what the hub calls this computer (see "The computer's name"); absent with old hubs. `rename`: how the last rename asked of this persona-link went: `{id, name}` or `{id, code, error}`.
 - `pending`: meaningful only when `connected`; `true` means the hub is waiting for the user to confirm this computer (see "Pending confirmation"); absent or `false` means confirmed.
 - `trust`: `system` when active mode validates the hub through system CAs (reverse proxy, no fingerprint); absent when pinned.
+- `conn`: active mode while `connected`: which link it is, a number that rises with each link (across mode switches) and that a restarted persona-link does not reuse (it starts from the time it started). The menu bar App's confirmations name it (see "Presence"); absent otherwise and with old helpers.
 - `attention`: the hub's latest "Needs you" summary, as it sent it; the full shape is in "Needs you". In short: `needs_you` (the count), `items` (at most 20,
   newest first, each with `machine_id`, `session_id`, `title`, `place`, `kind`, `detail`, `muted`, `notify`, `route`, and `interaction_id`, `since` when known), `more` (the rest),
   `web_url` (where `route` opens; in active mode the manager already fell back to the hub address when the hub has no https `public_url`, so the App needs no fallback of its own;

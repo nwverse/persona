@@ -3,6 +3,7 @@ package link
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,28 +119,27 @@ func TestLinkSendsPresence(t *testing.T) {
 }
 
 func TestParseRangLine(t *testing.T) {
-	if card, ok := ParseRangLine([]byte(`{"rang":{"interaction_id":"ix-1"}}`)); !ok || card != "ix-1" {
-		t.Fatalf("%q %v", card, ok)
+	if c, ok := ParseRangLine([]byte(`{"rang":{"interaction_id":"ix-1","conn":3}}`)); !ok || c != (Confirm{"ix-1", 3}) {
+		t.Fatalf("%+v %v", c, ok)
 	}
-	for _, line := range []string{``, `{}`, `{"rang":null}`, `{"rang":{}}`, `{"rang":{"interaction_id":""}}`,
-		`{"presence":{"active":true}}`} {
-		if card, ok := ParseRangLine([]byte(line)); ok {
-			t.Errorf("%q read as a confirmation of %q", line, card)
+	for _, line := range []string{``, `{}`, `{"rang":null}`, `{"rang":{}}`, `{"rang":{"interaction_id":"","conn":1}}`,
+		`{"rang":{"interaction_id":"ix-1"}}`, `{"rang":{"interaction_id":"ix-1","conn":0}}`, `{"presence":{"active":true}}`} {
+		if c, ok := ParseRangLine([]byte(line)); ok {
+			t.Errorf("%q read as a confirmation %+v", line, c)
 		}
 	}
 }
 
-// A link passes on the cards the app rang for while it is up, as rang messages; the ones queued before it came up
-// were the earlier link's and are not passed on.
+// A link passes on the app's confirmations for itself, as rang messages, and says which link it is in its status
+// (Conn). A confirmation for an earlier link is not passed on, also when it reaches the queue only once the next link
+// is up (it was stuck in the pipe).
 func TestLinkSendsConfirmations(t *testing.T) {
 	type sent struct {
 		link int32
 		card string
 	}
 	confirms := NewConfirms()
-	confirms.Push("ix-stale") // queued before any link: not this link's
 	got := make(chan sent, 16)
-	up := make(chan int32, 4)
 	var links atomic.Int32
 	drop := make(chan struct{})
 	srv, _ := fakeHubHello(t, func(c *websocket.Conn, _ Message) {
@@ -150,7 +150,6 @@ func TestLinkSendsConfirmations(t *testing.T) {
 				c.CloseNow()
 			}()
 		}
-		up <- n
 		for {
 			_, b, err := c.Read(context.Background())
 			if err != nil {
@@ -162,18 +161,18 @@ func TestLinkSendsConfirmations(t *testing.T) {
 			}
 		}
 	})
-	runAgainst(t, srv, "jd_x", Options{Confirms: confirms})
-	// pushUntil pushes card every 50 ms (the link's sender may not run yet) until a rang comes, and checks it.
-	pushUntil := func(what, card string, link int32) {
+	status := runAgainst(t, srv, "jd_x", Options{Confirms: confirms})
+	// pushUntil pushes c every 50 ms (the link's sender may not run yet) until a rang comes, and checks it.
+	pushUntil := func(what string, c Confirm, link int32) {
 		t.Helper()
 		timeout := time.After(10 * time.Second)
 		for tick := time.NewTicker(50 * time.Millisecond); ; {
-			confirms.Push(card)
+			confirms.Push(c)
 			select {
 			case s := <-got:
 				tick.Stop()
-				if s != (sent{link, card}) {
-					t.Fatalf("%s: got %+v, want %s on link %d", what, s, card, link)
+				if s != (sent{link, c.Card}) {
+					t.Fatalf("%s: got %+v, want %s on link %d", what, s, c.Card, link)
 				}
 				return
 			case <-tick.C:
@@ -182,10 +181,16 @@ func TestLinkSendsConfirmations(t *testing.T) {
 			}
 		}
 	}
-	<-up
-	pushUntil("a card rung for while the link is up", "ix-1", 1)
+	first := waitFor(t, status, func(s Status) bool { return s.State == "connected" })
+	if first.Conn == 0 {
+		t.Fatal("a connected status names no link")
+	}
+	pushUntil("a card rung for on this link", Confirm{"ix-1", first.Conn}, 1)
 	close(drop)
-	<-up
+	second := waitFor(t, status, func(s Status) bool { return s.State == "connected" && s.Conn != first.Conn })
+	if second.Conn <= first.Conn {
+		t.Fatalf("the next link is %d after %d", second.Conn, first.Conn)
+	}
 	for drained := false; !drained; { // repeats of ix-1 the first link sent before it went
 		select {
 		case <-got:
@@ -193,5 +198,51 @@ func TestLinkSendsConfirmations(t *testing.T) {
 			drained = true
 		}
 	}
-	pushUntil("on the next link", "ix-2", 2)
+	confirms.Push(Confirm{"ix-stale", first.Conn}) // the earlier link's, out of the pipe only now
+	pushUntil("on the next link", Confirm{"ix-2", second.Conn}, 2)
+}
+
+// A restarted persona-link numbers its links above the earlier run's: a confirmation the app wrote for the earlier
+// run's link matches none of the new one's.
+func TestLinkNumbersOutliveARestart(t *testing.T) {
+	srv, _ := fakeHubHello(t, func(c *websocket.Conn, _ Message) {
+		for {
+			if _, _, err := c.Read(context.Background()); err != nil {
+				return
+			}
+		}
+	})
+	connected := func(s Status) bool { return s.State == "connected" }
+	first := waitFor(t, runAgainst(t, srv, "jd_x", Options{}), connected)
+	time.Sleep(5 * time.Millisecond)
+	second := waitFor(t, runAgainst(t, srv, "jd_x", Options{}), connected)
+	if second.Conn <= first.Conn {
+		t.Fatalf("a later run's first link is %d, the earlier run's %d", second.Conn, first.Conn)
+	}
+}
+
+// A run never numbers two links the same, also across a switch to passive mode and back: a confirmation still queued
+// for the earlier active mode's link does not pass for the new one's.
+func TestLinkNumbersOutliveAModeSwitch(t *testing.T) {
+	srv, _ := fakeHubHello(t, func(c *websocket.Conn, _ Message) {
+		for {
+			if _, _, err := c.Read(context.Background()); err != nil {
+				return
+			}
+		}
+	})
+	path := filepath.Join(t.TempDir(), "link.json")
+	status := runAgainst(t, srv, "jd_x", Options{Path: path})
+	first := waitFor(t, status, func(s Status) bool { return s.State == "connected" })
+	if _, err := SetMode(path, ModePassive, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, status, func(s Status) bool { return s.Mode == ModePassive })
+	if _, err := SetMode(path, ModeActive, ""); err != nil {
+		t.Fatal(err)
+	}
+	again := waitFor(t, status, func(s Status) bool { return s.Mode == ModeActive && s.State == "connected" })
+	if again.Conn <= first.Conn {
+		t.Fatalf("the link after the switch back is %d, the one before it %d", again.Conn, first.Conn)
+	}
 }

@@ -86,45 +86,42 @@ func (b *PresenceBox) Latest(now time.Time) (PresenceInfo, bool) {
 // Poked receives once after each Set (a run of them may be one).
 func (b *PresenceBox) Poked() <-chan struct{} { return b.poke }
 
+// Confirm is the app's word that it handed a card's notification to Notification Center: the card (its interaction
+// id) and the link whose summary listed it (Status.Conn).
+type Confirm struct {
+	Card string
+	Conn uint64
+}
+
 // ParseRangLine reads one line the app wrote once it handed a card's notification to Notification Center:
-// {"rang":{"interaction_id":…}}. Anything else is not one.
-func ParseRangLine(line []byte) (string, bool) {
+// {"rang":{"interaction_id":…,"conn":…}}. Anything else is not one, nor is one without its link.
+func ParseRangLine(line []byte) (Confirm, bool) {
 	var l struct {
 		Rang *struct {
 			InteractionID string `json:"interaction_id"`
+			Conn          uint64 `json:"conn"`
 		} `json:"rang"`
 	}
-	if json.Unmarshal(line, &l) != nil || l.Rang == nil || l.Rang.InteractionID == "" {
-		return "", false
+	if json.Unmarshal(line, &l) != nil || l.Rang == nil || l.Rang.InteractionID == "" || l.Rang.Conn == 0 {
+		return Confirm{}, false
 	}
-	return l.Rang.InteractionID, true
+	return Confirm{Card: l.Rang.InteractionID, Conn: l.Rang.Conn}, true
 }
 
-// Confirms carries the cards whose notifications the app handed to Notification Center to the link, as they come. A
-// link passes on only the ones that came while it was up: one that came before was the earlier link's. A full queue
-// drops one, and a nil one (no app) carries none: either way the phone gets that card.
-type Confirms struct{ ch chan string }
+// Confirms carries the app's confirmations to the link, as they come. A link passes on only the ones for itself (their
+// Conn is its own): one for an earlier link may still come after it went, stuck in a pipe or a scan. A full queue drops
+// one, and a nil one (no app) carries none: either way the phone gets that card.
+type Confirms struct{ ch chan Confirm }
 
-func NewConfirms() *Confirms { return &Confirms{ch: make(chan string, 64)} }
+func NewConfirms() *Confirms { return &Confirms{ch: make(chan Confirm, 64)} }
 
-// Push queues card for the link.
-func (c *Confirms) Push(card string) {
+// Push queues c for the link.
+func (q *Confirms) Push(c Confirm) {
 	select {
-	case c.ch <- card:
+	case q.ch <- c:
 	default:
 	}
 }
 
-// C receives the queued cards.
-func (c *Confirms) C() <-chan string { return c.ch }
-
-// drop empties the queue.
-func (c *Confirms) drop() {
-	for {
-		select {
-		case <-c.ch:
-		default:
-			return
-		}
-	}
-}
+// C receives the queued confirmations.
+func (q *Confirms) C() <-chan Confirm { return q.ch }

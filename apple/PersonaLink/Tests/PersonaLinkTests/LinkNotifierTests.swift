@@ -58,12 +58,13 @@ final class LinkNotifierTests: XCTestCase {
         LinkAttention(needsYou: items.count + more, more: more, items: items)
     }
 
-    /// A notifier on center whose confirmations are kept, past its first summary (the baseline, which posts nothing).
-    private func started(_ center: FakeCenter) async -> (LinkNotifier, () -> [String]) {
+    /// A notifier on center whose confirmations are kept as "card@conn", past its first summary (the baseline, which
+    /// posts nothing) from the helper's link conn.
+    private func started(_ center: FakeCenter, conn: UInt64? = 7) async -> (LinkNotifier, () -> [String]) {
         let notifier = LinkNotifier(center: center)
         var confirmed: [String] = []
-        notifier.start(open: { _, _ in }, access: { _ in }, confirm: { confirmed.append($0) })
-        notifier.apply(summary())
+        notifier.start(open: { _, _ in }, access: { _ in }, confirm: { confirmed.append("\($0)@\($1)") })
+        notifier.apply(summary(), conn: conn)
         await notifier.settled()
         return (notifier, { confirmed })
     }
@@ -77,30 +78,30 @@ final class LinkNotifierTests: XCTestCase {
     func testConfirmsACardOnceItsNotificationIsHandedOver() async {
         let center = FakeCenter()
         let (notifier, confirmed) = await started(center)
-        notifier.apply(summary(item("s1", card: "ix-1")))
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 7)
         await notifier.settled()
         XCTAssertEqual(center.added, ["laptop/s1#needs"])
-        XCTAssertEqual(confirmed(), ["ix-1"])
+        XCTAssertEqual(confirmed(), ["ix-1@7"])
     }
 
     func testNoConfirmationWhenTheQueuedPostIsDropped() async {
         let center = FakeCenter()
         let (notifier, confirmed) = await started(center)
         center.hold = true
-        notifier.apply(summary(item("s1", card: "ix-1")))
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 7)
         await untilHeld(center)
-        notifier.apply(summary(item("s2", card: "ix-2"), more: 1)) // ix-1's session is now past the cap
+        notifier.apply(summary(item("s2", card: "ix-2"), more: 1), conn: 7) // ix-1's session is now past the cap
         center.release()
         await notifier.settled()
         XCTAssertFalse(center.added.contains("laptop/s1#needs"))
-        XCTAssertFalse(confirmed().contains("ix-1"), "a card whose notification was never handed over was confirmed")
+        XCTAssertFalse(confirmed().contains("ix-1@7"), "a card whose notification was never handed over was confirmed")
     }
 
     func testNoConfirmationWhenTheAddFails() async {
         let center = FakeCenter()
         let (notifier, confirmed) = await started(center)
         center.failAdd = true
-        notifier.apply(summary(item("s1", card: "ix-1")))
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 7)
         await notifier.settled()
         XCTAssertEqual(confirmed(), [])
     }
@@ -109,9 +110,9 @@ final class LinkNotifierTests: XCTestCase {
         let center = FakeCenter()
         let (notifier, confirmed) = await started(center)
         center.hold = true
-        notifier.apply(summary(item("s1", card: "ix-1")))
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 7)
         await untilHeld(center)
-        notifier.apply(nil) // the link went
+        notifier.apply(nil, conn: nil) // the link went
         center.release()
         await notifier.settled()
         XCTAssertEqual(confirmed(), [])
@@ -121,10 +122,10 @@ final class LinkNotifierTests: XCTestCase {
         let center = FakeCenter()
         let (notifier, confirmed) = await started(center)
         center.holdAdd = true
-        notifier.apply(summary(item("s1", card: "ix-1")))
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 7)
         for _ in 0..<1000 where center.adding.isEmpty { await Task.yield() }
         XCTAssertFalse(center.adding.isEmpty, "the notification never reached Notification Center")
-        notifier.apply(nil) // the link went while Notification Center took it
+        notifier.apply(nil, conn: nil) // the link went while Notification Center took it
         center.release()
         await notifier.settled()
         XCTAssertEqual(center.added, ["laptop/s1#needs"])
@@ -135,29 +136,48 @@ final class LinkNotifierTests: XCTestCase {
         let center = FakeCenter()
         let (notifier, confirmed) = await started(center)
         center.holdAdd = true
-        notifier.apply(summary(item("s1", card: "ix-1")))
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 7)
         for _ in 0..<1000 where center.adding.isEmpty { await Task.yield() }
         XCTAssertFalse(center.adding.isEmpty, "the notification never reached Notification Center")
-        notifier.apply(summary(item("s1", card: "ix-2"))) // the session waits on a newer card while ix-1's goes out
+        notifier.apply(summary(item("s1", card: "ix-2")), conn: 7) // the session waits on a newer card while ix-1's goes out
         center.release()
         await notifier.settled()
-        XCTAssertEqual(confirmed(), ["ix-2"], "a card whose notification was taken back at once was confirmed")
+        XCTAssertEqual(confirmed(), ["ix-2@7"], "a card whose notification was taken back at once was confirmed")
     }
 
     func testNoConfirmationWithNotificationsOff() async {
         let center = FakeCenter()
         let (notifier, confirmed) = await started(center)
         center.access = NotificationAccess(status: .denied, style: .banner)
-        notifier.apply(summary(item("s1", card: "ix-1")))
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 7)
         await notifier.settled()
         XCTAssertEqual(center.added, [])
         XCTAssertEqual(confirmed(), [])
     }
 
+    /// The confirmation names the helper's link whose summary listed the card; with a helper that names none, the
+    /// app confirms nothing (such a helper passes nothing on).
+    func testConfirmationNamesTheLinkOfItsSummary() async {
+        let center = FakeCenter()
+        let (notifier, confirmed) = await started(center)
+        notifier.apply(nil, conn: nil) // the link went
+        notifier.apply(summary(), conn: 8) // the next one's baseline
+        notifier.apply(summary(item("s1", card: "ix-1")), conn: 8)
+        await notifier.settled()
+        XCTAssertEqual(confirmed(), ["ix-1@8"])
+
+        let older = FakeCenter()
+        let (quiet, none) = await started(older, conn: nil)
+        quiet.apply(summary(item("s1", card: "ix-1")), conn: nil)
+        await quiet.settled()
+        XCTAssertEqual(older.added, ["laptop/s1#needs"])
+        XCTAssertEqual(none(), [], "a confirmation for a helper that names no link")
+    }
+
     func testConfirmationLine() {
-        XCTAssertEqual(Presence.rangLine("ix_1/a").map { String(decoding: $0, as: UTF8.self) },
-                       #"{"rang":{"interaction_id":"ix_1/a"}}"# + "\n")
-        XCTAssertEqual(Presence.rangLine(#"a"b"#).map { String(decoding: $0, as: UTF8.self) },
-                       #"{"rang":{"interaction_id":"a\"b"}}"# + "\n", "escaped as JSON")
+        XCTAssertEqual(Presence.rangLine("ix_1/a", conn: 3).map { String(decoding: $0, as: UTF8.self) },
+                       #"{"rang":{"conn":3,"interaction_id":"ix_1/a"}}"# + "\n")
+        XCTAssertEqual(Presence.rangLine(#"a"b"#, conn: 1).map { String(decoding: $0, as: UTF8.self) },
+                       #"{"rang":{"conn":1,"interaction_id":"a\"b"}}"# + "\n", "escaped as JSON")
     }
 }

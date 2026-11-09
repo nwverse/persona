@@ -488,6 +488,7 @@ func (d *Devices) report(all bool) {
 	defer d.requestDesktops(all) // a change of computers or of who may count goes with it, after it (presence.go)
 	d.reportMu.Lock()
 	defer d.reportMu.Unlock()
+	conn := d.desktopsRep.connection()
 	st := d.states()
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -500,6 +501,7 @@ func (d *Devices) report(all bool) {
 	}
 	if err := d.opts.Hub.Notify(devicewire.EventState, json.RawMessage(b)); err == nil {
 		d.lastSent = key
+		d.desktopsRep.stateSent(conn) // the desktops may follow on this connection (presence.go)
 	}
 }
 

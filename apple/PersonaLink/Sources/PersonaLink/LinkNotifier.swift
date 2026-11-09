@@ -15,7 +15,7 @@ import UserNotifications
     private var last: Task<Void, Never>?
     private var open: (_ route: String, _ webURL: String?) -> Void = { _, _ in }
     private var report: (_ access: NotificationAccess) -> Void = { _ in }
-    private var confirm: (_ card: String) -> Void = { _ in }
+    private var confirm: (_ card: String, _ conn: UInt64) -> Void = { _, _ in }
     private let center: NotificationCenterLike?
 
     init(center: NotificationCenterLike?) {
@@ -24,10 +24,10 @@ import UserNotifications
 
     /// Called at launch, before any summary. `open`: a clicked notification's route and the hub's web address when it
     /// was posted. `access`: what notifications may do, whenever that is checked. `confirm`: a card whose notification
-    /// went to Notification Center, on the connection it was for.
+    /// went to Notification Center, and the helper's link whose summary listed it (`LinkStatus.conn`).
     func start(open: @escaping (_ route: String, _ webURL: String?) -> Void,
                access: @escaping (_ access: NotificationAccess) -> Void,
-               confirm: @escaping (_ card: String) -> Void) {
+               confirm: @escaping (_ card: String, _ conn: UInt64) -> Void) {
         guard let center else { return }
         self.open = open
         report = access
@@ -45,8 +45,9 @@ import UserNotifications
         await last?.value
     }
 
-    /// A status line's summary changed (nil: it went away).
-    func apply(_ attention: LinkAttention?) {
+    /// A status line's summary changed (nil: it went away). `conn`: the helper's link that sent it; a helper that does
+    /// not say gets no confirmations.
+    func apply(_ attention: LinkAttention?, conn: UInt64?) {
         guard center != nil else { return }
         let changes = diff.apply(attention)
         let notes = changes.post
@@ -71,9 +72,10 @@ import UserNotifications
                     let gone = self.diff.adopt([(item.id, item.card)])
                     self.withdraw(gone)
                     // Handed to Notification Center and left there: the hub may leave this card to this Mac, unless the
-                    // connection it was for went meanwhile (a new one starts with no confirmations).
-                    if !gone.contains(item.id) && !item.card.isEmpty && self.diff.connection == connection {
-                        self.confirm(item.card)
+                    // connection it was for went meanwhile (a new one starts with no confirmations). The confirmation
+                    // names the helper's link the summary came on: the helper passes it on to that link only.
+                    if let conn, !gone.contains(item.id) && !item.card.isEmpty && self.diff.connection == connection {
+                        self.confirm(item.card, conn)
                     }
                 } else if changes.withdraw.contains(item.id) {
                     self.withdraw([item.id]) // the older notification it was to replace

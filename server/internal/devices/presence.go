@@ -153,8 +153,9 @@ func (m *Machine) desktop(now time.Time) (*desktopNow, *mgrLink) {
 }
 
 // desktopsReporter is the state of the one task that sends devices.desktops (reportDesktopsLoop): requests asked so
-// far and dealt with (done, reported closed at each), whether the next must go out unchanged (force), and the last sent
-// (sent, the reporter's alone).
+// far and dealt with (done, reported closed at each), whether the next must go out unchanged (force), the connections
+// to the hub begun (conns) and the one whose devices.state went out (stated), and the last sent (sent, the reporter's
+// alone).
 type desktopsReporter struct {
 	start    sync.Once
 	due      chan struct{}
@@ -163,7 +164,33 @@ type desktopsReporter struct {
 	mu       sync.Mutex
 	done     uint64
 	reported chan struct{}
+	conns    uint64
+	stated   uint64
 	sent     string
+}
+
+// busBegins: a new connection to the hub said hello; nothing went through it yet. Its desktops wait for its first
+// devices.state (stateSent): the hub takes a computer's desktop only once it has the computer.
+func (r *desktopsReporter) busBegins() {
+	r.mu.Lock()
+	r.conns++
+	r.mu.Unlock()
+}
+
+// connection is the connection to the hub now (busBegins), for stateSent.
+func (r *desktopsReporter) connection() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.conns
+}
+
+// stateSent: a devices.state went out on connection conn; if that is still the connection, its desktops may follow.
+func (r *desktopsReporter) stateSent(conn uint64) {
+	r.mu.Lock()
+	if r.conns == conn {
+		r.stated = conn
+	}
+	r.mu.Unlock()
 }
 
 // runCtx is the context the devices run in (Run's; a test's), background before there is one.
@@ -202,7 +229,8 @@ func (d *Devices) requestDesktops(force bool) uint64 {
 // reportDesktopsLoop is the desktops reporter: one devices.desktops at a time, in order, each with the computers as they
 // are then, a run of requests coalesced into one. It holds no lock while the hub takes it. A report says the TTL left
 // (the hub's own clock counts it down) and goes out when the computers, a since or a deadline changed, or a request
-// forced it.
+// forced it. Before a new connection's first devices.state the requests only wait (stateSent): the state's report asks
+// again once it went out, and the computers as they are then go out.
 func (d *Devices) reportDesktopsLoop(ctx context.Context) {
 	r := &d.desktopsRep
 	for {
@@ -210,6 +238,12 @@ func (d *Devices) reportDesktopsLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-r.due:
+		}
+		r.mu.Lock()
+		stated := r.stated == r.conns
+		r.mu.Unlock()
+		if !stated && !d.stopping.Load() { // stopping: nothing goes out (below), so the requests need not wait
+			continue
 		}
 		asked, force := r.asked.Load(), r.force.Swap(false)
 		if !d.stopping.Load() {
@@ -291,34 +325,49 @@ func (d *Devices) deliveries() <-chan struct{} {
 	return d.ring
 }
 
+// rangOn is the live link of one of the manager's Persona Link desktops with notifications showing that confirmed card,
+// nil without one, and whether there is such a desktop at all. only, when not nil: that link's desktop alone counts.
+func (d *Devices) rangOn(card string, now time.Time, only *mgrLink) (on *mgrLink, desktops bool) {
+	for _, m := range d.cfgMachines() {
+		p, l := m.desktop(now)
+		if p == nil || !p.Notifies || only != nil && l != only {
+			continue
+		}
+		desktops = true
+		l.heldMu.Lock()
+		rang := slices.Contains(l.held.rang, card)
+		l.heldMu.Unlock()
+		if rang {
+			return l, true
+		}
+	}
+	return nil, desktops
+}
+
 // LinkRang waits, all within one deadline (within) and as long as ctx lasts, for one of the manager's Persona Link
-// desktops with notifications showing to have confirmed card (its interaction id) on its live link, and then for the
-// desktops reporter to have sent the hub the desktops as they are, so it knows that desktop before the push comes (a
-// report the hub did not take leaves it without that desktop: it then pushes the phone). False at once while there is no
-// such desktop, a desktop that stops counting while it waits does not end the wait, and when the time is up or ctx ends: the push then goes to the phone
+// desktops with notifications showing to have confirmed card (its interaction id) on its live link, then for the
+// desktops reporter to have dealt with the desktops as they are, and then checks that the same link still is such a
+// desktop with that confirmation: a link replaced or stopping meanwhile does not count, and the wait goes on for a
+// confirmation that does. False at once while there is no such desktop (one that stops counting while it waits does
+// not end the wait), and when the time is up or ctx ends: the push then goes to the phone
 // (assistantwire.Notification.LinkCovered). A confirmation that came on an earlier link, or on a link whose computer is
-// no desktop now, does not count.
+// no desktop now, does not count. The app's confirmation is what lets the hub mute the phone at all; the hub then
+// mutes only for a Persona Link desktop it has a valid record of, and pushes the phone when it has none (a report it
+// did not take included).
 func (d *Devices) LinkRang(ctx context.Context, card string, within time.Duration) bool {
 	ctx, cancel := context.WithTimeout(ctx, within)
 	defer cancel()
 	for first := true; ; first = false {
 		wake := d.deliveries()
-		now, desktops, rang := time.Now(), false, false
-		for _, m := range d.cfgMachines() {
-			p, l := m.desktop(now)
-			if p == nil || !p.Notifies {
-				continue
+		l, desktops := d.rangOn(card, time.Now(), nil)
+		if l != nil {
+			if !d.desktopsReported(ctx, d.requestDesktops(false)) {
+				return false
 			}
-			desktops = true
-			l.heldMu.Lock()
-			rang = slices.Contains(l.held.rang, card)
-			l.heldMu.Unlock()
-			if rang {
-				break
+			if again, _ := d.rangOn(card, time.Now(), l); again != nil {
+				return true
 			}
-		}
-		if rang {
-			return d.desktopsReported(ctx, d.requestDesktops(false))
+			continue
 		}
 		if !desktops && first {
 			return false

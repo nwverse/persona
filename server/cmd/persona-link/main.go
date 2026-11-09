@@ -349,8 +349,8 @@ func readParent(r io.Reader, app *fromApp) {
 	for sc.Scan() {
 		if p, ok := link.ParsePresenceLine(sc.Bytes()); ok {
 			app.presence.Set(p, time.Now())
-		} else if card, ok := link.ParseRangLine(sc.Bytes()); ok {
-			app.confirms.Push(card)
+		} else if c, ok := link.ParseRangLine(sc.Bytes()); ok {
+			app.confirms.Push(c)
 		}
 	}
 	_, _ = io.Copy(io.Discard, r)

@@ -43,11 +43,11 @@ func TestReadParentTakesPresenceUntilStdinEnds(t *testing.T) {
 	eventually(func() bool { return latest().Active })
 	write(`{"presence":{"active":false,"notifies":true}}` + "\n")
 	eventually(func() bool { p := latest(); return !p.Active && p.Notifies })
-	write(`{"rang":{"interaction_id":"ix-1"}}` + "\n")
+	write(`{"rang":{"interaction_id":"ix-1","conn":2}}` + "\n")
 	select {
-	case card := <-confirms.C():
-		if card != "ix-1" {
-			t.Fatalf("confirmation of %q", card)
+	case c := <-confirms.C():
+		if c != (link.Confirm{Card: "ix-1", Conn: 2}) {
+			t.Fatalf("confirmation %+v", c)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the app's confirmation was not queued for the link")

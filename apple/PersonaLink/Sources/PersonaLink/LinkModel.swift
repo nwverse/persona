@@ -47,6 +47,9 @@ struct LinkStatus: Decodable, Equatable {
     /// The hub's "Needs you" summary (Attention.swift); helpers and hubs that do not send one leave it out. Decoded
     /// apart from the rest (`decode`), so a summary that does not decode loses only itself.
     var attention: LinkAttention? = nil
+    /// While connected (active mode): which of the helper's links this is. A confirmation names the link its card's
+    /// summary came on, and the helper passes it on to that link only; older helpers say nothing.
+    var conn: UInt64?
 
     var passive: Bool { mode == "passive" }
     var systemTrust: Bool { trust == "system" }
@@ -57,7 +60,7 @@ struct LinkStatus: Decodable, Equatable {
     var renamable: Bool { !passive && state == "connected" && !(machineName ?? "").isEmpty && pending != true }
 
     enum CodingKeys: String, CodingKey {
-        case state, machine, address, kind, since, node, error, retry, endpoints, mode, listen, addrs, from, trust, pending
+        case state, machine, address, kind, since, node, error, retry, endpoints, mode, listen, addrs, from, trust, pending, conn
         case nodeError = "node_error"
         case hubName = "hub_name"
         case meshHubs = "mesh_hubs"
@@ -314,7 +317,9 @@ enum LinkText {
                                       self?.notificationsOff = !access.allowed
                                       self?.presence.receive(.notifies(access.shows))
                                   },
-                                  confirm: { [weak self] card in self?.writeHelper(Presence.rangLine(card), what: "confirmation") })
+                                  confirm: { [weak self] card, conn in
+                                      self?.writeHelper(Presence.rangLine(card, conn: conn), what: "confirmation")
+                                  })
         readConfig()
         startHelper()
         presence.start(write: { [weak self] line in self?.writeHelper(line, what: "presence") })
@@ -414,7 +419,7 @@ enum LinkText {
 
     /// The helper's status changed: the notifications follow its summary.
     private func setStatus(_ s: LinkStatus?) {
-        if s?.attention != status?.attention { LinkNotifier.shared.apply(s?.attention) }
+        if s?.attention != status?.attention { LinkNotifier.shared.apply(s?.attention, conn: s?.conn) }
         status = s
     }
 
