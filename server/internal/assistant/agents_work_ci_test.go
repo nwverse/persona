@@ -1088,7 +1088,7 @@ func TestCICompletedTodoGuardsAfterRetirementWriteFailure(t *testing.T) {
 	// A later local TurnStarted can work independently, even if the old todo
 	// remains closed and the node clock differs.
 	restarted.workStarted(ctx, "box", "ci", time.Now().UTC())
-	closed, err := restarted.ciClosedTodo(ctx, "box", "ci")
+	closed, _, err := restarted.ciClosedTodo(ctx, "box", "ci", "", proto.WorkState{}, time.Time{})
 	if err != nil || closed {
 		t.Fatalf("new local turn blocked: %v %v", closed, err)
 	}
@@ -1098,7 +1098,7 @@ func TestCICompletedTodoGuardsAfterRetirementWriteFailure(t *testing.T) {
 	restarted.todos.mu.Lock()
 	restarted.todos.activeBySession[[2]string{"box", "ci"}] = "reopened"
 	restarted.todos.mu.Unlock()
-	if closed, err = restarted.ciClosedTodo(ctx, "box", "ci"); err != nil || closed {
+	if closed, _, err = restarted.ciClosedTodo(ctx, "box", "ci", "", proto.WorkState{}, time.Time{}); err != nil || closed {
 		t.Fatalf("reopened todo blocked: %v %v", closed, err)
 	}
 }
@@ -1206,4 +1206,102 @@ func TestCIWatchClosedTodoStaysQuietAfterTriage(t *testing.T) {
 		t.Fatalf("closed todo was retried: %+v", got)
 	}
 	s.waitWorkEvents()
+}
+
+func TestCIWatchNewTurnProofSurvivesTwoRestarts(t *testing.T) {
+	for _, observedStart := range []bool{false, true} {
+		name := "missed start"
+		if observedStart {
+			name = "observed start"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFakeHub()
+			st := &restoredTodoCIStore{doneAt: time.Now().UTC().Add(-5 * time.Minute)}
+			c := stopped("ci", "CI https://github.com/example/repo/pull/12")
+			c.UpdatedAt = time.Now().UTC().Add(time.Hour)
+			f.sessions["box"] = []proto.Session{c}
+			f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+			s := newServiceOn(t, f, st)
+			if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+				t.Fatal(err)
+			}
+			s.retireTodoWork([2]string{"box", "ci"})
+			old := entryOf(t, s, "ci")
+			if old.Work.RetiredTurnAt == nil {
+				t.Fatal("node turn not recorded")
+			}
+			// First restart: a genuinely new node turn ended while the manager
+			// was away, or its new start was observed locally.
+			first := newServiceOn(t, f, st)
+			if !first.loadWork(ctx) {
+				t.Fatal("first restart failed")
+			}
+			if observedStart {
+				first.workStarted(ctx, "box", "ci", time.Now().UTC())
+			}
+			c.UpdatedAt = c.UpdatedAt.Add(time.Minute)
+			f.setSessions("box", c)
+			first.workTurnSettled(ctx, "box", "ci")
+			watched := entryOf(t, first, "ci")
+			if watched.Work.CI == nil || watched.Work.CI.TodoProof == "" || watched.WakeAt == nil {
+				t.Fatalf("new turn lacked durable proof: %+v", watched)
+			}
+			// Match the database's JSON round trip instead of sharing a pointer
+			// with the in-memory store across the simulated process restart.
+			encoded, err := json.Marshal(watched.Work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var persisted proto.WorkState
+			if err := json.Unmarshal(encoded, &persisted); err != nil {
+				t.Fatal(err)
+			}
+			st.wmu.Lock()
+			row := st.rows[[2]string{"box", "ci"}]
+			row.Work = persisted
+			st.rows[[2]string{"box", "ci"}] = row
+			st.wmu.Unlock()
+			// Second restart loses the in-memory started map, but the proof is
+			// bound to this watch and the same persisted todo version.
+			second := newServiceOn(t, f, st)
+			if !second.loadWork(ctx) {
+				t.Fatal("second restart failed")
+			}
+			calls := 0
+			second.ext = fakeCIExtensions{call: func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error) {
+				calls++
+				return github.PRCheckSnapshot{Count: 1, Pending: true, Fingerprint: "pending"}, time.Time{}, true, nil
+			}}
+			second.workWake(ctx, second.newWorkView(ctx), [2]string{"box", "ci"}, time.Now())
+			got := entryOf(t, second, "ci")
+			if calls != 1 || got.Work.CI == nil || got.WakeAt == nil {
+				t.Fatalf("watch lost after second restart: calls %d, %+v", calls, got)
+			}
+			// A reopen invalidates the proof even if a completion has the same
+			// wall-clock timestamp, and a later completion invalidates it too.
+			reopened := st.doneAt.Add(time.Second)
+			second.todos.mu.Lock()
+			second.todos.todos["done"].ReopenedAt = &reopened
+			second.todos.mu.Unlock()
+			closed, _, err := second.ciClosedTodo(ctx, "box", "ci", got.Work.CI.TodoProof, proto.WorkState{}, time.Time{})
+			if err != nil || !closed {
+				t.Fatalf("old proof accepted after reopen: %v %v", closed, err)
+			}
+			second.todos.mu.Lock()
+			second.todos.todos["done"].ReopenedAt = nil
+			second.todos.mu.Unlock()
+			newer := st.doneAt.Add(10 * time.Minute)
+			second.todos.mu.Lock()
+			second.todos.todos["done"].DoneAt = &newer
+			second.todos.mu.Unlock()
+			second.workWake(ctx, second.newWorkView(ctx), [2]string{"box", "ci"}, time.Now())
+			got = entryOf(t, second, "ci")
+			if got.Work.CI != nil || got.WakeAt != nil {
+				t.Fatalf("older proof survived a new completion: %+v", got)
+			}
+			first.waitWorkEvents()
+			second.waitWorkEvents()
+		})
+	}
 }

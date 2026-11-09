@@ -66,6 +66,7 @@ type WorkCI struct {
 	Polls      int       `json:"polls,omitempty"`
 	Observed   string    `json:"observed,omitempty"`
 	ObservedAt time.Time `json:"observed_at,omitzero"`
+	TodoProof  string    `json:"todo_proof,omitempty"` // closed todo versions checked for this turn
 	Message    string    `json:"message,omitempty"`
 }
 

@@ -188,7 +188,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		return
 	}
 	if e.Work.CI != nil {
-		closed, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID)
+		closed, _, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID, e.Work.CI.TodoProof, proto.WorkState{}, time.Time{})
 		if err != nil || closed {
 			current := e
 			if err != nil {

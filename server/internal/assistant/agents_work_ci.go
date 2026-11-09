@@ -309,32 +309,59 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 	return workT(s.lang(ctx), "ci_failed", i18n.Args{"checks": ciCheckNames(result.failures)}), false
 }
 
-// ciClosedTodo detects a durable retirement even if its work-state write failed
-// before a restart. A later locally observed turn start or a reopened todo wins.
-func (s *Service) ciClosedTodo(ctx context.Context, machine, sid string) (bool, error) {
+// ciClosedTodo checks durable retirements and returns a proof of the exact
+// closed-todo versions that this turn was allowed to follow. Only a watch's own
+// persisted proof may be reused; a newly finished todo invalidates it.
+func (s *Service) ciClosedTodo(ctx context.Context, machine, sid, existingProof string, prior proto.WorkState, turn time.Time) (bool, string, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return false, err
+		return false, "", err
 	}
 	key := [2]string{machine, sid}
 	s.work.mu.Lock()
 	started := s.work.started[key]
 	s.work.mu.Unlock()
 	s.todos.mu.RLock()
-	defer s.todos.mu.RUnlock()
 	if _, open := s.todos.activeBySession[key]; open {
-		return false, nil
+		s.todos.mu.RUnlock()
+		return false, "", nil
 	}
+	var identities []string
+	var latest time.Time
 	for _, todo := range s.todos.todos {
-		if todo.DoneAt == nil || started.After(*todo.DoneAt) {
+		if todo.DoneAt == nil {
 			continue
 		}
 		for _, agent := range todo.Agents {
 			if agent.MachineID == machine && agent.SessionID == sid && agent.ReleasedAt == nil && agent.DismissedAt == nil {
-				return true, nil
+				reopened := ""
+				if todo.ReopenedAt != nil {
+					reopened = todo.ReopenedAt.UTC().Format(time.RFC3339Nano)
+				}
+				identities = append(identities, fmt.Sprintf("%q:%s:%s", todo.ID, todo.DoneAt.UTC().Format(time.RFC3339Nano), reopened))
+				if todo.DoneAt.After(latest) {
+					latest = *todo.DoneAt
+				}
+				break
 			}
 		}
 	}
-	return false, nil
+	s.todos.mu.RUnlock()
+	if len(identities) == 0 {
+		return false, "", nil
+	}
+	sort.Strings(identities)
+	hash := sha256.Sum256([]byte(strings.Join(identities, "\x00")))
+	proof := fmt.Sprintf("%x", hash)
+	if existingProof == proof || started.After(latest) {
+		return false, proof, nil
+	}
+	// RetiredAt and todo.DoneAt both come from the manager; the two turn
+	// timestamps both come from the node. Never compare across these clocks.
+	if prior.RetiredAt != nil && !prior.RetiredAt.Before(latest) && prior.RetiredTurnAt != nil &&
+		!turn.IsZero() && turn.After(*prior.RetiredTurnAt) && !sameTurn(proto.Session{UpdatedAt: turn}, *prior.RetiredTurnAt) {
+		return false, proof, nil
+	}
+	return true, "", nil
 }
 
 // ciCheckNames are untrusted external data. Quote and escape each bounded name
@@ -430,7 +457,7 @@ func (s *Service) deliverCI(ctx context.Context, e db.SessionWork, now time.Time
 	if err != nil || guest || s.isWorkMachine(e.MachineID) {
 		return
 	}
-	if closed, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID); err != nil || closed {
+	if closed, _, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID, e.Work.CI.TodoProof, proto.WorkState{}, time.Time{}); err != nil || closed {
 		return
 	}
 	sum := sha256.Sum256([]byte(e.MachineID + "\x00" + e.SessionID + "\x00" + e.TurnAt.UTC().Format(time.RFC3339Nano)))
