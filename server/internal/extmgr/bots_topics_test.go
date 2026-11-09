@@ -496,9 +496,9 @@ func TestTopicsCommandText(t *testing.T) {
 		{"/topics now", false, false}, {"/topics off now", false, false}, {"/topicsoff", false, false}, {"topics", false, false},
 		{"@_user_1 请 /topics", false, false}, {"/new", false, false}, {"", false, false},
 	} {
-		on, isIt := topicsCommand(c.text, bot)
-		if on != c.on || isIt != c.isIt {
-			t.Errorf("topicsCommand(%q) = %v, %v; want %v, %v", c.text, on, isIt, c.on, c.isIt)
+		cmd, isIt := topicsCmd(c.text, bot)
+		if on := cmd == topicsOn || cmd == topicsHome; on != c.on || isIt != c.isIt { // "home" is on too
+			t.Errorf("topicsCmd(%q) on = %v, %v; want %v, %v", c.text, on, isIt, c.on, c.isIt)
 		}
 	}
 }

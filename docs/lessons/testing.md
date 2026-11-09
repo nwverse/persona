@@ -1,5 +1,10 @@
 # Lessons: testing and validation
 
+- UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
+  notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
+  language's permission button, assert that the summary and reply are hittable, check for system alerts before
+  capturing, and actually inspect every image before publication.
+
 - A second failed start inside the automatic launcher-health throttle does not schedule another probe (#2600). A retry fixture that models recovery must invoke the supported explicit health check and observe its passing record; polling the record alone cannot create recovery. Keep the production throttle, terminal-only failure rules, and retry assertions unchanged.
 
 - On Linux, replacing a running executable requires a new file and rename; direct writes fail with `ETXTBSY`. Use a ready handshake and reap the fixture process to test the real overlap.
@@ -712,6 +717,10 @@ On a Linux development machine without the Android SDK or Xcode, pure-logic clie
 The Mac-only `test_hub_restart_mac.py` fixture used an empty, non-executable `personad` file. After blue-green switching was added, `hub-systemd.sh` executed it before restarting launchd. With `set -e`, macOS bash 3.2 returned 1 for `"$f" … || rc=$?`, which the script interpreted as a failed switch, rather than 126 for an executable failure. Bash 5 returned 126.
 
 Use an executable fixture that logs calls and returns the documented result: 0 for a successful switch, 3 for no edge to switch. Assert that success avoids launchd and that the no-edge case restarts only the hub agent, skipping node agents. Run this Mac-only suite on macOS; Linux CI skips it: `cd scripts/test && python3 -B -m unittest -v test_hub_restart_mac`.
+
+## macOS awk stops on bytes that are not UTF-8 (2026-11-10, #2722)
+
+In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first invalid byte sequence with `towc: multibyte conversion failure`, prints the record's raw bytes and exits 2; gawk and mawk on Linux read on, so CI never sees it. `install.sh` read every launchd file with awk, and vendors often ship binary property lists: each printed its bytes, and the Python tests reading the script's output with `text=True` crashed with `UnicodeDecodeError`. An awk that reads files it did not write runs with `LC_ALL=C`; plain substring matches mean the same in bytes. The Mac in hand may have no binary plist at all: the regression test writes one with `plistlib` (`FMT_BINARY`) into its own home.
 
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 

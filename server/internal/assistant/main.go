@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -498,7 +497,7 @@ func readHubConfig() (hubConfig, error) {
 func externalHub(deploy, listen string) (hub, fingerprint string, err error) {
 	hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
 	if hub == "" {
-		hub = localHubURL(listen)
+		hub = managerconf.LocalHubURL(listen)
 	}
 	if deploy == "child" {
 		return hub, "", nil
@@ -515,18 +514,6 @@ func externalHub(deploy, listen string) (hub, fingerprint string, err error) {
 		return "", "", fmt.Errorf("PERSONA_ASSISTANT_FINGERPRINT pins an https hub, and PERSONA_ASSISTANT_HUB is %q", hub)
 	}
 	return hub, fingerprint, nil
-}
-
-// localHubURL is the hub on this machine, from its listen address.
-func localHubURL(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return "http://127.0.0.1:18660"
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, port)
 }
 
 // errorTee is the manager process's log writer: lines go to stderr, and its error lines become the manager's error

@@ -168,6 +168,7 @@
     <string name="inbox_mute_tag_sender">发件人</string>
     <string name="inbox_mutes_title">已静音</string>
     <string name="inbox_mutes_failed">读不到已静音的列表</string>
+    <string name="inbox_mutes_offline">离线中：它回来后这里会显示它的静音。</string>
     <string name="inbox_mutes_empty_title">没有静音的</string>
     <string name="inbox_mutes_empty_text">在收件箱里长按一条，可以静音它的仓库、会话或发件人。</string>
     <string name="inbox_unmute">取消静音</string>
@@ -199,6 +200,7 @@
     <string name="inbox_policy_failed">规则没保存成功：%1$s</string>
     <string name="inbox_rules_title">规则</string>
     <string name="inbox_rules_failed">规则没加载出来：%1$s</string>
+    <string name="inbox_rules_offline">离线中：它回来后这里会显示它的规则。</string>
     <string name="inbox_rules_empty_title">还没有规则</string>
     <string name="inbox_rules_empty_text">在收件箱里长按一条内容，为它的会话、发件人或仓库设规则。</string>
     <string name="inbox_rules_remove_failed">规则没移除成功：%1$s</string>

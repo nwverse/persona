@@ -190,7 +190,7 @@ Any account-pool gateway that wants to feed usage into the sidebar implements on
 
 ## Who owns this (2026-11-05)
 
-User decision: the hub is only a communication center, and computers belong to the manager (`docs/server/machines.md` ("Who connects computers")), so subscription usage moved to the manager as-is, with no design change; the routes, fields and errors the App sees are unchanged.
+User decision: the hub is only a communication center, and computers belong to the manager (`docs/server/machines.md` ("Who connects to computers")), so subscription usage moved to the manager as-is, with no design change; the routes, fields and errors the App sees are unchanged.
 
 | Part | Code |
 | --- | --- |
