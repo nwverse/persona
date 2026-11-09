@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,6 +12,41 @@ import (
 	"testing"
 	"time"
 )
+
+// Names lists every template, parsing all of them.
+func Names() []string {
+	if err := templates.parseAll(); err != nil {
+		panic(fmt.Sprintf("prompts: %v", err))
+	}
+	var out []string
+	for _, t := range templates.root.Templates() {
+		if t.Name() != "" {
+			out = append(out, t.Name())
+		}
+	}
+	return out
+}
+
+// parseAll adds every template file to the set.
+func (s *templateSet) parseAll() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") || strings.HasPrefix(path, "mcp/") {
+			return err // mcp/ holds tool definitions, not templates (mcp.go)
+		}
+		return s.parse(strings.TrimSuffix(path, ".md"))
+	})
+}
+
+// ToolNames lists every MCP tool defined here.
+func ToolNames() []string {
+	out := make([]string, 0, len(mcpTools()))
+	for n := range mcpTools() {
+		out = append(out, n)
+	}
+	return out
+}
 
 // Each prompt's output is pinned by the golden tests of the package that uses it (hub, kb, node: *_golden_test.go);
 // these check the package's own rules.
