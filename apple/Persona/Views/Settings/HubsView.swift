@@ -53,21 +53,36 @@ struct HubsView: View {
         } message: {
             Text("Only changes the name on this device. Leave empty to use the hub's own name.")
         }
-        .confirmationDialog(removingGroup.map { String(localized: "Disconnect “\(model.groupName($0))”?") } ?? "", isPresented: Binding(
-            get: { removingGroup != nil }, set: { if !$0 { removingGroup = nil } }
-        ), titleVisibility: .visible, presenting: removingGroup) { g in
+        .confirmationDialog(removingGroupTitle, isPresented: removingGroupShown, titleVisibility: .visible, presenting: removingGroup) { g in
             Button("Disconnect This Group", role: .destructive) { removingGroup = nil; Task { await model.disconnectGroup(g) } }
         } message: { g in
             Text(model.groupIDs.count > 1 ? String(localized: "This group's machines, agents, and cached chats are removed from this device; other groups aren't affected. To use it again, pair again.")
                                          : String(localized: "After disconnecting, you'll need to scan the code to pair again."))
         }
-        .confirmationDialog(removingHub.map { String(localized: "Disconnect “\($0.displayName)”?") } ?? "", isPresented: Binding(
-            get: { removingHub != nil }, set: { if !$0 { removingHub = nil } }
-        ), titleVisibility: .visible, presenting: removingHub) { h in
+        .confirmationDialog(removingHubTitle, isPresented: removingHubShown, titleVisibility: .visible, presenting: removingHub) { h in
             Button("Disconnect This Hub", role: .destructive) { removingHub = nil; Task { await model.disconnectHub(h.id) } }
         } message: { _ in
             Text("Only this hub is disconnected; the group stays connected through its other hubs.")
         }
+    }
+
+    // The disconnect dialogs' titles and bindings stay out of `body`, which is near the type checker's time limit.
+    private var removingGroupTitle: String {
+        guard let g = removingGroup else { return "" }
+        return String(localized: "Disconnect “\(model.groupName(g))”?")
+    }
+
+    private var removingGroupShown: Binding<Bool> {
+        Binding(get: { removingGroup != nil }, set: { if !$0 { removingGroup = nil } })
+    }
+
+    private var removingHubTitle: String {
+        guard let h = removingHub else { return "" }
+        return String(localized: "Disconnect “\(h.displayName)”?")
+    }
+
+    private var removingHubShown: Binding<Bool> {
+        Binding(get: { removingHub != nil }, set: { if !$0 { removingHub = nil } })
     }
 
     @ViewBuilder private func groupRows(_ g: String) -> some View {
