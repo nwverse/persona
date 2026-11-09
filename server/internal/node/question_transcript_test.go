@@ -106,6 +106,30 @@ func TestClaudeQuestionResumeAfterNodeReplacementSeesTerminalResult(t *testing.T
 	}
 }
 
+// A replay can restore the attempt but lose PostToolUse; the unique transcript result still completes it.
+func TestClaudeQuestionResumeWithPairStillReadsTerminalResult(t *testing.T) {
+	n := codexTestNode(t)
+	h := withCancelHub(t, n)
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	path := writeQuestionTranscript(t, input, "toolu_paired", true)
+	pre := hookInput{HookEventName: "PreToolUse", SessionID: decidedSession, ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_paired", ToolInput: input, TranscriptPath: path}
+	n.questions.before(pre, time.Now())
+	permission := questionHookInput("PermissionRequest", input, "", path)
+	var in hookInput
+	_ = json.Unmarshal(permission, &in)
+	n.questions.pair(in, "a1", false, time.Now()) // replay restored Pre + Permission, but Post was lost
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	out, err := n.handleHook(ctx, sockRequest{Input: permission, Attempt: "a1", Resume: true})
+	waitFor(t, "the paired restored card to be withdrawn", func() bool { _, cancelled := h.counts(); return cancelled == 1 })
+	asked, cancelled := h.counts()
+	if err != nil || out != nil || asked != 0 || cancelled != 1 {
+		t.Fatalf("the existing pair hid the transcript completion: %v, %v (asked=%d cancelled=%d)", out, err, asked, cancelled)
+	}
+}
+
 // A completed older question and an outstanding identical one do not say which call a resumed attempt belongs to.
 func TestClaudeQuestionResumeWithIdenticalTranscriptCallsDoesNotGuess(t *testing.T) {
 	n := codexTestNode(t)

@@ -13,11 +13,12 @@ import (
 // omits tool_use_id, so PreToolUse supplies it and attempt keeps it across reconnects. PostToolUse completes only the
 // same id: a late receipt for one identical question can never cancel the next (#2382).
 type questionCalls struct {
-	mu        sync.Mutex
-	pending   map[string][]questionID      // PreToolUse ids awaiting PermissionRequest, by permissionKey
-	attempts  map[string]questionID        // assigned ids, by permissionKey + hook attempt
-	waiting   map[string][]*questionWaiter // live PermissionRequests, by permissionKey
-	completed map[string]time.Time         // PostToolUse receipts, by permissionKey + toolUseID
+	mu         sync.Mutex
+	pending    map[string][]questionID      // PreToolUse ids awaiting PermissionRequest, by permissionKey
+	attempts   map[string]questionID        // assigned ids, by permissionKey + hook attempt
+	waiting    map[string][]*questionWaiter // live PermissionRequests, by permissionKey
+	completed  map[string]time.Time         // PostToolUse receipts, by permissionKey + toolUseID
+	handedBack map[string]time.Time         // ambiguous attempts handed to the terminal, by permissionKey + attempt
 }
 
 type questionID struct {
@@ -71,6 +72,11 @@ func (q *questionCalls) forget(now time.Time) {
 			delete(q.completed, key)
 		}
 	}
+	for key, at := range q.handedBack {
+		if questionExpired(at, now) {
+			delete(q.handedBack, key)
+		}
+	}
 }
 
 // before remembers a PreToolUse id. Duplicate reports of the same call share one entry.
@@ -111,6 +117,9 @@ func (q *questionCalls) pair(in hookInput, attempt string, resume bool, now time
 	if attemptKey != "" {
 		if id, ok := q.attempts[attemptKey]; ok {
 			return id.id
+		}
+		if _, ok := q.handedBack[attemptKey]; ok {
+			return ""
 		}
 	}
 	if resume {
@@ -157,13 +166,25 @@ func (q *questionCalls) assignLocked(key, attemptKey, id string, now time.Time) 
 	}
 }
 
-func (q *questionCalls) hasPair(in hookInput, attempt string) bool {
+// handBack atomically decides an ambiguous attempt. An original pair that won the race keeps its card; otherwise the
+// decision is remembered so the original request cannot create a phone wait after the resumed one handed back.
+func (q *questionCalls) handBack(in hookInput, attempt string, now time.Time) bool {
 	key := permissionKey(in)
+	attemptKey := questionAttemptKey(key, attempt)
+	if attemptKey == "" {
+		return false
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.forget(time.Now())
-	_, ok := q.attempts[questionAttemptKey(key, attempt)]
-	return ok
+	q.forget(now)
+	if _, ok := q.attempts[attemptKey]; ok {
+		return false
+	}
+	if q.handedBack == nil {
+		q.handedBack = map[string]time.Time{}
+	}
+	q.handedBack[attemptKey] = now
+	return true
 }
 
 // restore installs a pairing recovered from the transcript after the Node that saw PreToolUse was replaced.
@@ -173,7 +194,13 @@ func (q *questionCalls) restore(in hookInput, attempt, id string, completed bool
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.forget(now)
-	if _, ok := q.attempts[attemptKey]; ok {
+	if _, ok := q.handedBack[attemptKey]; ok {
+		return
+	}
+	if assigned, ok := q.attempts[attemptKey]; ok {
+		if completed && assigned.id == id {
+			q.completeLocked(key, id, now)
+		}
 		return
 	}
 	if completed {
@@ -200,7 +227,9 @@ func (q *questionCalls) watch(ctx context.Context, in hookInput, attempt string,
 			w.id = assigned.id
 		}
 	}
-	if w.id != "" {
+	if _, ok := q.handedBack[attemptKey]; ok {
+		w.answered = true
+	} else if w.id != "" {
 		if _, ok := q.completed[key+"\x00"+w.id]; ok {
 			w.answered = true
 		}
@@ -234,6 +263,11 @@ func (q *questionCalls) complete(in hookInput, now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.forget(now)
+	q.completeLocked(key, id, now)
+}
+
+// completeLocked records one exact completion and releases all of its overlapping waiters. q.mu is held.
+func (q *questionCalls) completeLocked(key, id string, now time.Time) {
 	for _, w := range q.waiting[key] {
 		if !w.answered && w.id == id {
 			w.answered = true

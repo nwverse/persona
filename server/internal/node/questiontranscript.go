@@ -17,12 +17,12 @@ type transcriptQuestion struct {
 // answered in the terminal, its tool_result. The return reports ambiguity: the caller hands that attempt back to the
 // terminal instead of waiting for a PostToolUse that may never come.
 func (n *Node) restoreQuestionFromTranscript(in hookInput, attempt string, now time.Time) bool {
-	if attempt == "" || n.questions.hasPair(in, attempt) {
+	if attempt == "" {
 		return false
 	}
 	recovered := n.questionFromTranscript(in)
 	if recovered.ambiguous {
-		return true
+		return n.questions.handBack(in, attempt, now)
 	}
 	if recovered.id != "" {
 		n.questions.restore(in, attempt, recovered.id, recovered.completed, now)
