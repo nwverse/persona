@@ -686,6 +686,11 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// The main checkout of the repository `cwd` belongs to, when its host knows it (`repo_root`, #2840: Paseo keeps its
     /// worktrees under its own folder, whose paths name no repository). Group by repository uses it (`RepoPlace`).
     var repoRoot: String? = nil
+    /// The top of the git working tree `cwd` is in (`repoRoot` for the main checkout) and the branch checked out there,
+    /// as the node reads them (`worktree`, `branch`, #1805); nil from an older node. By Repository lists machine →
+    /// project → branch → agents with them (`RepoPlace`).
+    var worktree: String? = nil
+    var branch: String? = nil
     var state: AgentState
     var seenAt: Date?
     /// When the hub saw it enter its current state (`state_since`).
@@ -900,7 +905,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case permissionMode = "permission_mode"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
-        case repoRoot = "repo_root"
+        case repoRoot = "repo_root", worktree, branch
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
              workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
              assistantSpace = "space",
@@ -968,6 +973,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         slotIndex = try c.decodeIfPresent(Int.self, forKey: .slotIndex)
         paneIndex = try c.decodeIfPresent(Int.self, forKey: .paneIndex)
         repoRoot = try c.decodeIfPresent(String.self, forKey: .repoRoot)
+        worktree = try c.decodeIfPresent(String.self, forKey: .worktree)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
         seenAt = try c.decodeIfPresent(Date.self, forKey: .seenAt)
         stateSince = try c.decodeIfPresent(Date.self, forKey: .stateSince)
         queued = try c.decodeIfPresent([String].self, forKey: .queued)
