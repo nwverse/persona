@@ -97,6 +97,22 @@ import Testing
         #expect(ChatLines.hidesLiveSupervision(lines, open: []))
     }
 
+    @Test func automaticLiveWorkExpansionNeverOpensAQuietRecord() {
+        var call = item(2, kind: .toolUse)
+        call.toolName = "Bash"
+        call.toolUseID = "synthetic-live-call"
+        let blocks = ChatStore.rebuild([input(), call], settled: nil).blocks
+        guard case .turn(let turn)? = blocks.last else { return }
+        var renderer = ChatLines(openWork: [], opensLive: true, foldSupervision: true, active: true)
+        let folded = renderer.build(blocks, live: turn.id)
+        #expect(folded.count == 1)
+        #expect(ChatLines.hidesLiveSupervision(folded, open: []))
+        guard let header = quiet(folded) else { return }
+        renderer.openSupervision = [header.id]
+        let expanded = renderer.build(blocks, live: turn.id)
+        #expect(expanded.contains { if case .workStep(_, .step(.call(let c)), _) = $0.content { c.id == call.id } else { false } })
+    }
+
     @Test func agentConversationDoesNotAdoptMainConversationFolding() {
         let blocks = ChatStore.rebuild([input(), item(2)], settled: nil).blocks
         let baseline = ChatLines(openWork: []).build(blocks, live: nil)

@@ -51,7 +51,8 @@ Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "
   Recaps can close a turn without ending its supervision round; only the next actual input does that. A queued genuine
   input must not be absorbed into the quiet round. Preserve successful visibility evidence when overlapping raw pages
   replace server folds, persist that client-side evidence and invalidate caches when adding the fields. Structure-only
-  chat diagnostics must also handle the new line kinds without logging the input or answer.
+  chat diagnostics must also handle the new line kinds without logging the input or answer. Automatic live-work
+  expansion belongs inside an opened supervision trace; it must never open the quiet round itself.
 
 ## A tail window may contain no words at all (2026-11-04, #1163)
 
