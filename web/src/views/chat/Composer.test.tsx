@@ -416,6 +416,20 @@ describe("Composer Edit over unsent words (#2450)", () => {
     edit("the sent message ");
     expect(undoToast()).toBeUndefined();
   });
+
+  it.each([
+    ["a quote", { text: "the quoted reply", from: "Claude" }],
+    ["a comment card", { text: "fetchAll", comment: { body: "rename fetchAll before merging" } }],
+  ])("offers Undo for %s on the bar when the box is empty", (_, quote) => {
+    render("e");
+    act(() => void addQuote("e", quote, false));
+    const quotes = getQuotes("e").list;
+    edit("the sent message");
+    expect(getQuotes("e").list).toEqual([]);
+    act(() => undoToast()![2]!.run());
+    expect(getQuotes("e").list).toEqual(quotes);
+    expect(box().value).toBe("");
+  });
 });
 
 // ChatView interrupts a working agent on an Escape that reaches the window: an Escape the box uses for itself

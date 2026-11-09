@@ -15,7 +15,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 
 - An action that ends a card leaves the same receipt an answer does; a card that just vanishes reads as a failure. Name it in words on its own row, not an icon in the head, so it is not mistaken for "close".
 - When the composer says Working…, Interrupt and Esc must work too: derive both from the same condition (`state === "working" || awaiting`), not one from `state` alone.
-- Do not put a native `confirm()` in front of a reversible step such as replacing the draft: replace at once and offer Undo that restores the text, its quotes and the caret.
+- Do not put a native `confirm()` in front of a reversible step such as replacing the draft: replace at once and offer Undo that restores the text, its quotes and the caret. Offer it for everything the step drops: a box with no text but a quote or a comment card on its bar loses the user's own writing too.
 - An older-hub fallback that re-reads on an event the older hub never sends stays stale. Re-read when the data it reads first arrives (here: the chat's row in the store), and stop watching once it has.
 
 ## Cards in a scrolling flex box: `shrink-0`, and `overflow-clip` for sticky (#2017)
