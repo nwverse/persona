@@ -30,6 +30,10 @@ internal interface AgentCreationStore {
     suspend fun saveDefaults(scope: String, machine: String, defaults: AgentDefaults)
     suspend fun pending(scope: String): AgentStartOperation?
     suspend fun pending(scope: String, value: AgentStartOperation?)
+    /** New Agent's recent setups on this hub, newest first (#2134, [RecentSetups]); a store that keeps none has none. */
+    suspend fun recentSetups(scope: String): List<RecentSetup> = emptyList()
+    /** Changes the recent setups in one write and gives back what is kept. */
+    suspend fun updateRecentSetups(scope: String, change: (List<RecentSetup>) -> List<RecentSetup>): List<RecentSetup> = emptyList()
 }
 
 internal class AgentCreationPreferences(
@@ -57,6 +61,18 @@ internal class AgentCreationPreferences(
             val key = stringPreferencesKey("$scope/pending")
             if (value == null) p.remove(key) else p[key] = encodeOperation(value)
         }
+    }
+    /** One JSON string under `$scope/recent`, next to the machines' defaults. */
+    override suspend fun recentSetups(scope: String): List<RecentSetup> =
+        RecentSetups.decode(store.data.first()[stringPreferencesKey("$scope/recent")])
+    override suspend fun updateRecentSetups(scope: String, change: (List<RecentSetup>) -> List<RecentSetup>): List<RecentSetup> {
+        var kept = emptyList<RecentSetup>()
+        store.edit { p ->
+            val key = stringPreferencesKey("$scope/recent")
+            kept = change(RecentSetups.decode(p[key]))
+            if (kept.isEmpty()) p.remove(key) else p[key] = RecentSetups.encode(kept)
+        }
+        return kept
     }
 }
 
