@@ -81,5 +81,7 @@
   "archived_notice": "This agent is archived. Restore it to bring it back to Agents; a new message brings it back too.",
   "restore": "Restore",
   "connecting": "Connecting…",
-  "connecting_placeholder": "Connecting… you can start typing"
+  "connecting_placeholder": "Connecting… you can start typing",
+  "session_gone": "Unavailable",
+  "session_gone_placeholder": "This conversation is no longer available"
 }

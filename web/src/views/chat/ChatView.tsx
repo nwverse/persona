@@ -316,13 +316,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
-  // No row for this chat yet is not "you may not write": the box takes typing and says it is connecting. Only the main
-  // conversation may already send; every other chat waits for its row, because the node would start an Agent for an id
-  // nobody has. A lookup that found nothing leaves `session` a stand-in (useRuntimeSession), which is no row either.
-  const connecting = !session || detail.missing;
+  // No row for this chat yet is not "you may not write": the box takes typing and says it is connecting, or, when the hub
+  // answered that the session is gone, says that instead. Only the main conversation may already send; every other chat
+  // waits for its row, because the node would start an Agent for an id nobody has. A lookup that found nothing leaves
+  // `session` a stand-in (useRuntimeSession), which is no row either. Retries are refused along with sends.
+  const noRow = !session || detail.missing;
+  const gone = detail.missing && !isMain;
+  const refusedNoRow = noRow && !isMain;
   const unknownGate = useRef({ isMain, gone: detail.missing });
   unknownGate.current = { isMain, gone: detail.missing };
-  const connectingBlock = useMemo(() => ({ label: t("chat-chatview.connecting") }), []);
+  const noRowBlock = useMemo(() => (refusedNoRow ? { label: t(gone ? "chat-chatview.session_gone" : "chat-chatview.connecting") } : undefined), [refusedNoRow, gone]);
   // A Persona conversation without a title yet is "New chat", as All chats and the sidebar call it, not its folder's name (#1697)
   const named = session ?? archivedHere;
   const title = isMain ? MAIN_TITLE : named ? (assistant ? conversationTitle(named) : sessionTitle(named)) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
@@ -350,9 +353,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // (any kind, a notice too), or else a latest user message with its words; one that answered one answers no other
   const claimed = useRef(new Set<string>());
   useEffect(() => {
-    // what a reload interrupted, once the transcript can tell what went in
-    // (not before this chat is known: a restored bubble's Retry posts without passing through deliver)
-    if (!readOnly && !tr.loading && (!connecting || isMain)) restoreOutbox(mid, sid, pending.map((p) => p.id));
+    // what a reload interrupted, once the hub's first page can tell what went in (a cached page cannot),
+    // and not before this chat is known: a restored bubble's Retry posts without passing through deliver
+    if (!readOnly && tr.firstRead && !refusedNoRow) restoreOutbox(mid, sid, pending.map((p) => p.id));
     const users = [...segs.slice(-4).flatMap((seg) => (seg.user && !seg.user.injected ? [seg.user] : [])), ...taggedSeen(tr.items)];
     users.forEach((user) => acknowledgeLaunch(mid, sid, user));
     settleOutbox(mid, sid, users);
@@ -367,7 +370,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - p.at < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segs, tr.loading, connecting]);
+  }, [segs, tr.firstRead, refusedNoRow]);
 
   // seen: on open, when the page comes back to the front, and whenever a turn ends while it is on screen (lib/store.ts
   // viewSession); a subagent's transcript is not an agent of its own
@@ -744,7 +747,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const placed = useMemo(() => (readOnly ? { before: new Map<string, OutboxEntry[]>(), rest: [] } : placeFailed(lines, outbox)), [readOnly, lines, outbox]);
   const failedBefore = (id: string) => {
     const list = placed.before.get(id);
-    return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} />] : [];
+    return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} canRetry={!refusedNoRow} />] : [];
   };
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
@@ -1192,7 +1195,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 <div key={p.id} className="flex flex-col gap-3">
                   <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
                 </div>
-              ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} /> }))]
+              ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> }))]
                 .sort((a, b) => a.at - b.at)
                 .map((x) => x.el)}
             {!readOnly && (shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)) && (
@@ -1262,7 +1265,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
         />
         {assistant && session && <CompactionStrip session={session} />}
-        {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
+        {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && !refusedNoRow && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
         {gate.dialog}
         {session && !assistant && <AttentionNote session={session} />}
@@ -1291,13 +1294,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         <div ref={composerBox} className="shrink-0" hidden={voiceState === "live"}>
         <Composer
           draftKey={draftKey}
-          placeholder={offlineLine ? offlineLine : connecting ? t("chat-chatview.connecting_placeholder") : !sessionCan(session, "send") && session?.source_kind ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
+          placeholder={offlineLine ? offlineLine : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : !sessionCan(session, "send") && session?.source_kind ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           uploadDest={session?.space === "health" ? "health" : undefined}
           working={state === "working"}
           needsYou={state === "needs_you"}
           onSend={send}
-          disabled={Boolean(offlineLine) || (!connecting && !sessionCan(session, "send"))}
+          disabled={Boolean(offlineLine) || (!noRow && !sessionCan(session, "send"))}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
           onStop={sessionCan(session, "interrupt") ? interrupt : undefined}
           commands={commands}
@@ -1305,7 +1308,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           mention={mention}
           autoFocus
           onFocusChange={setTyping}
-          blocked={gate.blocked ?? (connecting && !isMain ? connectingBlock : undefined)}
+          blocked={gate.blocked ?? noRowBlock}
           footer={footer}
           voice={voiceEntry.offer}
         />
@@ -1353,7 +1356,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 onClick={() => {
                   const r = draftRefusal!;
                   setDraftRefusal(null);
-                  void retryOutbox(mid, sid, r.id, r.clearable); // under a new id: the refused one keeps its answer
+                  if (!refusedNoRow) void retryOutbox(mid, sid, r.id, r.clearable); // under a new id: the refused one keeps its answer
                 }}
               >
                 {t("chat-chatview.clear_and_send")}

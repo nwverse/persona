@@ -78,6 +78,15 @@ describe("main conversation first-screen cache", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("reports the first read only when the hub answered, not on the cached page", async () => {
+    writeFeedCache(scope, saved());
+    render();
+    expect(shown.loading).toBe(false);
+    expect(shown.firstRead).toBe(false);
+    await answer({ items: [item("question", 10, "Question", "user"), item("answer", 11, "Cached answer")], history: "v1" });
+    expect(shown.firstRead).toBe(true);
+  });
+
   it("keeps cached content and storage after failure and while retrying", async () => {
     writeFeedCache(scope, saved());
     render();
