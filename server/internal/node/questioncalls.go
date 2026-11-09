@@ -25,9 +25,17 @@ type questionID struct {
 }
 
 type questionWaiter struct {
-	id       string
-	cancel   context.CancelFunc
-	answered bool
+	id         string
+	attemptKey string
+	cancel     context.CancelFunc
+	answered   bool
+}
+
+func questionAttemptKey(key, attempt string) string {
+	if attempt == "" {
+		return ""
+	}
+	return key + "\x00attempt:" + attempt
 }
 
 func questionExpired(at, now time.Time) bool {
@@ -93,10 +101,7 @@ func (q *questionCalls) before(in hookInput, now time.Time) {
 // question's pending id. Spool replay calls pair too, rebuilding the assignment without creating a waiter.
 func (q *questionCalls) pair(in hookInput, attempt string, resume bool, now time.Time) string {
 	key := permissionKey(in)
-	attemptKey := ""
-	if attempt != "" {
-		attemptKey = key + "\x00attempt:" + attempt
-	}
+	attemptKey := questionAttemptKey(key, attempt)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.forget(now)
@@ -110,40 +115,96 @@ func (q *questionCalls) pair(in hookInput, attempt string, resume bool, now time
 	}
 	var id string
 	if ids := q.pending[key]; len(ids) > 0 {
-		id = ids[0].id
-		if q.pending[key] = ids[1:]; len(ids) == 1 {
+		// A terminal answer may arrive before its own PermissionRequest. Leave that completed id for the late request
+		// instead of letting the next identical question consume both the id and its completion.
+		which := 0
+		for i, candidate := range ids {
+			if _, done := q.completed[key+"\x00"+candidate.id]; !done {
+				which = i
+				break
+			}
+		}
+		id = ids[which].id
+		q.pending[key] = append(ids[:which:which], ids[which+1:]...)
+		if len(q.pending[key]) == 0 {
 			delete(q.pending, key)
 		}
 	}
 	if id != "" && attemptKey != "" {
-		if q.attempts == nil {
-			q.attempts = map[string]questionID{}
-		}
-		q.attempts[attemptKey] = questionID{id: id, at: now}
+		q.assignLocked(key, attemptKey, id, now)
 	}
 	return id
 }
 
-// watch waits for a phone answer or PostToolUse. A completion that arrived before PermissionRequest is consumed here,
+// assignLocked publishes an attempt's id and binds a resumed waiter that happened to arrive first. q.mu is held.
+func (q *questionCalls) assignLocked(key, attemptKey, id string, now time.Time) {
+	if q.attempts == nil {
+		q.attempts = map[string]questionID{}
+	}
+	q.attempts[attemptKey] = questionID{id: id, at: now}
+	_, done := q.completed[key+"\x00"+id]
+	for _, w := range q.waiting[key] {
+		if w.attemptKey == attemptKey && w.id == "" {
+			w.id = id
+			if done && !w.answered {
+				w.answered = true
+				w.cancel()
+			}
+		}
+	}
+}
+
+func (q *questionCalls) hasPair(in hookInput, attempt string) bool {
+	key := permissionKey(in)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.forget(time.Now())
+	_, ok := q.attempts[questionAttemptKey(key, attempt)]
+	return ok
+}
+
+// restore installs a pairing recovered from the transcript after the Node that saw PreToolUse was replaced.
+func (q *questionCalls) restore(in hookInput, attempt, id string, completed bool, now time.Time) {
+	key := permissionKey(in)
+	attemptKey := questionAttemptKey(key, attempt)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.forget(now)
+	if _, ok := q.attempts[attemptKey]; ok {
+		return
+	}
+	if completed {
+		if q.completed == nil {
+			q.completed = map[string]time.Time{}
+		}
+		q.completed[key+"\x00"+id] = now
+	}
+	q.assignLocked(key, attemptKey, id, now)
+}
+
+// watch waits for a phone answer or PostToolUse. A completion that arrived before PermissionRequest is observed here,
 // before any card is created.
 func (q *questionCalls) watch(ctx context.Context, in hookInput, attempt string, resume bool) (context.Context, func() bool, func(), string) {
 	key := permissionKey(in)
+	attemptKey := questionAttemptKey(key, attempt)
 	id := q.pair(in, attempt, resume, time.Now())
 	ctx, cancel := context.WithCancel(ctx)
-	w := &questionWaiter{id: id, cancel: cancel}
+	w := &questionWaiter{id: id, attemptKey: attemptKey, cancel: cancel}
 	q.mu.Lock()
 	q.forget(time.Now())
-	if id != "" {
-		if _, ok := q.completed[key+"\x00"+id]; ok {
-			w.answered = true
-			delete(q.completed, key+"\x00"+id)
+	if w.id == "" {
+		if assigned, ok := q.attempts[attemptKey]; ok { // pair ran before the first request published its assignment
+			w.id = assigned.id
 		}
 	}
-	if q.waiting == nil {
-		q.waiting = map[string][]*questionWaiter{}
+	if w.id != "" {
+		if _, ok := q.completed[key+"\x00"+w.id]; ok {
+			w.answered = true
+		}
 	}
-	q.waiting[key] = append(q.waiting[key], w)
+	q.waiting = addHookWaiter(q.waiting, key, w)
 	answered := w.answered
+	id = w.id
 	q.mu.Unlock()
 	if answered {
 		cancel()
@@ -154,24 +215,13 @@ func (q *questionCalls) watch(ctx context.Context, in hookInput, attempt string,
 			return w.answered
 		}, func() {
 			q.mu.Lock()
-			ws := q.waiting[key]
-			for i, other := range ws {
-				if other == w {
-					ws = append(ws[:i:i], ws[i+1:]...)
-					break
-				}
-			}
-			if len(ws) == 0 {
-				delete(q.waiting, key)
-			} else {
-				q.waiting[key] = ws
-			}
+			q.waiting = removeHookWaiter(q.waiting, key, w)
 			q.mu.Unlock()
 			cancel()
 		}, id
 }
 
-// complete records PostToolUse by exact id, canceling only its own waiter. The receipt is also kept for a PermissionRequest
+// complete records PostToolUse by exact id, canceling every overlapping waiter of that call. The receipt is also kept for a PermissionRequest
 // or replay that has not arrived yet; a different identical question has a different id and is unaffected.
 func (q *questionCalls) complete(in hookInput, now time.Time) {
 	key, id := permissionKey(in), in.ToolUseID
@@ -182,7 +232,6 @@ func (q *questionCalls) complete(in hookInput, now time.Time) {
 		if !w.answered && w.id == id {
 			w.answered = true
 			w.cancel()
-			break
 		}
 	}
 	if id != "" {

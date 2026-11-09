@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -169,6 +171,84 @@ func TestClaudeQuestionResumeKeepsOriginalToolUseID(t *testing.T) {
 	}
 }
 
+// An old connection and its resumed request may overlap briefly; one PostToolUse releases every waiter of that id.
+func TestClaudeQuestionTerminalAnswerReleasesOverlappingResume(t *testing.T) {
+	fakeAgent(t)
+	n := codexTestNode(t)
+	h := withCancelHub(t, n)
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	pre, _ := json.Marshal(hookInput{HookEventName: "PreToolUse", SessionID: "s1", ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_overlap", ToolInput: input})
+	if _, err := n.handleHook(context.Background(), sockRequest{Input: pre}); err != nil {
+		t.Fatal(err)
+	}
+	permission, _ := json.Marshal(hookInput{HookEventName: "PermissionRequest", SessionID: "s1", ToolName: "AskUserQuestion", ToolInput: input})
+	call := func(resume bool) <-chan any {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan any, 1)
+		go func() {
+			out, _ := n.handleHook(ctx, sockRequest{Input: permission, Attempt: "a1", Resume: resume, AgentPID: 4242, AgentStart: "linux:7"})
+			done <- out
+		}()
+		t.Cleanup(func() { cancel() })
+		return done
+	}
+	first, second := call(false), call(true)
+	waitFor(t, "both overlapping cards", func() bool { asked, _ := h.counts(); return asked == 2 })
+	postInput, _ := json.Marshal(map[string]any{"questions": questions, "answers": map[string]string{"Which?": "A"}})
+	post, _ := json.Marshal(hookInput{HookEventName: "PostToolUse", SessionID: "s1", ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_overlap", ToolInput: postInput})
+	if _, err := n.handleHook(context.Background(), sockRequest{Input: post}); err != nil {
+		t.Fatal(err)
+	}
+	for name, done := range map[string]<-chan any{"first": first, "resumed": second} {
+		select {
+		case out := <-done:
+			if out != nil {
+				t.Fatalf("%s waiter answered a terminal-completed question: %v", name, out)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("%s waiter stayed blocked after PostToolUse", name)
+		}
+	}
+}
+
+// An early terminal answer can make the next identical PermissionRequest arrive before the answered call's own one.
+func TestClaudeQuestionOutOfOrderPermissionRequestsKeepTheirIDs(t *testing.T) {
+	n := codexTestNode(t)
+	fh := withFakeHub(t, n)
+	fh.answer = func(proto.Interaction) proto.Resolution {
+		return proto.Resolution{Answers: map[string]string{"Which?": "A"}}
+	}
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	hook := func(event, id string, raw json.RawMessage) {
+		t.Helper()
+		in, _ := json.Marshal(hookInput{HookEventName: event, SessionID: "s1", ToolName: "AskUserQuestion", ToolUseID: id, ToolInput: raw})
+		if _, err := n.handleHook(context.Background(), sockRequest{Input: in}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	postInput, _ := json.Marshal(map[string]any{"questions": questions, "answers": map[string]string{"Which?": "A"}})
+	hook("PreToolUse", "toolu_first", input)
+	hook("PostToolUse", "toolu_first", postInput)
+	hook("PreToolUse", "toolu_second", input)
+	permission, _ := json.Marshal(hookInput{HookEventName: "PermissionRequest", SessionID: "s1", ToolName: "AskUserQuestion", ToolInput: input})
+	out, err := n.handleHook(context.Background(), sockRequest{Input: permission, Attempt: "a2"})
+	if err != nil || out == nil {
+		t.Fatalf("the second question took the first question's completed id: %v, %v", out, err)
+	}
+	cards := fh.interactions()
+	if len(cards) != 1 || cards[0].ToolUseID != "toolu_second" {
+		t.Fatalf("the second question was paired incorrectly: %+v", cards)
+	}
+	out, err = n.handleHook(context.Background(), sockRequest{Input: permission, Attempt: "a1"})
+	if err != nil || out != nil || len(fh.interactions()) != 1 {
+		t.Fatalf("the late PermissionRequest of the answered call asked again: %v, %v", out, err)
+	}
+}
+
 // Standby replays the question lifecycle, not just hook.event: a terminal answer while away stays answered.
 func TestClaudeQuestionStandbyReplayKeepsTerminalAnswer(t *testing.T) {
 	n := codexTestNode(t)
@@ -196,6 +276,40 @@ func TestClaudeQuestionStandbyReplayKeepsTerminalAnswer(t *testing.T) {
 	out, err := n.handleHook(ctx, sockRequest{Input: permission, Attempt: "a1", Resume: true})
 	if err != nil || out != nil || len(fh.interactions()) != 0 {
 		t.Fatalf("the spooled terminal answer was lost: %v, %v (cards=%d)", out, err, len(fh.interactions()))
+	}
+}
+
+// A newer live event suppresses stale hook.event reports, but must not erase the replayed question lifecycle.
+func TestClaudeQuestionReplayAheadStillKeepsTerminalAnswer(t *testing.T) {
+	n := codexTestNode(t)
+	fh := withFakeHub(t, n)
+	fh.answer = func(proto.Interaction) proto.Resolution {
+		return proto.Resolution{Answers: map[string]string{"Which?": "A"}}
+	}
+	n.logger = log.New(io.Discard, "", 0)
+	questions := []map[string]any{{"question": "Which?", "options": []map[string]any{{"label": "A"}, {"label": "B"}}}}
+	input, _ := json.Marshal(map[string]any{"questions": questions})
+	pre, _ := json.Marshal(hookInput{HookEventName: "PreToolUse", SessionID: decidedSession, ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_ahead", ToolInput: input})
+	permission, _ := json.Marshal(hookInput{HookEventName: "PermissionRequest", SessionID: decidedSession, ToolName: "AskUserQuestion", ToolInput: input})
+	postInput, _ := json.Marshal(map[string]any{"questions": questions, "answers": map[string]string{"Which?": "A"}})
+	post, _ := json.Marshal(hookInput{HookEventName: "PostToolUse", SessionID: decidedSession, ToolName: "AskUserQuestion",
+		ToolUseID: "toolu_ahead", ToolInput: postInput})
+	sp := openSpool(filepath.Join(t.TempDir(), spoolFile))
+	for i, raw := range []json.RawMessage{pre, permission, post} {
+		if _, err := sp.add(spoolEntry{ID: string(rune('a' + i)), At: time.Now(), Kind: "hook",
+			Request: sockRequest{Kind: "hook", Input: raw, Attempt: "a1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stop, _ := json.Marshal(hookInput{HookEventName: "Stop", SessionID: decidedSession})
+	n.ahead.note(sockRequest{Kind: "hook", Input: stop}) // a newer live Stop makes every kept event "behind"
+	n.replayed, n.stateReady = make(chan struct{}), make(chan struct{})
+	close(n.stateReady)
+	n.replaySpool(context.Background(), sp)
+	out, err := n.handleHook(context.Background(), sockRequest{Input: permission, Attempt: "a1", Resume: true})
+	if err != nil || out != nil || len(fh.interactions()) != 0 {
+		t.Fatalf("ahead filtering lost the terminal answer: %v, %v (cards=%d)", out, err, len(fh.interactions()))
 	}
 }
 

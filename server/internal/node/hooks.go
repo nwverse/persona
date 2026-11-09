@@ -459,6 +459,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if proto.HasDuplicateQuestionText(ix.Questions) {
 			return permissionDecision(map[string]any{"behavior": "deny", "message": duplicateQuestionReason}), nil
 		}
+		if req.Resume {
+			n.restoreQuestionFromTranscript(in, req.Attempt, time.Now())
+		}
 		ctx, otherAnswered, stopOther := n.decided.watch(ctx, permissionKey(in))
 		defer stopOther()
 		ctx, questionAnswered, stopQuestion, toolUseID := n.questions.watch(ctx, in, req.Attempt, req.Resume)
