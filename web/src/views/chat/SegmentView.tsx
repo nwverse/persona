@@ -38,6 +38,9 @@ export const BUBBLE_MAX_LINES = 14;
 const CHARS_PER_LINE = 30;
 /** A folded message: ten lines high, scrolling inside (the chat scrolls on at its top and end). */
 const FOLDED = "max-h-[10lh] overflow-y-auto";
+/** Characters to a line of a bubble narrower than any drawn (a phone's holds about 17 wide ones): a message within
+ *  BUBBLE_MAX_LINES even there is short in any bubble, and is not measured. */
+const NARROWEST_CHARS = 10;
 
 /** How many lines a message takes in its bubble, by its text (the bubble measures itself once drawn). */
 export function bubbleLines(text: string, perLine = CHARS_PER_LINE): number {
@@ -106,6 +109,11 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || open) return;
+    // short however narrow: no layout read (opening a long chat read every bubble's, each a forced layout)
+    if (bubbleLines(text, NARROWEST_CHARS) <= BUBBLE_MAX_LINES) {
+      setLong(false);
+      return;
+    }
     // its full height in lines (a fold's scrollHeight is all of it)
     const line = parseFloat(getComputedStyle(el).lineHeight) || 24;
     setLong(el.scrollHeight / line > BUBBLE_MAX_LINES + 0.5);
