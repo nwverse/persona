@@ -3,6 +3,7 @@ import { storedCredentials, storeCredentials, CLIENT_HEADERS, OP_HEADERS, compat
 
 import { MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
 import { BASE } from "./base";
+import { intercepted, reloadForSignIn } from "./edge-auth";
 import { requestCrumb } from "./error-reports";
 import { currentLanguage, t } from "../i18n";
 import type { Item } from "./types";
@@ -81,6 +82,13 @@ export const CLIENT_PLATFORM = "web";
 export const CLIENT_VERSION = "1";
 /** What this page can render beyond the basics (client_hello `features`). */
 /** `managers`: the hub pushes {"type":"managers"} when its roster changes (Settings › Managers, lib/managers.ts). */
+/**
+ * The pong timeout (seconds) this page asks the hub for in client_hello. The hub's default of 15 s is tight on a
+ * high-latency public link whose outbound path changes now and then: a ping or its pong lost across a switch closed
+ * the socket (pong_timeout) every 30-250 s. 45 s rides through a switch yet stays under the page's own 70 s quiet
+ * limit, so a dead link is still dropped. Only the timeout is asked for: the 20 s interval stays the hub's.
+ */
+export const CLIENT_PONG_TIMEOUT = 45;
 export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1"];
 
 // A read the hub has not answered by then fails instead of loading forever (#4492): a restarting hub, a stuck node or a
@@ -150,11 +158,18 @@ async function request<T>(path: string, init: ApiOptions): Promise<T> {
   const method = init.method ?? "GET";
   let res: Response;
   try {
-    res = await fetch(`${BASE}/api/v1${path}`, { ...fetchOptions, headers, body });
+    // manual: a redirect (the sign-in layer in front of the hub has expired) arrives as one instead of being followed
+    // into a cross-origin page this script cannot read; the hub itself never redirects its API
+    res = await fetch(`${BASE}/api/v1${path}`, { redirect: "manual", ...fetchOptions, headers, body });
   } catch (e) {
     // a breadcrumb for an error report: the method, the path's pattern (no ids, no query) and that it did not get there
     if (!isAbort(e)) requestCrumb(method, path, 0);
     throw e;
+  }
+  if (intercepted(res)) {
+    requestCrumb(method, path, res.status);
+    reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    throw new ApiError(res.status || 401, t("lib-api.hub_no_response"), {}, false);
   }
   const text = await res.text();
   let data: Record<string, unknown> = {};
