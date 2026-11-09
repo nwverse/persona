@@ -1,5 +1,27 @@
 # Lessons: Android
 
+## Inbox writes must not wait behind full-list reads (#2545)
+
+A grouped conversation swipe used the explicit bulk-cleanup path, so each success emitted its own Undo notice (deliberately exempt
+from feedback deduplication). Use silent completion for row gestures and a stable inline retry for failed writes; retain Undo for explicit
+bulk cleanup. A failure of the subsequent read must not turn an accepted write into a failed action. Keep writes independent of the
+full-refresh lock, bound concurrent requests, serialize overlapping item targets, and conflate invalidations and ambiguous responses.
+Record local write generations so a list captured before a write cannot resurrect its rows. A different incoming message version must
+still win over both a write response and rollback. Persist confirmed results with their manager identity, never speculative marks.
+Test delayed reads, delayed writes, new messages during writes, pairing replacement, duplicate manager IDs and cache-only restoration.
+Virtual-clock request timings prove ordering and request counts, not phone frame times or production latency. Run filesystem-backed
+restoration waits with a real timeout: a virtual timeout can fire before the IO dispatcher gets a turn.
+
+## Host-owned lifecycle controls need real application wiring (#2397)
+
+A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
+unsupported default. Forward both per-extension and global preferences. A manager-bound detail page must also bind catalog/global reads
+and carry its owner into upgrade consent and operation filtering; an extension-ID-only pin does not cover `extensions/-/catalog`.
+Keep a persisted preference separate from its pause reason. HTTP operation receipts belong to the captured request owner even when
+older responses omit `manager`; broadcasts must still be filtered by their explicit hub-stamped owner. Treating both alike loses a
+non-default manager's start/retry receipt. Finally, `HubExtension.kind` is a contribution point, not a declared runtime:
+missing runtime metadata must say **Not provided**, never infer execution details from a UI category.
+
 ## Register new native wire examples, not just generated models (#1187)
 
 A generated permission DTO can compile while `ExtensionWireTest.examplesRoundTrip` cannot select its serializer.
@@ -111,6 +133,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Testing
 
+- A screenshot test's fake image loader is global state (#2546). `SingletonImageLoader.setUnsafe` survives into later Robolectric classes using the same sandbox. Reset the singleton and shut down the test-owned loader in teardown. Otherwise a later image-fallback assertion can fail because it receives a successful synthetic bitmap; running only that later class hides the leak. Reproduce with the showcase and native-stream classes together, and retain the original fallback assertion.
+
 - `OkHttpHubConnection` publishes `Revoked` before it reports the last refusing hub through `onMemberRevoked`, outside the lock (HubGroupConnectionTest). A test that reads the callback list right after seeing `Revoked` can miss that last entry under load; one hosted run failed `theConnectionIsRevokedOnlyWhenNoHubOfTheGroupIsLeft` this way while main passed. Widening the gap with a temporary sleep before that report fails the old test every time (`but was:<[(hub-a, true), (hub-b, true)]>`). Production consumers launch their cleanup asynchronously and reach the same end state in either order, so the test now waits for the report it asserts, then checks the exact list.
 
 - Closing a `ServerSocket` that another thread is blocked accepting on does not free its port when `close()` returns (PortForwarder, #3483). The JDK only wakes the accepting thread; the port is released after that thread leaves `accept`. On a busy 2-CPU runner the next pairing's forwarder then found the number still taken and bound another one, failing `aClosedOpenerFreesItsPortForTheNext` on two hosted runs while it passed on a 64-CPU machine. A bare JVM probe on 2 CPUs failed an immediate rebind 18/300 times idle and about 200 to 260/300 under load, 0/300 after joining the accept thread. `Forward.close()` now joins its accept threads (bounded). Reproduce with the Gradle run pinned to two busy CPUs (`taskset -c 0,1` plus busy loops); `closeReturnsOnlyOnceItsPortIsFree` fails at once on the old code there. A test failing only on hosted runners can be a real bug; an earlier retry of the probed port here was the wrong diagnosis.
@@ -122,6 +146,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Tests of `OkHttpHubConnection.events` wait for events, not time (2026-11-08, #1254). `events` is hot, and the connection's forwarding coroutine hands each event over after the socket's loop queued it, on its own schedule. Await the subscription (`onSubscription`) before the hub sends. Skip the first socket's hello: it can still reach a subscriber that subscribed after Online. Wait for `onReady` to know the connection handled a socket's hello: a socket that did not resume dropped earlier sockets' queued events by then, while a resumed one calls `onReady` too and keeps forwarding them. Online stays up through a restart's grace, and `lastHello` is set before earlier sockets' events stop being forwarded. Watch a subscriber that never blocks to see which event is being handed over, and end with one more event rather than a delay to show nothing else came (`HubSlowSubscriberTest`).
 
 - Internationalization cleanup (#2453): localized Compose components do not prove that background feedback is localized. Fixed-language fallbacks such as `OperationFeedback.message` and `PendingStatus.label` can leak Chinese through view models, state objects and snackbars. Remove the old APIs and resolve `UiText` with the current page's resources. In contrast, pure JVM `CoreText.shown` already uses the translator injected by the App; `joinToString` alone is not evidence of missing translations. Exempt only the design system's developer catalog, not all of `src/debug`, and test that ordinary debug Kotlin, XML and similarly named directories still fail the check. Robolectric Native renders Chinese and Japanese glyphs but is not simulator acceptance; assert that light and dark screenshots differ.
+
+- A settings hierarchy migration has two compatibility surfaces (#2521): serialized `NavKey` values and standalone `rememberSaveable` page strings. Keep both old values readable and restore the new parent without replacing the leaf's identity. Exercise cold/warm external intents and Back, not only a DEBUG direct-open alias. A loaded ledger can put its introduction after dozens of rows: use the visible filter/list as the emulator readiness marker, not an off-screen footer.
 
 - Settings-entry migration screenshots must not just hand-build identically named `JRow`s (2026-11-05, #2196). Old channel screenshots drew "Extensions → Channels" themselves and could not detect misplaced entries after Settings changed. Render the real `SettingsScreen` with minimal fake services and navigation callbacks; check separate sections, ordering, click targets, two-column selection, missing capabilities, and demo mode. When removing the "Meet Persona" entry, first find the actual label (Android's `Persona` under Assistant); do not delete the main chat or the profile page still used by top bars / launchers. Open and inspect Robolectric Native images, explicitly stating that they are not emulator screenshots. After cleaning wrapper imports, rebuild after automatically merging the latest `main`: another PR may make a retained page use a dependency previously used only by the wrapper (#2192's main-chat migration callback reused `LocalAssistantHost`). No textual Git conflict does not mean dependencies remain complete.
 
@@ -381,3 +407,5 @@ After sending SIGINT to `screenrecord`, wait for the recording process on the de
 An update card can retain metadata for hours. A content-addressed file on disk is not enough if the download route always resolves the latest manifest: publishing another release makes the cached checksum reject the new bytes before installation. Return a hash-pinned `download_url` (older clients already preserve the query), retain those APKs, and refresh metadata before a new install attempt. Keep the unpinned route for bootstrap downloads. Test publication between discovery and download.
 
 Separate metadata, download, verification, permission and installer failures. Log the stage and exception class without transport messages that could contain credentials. Returning from unknown-source settings requires checking the actual grant before continuing; a result code alone does not establish permission. A committed PackageInstaller session only proves handoff, never installation success. A signing receipt or publication message also does not prove the online verifier ran: retain and inspect its terminal result.
+
+- A renderer version bump also changes negative fixtures: a newly supported field, chart or icon can no longer stand for an unknown value. Assert its concrete v6 meaning and retain a separate unknown-value rejection case; keep the advertised device version pinned to the delivered contract (#828).
