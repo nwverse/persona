@@ -710,6 +710,7 @@ Code: `server/internal/node/assistant_codex.go`; `assistant_agent.go` chooses Cl
 including `command codex …`), retaining environment, `-c model_provider=…`, `-m`. One app-server per chat, one thread inside;
 thread id is session id (assigned by Codex, known only after new-chat `thread/start`), rollout is history (`docs/integrations/codex.md`), App displays normally.
 Handshake: `initialize` (experimentalApi) → `skills/extraRoots/set` → `thread/start` / `thread/resume`.
+With no permission mode selected for the conversation or its manager, thread start/resume and subsequent turns omit approval and sandbox overrides. Codex retains the launcher's effective configuration, including profiles and managed restrictions. An explicit mode, including Default, still uses the mapping below; transcript policy readback is not treated as a selection. Inherited workspace policies keep their own network and writable-root settings, so memory access outside those roots may require approval. Existing persisted choices remain explicit.
 Snapshots accompany each message as Claude does (first `turn/start` / `turn/steer` input); `developerInstructions` holds only memory.
 
 | Capability | Claude (`claude -p`) | Codex (`codex app-server`) |
