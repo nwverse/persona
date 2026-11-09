@@ -77,7 +77,10 @@ func testNode(t testing.TB) (*Node, string) {
 	t.Helper()
 	home := t.TempDir()
 	n := &Node{home: home, paths: map[string]string{}, files: map[string]*transcript.File{}, procs: map[string]*assistantProc{},
-		agents: map[string]host.Agent{}, watches: map[string]*watch{}, state: &stateFile{Sessions: map[string]sessionState{}}}
+		agents: map[string]host.Agent{}, watches: map[string]*watch{}, state: &stateFile{Sessions: map[string]sessionState{}},
+		// A new tab's shell is waited for no longer than the 300 ms a start slept before #2570: tests of a settling
+		// shell set their own waits (shellsettle_test.go).
+		shellSettle: 300 * time.Millisecond}
 	return n, home
 }
 

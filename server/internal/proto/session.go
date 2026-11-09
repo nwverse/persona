@@ -340,6 +340,12 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeShellWaiting: the new tab's shell stopped on a question of its startup files (an update prompt, [Y/n]) before
+	// the start command was typed (#2570). Nothing ran; the tab is kept a while for someone to answer (node/shellsettle.go).
+	CodeShellWaiting = "shell_waiting"
+	// CodeStartLineRejected: the new tab's shell did not take the typed start line, twice (a startup prompt ate its first
+	// characters, #2570). Nothing ran; the tab is closed.
+	CodeStartLineRejected = "start_line_rejected"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).
