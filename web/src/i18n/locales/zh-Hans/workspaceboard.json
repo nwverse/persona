@@ -73,5 +73,16 @@
   "choose": "选择",
   "bind_directory_hint": "只绑定目录，不会启动 Agent。hub 会验证并规范化目录路径。",
   "bind_directory": "绑定目录",
-  "touch_hint": "用卡片菜单移到这列"
+  "touch_hint": "用卡片菜单移到这列",
+  "view_label": "看板视图",
+  "view_manual": "手动",
+  "view_auto": "自动",
+  "auto_lanes_label": "按 Agent 状态自动分列",
+  "auto_lane_review": "待验收",
+  "auto_lane_idle": "空闲",
+  "auto_empty_needs_you": "没有需要你的事项。",
+  "auto_empty_working": "这里没有正在工作的 Agent。",
+  "auto_empty_review": "没有待验收的工作区。",
+  "auto_empty_idle": "没有空闲的工作区。",
+  "auto_open_session": "打开会话"
 }
