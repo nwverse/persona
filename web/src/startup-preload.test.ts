@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { brotliDecompressSync } from "node:zlib";
 import { LANG_MATCHES, LANGS, preferredLanguage } from "./i18n";
-import { localeDirs, preloadScript } from "./startup-preload";
+import { brotliCopies, BROTLI_MIN_SIZE, localeDirs, preloadScript } from "./startup-preload";
 
 const langs = localeDirs(join(__dirname, "i18n/locales"));
 
@@ -61,5 +64,23 @@ describe("startup preload script", () => {
     } finally {
       window.history.pushState(null, "", "/");
     }
+  });
+});
+
+describe("brotli copies", () => {
+  it("writes name.br beside each file of 1 KB or more, decoding to it, the same bytes every time", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "startup-br-"));
+    mkdirSync(join(dir, "assets"));
+    const big = "export const greeting = \"hello\";\n".repeat(100);
+    writeFileSync(join(dir, "assets/App-1.js"), big);
+    writeFileSync(join(dir, "assets/small-2.js"), "x".repeat(BROTLI_MIN_SIZE - 1));
+    const st = await brotliCopies(dir, ["assets/App-1.js", "assets/small-2.js"]);
+    const br = readFileSync(join(dir, "assets/App-1.js.br"));
+    expect(st).toEqual({ files: 1, before: big.length, after: br.length });
+    expect(brotliDecompressSync(br).toString()).toBe(big);
+    expect(existsSync(join(dir, "assets/small-2.js.br"))).toBe(false);
+    await brotliCopies(dir, ["assets/App-1.js"]);
+    expect(readFileSync(join(dir, "assets/App-1.js.br")).equals(br)).toBe(true);
+    rmSync(dir, { recursive: true });
   });
 });

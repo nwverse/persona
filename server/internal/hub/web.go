@@ -32,7 +32,9 @@ var webDist embed.FS
 //
 // The built-in copy's precompressed files (docs/web/web.md "Precompressed assets") go out as they are stored to a
 // client that takes gzip, and decompressed to any other request, with the headers and bytes a plain file would
-// have. The data dir's files are plain and gzipResponses compresses them as it sends them, as before.
+// have. A first-screen asset the web build also wrote as name.br (webasset.BrotliSuffix) goes out as that copy to a
+// client that takes br (serveBrotli). The data dir's files are plain and gzipResponses compresses them as it sends
+// them, as before; its .br copies are not sent.
 func webApp(dir string) http.Handler {
 	embedded, _ := fs.Sub(webDist, "webdist")
 	return webFrom(dir, embedded)
@@ -63,8 +65,10 @@ func webFrom(dir string, embedded fs.FS) http.Handler {
 		asset, hidden := strings.HasPrefix(name, "assets/"), strings.HasPrefix(path.Base(name), ".")
 		kept := asset || name == webasset.Licenses // a file the build may keep gzipped (webasset.Precompressible)
 		// In the built-in copy an asset's .gz is how another asset is stored, never a file of its own (Vite makes none);
-		// so is the licenses' .gz, which falls back to index.html like any other path without a file.
-		storedForm := builtIn && (asset && strings.HasSuffix(name, webasset.Suffix) || name == webasset.Licenses+webasset.Suffix)
+		// so is the licenses' .gz, which falls back to index.html like any other path without a file. An asset's .br is
+		// the build's brotli copy of another asset in either copy, never a file of its own either.
+		storedForm := builtIn && (asset && strings.HasSuffix(name, webasset.Suffix) || name == webasset.Licenses+webasset.Suffix) ||
+			asset && strings.HasSuffix(name, webasset.BrotliSuffix)
 		stored := false // file is kept as file + webasset.Suffix
 		if name == "" || hidden || storedForm || !isFile(site, name) {
 			switch {
@@ -92,6 +96,9 @@ func webFrom(dir string, embedded fs.FS) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		if file == "index.html" {
 			serveIndex(w, r, site)
+			return
+		}
+		if builtIn && asset && brotliWanted(r) && serveBrotli(w, r, site, name) {
 			return
 		}
 		if stored {
@@ -153,6 +160,33 @@ func serveStored(w http.ResponseWriter, r *http.Request, site fs.FS, name string
 		return
 	}
 	http.ServeContent(w, r, path.Base(name), st.ModTime(), plain)
+}
+
+// serveBrotli sends the brotli copy the web build wrote of the asset name (name + webasset.BrotliSuffix), as it is
+// stored, to a request brotliWanted took; gzipResponses passes an answer that has its Content-Encoding on as it is.
+// It reports false, having written nothing, when there is no copy or its type cannot be told by name: the request
+// then gets the gzip or plain file, as before.
+func serveBrotli(w http.ResponseWriter, r *http.Request, site fs.FS, name string) bool {
+	ct := mime.TypeByExtension(path.Ext(name))
+	if ct == "" {
+		return false
+	}
+	f, err := site.Open(name + webasset.BrotliSuffix)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	rs, ok := f.(io.ReadSeeker)
+	if err != nil || !ok || st.IsDir() {
+		return false
+	}
+	h := w.Header()
+	h.Set("Content-Type", ct)
+	h.Set("Content-Encoding", "br")
+	h.Add("Vary", "Accept-Encoding")
+	http.ServeContent(w, r, path.Base(name), st.ModTime(), rs)
+	return true
 }
 
 // gunzipSeeker reads a gzip file's content as http.ServeContent reads a file: its size comes from the gzip trailer

@@ -1,8 +1,12 @@
-// The inline <head> script vite.config.ts's startup-preload plugin writes into index.html. It lives here, with no
-// imports of the client code, so the config can load it and a test can check it against src/i18n/index.ts: the
-// languages it has catalogs for (LANGS) and how it picks one (preferredLanguage) must stay the same as the client's.
+// The inline <head> script vite.config.ts's startup-preload plugin writes into index.html, and the brotli copies it
+// writes of the files that script and the page load. It lives here, with no imports of the client code, so the config
+// can load it and a test can check it against src/i18n/index.ts: the languages it has catalogs for (LANGS) and how it
+// picks one (preferredLanguage) must stay the same as the client's.
 import { readdirSync, readFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants } from "node:zlib";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -53,4 +57,30 @@ export function preloadScript(files: PreloadFiles): string {
   var screen = /^\\/screen\\/[^/]/.test(path);
   [files.catalogs[lang]].concat(files.shared, screen ? files.screen : files.app).forEach(add);
 })();`;
+}
+
+/** The smallest file worth a brotli copy: server/internal/webasset MinSize, below which the hub compresses nothing. */
+export const BROTLI_MIN_SIZE = 1024;
+
+const brotli = promisify(brotliCompress);
+
+/**
+ * Writes name.br beside each of `files` (paths below `dir`) of BROTLI_MIN_SIZE bytes or more, when brotli makes it
+ * smaller: quality 11 with the input's size as hint, so the same file always gives the same bytes. The hub sends
+ * these as stored to a browser that takes br (server/internal/hub/web.go serveBrotli); Go has no brotli encoder, so
+ * the build makes them. Returns the files it wrote and their bytes before and after. Build time only.
+ */
+export async function brotliCopies(dir: string, files: string[]): Promise<{ files: number; before: number; after: number }> {
+  const out = { files: 0, before: 0, after: 0 };
+  await Promise.all(files.map(async (file) => {
+    const data = await readFile(join(dir, file));
+    if (data.length < BROTLI_MIN_SIZE) return;
+    const br = await brotli(data, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: data.length } });
+    if (br.length >= data.length) return;
+    await writeFile(join(dir, `${file}.br`), br);
+    out.files++;
+    out.before += data.length;
+    out.after += br.length;
+  }));
+  return out;
 }

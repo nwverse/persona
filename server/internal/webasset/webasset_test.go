@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,6 +29,11 @@ func TestPrecompress(t *testing.T) {
 		"manifest.webmanifest":     big,
 		"third-party-licenses.txt": big,
 		"admin/assets/admin-7.js":  big,
+		"assets/App-1.js.br":       big, // the web build's brotli copy: compressed already
+	}
+	// mime.TypeByExtension also reads the system's mime.types, which may give .br a text type.
+	if err := mime.AddExtensionType(BrotliSuffix, "text/plain"); err != nil {
+		t.Fatal(err)
 	}
 	for name, body := range files {
 		p := filepath.Join(root, filepath.FromSlash(name))
