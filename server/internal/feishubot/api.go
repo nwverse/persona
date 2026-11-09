@@ -452,6 +452,8 @@ func (c *Client) Resource(ctx context.Context, messageID, key, kind string, limi
 			return nil, "", err
 		}
 		ct := resp.Header.Get("Content-Type")
+		// Only a non-200 answer is an error. A 200 is the file whatever its type (a .json file the user sent comes
+		// labeled application/json), as in the official SDK, which never reads a 200 download as an error.
 		if resp.StatusCode != http.StatusOK {
 			var env struct {
 				Code int    `json:"code"`
@@ -476,33 +478,11 @@ func (c *Client) Resource(ctx context.Context, messageID, key, kind string, limi
 		if err != nil {
 			return nil, "", err
 		}
-		// A 200 labeled JSON is either a JSON file the user sent or Feishu's error answer; only the latter is an error.
-		if strings.HasPrefix(ct, "application/json") {
-			if code, msg, ok := errorEnvelope(b); ok {
-				if tokenGone(code) && attempt == 0 {
-					continue
-				}
-				return nil, "", &APIError{Op: "download", Code: code, Msg: msg}
-			}
-		}
 		if int64(len(b)) > limit {
 			return nil, "", fmt.Errorf("%w: larger than %d MB", ErrTooLarge, limit>>20)
 		}
 		return b, ct, nil
 	}
-}
-
-// errorEnvelope reads a 200 JSON download as Feishu's {"code", "msg"} error answer: an object with a non-zero
-// numeric code and a string msg. Anything else (a JSON file the user sent) is not one.
-func errorEnvelope(b []byte) (code int, msg string, ok bool) {
-	var env struct {
-		Code *int    `json:"code"`
-		Msg  *string `json:"msg"`
-	}
-	if json.Unmarshal(b, &env) != nil || env.Code == nil || *env.Code == 0 || env.Msg == nil {
-		return 0, "", false
-	}
-	return *env.Code, *env.Msg, true
 }
 
 // Refused: Feishu will not take this message however often it is sent (the card's content refused, the bot not in
