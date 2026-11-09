@@ -206,8 +206,13 @@ struct ChatLines {
         return out
     }
 
-    /// Whether a work line is open; `live`: it is the running one.
-    func isOpen(_ work: String, live: Bool) -> Bool { openWork.contains(work) != (openAll || (opensLive && live)) }
+    /// Whether a work line is open; `live`: it is the running one. The wake drawer's work line ("dw-…") keeps folding
+    /// while it runs, as it always has: only the chat's own running line opens by itself.
+    func isOpen(_ work: String, live: Bool) -> Bool {
+        openWork.contains(work) != (openAll || (opensLive && live && !work.hasPrefix(Self.drawerWork)))
+    }
+    /// The id prefix of the wake drawer's work line (`ChatView.wakeLines`).
+    static let drawerWork = "dw-"
 
     /// The subagents a work line launched one after another (in parallel), each run in the order they were launched.
     static func agentRuns(_ items: [WorkItem]) -> [[ToolCall]] {

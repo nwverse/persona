@@ -263,8 +263,9 @@ private fun ChatPage(
     val chatList = rememberChatListState(readingKey, anchorStore)
     val search = remember { ChatSearchState() }
     val openWork = chatList.position.expanded
-    // The running work lines the user folded where they open on their own (Persona's own chat, #1614).
-    var liveFolded by remember { mutableStateOf(emptySet<String>()) }
+    // The running work lines the user folded where they open on their own (Persona's own chat, #1614); kept through a
+    // rotation or a theme change, like the chat's other open lines.
+    var liveFolded by rememberSaveable(stateSaver = LiveFoldedSaver) { mutableStateOf(emptySet<String>()) }
     var timelineVersion by remember { mutableIntStateOf(0) }
     val timeline = remember { ChatTimeline() }
     // Sent, the hub not saying working yet (#3909): the turn counts as started for a minute after the message.

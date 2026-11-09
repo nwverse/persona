@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import androidx.compose.runtime.saveable.Saver
 import persona.core.contracts.Item
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.lines.LiveWorkId
@@ -53,16 +54,14 @@ internal fun settleLiveFolds(folded: Set<String>, live: Set<String>): Set<String
  */
 internal fun liveFoldsToFetch(lines: List<ChatLine>, openLive: Boolean, folding: Set<String>, failed: Set<String>): List<Item> {
     if (!openLive) return emptyList()
-    return buildList {
-        fun visit(list: List<ChatLine>) {
-            for (line in list) when (line) {
-                is ChatLine.Work -> if (line.live && line.open) line.steps.forEach { step ->
-                    (step as? WorkItem.Folded)?.item?.item?.takeIf { it.id !in folding && it.id !in failed }?.let(::add)
-                }
-                is ChatLine.Wakes -> visit(line.drawer)
-                else -> {}
-            }
-        }
-        visit(lines)
+    // A wake drawer (ChatLine.Wakes) is one notice on the phone: its steps are never drawn, so they are not fetched.
+    return lines.filterIsInstance<ChatLine.Work>().filter { it.live && it.open }.flatMap { line ->
+        line.steps.mapNotNull { step -> (step as? WorkItem.Folded)?.item?.item?.takeIf { it.id !in folding && it.id !in failed } }
     }
 }
+
+/** Saves the running work lines the user folded ([settleLiveFolds]) across a configuration change. */
+internal val LiveFoldedSaver = Saver<Set<String>, ArrayList<String>>(
+    save = { ArrayList(it) },
+    restore = { it.toSet() },
+)

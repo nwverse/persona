@@ -193,6 +193,12 @@ struct ChatLinesTests {
         // Folded by the user while it runs (the chat flips it in `openWork`), it stays folded until the turn ends.
         lines.openWork = [live[1].id]
         #expect(kinds(lines.build(b, live: t.id)) == ["user", "work"])
+        // The wake drawer's running work line keeps folding, as it always has; a tap still opens it.
+        lines.openWork = []
+        let drawer = ChatLines.drawerWork + t.id
+        #expect(!lines.isOpen(drawer, live: true))
+        lines.openWork = [drawer]
+        #expect(lines.isOpen(drawer, live: true))
     }
 
     @Test func theRunningTurnShowsEachMessage() {

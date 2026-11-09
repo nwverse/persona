@@ -840,7 +840,8 @@ struct ChatView: View {
 
     /// The running turn's work line, if one is drawn.
     private var liveWorkID: String? {
-        currentLines().last { if case .work(_, _, true, _, _) = $0.content { true } else { false } }?.id
+        guard Self.opensLiveWork(style) else { return nil } // only the assistant's chat needs it: no lookup elsewhere
+        return currentLines().last { if case .work(_, _, true, _, _) = $0.content { true } else { false } }?.id
     }
 
     /// The running work line stopped running (its turn ended, or a message started the next exchange): folded again,
@@ -1335,7 +1336,7 @@ struct ChatView: View {
         var results = Array(groups.reversed().joined())
         let items = ChatLines.workItems(process)
         if !items.isEmpty || live {
-            results.append(.work(id: "dw-" + t.id, items: items, live: live,
+            results.append(.work(id: ChatLines.drawerWork + t.id, items: items, live: live,
                                  start: process.first?.firstTS, end: process.last?.lastTS))
         }
         return results
