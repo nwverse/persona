@@ -229,9 +229,18 @@ fun PairingScreen(
             recordAttempt(PairingRequest(address.trim(), token), error)
         }
     }
-    BackHandler(!readiness && engineStep == null && !running && (confirm != null || manual || failure != null)) {
-        confirm = null; manual = false; failure = null; progress = emptyList(); notice = null
+    // System Back goes back one page: failure or confirm to the form (or the connect choices), the form to the choices,
+    // the choices to the welcome page, and the first checklist into the app. The engine step keeps its own rule.
+    val back: (() -> Unit)? = when {
+        engineStep != null -> null
+        readiness -> onBack ?: onReady
+        running -> null
+        confirm != null || failure != null || progress.isNotEmpty() -> { { confirm = null; failure = null; progress = emptyList(); notice = null } }
+        manual -> { { manual = false } }
+        !welcome && !skipWelcome && initialLink == null -> { { welcome = true; notice = null } }
+        else -> null
     }
+    BackHandler(back != null) { back?.invoke() }
     val step = engineStep
     if (step != null) {
         EngineSelectionScreen(step, sessions, machines, pairing = true, onDone = {

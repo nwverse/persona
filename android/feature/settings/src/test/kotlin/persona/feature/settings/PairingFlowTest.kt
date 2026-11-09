@@ -1,7 +1,12 @@
 package persona.feature.settings
 
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
@@ -16,6 +21,8 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -94,5 +101,54 @@ class PairingFlowTest {
         rule.waitUntil(5_000) { pairing.attempts == 2 }
         failed()
         rule.onNodeWithText(tried).assertExists()
+    }
+
+    /** System Back walks the pairing pages back one step and never leaves the app from inside the flow. */
+    @Test fun systemBackStepsBackOnePage() {
+        var case by mutableIntStateOf(0)
+        val refused = FakePairing(error = ConnectException("refused"))
+        show {
+            key(case) {
+                if (case == 0) PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {})
+                else PairingScreen(refused, sessions, onReady = {}, onDiagnostics = {}, skipWelcome = true)
+            }
+        }
+        val cases = listOf<Pair<() -> Unit, () -> Unit>>(
+            // Welcome › Connect hub, back: the welcome page again.
+            { tap(R.string.settings_pairing_welcome_connect) } to {
+                rule.onNodeWithText(text(R.string.settings_pairing_welcome_title)).assertExists()
+            },
+            // Manual entry › Confirm › failure, back: the form with the address still in it; back again: the connect choices.
+            { fillManual("http://127.0.0.1:1"); tap(R.string.settings_pairing_next); tap(R.string.settings_pairing_confirm); failed() } to {
+                rule.onNodeWithText(text(R.string.settings_pairing_failed_title)).assertDoesNotExist()
+                fields()[0].assert(hasText("http://127.0.0.1:1"))
+                back()
+                rule.onNodeWithText(text(R.string.settings_pairing_scan)).assertExists()
+                fields().assertCountEquals(0)
+            },
+        )
+        cases.forEachIndexed { index, (steps, landed) ->
+            case = index
+            rule.waitForIdle()
+            steps()
+            back()
+            landed()
+            assertFalse("case $index left the app", rule.activity.isFinishing)
+        }
+    }
+
+    /** The checklist that follows a first pairing, with no engine step (machines = null). */
+    private fun firstChecklist(onReady: () -> Unit) {
+        rule.activity.getSharedPreferences("settings-readiness", Context.MODE_PRIVATE).edit().putBoolean("onboarding-pending", true).commit()
+        show { PairingScreen(FakePairing(paired = true), sessions, onReady = onReady, onDiagnostics = {}) }
+        rule.onAllNodesWithText(text(R.string.settings_ready_title)).onFirst().assertExists()
+    }
+
+    @Test fun systemBackOnTheFirstChecklistEntersTheApp() {
+        var ready = 0
+        firstChecklist { ready++ }
+        back()
+        assertEquals(1, ready)
+        assertFalse(rule.activity.isFinishing)
     }
 }
