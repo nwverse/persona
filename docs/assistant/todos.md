@@ -290,6 +290,14 @@ effective from the next judgment and next dispatched task. When on:
 
 ## Close Agents for completed tasks
 
+Completing a to-do stops Persona's automatic follow-ups for its linked Agents, including when a turn ends after
+completion: no transient-error retry, usage-limit continuation, scheduled wake or new triage card. Triage may still
+record the turn's work state. The check runs before scheduling and again before sending, including after a manager
+restart. It applies to manually linked to-dos too, regardless of whether the Agent can be closed. Released or dismissed
+links do not count, and an Agent linked to an open to-do can still receive follow-ups. Deleting a to-do leaves its Agents
+unaffected. Direct chat messages and `agent_send` still work; a user-completed to-do stays done until explicitly reopened,
+while a hub-completed task reopens on new work as described below.
+
 After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent no longer occupies a herdr tab:
 assistant checks every minute (`assistant/tasks_close.go`, reading hub's App-facing session list through `sessions.list`); once task completion and Agent inactivity both reach 3 minutes (`taskCloseIdle`, measured from the later of completion time and last activity), ask node to close it (`session.retire`, `node/retire.go`):
 close its pane (whole tab if it is the only pane, same as **Close** on phone), exiting the Agent process with it.
