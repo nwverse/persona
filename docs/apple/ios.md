@@ -1541,9 +1541,12 @@ kept only for this run (`AppModel.assistantPicks`), and a pick whose manager lea
   manager is held for this run (`assistantByManager`; the default's is still the one saved), so going back shows it at once.
   A read for the manager shown before doesn't land (`AppModel.showsPage(of:)`), nor does its readiness. The hub relays another
   manager's conversation list and new conversations without `manager`: the client stamps them with the manager it named.
-  A first message that failed to start stays on its manager's page (`FailedStart.Message.manager`). A launcher picked on one
-  manager's page is dropped on a switch; Health keeps its own, falling back to the default's. A change of the default manager,
-  or the shown one coming back online, reads the page again. A channel's target (Settings) lists the default's conversations.
+  A first message that failed to start stays on its manager's page, one per page (`FailedStart.Message.manager`). A main
+  conversation is only started once the shown manager's settings are read; before that a start is a plain conversation. A
+  launcher picked on one manager's page is dropped on a switch; with several managers Health keeps its own, falling back to
+  the default's. A change of the default manager, or the shown one coming back online, reads the page again (and, with another
+  manager shown, the new default's settings for Health and the channels). A channel's target (Settings) lists the default's
+  conversations.
 - **Offline**: the page shows what it last read in this run, a note above the composer ("<name> · last synced <time>. Messages
   can be sent once it's back.", `ManagerOfflineNote`) and every composer is off; suggestions are hidden and Ask Persona says so
   instead of sending. A conversation of an offline manager opened anywhere has its composer off with the same note

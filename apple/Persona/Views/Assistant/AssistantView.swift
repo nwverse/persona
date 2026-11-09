@@ -22,7 +22,7 @@ struct AssistantView: View {
     /// A first message whose start failed (#1368): it stays on the page until it is sent again or deleted.
     @State private var failedStart = FailedStart.shared
     @State private var starterLauncher: String?
-    /// Health's own pick: its conversations are the default manager's, whichever manager the page shows.
+    /// Health's own pick with several managers: its conversations are the default's, whichever manager the page shows.
     @State private var healthLauncher: String?
     @State private var showProfile = false
     @State private var showKnowledge = false
@@ -221,7 +221,7 @@ struct AssistantView: View {
             .navigationDestination(isPresented: $showTodos) { TodosView() }
             .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
             .navigationDestination(isPresented: $showHealth) {
-                HealthView(disabled: shownStart != nil, launcher: $healthLauncher) { text, images in
+                HealthView(disabled: shownStart != nil, launcher: healthLauncherPick) { text, images in
                     Task { await start(text, images, space: Session.healthSpace) }
                 }
             }
@@ -346,10 +346,13 @@ struct AssistantView: View {
         pending ?? shownFailure.map { PendingStart(text: $0.text, imageCount: $0.images.count, failed: $0) }
     }
 
-    /// The failed first message this page shows: one sent from the manager it shows (a Health one from any).
+    /// The failed first message this page shows: the latest sent from the manager it shows, or from Health.
     private var shownFailure: FailedStart.Message? {
-        failedStart.message.flatMap { $0.space != nil || model.assistantShows($0.manager) ? $0 : nil }
+        failedStart.messages.last { $0.space != nil || model.assistantShows($0.manager) }
     }
+
+    /// Health's launcher pick: home's with one manager.
+    private var healthLauncherPick: Binding<String?> { model.managerRoster?.isMulti == true ? $healthLauncher : $starterLauncher }
 
     /// Resend on a failed first message: the op id a chat's Resend would choose (`FailedStart.resendOp`), then the start.
     private func resend() {
@@ -361,12 +364,14 @@ struct AssistantView: View {
         let receipts = model.hubFeatures.contains(AssistantStart.feature)
         Task {
             let op = await FailedStart.resendOp(m, api: api, receipts: receipts)
+            guard m.space != nil || model.showsPage(of: api) else { return } // another manager's page by now
             await start(m.text, m.images, space: m.space, op: op)
         }
     }
 
     private func deleteFailed() {
-        withAnimation(Theme.Motion.standard) { failedStart.clear() }
+        let m = shownFailure
+        withAnimation(Theme.Motion.standard) { failedStart.clear { $0 == m } }
         model.readiness.failure = nil
     }
 
@@ -382,9 +387,11 @@ struct AssistantView: View {
         }
         withAnimation(Theme.Motion.standard) { pending = PendingStart(text: text, imageCount: images.count) }
         do {
-            let makesMain = space == nil && model.assistantMain == nil // the first one becomes the main conversation
+            // The first one becomes the main conversation; with the settings not read yet, whether there is one is unknown.
+            let makesMain = space == nil && model.assistantConfig != nil && model.assistantMain == nil
+            let launcher = space == nil ? starterLauncher : healthLauncherPick.wrappedValue
             let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature), op: op) { op in
-                try await api.startConversation(prompt: text, images: images, launcher: space == nil ? starterLauncher : healthLauncher,
+                try await api.startConversation(prompt: text, images: images, launcher: launcher,
                                                 permissionMode: starterMode.isEmpty ? nil : starterMode,
                                                 effort: starterEffort.isEmpty ? nil : starterEffort,
                                                 main: makesMain, space: space, opID: op)
@@ -396,21 +403,22 @@ struct AssistantView: View {
                 // Another manager's page by now: the conversation is listed on its own page, not opened on this one.
                 if space != nil || model.showsPage(of: api) { model.assistantCurrent = s.key }
                 pending = nil
-                if failedStart.message.map({ $0.space != nil || $0.manager == api.shownManager }) == true { failedStart.clear() }
+                failedStart.clear { $0.space == space && (space != nil || model.sameManager($0.manager, api.shownManager)) }
             }
         } catch {
             // A coded refusal (no computer, Claude Code missing…) is a card with what to do, not a red line (5.2).
             // The message stays where it was sent, as the chat's failed bubble, with Resend and Delete (#1368).
             let coded = CodedFailure(error)
+            let here = space != nil || model.showsPage(of: api) // the card belongs to the page it failed on
             withAnimation(Theme.Motion.standard) {
                 pending = nil
-                model.readiness.failure = coded
+                if here { model.readiness.failure = coded }
                 failedStart.fail(FailedStart.Message(text: text, images: images, space: space, op: op,
                                                      mayHaveStarted: FailedStart.mayHaveStarted(error),
-                                                     reason: coded == nil ? error.shown : nil, at: .now,
+                                                     reason: coded == nil || !here ? error.shown : nil, at: .now,
                                                      manager: space == nil ? api.shownManager : nil))
             }
-            if coded != nil { model.readinessChanged() }
+            if here, coded != nil { model.readinessChanged() }
             Haptics.error()
         }
     }

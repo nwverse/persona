@@ -901,6 +901,7 @@ final class AppModel {
                 guard showsPage(of: api) else { return }
                 assistantConfig = updated
             }
+            guard showsPage(of: api) else { return }
             // A hub that names no launcher gets the same retry state as a failed read (#4200): current hubs always
             // resolve one (their default), so an empty answer means an old hub — show Couldn't Load Settings instead of an
             // endless Reading or a made-up name.
@@ -958,8 +959,10 @@ final class AppModel {
                 assistantCurrent = main
                 try await api.send(main, text: text)
             } else {
+                // Settings not read yet: whether it has a main conversation is unknown, and a plain one replaces none.
+                let makesMain = assistantConfig != nil
                 let s = try await AssistantStart.run(receipts: hubFeatures.contains(AssistantStart.feature)) { op in
-                    try await api.startConversation(prompt: text, main: true, opID: op)
+                    try await api.startConversation(prompt: text, main: makesMain, opID: op)
                 }
                 began(s, text: text)
                 assistantCurrent = s.key

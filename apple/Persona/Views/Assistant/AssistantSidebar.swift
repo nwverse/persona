@@ -1135,7 +1135,7 @@ struct AssistantSidebar: View {
         // The main conversation is the list's first row (`mainItem`): not here, and not in Auto Chats (`isPinned`).
         // Those Persona opened by itself are in Auto Chats (#3264); with a hub that does not say, the scheduled tasks' ones
         // are on Scheduled Tasks, under each task (#2838). The open one keeps its row.
-        let split = AutoConversations(all.filter { !isPinned($0) }, tasks: taskChats.known, current: current,
+        let split = AutoConversations(all.filter { !isPinned($0) }, tasks: taskChats.known(on: model.api), current: current,
                                       hubSays: model.hubFeatures.contains(AutoConversationSource.feature))
         let rest = AssistantSidebarGroups.newestFirst(split.mine)
         if rest.isEmpty && split.auto.isEmpty {
@@ -1209,7 +1209,7 @@ struct AssistantSidebar: View {
         .accessibilityValue(autoOpen ? String(localized: "Expanded") : String(localized: "Collapsed [Assistant Sidebar e64447]"))
         .accessibilityIdentifier("sidebar-auto")
         if autoOpen {
-            ForEach(split.bySource(tasks: taskChats.known), id: \.source) { g in
+            ForEach(split.bySource(tasks: taskChats.known(on: model.api)), id: \.source) { g in
                 sourceRow(g.source.name, symbol: g.source.symbol, count: g.sessions.count, needsYou: g.needsYou, working: g.working,
                           id: g.source.id) { autoList = AutoConversationsRoute(source: g.source.id) }
             }

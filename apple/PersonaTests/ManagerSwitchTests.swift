@@ -153,6 +153,69 @@ struct ManagerSwitchTests {
         #expect(reads(nil) == before + 1, "the new default's page is read")
     }
 
+    @Test func theDefaultMovingUnderAnotherManagersPageReadsTheNewDefaultsSettings() async throws {
+        let saved = UserDefaults.standard.object(forKey: "assistant.current")
+        defer { UserDefaults.standard.set(saved, forKey: "assistant.current") }
+        let hub = FakeHub()
+        let tz = TimeZone.current.identifier
+        hub.on("GET", "/api/v1/assistant") { req in
+            Data((req.headers[Self.header] == "m-1" ? #"{"machine_id":"w","launcher":"codex","cwd":"/w","conversations":[],"timezone":"\#(tz)"}"#
+                                                     : #"{"machine_id":"h","launcher":"claude","cwd":"/h","conversations":[],"timezone":"\#(tz)"}"#).utf8)
+        }
+        let model = try model(hub, roster: try Self.roster())
+        model.selectAssistantManager("m-1")
+        await waitUntil { model.assistantConfig?.launcher == "codex" }
+        hub.on("GET", "/api/v1/managers", json: #"""
+        {"default":"m-2","managers":[{"id":"assistant","name":"助手","online":true,"builtin":true},
+          {"id":"m-1","name":"工作","online":true},{"id":"m-2","name":"家里","online":true,"default":true}]}
+        """#)
+        await model.refreshManagerRoster("")
+        #expect(model.assistantManagerID == "m-1")
+        let group = model.hub?.group ?? ""
+        await waitUntil { model.assistantByGroup[group] != nil }
+        #expect(model.assistantByGroup[group]?.launcher == "claude", "Health and the channels have the new default's settings")
+    }
+
+    @Test func aSettingsReadForAPageLeftDoesntSayTheyCouldntLoad() async throws {
+        let saved = UserDefaults.standard.object(forKey: "assistant.current")
+        defer { UserDefaults.standard.set(saved, forKey: "assistant.current") }
+        let hub = FakeHub()
+        let tz = TimeZone.current.identifier
+        hub.on("GET", "/api/v1/assistant") { req in
+            Data((req.headers[Self.header] == "m-1" ? #"{"machine_id":"w","launcher":"codex","cwd":"/w","conversations":[],"timezone":"\#(tz)"}"#
+                                                     : #"{"machine_id":"a","launcher":"","cwd":"/a","conversations":[],"timezone":"Nowhere/Else"}"#).utf8)
+        }
+        let model = try model(hub, roster: try Self.roster())
+        hub.on("PUT", "/api/v1/assistant") { _ in
+            model.selectAssistantManager("m-1") // the page moves on while the default's zone is saved, which fails
+            throw APIError(status: 500, message: "down")
+        }
+        await model.refreshAssistant()
+        #expect(model.assistantManagerID == "m-1" && !model.assistantConfigLoadFailed)
+    }
+
+    @Test func noMainConversationStartsBeforeItsManagersSettingsAreRead() async throws {
+        let saved = UserDefaults.standard.object(forKey: "assistant.current")
+        defer { UserDefaults.standard.set(saved, forKey: "assistant.current") }
+        let hub = FakeHub()
+        let tz = TimeZone.current.identifier
+        hub.on("GET", "/api/v1/assistant") { _ in throw APIError(status: 503, message: "away") }
+        hub.on("POST", "/api/v1/assistant/conversations",
+               json: #"{"session":{"session_id":"s1","status":"working","state":"working","assistant":true,"pending_interactions":0}}"#)
+        let model = try model(hub, roster: try Self.roster())
+        func main() throws -> Any? {
+            let body = try #require(hub.sent("POST", "/api/v1/assistant/conversations").last?.body)
+            return try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])["main"]
+        }
+        model.selectAssistantManager("m-1")
+        await model.askPersona("hello")
+        #expect(try main() == nil, "whether m-1 has a main conversation is unknown: a plain one, which replaces none")
+        hub.on("GET", "/api/v1/assistant", json: #"{"machine_id":"w","launcher":"codex","cwd":"/w","conversations":[],"timezone":"\#(tz)"}"#)
+        await model.refreshAssistant()
+        await model.askPersona("hello again")
+        #expect(try main() as? Bool == true, "read, with none: the first becomes it")
+    }
+
     private func waitUntil(_ what: () -> Bool) async {
         let deadline = Date.now + 5
         while !what(), Date.now < deadline { try? await Task.sleep(for: .milliseconds(20)) }

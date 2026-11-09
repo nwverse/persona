@@ -25,6 +25,14 @@ extension AppModel {
         managerRosters[group] = roster
         // A pick of a manager that left goes with it: the page doesn't jump to it should it come back.
         assistantPicks[group] = roster.flatMap { $0.isMulti ? $0.named(assistantPicks[group]) : nil }
+        // Another manager's page stays shown: Health and the channels read the new default's settings all the same.
+        if defaultMoved, assistantPicks[group] != nil, let moved = roster?.defaultID {
+            Task {
+                guard let st = try? await api.manager(nil).assistant(), managerRosters[group]?.defaultID == moved,
+                      assistantPick(in: group) != nil else { return }
+                assistantByGroup[group] = st
+            }
+        }
         guard group == hub?.group else { return }
         // The manager the Persona page showed left the roster (or the hub has one manager again), the default moved, or the
         // shown one is back online: the page reads its manager again.
@@ -59,9 +67,12 @@ extension AppModel {
     var assistantManagerOffline: HubManager? { assistantManager.flatMap { $0.online ? nil : $0 } }
 
     /// Whether a thing stamped `manager` is the Persona page's manager's (everything is, with one manager).
-    func assistantShows(_ manager: String?) -> Bool {
+    func assistantShows(_ manager: String?) -> Bool { sameManager(manager, assistantManagerID) }
+
+    /// Whether things stamped `a` and `b` are one manager's (everything is, with one manager).
+    func sameManager(_ a: String?, _ b: String?) -> Bool {
         guard let roster = managerRoster, roster.isMulti else { return true }
-        return roster.owner(manager) == roster.owner(assistantManagerID)
+        return roster.owner(a) == roster.owner(b)
     }
 
     /// The Persona page's manager for its lists; nil with one manager.

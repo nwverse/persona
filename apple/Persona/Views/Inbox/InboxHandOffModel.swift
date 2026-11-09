@@ -128,9 +128,10 @@ final class InboxHandOffModel {
             plainToMain: { text in
                 let key: SessionKey
                 let client = try api()
-                // The item's manager's main conversation: the Persona page's when it shows that manager, else its own.
+                // The item's manager's main conversation: the Persona page's when it shows that manager and has read its
+                // settings, else read from them (with none known, a start would replace the main conversation).
                 let main: SessionKey?
-                if model.assistantShows(item.manager) {
+                if model.assistantShows(item.manager), model.assistantConfig != nil {
                     main = model.assistantMain
                 } else {
                     let st = try await client.assistant()
