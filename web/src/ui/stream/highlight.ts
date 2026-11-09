@@ -10,6 +10,7 @@
 import { createContext, createElement, startTransition, useContext, useLayoutEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import type { ElementContent, Root } from "hast";
+import { commonLowlight } from "../../lib/lowlight";
 import { lazyPlugin } from "./lazy-plugin";
 
 type Plugin = () => (tree: Root) => void;
@@ -22,8 +23,8 @@ const plugin = lazyPlugin<Plugin>(() => import("rehype-highlight").then((m) => m
 
 type Lowlight = { highlight: (lang: string, text: string) => Root };
 
-// Destructured so Rollup drops the entry's every-grammar `all` (lib/code-view.ts loads the same chunk).
-const grammars = lazyPlugin<Lowlight>(() => import("lowlight").then(({ createLowlight, common }) => createLowlight(common) as Lowlight));
+// The lowlight the code views use too (lib/lowlight.ts).
+const grammars = lazyPlugin<Lowlight>(commonLowlight);
 
 /** Loads the highlighter (once). */
 export const loadHighlight = (): Promise<unknown> => (codeHighlight.inBlock ? grammars.load() : plugin.load());
