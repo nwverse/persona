@@ -174,8 +174,9 @@ func TestFleetSessionsMemoMatchesWholeLists(t *testing.T) {
 
 // A manager's list with one session of 150 changed costs the hub that one session: the list is decoded by changed
 // rows (fleet_link.go) and the other sessions' rows are pushed again as the same slices (encodeKept). The oracle test
-// above sees only the bytes, which are the same either way. 43 allocations measured for the hop with five delta apps
-// and two older ones, 571 with the list decoded whole; encoding every row again is 44, told apart by the rows' identity.
+// above sees only the bytes, which are the same either way. 38 allocations measured for the hop with five delta apps
+// and two older ones (43 while jsontext's decoder split the list), 571 with the list decoded whole; encoding every row
+// again is 39, told apart by the rows' identity.
 func TestFleetSessionsOneChangedReusesRows(t *testing.T) {
 	if !isolatedSessionAllocation(t) {
 		return
@@ -194,7 +195,7 @@ func TestFleetSessionsOneChangedReusesRows(t *testing.T) {
 		}
 	}
 	n := 1
-	if allocs := testing.AllocsPerRun(20, func() { n++; send(n) }); allocs > 50 && !raceEnabled {
+	if allocs := testing.AllocsPerRun(20, func() { n++; send(n) }); allocs > 40 && !raceEnabled {
 		t.Fatalf("a list with one session changed allocates %v times", allocs)
 	}
 }
