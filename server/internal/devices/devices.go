@@ -142,6 +142,9 @@ type Devices struct {
 	reportMu  sync.Mutex
 	reportDue chan struct{}
 	lastSent  string // the last devices.state sent (stateKey), to send only changes
+	// desktopsMu: one devices.desktops at a time; desktopsSent: the last one sent (presence.go).
+	desktopsMu   sync.Mutex
+	desktopsSent string
 
 	packages nodePackages // the node builds for the machines' platforms (packages.go)
 
@@ -466,6 +469,7 @@ func (d *Devices) report(all bool) {
 	default:
 		return // the machines are not made yet; the first report follows when they are (startMachines)
 	}
+	defer d.reportDesktops(all) // a change of computers or of who may count goes with it (presence.go)
 	d.reportMu.Lock()
 	defer d.reportMu.Unlock()
 	st := d.states()

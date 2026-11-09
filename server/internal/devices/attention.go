@@ -55,12 +55,12 @@ func (d *Devices) attentionFor(id, webURL string) *link.Attention {
 	if a == nil {
 		return nil
 	}
-	pending, err := d.PendingMachineIDs(context.Background())
+	eligible, known := d.summaryEligible(id)
 	out := *a
 	switch {
-	case d.IsWork(id) || err == nil && slices.Contains(pending, id):
+	case known && !eligible:
 		out, webURL = link.Attention{Items: []link.AttentionItem{}}, ""
-	case err != nil:
+	case !known:
 		return nil
 	}
 	out.Rev, out.WebURL = "", webURL
@@ -68,6 +68,20 @@ func (d *Devices) attentionFor(id, webURL string) *link.Attention {
 	sum := sha256.Sum256(b)
 	out.Rev = hex.EncodeToString(sum[:8])
 	return &out
+}
+
+// summaryEligible is whether computer id gets the "Needs you" summary as it is: not a work computer, nor one waiting
+// to be confirmed. known is false while the hub cannot say which computers wait (a work computer is known anyway). The
+// presence of a computer counts by the same rule (presence.go).
+func (d *Devices) summaryEligible(id string) (eligible, known bool) {
+	if d.IsWork(id) {
+		return false, true
+	}
+	pending, err := d.PendingMachineIDs(context.Background())
+	if err != nil {
+		return false, false
+	}
+	return !slices.Contains(pending, id), true
 }
 
 // readyForAttention: the link's endpoints went out, so a summary may follow them; the latest goes now.

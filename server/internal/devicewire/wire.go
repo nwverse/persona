@@ -21,6 +21,11 @@ const (
 	EventState = "devices.state"
 	// EventNode {machine_id, event, params}: one of a node's one-way events, as it came, in the order they came.
 	EventNode = "devices.event"
+	// EventDesktops Desktops: the manager's computers whose Persona Link says the user is at them now, all of them, on
+	// every presence the Persona Links say (once a minute while active), after a devices.state when it changed, and in
+	// full after each handshake. Apart from devices.state, whose every change goes to the apps as their machine list.
+	// Older hubs ignore it.
+	EventDesktops = "devices.desktops"
 	// MethodRequest {machine_id, method, params, request} → the hub's answer to a node's request the hub answers
 	// (interaction.create, assistant.lark, mcp.tools, mcp.call).
 	MethodRequest = "devices.request"
@@ -253,6 +258,21 @@ type State struct {
 	Derived   bool      `json:"derived,omitempty"`
 	// Paths are its ways, for the admin page.
 	Paths []PathInfo `json:"paths,omitempty"`
+}
+
+// Desktops is EventDesktops' params.
+type Desktops struct {
+	Desktops []Desktop `json:"desktops"`
+}
+
+// Desktop is a computer whose Persona Link says the user is at it (docs/operations/link.md "Presence"), until
+// ActiveUntil; the hub counts it as a desktop for "Phone Muted" while that is ahead and Notifies holds.
+type Desktop struct {
+	MachineID string `json:"machine_id"`
+	// Since: when this run of presence began (the apps show it).
+	Since       time.Time `json:"since"`
+	ActiveUntil time.Time `json:"active_until"`
+	Notifies    bool      `json:"notifies"`
 }
 
 // PathInfo is a path as the admin page and the machine list show it.

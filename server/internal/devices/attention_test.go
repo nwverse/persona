@@ -217,6 +217,7 @@ type attConnector struct {
 
 	mu       sync.Mutex
 	features []string
+	presence *link.PresenceInfo // what its menu bar app says (presence_test.go)
 	held     string
 	posts    []link.Attention
 	fail     int
@@ -236,7 +237,7 @@ func newAttConnector(t *testing.T) *attConnector {
 		switch r.URL.Path {
 		case link.ConnectorInfoPath:
 			_ = json.NewEncoder(w).Encode(link.ConnectorInfo{Machine: "example-service", Version: "test", Features: ac.features,
-				AttentionRev: ac.held})
+				AttentionRev: ac.held, Presence: ac.presence})
 		case link.ConnectorAttentionPath:
 			var a link.Attention
 			if json.NewDecoder(r.Body).Decode(&a) != nil {

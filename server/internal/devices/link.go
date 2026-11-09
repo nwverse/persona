@@ -162,6 +162,8 @@ func (d *Devices) acceptLink(conn *websocket.Conn, a devicewire.Accept) {
 			l.deliver(msg.ID, linkStream{err: fmt.Errorf("Persona Link: %s", textfmt.Clip(msg.Error, 300))})
 		case "rename":
 			go d.linkRename(l, msg)
+		case "presence":
+			m.takePresence(l, msg)
 		}
 	}
 	cause := context.Cause(ctx)
@@ -365,6 +367,7 @@ func (m *Machine) dropLink(l *mgrLink, cause error) {
 		return
 	}
 	m.link, m.linkDown = nil, cause
+	m.presence = nil // the summary cannot reach this computer now: it no longer stands in for the phone
 	if !m.online && cause != nil {
 		m.err = cause.Error()
 	}

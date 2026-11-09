@@ -438,6 +438,9 @@ func (m *Machine) probeService(ctx context.Context) {
 		}
 		was := m.svc.ok
 		m.svc.probed, m.svc.ok, m.svc.rtt, m.svc.err = time.Now(), ok, rtt, err
+		if !ok {
+			m.presence = nil // what an unreachable connector said last no longer stands
+		}
 		if version != "" {
 			m.svc.version = version
 		}
@@ -497,10 +500,17 @@ func (m *Machine) probeService(ctx context.Context) {
 	}
 	set(true, rtt, "", info.Version)
 	m.mu.Lock()
+	present := false
 	if !m.svcMovedOnLocked(gen) {
 		m.svc.attention, m.svc.attRev = slices.Contains(info.Features, link.FeatureAttention), info.AttentionRev
+		present = m.presence != nil
+		m.keepPresenceLocked(info.Presence, time.Now())
+		present = present || m.presence != nil
 	}
 	m.mu.Unlock()
+	if present {
+		m.d.reportDesktops(false) // the presence's new active_until, or its end (presence.go)
+	}
 	m.wakeAttention() // posted by the machine's own sender: a connector slow to take it holds up no probe
 }
 
