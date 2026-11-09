@@ -2717,13 +2717,83 @@ A call that asks for progress (`_meta.progressToken`, which Claude Code always s
 
 | Tool | Executed by | Description |
 | --- | --- | --- |
-| `phone_*` | iPhone App | declared by the App via `register_phone` (contacts, calendar, reminders, location, health, photos, clipboard, device info, notifications…) |
+| Device `phone_*` tools | phone App | declared by the App via `register_phone` (contacts, calendar, reminders, location, health, photos, clipboard, device info, notifications…); the hub adds `queue_if_offline` to confirmed writes (below) |
+| `phone_write_queue_list` / `phone_write_queue_cancel` | hub | inspect retained phone writes / cancel an unsent write, including when all phones are offline |
 | `mail_accounts` / `mail_search` / `mail_read` | hub | read-only |
 | `mail_save_attachment` | node on the agent's machine | writes a file under `<data dir>/attachments/mail`; the bytes come from the manager over `mail.attachment` (at most 25 MB, only while the mail connector offers the tool to that caller); `mail_read` lists the attachment ids |
 | `mail_send` | hub (mail connector) | write: goes through `connector_gate`; by default a `permission` interaction is created before sending, and it sends only after approval on the phone. Bad params are refused directly without a card |
 | `github_search` / `github_read` / `github_diff` / `github_checks` | hub (GitHub connector) | read-only, see the next row |
 | `github_comment` / `github_review` | hub (GitHub connector) | write: goes through `connector_gate`; by default each one is confirmed on the phone. The card states repo#number "title", the full text and who will see it; approvals start with [Approve] |
 | `<connector id>_*` | hub (connector) | only for the assistant, and only for connectors whose status is `ok`. Read-only tools run directly; writes first go through `connector_gate` in the manager's manager.json, which by default creates a `permission` interaction (the card states who will see it), and run only after approval on the phone (`server/internal/connector`) |
+
+### Phone write queue
+
+The hub adds an optional `queue_if_offline: boolean` to the schemas of `phone_calendar_create_event`,
+`phone_reminders_create`, `phone_reminders_update`, `phone_reminders_complete`, `phone_reminders_delete`, and
+`phone_health_write_sample`. Without true, the existing immediate call and background wake behavior stays unchanged.
+With true and no connected device offering the tool, the hub persists a queue entry and immediately returns that record
+as JSON text in a successful `ToolResult`. After admission it schedules a best-effort silent push in the background,
+using the normal most-recent-device selection and 30-second wake throttle; the reply does not wait for the push or a
+connection. Without configured push, this attempt does nothing. A woken phone registers its tools and triggers delivery
+as usual. With a connected device the hub calls the tool normally. The hub strips the option
+before sending `tool_call`; existing apps need no change, and reads and writes without phone confirmation cannot queue.
+The tool must also appear in a retained phone registration before the hub accepts it into the queue. A queued receipt
+means the request was accepted for later delivery; it does not mean the change was saved.
+
+The queue belongs to this hub's transport, shared across its computer sessions and devices. An entry contains:
+
+```text
+PhoneWrite {
+  id: string, tool: string, args: object,
+  state: queued | delivering | succeeded | declined | failed | uncertain | cancelled,
+  result?: ToolResult,
+  created_at: RFC3339, updated_at: RFC3339
+}
+```
+
+| Operation | Response |
+| --- | --- |
+| MCP `phone_write_queue_list {id?}` | `{items: [PhoneWrite], pending_count: N}`; an optional ID filters the list, but the count always includes all pending entries |
+| MCP `phone_write_queue_cancel {id}` | The cancelled `PhoneWrite`; an already-cancelled ID returns the same record, otherwise an error if missing or no longer queued |
+| `GET /api/v1/phone/write-queue?id=<optional id>` | The same list envelope; records in enqueue order, empty `items` if the ID is not retained |
+| `POST /api/v1/phone/write-queue/{id}/cancel` | The cancelled record (also for a repeated cancellation); 404 if missing, 409 for any other nonqueued state |
+
+Both HTTP routes use normal hub authentication and require full credentials; answer-only devices and extension tokens
+cannot access them. They need no phone connection. Clients can poll the list on connection, foregrounding, and while a
+queue view is visible. `pending_count` counts `queued` plus `delivering` and can supply a badge. This API prepares the data for an App queue view; iOS and Android do not yet display that view or badge.
+
+At `register_phone`, the hub schedules a single asynchronous delivery loop. It picks the oldest queued entry whose tool
+is currently registered by a connected phone, commits `delivering` before sending, and waits for that phone's result
+before taking another entry. The normal phone confirmation remains mandatory. Queue delivery never holds the hub's
+global lock while waiting for storage or the phone, and registration never waits for delivery. A disconnected or disabled
+tool leaves its entries queued until a capable device registers it again. Each delivery pass reads only queued entries
+in enqueue order, at most 100, using the queue's partial index; its idle timer does not load terminal history. The list
+API and list tool use a plain SELECT without taking the queue mutation lock or deleting records.
+
+| State | Meaning |
+| --- | --- |
+| `queued` | Persisted and not sent; cancellation is still possible |
+| `delivering` | Claimed for delivery; awaiting the normal phone confirmation/result |
+| `succeeded` | Phone returned a successful result |
+| `declined` | Phone explicitly returned `The user declined on the phone.` with `isError: true` |
+| `failed` | Phone returned another tool error; the result includes its explanation |
+| `uncertain` | Confirmation timed out, the sending connection closed, or the hub restarted while delivery was in progress; never automatically resent |
+| `cancelled` | Cancelled before delivery began |
+
+Each send waits up to `phoneConfirmWait` (30 minutes), independent of the original caller's request lifetime. A timeout
+or disconnect does not prove the phone made no change, even when a late result arrives after reconnecting; inspect the
+actual phone data before submitting another write. Restart recovery changes leftover `delivering` entries to `uncertain`
+and preserves queued entries. There is no automatic retry for terminal records.
+
+Deduplication covers only `queued` entries: the same tool and normalized JSON arguments reuse the existing ID (key order
+and whitespace are irrelevant). It does not cover already-delivering or terminal entries. The limit is 100 pending
+entries (`queued` plus `delivering`), with at most 64 KiB of arguments each. Cleanup runs only on admission and when
+recording a delivery result, removing terminal records older than 30 days and keeping the newest 1,000 terminal records.
+Reads, cancellations, and startup recovery do not clean up: older records and additional terminal records from
+cancellation or recovery remain visible until the next cleanup. The total table remains bounded at 1,100 records.
+Stored results are limited to 64 KiB; when a phone returns more, the hub stores an explanation instead of its full result
+without changing the outcome state. Pending entries do not expire or get evicted when a queue is full.
+See `docs/apple/phone-tools.md`, "Offline write queue", for caller behavior and confirmation details.
 
 ## Connector API
 
