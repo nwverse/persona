@@ -59,11 +59,15 @@ object MachineManagementModule {
     }
 
     // The machine ids come from the merged lists: each call goes to the group the id names, on that group's connection.
-    // Subscription quota belongs to a hub: the selected group's, like the other hub-level pages.
-    @Provides @Singleton fun machines(stacks: GroupStacks, runtime: ConnectionRuntime): MachineManagement = mergedMachineManagement(object : MachineRoutes {
+    // Subscription quota belongs to a hub: every open group's, each on its own hub, as the overview lists every group's machines.
+    @Provides @Singleton fun machines(stacks: GroupStacks): MachineManagement = mergedMachineManagement(object : MachineRoutes {
         override suspend fun <T> on(machineId: String, call: suspend (MachineManagement) -> T): T =
             stacks.use(GroupKeys.namespaceOf(machineId)) { call(HttpMachineManagement(it.connection).inGroup(it.names)) }
-    }, selected = { HttpMachineManagement(runtime.connection()) })
+    }, usage = {
+        stacks.stacks.value.map { stack ->
+            GroupUsageRead(stack.namespace.orEmpty()) { stacks.use(stack.namespace) { HttpMachineManagement(it.connection).usageWindows() } }
+        }
+    })
 
     // A hub-level page: the selected group's hub, whose own plain ids it reads and sends back (docs/android/android.md "Multiple hubs").
     // Bound to the pairing at each call, like model configuration: switching hubs reads the new hub's switches.
