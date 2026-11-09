@@ -85,7 +85,7 @@ If the web client says "Secure connection isn't enabled on the hub yet", the old
 | **Needs You** and a count beside the icon | Sessions waiting on you (newer hubs only). Click one to open it in the web app; **And N More…** opens the web app |
 | **Set Web Address…** | Where the web app opens. Needed when the hub has no https public URL, or when you use the web app at another address |
 
-See [link.md](link.md), "Menu-bar app", for the icon states.
+See [link.md](link.md), "Menu bar App or command-line Link", for the icon states.
 
 ## Upgrade
 
@@ -127,6 +127,6 @@ If you must copy it, right-click › Open, or run `xattr -dr com.apple.quarantin
 **"Link connected, but the hub cannot reach the local node"**: run `"/Applications/Persona Link.app/Contents/Helpers/persona-link" node status` to check whether the persistent node service is installed
 and loaded by launchd. Logs are in `~/.persona/node-attach.log`. If not installed, click **Install local node service** in the menu.
 
-**The menu-bar panel has the old square corners and thin border**: the app was built with an older script. Pull the latest code and run `install` again (see [lessons/macos.md](../lessons/macos.md), "Persona Link's panel kept the old appearance", for why).
+**The menu-bar panel has the old square corners and thin border**: the app was built with an older script. Pull the latest code and run `install` again (see [lessons/macos.md](../lessons/macos.md) for why).
 
 **Read logs**: `tail -f ~/.persona/link.log`, or `"/Applications/Persona Link.app/Contents/Helpers/persona-link" logs -f`. On a computer that used the older Persona version, these files may still live under `~/.persona/` ([config.md](config.md), "Naming and configuration").

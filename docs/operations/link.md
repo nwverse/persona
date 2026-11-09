@@ -592,7 +592,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - Default bundle id is the placeholder `com.example.persona.link`, overrideable by `mac.link_bundle_id` in `~/.config/persona/config.json` or environment variable
   `PERSONA_LINK_BUNDLE_ID` (old name `PERSONA_LINK_BUNDLE_ID`).
 - After building, `vtool` changes the executable's recorded SDK version to the actual SDK used: xcodebuild records Swift packages as deployment target 15.0, making the system draw menu bar panels in the old SDK style
-  ([lessons/macos.md](../lessons/macos.md), "Persona Link's panel looks old").
+  ([lessons/macos.md](../lessons/macos.md)).
 - `UNIVERSAL=1` also builds Intel.
 
 **System settings**

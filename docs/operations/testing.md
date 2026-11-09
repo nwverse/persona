@@ -599,7 +599,7 @@ The main chat goes through the mock's `POST /api/v1/inbox/{id}/handoff` (#1194; 
 the mock a hub without that route (404). A hand-off whose answer got lost (`POST /mock/fault` lost_receipt) keeps the sheet and says to look in the chat first; sending again goes under
 the same `client_id` (one hand-off in `/mock/sent_to`) and adds how to send it anyway (`testAHandOffThatMayHaveGoneSaysToLookFirst`, light and dark shots in `PERSONA_SHOTS`).
 
-Weak/offline network (`ConnectionTests`, `docs/apple/ios.md` ("Connection state")): `PORT=18760 python3 scripts/mock/mock_hub.py &`,
+Weak/offline network (`ConnectionTests`, `docs/apple/ios.md` ("Connection status")): `PORT=18760 python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18760 xcodebuild test … -only-testing:PersonaUITests/ConnectionTests`: 16-second outage, title unchanged first 8-second grace (`docs/operations/hub-restart.md`), then Connecting,
 restored on return; 0.2-second outage (~1-second reconnect) never changes title. Offline send says Auto-send when connected, received once after recovery,
 even further drops/background (no background reconnect/send until foreground)/App relaunch (disk outbox). Server restart dedup: `TestSendRetryAfterRestartAndRefusal`.
@@ -696,14 +696,14 @@ Each case records body counts/main-thread time per push (`PERF` logs/attachments
 
 - Mock: `PORT=18797 MOCK_AGENTS=1 MOCK_CHURN=1 python3 scripts/mock/mock_hub.py &`; `GET /mock/churn?n=12&ms=400` pushes n rounds (each machine's session list—working text changes,
   two working Agents alternate newest—machine list, one new step per open chat, reply every 4 rounds). `&steps=N` steps/chat/round; `&final=1` ends turn after pushes (final reply, Working→done); `/mock/churned` progress. `MOCK_CHURN=1` adds first-chat screenshot +5 machines (menu scroll). `&inbox=1` changes Inbox/pending items each round; `&waiting=1` adds waiting Agent,
-  answered next round (badge changes; real hub pushes these continually, session-only tests miss badge-driven rebuilds, `docs/archive/apple/live-updates.md` ("It returned")).
+  answered next round (badge changes; real hub pushes these continually, session-only tests miss badge-driven rebuilds, `docs/archive/apple/live-updates.md` ("It came back")).
 - `TEST_RUNNER_PERSONA_CHURN_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/LiveUpdateTests`.
 - Run the default navigation: compact iPhone uses the shell; regular-width iPad keeps its sidebar. `launchPersona()` does not choose navigation.
   `LiveUpdateTests`, `ChatFollowTests`, `ScrollUnderPushTests` must preserve these defaults in both styles.
 
 ### Pushes while scrolling (`ScrollUnderPushTests`)
 
-During finger drag/inertia, content only follows finger/inertia despite pushes (`docs/archive/apple/live-updates.md` ("Forced refresh while scrolling")).
+During finger drag/inertia, content only follows finger/inertia despite pushes (`docs/archive/apple/live-updates.md` ("Forced refreshes while scrolling")).
 Drag/fling Agents, Agent chat, Persona chat ~20 seconds while mock follows real cadence: `/mock/churn?n=10&ms=2000&inbox=1&waiting=1&real=1`,
 every 2 seconds. `&real=1` alternates working text between one/two lines and finishes/restarts one Agent every third round (space reorders).
 
@@ -898,12 +898,12 @@ with denial reason/already answered), question then approval, two Plan questions
   `PERSONA_CODEX_COLS=64` also narrow-window runs (`stty cols`, headless splits don't narrow); `PERSONA_CODEX_CASES=a,b` selected cases.
 - Uses own `~/.codex` login, real tiny model calls. Trust writes `~/.codex/config.toml`, rollouts in `~/.codex/sessions`;
   both cleaned on exit. No local Go: cross-build on hub/copy back.
-- `PERSONA_CODEX_DAEMON_BINS="<0.163 codex>"` daemon route (`docs/integrations/codex.md` ("Sessions on daemons")): tests own
+- `PERSONA_CODEX_DAEMON_BINS="<0.163 codex>"` daemon route (`docs/integrations/codex.md` ("Sessions on the daemon")): tests own
   `codex app-server --listen unix://<temporary directory>/app.sock`, restartable child, never active daemon. TUI `--remote … -C <directory> -s read-only`,
   node discovery disabled, only this app-server, fake hub answers/withdraws cards. Async/blocking questions, command/edit/permission approvals, denial reasons,
   computer-first/phone-first/simultaneous answers, restart, draft send; first `PERSONA_CODEX_BINS` (e.g. 0.153) alongside confirms terminal route.
   Permission tests enable `features.request_permissions_tool` in test app-server.
-- Phone start (`TestLiveCodexStart`, `docs/integrations/codex.md` ("Creating from the phone")): real `session.start`, first message quotes/newlines/`$`/backticks/Chinese/thousands of characters.
+- Phone start (`TestLiveCodexStart`, `docs/integrations/codex.md` ("Starting from the phone")): real `session.start`, first message quotes/newlines/`$`/backticks/Chinese/thousands of characters.
   Each daemon binary via `--remote` on own server (app-server route), same with `-c` (terminal route, Connection explanation), first BINS (0.153).
   Each round: reply ≤60 s, correct thread, exact rollout first message, one session/pane,
   correct route, second phone message received after first reply; missing-command launcher errors immediately. Needs local personad (`codex-start`), built by script.
@@ -1188,9 +1188,9 @@ Compare same real pushes before/after hub session-list/Live Activity timing chan
 2. Replay `PERSONA_PUSH_RECORDING=~/push.jsonl go test ./internal/hub -run TestPushReplay -v`: before-recorded/after-generated
    counts/bytes per minute; timestamped Live Activity changes pass through coalescing/throttling, report notifications/hour with App closed and longest island/hub mismatch, fail beyond limits.
 3. Real `broadcastSessions` decides sends, matches byte-comparison results (decode retains fields); parallel incremental App (`sessions_delta`) counted.
-4. Background `AgentSync` fetches: `python3 scripts/diag/agentsync_replay.py ~/push.jsonl`, recorded rev/state (45/min→9/min, `docs/apple/ios.md` ("Background sync")).
+4. Background `AgentSync` fetches: `python3 scripts/diag/agentsync_replay.py ~/push.jsonl`, recorded rev/state (45/min→9/min, `docs/apple/ios.md` ("Information architecture")).
 
-19-minute recording 2026-11-02 (battery investigation, `docs/apple/live-activity.md` ("Push cadence"), `docs/server/server.md` ("Push volume to App")):
+19-minute recording 2026-11-02 (battery investigation, `docs/apple/live-activity.md` ("Push cadence"), `docs/server/server.md` ("Traffic pushed to the app")):
 
 | | Before | After |
 | --- | --- | --- |
@@ -1215,4 +1215,4 @@ xcrun xcresulttool export attachments --path /tmp/shots.xcresult --output-path /
 `PERSONA_FLEET_SAMPLE=current` doesn't launch App, captures current activity (real APNs, `docs/apple/live-activity.md` verification).
 Shared island: `scripts/app/island_peer.sh <simulator udid>` installs sample `apple/IslandPeer` (one "8 min" activity),
 add `TEST_RUNNER_PERSONA_ISLAND_PEER=dev.example.islandpeer`, extra `-shared` coexistence and `-landscape` (sample foreground landscape, Persona alone on island);
-`TEST_RUNNER_PERSONA_FLEET_COUNT=12` changes fake counts to 12 for two/three digits. iPhone 18 Pro/17 Pro differ, screenshot both (`docs/apple/live-activity.md` ("Sharing Dynamic Island with other Apps")).
+`TEST_RUNNER_PERSONA_FLEET_COUNT=12` changes fake counts to 12 for two/three digits. iPhone 18 Pro/17 Pro differ, screenshot both (`docs/apple/live-activity.md` ("Sharing the Dynamic Island with other apps")).

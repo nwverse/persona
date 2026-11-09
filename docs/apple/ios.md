@@ -140,7 +140,7 @@ Chat page:
   DEBUG `-tab dev -openMachinePage <machine id>`.
 - Machines (`docs/server/machines.md` ("App")): all machines in one page, each card online/system/Agent counts (Needs you / Working / Idle), current CPU/memory/network,
   1-hour mini charts, alerts, Redeploy on version mismatch, urgent first. Details show Agents above (open chats), then charts
-  (1 / 6 / 24 hours, press to scrub), system info, launchers. Below Engine: What this computer can do (#3018, node self-check by capability, expandable checks; stale generated files offer confirmed Repair, `docs/server/machines.md` ("Self-check")); entries drawer Machines, Settings › Machines, Agents menu Machines (old Machine monitoring merged).
+  (1 / 6 / 24 hours, press to scrub), system info, launchers. Below Engine: What this computer can do (#3018, node self-check by capability, expandable checks; stale generated files offer confirmed Repair, `docs/server/machines.md` ("Doctor: what this computer can do")); entries drawer Machines, Settings › Machines, Agents menu Machines (old Machine monitoring merged).
   Subscription Usage below cards (#2889, `docs/server/usage-windows.md` ("UI (iOS / Mac)")): Codex / Claude / gateway accounts, one row per window, hidden with no data.
   DEBUG `-tab dev -openMonitor all|<machine id> [-openMonitorRange 6h|24h] [-openMonitorScrub 0.55]`.
 - Away recap: Claude Code away_summary becomes Away recap card, removing "(disable recaps in /config)"; disable in Settings › Claude Code Settings.
@@ -370,7 +370,7 @@ Chat page:
     ⋯ › Select turns the list into checkmarks with a bar under it: the count, Move, and the trash button; Done ends it. A trash toast has Undo (puts it back through `files/restore`); there is no permanent delete.
     A move to a taken name asks Replace (the one there goes to the trash) / Keep Both. These show only when hello's `features` has `file_edit` (or the hub sends none).
     On an iPad, files dragged in from another app (Files, Photos) upload into the folder shown, with an accent outline while they are over it.
-  - **Auto-refresh** (#3089, web #2439, `App/FsLive.swift`, `Views/Session/FsLiveModifier.swift`, `docs/protocol/protocol.md` ("Automatic file refresh")):
+  - **Auto-refresh** (#3089, web #2439, `App/FsLive.swift`, `Views/Session/FsLiveModifier.swift`, `docs/protocol/protocol.md` ("File auto-refresh")):
     foreground Files/Git sends WebSocket `fs_watch` (current directory/Git marks, Git state; same cwd combined),
     `fs_changed` debounced 200 ms then reread in place without loading animation (retain older loaded commits if latest unchanged); unsubscribe off foreground (`.onTabVisibility`),
     reread on return and re-send/reread on socket reconnect. Old hubs/nodes lacking `fs_watch` keep pull-to-refresh / ⌘R. Open diffs/file viewers do not refresh yet. Mac shares panels.
@@ -438,7 +438,7 @@ Chat page:
   (`Answered.answerLines`) say declined, canceled or opened, or list the values with secrets hidden. Siri / Shortcuts never accept one (`ApproveFirstIntent`), and the
   watch summary leaves them out (`Interaction.showsOnWatch`: an older watch build would fail to decode the whole summary). Not pushed while the app is closed (#2433).
   `ElicitationCardTests` mock `MOCK_ELICITATION=1` / `=unsupported`.
-- Input: above (at most 4 photos, resized 1600px; library videos uploaded as files to computer, message file card, protocol.md ("Sending video"); / shortcuts; Send becomes red Interrupt while working).
+- Input: above (at most 4 photos, resized 1600px; library videos uploaded as files to computer, message file card, protocol.md ("Sending videos"); / shortcuts; Send becomes red Interrupt while working).
 - Navigation subtitle: Machine · Model · State.
 
 ## New shell (ChatGPT-style, 2026-11-01)
@@ -506,7 +506,7 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
   (Pinned: Unpin all; Recent: New chat, View all). Each row has one circular marker (pale chat bubble color chosen by session id, adjacent rows different) + one-line title,
   with a right-side status dot only for Needs you / Unread / Working; the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
   (tap for profile), Settings on the right (drawer only; split mode has the tab bar beside it). Search lists only results (N chats). Long-press also copies session ID or ends the chat.
-  **Automatic chats** (#3264, `AutoConversations`): when the hub reports origins (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Assistant chat origins")),
+  **Automatic chats** (#3264, `AutoConversations`): when the hub reports origins (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Origin of assistant chats")),
   Recent lists only the user's own (`user` / `channel` / absent); Inbox AI twin, scheduled tasks, Lark /agent, derived chats and extension-created chats fold into the first row below Recent, "Automatic chats N",
   collapsed by default, local `assistant.autoOpen`; collapsed still shows waiting count / Working / Unread. Expanded shows small rows per origin (count, status) and All chats,
   opening `AutoConversationsView` (All · Mine · source filters, prefiltered by source); Recent's ⋯ also includes All chats. Same view in iPhone drawer, iPad split and Mac sidebar.
@@ -727,7 +727,7 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
 In `LauncherPicker` a blocked row is gray with the line (`LauncherBlockLine`) and an info mark; a tap opens `LauncherBlockedHelp` (why, How to Fix, the record under Details, Add Provider → `ProviderWizard`, Try Anyway picks it once the sheet has closed),
 never picks it. The form says the line under the launcher row when the launcher that will run is blocked (Model Settings' default, or picked anyway); Start stays enabled. Run Agent Here picks a usable launcher first, lists blocked ones last in its menu under a section titled with the line (a picker menu drops an option's second line), and says it in its footer once picked.
 Both read the list with `AppModel.launchersForStart` (fresh, not the cache). Add Provider is offered only for a computer in the hub-level group (the wizard saves there).
-`StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Launcher health in New Agent").
+`StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Mock-data screenshots").
 
 ## Recent setups in New Agent (#2134)
 
@@ -735,7 +735,7 @@ Every start from New Agent (the Codex and Claude Code paths, where the per-machi
 - The form's top section **Recent** (hidden when joining a space) shows at most three cards on the machines offered (`RecentSetupRow`, `Views/NewChat/RecentSetupCards.swift`): folder · machine, then launcher · model · mode · effort; Allow Everything in `Theme.cautionText` with its mark; an offline machine's card gray with Offline and not pickable. A card's context menu has Remove from Recent and Clear Recent Setups.
 - A tap fills every field and focuses First Message; it never starts. Another machine's card is applied once that machine's launchers and directories are in (`pendingFill`, after its saved defaults); the model is picked when `loadModels` moves to that launcher's list (`restoredModel`), before the list comes, so the efforts offered are the model's. A Codex card leaves the machine's Claude mode and effort as they were.
 - Picking a machine (on open or by its card) also restores the model of its latest setup with the launcher it restores (`RecentSetups.model`); none: the default. No new per-machine key: Siri's `newChat.machine`, `launcher.<m>`, `cwd.<m>` are unchanged.
-- UI flow: `RecentSetupsUITests` (`docs/operations/testing.md`, "Recent setups in New Agent").
+- UI flow: `RecentSetupsUITests` (`docs/operations/testing.md`, "Mock-data screenshots").
 
 ## An agent's live reply (#1309)
 
@@ -1303,7 +1303,7 @@ Like Telegram: network trouble shows no banner; **the page title becomes "small 
 
 ## SSH tunnels (fallback when direct connections fail, #891)
 
-When a device cannot reach the hub address, connect through an SSH server. For the mechanism, server setup and security, see [network.md, "Connect to the hub through an SSH tunnel"](../operations/network.md#经-ssh-隧道连-hub直连不通时的后备); this section covers the App side.
+When a device cannot reach the hub address, connect through an SSH server. For the mechanism, server setup and security, see [network.md, "Connecting to hub through SSH"](../operations/network.md#经-ssh-隧道连-hub直连不通时的后备); this section covers the App side.
 
 - **Code**: the tunnel itself is in the shared package `apple/Packages/PersonaSSH` (swift-nio-ssh + Network.framework, shared by iOS and Mac, not linked into the watch);
   App-side `Persona/App/SSHTunnels.swift` (one tunnel per hub, `SSHKeys`, routing `AppModel.sshRoute`),
@@ -1383,7 +1383,7 @@ The file viewer opens http(s) links within its own presentation layer: on iPhone
 | Tables | CSV, TSV, xlsx use a native table (`TableFileView`, #1294), see "Tables" below; the menu offers "View source" for CSV and "Open with Quick Look" for xlsx |
 | Office, iWork, RTF | docx, doc, xlsx, xls, pptx, ppt, pages, numbers, key, rtf use system QuickLook (#1293): downloaded through `…/file/download` to this preview's temporary file, then embedded in the page (iOS `QLPreviewController`, Mac `QLPreviewView`), without another presentation layer. The menu can "Share" the file (open in another App, save to Files). Closing the preview clears the temporary file. `.key` sent as text (PEM private key) still displays as code; iWork documents saved as folders (packages) are still listed as directories |
 
-**Thumbnails on the Files page** (#1293): for images, PDFs, videos and the documents above, when a row appears it requests a thumbnail from the computer holding the file (`GET …/file/thumb`, hub feature `file_thumb`, `docs/protocol/protocol.md` ("File previews")), sized to the row's tile × screen scale, at most three concurrently (`FileThumbnails`). Results are stored in memory and the cache directory by (hub group, machine, path, size, modification time): a changed file changes the key and is requested again. Every copy on disk is also checked once per launch with its ETag (`If-None-Match`, 304 keeps it), so a node that draws differently (#1303, JPEG orientation) replaces old pictures of unchanged files. If the machine cannot render it (`no_thumbnail`: Office on Linux, missing tools), or an old hub lacks the feature, the icon stays and no further request is made in this launch. Code and text get no thumbnails. A dark-page document thumbnail is not used; the icon is shown instead (in Mac dark mode, Quick Look gives RTF and text a dark background, making a black square in the list). Items with only a path (file cards in chats; `FileThumbnailIcon` passes size 0 and no time) are stored by path alongside the node's ETag and checked the same way: 304 reuses the old image, while a file regenerated at the same path gets a new one. The card's tile can be enlarged with `width` / `height`, and the image fits proportionally.
+**Thumbnails on the Files page** (#1293): for images, PDFs, videos and the documents above, when a row appears it requests a thumbnail from the computer holding the file (`GET …/file/thumb`, hub feature `file_thumb`, `docs/protocol/protocol.md` ("File preview")), sized to the row's tile × screen scale, at most three concurrently (`FileThumbnails`). Results are stored in memory and the cache directory by (hub group, machine, path, size, modification time): a changed file changes the key and is requested again. Every copy on disk is also checked once per launch with its ETag (`If-None-Match`, 304 keeps it), so a node that draws differently (#1303, JPEG orientation) replaces old pictures of unchanged files. If the machine cannot render it (`no_thumbnail`: Office on Linux, missing tools), or an old hub lacks the feature, the icon stays and no further request is made in this launch. Code and text get no thumbnails. A dark-page document thumbnail is not used; the icon is shown instead (in Mac dark mode, Quick Look gives RTF and text a dark background, making a black square in the list). Items with only a path (file cards in chats; `FileThumbnailIcon` passes size 0 and no time) are stored by path alongside the node's ETag and checked the same way: 304 reuses the old image, while a file regenerated at the same path gets a new one. The card's tile can be enlarged with `width` / `height`, and the image fits proportionally.
 
 **Binary files return only metadata**: when the hub has `file_stream`, the Files page reads with `stream=1` and binary files return only size, type and revision; images and PDFs are then fetched in full through `…/file/download` (no longer capped at 2 MB), QuickLook still downloads to a temporary file, and videos read segments on demand (#706, see "Video" above). Old hubs still return the entire file as base64.
 

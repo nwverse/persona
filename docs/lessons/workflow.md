@@ -1,6 +1,6 @@
 # Lessons: collaboration and process: multiple Agents changing the repo at once, commits, migration numbers, scripts
 
-Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md` ("Lessons"); index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
+Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
 - Remote-tracking refs and `FETCH_HEAD` are shared across worktrees (#2705). Another task's fetch can advance
   `origin/main` between inspection and local commit consolidation, turning an older tree into apparent reversions

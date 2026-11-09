@@ -10,11 +10,11 @@
 | --- | --- | --- |
 | 客户端优先解码 `state`，缺失或 null 时才按 `status` 回退，未知枚举变为 `unknown`。 | Models 的 `Session.init(from:)`、`AgentState.init(status:)` | `client_state_precedence` |
 | 客户端不根据 `seen_at` 或 `pending_interactions` 重算状态。 | Models 的 `Session.init(from:)` | `client_state_precedence` |
-| hub 遇到待处理交互或 blocked 优先产生 needs_you，其余按宿主状态派生。 | `server/internal/assistant/fleet.go` 的 `agentState`；`docs/protocol/agent-states.md`「统一状态」 | `hub_blocked`、`hub_pending_offline`、`hub_working_seen`、`hub_idle`、`hub_offline`、`hub_unknown` |
-| hub 对 done 使用 `seen_at >= updated_at - 2 秒` 的已看容差，未看过则 unread。 | `agentState`；`docs/protocol/agent-states.md`「看过」 | `hub_done_unseen`、`hub_done_seen_before_tolerance`、`hub_done_seen_at_tolerance`、`hub_done_seen_equal`、`hub_done_seen_after` |
+| hub 遇到待处理交互或 blocked 优先产生 needs_you，其余按宿主状态派生。 | `server/internal/assistant/fleet.go` 的 `agentState`；`docs/protocol/agent-states.md`「Unified states」 | `hub_blocked`、`hub_pending_offline`、`hub_working_seen`、`hub_idle`、`hub_offline`、`hub_unknown` |
+| hub 对 done 使用 `seen_at >= updated_at - 2 秒` 的已看容差，未看过则 unread。 | `agentState`；`docs/protocol/agent-states.md`「Seen」 | `hub_done_unseen`、`hub_done_seen_before_tolerance`、`hub_done_seen_at_tolerance`、`hub_done_seen_equal`、`hub_done_seen_after` |
 | idle 或 unknown 才算空闲，空闲会话有循环、后台任务或运行中的子代理时算待唤醒。 | Models 的 `isQuiet`；ChatsView 的 `Session.isWaiting` | `waiting_requires_quiet_state` |
 | 行优先级是需要你、完成未看、工作中、待唤醒、已屏蔽、已看，屏蔽不降低需要你的优先级。 | ChatsView 的 `rank` | `rank_all_states_and_mutes` |
-| 工作中用 `state_since`，缺失时用 `updated_at`，其余状态用 `updated_at`，时间缺失排最后，同时间按 `session_id` 升序。 | Models 的 `sortDate`；ChatsView 的 `ordered`；`CLAUDE.md`「同一时间再按 id」 | `working_since_then_id`、`working_since_then_id_reversed` |
+| 工作中用 `state_since`，缺失时用 `updated_at`，其余状态用 `updated_at`，时间缺失排最后，同时间按 `session_id` 升序。 | Models 的 `sortDate`；ChatsView 的 `ordered`；`CLAUDE.md`「Most common pitfalls」 | `working_since_then_id`、`working_since_then_id_reversed` |
 | 本任务在排序键和 session_id 都相等时追加完整 id 比较，确保跨机器次序确定。 | `CLAUDE.md`；ChatsView 的 `ordered` | `cross_machine_same_session_id`、`cross_machine_same_session_id_reversed` |
 | 快速筛选中的组内排序跳过 rank，只比较排序时间和 session_id。 | ChatsView 的 `ordered` | `quick_filter_ignores_rank` |
 | 显式会话屏蔽优先于 allowed，allowed 优先于空间屏蔽，屏蔽的普通空闲会话仍归已看。 | `apple/Shared/APIClient.swift` 的 `Pins.mutes`；ChatsView 的 `rank` | `mute_allow_and_explicit_override`、`rank_all_states_and_mutes` |

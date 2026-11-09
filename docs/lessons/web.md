@@ -454,7 +454,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Upward scroll position does not necessarily mean user action: composer height remeasurement briefly collapses it, growing the viewport and causing the browser to clamp `scrollTop` upward a few pixels; again, the event arrives late.
   Stop following only when the user is scrolling (upward wheel, touch, scroll keys, scrollbar drag, and within 700ms afterward) and position moves upward (`followsAfterScroll`).
 - When content below the list (composer, task dock, question card) grows, content stays unchanged but viewport shrinks. ResizeObserver must observe the viewport too, or the latest row is covered.
-- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "How to run").
+- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "Running it").
 
 ## Spreadsheet viewer (2026-11-04, #1310)
 

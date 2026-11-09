@@ -11,7 +11,7 @@
 
 - Run standalone release-worker tests on the oldest supported Python, including receipt verification and verified-artifact retries (#1077). Python 3.9 has no `hashlib.file_digest`; bounded reads into `hashlib.sha256` keep hashing portable without loading an APK into memory. Cover empty files and binary inputs spanning multiple chunks.
 
-Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`, "Lessons"; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
+Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
 - Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
 
@@ -195,7 +195,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   Add a `-tab` value with every new page. To reproduce "passes alone, fails after other tests", inspect `Library/Preferences/<bundle-id>.plist` in the app container first
   (`simctl spawn … defaults write` does not write into the app container).
 - "Push does not interrupt" must push while the finger is still down or momentum is active. Pushing after scrolling stops misses whole-screen jumps: `LiveUpdateTests` "middle row stays still" was always green,
-  while real-hub Agents lists jumped over 900 pt during scroll. Measure frame by frame with `PerfScroll` (`docs/operations/testing.md`, "Push during scrolling").
+  while real-hub Agents lists jumped over 900 pt during scroll. Measure frame by frame with `PerfScroll` (`docs/operations/testing.md`, "Pushes while scrolling").
 - Mock hubs must answer like real hubs, especially unready states: with Telegram disabled, real hub cannot list its capabilities (the program has never run; capabilities are self-reported),
   but mock always advertised `login`, leaving tests/screenshots green while the real page lacked a switch, said "Configure in hub.json", and could not enable it (2026-11-03, #622).
   Before writing a mock, inspect the real path's response in every state; start tests from what users first see (disabled).

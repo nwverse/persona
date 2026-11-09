@@ -473,7 +473,7 @@ type voiceRun struct {
   - #5506: when the gate is already open (the user spoke earlier) but the App's audio had the user's voice after their last caption, the caption of the request that triggered the delegation is still on its way (it comes 0.1–0.4 s after the call): wait for it too, within the same `gateWait`, then build the message. Without it after `gateWait`, send what was captioned.
     #5790: not when the fast layer's reply that made the call ended (`response.completed`) without any audio: the tested service holds that caption until the call's result (lessons "Late captions on replies that only call a tool"), so it cannot come in time and waiting only delayed the message by the full 2.5 s. With the gate open the message goes as soon as that reply ends; a closed gate is unchanged. Upstreams that do not say when replies start and end wait as before.
   - Agent messages do not request "keep replies brief".
-  - Still `<persona-context>`: attributed blocks have not migrated (`../protocol/protocol.md` ("Rename")).
+  - Still `<persona-context>`: attributed blocks have not migrated (`../protocol/protocol.md` ("Tags in messages")).
 - **Timeout**:
   - Hub send wait: normally 90 seconds; session `offline` or `Starting`, 5 minutes.
   - Extension waits another 30 seconds.
@@ -576,7 +576,7 @@ Titles, goals, progress, recent turns, card questions, and Agent titles go insid
    - Threshold basis: tested model keeps speaking for `嗯嗯` (mm-hmm), 0.43 seconds, but stops for `等一下` (wait), 0.64 seconds, and `对对对` (yes, yes, yes), 0.70 seconds. Do not use the model's own 0.8-second stopping delay as threshold: it would miss short interruptions the model honors, while most abandoned audio is already in the App (9–10× realtime).
      Residual echo and ambient noise on real devices make continuous energy more likely; confirm 0.5 seconds on hardware;
    - protocol 1: upstream interruption sends `clear`, without an energy rule; ignore `incomplete` replacing an already `completed` reply (#4719, same as protocol 2).
-8. **Heartbeat** (#3503, both protocols): a working run (not `held`, not another-channel round) with `heartbeatAfter` (2 minutes) of call silence gets `progress.md`, "Still working, elapsed time":
+8. **Heartbeat** (#3503, both protocols): a working run (not `held`, not another-channel round) with `heartbeatAfter` (2 minutes) of call silence gets `progress.md`:
    "Sound" includes model playback not finished, voiced App audio, user captions or typed text, and this run's last announcement;
    speak only `activity` category ("Running tests / reading", no commands or paths) and time since assignment (observed runs since session became working), never Agent text, and do not close the user-speech gate.
    #3503 real-service run: a task took 2.5 minutes; at 2 minutes the model said "Still running, over two minutes, no result yet", without reading any command arguments.

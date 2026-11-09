@@ -511,7 +511,7 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
   Scheduled tasks themselves (e.g. a morning briefing's own chat) later moved to the main-chat category too (#1544): work in the assistant directory shouldn't use the "new Agent" default.
 - Occasional launcher `command not found: claude`, or node-started chats reporting `send to claude: write |1: file already closed` (2026-11-05, #2581), usually means npm is globally reinstalling Claude Code (auto-update moves the old install first, writes the new one about 2.5 seconds later). Long-lived old claude processes (months-old sessions in botmux / herdr) each periodically detect "new version", reinstall, then never restart themselves, causing reinstalls every minute or two (7 times in 8 minutes measured). Check repeated `install --global @anthropic-ai/claude-code` in `~/.npm/_logs/` and versions via `/proc/<pid>/exe --version`; the root fix is ending old processes. node retries early "command missing" exits every 2 seconds, at most 3 times, and reports stderr instead of a pipe error.
 - SSH sessions can't read macOS's login keychain: claude started by an SSH-started node gets 401 if its API key comes from the keychain (Agents in herdr work because herdr is in the login session).
-  Install resident node on that Mac (`scripts/deploy/node-launchd.sh install`, `docs/server/server.md` ("Resident node")).
+  Install resident node on that Mac (`scripts/deploy/node-launchd.sh install`, `docs/server/server.md` ("Persistent node")).
 - Go `UnixListener.Close()` deletes the socket file by default: during redeploy, old node exit deleted the new node's `~/.persona/node.sock`,
   silently disabling every hook / MCP (unreachable hooks allow the TUI). Fixed with `SetUnlinkOnClose(false)` and a rebuild self-check every 15 seconds.
   Suspect inactive hooks / MCP? Run `personad node doctor` first (actual socket response, generated files matching the binary, command paths still present; `docs/integrations/claude-integration.md` ("Self-check")).
@@ -1096,7 +1096,7 @@ Official extension catalogs embed payload and signatures in one document. Reject
 - Future long-lived daemon-independent processes follow `launchHerdrServer`: transient units plus no-user-bus fallback, with generated command lines tested separately.
 - Known, not fixed:
   - Hub self-update rollback watchdog (`startWatchdog` in `hub/selfupdate.go`) only uses `setsid`, remaining in the hub cgroup under systemd.
-  - Without resident node (`personad-node`), hub's local `node --stdio` and assistant claude live in `personad.service` and stop on hub restart (`docs/operations/hub-restart.md` ("Uninterrupted chats")).
+  - Without resident node (`personad-node`), hub's local `node --stdio` and assistant claude live in `personad.service` and stop on hub restart (`docs/operations/hub-restart.md` ("Chats not interrupted: hosting by the resident node")).
   - `herdrstart_test.go` doesn't cover the `systemd-run` command branch.
   - Whether macOS `setsid` protects herdr from launchd job-stop cleanup hasn't been checked on Mac; Windows node doesn't launch herdr, so no equivalent issue.
 - When a field can mean either "package to send" or "built-in, no package", add a package-only accessor (2026-11-05, #1830 wrap-up, `Manifest.NodeProgram()`):

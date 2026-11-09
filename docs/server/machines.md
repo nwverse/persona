@@ -304,7 +304,7 @@ Follow dataviz rules:
 
 ## Doctor: what this computer can do (#2429)
 
-The web Machines page has **What this computer can do** (modeled on Moshi's Doctor page), presenting `personad node doctor` results (`docs/integrations/claude-integration.md`, "Doctor") by feature, not a string of check names.
+The web Machines page has **What this computer can do** (modeled on Moshi's Doctor page), presenting `personad node doctor` results (`docs/integrations/claude-integration.md`, "Self-check") by feature, not a string of check names.
 iOS / Mac machine detail (#3018, `apple/Persona/Views/Machines/NodeHealthSection.swift`, grouping in `NodeHealthModel.swift`'s `NodeHealth`) places it after Engine. Grouping, states and copy match web; changing one requires updating the other.
 The native Mac app is frozen ([mac.md](../apple/mac.md)): it shows this section through the shared iOS view and gets no Mac-only changes for it.
 
