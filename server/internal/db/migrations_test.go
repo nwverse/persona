@@ -298,6 +298,36 @@ func unifiedMigrate(t *testing.T, url string, until int) {
 	}
 }
 
+// Opening a database that is up to date only reads schema_migrations: no ALTER TABLE, no renumbering write. So a start
+// does not wait for a session that holds SHARE on the table, and takes no ACCESS EXCLUSIVE lock or transaction id.
+func TestOpenUpToDateOnlyReadsSchemaMigrations(t *testing.T) {
+	ctx := context.Background()
+	url := migratedDatabase(t, AllSets)
+	reader, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close(ctx)
+	if _, err := reader.Exec(ctx, `ALTER DATABASE `+pgx.Identifier{DatabaseName(url)}.Sanitize()+` SET lock_timeout = '2s'`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := reader.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `LOCK TABLE schema_migrations IN SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []Sets{AllSets, HubSet, ManagerSet} {
+		d, err := Open(ctx, url, s)
+		if err != nil {
+			t.Fatalf("open %d while a reader holds schema_migrations: %v", s, err)
+		}
+		d.Close()
+	}
+}
+
 // A record of a migration under the number it had before a merge renumbered it is moved to the new number, or only
 // dropped when that is recorded too; either way the migration that has the old number now runs.
 func TestMigrateRenumbered(t *testing.T) {
