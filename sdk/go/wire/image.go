@@ -126,3 +126,48 @@ func webpSize(b []byte) (int, int, error) {
 	}
 	return 0, 0, bad
 }
+
+// ImageRefs are the refs of a view's pictures (an image's src, a row's thumbnail and avatar, a header's and a
+// comment's avatar, a tile's image), each once, in order: what the hub would ask ui.image for.
+func ImageRefs(v *View) []string {
+	var out []string
+	add := func(ref string) {
+		if ref != "" && !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	if v == nil {
+		return nil
+	}
+	for _, s := range v.Sections {
+		for _, e := range s.Items {
+			if e.Src != nil {
+				add(e.Src.Ref)
+			}
+			if e.Thumbnail != nil {
+				add(e.Thumbnail.Ref)
+			}
+			if e.Avatar != nil {
+				add(e.Avatar.Ref)
+			}
+			for _, t := range e.Tiles {
+				if t.Image != nil {
+					add(t.Image.Ref)
+				}
+			}
+			for _, c := range e.Comments {
+				if c.Avatar != nil {
+					add(c.Avatar.Ref)
+				}
+			}
+			for _, th := range e.Threads {
+				for _, c := range th.Comments {
+					if c.Avatar != nil {
+						add(c.Avatar.Ref)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
