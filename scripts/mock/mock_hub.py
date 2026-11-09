@@ -9672,10 +9672,10 @@ def personal_listed(hidden):
     return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files);
-# ?reset=1 starts over. The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
+# ?reset=1 starts over; ?gone=1 puts the branch on an upstream deleted on the remote (#1884). The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
 # reading it refuse; POST git/pr opens one, git/pr/merge merges it or sets it to merge when ready.
 def git_write_fresh():
-    return {"branch": "widget-hourly", "upstream": "", "ahead": 2, "fail": None, "files": [
+    return {"branch": "widget-hourly", "upstream": "", "ahead": 2, "gone": False, "fail": None, "files": [
         {"path": "WeatherWidget/Provider.swift", "index": ".", "worktree": "M", "added": 12, "deleted": 3, "binary": False},
         {"path": "WeatherWidget/WidgetView.swift", "index": "A", "worktree": ".", "added": 18, "deleted": 0, "binary": False},
         {"path": "Sources/App/main.swift", "index": "M", "worktree": "M", "added": 2, "deleted": 1, "binary": False},
@@ -9741,7 +9741,7 @@ def git_write_status(root):
     head = MOCK_COMMITS[0] if w["ahead"] <= 2 else dict(MOCK_COMMITS[0], hash="e" * 40, short="eeeeeee", subject=w.get("last", MOCK_COMMITS[0]["subject"]))
     return {"is_repo": True, "root": root, "branch": w["branch"], "head": head, "upstream": w["upstream"], "ahead": w["ahead"],
             "behind": 0, "stashes": len(w["stashes"]), "commits": ([head] if head is not MOCK_COMMITS[0] else []) + MOCK_COMMITS[:29],
-            "files": [dict(f) for f in w["files"]]}
+            "files": [dict(f) for f in w["files"]], **({"gone": True} if w["gone"] else {})}
 
 
 def git_branches():
@@ -9786,7 +9786,7 @@ def git_write(h, p, body):
             if not body.get("set_upstream"): return h.send_json({"error": "no upstream", "code": "git_no_upstream"}, 409)
             w["upstream"] = "origin/" + w["branch"]
             w["branches"].append(("origin/" + w["branch"], True))
-        w["ahead"] = 0
+        w["ahead"], w["gone"] = 0, False
         out["output"] = "To github.com:example/weather.git\n*\trefs/heads/%s:refs/heads/%s\t[new branch]" % (w["branch"], w["branch"])
     elif op == "switch":
         name = body.get("branch", "")
@@ -9798,7 +9798,7 @@ def git_write(h, p, body):
             w["upstream"], w["ahead"] = "origin/" + name, 0
         else:
             w["upstream"], w["ahead"] = ("origin/" + name if ("origin/" + name, True) in w["branches"] else ""), 0
-        w["branch"] = name
+        w["branch"], w["gone"] = name, False
     elif op == "stash":
         o = body.get("op")
         if o == "push":
@@ -13194,6 +13194,7 @@ class H(BaseHTTPRequestHandler):
                 if kind != "none": GIT_W.update(upstream="origin/" + GIT_W["branch"], ahead=0)
                 GIT_W["pr"] = None if kind == "none" else git_pr_make(kind, GIT_W["branch"])
             if "pr_fail" in q: GIT_W["pr_fail"] = q["pr_fail"][0] or None
+            if q.get("gone"): GIT_W.update(upstream="origin/" + GIT_W["branch"], ahead=0, gone=True)
             return self.send_json({"branch": GIT_W["branch"], "ahead": GIT_W["ahead"], "files": len(GIT_W["files"])})
         if p == "/mock/git-pull" and os.environ.get("MOCK_GIT_PULL"):
             if "mode" in q:
