@@ -346,8 +346,8 @@ func TestScreenCardWithoutDialogShowsWithoutAPush(t *testing.T) {
 	}
 	// Persona Link's summary lists it, but notifies only the real card, which the phone is pushed for.
 	summary := func() link.Attention {
-		agents, ixs, shown := ft.s.fleetInputs()
-		return linkAttention("en", agents, ixs, shown)
+		agents, ixs, told := ft.s.fleetInputs()
+		return linkAttention("en", agents, ixs, told)
 	}
 	if a := summary(); len(a.Items) != 1 || a.Items[0].InteractionID != "scr_mac_s1" || a.Items[0].Notify {
 		t.Fatalf("summary with the placeholder %+v", a)
@@ -499,6 +499,19 @@ func TestScreenCardBackHalfDrawnAfterTheNodeReconnectsIsQuiet(t *testing.T) {
 	if back, _ := waitCards(s, 1, 2*time.Second); len(back) != 1 || back["scr_mac_s1"] == "" {
 		t.Fatalf("the card before the dialog: %v", back)
 	}
+	// Persona Link: the card read before the dialog matched only by its session (an older card's mark matches so too):
+	// not the user's; the dialog's card back by its own id is, as it rang before the detach.
+	summarized := func() link.AttentionItem {
+		agents, ixs, told := s.fleetInputs()
+		a := linkAttention("en", agents, ixs, told)
+		if len(a.Items) != 1 {
+			t.Fatalf("summary %+v", a)
+		}
+		return a.Items[0]
+	}
+	if it := summarized(); it.InteractionID != "scr_mac_s1" || it.Notify {
+		t.Fatalf("the card before the dialog in the summary %+v", it)
+	}
 	n.setScreen(pickModel)
 	var first string
 	for id := range got {
@@ -511,6 +524,9 @@ func TestScreenCardBackHalfDrawnAfterTheNodeReconnectsIsQuiet(t *testing.T) {
 	}
 	if ids := pendingIDs(s); len(ids) != 1 || ids[first] == "" {
 		t.Fatalf("the dialog's card did not come back: %v, had %v", ids, got)
+	}
+	if it := summarized(); it.InteractionID != first || !it.Notify {
+		t.Fatalf("the dialog's card back in the summary %+v", it)
 	}
 	if pushes := ft.pushesOf(assistantwire.NotifyInput, 2, 300*time.Millisecond); len(pushes) != 1 {
 		t.Fatalf("pushed %d times", len(pushes))

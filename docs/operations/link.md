@@ -417,16 +417,21 @@ The manager that carries this computer tells its Persona Link which agents wait 
 persona-link only relays the summary into its status: it shows nothing itself, and nothing on this computer can answer or approve a card with it.
 
 **What is in it**
-- The list and the count are the web app's "Needs you" badge as it is (`stateCounts().badge` in `web/src/lib/sessions.ts`): agents in "Needs you", without quiet tasks' agents and the assistant's conversations;
+- The list and the count are the web app's "Needs you" badge as it is (`stateCounts().badge` in `web/src/lib/sessions.ts`): agents whose row says "Needs you" (the same rows the web app gets; a card read
+  just after its row does not count before the row says so), without quiet tasks' agents and the assistant's conversations;
   muted agents and agents waiting only on a question the assistant is still deciding on (`delegating`) stay. One item per agent, by its oldest card handed to the user; while it has none,
   by its oldest card (one the manager has not decided on yet, or a question the assistant is still deciding on). Cards of the same time go by id. An agent with no card that can stand for it
   (a terminal dialog, an MCP elicitation) is `screen`.
-- Whether an item notifies is the phone's push rule, worked out by the manager into `notify`: only once one of its cards is the user's (the manager announced it to the apps, and it is not a question
+- Whether an item notifies is the phone's push rule, worked out by the manager into `notify`: only once one of its cards is the user's (the manager rang it, when the phone is pushed; not a question
   the assistant is still deciding on: such a question is pushed only once the assistant hands it to the user), and never for a muted agent (or one in a muted space;
   `server/internal/assistant/fleet_mutes.go`). An agent in a terminal dialog notifies once the screen card made for it is announced (a moment later, or when its dialog can be read),
   as the phone is pushed then; the web app rings such a dialog at once. Otherwise the web app's system notifications follow the same rule. Clients notify on `notify` alone
   and never work the rule out themselves; `muted` is only for showing the item muted. An item notifies the first time it shows with `notify: true`, which may come after it was listed
   without it: a question the assistant hands to the user keeps its `interaction_id` and `since`.
+- A card made again (a screen card read again once its node is back, a card the manager takes back after a restart, a Codex card listed again) notifies only when the manager can tell it
+  rang before: a screen card read again as the very card that rang (its own id; one matched only by its session is not). Any other comes back not notifying, until it rings again: fewer notifications rather than more. A hook's card waits in the manager
+  while its node reconnects: it is the same card and keeps what it was. (Persona Link takes the first summary of a link as its baseline, so a card pushed before a restart does not ring
+  there again either.)
 - `spec/fixtures/attention` holds the manager and the web app to the same list, count and `notify`.
 - Order: by when the agent started waiting (`since`), newest first, then by machine and session id. Past 20 items the oldest are cut, so an agent that just started waiting is always listed and can be notified.
   The same agents and cards always give the same summary.
@@ -455,7 +460,8 @@ persona-link only relays the summary into its status: it shows nothing itself, a
   (a post that failed, a connector that restarted). Not while the connector holds the hub off (`401`, `429`), as for `info` and streams.
 - A computer waiting to be confirmed or marked `trust: "work"` gets an empty summary (`needs_you: 0`, no items, no `web_url`): the summary names every agent's work, which neither may read.
   That also takes back what a computer had when it may no longer have it, without the link reconnecting. It gets the summary once it may. While the hub cannot say which computers wait to be
-  confirmed, nothing new goes to any computer: what each has stays, and one that has nothing gets nothing (an empty summary and the full one back would ring every item again).
+  confirmed, nothing new goes to a computer that is not known to be a work one: what it has stays, and one that has nothing gets nothing (an empty summary and the full one back would ring every
+  item again). A work computer gets the empty summary all the same.
 
 **On the computer**
 - persona-link puts the latest summary into its status as `attention`: the JSON line the menu bar App reads and `link.status.json` (`persona-link status`, the Windows tray).

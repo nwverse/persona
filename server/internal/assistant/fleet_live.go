@@ -91,9 +91,9 @@ func (s *Service) liveLoop(ctx context.Context) {
 		case <-tick.C:
 		}
 		l := s.lang(context.Background())
-		agents, ixs, shown := s.fleetInputs()
+		agents, ixs, told := s.fleetInputs()
 		s.tellLive(buildFleetIn(l, agents, ixs))
-		s.devs.SetAttention(linkAttention(l, agents, ixs, shown)) // sent on only when it changed
+		s.devs.SetAttention(linkAttention(l, agents, ixs, told)) // sent on only when it changed
 	}
 }
 
@@ -121,7 +121,7 @@ func (s *Service) fleetSnapshot() FleetState {
 }
 
 // fleetInputs is every machine's agents as the fleet sees them, the pending interactions (oldest first), and which of
-// those the apps were told of (pendingCards).
+// those are the user's (pendingCards).
 func (s *Service) fleetInputs() ([]fleetInput, []proto.Interaction, map[string]bool) {
 	var agents []fleetInput
 	for _, m := range s.fleetMachines() {
@@ -136,8 +136,8 @@ func (s *Service) fleetInputs() ([]fleetInput, []proto.Interaction, map[string]b
 			})
 		}
 	}
-	ixs, shown := s.pendingCards()
-	return agents, ixs, shown
+	ixs, told := s.pendingCards()
+	return agents, ixs, told
 }
 
 // round2 keeps two significant digits: 12345 → 12000, 987 → 990. The island shows "12k", so finer changes would

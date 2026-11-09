@@ -46,18 +46,22 @@ func (d *Devices) spreadAttention() {
 
 // attentionFor is what computer id gets: the latest summary with webURL, its Rev a hash of everything else in it; nil
 // when there is nothing to send. A computer that may not have it (waiting to be confirmed, a work computer: the summary
-// names every agent's work) gets an empty summary instead: told nothing, and what it had is taken back. While the hub
-// cannot say which computers wait to be confirmed, nothing new goes anywhere: what a computer has stays, and one that
-// has nothing gets nothing (an empty summary now and the full one back later would ring every item again).
+// names every agent's work) gets an empty summary instead: told nothing, and what it had is taken back. A work
+// computer is known to be one whatever the hub can say of the confirmations; otherwise, while the hub cannot say which
+// computers wait to be confirmed, nothing new goes: what a computer has stays, and one that has nothing gets nothing
+// (an empty summary now and the full one back later would ring every item again).
 func (d *Devices) attentionFor(id, webURL string) *link.Attention {
 	a := d.attention.Load()
-	pending, err := d.PendingMachineIDs(context.Background())
-	if a == nil || err != nil {
+	if a == nil {
 		return nil
 	}
+	pending, err := d.PendingMachineIDs(context.Background())
 	out := *a
-	if slices.Contains(pending, id) || d.IsWork(id) {
+	switch {
+	case d.IsWork(id) || err == nil && slices.Contains(pending, id):
 		out, webURL = link.Attention{Items: []link.AttentionItem{}}, ""
+	case err != nil:
+		return nil
 	}
 	out.Rev, out.WebURL = "", webURL
 	b, _ := json.Marshal(out)

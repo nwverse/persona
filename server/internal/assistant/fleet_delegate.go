@@ -222,7 +222,7 @@ func (s *Service) delegate(ix proto.Interaction, forget func()) {
 	s.fleet.mu.Unlock()
 	shown := ix
 	shown.Delegating = true
-	s.display(shown)
+	s.show(shown)
 	go s.delegateNow(ix, forget)
 }
 

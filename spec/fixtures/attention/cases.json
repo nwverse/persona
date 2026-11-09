@@ -481,6 +481,47 @@
       }
     },
     {
+      "name": "card_read_after_a_working_row",
+      "description": "A card read after its row still said working (the manager reads rows, then cards) is not counted: the badge counts rows in \"Needs you\" only.",
+      "source": [
+        "web/src/lib/sessions.ts stateCounts (badge)",
+        "web/src/lib/attention.ts lookingOnly",
+        "web/src/lib/session-actions.ts isMuted",
+        "server/internal/assistant/fleet_attention.go linkAttention"
+      ],
+      "derived": true,
+      "input": {
+        "sessions": [
+          {
+            "machine_id": "mac",
+            "session_id": "s-late",
+            "state": "working",
+            "title": "s-late",
+            "cwd": "/home/user/project",
+            "updated_at": "2026-11-09T06:50:00Z"
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-late",
+            "machine_id": "mac",
+            "session_id": "s-late",
+            "kind": "permission",
+            "created_at": "2026-11-09T07:00:00Z"
+          }
+        ],
+        "mutes": {
+          "spaces": [],
+          "sessions": []
+        }
+      },
+      "expected": {
+        "needs_you": 0,
+        "more": 0,
+        "items": []
+      }
+    },
+    {
       "name": "nothing_needs_you",
       "description": "Nothing needs the user: the count is 0 and the list is empty, not missing.",
       "source": [

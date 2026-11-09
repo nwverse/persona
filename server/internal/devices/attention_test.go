@@ -423,3 +423,59 @@ func TestConnectorSenderHoldsUpNoProbe(t *testing.T) {
 		t.Fatal("the sender outlived its machine")
 	}
 }
+
+// A computer known to be a work computer gets the empty summary even while the hub cannot say which computers wait to
+// be confirmed: the freeze holds back news, never a take-back. Active mode: a path learnt joins the laptop to a work
+// entry (learnUID), with its link up throughout. Passive mode: the connector's computer becomes a work one while the
+// hub keeps reading its info.
+func TestSummaryTakenBackFromAWorkComputerWhileTheHubCannotSay(t *testing.T) {
+	d := newTestDevices(t)
+	d.SetAttention(summary("ix-1"))
+	alias, _ := json.Marshal(MachineConfig{ID: "alias", Name: "Laptop at work", Kind: "ssh", Trust: "work"})
+	cfg := devicewire.Config{HubID: "hub-test", HubName: "test", Machines: []json.RawMessage{linkEntry("Laptop"), alias}}
+	c, l := attentionLinkWith(t, d, cfg, link.FeatureAttention)
+	if a := c.next(t, "attention").Attention; a.Items[0].InteractionID != "ix-1" {
+		t.Fatalf("summary %+v", a)
+	}
+	cfg.PendingUnknown = true
+	d.Configure(cfg)
+	d.SetAttention(summary("ix-2")) // news the freeze holds back
+	noAttentionBefore(t, c, l)
+	d.fleet.mu.Lock()
+	d.fleet.init()
+	d.fleet.uids["cfg:lap"] = "same-computer"
+	d.fleet.mu.Unlock()
+	d.learnUID(&nodePath{key: "cfg:alias"}, "same-computer")
+	if !d.IsWork("lap") {
+		t.Fatal("the laptop is not a work computer: this tests nothing")
+	}
+	if a := c.next(t, "attention").Attention; !emptySummary(a) {
+		t.Fatalf("a work computer while the hub cannot say %+v", a)
+	}
+	if l.ctx.Err() != nil {
+		t.Fatal("the link dropped: this tests nothing")
+	}
+
+	ac := newAttConnector(t)
+	ac.set(func(ac *attConnector) { ac.features = []string{link.FeatureAttention} })
+	m := serviceMachineAt(t, ac.srv, ac.fp, "jc_test")
+	a := summary("ix-1")
+	m.d.attention.Store(&a)
+	probe(m)
+	m.d.mu.Lock()
+	m.d.cfg.PendingUnknown = true
+	m.d.mu.Unlock()
+	m.d.SetAttention(summary("ix-2")) // news the freeze holds back
+	sendWoken(context.Background(), m)
+	if n, _ := ac.state(); n != 1 {
+		t.Fatalf("posted %d times while frozen", n)
+	}
+	m.cfg.Trust = "work" // what its entry says now (a new entry rebuilds the machine, which reads the same)
+	probe(m)             // the hub keeps coming in
+	ac.mu.Lock()
+	last := ac.posts[len(ac.posts)-1]
+	ac.mu.Unlock()
+	if n, held := ac.state(); n != 2 || !emptySummary(&last) || held != last.Rev {
+		t.Fatalf("passive work computer while the hub cannot say: %d posts, last %+v, holds %q", n, last, held)
+	}
+}

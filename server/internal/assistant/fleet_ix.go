@@ -55,10 +55,13 @@ type pending struct {
 	// announced: a screen card that rang (announce), carried through a detach (screenGone.announced), so the card
 	// read again once the node is back rings at the window's end only if its predecessor never did (#4979).
 	announced bool
-	// shown: it is the user's: the apps were told of it as one (tell, show; or before a restart), as the phone was
-	// pushed. Not while it is on its way there (recorded, then announced), nor while only displayed (display: the
-	// assistant decides on it, or its dialog was not read). Persona Link's summary notifies by it (fleet_attention.go).
-	shown bool
+	// told: it is the user's: it went through tell, when the phone is pushed, or it is a screen card back from a
+	// detach whose predecessor rang. Not while it is on its way there (recorded, then announced), while the assistant
+	// decides on it, nor when it is only put back on the apps (show) by a way back that cannot tell whether it rang
+	// before (a restart, a hook asking again for a card only the history has, a Codex card listed again): those count
+	// once tell rings them. A hook claiming its card again in the same manager resumes this pending, and keeps it.
+	// Persona Link's summary notifies by it (fleet_attention.go).
+	told bool
 }
 
 // resumeGrace is how long a resumable interaction outlives its node: a little longer than hooks keep reconnecting
@@ -104,10 +107,10 @@ func (s *Service) announce(ix proto.Interaction) {
 // for a quiet task.
 func (s *Service) tell(ix proto.Interaction) {
 	ix = s.withTask(ix)
-	s.markShown(ix.ID)
+	s.markTold(ix)
 	s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: ix})
 	s.publishSessions(ix.MachineID)
-	s.liveChanged(false) // whether it is shown and decided on counts for Persona Link's summary, not for the list
+	s.liveChanged(false) // whether it is told counts for Persona Link's summary, not for the list
 	if s.quietSession(ix.MachineID, ix.SessionID) {
 		// A quiet task's question is no push, bot card or channel message: the main conversation is told (#1731).
 		go s.InteractionRaised(context.Background(), InteractionRaised{Interaction: ix})
@@ -120,26 +123,21 @@ func (s *Service) tell(ix proto.Interaction) {
 	s.InteractionAnnounced(context.Background(), InteractionAnnounced{Interaction: ix}) // the Feishu bot, the channels
 }
 
-// show puts a card on every app without a push (one they were told about already).
+// show puts a card on every app without a push: one they were told about already (a way back), or one that is not the
+// user's yet (the assistant decides on it; a screen card whose dialog was not read, #4450). It never makes a card the
+// user's (pending.told): only tell does.
 func (s *Service) show(ix proto.Interaction) {
-	s.markShown(ix.ID)
-	s.display(ix)
-}
-
-// display puts a card on every app before it is the user's, so it notifies nothing anywhere yet: a question the
-// assistant decides on first (delegate), a screen card whose dialog was not read (its real card rings, #4450).
-func (s *Service) display(ix proto.Interaction) {
 	s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: s.withTask(ix)})
 	s.publishSessions(ix.MachineID)
-	s.liveChanged(false) // whether it is the user's counts for Persona Link's summary, not for the list
+	s.liveChanged(false) // the card, and whether the assistant decides on it, count for Persona Link's summary
 }
 
-// markShown notes that pending card id is the user's: the apps are being told of it as one (tell, show), or were
-// before (pending.shown).
-func (s *Service) markShown(id string) {
+// markTold notes that pending card ix is the user's: tell is ringing it (pending.told). Only that card: a newer one
+// under the same id (a screen card made again after blocked -> working -> blocked) was not told yet.
+func (s *Service) markTold(ix proto.Interaction) {
 	s.fleet.mu.Lock()
-	if p := s.fleet.interactions[id]; p != nil {
-		p.shown = true
+	if p := s.fleet.interactions[ix.ID]; p != nil && p.ix.CreatedAt.Equal(ix.CreatedAt) {
+		p.told = true
 	}
 	s.fleet.mu.Unlock()
 }
@@ -662,15 +660,15 @@ func (s *Service) pendingInteractions() []proto.Interaction {
 	return out
 }
 
-// pendingCards is pendingInteractions and, read with them, the ids of those the apps were told of (pending.shown).
+// pendingCards is pendingInteractions and, read with them, the ids of those that are the user's (pending.told).
 func (s *Service) pendingCards() ([]proto.Interaction, map[string]bool) {
 	s.fleet.mu.Lock()
 	out := []proto.Interaction{}
-	shown := map[string]bool{}
+	told := map[string]bool{}
 	for _, p := range s.fleet.interactions {
 		out = append(out, p.ix)
-		if p.shown {
-			shown[p.ix.ID] = true
+		if p.told {
+			told[p.ix.ID] = true
 		}
 	}
 	s.fleet.mu.Unlock()
@@ -678,7 +676,7 @@ func (s *Service) pendingCards() ([]proto.Interaction, map[string]bool) {
 		out[i] = s.withTask(out[i])
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-	return out, shown
+	return out, told
 }
 
 // pendingIx is one pending interaction; false when it is not pending.
@@ -878,7 +876,7 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 	m := s.ixMapLocked()
 	for _, ix := range resumable {
 		if m[ix.ID] == nil {
-			m[ix.ID] = &pending{ix: ix, done: make(chan proto.Resolution, 1), shown: true} // announced before the restart
+			m[ix.ID] = &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
 			s.orphanLocked(m[ix.ID])
 		}
 	}
