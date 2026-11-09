@@ -35,6 +35,10 @@ type toolLoopState struct {
 	consumedSaved, pendingSaved, pendingPriorSilenced bool
 }
 
+func (st *toolLoopState) forgetObservation() {
+	st.uncertain, st.observedRev, st.missingRev, st.missingAdvances = true, 0, 0, 0
+}
+
 type loopClearReason uint8
 
 const (
@@ -69,6 +73,7 @@ func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
 	s.work.init()
 	state := s.work.loops[k]
 	changed := state != nil && state.cardID != ""
+	persist := state != nil && !(reason == loopCandidateGone && state.silenced && !changed)
 	if state != nil {
 		delete(s.work.cards, state.cardID)
 		switch {
@@ -91,7 +96,7 @@ func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
 		}
 	}
 	s.work.mu.Unlock()
-	if state != nil {
+	if persist {
 		if err := s.saveToolLoops(context.Background()); err != nil {
 			s.logf("tool loop: save: %v", err)
 		}
@@ -123,7 +128,7 @@ func (s *Service) retainUncertainLoop(k [2]string, st *toolLoopState, c proto.Se
 // of which lines changed. The caller holds work.mu.
 func (s *Service) missingToolLoop(k [2]string, st *toolLoopState, c proto.Session, present bool) (bool, bool) {
 	if !present || c.Status != proto.StatusWorking || c.ToolLoop != nil {
-		st.uncertain, st.observedRev, st.missingRev, st.missingAdvances = true, 0, 0, 0
+		st.forgetObservation()
 		return false, false
 	}
 	if st.observedRev > 0 && c.Rev > st.observedRev {
@@ -270,7 +275,7 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 			s.work.mu.Lock()
 			for k, st := range s.work.loops {
 				if k[0] == d.ID {
-					st.uncertain, st.observedRev, st.missingRev, st.missingAdvances = true, 0, 0, 0
+					st.forgetObservation()
 				}
 			}
 			s.work.mu.Unlock()
@@ -312,7 +317,7 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 	removed, pruned := false, false
 	for k, st := range s.work.loops {
 		if !seen[k] {
-			st.uncertain, st.observedRev, st.missingRev, st.missingAdvances = true, 0, 0, 0
+			st.forgetObservation()
 		}
 		if d, ok := v.devices[k[0]]; ok && d.Reachable && !v.failed[k[0]] && !seen[k] && st.expiredID == "" &&
 			!st.updatedAt.IsZero() && time.Since(st.updatedAt) > workKeep {
