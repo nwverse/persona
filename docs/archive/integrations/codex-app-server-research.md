@@ -1,6 +1,6 @@
 # Codex app-server: multi-instance integration research
 
-Moved unchanged from the [Codex app-server guide](../../integrations/codex-app-server.md) (2026-11-10). This is the source research of 2026-11-01 that the first implementation was built on: upstream and Persona line references are pinned to the versions below, and the "First implementation" section it mentions stays in the guide.
+Moved unchanged from the [Codex app-server guide](../../integrations/codex-app-server.md) (2026-11-10). This is the source research of 2026-11-01 that the first implementation was built on, with later additions (the 2026-11-07 Windows notes, `thread/archive`): upstream and Persona line references are pinned to the versions below, and the "First implementation" section it mentions stays in the guide.
 
 ## Scope and conclusions
 
