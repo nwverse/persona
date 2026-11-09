@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`): the switch, on by default, and how much of what
+/// Settings › Appearance › Layout › New Conversation Layout (#1666, `ChatLayout`): the switch, on by default, and how much of what
 /// Persona and its tasks say to each other shows before Expand.
 struct ChatLayoutSettingsPage: View {
     @Bindable private var settings = ChatLayoutSettings.shared

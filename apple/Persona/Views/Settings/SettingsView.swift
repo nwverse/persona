@@ -395,6 +395,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
         else if d.string(forKey: "openAppearance") == "chat" { p.append(SettingsPage.chatLayout) } // New Conversation Layout (#1666)
+        else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
         else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
                      : a == "scheme" ? SettingsPage.colorScheme : SettingsPage.persona)
@@ -459,8 +460,10 @@ enum SettingsPage: Hashable {
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
-    /// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`).
+    /// Settings › Appearance › Layout › New Conversation Layout (#1666, `ChatLayout`).
     case chatLayout
+    /// Settings › Appearance › Layout (#2530): the Agents list's rows, and the conversation's layout.
+    case layout
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -518,6 +521,11 @@ private struct SettingsDestinations: ViewModifier {
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
         case .chatLayout: ChatLayoutSettingsPage()
+        #if os(iOS)
+        case .layout: LayoutSettingsPage()
+        #else
+        case .layout: EmptyView()
+        #endif
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
         #else

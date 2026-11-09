@@ -105,7 +105,7 @@ final class NewChatLayoutTests: XCTestCase {
         app.terminate()
     }
 
-    /// Settings › Appearance › New Conversation Layout: the switch on, the fold choices under it; off, they go.
+    /// Settings › Appearance › Layout › New Conversation Layout: the switch on, the fold choices under it; off, they go.
     @MainActor func testSettingsPage() throws {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
