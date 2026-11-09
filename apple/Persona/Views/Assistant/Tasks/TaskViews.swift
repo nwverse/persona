@@ -132,6 +132,8 @@ struct PlanCard: View {
     var plan: TaskPlan
     @State private var remember = false
     @State private var editing = false
+    /// Each task's ultracode as set on the card (#12), by index; the assistant's where it is not.
+    @State private var ultraChoice: [Int: Bool] = [:]
     private var store: TasksStore { .shared }
 
     var body: some View {
@@ -147,10 +149,15 @@ struct PlanCard: View {
             Label(plan.tasks.count > 1 ? String(localized: "Split into \(plan.tasks.count) tasks, started like this") : String(localized: "Start like this"), systemImage: Theme.Icon.taskPlan)
                 .font(Theme.Font.captionStrong)
                 .foregroundStyle(.secondary)
+            let offered = Ultracode.planOffered
+            let ultracode = Ultracode.choices(plan, card: ultraChoice)
             ForEach(Array(plan.tasks.enumerated()), id: \.offset) { n, task in
                 if n > 0 { Divider() }
-                PlanTaskRow(number: n + 1, task: task, numbered: plan.tasks.count > 1)
+                PlanTaskRow(number: n + 1, task: task, numbered: plan.tasks.count > 1,
+                            ultra: offered ? .init(on: ultracode[n], blocked: Ultracode.blocked(machine: task.machine)) : nil,
+                            onUltra: { ultraChoice[n] = $0 })
             }
+            .disabled(store.busyPlans.contains(plan.id))
             Button {
                 withAnimation(Theme.Motion.state) { remember.toggle() }
             } label: {
@@ -163,7 +170,9 @@ struct PlanCard: View {
             .buttonStyle(.plain)
             HStack(spacing: Theme.Space.s) {
                 Button {
-                    Task { await store.start(plan, remember: remember) }
+                    let blocked = Ultracode.blockedMachines(plan.tasks)
+                    let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: ultraChoice), blocked: { blocked.contains($0) })
+                    Task { await store.start(plan, edits: edits, remember: remember) }
                 } label: {
                     Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Started")).lineLimit(1)
                         .frame(maxWidth: .infinity)
@@ -180,9 +189,11 @@ struct PlanCard: View {
         }
         .card(padding: Theme.Space.l)
         .sheet(isPresented: $editing) {
-            PlanEditSheet(plan: plan) { edits in
+            PlanEditSheet(plan: plan, ultracode: Ultracode.choices(plan, card: ultraChoice)) { edits in
                 editing = false
-                Task { await store.start(plan, edits: edits, remember: remember) }
+                let blocked = Ultracode.blockedMachines(edits)
+                let sent = Ultracode.editsToSend(plan, edits: edits, blocked: { blocked.contains($0) })
+                Task { await store.start(plan, edits: sent, remember: remember) }
             }
         }
     }
@@ -208,9 +219,14 @@ struct PlanCard: View {
 
 /// One task of an open plan: its title, where it would run (each a chip), and why there.
 struct PlanTaskRow: View {
+    struct Ultra { var on: Bool; var blocked: String? }
+
     var number: Int
     var task: PlanTask
     var numbered: Bool
+    /// The task's ultracode on the card (#12): nil where the hub has none, and the row is drawn as before.
+    var ultra: Ultra? = nil
+    var onUltra: (Bool) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -234,6 +250,15 @@ struct PlanTaskRow: View {
                 } else if let p = task.permission, !p.isEmpty {
                     Chip(text: Self.permissionLabel(p))
                 }
+                if let ultra {
+                    UltracodeChip(on: ultra.on, blocked: ultra.blocked, change: onUltra)
+                }
+            }
+            // Asked for on a computer that can't: it starts without.
+            if let ultra, ultra.on, let reason = ultra.blocked {
+                Text("Starts without ultracode: \(reason)")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.cautionText)
             }
             if let why = task.why, !why.isEmpty {
                 Text(why).font(Theme.Font.caption).foregroundStyle(.secondary)
@@ -254,8 +279,12 @@ struct PlanTaskRow: View {
 /// Edit: the plan's fields the user can change before it starts.
 struct PlanEditSheet: View {
     var plan: TaskPlan
+    /// Each task's ultracode as the card shows it (#12): where Edit starts.
+    var ultracode: [Bool] = []
     var start: ([PlanTask]) -> Void
     @State private var tasks: [PlanTask] = []
+    /// What the sheet opened with: anything else is unsaved.
+    @State private var opened: [PlanTask] = []
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -280,6 +309,10 @@ struct PlanEditSheet: View {
                         Picker("Permissions", selection: Binding(get: { tasks[i].permission ?? "default" }, set: { tasks[i].permission = $0 })) {
                             ForEach(["default", "acceptEdits", "plan", "bypassPermissions"], id: \.self) { Text(PlanTaskRow.permissionLabel($0)).tag($0) }
                         }
+                        if Ultracode.planOffered {
+                            PlanUltracodeRow(on: Binding(get: { tasks[i].ultracode == true }, set: { tasks[i].ultracode = $0 }),
+                                             blocked: Ultracode.blocked(machine: tasks[i].machine))
+                        }
                     }
                     Section("Message for the Agent") {
                         TextField(String(localized: "First Message"), text: $tasks[i].prompt, axis: .vertical).lineLimit(3...8)
@@ -288,7 +321,7 @@ struct PlanEditSheet: View {
             }
             .navigationTitle("Edit [Task Views 928324]")
             .navigationBarTitleDisplayMode(.inline)
-            .sheetCancel(unsaved: !tasks.isEmpty && tasks != plan.tasks) { dismiss() }
+            .sheetCancel(unsaved: !tasks.isEmpty && tasks != opened) { dismiss() }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Started") { start(tasks) }.bold() }
             }
@@ -296,7 +329,11 @@ struct PlanEditSheet: View {
         #if os(macOS)
         .macSheet()
         #endif
-        .onAppear { if tasks.isEmpty { tasks = plan.tasks } }
+        .onAppear {
+            guard tasks.isEmpty else { return }
+            tasks = Ultracode.editsOf(plan, choices: ultracode)
+            opened = tasks
+        }
     }
 }
 
@@ -315,6 +352,7 @@ struct TaskCard: View {
         if let todo = store.todos[todoID] {
             let state = store.state(todo)
             let lead = store.leadSession(todo)
+            let ultracode = store.ultracode(todo)
             Button {
                 store.detailTask = todo.id
             } label: {
@@ -322,14 +360,18 @@ struct TaskCard: View {
                     HStack(spacing: Theme.Space.s) {
                         TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
                         Text(todo.title).font(Theme.Font.bodyStrong).lineLimit(1)
+                        if ultracode { UltracodeMark(font: Theme.Font.labelStrong).transition(.opacity) }
                         Spacer(minLength: Theme.Space.s)
                         if let t = TaskClock.since(todo.createdAt), state != .done, state != .failed {
                             Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
                         }
                     }
+                    .animation(UltracodeMark.motion, value: ultracode)
                     Text(TaskPlace.line(todo, lead: lead))
                         .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                     TaskNowLine(todo: todo, state: state, lead: lead)
+                    // What Persona sent its agent (#1542): the hand-off sent with this card is drawn only here.
+                    TaskSentList(todoID: todo.id, conversation: conversation)
                     if state == .done, todo.supervision != nil {
                         ReviewChip(todo: todo)
                     }
@@ -428,8 +470,8 @@ struct TaskNowLine: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if let since {
                     // How long the step has gone on: a long test run or CI wait reads as one, not as a stuck card.
-                    TimelineView(.periodic(from: .now, by: TaskClock.tick)) { context in
-                        if let t = TaskClock.since(since, now: context.date) {
+                    VisibleTimelineView(interval: TaskClock.tick) { now in
+                        if let t = TaskClock.since(since, now: now) {
                             Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
                         }
                     }
@@ -465,14 +507,17 @@ struct TaskLine: View {
     var body: some View {
         if let todo = store.todos[todoID] {
             let state = store.state(todo)
+            let ultracode = store.ultracode(todo)
             Button { store.detailTask = todo.id } label: {
                 HStack(spacing: Theme.Space.s) {
                     TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
                     Text(todo.title).font(Theme.Font.secondaryMedium).lineLimit(1)
+                    if ultracode { UltracodeMark(font: Theme.Font.label).transition(.opacity) }
                     Spacer(minLength: Theme.Space.s)
                     Text(state.label).font(Theme.Font.caption).foregroundStyle(state.labelColor).lineLimit(1).fixedSize()
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 }
+                .animation(UltracodeMark.motion, value: ultracode)
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
                 .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
@@ -492,6 +537,7 @@ struct TaskLine: View {
 struct FeedLine: View {
     var item: FeedItem
     var group: String = ""
+    @Environment(\.chatLayout) private var layout
     private var store: TasksStore { .shared }
 
     var body: some View {
@@ -509,9 +555,19 @@ struct FeedLine: View {
             if let id = item.ref, !store.laterMessages.contains(id) { MessageCard(item: item, itemID: id) }
         case .answered: AnsweredLine(item: item, taskTitle: taskTitle)
         case .receipt: ReceiptCard(item: item)
-        case .routed: routed
+        case .routed:
+            // Persona's own message to the task's agent is never the user's bubble (#1542). The new conversation layout
+            // (#1666): "Persona → @task" folded in Persona's box, the user's own "Me → @task" in the user's box.
+            if item.sentByPersona {
+                if layout.on { RoutedExchange(item: item, taskTitle: taskTitle, layout: layout) } else { AgentSentLine(item: item, taskTitle: taskTitle) }
+            } else if layout.on {
+                UserRoutedExchange(item: item, taskTitle: taskTitle)
+            } else {
+                routed
+            }
         case .review: ReviewFeedLine(item: item, taskTitle: taskTitle)
-        case .report: ReportFeedLine(item: item, taskTitle: taskTitle)
+        case .report:
+            if layout.on { ReportExchange(item: item, taskTitle: taskTitle, layout: layout) } else { ReportFeedLine(item: item, taskTitle: taskTitle) }
         case .view:
             // Until the shared interactive renderer is connected, show the current card's plain-text fallback.
             if let id = item.ref,
@@ -539,9 +595,11 @@ struct FeedLine: View {
 
     private var taskTitle: String { item.ref.flatMap { store.todos[$0]?.title } ?? String(localized: "Tasks") }
 
+    /// What the user said straight to the task (its card's Message): the user's bubble under where it went.
     private var routed: some View {
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
-            // Persona stopped the agent's turn and then told it (agent_interrupt with then, #5112).
+            // Persona stopped the agent's turn and then told it (agent_interrupt with then, #5112): from a hub before #1542,
+            // which did not say it was Persona's.
             Label(item.interrupted ? String(localized: "Stopped “\(taskTitle)” and told it") : String(localized: "Message “\(taskTitle)”"),
                   systemImage: item.interrupted ? Theme.Icon.interrupt : Theme.Icon.routeToTask)
                 .font(Theme.Font.captionMedium)

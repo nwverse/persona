@@ -10,7 +10,7 @@ final class ProviderWizardUITests: XCTestCase {
 
     @MainActor private func launch(_ step: String) {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "YES", "-tab", "settings", "-dev.openChat", "",
+        app.launchArguments = ["-demo.on", "YES", "-tab", "settings", "-dev.openChat", "",
                                "-openModelLaunchers", "YES", "-openProviderWizard", step]
         app.launchPinned()
     }
@@ -103,7 +103,7 @@ final class ProviderWizardUITests: XCTestCase {
     /// Model Settings › Main Chat has How It Runs; saving Agent SDK shows it in the category's line.
     @MainActor func testTheMainConversationsRuntime() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "YES", "-tab", "settings", "-dev.openChat", "",
+        app.launchArguments = ["-demo.on", "YES", "-tab", "settings", "-dev.openChat", "",
                                "-openModelConfiguration", "YES", "-openModelPurpose", "assistant"]
         app.launchPinned()
         let runtime = el("model-config-runtime")
@@ -190,7 +190,7 @@ final class ProviderWizardUITests: XCTestCase {
     /// A wrapper script on a machine's PATH (#5954) is listed under From PATH, and its page says where it comes from.
     @MainActor func testAScriptOnPathSaysWhereItComesFrom() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "YES", "-tab", "settings", "-dev.openChat", "", "-openModelLaunchers", "YES"]
+        app.launchArguments = ["-demo.on", "YES", "-tab", "settings", "-dev.openChat", "", "-openModelLaunchers", "YES"]
         app.launchPinned()
         let row = app.staticTexts["claude-work"]
         for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }

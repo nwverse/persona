@@ -14,10 +14,15 @@ struct InjectedLine: View {
     @State private var unfold = Unfolding()
     @State private var bottom: CGFloat = 0
     @Environment(\.chatPin) private var pin
+    @Environment(\.chatLayout) private var layout
     private var store: TasksStore { .shared }
     private var pinKey: String { "injected-" + item.id }
 
     var body: some View {
+        if layout.on, injected.isPatrol { patrol } else { pill }
+    }
+
+    @ViewBuilder private var pill: some View {
         let todo = conversation.flatMap { Self.task(of: injected, todos: Array(store.todos.values), conversation: $0) }
         let detail = injected.detail.flatMap { $0.isEmpty ? nil : $0 }
         VStack(alignment: .leading, spacing: 0) {
@@ -40,6 +45,52 @@ struct InjectedLine: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { bottom = $0 }
         .background(Theme.Fill.chip, in: open ? AnyShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous)) : AnyShape(.capsule))
         .frame(maxWidth: .infinity)
+        .chatPinned(pinKey)
+    }
+
+    /// The new conversation layout (#1666): supervision and scheduled runs are Persona writing to itself, under the
+    /// Supervision identity, "Persona → @Persona", in Persona's box on its side; never where the user's messages are.
+    private var patrol: some View {
+        let detail = injected.detail.flatMap { $0.isEmpty ? nil : $0 }
+        return VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            ExchangeHeader(identity: String(localized: "Supervision [Chat Layout]"), from: ChatNames.persona, to: ChatNames.persona,
+                           icon: InjectedLook.icon(injected), tint: InjectedLook.tint(injected))
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    Text(injected.line)
+                        .font(Theme.Font.body)
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if detail != nil {
+                        ThemedIcon(Theme.Icon.disclosure)
+                            .font(Theme.Font.labelStrong)
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                            .accessibilityHidden(true)
+                    }
+                }
+                .contentShape(.rect)
+                .onTapGesture { if detail != nil { toggle() } }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("injected-\(injected.kind)")
+                .accessibilityAddTraits(detail != nil ? .isButton : [])
+                if open, let detail {
+                    Text(detail)
+                        .font(Theme.Font.secondary)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("injected-detail")
+                        .unfolding(unfold)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .chatBoxed(Theme.ChatBox.persona)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.trailing, Theme.Space.xxl)
+        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { bottom = $0 }
         .chatPinned(pinKey)
     }
 

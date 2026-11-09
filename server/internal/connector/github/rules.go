@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // What of GitHub's notifications reaches the inbox, and how urgent it is (docs/assistant/inbox.md "Connector: GitHub"): the
@@ -131,7 +131,7 @@ func (c *Connector) SetOptions(raw json.RawMessage) error {
 
 // ciTitle is a CheckSuite notification's title: "<workflow> workflow run[, Attempt #N] <status> for <branch> branch"
 // (it has no URL: the branch is only in the title).
-var ciTitle = regexp.MustCompile(`^(.+) workflow run(?:, Attempt #\d+)? (.+?) for (.+) branch$`)
+var ciTitle = lazyre.New(`^(.+) workflow run(?:, Attempt #\d+)? (.+?) for (.+) branch$`)
 
 type ciRun struct {
 	workflow, status, branch string

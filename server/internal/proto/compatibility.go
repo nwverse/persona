@@ -2,38 +2,93 @@ package proto
 
 import (
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
+	"slices"
 )
 
 // Both keys carry the same value on all hub/node/manager boundaries. Old peers
 // ignore the canonical key. Presence, not boolean truth, gives it precedence.
 type sessionJSON Session
 
-func (s Session) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		sessionJSON
-		LegacyStarted bool `json:"started_by_jarvis"`
-	}{sessionJSON(s), s.StartedByPersona})
+// sessionWire is a Session as sent: its fields, then the legacy key. The session is embedded by pointer, so encoding
+// one copies none of its ~1 KB of fields.
+type sessionWire struct {
+	*sessionJSON
+	LegacyStarted bool `json:"started_by_jarvis"`
 }
-func (s *Session) UnmarshalJSON(data []byte) error {
-	v := struct {
-		sessionJSON
-		LegacyStarted  json.RawMessage `json:"started_by_jarvis"`
-		CurrentStarted json.RawMessage `json:"started_by_persona"`
-	}{sessionJSON: sessionJSON(*s)}
-	if err := json.Unmarshal(data, &v); err != nil {
+
+func (s Session) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&sessionWire{(*sessionJSON)(&s), s.StartedByPersona})
+}
+
+// MarshalJSONTo writes MarshalJSON's bytes straight into the encoder that asked: the hub encodes every session of a
+// list on each push, and MarshalJSON's bytes were then checked and copied again by that encoder. On a pointer, so the
+// session is not copied either; encoding/json calls it for an addressable session (a pointer, a slice element) and
+// MarshalJSON for the rest. Encoded with encoding/json's options, as MarshalJSON is, so an encoder that does not
+// escape HTML still gets it escaped; the caller's indentation applies, as it did to MarshalJSON's output.
+func (s *Session) MarshalJSONTo(enc *jsontext.Encoder) error {
+	return jsonv2.MarshalEncode(enc, &sessionWire{(*sessionJSON)(s), s.StartedByPersona}, json.DefaultOptionsV1())
+}
+
+// sessionWireIn is a Session as received: its fields, with both started keys kept apart (the session is embedded by
+// pointer, so it is decoded in place). The canonical key, when present (null included), beats the legacy one.
+type sessionWireIn struct {
+	*sessionJSON
+	LegacyStarted  startedKey `json:"started_by_jarvis"`
+	CurrentStarted startedKey `json:"started_by_persona"`
+}
+
+// startedKey is one started key as received: kind is 0 when it was absent, else its value's first byte ('t', 'f',
+// 'n'). Any other value is kept as it came, so it fails, as a bool would, only if it is the key used.
+type startedKey struct {
+	kind  jsontext.Kind
+	other []byte
+}
+
+func (k *startedKey) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	val, err := dec.ReadValue()
+	if err != nil {
 		return err
 	}
-	raw := v.LegacyStarted
-	if len(v.CurrentStarted) > 0 {
-		raw = v.CurrentStarted
+	*k = startedKey{kind: val.Kind()} // the last of a repeated key counts
+	if k.kind != 't' && k.kind != 'f' && k.kind != 'n' {
+		k.other = slices.Clone(val)
 	}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &v.sessionJSON.StartedByPersona); err != nil {
+	return nil
+}
+
+// UnmarshalJSONFrom decodes a session straight from the caller's decoder, into the session itself: the hub and the
+// manager decode every session of every list a node or a manager sends. UnmarshalJSON, which encoding/json called
+// before, got each session's bytes read out, then decoded them again into a copy of the session. Decoded with
+// encoding/json's options, as UnmarshalJSON was; a session that fails to decode is left as it was, as before (its
+// error names the field's whole path now).
+func (s *Session) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	was := *s
+	in := sessionWireIn{sessionJSON: (*sessionJSON)(s)}
+	if err := jsonv2.UnmarshalDecode(dec, &in, json.DefaultOptionsV1()); err != nil {
+		*s = was
+		return err
+	}
+	key := in.LegacyStarted
+	if in.CurrentStarted.kind != 0 {
+		key = in.CurrentStarted
+	}
+	switch key.kind {
+	case 0, 'n': // absent or null: left as it was
+	case 't', 'f':
+		s.StartedByPersona = key.kind == 't'
+	default:
+		if err := json.Unmarshal(key.other, &s.StartedByPersona); err != nil {
+			*s = was
 			return err
 		}
 	}
-	*s = Session(v.sessionJSON)
 	return nil
+}
+
+func (s *Session) UnmarshalJSON(data []byte) error {
+	return jsonv2.Unmarshal(data, s, json.DefaultOptionsV1())
 }
 
 // Only the managed-launcher enum is projected; focus-source IDs and arbitrary

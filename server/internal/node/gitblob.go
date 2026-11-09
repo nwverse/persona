@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -23,7 +23,7 @@ const maxBlobBytes = 200 << 20
 var blobWrites singleflight.Group
 
 // blobRev: HEAD, INDEX (the staged version), or a commit (full or short hash) optionally followed by ^ (its parent).
-var blobRev = regexp.MustCompile(`^(HEAD|INDEX|[0-9a-f]{4,64}\^?)$`)
+var blobRev = lazyre.New(`^(HEAD|INDEX|[0-9a-f]{4,64}\^?)$`)
 
 // gitBlob writes one version of a file into the node's cache so a client can read it like any file (file/download):
 // the web compares a changed PDF / docx / pptx / picture with the version before (docs/protocol/protocol.md "File preview").

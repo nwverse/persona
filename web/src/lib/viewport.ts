@@ -82,9 +82,10 @@ export function hasFinePointer(): boolean {
 }
 
 /** Whether Enter (without Shift) sends: with a precise pointer, yes; on a touch screen alone it is a new line there and
- *  only the button sends. */
-export function enterSends(e: { key: string; shiftKey: boolean }, fine: boolean): boolean {
-  return e.key === "Enter" && !e.shiftKey && fine;
+ *  only the button sends. Mod+Alt+Enter is left out: that is the waiting-card shortcut (lib/shortcuts.ts), and the
+ *  composer must not swallow the key before the shortcut dispatcher sees it. */
+export function enterSends(e: { key: string; shiftKey: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }, fine: boolean): boolean {
+  return e.key === "Enter" && !e.shiftKey && !(e.altKey && (e.ctrlKey || e.metaKey)) && fine;
 }
 
 /** The narrow layout (below lg: the sidebar is a drawer, the side panel covers the page): Tailwind's `max-lg:`, kept in step. */

@@ -417,6 +417,22 @@ describe("dispatching a key", () => {
     expect(dispatchKey(event(ctrl("0", {}, { code: "Digit0" }), page), { platform: "other" })).toBe(false);
     expect(dispatchKey(event(ctrl("3", { altKey: true }, { code: "Digit3" }), page), { platform: "other" })).toBe(false);
   });
+  it("focuses the waiting card on its default chord, Mod+Alt+Enter — free of the reserved and the other commands", () => {
+    const run = vi.fn();
+    on("focus-card", run);
+    // Mod+Enter is the dialogs' (reserved), Mod+Shift+Enter maximizes; Mod+Alt+Enter is nobody else's, on any platform
+    for (const platform of ["other", "mac"] as const) {
+      expect(reservedWhy("Mod+Alt+Enter", platform)).toBeNull();
+      expect(SHORTCUTS.filter((s) => s.id !== "focus-card").some((s) => expandChord(s.chord).includes("Mod+Alt+Enter"))).toBe(false);
+    }
+    expect(dispatchKey(event(ctrl("Enter", { altKey: true }), input), { platform: "other" })).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+    // it rebinds like every command: the new chord fires, the default no longer does
+    const bindings = bindingsOf({ "focus-card": "Mod+Alt+K" });
+    expect(dispatchKey(event(ctrl("k", { altKey: true }), page), { platform: "other", bindings })).toBe(true);
+    expect(dispatchKey(event(ctrl("Enter", { altKey: true }), page), { platform: "other", bindings })).toBe(false);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
   it("uses the user's chords, not the defaults", () => {
     const run = vi.fn();
     on("jump", run);

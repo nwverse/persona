@@ -119,8 +119,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         PopFrames.startIfAsked()
-        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up).
-        if d.bool(forKey: "openChatsFresh") { ChatCache.removeAll() }
+        // `-openChatsFresh YES`: no chat kept on disk from an earlier run (LiveUpdateTests: churned steps piled up), every
+        // report folded again (ReportFoldUITests), and nowhere a chat was left (`chat.read.<session>`: Persona's
+        // conversations reopen there too since #1666).
+        if d.bool(forKey: "openChatsFresh") {
+            ChatCache.removeAll()
+            OpenReports.shared.closeAll()
+            let kept = d.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
+            for k in kept.keys where k.hasPrefix("chat.read.") { d.removeObject(forKey: k) }
+        }
         // `-openImagesFresh YES`: no chat picture kept on disk from an earlier run, so a hub that fails it fails it (#182).
         if d.bool(forKey: "openImagesFresh") { try? FileManager.default.removeItem(at: URL.cachesDirectory.appending(path: "chat-images")) }
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
@@ -147,7 +154,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         FrameProbe.listenIfAsked()
         #endif
         // Every tab a UI test can ask for. One it asks for and this does not know leaves the tab the last run saved
-        // (`app.tab`): after a run in the old layout with `-tab settings`, the shell opened on the Settings sheet and the
+        // (`app.tab`): after a run with `-tab settings`, the shell opened on the Settings sheet and the
         // Feishu tests that asked for `-tab feishu` never saw the Messages page (#1664).
         switch d.string(forKey: "tab") {
         case "dev": AppModel.shared.selectedTab = .chats

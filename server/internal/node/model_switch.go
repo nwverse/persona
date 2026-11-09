@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -24,15 +23,13 @@ import (
 // Only Claude Code's TUI sessions: a Codex thread on its app-server keeps its effort-only control (codex_effort.go),
 // a headless Persona conversation switches model in its own chip, and every other agent has no command to type.
 
-// modelIDRe is what may follow `/model `: an id from the agent's own list (aliases such as opus, a full id, a
-// bracketed variant like opus[1m], a gateway's provider/model). One word, never a flag or another command.
-var modelIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$`)
-
-// modelCommand is the line typed into Claude Code to switch the session to model. An empty model would open the
-// picker, a model with spaces or a leading dash would be more than one word, so none of them is built.
+// modelCommand is the line typed into Claude Code to switch the session to model: an id from the agent's own list
+// (aliases such as opus, a full id, a bracketed variant like opus[1m], a gateway's provider/model) or one the user
+// typed, held to the rule every model is (proto.ValidModelID, #1644). An empty model would open the picker, a model
+// with spaces or a leading dash would be more than one word, so none of them is built.
 func modelCommand(model string) (string, error) {
 	model = strings.TrimSpace(model)
-	if model == "" || !modelIDRe.MatchString(model) {
+	if !proto.ValidModelID(model) {
 		return "", fmt.Errorf("invalid model %q", model)
 	}
 	return "/model " + model, nil

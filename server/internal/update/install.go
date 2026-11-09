@@ -70,6 +70,19 @@ type Pending struct {
 	Nodes       string    `json:"nodes"`      // the downloaded node binaries, put in place once confirmed
 	// Programs are the programs swapped with the hub (personad-wechat): going back puts them back too.
 	Programs []Swapped `json:"programs,omitempty"`
+	// Run is the program the hub goes on as, when it is not Target: the persona-hub swapped with personad, for a hub
+	// that runs as persona-hub. Target stays personad, the release's main download, so a build that does not know Run
+	// (an older edge or watchdog) runs personad, which serves the same hub (RunPath).
+	Run string `json:"run,omitempty"`
+}
+
+// RunPath is the binary the hub runs after the update and again after going back: Run, or Target for a pending
+// without one (a hub that runs as personad, or a pending an older build wrote).
+func (p Pending) RunPath() string {
+	if p.Run != "" {
+		return p.Run
+	}
+	return p.Target
 }
 
 // Swapped is one program swapped with the hub: Prev is the one to go back to, "" when there was none (going back

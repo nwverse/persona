@@ -22,7 +22,7 @@ final class LarkPinnedShelfFlowTests: XCTestCase {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "feishu", "-demo.on", "NO",
-            "-ui.oldLayout", "NO", "-integrations.lark.enabled", "YES"]
+            "-integrations.lark.enabled", "YES"]
         if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         else { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"] }
         app.launchPinned()

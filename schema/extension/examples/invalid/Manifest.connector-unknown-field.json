@@ -1,0 +1,13 @@
+{
+  "manifest_version": 1,
+  "id": "example-notes",
+  "name": "Example Notes",
+  "version": "1.0.0",
+  "engines": {"persona": ">=202611050000", "extension_protocol": 1},
+  "runtime": {"command": {"linux-amd64": "bin/example-notes-linux-amd64"}},
+  "contributes": {
+    "connectors": [
+      {"id": "examplenotes", "name": "Example Notes", "capabilities": ["status", "tools"], "confim_always": ["delete_*"]}
+    ]
+  }
+}

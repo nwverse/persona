@@ -1,4 +1,5 @@
 {
   "new_worktree": " · new worktree: {branch}",
-  "archive_close_card": "Archive {agent} · {machine} and close it on the computer (its transcript stays; a message resumes it)"
+  "archive_close_card": "Archive {agent} · {machine} and close it on the computer (its transcript stays; a message resumes it)",
+  "with_model": " · model: {model}"
 }

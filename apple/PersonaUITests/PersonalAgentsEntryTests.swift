@@ -32,7 +32,7 @@ final class PersonalAgentsEntryTests: XCTestCase {
         }
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-tab", "dev", "-dev.openChat", ""]
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-dev.openChat", ""]
         app.launchPinned()
         let pill = app.buttons["agents.personal"]
         XCTAssertTrue(pill.waitForExistence(timeout: 30), app.debugDescription)

@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -17,6 +16,8 @@ import (
 	"unicode"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // link is one live link to the hub.
@@ -52,7 +53,7 @@ func dial(ctx context.Context, c *Config) (*link, error) {
 	return l, nil
 }
 
-var streamID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+var streamID = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 
 // serve runs the link until it ends and says why.
 func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) error {

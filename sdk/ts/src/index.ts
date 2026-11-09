@@ -1,4 +1,6 @@
 import { extensionEnv, hubEnv } from './compat.js';
+import { ExactJSON } from './exact-json.ts';
+export { ExactJSON, JSONIntegerError } from './exact-json.ts';
 // Persona extension SDK for TypeScript (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"): an extension program's side of
 // the process protocol, for Bun. Build the program with `bun build --compile` into one executable per platform:
 // the package holds only that, and the hub needs no runtime.
@@ -39,6 +41,27 @@ export const unsupported = (why: string) => new ExtError(why, "unsupported");
 /** Answers the calls of one namespace: method is without the namespace ("status" for connector.status). */
 export type Handler = (method: string, params: any) => unknown | Promise<unknown>;
 
+/** Original request params, before Number rounding. Missing params and JSON null stay distinct.
+ * This view covers opted-in namespace and initialization RPC requests, not replies, events or serialization. */
+export interface ExactCall {
+  readonly rawParams: string | undefined;
+  readonly params: ExactJSON | undefined;
+}
+
+/** Events still use legacy params and have no call metadata. */
+export type ExactHandler = (method: string, params: any, call: ExactCall | undefined) => unknown | Promise<unknown>;
+const EXACT_PARAMS = Symbol.for("@persona/extension.exactParams");
+type OptInHandler = Handler & { [EXACT_PARAMS]?: true };
+
+/** Explicitly opt one namespace into original JSON request params. The second argument
+ * remains legacy JSON.parse data. Lexical int64 errors become public invalid_params errors. */
+export function withExactParams(handler: ExactHandler): Handler {
+  const wrapped = (method: string, params: any, call?: ExactCall) => handler(method, params, call);
+  Object.defineProperty(wrapped, EXACT_PARAMS, { value: true });
+  return wrapped;
+}
+
+
 /** One ui contribution: what it draws, and what its buttons do. */
 export interface Page {
   render(req: UIRequest): wire.View | Promise<wire.View>;
@@ -49,6 +72,10 @@ export interface Page {
 /** A ui.render or ui.action, and the hub to call while drawing. */
 export interface UIRequest extends wire.UIParams {
   hub: Hub;
+  /** Derived by the host page lifecycle, never inferred from ui_version. Absent on ordinary snapshots. */
+  transport?: "snapshot" | "stream";
+  /** Mounted root factory lifetime; disposal or suspension aborts pending preparation. */
+  signal?: AbortSignal;
 }
 
 /** A shortcut.run: its params' values (strings), for whom; and the hub to call while running. */
@@ -79,6 +106,32 @@ export interface Program {
   shortcuts?: Record<string, (req: ShortcutRequest) => wire.ShortcutResult | void | Promise<wire.ShortcutResult | void>>;
   /** If set, served on the hub's socket (runtime.http in the manifest) by main(). */
   fetch?(req: Request): Response | Promise<Response>;
+}
+
+/** Initialization RPC metadata; direct initializer calls have no raw frame and receive undefined. */
+export type ExactInitializer = (this: Program, init: Init, hub: Hub, call: ExactCall | undefined) => ReturnType<NonNullable<Program["init"]>>;
+const EXACT_INIT_KEY = "@persona/extension.exactInitParams";
+
+/** Opt initialization into exact params without changing the parsed Init, Hub or receiver.
+ * The symbol is resolved only when used, so importing unrelated SDK APIs has no new side effect. */
+export function withExactInit(handler: ExactInitializer): NonNullable<Program["init"]> {
+  const wrapped = function(this: Program, init: Init, hub: Hub, call?: ExactCall) {
+    return Reflect.apply(handler, this, [init, hub, call]);
+  };
+  Object.defineProperty(wrapped, Symbol.for(EXACT_INIT_KEY), { value: true });
+  return wrapped;
+}
+
+function initializeProgram(prog: Program, init: Init, hub: Hub, rawFrame: string): ReturnType<NonNullable<Program["init"]>> {
+  const handler = prog.init;
+  if (handler == null) return;
+  if (typeof handler !== "function") throw new TypeError("prog.init is not a function");
+  // Only the wrapper's own inert data marker opts in; inherited/getter markers do not.
+  if (Object.getOwnPropertyDescriptor(handler, Symbol.for(EXACT_INIT_KEY))?.value === true) {
+    const exact = ExactJSON.parse(rawFrame).field("params");
+    return Reflect.apply(handler, prog, [init, hub, Object.freeze({ rawParams: exact?.raw, params: exact })]);
+  }
+  return Reflect.apply(handler, prog, [init, hub]);
 }
 
 const kindOf = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
@@ -219,18 +272,21 @@ export function connect(prog: Program, write: Write) {
   let initialized = false;
   let contributes: Record<string, unknown> | undefined;
   const inflight = new Set<Promise<unknown>>();
+  // Only negotiated page lifecycle calls are cancelable; services retain legacy semantics.
+  const pageCalls = new Map<string, AbortController>();
+  const cancelablePage = (method: string) => ["ui.page.mount", "ui.page.event", "ui.page.resume"].includes(method);
   let initializing: Promise<void> | undefined;
   let accepting = true;
   let shuttingDown: Promise<unknown[]> | undefined;
 
-  async function request(method: string, params: any): Promise<unknown> {
+  async function request(method: string, params: any, rawFrame: string, signal?: AbortSignal): Promise<unknown> {
     if (method === "initialize") {
       if (params?.protocol !== PROTOCOL) {
         throw new ExtError(`protocol ${params?.protocol}, not ${PROTOCOL}`, "wrong_protocol");
       }
       if (!initialized) {
         const init: Init = { ...params, info: params.extension ?? params.plugin ?? { id: "", version: "" } };
-        initializing ??= Promise.resolve(prog.init?.(init, hub)).then((c) => {
+        initializing ??= Promise.resolve(initializeProgram(prog, init, hub, rawFrame)).then((c) => {
           // An empty map says nothing, as in the Go SDK: the answer leaves contributes out (all of it).
           contributes = c && Object.keys(c).length > 0 ? c : undefined;
           initialized = true;
@@ -242,7 +298,9 @@ export function connect(prog: Program, write: Write) {
           throw e;
         }
       }
-      return { protocol: PROTOCOL, id: prog.id, version: prog.version, ...(contributes ? { contributes } : {}) };
+      return { protocol: PROTOCOL, id: prog.id, version: prog.version,
+        ...(Object.values(prog.ui ?? {}).some(isComponentPage) ? { ui_page_cancellation: 1 } : {}),
+        ...(contributes ? { contributes } : {}) };
     }
     if (method === "manifest") {
       if (prog.manifest === undefined) throw new ExtError("no manifest here: it is in the package", "unknown_method");
@@ -253,13 +311,19 @@ export function connect(prog: Program, write: Write) {
     if (!initialized) throw new ExtError("not initialized", "not_initialized");
     if (method === "ping") return {};
     if (method === "ui.page.supported") return { contributions: Object.entries(prog.ui ?? {}).filter(([, page]) => isComponentPage(page)).map(([id]) => id) };
-    if (method.startsWith("ui.page.")) return pageBridge.call(method.slice(8), params ?? {});
+    if (method.startsWith("ui.page.")) return pageBridge.call(method.slice(8), params ?? {}, signal);
     const dot = method.indexOf(".");
     if (dot < 0) throw unknownMethod(method);
     const ns = method.slice(0, dot);
     const rest = method.slice(dot + 1);
     const h = prog.namespaces?.[ns];
-    if (h) return h(rest, params ?? {});
+    if (h) {
+      if ((h as OptInHandler)[EXACT_PARAMS] === true) {
+        const exact = ExactJSON.parse(rawFrame).field("params");
+        return (h as ExactHandler)(rest, params ?? {}, Object.freeze({ rawParams: exact?.raw, params: exact }));
+      }
+      return h(rest, params ?? {});
+    }
     if (ns === "ui" && prog.ui) return ui(rest, params ?? {});
     if (ns === "shortcut" && prog.shortcuts) {
       if (rest !== "run") throw unknownMethod(method);
@@ -344,14 +408,21 @@ export function connect(prog: Program, write: Write) {
     }
     if (f.method) {
       const id = f.id;
+      if (id && pageCalls.has(id)) { write(answer(id, { error: { message: "duplicate active page request ID" } })); return; }
+      const controller = id && cancelablePage(f.method) ? new AbortController() : undefined;
+      if (controller && pageCalls.size >= 256) { write(answer(id, { error: { message: "page request quota" } })); return; }
+      if (id && controller) pageCalls.set(id, controller);
       const done = Promise.resolve()
-        .then(() => request(f.method!, f.params))
+        .then(() => request(f.method!, f.params, text, controller?.signal))
         .then(
           (result) => write(answer(id, { result: result ?? {} })),
           (err) => write(answer(id, { error: wireError(err) })),
         );
       inflight.add(done);
-      done.finally(() => inflight.delete(done));
+      done.finally(() => { inflight.delete(done); if (id && pageCalls.get(id) === controller) pageCalls.delete(id); });
+    } else if (f.event === "rpc.cancel") {
+      const id = (f.params as { id?: unknown } | undefined)?.id;
+      if (typeof id === "string") pageCalls.get(id)?.abort();
     } else if (f.event) {
       const dot = f.event.indexOf(".");
       const h = initialized && dot > 0 ? prog.namespaces?.[f.event.slice(0, dot)] : undefined;

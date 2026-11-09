@@ -3,13 +3,13 @@ import XCTest
 /// A chat returns to the entry it came from, including after a cancelled edge swipe.
 /// Film the same flows for bar-material continuity; an accessibility tree cannot prove that a blur stayed visible.
 final class LarkNavigationTests: XCTestCase {
-    @MainActor private func launch(oldLayout: Bool, inbox: String? = nil) throws -> XCUIApplication {
+    @MainActor private func launch(inbox: String? = nil) throws -> XCUIApplication {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs mock Hub") }
         continueAfterFailure = false
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", inbox == nil ? "assistant" : "mail", "-demo.on", "NO",
-                               "-ui.oldLayout", oldLayout ? "YES" : "NO", "-integrations.lark.enabled", "YES",
+                               "-integrations.lark.enabled", "YES",
                                "-inbox.kind", inbox.map { $0.contains("f3") ? "group" : "dm" } ?? "", "-inbox.source", ""]
         // Navigate through the actual inbox. Its debug deep link replaces the shell's path and skips that page.
         app.launchPinned()
@@ -46,45 +46,38 @@ final class LarkNavigationTests: XCTestCase {
     }
 
     @MainActor func testMessagesKeepsItsNavigationAfterCancelledAndCompletedBack() throws {
-        for oldLayout in [false, true] {
-            let app = try launch(oldLayout: oldLayout)
-            let entry = oldLayout ? app.tabBars.buttons["消息"] : app.buttons["shell-feishu"].firstMatch
-            XCTAssertTrue(entry.waitForExistence(timeout: 20))
-            entry.tapCenter()
-            for (feed, title) in [("f3", "周末徒步群"), ("f1", "韩梅梅")] {
-                let row = app.buttons["feishu-chat-" + feed]
-                XCTAssertTrue(row.waitForExistence(timeout: 15))
-                row.tapCenter()
-                assertChat(app, title: title)
-                cancelBack(app, title: title)
-                if oldLayout { XCTAssertFalse(entry.isHittable, "cancelled back must keep the chat's tab bar hidden") }
-                shot(app, name: "messages-\(oldLayout ? "old" : "new")-\(feed)")
-                back(app)
-                XCTAssertTrue(row.waitForExistence(timeout: 8))
-                XCTAssertTrue(entry.isHittable, "the original entry returns with the list")
-            }
-            app.terminate()
+        let app = try launch()
+        let entry = app.buttons["shell-feishu"].firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 20))
+        entry.tapCenter()
+        for (feed, title) in [("f3", "周末徒步群"), ("f1", "韩梅梅")] {
+            let row = app.buttons["feishu-chat-" + feed]
+            XCTAssertTrue(row.waitForExistence(timeout: 15))
+            row.tapCenter()
+            assertChat(app, title: title)
+            cancelBack(app, title: title)
+            shot(app, name: "messages-shell-\(feed)")
+            back(app)
+            XCTAssertTrue(row.waitForExistence(timeout: 8))
+            XCTAssertTrue(entry.isHittable, "the original entry returns with the list")
         }
+        app.terminate()
     }
 
     @MainActor func testInboxKeepsItsNavigationAfterCancelledAndCompletedBack() throws {
-        for oldLayout in [false, true] {
-            for (item, title) in [("lark:f3:300", "周末徒步群"), ("lark:f1:100", "韩梅梅")] {
-                let app = try launch(oldLayout: oldLayout, inbox: item)
-                XCTAssertTrue(app.navigationBars["收件箱"].waitForExistence(timeout: 20))
-                let row = app.staticTexts[title].firstMatch
-                for _ in 0..<5 where !row.isHittable { app.swipeUp() }
-                XCTAssertTrue(row.waitForExistence(timeout: 10))
-                row.tapCenter()
-                assertChat(app, title: title)
-                cancelBack(app, title: title)
-                if oldLayout { XCTAssertFalse(app.tabBars.buttons["收件箱"].isHittable) }
-                shot(app, name: "inbox-\(oldLayout ? "old" : "new")-\(item.contains("f3") ? "group" : "dm")")
-                back(app)
-                XCTAssertTrue(app.navigationBars["收件箱"].waitForExistence(timeout: 8), "back returns to the inbox")
-                if oldLayout { XCTAssertTrue(app.tabBars.buttons["收件箱"].isHittable) }
-                app.terminate()
-            }
+        for (item, title) in [("lark:f3:300", "周末徒步群"), ("lark:f1:100", "韩梅梅")] {
+            let app = try launch(inbox: item)
+            XCTAssertTrue(app.navigationBars["收件箱"].waitForExistence(timeout: 20))
+            let row = app.staticTexts[title].firstMatch
+            for _ in 0..<5 where !row.isHittable { app.swipeUp() }
+            XCTAssertTrue(row.waitForExistence(timeout: 10))
+            row.tapCenter()
+            assertChat(app, title: title)
+            cancelBack(app, title: title)
+            shot(app, name: "inbox-shell-\(item.contains("f3") ? "group" : "dm")")
+            back(app)
+            XCTAssertTrue(app.navigationBars["收件箱"].waitForExistence(timeout: 8), "back returns to the inbox")
+            app.terminate()
         }
     }
 }

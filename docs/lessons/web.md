@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## Streamed stat grids need the same text bounds as snapshots (#1703)
+
+Fixed grid columns do not constrain a value's painted text. Give each cell `min-w-0` and its value `truncate`, retaining the full DOM text and title. The legacy renderer can already have these guards while a separate native stream renderer omits them. A six-column grid exposed overlapping values that looked fine with two columns. Regress the native snapshot/delta DOM contract, then check real wide/narrow light/dark browser geometry; jsdom cannot prove clipping.
+
 ## Notification preference writes need hub ordering (#1285)
 
 Ignoring an older PUT response cannot stop its request from committing last. Serialize notification and manager-push writes together, keep confirmed preferences separately from queued intents, and send only the changed fields. Remove a failed intent before rebuilding the optimistic view, so another field's save does not silently retry it. Reads started during a write need completion fencing too. Regress authoritative commits and reloads with a deferred transport; response-only checks can pass while the hub retains the wrong choice.
@@ -27,6 +31,14 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 - In Playwright, `scroll_into_view_if_needed` did not scroll the sidebar's own `overflow-y-auto` list when the row was in the last few pixels of the window; `hover()` then fell outside it and `:hover` stayed false. Scroll with `page.mouse.wheel` over the list, then assert `el.matches(':hover')` before checking a hover state.
 - Two marks that differ only in color fail color-blind users, and at 16 px two framed icons (terminal box vs window box) read as the same rounded square, next to the todo icon's box as well. Give each kind its own silhouette (a frameless prompt vs a framed window).
 - A row's title is `flex-1` (basis 0) and an end tag `shrink-0`: the tag keeps its whole width and the title takes what is left, so a selected row with a mark, a runtime tag and the ⋯ cut the title to about 5 characters. Give the title `basis-auto` when end words exist and let those words shrink first (`min-w-6 shrink-[20]`). Screenshot the selected row with the mouse moved away, and a sidebar tall enough that the usage card does not cover the list.
+
+## Listeners on an element React may replace (2026-11-07, #1309)
+
+- The chat's scroller is a different element once an agent's session arrives: the page's frame changes (a terminal to switch to), and React reuses the old `div` for something else (it became the composer dock). Effects that bound a `ResizeObserver` and wheel / touch listeners to `scroller.current` once (`[]` deps) kept watching the old one, so on an agent's page opened by its address the chat stopped following content that grows after layout (streamed Markdown): the live reply's last lines sat under the composer. Navigating from the sidebar never showed it, because the session was already there. Keep the element in state through a callback ref and list it in those effects' deps (`ChatView.tsx` `scrollEl`); `web/e2e/agent-live.mjs` checks a page opened by its address.
+
+## Live text and older pages (2026-11-07, #1309)
+
+- `useTranscript` once ended the live text whenever a batch of items had any of the agent's words, and older pages and opened folds go through the same `apply`. The main chat did not show it (its delta comes again 80 ms later); an agent's does not come again while a tool runs, so scrolling up or opening "Worked for …" blanked it for minutes. Only the newest items (pushes, the first page, a pull) may touch live text, and an agent's is recomputed against them from the last delta, not cleared.
 
 ## Native extension delta boundaries (#5956)
 

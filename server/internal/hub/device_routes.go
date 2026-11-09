@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -22,6 +23,10 @@ func (h *Hub) deviceRoutes(api *http.ServeMux) {
 		d.CredentialID = principalOf(r.Context()).ID
 		d.Credential = d.CredentialID
 		if err := h.push.register(d); err != nil {
+			if errors.Is(err, db.ErrPushRegistrationConflict) {
+				writeErr(w, http.StatusConflict, i18n.Err("http-status.conflict"))
+				return
+			}
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
 		}
@@ -38,6 +43,11 @@ func (h *Hub) deviceRoutes(api *http.ServeMux) {
 	})
 	api.HandleFunc("PUT /api/v1/devices/{id}/prefs", func(w http.ResponseWriter, r *http.Request) {
 		prefs := h.push.prefs(r.PathValue("id"))
+		before := prefs
+		if prefs.Look != nil {
+			look := *prefs.Look
+			before.Look = &look // decoding a partial look mutates the existing pointer
+		}
 		if err := decodeJSONBody(w, r, &prefs, 16<<10); err != nil {
 			writeBodyErr(w, err, err)
 			return
@@ -54,7 +64,7 @@ func (h *Hub) deviceRoutes(api *http.ServeMux) {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		h.live.settingsChanged()
+		h.live.settingsChanged(r.PathValue("id"), before, prefs)
 		writeJSON(w, h.prefsView(prefs))
 	})
 }
