@@ -134,7 +134,6 @@
   "internal/update/build.go": 6,
   "internal/update/image.go": 6,
   "internal/update/watch.go": 1,
-  "internal/voice/plugin.go": 1,
   "internal/voice/send.go": 7,
   "internal/voice/session.go": 5,
   "internal/voice/session_app.go": 1,

@@ -247,7 +247,7 @@ func sortedKeys[V any](m map[string]V) []string {
 // unitPrograms are the programs a systemd unit starts: the first word of each ExecStart in its [Service] (key and value
 // trimmed), the drop-ins read after the unit file, where an empty ExecStart= clears the ones before (systemd's order).
 // hub-systemd.sh reads a unit the same way (unit_program; scripts/test/test_hub_switch_deploy.py runs it over
-// testdata/exec_start.json, as TestExecStartTable does here).
+// testdata/exec_start.json, as TestExecProgram does here).
 func unitPrograms(file string, dropins []string, home string) []string {
 	var starts []string
 	for _, path := range append([]string{file}, dropins...) {
