@@ -161,6 +161,13 @@ export function itemHeaders(manager: string | undefined): Record<string, string>
   return manager && manager !== rosterDefault ? { [MANAGER_HEADER]: manager } : undefined;
 }
 
+/** The header naming manager on a change to a thing a list read from each manager stamped with it (several managers),
+ *  even when it is the default: the default may have changed since the list was read. None for an unstamped thing (one
+ *  manager). */
+export function stampedHeaders(manager: string | undefined): Record<string, string> | undefined {
+  return manager ? { [MANAGER_HEADER]: manager } : undefined;
+}
+
 /** url (an /api/v1 path or a full /api/ URL) with `manager=` for another manager's thing, as an <img> or a link
  *  can't send a header (the hub reads the query too); as it is for the default's, and for anything not the hub's (a
  *  picture's https: or blob: URL). */

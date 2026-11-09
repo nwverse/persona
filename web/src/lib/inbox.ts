@@ -6,7 +6,7 @@
 // The pure parts (filters, sections, labels, the "Hand to AI" message, Feishu message parts) are plain functions so the
 // tests can run them without a DOM.
 
-import { itemHeaders, otherManager, sameManager } from "./manager-choice";
+import { itemHeaders, otherManager, sameManager, stampedHeaders } from "./manager-choice";
 import { formatDate, t } from "../i18n";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { api, ApiError, enc, errorText, getToken } from "./api";
@@ -1131,9 +1131,9 @@ export async function listInboxMutes(manager?: string): Promise<InboxMute[]> {
   return sortMutes((r.mutes ?? []).map((m) => (manager ? { ...m, manager } : m)));
 }
 
-/** "Unmute" (`mute`'s manager's): only what comes in later comes back. */
+/** "Unmute" (`mute`'s manager's, named even when it is the default now): only what comes in later comes back. */
 export function unmuteInbox(mute: Pick<InboxMute, "id" | "manager">): Promise<unknown> {
-  return api(`/inbox/mutes/${enc(mute.id)}`, { method: "DELETE", headers: itemHeaders(mute.manager) });
+  return api(`/inbox/mutes/${enc(mute.id)}`, { method: "DELETE", headers: stampedHeaders(mute.manager) });
 }
 
 /** A policy's tier (docs/assistant/inbox.md "Policies"): "" leaves the tier to triage. */
@@ -1234,9 +1234,10 @@ export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxM
   }
 }
 
-/** Remove a policy (`policy`'s manager's): items keep the tier it gave until new content is triaged again. */
+/** Remove a policy (`policy`'s manager's, named even when it is the default now): items keep the tier it gave until new
+ *  content is triaged again. */
 export function removeInboxPolicy(policy: Pick<InboxPolicy, "id" | "manager">): Promise<unknown> {
-  return api(`/inbox/policies/${enc(policy.id)}`, { method: "DELETE", headers: itemHeaders(policy.manager) });
+  return api(`/inbox/policies/${enc(policy.id)}`, { method: "DELETE", headers: stampedHeaders(policy.manager) });
 }
 
 /** What a bulk action does (POST /api/v1/inbox/bulk): `dismiss` is Clean up all (done_by=dismissed), `done` files a section
