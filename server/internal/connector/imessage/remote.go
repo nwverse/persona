@@ -3,12 +3,12 @@ package imessage
 import (
 	"context"
 	"errors"
-	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The hub's side: the connector reads through the node of one Mac (Reader runs there), so it is a thin adapter over
@@ -191,7 +191,7 @@ func (c *Remote) explain(err error) string {
 // Explain is err in words for the app (the same as Status uses).
 func (c *Remote) Explain(err error) string { return c.explain(err) }
 
-var chatID = regexp.MustCompile(`^` + ID + `-[0-9a-f]{12}$`)
+var chatID = lazyre.New(`^` + ID + `-[0-9a-f]{12}$`)
 
 // ValidChat says whether id looks like a conversation id: nothing else is sent to the Mac.
 func ValidChat(id string) bool { return chatID.MatchString(id) }

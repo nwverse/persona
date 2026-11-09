@@ -24,10 +24,19 @@ import (
 // newTaskService is an assistant on a fake hub with machine box, whose task agents are followed at once.
 func newTaskService(t *testing.T) (*Service, *fakeHub) {
 	t.Helper()
+	return newTaskServiceOn(t, nil)
+}
+
+// newTaskServiceOn is newTaskService with st as its database (nil: none).
+func newTaskServiceOn(t *testing.T, st Store) (*Service, *fakeHub) {
+	t.Helper()
 	f := newFakeHub()
 	f.sessions["box"] = nil
 	f.settings = &Settings{Timezone: "Asia/Shanghai"}
-	return newStorelessService(t, f), f
+	if st == nil {
+		return newStorelessService(t, f), f
+	}
+	return newServiceOn(t, f, st), f
 }
 
 func planArgs(readonly bool) json.RawMessage {
@@ -539,8 +548,9 @@ func TestSnapshotTaskFollowsTheAgent(t *testing.T) {
 		Needs: []prompts.SnapshotAgent{{Label: "修 CI", Machine: "mac-a", Session: "b00502b8", Line: "要你批准推送",
 			Link: sessionLink("https://hub.example.com", "mac-a", "b00502b8-82a3", false)}},
 		Tasks: []prompts.SnapshotTask{linked},
-		Unaccepted: []prompts.SnapshotAccept{{Title: "飞书机器人任务进展", Changed: "多了任务进展开关", Link: "https://hub.example.com/settings?tab=feishu",
-			Since: now.Add(-24 * time.Hour)}, {Title: "另一件事", Changed: "改了 A", Since: now}},
+		Unaccepted: []prompts.SnapshotAccept{{Title: "飞书机器人任务进展", Verdict: "✅ 做完了：已部署，按下面验收", Changed: "多了任务进展开关",
+			Link: "https://hub.example.com/settings?tab=feishu", Since: now.Add(-24 * time.Hour)},
+			{Title: "调研能不能直连", Verdict: "⛔ 做不了：对方接口不对外开放", Link: "https://hub.example.com/s/box/s1", Since: now}},
 		UnacceptedTotal: 3}))
 	// The calendar only carries the meetings still to come: a review in the evening must not read an empty one as a day
 	// without meetings (#4596), so the line says what it leaves out.
@@ -639,7 +649,7 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res, "Started 1 task(s) without asking") {
+	if !strings.Contains(res, "Queued 1 task(s) for dispatch without asking") {
 		t.Fatalf("result = %q", res)
 	}
 	waitFor(t, "the agent to start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })

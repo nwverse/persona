@@ -1,4 +1,6 @@
 {
+  "receipt_review_followup": "Persona がフォロー",
+  "report_progress": "進捗更新 · {title}",
   "removed": "「{title}」を削除しました",
   "remove_failed": "削除できませんでした：{error}",
   "remove_ellipsis": "タスクを削除…",
@@ -132,5 +134,9 @@
   "report_step": "ステップ {step} · {text}",
   "report_from": "「{title}」から Persona へ",
   "report_later": "次のブリーフィングまで待てます",
-  "said_to_interrupting": "「{title}」を止めて指示"
+  "said_to_interrupting": "「{title}」を止めて指示",
+  "sent_to": "「{title}」に送信",
+  "sent_interrupting": "「{title}」を止めて送信",
+  "sent_count_other": "指示を{count}件送信",
+  "copy": "コピー"
 }

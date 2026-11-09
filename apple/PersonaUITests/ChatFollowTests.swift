@@ -212,6 +212,34 @@ final class ChatFollowTests: XCTestCase {
         followAndReturn(launch(["-tab", "assistant", "-openAssistant", persona]), "persona", stream: true)
     }
 
+    /// Persona's conversation reopens where it was left (#1666), as an agent's chat does: read up, leave the app (the
+    /// place is saved as it goes to the background), end it, launch it again. It opens at the same place, not at the
+    /// newest, with as many lines below it as before (within a line or two: the landing aligns the row's edge).
+    @MainActor func testPersonaReopensWhereItWasLeft() throws {
+        let open = ["-tab", "assistant", "-openAssistant", persona]
+        let first = launch(open)
+        expect(first, "persona-reopen: did not open at the newest", timeout: 20) { $0["bottom"] == 1 && $0["newestShown"] == 1 }
+        sleep(2)
+        readOlder(first, times: 4)
+        expect(first, "persona-reopen: did not read up") { $0["bottom"] == 0 && $0["newestShown"] == 0 }
+        sleep(1)
+        let before = state(first)["behind"] ?? 0
+        XCTAssertGreaterThan(before, 0, "persona-reopen: nothing below the place read: \(state(first))")
+        shot(first, "persona-reopen-left")
+        XCUIDevice.shared.press(.home) // the app goes to the background: the place is saved
+        sleep(2)
+        first.terminate()
+
+        let app = launch(open, keepCache: true)
+        expect(app, "persona-reopen: did not land at the saved place (at the newest, or following)", timeout: 20) {
+            $0["bottom"] == 0 && $0["newestShown"] == 0 && $0["follows"] == 0
+        }
+        sleep(2)
+        let after = state(app)["behind"] ?? 0
+        XCTAssertLessThanOrEqual(abs(after - before), 2, "persona-reopen: \(before) lines below before, \(after) after")
+        shot(app, "persona-reopen-landed")
+    }
+
     // MARK: Against a real hub (screenshots before / after; skipped without PERSONA_REAL_PAIR)
 
     /// A real hub's long chats: `PERSONA_REAL_PAIR` (a pairing URL), `PERSONA_REAL_AGENT` (machine/session of an agent whose

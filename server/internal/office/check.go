@@ -8,9 +8,10 @@ import (
 	"io"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Check says what is in a .docx, .xlsx or .pptx (Persona's or anyone's), for whoever made it to look over: a
@@ -115,7 +116,7 @@ func checkDocx(files map[string]*zip.File) (map[string]any, error) {
 		"tables": tables, "pictures": pictures, "characters": chars}, nil
 }
 
-var refRE = regexp.MustCompile(`^([A-Z]+)(\d+)$`)
+var refRE = lazyre.New(`^([A-Z]+)(\d+)$`)
 
 func checkXlsx(files map[string]*zip.File) (map[string]any, error) {
 	type sheet struct {

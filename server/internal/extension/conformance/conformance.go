@@ -11,7 +11,6 @@ import (
 	"errors"
 	"io"
 	"os/exec"
-	"regexp"
 	"slices"
 	"testing"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/serve"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -68,7 +68,7 @@ func Serve(t testing.TB, prog serve.Program) Run {
 	return Run{ToProgram: hubW, FromProgram: hubR, Exited: exited}
 }
 
-var snake = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+var snake = lazyre.New(`^[a-z][a-z0-9_]*$`)
 
 // T is what Check reports to: a test's testing.TB, or `personad extension test`'s own (Fatalf ends the check).
 type T interface {

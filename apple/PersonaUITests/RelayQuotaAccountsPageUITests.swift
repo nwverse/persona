@@ -21,7 +21,7 @@ final class RelayQuotaAccountsPageUITests: XCTestCase {
         continueAfterFailure = false
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-tab", "assistant", "-dev.openChat", ""]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-dev.openChat", ""]
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["允许", "Allow"] where springboard.buttons[label].waitForExistence(timeout: 3) { springboard.buttons[label].tap() }

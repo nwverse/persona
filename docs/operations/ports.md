@@ -96,4 +96,3 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
 
 - The web version can't use it (see the trade-off above); it shows a dev server through a headless browser on the computer instead ([preview.md](../web/preview.md)).
 - https dev servers: bytes are forwarded, but WKWebView rejects their self-signed certificates, so the page won't open.
-- On the old layout (`-ui.oldLayout`), the iPhone top bar doesn't show the session's port row, only the badges in messages; the new shell and the iPad sidebar both have it.

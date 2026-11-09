@@ -2,21 +2,15 @@
 package transcript
 
 import (
-	"bytes"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/compat"
-	"hash/crc32"
-	"io"
-	"os"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -81,13 +75,22 @@ type entry struct {
 	// Origin: where a user line came from; a subagent handing back its report carries the report here (Claude Code
 	// 2.1.318+), on a hidden line its task notification then only points at (handbackOf). Raw: a shape not known yet
 	// must not lose the line.
-	Origin        json.RawMessage `json:"origin"`
-	Cwd           string          `json:"cwd"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
-	// system/api_error: {message, formatted} (raw: other lines may carry a plain string here), and which retry this is.
-	Error        json.RawMessage `json:"error"`
-	RetryAttempt int             `json:"retryAttempt"`
-	MaxRetries   int             `json:"maxRetries"`
+	Origin json.RawMessage `json:"origin"`
+	Cwd    string          `json:"cwd"`
+	// toolUseResult, a tool's own copy of its output (often as long as the tool_result itself), is not read: items take
+	// a result from the message, and a field here would copy every one of them for nothing.
+
+	// system/api_error: {message, formatted}, and which retry this is. An assistant line Claude Code wrote itself for a
+	// request that failed (isApiErrorMessage) carries the error's kind here as a string (rate_limit,
+	// authentication_failed…), and a subscription's limit the account's quota (quotaLimits; claudeErrorKind).
+	Error             json.RawMessage `json:"error"`
+	RetryAttempt      int             `json:"retryAttempt"`
+	MaxRetries        int             `json:"maxRetries"`
+	IsAPIErrorMessage bool            `json:"isApiErrorMessage"`
+	QuotaLimits       *struct {
+		Status   string          `json:"status"`   // "rejected": the limit refused the request
+		ResetsAt json.RawMessage `json:"resetsAt"` // epoch seconds
+	} `json:"quotaLimits"`
 	// system/scheduled_task_fire: the /loop prompt that is about to run.
 	Prompt string `json:"prompt"`
 }
@@ -181,10 +184,29 @@ type Meta struct {
 	// (a tail read from mid-turn).
 	TurnClosed bool
 	// TurnError / TurnErrorKind: the latest turn failed on the model service, as the agent's own record says it
-	// (Codex: task_complete's error, #2185); empty when it ended well, or when the record does not say (Claude Code
-	// writes its error as the answer: the hub reads that off LastText). Kind is proto.TurnErrorTransient / User, or
-	// "" when the record gives no kind to go by.
+	// (Codex: task_complete's error, #2185; Claude Code: the reply it writes itself for a failed request,
+	// isApiErrorMessage, #1710); empty when it ended well or the model answered since. Kind is
+	// proto.TurnErrorTransient / User / UsageLimit, or "" when the record gives no kind to go by (an older Claude Code,
+	// a gateway's 429): the hub reads the text then.
 	TurnError, TurnErrorKind string
+	// TurnErrorResetsAt: when the subscription usage limit that failed the turn resets, as the record says (Claude
+	// Code's quotaLimits.resetsAt; for Codex the full window of the rollout's latest rate limits); zero when it does not.
+	TurnErrorResetsAt time.Time
+	// TurnErrorResumes: Claude Code said it goes on by itself once the limit resets, and nothing took that back since
+	// (claudeLimitNotice). It outlasts the turns background tasks wake the session for while it waits (each fails
+	// again at once, with no new notice), not a message: typing cancels Claude Code's own continuation.
+	TurnErrorResumes bool
+	// resumesSaid: a line read said whether Claude Code goes on by itself (TurnErrorResumesSaid).
+	resumesSaid bool
+	// TurnErrorAfterWork: the failed turn did some work (a reply, a tool call, thinking) before the error ended it.
+	TurnErrorAfterWork bool
+	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next
+	// turn's start sets it back. turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
+	turnWorked    bool
+	turnErrorLine string
+	// codexLimitFull: when the full windows of a rollout's latest rate limits (Codex's own limit, at 100%) reset, the
+	// latest of them; zero when none is full. A usage-limit failure resets then (TurnErrorResetsAt).
+	codexLimitFull time.Time
 	// codexSeen: newer rollouts record an item both as event_msg/item_completed and in history_mutation.
 	codexSeen   map[string]bool
 	codexTurnID string
@@ -264,14 +286,14 @@ func withoutBotmuxSentinel(text string) string {
 
 // pastedRe matches the wrapper Claude Code puts around long pasted input (also what herdr's bracketed paste from
 // the phone, e.g. a WeChat voice-input transcript, turns into): <pasted_content id="ae9b">…</pasted_content id="ae9b">.
-var pastedRe = regexp.MustCompile(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
+var pastedRe = lazyre.New(`<[\\/]*pasted_content(?:\s+id="[^"]*")?\s*>`) // also <\pasted…> / <\/pasted…> from nested pastes
 
 // ContextRe matches the live snapshot Persona starts each message to its assistant with (node/assistant_context.go):
 // context for the model, not something the user wrote. It is <persona-context>; history and older nodes have
 // <persona-context> (#3182).
-var ContextRe = regexp.MustCompile(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
+var ContextRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `>.*?</` + compat.ContextPattern() + `>\s*`)
 
-var tagRe = regexp.MustCompile(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
+var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>(.*?)</(command-name|command-message|command-args|local-command-stdout|local-command-stderr|task-notification|system-reminder)>`)
 
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
@@ -325,10 +347,13 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 		}
 		if !meta.Codex && (it.Wake || it.Role == "user" && it.Kind == proto.KindText && !it.Queued) {
-			if local := meta.localInput && !it.Wake; local && !meta.localTurn {
+			local := meta.localInput && !it.Wake
+			if local && !meta.localTurn {
 				meta.localTurn, meta.beforeLocal = true, [2]bool{meta.TurnOpen, meta.TurnClosed}
 			} else if !local {
 				meta.localTurn = false
+				// A local command (a slash command, "! cmd") is not sent to the model: it does not end a limit.
+				meta.ClaudeTurnStarted(it.Wake)
 			}
 			meta.TurnOpen, meta.TurnClosed = true, false // a Claude turn starts; parseLine closes it
 		}
@@ -336,9 +361,20 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	return items
 }
 
+// lineJSON is encoding/json's way of decoding without its check of the whole input before it decodes (its legacy
+// error semantics): the decoder checks each byte as it reads it anyway, so input that is not JSON fails all the same,
+// read once instead of twice. A transcript line is mostly its message, and a message's content was read up to four
+// times (the line, then the content as a string, as blocks, a tool result's again). The error differs from
+// json.Unmarshal's (its type and text, and it stops at the first value of the wrong type), so only for callers that
+// just ask whether decoding failed; TestLineJSONMatchesUnmarshal checks it fails and decodes as json.Unmarshal does.
+var lineJSON = jsonv2.JoinOptions(json.DefaultOptionsV1(), json.ReportErrorsWithLegacySemantics(false))
+
+// unmarshalLine is json.Unmarshal reading data once (lineJSON); err only says whether it failed.
+func unmarshalLine(data []byte, v any) error { return jsonv2.Unmarshal(data, v, lineJSON) }
+
 func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	var e entry
-	if err := json.Unmarshal(line, &e); err != nil {
+	if err := unmarshalLine(line, &e); err != nil {
 		return nil
 	}
 	meta.tree = treeLine{uuid: e.UUID, parent: e.ParentUUID, sidechain: e.IsSidechain, assistant: e.Type == "assistant",
@@ -494,6 +530,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		switch e.Subtype {
 		case "turn_duration":
 			meta.TurnOpen, meta.TurnClosed = false, true
+			meta.turnWorked = false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
 			ms, ok := recordedMilliseconds(e.DurationMS)
 			if !ok || strings.TrimSpace(e.ParentUUID) == "" {
 				return nil
@@ -539,6 +576,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			return []proto.Item{it}
 		case "informational":
 			text = rawString(e.Content)
+			meta.claudeLimitNotice(text)
 		default:
 			return nil
 		}
@@ -572,7 +610,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 		}
 		var s string
-		if json.Unmarshal(e.Message.Content, &s) == nil {
+		if unmarshalLine(e.Message.Content, &s) == nil {
 			if strings.Contains(s, "<task-notification>") {
 				meta.taskFinished(s, e.Timestamp)
 			}
@@ -589,7 +627,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			return items
 		}
 		var blocks []block
-		if json.Unmarshal(e.Message.Content, &blocks) != nil {
+		if unmarshalLine(e.Message.Content, &blocks) != nil {
 			return nil
 		}
 		var out []proto.Item
@@ -648,7 +686,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			meta.Model = e.Message.Model
 		}
 		var blocks []block
-		if json.Unmarshal(e.Message.Content, &blocks) != nil {
+		if unmarshalLine(e.Message.Content, &blocks) != nil {
 			return nil
 		}
 		var out []proto.Item
@@ -696,245 +734,10 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				meta.trackBackground(b.ID, b.Name, b.Input, e.Timestamp)
 			}
 		}
+		meta.claudeReply(&e, blocks, len(out) > 0)
 		return out
 	}
 	return nil
-}
-
-// Background tasks: Bash with run_in_background and subagents launched async answer with a task id right away
-// ("Command running in background with ID: b85polnoj. Output is being written to: …" / "Async agent launched …
-// agentId: …") and report back later with a <task-notification> carrying the same id. TaskStop / KillShell end them too.
-// A workflow answers "Workflow launched in background. Task ID: w5k2nd1ap\nSummary: …\nTranscript dir: …\nScript file:
-// …\nRun ID: wf_…"; a Monitor "Monitor started (task bqke1prjm, expires in 30m unless …)".
-var (
-	// agentId needs its colon: newer results first warn about "the agentId below", whose next word is not the id.
-	bgIDRe     = regexp.MustCompile(`(?:running in background with ID:?|agentId:|in background\. Task ID:?|Monitor started \(task:?)\s*([A-Za-z0-9_-]+)`)
-	wfRunRe    = regexp.MustCompile(`(?m)^Run ID:\s*(wf_[A-Za-z0-9_-]+)`)
-	wfSumRe    = regexp.MustCompile(`(?m)^Summary:\s*(.+)$`)
-	wfScriptRe = regexp.MustCompile(`(?m)^Script file:\s*(\S+\.js)\s*$`)
-	wfDirRe    = regexp.MustCompile(`(?m)^Transcript dir:\s*\S*/(wf_[A-Za-z0-9_-]+)\s*$`)
-	wfNameRe   = regexp.MustCompile("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
-	expiresRe  = regexp.MustCompile(`expires in (\d+)(ms|s|m|h)\b`)
-	wakeInRe   = regexp.MustCompile(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
-	bgMovedRe  = regexp.MustCompile(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
-	bgOutputRe = regexp.MustCompile(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
-)
-
-func (m *Meta) trackBackground(toolUseID, name string, raw json.RawMessage, ts time.Time) {
-	var in struct {
-		Command     string `json:"command"`
-		Description string `json:"description"`
-		Background  bool   `json:"run_in_background"`
-		TaskID      string `json:"task_id"`
-		ShellID     string `json:"shell_id"`
-		// ScheduleWakeup / CronCreate (the /loop skill)
-		Delay     float64 `json:"delaySeconds"`
-		Prompt    string  `json:"prompt"`
-		Reason    string  `json:"reason"`
-		Stop      bool    `json:"stop"`
-		Cron      string  `json:"cron"`
-		Recurring *bool   `json:"recurring"`
-		// Workflow
-		WorkflowName string `json:"name"`
-		Script       string `json:"script"`
-		ScriptPath   string `json:"scriptPath"`
-	}
-	_ = json.Unmarshal(raw, &in)
-	switch name {
-	case "ScheduleWakeup":
-		if in.Stop {
-			m.Loop = nil
-			return
-		}
-		if m.loopPending == nil {
-			m.loopPending = map[string]proto.LoopInfo{}
-		}
-		m.loopPending[toolUseID] = proto.LoopInfo{Kind: "wakeup", Prompt: in.Prompt, Reason: in.Reason,
-			IntervalSeconds: int(in.Delay), NextAt: ts.Add(time.Duration(in.Delay) * time.Second)}
-	case "CronCreate":
-		if (in.Recurring != nil && !*in.Recurring) || onceCron(in.Cron) {
-			return // a one-off reminder, not a loop
-		}
-		m.Loop = &proto.LoopInfo{Kind: "cron", Prompt: in.Prompt, Cron: in.Cron}
-	case "CronDelete":
-		if m.Loop != nil && m.Loop.Kind == "cron" {
-			m.Loop = nil
-		}
-	case "Bash":
-		if !in.Background {
-			return
-		}
-		m.pend(toolUseID, proto.BackgroundTask{Kind: "shell", Command: in.Command, Description: in.Description, StartedAt: ts})
-	case "Agent", "Task":
-		// Whether it went to the background shows in the result ("Async agent launched").
-		m.pend(toolUseID, proto.BackgroundTask{Kind: "agent", Description: in.Description, StartedAt: ts})
-	case "Monitor":
-		m.pend(toolUseID, proto.BackgroundTask{Kind: "monitor", Command: in.Command, Description: in.Description, StartedAt: ts})
-	case "Workflow":
-		name := in.WorkflowName
-		if mm := wfNameRe.FindStringSubmatch(in.Script); name == "" && mm != nil {
-			name = mm[1]
-		}
-		if name == "" {
-			name = scriptName(in.ScriptPath)
-		}
-		m.pend(toolUseID, proto.BackgroundTask{Kind: "workflow", Description: name, StartedAt: ts})
-	case "TaskStop", "KillShell", "KillBash":
-		m.removeBackground(in.TaskID + in.ShellID)
-		m.workflowEnded(in.TaskID+in.ShellID, proto.WorkflowKilled, ts)
-	}
-}
-
-// onceCron reports a cron expression pinned to one date ("33 17 21 10 *": day of month and month both fixed).
-func onceCron(expr string) bool {
-	f := strings.Fields(expr)
-	if len(f) < 5 {
-		return false
-	}
-	_, errDay := strconv.Atoi(f[2])
-	_, errMonth := strconv.Atoi(f[3])
-	return errDay == nil && errMonth == nil
-}
-
-func (m *Meta) pend(toolUseID string, t proto.BackgroundTask) {
-	if m.bgPending == nil {
-		m.bgPending = map[string]proto.BackgroundTask{}
-	}
-	m.bgPending[toolUseID] = t
-}
-
-func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time.Time) {
-	if l, ok := m.loopPending[toolUseID]; ok {
-		delete(m.loopPending, toolUseID)
-		if !isError {
-			if mm := wakeInRe.FindStringSubmatch(result); mm != nil { // "Next wakeup scheduled for 11:57:00 (in 1859s)"
-				if n, err := strconv.Atoi(mm[1]); err == nil {
-					l.NextAt = ts.Add(time.Duration(n) * time.Second)
-				}
-			}
-			if m.Loop != nil && m.Loop.Kind == "wakeup" {
-				l.Ticks = m.Loop.Ticks
-			}
-			l.Ticks++
-			m.Loop = &l
-		}
-		return
-	}
-	t, ok := m.bgPending[toolUseID]
-	if !ok {
-		if mv := bgMovedRe.FindStringSubmatch(result); mv != nil && !isError {
-			m.removeBackground(mv[1])
-			m.Background = append(m.Background, proto.BackgroundTask{ID: mv[1], Kind: "shell", Description: "超时转到后台的命令",
-				OutputFile: outputFile(result), StartedAt: ts})
-		}
-		return
-	}
-	delete(m.bgPending, toolUseID)
-	match := bgIDRe.FindStringSubmatch(result)
-	if isError || match == nil {
-		return // ran in the foreground after all, or failed to start
-	}
-	t.ID = match[1]
-	t.OutputFile = outputFile(result)
-	if t.StartedAt.IsZero() {
-		t.StartedAt = ts
-	}
-	switch t.Kind {
-	case "monitor":
-		if e := expiresRe.FindStringSubmatch(result); e != nil {
-			n, _ := strconv.Atoi(e[1])
-			unit := map[string]time.Duration{"ms": time.Millisecond, "s": time.Second, "m": time.Minute, "h": time.Hour}[e[2]]
-			at := ts.Add(time.Duration(n) * unit)
-			t.ExpiresAt = &at
-		}
-	case "workflow":
-		m.workflowStarted(&t, toolUseID, result)
-	}
-	m.removeBackground(t.ID)
-	m.Background = append(m.Background, t)
-}
-
-// workflowsKept: how many workflow runs a session's Meta remembers.
-const workflowsKept = 8
-
-func (m *Meta) workflowStarted(t *proto.BackgroundTask, toolUseID, result string) {
-	w := proto.Workflow{TaskID: t.ID, Name: t.Description, Status: proto.WorkflowRunning, Running: true, StartedAt: t.StartedAt,
-		ToolUseID: toolUseID}
-	if r := wfRunRe.FindStringSubmatch(result); r != nil {
-		w.RunID = r[1]
-	} else if r := wfDirRe.FindStringSubmatch(result); r != nil {
-		w.RunID = r[1]
-	}
-	if r := wfSumRe.FindStringSubmatch(result); r != nil {
-		w.Summary = strings.TrimSpace(r[1])
-	}
-	if r := wfScriptRe.FindStringSubmatch(result); r != nil && w.RunID != "" {
-		if m.WorkflowScripts == nil {
-			m.WorkflowScripts = map[string]string{}
-		}
-		m.WorkflowScripts[w.RunID] = r[1]
-		if w.Name == "" {
-			w.Name = scriptName(r[1])
-		}
-	}
-	t.RunID = w.RunID
-	if t.Description == "" {
-		t.Description = cmpOr(w.Name, w.Summary)
-	}
-	for i, o := range m.Workflows {
-		if o.TaskID == w.TaskID {
-			m.Workflows = append(m.Workflows[:i:i], m.Workflows[i+1:]...)
-			break
-		}
-	}
-	m.Workflows = append(m.Workflows, w)
-	if n := len(m.Workflows) - workflowsKept; n > 0 {
-		for _, o := range m.Workflows[:n] {
-			delete(m.WorkflowScripts, o.RunID)
-		}
-		m.Workflows = append([]proto.Workflow(nil), m.Workflows[n:]...)
-	}
-}
-
-// workflowEnded records that the workflow with task id ended with status (its notification, a TaskStop).
-func (m *Meta) workflowEnded(id, status string, ts time.Time) {
-	for i := range m.Workflows {
-		w := &m.Workflows[i]
-		if w.TaskID != id || !w.Running {
-			continue
-		}
-		switch status {
-		case proto.WorkflowFailed, proto.WorkflowKilled:
-		case "stopped":
-			status = proto.WorkflowKilled
-		default:
-			status = proto.WorkflowCompleted
-		}
-		w.Status, w.Running, w.EndedAt = status, false, &ts
-	}
-}
-
-// scriptName is a workflow's name from its script file: "<name>-wf_<run>.js" (a saved one: "<name>.js").
-func scriptName(path string) string {
-	base := strings.TrimSuffix(path[strings.LastIndexAny(path, "/\\")+1:], ".js")
-	if i := strings.Index(base, "-wf_"); i > 0 {
-		base = base[:i]
-	}
-	return base
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}
-
-func outputFile(result string) string {
-	if o := bgOutputRe.FindStringSubmatch(result); o != nil {
-		return o[1]
-	}
-	return ""
 }
 
 // said notes the agent writing at ts: LastText (when t has words) and what its branch said.
@@ -947,293 +750,8 @@ func (m *Meta) said(t string, ts time.Time) {
 	m.tree.saidAt, m.tree.spoke = ts, true
 }
 
-func (m *Meta) taskFinished(notification string, ts time.Time) {
-	if id := firstTag(notification, "task-id"); id != "" {
-		m.removeBackground(id)
-		m.workflowEnded(id, firstTag(notification, "status"), ts)
-	}
-}
-
-func (m *Meta) removeBackground(id string) {
-	if id == "" {
-		return
-	}
-	for i, t := range m.Background {
-		if t.ID == id {
-			m.Background = append(m.Background[:i:i], m.Background[i+1:]...)
-			return
-		}
-	}
-}
-
-func (m *Meta) applyQueue(op, content string) {
-	// Queued text keeps the <pasted_content> wrapper of long / voice input; show what the user wrote.
-	content = strings.TrimSpace(pastedRe.ReplaceAllString(content, ""))
-	if from, body, ok := CrossSession(content); ok {
-		content = "【来自 " + from + "】" + body
-	}
-	removeOne := func() bool {
-		for i, q := range m.Queue {
-			if q == content {
-				m.Queue = append(m.Queue[:i:i], m.Queue[i+1:]...)
-				return true
-			}
-		}
-		return false
-	}
-	switch op {
-	case "enqueue":
-		if content != "" {
-			m.Queue = append(m.Queue, content)
-		}
-	case "dequeue":
-		if len(m.Queue) > 0 {
-			m.Queue = m.Queue[1:]
-		}
-	case "remove", "popAll":
-		if content == "" || !removeOne() {
-			if op == "popAll" {
-				m.Queue = nil
-			} else if len(m.Queue) > 0 {
-				m.Queue = m.Queue[1:]
-			}
-		}
-	}
-}
-
-// A message another Claude session sent this one ("Another Claude session sent a message:" + the tagged body + an
-// English note on how to treat it).
-// caveatRe drops Claude Code's note that the lines around it came from a local command (context for the model).
-var caveatRe = regexp.MustCompile(`(?s)<local-command-caveat>.*?</local-command-caveat>`)
-
-var teammateRe = regexp.MustCompile(`(?s)<teammate-message([^>]*)>\s*(.*?)\s*</teammate-message>`)
-var teammateIDRe = regexp.MustCompile(`teammate_id="([^"]*)"`)
-
-var crossRe = regexp.MustCompile(`(?s)<cross-session-message([^>]*)>\s*(.*?)\s*</cross-session-message>`)
-var crossNameRe = regexp.MustCompile(`from-name="([^"]*)"`)
-
-// peerMessage is another Claude session's message that came while this one was idle: Claude Code (2.1.299 on) writes
-// it as a hidden (isMeta) user line with the sender in its origin, and it starts a turn, so it reads as the message it
-// is, the sender's name on it, and opens the turn like a typed one (ParseLine). One absorbed mid-turn is a
-// queued_command attachment instead (parseLine). A subagent handing back its report has a peer origin too: its report
-// comes with its task notification (handbackOf). ok false for anything else.
-func peerMessage(mk func(int, string, string) proto.Item, origin, content json.RawMessage) (proto.Item, bool) {
-	var o struct {
-		Kind     string `json:"kind"`
-		Name     string `json:"name"`
-		Body     string `json:"body"`
-		Handback bool   `json:"handback"`
-	}
-	if len(origin) == 0 || json.Unmarshal(origin, &o) != nil || o.Kind != "peer" || o.Handback {
-		return proto.Item{}, false
-	}
-	var text string
-	if json.Unmarshal(content, &text) != nil {
-		var blocks []block
-		_ = json.Unmarshal(content, &blocks)
-		var parts []string
-		for _, b := range blocks {
-			if b.Type == "text" {
-				parts = append(parts, b.Text)
-			}
-		}
-		text = strings.Join(parts, "\n")
-	}
-	return peerItem(mk, text, o.Name, o.Body)
-}
-
-// attachmentOrigin is an attachment line's origin as Claude Code wrote it (only queued commands with a peer origin
-// read it, so not every line is decoded twice).
-func attachmentOrigin(line []byte) json.RawMessage {
-	var l struct {
-		Attachment struct {
-			Origin json.RawMessage `json:"origin"`
-		} `json:"attachment"`
-	}
-	if json.Unmarshal(line, &l) != nil {
-		return nil
-	}
-	return l.Attachment.Origin
-}
-
-// FromSession is who a message another Claude session sent is from when it does not say (the apps and the hub put it
-// in the reader's language: hub/transcript_text.go, assistant/fleet_text.go).
-const FromSession = "另一个会话"
-
-// peerItem is a message another Claude session sent, as the chat shows it: the body the origin carries (the tagged one
-// in text when it does not), the sender's name on it. ok false when there is no body.
-func peerItem(mk func(int, string, string) proto.Item, text, name, body string) (proto.Item, bool) {
-	from, tagged, ok := CrossSession(text)
-	if b := strings.TrimSpace(body); b != "" || !ok {
-		tagged = b
-	}
-	if name != "" {
-		from = name
-	} else if !ok {
-		from = FromSession
-	}
-	// The user's own message from the phone, through the session's peer inbox (node/claudepeer.go): its words, without
-	// what Persona told the model about where they came from.
-	if from == PersonaPeer {
-		if words, ok := prompts.PeerMessageBody(tagged); ok {
-			tagged = strings.TrimSpace(words)
-		}
-	}
-	if tagged == "" {
-		return proto.Item{}, false
-	}
-	it := mk(0, "user", proto.KindText)
-	it.Text, it.From = clip(tagged), from
-	return it, true
-}
-
-// PersonaPeer is the sender name node signs the messages it sends through a claude's peer inbox with (the user's
-// own words from the phone, node/claudepeer.go peerSender).
-const PersonaPeer = "Persona"
-
-// CrossSession returns the sender and body of a cross-session message, ok false for anything else.
-func CrossSession(s string) (from, body string, ok bool) {
-	m := crossRe.FindStringSubmatch(s)
-	if m == nil {
-		return "", "", false
-	}
-	from = FromSession
-	if n := crossNameRe.FindStringSubmatch(m[1]); n != nil && n[1] != "" {
-		from = n[1]
-	}
-	return from, strings.TrimSpace(m[2]), true
-}
-
-// markWake flags a background task's notice that arrives as a user message: the agent was idle and the notice
-// started a new turn (ones absorbed mid-turn come as queued_command attachments instead).
-func markWake(items []proto.Item) {
-	for i := range items {
-		if items[i].Kind == proto.KindNotice {
-			items[i].Wake = true
-		}
-	}
-}
-
-func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []proto.Item {
-	trimmed := legacyLarkAgent(strings.TrimSpace(caveatRe.ReplaceAllString(pastedRe.ReplaceAllString(ContextRe.ReplaceAllString(s, ""), ""), "")))
-	if trimmed == "" {
-		return nil
-	}
-	if from, body, ok := CrossSession(trimmed); ok {
-		it := mk(0, "user", proto.KindText)
-		it.Text, it.From = clip(body), from
-		return []proto.Item{it}
-	}
-	if m := teammateRe.FindStringSubmatch(trimmed); m != nil { // agent teams: a teammate reporting to the lead
-		from := "队友"
-		if n := teammateIDRe.FindStringSubmatch(m[1]); n != nil && n[1] != "" {
-			from = n[1]
-		}
-		it := mk(0, "user", proto.KindText)
-		it.Text, it.From = clip(teammateNote(strings.TrimSpace(m[2]))), from
-		return []proto.Item{it}
-	}
-	// "! cmd" typed in Claude Code runs the command directly: the input reads as the user's own line, its output
-	// as a Bash call under it (the input line comes first; its command is kept for the output's call).
-	if strings.HasPrefix(trimmed, "<bash-input>") {
-		cmd := strings.TrimSpace(firstTag(trimmed, "bash-input"))
-		meta.bashInput, meta.localInput = cmd, true
-		it := mk(0, "user", proto.KindText)
-		it.Text = clip("! " + cmd)
-		return []proto.Item{it}
-	}
-	if strings.HasPrefix(trimmed, "<bash-stdout>") || strings.HasPrefix(trimmed, "<bash-stderr>") {
-		out := strings.TrimSpace(strings.TrimSpace(firstTag(trimmed, "bash-stdout")) + "\n" + strings.TrimSpace(firstTag(trimmed, "bash-stderr")))
-		input, _ := json.Marshal(map[string]string{"command": meta.bashInput})
-		meta.bashInput = ""
-		meta.endLocalTurn()
-		use := mk(0, "assistant", proto.KindToolUse)
-		id := strings.TrimSuffix(use.ID, "#0") + "-bash"
-		use.ToolUseID, use.ToolName, use.ToolInput = id, "Bash", input
-		res := mk(1, "user", proto.KindToolResult)
-		res.ToolUseID, res.Text, res.IsError = id, clip(out), strings.TrimSpace(firstTag(trimmed, "bash-stderr")) != ""
-		return []proto.Item{use, res}
-	}
-	if strings.HasPrefix(trimmed, "<command-name>") || strings.HasPrefix(trimmed, "<command-message>") {
-		name := firstTag(trimmed, "command-name")
-		args := firstTag(trimmed, "command-args")
-		if name == "/effort" && isUltracodeCommand(args) && !meta.tree.sidechain {
-			// The command's confirmed output becomes one notice; the command itself is not a user prompt.
-			meta.localInput = true
-			return nil
-		}
-		if name == "/compact" && strings.TrimSpace(args) == "" {
-			// Persona compacts an idle assistant conversation itself (node/assistant.go): a notice, not a message the
-			// user sent, and not activity that would make the conversation unread.
-			it := mk(0, "system", proto.KindNotice)
-			it.Text = CompactNotice
-			return []proto.Item{it}
-		}
-		meta.localInput = true
-		it := mk(0, "user", proto.KindText)
-		it.Text = strings.TrimSpace(name + " " + args)
-		return []proto.Item{it}
-	}
-	if strings.HasPrefix(trimmed, "<local-command-stdout>") || strings.HasPrefix(trimmed, "<local-command-stderr>") {
-		meta.endLocalTurn()
-		it := mk(0, "system", proto.KindNotice)
-		it.Text = clip(strings.TrimSpace(ansiRe.ReplaceAllString(tagRe.ReplaceAllString(trimmed, "$2"), "")))
-		if it.Text == "" {
-			return nil
-		}
-		meta.claudeGoalOutput(it.Text, meta.Updated)
-		if strings.HasPrefix(trimmed, "<local-command-stdout>") && !meta.tree.sidechain {
-			if items, ok := meta.claudeUltracodeOutput(it.Text, it.TS, it); ok {
-				return items
-			}
-		}
-		return []proto.Item{it}
-	}
-	if strings.HasPrefix(trimmed, "<task-notification>") {
-		if meta.notified[trimmed] {
-			return nil
-		}
-		if meta.notified == nil {
-			meta.notified = map[string]bool{}
-		}
-		meta.notified[trimmed] = true
-		it := mk(0, "system", proto.KindNotice)
-		it.Task, it.Text = taskNote(trimmed)
-		meta.noteCall(it.Task)
-		meta.reportFor(it.Task)
-		return []proto.Item{it}
-	}
-	if trimmed == "[Request interrupted by user]" || trimmed == "[Request interrupted by user for tool use]" {
-		meta.TurnOpen, meta.TurnClosed = false, true
-		it := mk(0, "system", proto.KindNotice)
-		it.Text = InterruptedNotice
-		return []proto.Item{it}
-	}
-	text := strings.TrimSpace(tagRe.ReplaceAllStringFunc(trimmed, func(m string) string {
-		if strings.HasPrefix(m, "<system-reminder>") {
-			return ""
-		}
-		return m
-	}))
-	if text == "" {
-		return nil
-	}
-	it := mk(0, "user", proto.KindText)
-	it.Text = clip(text)
-	return []proto.Item{it}
-}
-
-// endLocalTurn: a local command's output came, so the turn it started (no agent reply in between) is over and the
-// turn state is what it was before the command: Claude Code writes no turn_duration for it (#4661).
-func (m *Meta) endLocalTurn() {
-	if m.localTurn && m.TurnOpen {
-		m.TurnOpen, m.TurnClosed = m.beforeLocal[0], m.beforeLocal[1]
-	}
-	m.localTurn = false
-}
-
 // ansiRe matches terminal escape sequences (colors, bold) that local command output keeps.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var ansiRe = lazyre.New(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // apiErrorText is what an api_error line says went wrong: error.formatted / error.message, or older lines' content.
 func apiErrorText(e entry) string {
@@ -1259,16 +777,6 @@ func apiErrorText(e entry) string {
 	return "请求失败"
 }
 
-// snippetLine is the first line of s, at most n runes.
-func snippetLine(s string, n int) string {
-	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-	r := []rune(strings.TrimSpace(s))
-	if len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return string(r)
-}
-
 func firstTag(s, tag string) string {
 	open, close := "<"+tag+">", "</"+tag+">"
 	i := strings.Index(s, open)
@@ -1285,11 +793,11 @@ func firstTag(s, tag string) string {
 
 func toolResultContent(raw json.RawMessage) (string, []*proto.Image) {
 	var s string
-	if json.Unmarshal(raw, &s) == nil {
+	if unmarshalLine(raw, &s) == nil {
 		return s, nil
 	}
 	var blocks []block
-	if json.Unmarshal(raw, &blocks) != nil {
+	if unmarshalLine(raw, &blocks) != nil {
 		return "", nil
 	}
 	var parts []string
@@ -1322,448 +830,4 @@ func rawString(raw json.RawMessage) string {
 		return s
 	}
 	return string(raw)
-}
-
-func clip(s string) string { return clipTo(s, maxTextLen) }
-
-// clipTo cuts s to at most n bytes on a UTF-8 boundary and notes the original size.
-func clipTo(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n
-	for cut > 0 && (s[cut]&0xC0) == 0x80 {
-		cut--
-	}
-	return s[:cut] + fmt.Sprintf("\n…（已截断，共 %d 字节）", len(s))
-}
-
-// light is the copy of an item that pages and pushes carry; cut says something was left out (fetch it with Full).
-// Long text ends in a line that says it was cut, so apps that do not know FullSize still show it truncated, not whole.
-// Only a tool's output has a "View full text" button in the app, so only its note says to tap for the whole.
-func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
-	limit, note := pageTextLen, "\n…（已截断，共 %d 字节）"
-	if it.Kind == proto.KindToolResult {
-		limit, note = pageOutputLen, "\n…（已截断，点开看全文，共 %d 字节）"
-	}
-	if len(it.Text) > limit && it.Role == "user" && it.Kind == proto.KindText {
-		if t, ok := lightContexts(it.Text, limit); ok { // what the user wrote stays whole, the blocks' bodies are cut
-			it.FullSize, it.Text = len(it.Text), t
-			cut = true
-		}
-	}
-	if len(it.Text) > limit {
-		end := limit
-		for end > 0 && (it.Text[end]&0xC0) == 0x80 {
-			end--
-		}
-		if nl := strings.LastIndexByte(it.Text[:end], '\n'); nl > end-512 { // end on a whole line when one is near
-			end = nl
-		}
-		it.FullSize = len(it.Text)
-		it.Text = it.Text[:end] + fmt.Sprintf(note, len(it.Text))
-		cut = true
-	}
-	if it.Image != nil && it.Image.Data != "" && !keepImage {
-		it.Image = it.Image.Placeholder()
-		cut = true
-	}
-	return it, cut
-}
-
-// clipJSON shortens very long string fields (e.g. Write content) inside tool inputs.
-func clipJSON(raw json.RawMessage) json.RawMessage {
-	if len(raw) <= maxInputLen {
-		return raw
-	}
-	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
-		return raw
-	}
-	for k, v := range m {
-		if s, ok := v.(string); ok && len(s) > maxInputLen/2 {
-			m[k] = clipTo(s, maxInputLen/2)
-		}
-	}
-	b, _ := json.Marshal(m)
-	return b
-}
-
-// File incrementally parses a transcript file. Safe for concurrent use.
-type File struct {
-	Path string
-
-	mu      sync.Mutex
-	offset  int64
-	lines   int
-	partial []byte
-	items   []proto.Item
-	meta    Meta
-	// History identity (Span.History): the file's inode, a hash of its first line, and how many times it was found
-	// rewritten while this process read it.
-	ino       uint64
-	firstHash uint32
-	gen       int
-	// tree: the transcript's branches (branch.go): lines on an abandoned one are not kept as items.
-	tree *branchTree
-	// cut: where the lines whose stored items were cut down (light) sit in the file, by seq; Full reads them again.
-	// Images used to stay in memory for every session ever opened.
-	cut map[int]lineRef
-	// A big file opened cold is parsed from a window at its end (window.go): lines 1..base are not parsed yet, win
-	// says where they are, and meta covers only the parsed lines (partialMeta) until Meta works it out for the file.
-	base        int
-	win         *window
-	partialMeta bool
-}
-
-type lineRef struct {
-	off int64
-	n   int
-}
-
-// Span says where a batch of items sits in the transcript, so a client can tell whether it continues what it has.
-// History names this version of the file: it changes when the file is replaced or rewritten (seqs start over), and
-// stays the same across node restarts. From is the line the batch continues from (it holds lines From+1..To), To the
-// last line it accounts for — lines without items (titles, modes, attachments) count too, so To is often past the last
-// item's seq.
-type Span struct {
-	History  string
-	From, To int
-}
-
-func NewFile(path string) *File { return &File{Path: path} }
-
-// Where is the path the file is read from now.
-func (f *File) Where() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.Path
-}
-
-// Relocate points the file at where its transcript is now: Codex moves a rollout between sessions/ and
-// archived_sessions/ when a thread is archived or restored. What was read stays; reading goes on from there (a moved
-// file keeps its inode, so Refresh does not start over).
-func (f *File) Relocate(path string) {
-	f.mu.Lock()
-	f.Path = path
-	f.mu.Unlock()
-}
-
-// NewSubagentFile reads a subagent's transcript (<session>/subagents/agent-<id>.jsonl, every line a sidechain).
-func NewSubagentFile(path string) *File { return &File{Path: path, meta: Meta{Sidechain: true}} }
-
-func (f *File) history() string {
-	if f.lines == 0 {
-		return "" // nothing read yet: no identity to compare
-	}
-	return fmt.Sprintf("%x.%08x.%d", f.ino, f.firstHash, f.gen) + f.branchToken()
-}
-
-// Refresh reads newly appended complete lines and returns the new items.
-func (f *File) Refresh() ([]proto.Item, error) {
-	fresh, _, err := f.RefreshSpan()
-	return fresh, err
-}
-
-// RefreshSpan is Refresh that also says which lines it read (From == To: none).
-func (f *File) RefreshSpan() ([]proto.Item, Span, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	fresh, span, err := f.refresh()
-	if err != nil || f.tree == nil || len(f.tree.revoked) == 0 {
-		return fresh, span, err
-	}
-	// Claude went on from a turn the node took for rewound (RewoundAt): it was not. Its items are gone from those kept,
-	// so the file is read again from the start without it, under a new token (the clients start over, as for a file
-	// rewritten).
-	manual := map[string]bool{}
-	for u := range f.tree.manual {
-		manual[u] = true
-	}
-	for _, u := range f.tree.revoked {
-		delete(manual, u)
-	}
-	f.offset, f.lines, f.partial, f.items, f.cut, f.meta = 0, 0, nil, nil, nil, Meta{Sidechain: f.meta.Sidechain}
-	f.base, f.win, f.partialMeta, f.firstHash = 0, nil, false, 0
-	f.tree = &branchTree{manual: manual, marked: f.tree.marked}
-	f.gen++
-	return f.refresh()
-}
-
-// freshTree is a new tree for the file read again from somewhere: the roots the node set stay (none after a file
-// replaced, whose tree is nil), with the lines that were under them then (branchTree.marked).
-func (f *File) freshTree() *branchTree {
-	if f.tree == nil {
-		return &branchTree{}
-	}
-	t := f.tree.kept()
-	return &t
-}
-
-func (f *File) refresh() ([]proto.Item, Span, error) {
-	fh, err := os.Open(f.Path)
-	if err != nil {
-		return nil, Span{}, err
-	}
-	defer fh.Close()
-	st, err := fh.Stat()
-	if err != nil {
-		return nil, Span{}, err
-	}
-	ino := inode(st)
-	if st.Size() < f.offset || (f.ino != 0 && ino != 0 && ino != f.ino) { // truncated or replaced: start over
-		f.offset, f.lines, f.partial, f.items, f.cut, f.meta, f.tree = 0, 0, nil, nil, nil, Meta{Sidechain: f.meta.Sidechain}, nil
-		f.base, f.win, f.partialMeta = 0, nil, false
-		f.firstHash = 0
-		f.gen++
-	}
-	f.ino = ino
-	from := f.lines
-	if st.Size() == f.offset {
-		return nil, Span{f.history(), from, from}, nil
-	}
-	if f.offset == 0 && st.Size() > 2*windowBytes {
-		// A big file read cold: its end only (the batch continues from the lines not parsed).
-		fresh, ok, err := f.openWindow(fh, st.Size())
-		if err != nil {
-			return nil, Span{}, err
-		}
-		if ok {
-			return fresh, Span{f.history(), f.base, f.lines}, nil
-		}
-	}
-	if _, err := fh.Seek(f.offset, io.SeekStart); err != nil {
-		return nil, Span{}, err
-	}
-	// Read straight after the partial line into a buffer sized from the stat (bytes.MinRead spare so the EOF read does
-	// not grow it): one copy of the new bytes instead of io.ReadAll's doublings plus an append. A file still growing
-	// is read to EOF all the same.
-	buf := bytes.NewBuffer(make([]byte, 0, len(f.partial)+int(st.Size()-f.offset)+bytes.MinRead))
-	buf.Write(f.partial)
-	if _, err := buf.ReadFrom(fh); err != nil {
-		return nil, Span{}, err
-	}
-	data := buf.Bytes()
-	f.offset += int64(len(data) - len(f.partial))
-	f.seeNotifications(data)
-	pos := f.offset - int64(len(data)) // where data starts in the file
-	var fresh []proto.Item
-	for {
-		i := bytes.IndexByte(data, '\n')
-		if i < 0 {
-			break
-		}
-		line, at := data[:i], pos
-		data, pos = data[i+1:], pos+int64(i)+1
-		f.lines++
-		if f.lines == 1 {
-			f.firstHash = crc32.ChecksumIEEE(line)
-		}
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		items := ParseLine(f.lines, line, &f.meta)
-		if f.tree == nil {
-			f.tree = &branchTree{}
-		}
-		if trackLine(f.tree, &f.meta, items, &f.items, &fresh) { // on a branch that was gone back over (branch.go)
-			continue
-		}
-		// New items go out with their images (subscribers that did not ask for lazy images get them whole); the
-		// stored copy leaves them out.
-		for _, it := range items {
-			sent, _ := light(it, true)
-			kept, cut := light(it, false)
-			fresh = append(fresh, sent)
-			f.items = append(f.items, kept)
-			if cut {
-				if f.cut == nil {
-					f.cut = map[int]lineRef{}
-				}
-				f.cut[f.lines] = lineRef{at, i}
-			}
-		}
-	}
-	f.partial = append([]byte(nil), data...)
-	return fresh, Span{f.history(), from, f.lines}, nil
-}
-
-// before returns the index of the first item with seq >= beforeSeq (0 = len, the end). Callers hold f.mu.
-func (f *File) before(beforeSeq int) int {
-	if beforeSeq <= 0 {
-		return len(f.items)
-	}
-	end := 0
-	for end < len(f.items) && f.items[end].Seq < beforeSeq {
-		end++
-	}
-	return end
-}
-
-// pageSpan is the span of items[start:end] counted back from beforeSeq. Callers hold f.mu.
-func (f *File) pageSpan(start, beforeSeq int) Span {
-	sp := Span{History: f.history(), To: f.lines}
-	if beforeSeq > 0 {
-		sp.To = beforeSeq - 1
-	}
-	if (start > 0 || f.base > 0) && start < len(f.items) {
-		sp.From = f.items[start].Seq - 1
-	}
-	return sp
-}
-
-// Page returns items with seq < beforeSeq (0 = from the end), newest `limit`, in ascending order.
-func (f *File) Page(beforeSeq, limit int) ([]proto.Item, bool, Span) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ensureItems(beforeSeq, limit)
-	end := f.before(beforeSeq)
-	start := max(end-limit, 0)
-	// Never split a transcript line across pages.
-	for start > 0 && f.items[start].Seq == f.items[start-1].Seq {
-		start--
-	}
-	out := append([]proto.Item(nil), f.items[start:end]...)
-	return out, start > 0 || f.base > 0, f.pageSpan(start, beforeSeq)
-}
-
-// PageTurns returns the items before beforeSeq (0 = the end) going back far enough to hold `turns` whole exchanges:
-// it starts at a user prompt, so a page never opens in the middle of a turn. maxItems caps one enormous turn.
-func (f *File) PageTurns(beforeSeq, turns, maxItems int) ([]proto.Item, bool, Span) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ensureTurns(beforeSeq, turns, maxItems)
-	end := f.before(beforeSeq)
-	start, seen := end, 0
-	for start > 0 && seen < turns && end-start < maxItems {
-		start--
-		if it := f.items[start]; it.Role == "user" && it.Kind == proto.KindText && !it.Queued {
-			seen++
-		}
-	}
-	for start > 0 && f.items[start].Seq == f.items[start-1].Seq { // never split a transcript line across pages
-		start--
-	}
-	out := append([]proto.Item(nil), f.items[start:end]...)
-	return out, start > 0 || f.base > 0, f.pageSpan(start, beforeSeq)
-}
-
-// Full returns an item whole: all of its text and its image data (pages and pushes carry a light copy). The line it
-// came from is read and parsed again; if that no longer gives the item (the file changed under it), it says so
-// rather than pass the cut copy off as whole.
-func (f *File) Full(id string) (proto.Item, error) {
-	f.mu.Lock()
-	var it proto.Item
-	found := false
-	for {
-		for i := len(f.items) - 1; i >= 0; i-- {
-			if f.items[i].ID == id {
-				it, found = f.items[i], true
-				break
-			}
-		}
-		if found || f.loadOlder() == 0 { // an item in lines not parsed yet: parse back to it
-			break
-		}
-	}
-	ref, cut := f.cut[it.Seq]
-	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: f.meta.Codex}
-	f.mu.Unlock()
-	if !found {
-		return it, fmt.Errorf("no item %s", id)
-	}
-	if !cut {
-		return it, nil
-	}
-	full, ok := f.reparse(it.Seq, ref, &scratch)[id]
-	if !ok {
-		return it, fmt.Errorf("item %s: line %d of the transcript changed, reload the chat", id, it.Seq)
-	}
-	it.Text, it.FullSize, it.Image = full.Text, 0, full.Image
-	return it, nil
-}
-
-// WithImages puts the image data back into items (for callers that did not ask for lazy images).
-func (f *File) WithImages(items []proto.Item) []proto.Item {
-	var out []proto.Item
-	parsed := map[int]map[string]proto.Item{}
-	for i, it := range items {
-		if it.Image == nil || !it.Image.Lazy {
-			continue
-		}
-		f.mu.Lock()
-		ref, cut := f.cut[it.Seq]
-		scratch := Meta{Sidechain: f.meta.Sidechain, Codex: f.meta.Codex}
-		f.mu.Unlock()
-		if !cut {
-			continue
-		}
-		if parsed[it.Seq] == nil {
-			parsed[it.Seq] = f.reparse(it.Seq, ref, &scratch)
-		}
-		if full, ok := parsed[it.Seq][it.ID]; ok && full.Image != nil {
-			if out == nil {
-				out = append([]proto.Item(nil), items...)
-			}
-			out[i].Image = full.Image
-		}
-	}
-	if out == nil {
-		return items
-	}
-	return out
-}
-
-// reparse reads line seq again and returns its items by id (none if the file changed under it).
-func (f *File) reparse(seq int, ref lineRef, scratch *Meta) map[string]proto.Item {
-	fh, err := os.Open(f.Path)
-	if err != nil {
-		return nil
-	}
-	defer fh.Close()
-	line := make([]byte, ref.n)
-	if _, err := fh.ReadAt(line, ref.off); err != nil {
-		return nil
-	}
-	out := map[string]proto.Item{}
-	for _, it := range ParseLine(seq, line, scratch) {
-		out[it.ID] = it
-	}
-	return out
-}
-
-// After returns items with seq > afterSeq, oldest first: at least limit of them unless fewer exist, and never part of
-// a line (a Codex tool call is its call and its result on one line; a client resuming from the last seq it got would
-// never see the rest). more says items are left after the last one returned. The span runs from afterSeq to the last
-// line read when nothing is left, else to the last item's line.
-func (f *File) After(afterSeq, limit int) (items []proto.Item, more bool, span Span) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ensureAfter(afterSeq)
-	span = Span{History: f.history(), From: afterSeq, To: max(f.lines, afterSeq)}
-	i := 0
-	for i < len(f.items) && f.items[i].Seq <= afterSeq {
-		i++
-	}
-	end := min(i+limit, len(f.items))
-	for end > i && end < len(f.items) && f.items[end].Seq == f.items[end-1].Seq {
-		end++
-	}
-	if end == i {
-		return nil, false, span
-	}
-	more = end < len(f.items)
-	if more {
-		span.To = f.items[end-1].Seq
-	}
-	return append([]proto.Item(nil), f.items[i:end]...), more, span
-}
-
-// Meta is the session-level information of the whole file (for a file opened by its end, worked out on first call).
-func (f *File) Meta() Meta { return f.fullMeta() }
-
-func (f *File) LastSeq() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lines
 }

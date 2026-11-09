@@ -1,6 +1,10 @@
 package transcript
 
-import "testing"
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
 
 func TestAskOf(t *testing.T) {
 	for _, c := range []struct{ name, text, want string }{
@@ -46,5 +50,52 @@ func TestAskOfClips(t *testing.T) {
 	got := []rune(AskOf(long + "吗？"))
 	if len(got) != askMost+1 || got[askMost] != '…' {
 		t.Fatalf("not clipped to %d runes: %d", askMost, len(got))
+	}
+}
+
+// The sayings are matched on every session of every list a manager publishes, and most replies hold none of them: each
+// pattern keeps its gate (lazyre.NewGated), which turns such a reply away before the regexp engine walks every
+// alternative at every position (BenchmarkAskOf, a reply that asks nothing: about 72 to 5 microseconds). A
+// saying that may start with anything (a class, a repeat, (?i)) would drop the gate. The code-block and 吗 patterns
+// are gated too: most replies hold neither, and a gated replacement gives such a text back without copying it.
+func TestAskPatternsGated(t *testing.T) {
+	for name, re := range map[string]interface{ Gated() bool }{"askPhrases": askPhrases, "askNone": askNone, "askInline": askInline, "askFence": askFence,
+		"askParticle": askParticle} {
+		if !re.Gated() {
+			t.Errorf("%s lost its gate: every match must start with a literal", name)
+		}
+	}
+}
+
+// cutListMark is the list-mark regexp it replaced, written out.
+func TestCutListMarkMatchesRegexp(t *testing.T) {
+	re := regexp.MustCompile(`^\s*(?:[-*+>#]+|\d+[.)、])\s*`)
+	for _, line := range []string{"", "   ", "plain", "  plain ", "- item", "\t* item", "+item", "> quote", ">> - nested",
+		"## Heading", "-", "1. one", "12) twelve", "3、三", "3。三", "42 is", "4.5 GB", "7.", " \r\f9.\tx", "— dash", "一、列表"} {
+		if got, want := cutListMark(line), re.ReplaceAllString(line, ""); got != want {
+			t.Errorf("cutListMark(%q) = %q, want %q", line, got, want)
+		}
+	}
+}
+
+// A reply without code blocks or markup is split into sentences without copying it, its lines or a list of all its
+// sentences, and its sentences, which start with a capital but hold none of the sayings' words, are not lowered to be
+// matched (MayMatchLowered): it allocates nothing. It was 16: two copies for each regexp and replacer pass, and the
+// list's growth; then 3, a strings.ToLower of each sentence in the tail.
+func TestAskOfAllocations(t *testing.T) {
+	text := strings.Repeat("The tests pass and the branch is pushed. ", 6)
+	if n := testing.AllocsPerRun(100, func() { AskOf(text) }); n > 0 {
+		t.Fatalf("AskOf allocates %v times for a reply that asks nothing", n)
+	}
+}
+
+// BenchmarkAskOf is a reply that reports and asks nothing, the usual last words of a session in a list.
+func BenchmarkAskOf(b *testing.B) {
+	text := strings.Repeat("The tests pass and the branch is pushed. ", 6)
+	b.ReportAllocs()
+	for b.Loop() {
+		if AskOf(text) != "" {
+			b.Fatal("asked")
+		}
 	}
 }

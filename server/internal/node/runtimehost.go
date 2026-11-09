@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -160,10 +161,21 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 	defer stop()
 	defer c.Close()
 	peer := rpc.New("r", c)
+	pid := 0
+	if nc, ok := c.(net.Conn); ok {
+		pid, _ = peerPID(nc) // 0 for a pipe, or where the system does not tell
+	}
+	// This node or an ancestor of it is a relay, not the runtime's own process: the manager's egress proxy leads an
+	// extension's sandbox here (extmgr/extension_sandbox.go), and the manager may run this node, so everything the node
+	// runs would descend from it.
+	if pid > 0 && slices.Contains(nodeLineage(), pid) {
+		pid = 0
+	}
 	h := rh.reg.add(peer)
 	h.mu.Lock()
 	h.drop = cancel
 	h.daemon = daemon
+	h.pid = pid
 	h.mu.Unlock()
 	peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return rh.request(ctx, h, method, params)
@@ -214,7 +226,8 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		rh.logger.Printf("runtime %s %s #%d connected", hello.Runtime, hello.Version, h.serial)
 		// features: what this node does beyond the first protocol. prefer_running: when two runtimes list a session, the
-		// one running it answers for it (runtimes.go recomputeOwners), so a runtime may list sessions it only has on disk.
+		// one running it answers for it (runtimes_registry.go recomputeOwners), so a runtime may list sessions it only
+		// has on disk.
 		// resume_argv: a session listed offline with resume_argv is resumed in the terminal engine (pi.go).
 		// handover: a send refused with the handover code goes to the runtime that takes the session over (handOver).
 		// transcript: a session listed with a Claude transcript has its content read from it here (runtimetranscript.go).
@@ -283,6 +296,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		// As the assistant only for one of the assistant's conversations that this runtime runs.
 		assistant := p.Assistant && h.assistant() && rh.reg.owns(h, p.SessionID) && n.isAssistantSession(p.SessionID)
+		if p.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
+			return n.saveMailAttachment(ctx, p.Args, p.SessionID, assistant, n.guestOf(p.SessionID) != nil), nil
+		}
 		if g := n.gateTool(p.Name); assistant && g != nil {
 			return n.assistantGateTool(ctx, g, p.SessionID, p.Args), nil
 		}

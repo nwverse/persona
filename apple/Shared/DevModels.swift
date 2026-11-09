@@ -124,4 +124,40 @@ extension APIClient {
     func listDir(machine: String, path: String, cwd: String) async throws -> FileListing {
         try await get(mp(machine) + "/fs", query: ["path": path, "cwd": cwd])
     }
+
+    // Rename, move, trash and put back (docs/protocol/protocol.md "Changing files"); paths as in listDir.
+    private struct RenameRequest: Encodable { var path, cwd, name: String }
+    private struct RenameResponse: Decodable { var path: String }
+    /// Renames path in its folder; returns the new path.
+    func renameFile(machine: String, path: String, cwd: String, name: String) async throws -> String {
+        try await post(mp(machine) + "/files/rename", body: RenameRequest(path: path, cwd: cwd, name: name), as: RenameResponse.self).path
+    }
+    private struct MoveRequest: Encodable { var paths: [String]; var cwd, dir: String; var conflict: String? }
+    struct MovedFile: Decodable, Sendable { var from, to: String }
+    private struct MoveResponse: Decodable { var moved: [MovedFile]? }
+    /// Moves paths into folder dir; conflict "replace" / "keep" answers a 409 `exists`.
+    func moveFiles(machine: String, paths: [String], cwd: String, dir: String, conflict: String? = nil) async throws -> [MovedFile] {
+        try await post(mp(machine) + "/files/move", body: MoveRequest(paths: paths, cwd: cwd, dir: dir, conflict: conflict),
+                       timeout: 130, as: MoveResponse.self).moved ?? []
+    }
+    private struct TrashRequest: Encodable { var paths: [String]; var cwd: String }
+    struct TrashedFile: Decodable, Sendable {
+        var path: String
+        var trashID: String
+        enum CodingKeys: String, CodingKey { case path, trashID = "trash_id" }
+    }
+    private struct TrashResponse: Decodable { var trashed: [TrashedFile]? }
+    /// Moves paths to the machine's trash; restoreFiles with the ids puts them back.
+    func trashFiles(machine: String, paths: [String], cwd: String) async throws -> [TrashedFile] {
+        try await post(mp(machine) + "/files/trash", body: TrashRequest(paths: paths, cwd: cwd), timeout: 130, as: TrashResponse.self).trashed ?? []
+    }
+    private struct RestoreRequest: Encodable {
+        var trashIDs: [String]
+        enum CodingKeys: String, CodingKey { case trashIDs = "trash_ids" }
+    }
+    private struct RestoreResponse: Decodable { var restored: [RenameResponse]? }
+    func restoreFiles(machine: String, trashIDs: [String]) async throws -> [String] {
+        try await post(mp(machine) + "/files/restore", body: RestoreRequest(trashIDs: trashIDs), timeout: 130, as: RestoreResponse.self)
+            .restored?.map(\.path) ?? []
+    }
 }

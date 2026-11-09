@@ -30,6 +30,9 @@ export interface PlanTask {
   why?: string;
   todo_id?: string;
   error?: string;
+  /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
+  error_code?: string;
+  error_args?: Record<string, string>;
 }
 
 export interface TaskPlan {
@@ -78,6 +81,11 @@ export interface BriefRow {
   nudged?: boolean;
   /** accept: when the round's "Please verify" ask was made (with or without a Lark card); the Accept button sends it back. */
   asked_at?: string;
+  /** accept: the verdict line, word for word as the Lark card says it (#1226), in the bot's language; a hub from before leaves it out. */
+  verdict?: string;
+  /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
+  outcome?: "done" | "cannot" | "decide";
+  recommend?: string;
 }
 
 export interface BriefFailed {
@@ -179,6 +187,58 @@ export function field(it: FeedItem, key: string): string | undefined {
 export function feedNotice(it: FeedItem): string | undefined {
   if (it.kind !== "notice") return undefined;
   return field(it, "text")?.trim() || undefined;
+}
+
+/** `routed`: Persona wrote it to the task's agent (agent_send with a task, agent_interrupt's then, a rework; #1542), so
+ *  it is drawn folded as Persona's (`SentLine`), never as the user's bubble. What the user sent has no `from`. */
+export function sentByPersona(it: FeedItem): boolean {
+  return it.kind === "routed" && it.body?.from === "assistant";
+}
+
+/** How long after its task's card a message of Persona's counts as the card's hand-off: agent_send with a task writes the
+ *  card and, right after it, what it sent. */
+export const HAND_OFF_MS = 60_000;
+
+/** The hand-offs the task cards take in (#1542, not drawn on their own): Persona's messages within `HAND_OFF_MS` after
+ *  their own task's card in the same conversation. Only a card drawn in full (from today, FeedLineView) has the list: from
+ *  another day it is a TaskLine, and its hand-off stays a folded line under it (#1668). */
+export function takenIn(feed: FeedItem[], now = new Date()): Set<string> {
+  const cards = new Map<string, number[]>();
+  for (const it of feed) {
+    if (it.kind !== "task" || !it.ref || !isToday(it.at, now)) continue;
+    const key = it.conversation + "/" + it.ref;
+    cards.set(key, [...(cards.get(key) ?? []), Date.parse(it.at)]);
+  }
+  const out = new Set<string>();
+  if (cards.size === 0) return out;
+  for (const it of feed) {
+    if (!sentByPersona(it) || !it.ref) continue;
+    const at = Date.parse(it.at);
+    if ((cards.get(it.conversation + "/" + it.ref) ?? []).some((c) => c <= at && at - c <= HAND_OFF_MS)) out.add(it.id);
+  }
+  return out;
+}
+
+/** The feed without the hand-offs the cards take in: what the chat draws among its lines. */
+export function shownFeed(feed: FeedItem[], now = new Date()): FeedItem[] {
+  const hidden = takenIn(feed, now);
+  return hidden.size === 0 ? feed : feed.filter((it) => !hidden.has(it.id));
+}
+
+/** Persona's messages to task `todoId`, oldest first: what its card lists. */
+export function sentTo(feed: FeedItem[], todoId: string): FeedItem[] {
+  return feed
+    .filter((it) => sentByPersona(it) && it.ref === todoId)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** The first line with words in it, trimmed: what a folded message shows. */
+export function firstLine(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t) return t;
+  }
+  return "";
 }
 
 /** A receipt's outcome: an `interrupted` one (#1516), or a `done` one from a hub before it whose summary is the API
@@ -580,6 +640,7 @@ export type DisplayLine =
 
 /** When the user sent the line's message (feed items go before the first message sent after them). */
 function inputTime(line: ChatLine): number | undefined {
+  if (line.kind === "supervision") return line.lines.map(inputTime).find((at) => at !== undefined);
   if (line.kind !== "segment" || !line.seg.user?.ts) return undefined;
   return Date.parse(line.seg.user.ts);
 }
@@ -591,6 +652,7 @@ function lineTime(l: DisplayLine): number | undefined {
       return Date.parse(l.item.at);
     case "chat": {
       const c = l.line;
+      if (c.kind === "supervision") return inputTime(c);
       if (c.kind === "segment") return Date.parse(c.seg.user?.ts ?? c.seg.start ?? "") || undefined;
       if (c.kind === "notice" || c.kind === "apiError" || c.kind === "compact") return Date.parse(c.item.ts ?? "") || undefined;
       return undefined;
@@ -618,7 +680,9 @@ export function quickResult(use: Item, result?: Item): QuickResult | undefined {
 
 /** The chat's lines with the feed among them (each item at the end of the exchange it happened in), each exchange's
  *  quick results after it, and a day line over the first line of each day. */
-export function displayLines(lines: ChatLine[], feed: FeedItem[]): DisplayLine[] {
+export function displayLines(lines: ChatLine[], all: FeedItem[]): DisplayLine[] {
+  // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
+  const feed = shownFeed(all);
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {

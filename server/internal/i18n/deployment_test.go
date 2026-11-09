@@ -1,13 +1,14 @@
 package i18n
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
 
 func TestDeploymentText(t *testing.T) {
 	for _, l := range []Lang{ZhHans, En, Ja} {
-		for key, source := range catalogs[ZhHans] {
+		for key, source := range catalogs()[ZhHans] {
 			if !strings.HasPrefix(key, "devices-deploy.") && !strings.HasPrefix(key, "hub-machine.deploy_") {
 				continue
 			}
@@ -53,4 +54,78 @@ func TestDeploymentTextPreservesUnknownAndData(t *testing.T) {
 	if got := DeploymentText(En, source); got != want {
 		t.Fatalf("version was translated: %q", got)
 	}
+}
+
+// A template's literals only skip texts its pattern cannot match: on its own catalog's texts (each template filled in)
+// match is the pattern's answer. A text no template is worded as, the usual node or SSH error, fits none of them, so
+// it runs no regexp.
+func TestTemplateLiteralsOnlySkipMisses(t *testing.T) {
+	for name, x := range catalogIndexes() {
+		forms := x.forms
+		for i := range forms {
+			f := &forms[i]
+			for _, text := range catalogTexts(forms) {
+				if got, want := f.match(text), f.pattern.FindStringSubmatch(text); !slices.Equal(got, want) {
+					t.Fatalf("%s %s on %q: match %q, pattern %q", name, f.key, text, got, want)
+				}
+			}
+			for _, text := range unknownTexts {
+				if f.fits(text) {
+					t.Errorf("%s %s fits %q: it would run its regexp on every unknown text", name, f.key, text)
+				}
+			}
+		}
+	}
+}
+
+// The index by first byte finds, for every text, the template trying them all in order finds, with the same
+// submatches: on each catalog's own texts, each starting byte and the empty text. An unknown text is tried against a
+// few templates, not all of them.
+func TestTemplateIndexFindsTheSameTemplate(t *testing.T) {
+	for name, x := range catalogIndexes() {
+		texts := catalogTexts(x.forms)
+		for c := range 256 {
+			texts = append(texts, string(rune(c)), string([]byte{byte(c)})+" failed: 7")
+		}
+		for _, text := range texts {
+			want, wantMatch := -1, []string(nil)
+			for i := range x.forms {
+				if m := x.forms[i].pattern.FindStringSubmatch(text); m != nil {
+					want, wantMatch = i, m
+					break
+				}
+			}
+			got, gotMatch := -1, []string(nil)
+			for _, n := range x.candidates(text) {
+				if m := x.forms[n].match(text); m != nil {
+					got, gotMatch = int(n), m
+					break
+				}
+			}
+			if got != want || !slices.Equal(gotMatch, wantMatch) {
+				t.Fatalf("%s on %q: the index finds template %d %q, trying all finds %d %q", name, text, got, gotMatch, want, wantMatch)
+			}
+		}
+		for _, text := range unknownTexts {
+			if n, all := len(x.candidates(text)), len(x.forms); n > all/6 {
+				t.Errorf("%s tries %d of its %d templates on %q", name, n, all, text)
+			}
+		}
+	}
+}
+
+var unknownTexts = []string{"ssh: connect to host example port 22: Connection refused", "connection reset by peer", "Ready"}
+
+func catalogIndexes() map[string]*templateIndex {
+	return map[string]*templateIndex{"deployment": deploymentTemplates(), "inbox": inboxTemplates(), "computer": computerTemplates()}
+}
+
+// catalogTexts are the texts a catalog's templates are tried on: the empty text, a number, the unknown texts, and each
+// template filled in (a count, and opaque text, for each placeholder).
+func catalogTexts(forms []deploymentTemplate) []string {
+	texts := append([]string{"", "7"}, unknownTexts...)
+	for _, f := range forms {
+		texts = append(texts, strings.Join(f.literals, "7"))
+	}
+	return texts
 }

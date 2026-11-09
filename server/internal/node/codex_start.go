@@ -9,13 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -237,7 +237,7 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 
 // codexTrustRE is Codex's folder trust dialog with "trust and continue" selected (0.163: "› 1. Trust and continue";
 // 0.153: "› 1. Yes, continue"): enter picks it.
-var codexTrustRE = regexp.MustCompile(`(?m)^\s*›\s*1\.\s+(?:Trust and continue|Yes, continue)\s*$`)
+var codexTrustRE = lazyre.New(`(?m)^\s*›\s*1\.\s+(?:Trust and continue|Yes, continue)\s*$`)
 
 // codexThreadStart is when a rollout's thread began (its session_meta) and the text of its first user message ("" when
 // there is none yet).
@@ -326,6 +326,11 @@ func CodexStart(args []string) error {
 	path, err := exec.LookPath(words[0])
 	if err != nil {
 		return fmt.Errorf("%s %s not found in PATH", codexStartError, words[0])
+	}
+	// On Windows the launcher may be a batch file (npm's codex.cmd): the program behind it, never cmd.exe with the message.
+	path, env, err = codexStartProgram(path, f.Prompt != "", env)
+	if err != nil {
+		return fmt.Errorf("%s %v", codexStartError, err)
 	}
 	argv := append([]string(nil), words...)
 	if f.Prompt != "" { // a resume without a message (`personad tab-start`, pi.go) runs the words alone
