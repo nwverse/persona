@@ -3084,17 +3084,25 @@ if MOCK_TASKS:
         # what is in progress. The Accept button posts to /api/v1/todos/{id}/accept (accept_brief below).
         _feed("feed_brief", 1.5, "brief", "morning", {
             "title": "早报", "at": ago(minutes=1.6), "hours": 12,
-            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 4800, "nudged": True},
+            # A card and a question name the chat they came from (machine_id / session_id, #2320): the apps open it. The second
+            # card names none, as a card from no chat (or a hub from before) does.
+            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock",
+                         "machine_id": "macbook", "session_id": TESTS, "waited_s": 4800, "nudged": True},
                         {"id": "ix_mock_2", "title": "需要你批准", "from": "来自 Persona", "waited_s": 300}],
+            # The newest rows of each, the totals counting all of them ("and 5 more"; iPhone folds them behind the heading).
             "failed": [{"kind": "task", "id": "todo_task_align", "title": "设置页按钮对齐", "at": ago(hours=3), "why": "rpc: connection closed"},
                        {"kind": "routine", "id": "patrol", "ref": "run_mock", "title": "巡检", "at": ago(hours=5), "why": "Persona 停机，错过了时间", "skipped": True}],
-            "failed_total": 2,
-            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)}], "done_total": 1,
+            "failed_total": 3,
+            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)},
+                     {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
+            # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)}],
+                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
-                       "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 26 * 3600},
+                       "link": "http://127.0.0.1/s/macbook/mock", "machine_id": "macbook", "session_id": TESTS, "waited_s": 26 * 3600},
                       {"id": "lt_mock_2", "title": "发布说明里要不要写内部编号？", "from": "来自 Agent「发布」", "waited_s": 3 * 3600}],
             "later_total": 2,
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
@@ -15180,18 +15188,18 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(folder_state({}))
         if p.startswith("/api/v1/inbox/") and p.endswith("/folder") and self.command == "PUT":
             iid = unquote(p[len("/api/v1/inbox/"):-len("/folder")])
-            it = next((x for x in INBOX if x["id"] == iid), None)
-            if not it: return self.send_json({"error": "no such inbox item"}, 404)
+            inbox_item = next((x for x in INBOX if x["id"] == iid), None)
+            if not inbox_item: return self.send_json({"error": "no such inbox item"}, 404)
             folder = json.loads(self.last_body or b"{}").get("folder")
             if folder is None:
-                it.pop("folder", None); it.pop("folder_by", None)
+                inbox_item.pop("folder", None); inbox_item.pop("folder_by", None)
             else:
                 f = normalize_folder(folder)
                 if not f and str(folder).strip(): return self.send_json({"error": "folder must have at least one name between the slashes"}, 400)
-                it["folder_by"] = "user"
-                if f: it["folder"] = f
-                else: it.pop("folder", None)
-            return self.send_json(dict({k: v for k, v in it.items() if k != "context"}, version=inbox_version(it)))
+                inbox_item["folder_by"] = "user"
+                if f: inbox_item["folder"] = f
+                else: inbox_item.pop("folder", None)
+            return self.send_json(dict({k: v for k, v in inbox_item.items() if k != "context"}, version=inbox_version(inbox_item)))
         if p == "/api/v1/inbox/policies" and self.command == "POST":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])

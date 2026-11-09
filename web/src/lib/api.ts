@@ -3,6 +3,7 @@ import { storedCredentials, storeCredentials, CLIENT_HEADERS, OP_HEADERS, compat
 
 import { MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
 import { BASE } from "./base";
+import { intercepted, reloadForSignIn } from "./edge-auth";
 import { requestCrumb } from "./error-reports";
 import { currentLanguage, t } from "../i18n";
 import type { Item } from "./types";
@@ -99,6 +100,10 @@ export const READ_TIMEOUT_MS = 45_000;
  *  past the hub's own limit, so the hub's error (which computer, which launcher) or a late answer comes first (#5035). */
 export const pastHub = (hubMs: number): number => hubMs + 5_000;
 
+/** The waits before a read's second and third try: a dropped connection or a proxy's 502 usually clears within seconds.
+ *  None under Vitest, whose stub hubs answer once and whose failures would otherwise all wait these out. */
+const readRetryMs = () => (import.meta.env.MODE === "test" ? [] : [300, 1_000]);
+
 /** The hub did not answer a read within its time (`api`'s `timeout`). */
 export class HubTimeoutError extends Error {
   constructor() {
@@ -113,7 +118,8 @@ type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: s
  *  `timeout`: ms before a read gives up with HubTimeoutError (default READ_TIMEOUT_MS for GET, none otherwise; 0: none). */
 export async function api<T>(path: string, init: ApiOptions & { timeout?: number } = {}): Promise<T> {
   const { timeout, ...rest } = init;
-  const limit = timeout ?? ((init.method ?? "GET").toUpperCase() === "GET" ? READ_TIMEOUT_MS : 0);
+  const read = (init.method ?? "GET").toUpperCase() === "GET";
+  const limit = timeout ?? (read ? READ_TIMEOUT_MS : 0);
   if (!limit) return request<T>(path, rest);
   // The caller's own signal still aborts as before (an AbortError); only the time running out becomes HubTimeoutError.
   const controller = new AbortController();
@@ -127,13 +133,31 @@ export async function api<T>(path: string, init: ApiOptions & { timeout?: number
     controller.abort();
   }, limit);
   try {
-    return await request<T>(path, { ...rest, signal: controller.signal });
+    for (let tries = 0; ; tries++) {
+      try {
+        return await request<T>(path, { ...rest, signal: controller.signal });
+      } catch (e) {
+        // asking again is safe for a read: a gap gets a couple more tries, all inside the read's own time limit
+        if (!read || tries >= readRetryMs().length || !isTransient(e)) throw e;
+        await pause(readRetryMs()[tries], controller.signal);
+      }
+    }
   } catch (e) {
     throw late && isAbort(e) ? new HubTimeoutError() : e;
   } finally {
     clearTimeout(timer);
     outer?.removeEventListener("abort", forward);
   }
+}
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((done, fail) => {
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      fail(new DOMException("aborted", "AbortError"));
+    }, { once: true });
+  });
 }
 
 async function request<T>(path: string, init: ApiOptions): Promise<T> {
@@ -157,11 +181,18 @@ async function request<T>(path: string, init: ApiOptions): Promise<T> {
   const method = init.method ?? "GET";
   let res: Response;
   try {
-    res = await fetch(`${BASE}/api/v1${path}`, { ...fetchOptions, headers, body });
+    // manual: a redirect (the sign-in layer in front of the hub has expired) arrives as one instead of being followed
+    // into a cross-origin page this script cannot read; the hub itself never redirects its API
+    res = await fetch(`${BASE}/api/v1${path}`, { redirect: "manual", ...fetchOptions, headers, body });
   } catch (e) {
     // a breadcrumb for an error report: the method, the path's pattern (no ids, no query) and that it did not get there
     if (!isAbort(e)) requestCrumb(method, path, 0);
     throw e;
+  }
+  if (intercepted(res)) {
+    requestCrumb(method, path, res.status);
+    reloadForSignIn(); // the layer in front takes over the page and sends it to its sign-in
+    throw new ApiError(res.status || 401, t("lib-api.hub_no_response"), {}, false);
   }
   const text = await res.text();
   let data: Record<string, unknown> = {};
@@ -221,6 +252,14 @@ export function fileThumbURL(mid: string, path: string, cwd?: string, size = 256
 
 export function isAbort(e: unknown) {
   return e instanceof DOMException && e.name === "AbortError";
+}
+
+/** Whether the request may not have reached a running hub: fetch failed, or something in front of it answered 502/503/504. */
+export function isTransient(e: unknown): boolean {
+  if (e instanceof TypeError) return true; // fetch: the connection failed (an abort is a DOMException)
+  // the hub's own errors carry a code or say what was delivered (a machine offline, a node timing out): those are
+  // answers, not gaps
+  return e instanceof ApiError && [502, 503, 504].includes(e.status) && (!e.isJson || (!e.code && e.body.delivered === undefined));
 }
 
 /** The hub answered for a computer that did not (docs/protocol/protocol.md "Error body"): what became of the computer and
