@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Settings › Extensions keeps an extension's unsaved configuration while its page is closed (#2800): coming back from
-// another extension's page finds the edits, the save bar and the list's mark; Revert drops them. Only the edits come
-// back: a field changed elsewhere meanwhile shows, and is saved with, its new value. With a market, the list's note does
-// not contradict the market's.
+// another extension's page finds the edits, the save bar and the list's mark (beside what is still missing); Revert drops
+// them, and so does the extension leaving the list. Only the edits come back: a field changed elsewhere meanwhile shows,
+// and is saved with, its new value. With a market, the list's note does not contradict the market's.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,7 +41,7 @@ let login = 0;
 beforeEach(() => {
   hub.markets = false;
   hub.saved = [];
-  hub.list = [ext("example-notes", "Example Notes"), ext("example-quota", "Example Quota")];
+  hub.list = [{ ...ext("example-notes", "Example Notes"), needs_setup: ["API key"] }, ext("example-quota", "Example Quota")];
   hub.details = { "example-notes": notes(30), "example-quota": { ...ext("example-quota", "Example Quota"), form: { fields: [] }, config: {} } as HubExtensionDetail };
   setToken(`token-${++login}`); // a new credential: nothing kept from the case before
   host = document.createElement("div");
@@ -88,6 +88,7 @@ describe("an extension's unsaved configuration", () => {
     hub.details["example-notes"] = notes(elsewhere); // another device, app or an upgrade, while the page is closed
     await show(null);
     expect(row("Example Notes").textContent?.includes(t("settings-extensions.unsaved"))).toBe(unsaved);
+    expect(row("Example Notes").textContent).toContain(t("settings-extensions.needs_setup", { items: "API key" }));
     expect(row("Example Quota").textContent).not.toContain(t("settings-extensions.unsaved"));
 
     await show("example-notes");
@@ -97,6 +98,17 @@ describe("an extension's unsaved configuration", () => {
     if (!unsaved) return;
     await act(async () => button(t("common.save"))!.click());
     expect(hub.saved).toEqual([{ base_url: TYPED, every_minutes: elsewhere }]);
+  });
+
+  it("is dropped once the list no longer has the extension (uninstalled elsewhere), so a reload stops asking", async () => {
+    const reloadAsks = () => !dispatchEvent(new Event("beforeunload", { cancelable: true }));
+    await show("example-notes");
+    typeInto(input()!, TYPED);
+    await show("example-quota");
+    expect(reloadAsks()).toBe(true);
+    hub.list = [ext("example-quota", "Example Quota")];
+    await show(null);
+    expect(reloadAsks()).toBe(false);
   });
 });
 

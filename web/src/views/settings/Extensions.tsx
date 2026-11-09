@@ -175,7 +175,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
     const mine = ++reads.current;
     setLoading(true);
     listExtensionsInfo()
-      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError("")))
+      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError(""), dropGone(r.extensions)))
       .catch((e) => mine === reads.current && setError(errorText(e)))
       .finally(() => mine === reads.current && setLoading(false));
   };
@@ -280,6 +280,9 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           ...g.items.map((p) => {
             const i = (extensions ?? []).indexOf(p);
             const kept = drafts.has(unsavedKey(p.id, p.manager));
+            // the kept edits' mark goes before what is still missing, not instead of it
+            const needs = p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : "";
+            const note = p.error || [kept ? t("settings-extensions.unsaved") : "", needs].filter(Boolean).join(" · ") || p.description;
             return (
               <button
                 key={`${p.manager ?? ""}:${p.id}`}
@@ -296,9 +299,9 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
                     <span className="truncate text-[13px] text-ink">{p.name}</span>
                     {p.source && p.source !== "installed" && <Pill>{sourceText(p.source)}</Pill>}
                   </div>
-                  {(kept || p.needs_setup?.length || p.error || p.description) && (
-                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : kept || p.needs_setup?.length ? "text-orange" : "text-ink-3")}>
-                      {p.error || (kept ? t("settings-extensions.unsaved") : p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : p.description)}
+                  {note && (
+                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : kept || needs ? "text-orange" : "text-ink-3")}>
+                      {note}
                     </div>
                   )}
                 </div>
@@ -346,7 +349,8 @@ const unsavedListeners = new Set<() => void>();
 let unsavedVersion = 0;
 
 /** The default manager's extension has no manager in its route (the list's rows, OwnedExtension): both name it "". */
-const unsavedKey = (id: string, manager?: string) => `${manager && manager !== defaultManager() ? manager : ""}|${id}`;
+const unsavedOwner = (manager?: string) => (manager && manager !== defaultManager() ? manager : "");
+const unsavedKey = (id: string, manager?: string) => `${unsavedOwner(manager)}|${id}`;
 
 function warnUnsaved(e: BeforeUnloadEvent) {
   e.preventDefault();
@@ -366,6 +370,18 @@ function keepUnsaved(key: string, kept: Unsaved | null) {
   if (kept) unsaved.set(key, kept);
   else unsaved.delete(key);
   if (had !== unsaved.has(key)) unsavedChanged();
+}
+
+/** After the list is read: the kept edits of an extension it no longer has (uninstalled while its page was closed) go, or
+ *  a reload would keep asking about edits nobody can open. Only for managers the list has rows of: another one may just
+ *  not have answered. */
+function dropGone(list: HubExtension[]) {
+  const there = new Set(list.map((x) => unsavedKey(x.id, x.manager)));
+  const owners = new Set(list.map((x) => unsavedOwner(x.manager)));
+  const gone = [...unsaved.keys()].filter((k) => !there.has(k) && owners.has(k.slice(0, k.indexOf("|"))));
+  if (!gone.length) return;
+  gone.forEach((k) => unsaved.delete(k));
+  unsavedChanged();
 }
 
 // Signing out or pairing again: another person's hub (or none), so the edits are not theirs.
