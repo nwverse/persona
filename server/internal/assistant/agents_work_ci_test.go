@@ -1108,10 +1108,17 @@ func TestCICompletedTodoGuardsAfterRetirementWriteFailure(t *testing.T) {
 type restoredTodoCIStore struct {
 	failingDeferredWorkStore
 	todoStore
-	doneAt time.Time
+	doneAt   time.Time
+	failTodo bool
 }
 
 func (s *restoredTodoCIStore) ListTodos(context.Context) ([]db.TodoRow, error) {
+	if s.failTodo {
+		return nil, errors.New("todo database unavailable")
+	}
+	if s.doneAt.IsZero() {
+		return nil, nil
+	}
 	return []db.TodoRow{{ID: "done", DoneAt: &s.doneAt}}, nil
 }
 func (*restoredTodoCIStore) ListAllTodoSpaces(context.Context) ([]db.TodoSpaceRow, error) {
@@ -1125,4 +1132,78 @@ func (*restoredTodoCIStore) ListTodoThreads(context.Context) (map[string]db.Todo
 }
 func (*restoredTodoCIStore) ListTodoSources(context.Context) (map[string]db.TodoSource, error) {
 	return nil, nil
+}
+
+func TestCIWatchRetriesTriageAfterTodoReadFailure(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub()
+	st := &restoredTodoCIStore{failTodo: true}
+	c := stopped("ci", "PR #12 CI")
+	c.UpdatedAt = time.Now().UTC().Add(-2 * time.Minute)
+	f.sessions["box"] = []proto.Session{c}
+	f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+	s := newServiceOn(t, f, st)
+	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+		t.Fatal(err)
+	}
+	triage(t, s, "ci")
+	if e, ok := s.workEntry([2]string{"box", "ci"}); ok && (e.Work.Phase != "" || e.Work.By != "") {
+		t.Fatalf("failure was recorded as triaged: %+v", e)
+	}
+	if got := f.sentToAgents(); len(got) != 0 {
+		t.Fatalf("sent during failed read: %v", got)
+	}
+	// Advance the existing retry backoff without sleeping; backfill must then
+	// re-run triage after the database becomes readable.
+	st.failTodo = false
+	key := [2]string{"box", "ci"}
+	s.work.mu.Lock()
+	tried := s.work.tried[key]
+	tried.at = time.Now().Add(-workRetryTriage - time.Second)
+	s.work.tried[key] = tried
+	s.work.mu.Unlock()
+	s.backfillWork(ctx, s.newWorkView(ctx), time.Now())
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.work.mu.Lock()
+			busy := s.work.triaging[key]
+			s.work.mu.Unlock()
+			if e, ok := s.workEntry(key); !busy && ok && e.Work.CI != nil && e.WakeAt != nil {
+				s.waitWorkEvents()
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("backfill did not restore the CI watch")
+		}
+	}
+}
+
+func TestCIWatchClosedTodoStaysQuietAfterTriage(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub()
+	st := &restoredTodoCIStore{doneAt: time.Now().UTC()}
+	c := stopped("ci", "PR #12 CI")
+	c.UpdatedAt = time.Now().UTC().Add(-time.Minute)
+	f.sessions["box"] = []proto.Session{c}
+	f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+	s := newServiceOn(t, f, st)
+	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+		t.Fatal(err)
+	}
+	triage(t, s, "ci")
+	got := entryOf(t, s, "ci")
+	if got.Work.Phase != proto.WorkBlocked || got.Work.CI != nil || got.WakeAt != nil {
+		t.Fatalf("closed todo scheduled a watch: %+v", got)
+	}
+	triage(t, s, "ci")
+	got = entryOf(t, s, "ci")
+	if got.Work.CI != nil || got.WakeAt != nil {
+		t.Fatalf("closed todo was retried: %+v", got)
+	}
+	s.waitWorkEvents()
 }

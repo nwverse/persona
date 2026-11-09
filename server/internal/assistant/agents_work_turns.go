@@ -242,7 +242,13 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
 		startCIWatch(c, &e, time.Now(), ask, reply)
 		if e.Work.CI != nil {
-			if closed, err := s.ciClosedTodo(ctx, machine, c.SessionID); err != nil || closed {
+			closed, err := s.ciClosedTodo(ctx, machine, c.SessionID)
+			if err != nil {
+				s.logf("triage %s/%s: cannot read todos: %v", machine, short(c.SessionID), err)
+				s.workEvent(machine, c.SessionID, "failed", map[string]any{"error": "todo state unavailable"})
+				return // do not mark this turn triaged; backfill retries after backoff
+			}
+			if closed {
 				e.WakeAt, e.Work.WakeAt, e.Work.CI = nil, nil, nil
 			}
 		}
