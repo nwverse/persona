@@ -131,7 +131,10 @@ func (p *assistantProc) alive() bool {
 }
 
 // isAssistantSession tells assistant conversations (headless) apart from herdr sessions.
-func (n *Node) isAssistantSession(id string) bool {
+func (n *Node) isAssistantSession(id string) bool { return n.isAssistantSessionIn(id, nil) }
+
+// isAssistantSessionIn is isAssistantSession with the assistant's project name taken once per list pass (codexListPass).
+func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	n.mu.Lock()
 	_, ok := n.procs[id]
 	a := n.agents[id]
@@ -148,7 +151,7 @@ func (n *Node) isAssistantSession(id string) bool {
 		return true
 	}
 	if p := n.transcriptPath(id); p != "" && (compat.IsAssistantTranscript(filepath.Base(filepath.Dir(p))) ||
-		isAssistantProject(filepath.Base(filepath.Dir(p)), n.assistantProject())) {
+		isAssistantProject(filepath.Base(filepath.Dir(p)), pass.assistantProject(n))) {
 		return true
 	}
 	// A conversation an agent runtime runs (assistant_runtime.go), listed before this node kept its state.
