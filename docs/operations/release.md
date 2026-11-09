@@ -479,8 +479,8 @@ repository. Keep the existing package, signing certificate and signing entry. Ne
 or treat an old verified APK as a build of the new source. Compare migrated file content when commit IDs have changed.
 
 The release APK is shrunk by R8 without renaming (docs/android/android.md "Release shrinking"). After `:app:assembleRelease` and
-before the APK is copied for signing, the worker runs `scripts/release/check_android_shrink.py` on it and on
-`android/app/build/outputs/mapping/release`; any class, constructor or method that Android or the app reaches only by name and
+before the APK is copied for signing, the worker runs `scripts/release/check_android_shrink.py` on it and on R8's
+output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app reaches only by name and
 that R8 removed fails the build, so nothing is signed or published. Before the first shrunk release, install it on a phone and
 open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings
 tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`).
