@@ -297,6 +297,13 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   yields only "Not logged in · Please run /login". If the user selected a working launcher in "New Agent", use it (hub passes it to node, which uses it only when neither of the first two choices exists).
 - Keep the session's original model on resume (`sessionState.Model`); switch to the "New Agent" model only when using the hub-selected launcher.
 
+## `--resume` without `--model` brings back the session's last model (2026-11-09, #2487, 2.1.296)
+
+- Claude Code restores the model a resumed session last ran on. Only `--model`, `ANTHROPIC_MODEL` or an `ANTHROPIC_DEFAULT_*_MODEL` stops it; `"model"` in `settings.json` or `--settings` does not.
+  The main chat had no model configured, so the app said "Claude Code default", but every `--resume` kept the model an earlier start had used. When the gateway dropped that model, every turn failed (`model_not_found`, later a 503 retried ten times), and changing Claude Code's settings changed nothing.
+- To check which model a turn used, read the last `assistant` line's `message.model` in the transcript. `modelUsage` in `-p --output-format json` and in `cost-state` adds up the whole session.
+- An assistant conversation resumed with no configured model now gets `--model` with what a new session would use (`node/assistant_resume_model.go`). `--model default` alone would be wrong: it ignores the settings' `model`, and on a gateway set up through `ANTHROPIC_MODEL` it would replace that gateway's model.
+
 ## herdr restart and restore (v0.9.5, 2026-11-04, #1879)
 
 - `herdr server` is a foreground headless server; it doesn't daemonize itself. Socket: `$XDG_CONFIG_HOME/herdr/herdr.sock` (or `HERDR_SOCKET_PATH`).
