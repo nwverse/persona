@@ -5,9 +5,10 @@ package extmgr
 // "Allow once" / "Always allow" / "Deny". Apps always allowed are kept by bundle id for that Mac in the hub's settings
 // (computerAppsKey) and listed, and removable, on the machine's page. Some are never remembered and asked about every
 // time (askedEveryTime), and so is a call whose apps cannot all be told (a script naming them by expression, a step
-// with no app).
+// with no app, a launch naming none). An app a call opens counts as one it operates.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -65,10 +67,20 @@ var askedEveryTimeNames = []string{
 // approval: the plugin's "Ask the first time an app is operated", on unless turned off.
 func (s cuaSettings) approval() bool { return s.AppApproval == nil || *s.AppApproval }
 
-var getAppLiteral = lazyre.New(`getApp\(\s*(?:"([^"\\]+)"|'([^'\\]+)')\s*\)`)
+var (
+	getAppLiteral = lazyre.New(`getApp\(\s*(?:"([^"\\]+)"|'([^'\\]+)')\s*\)`)
+	launchLiteral = lazyre.New(`launch\(\s*(?:"([^"\\]+)"|'([^'\\]+)')\s*\)`)
+	// getAppWord and launchWord count every occurrence of the callee's name. A call the literal patterns cannot
+	// read (space or a comment before the parentheses, a computed callee, an argument that is not a plain string)
+	// then makes the script's apps unknown instead of being missed: comparing substring counts of "getApp(" would
+	// miss the same calls the literal pattern misses, and judge the script fully known.
+	getAppWord = lazyre.New(`\bgetApp\b`)
+	launchWord = lazyre.New(`\blaunch\b`)
+)
 
 // callApps is what a computer tool call names: its apps by name (or wholeScreen), and whether that is all it may
-// touch (false: a script naming its apps by expression or none, a step with no app of its own or the call's).
+// touch (false: a script naming its apps by expression or none, a step with no app of its own or the call's, a
+// launch_app step naming no app). An app the call opens (launch_app, cua.launch) is one it touches.
 func callApps(name, app, script string, steps json.RawMessage) (apps []string, whole bool) {
 	add := func(a string) {
 		if a = strings.TrimSpace(a); a != "" && !slices.Contains(apps, a) {
@@ -85,12 +97,24 @@ func callApps(name, app, script string, steps json.RawMessage) (apps []string, w
 		for _, m := range getAppLiteral.FindAllStringSubmatch(script, -1) {
 			add(m[1] + m[2])
 		}
-		return apps, len(apps) > 0 && strings.Count(script, "getApp(") == len(getAppLiteral.FindAllString(script, -1))
+		for _, m := range launchLiteral.FindAllStringSubmatch(script, -1) {
+			add(m[1] + m[2])
+		}
+		return apps, len(apps) > 0 && len(getAppWord.FindAllString(script, -1)) == len(getAppLiteral.FindAllString(script, -1)) &&
+			len(launchWord.FindAllString(script, -1)) == len(launchLiteral.FindAllString(script, -1))
 	}
 	var list []map[string]json.RawMessage
 	_ = json.Unmarshal(steps, &list)
 	whole = len(list) > 0
 	for _, s := range list {
+		if opened, ok := launchTarget(s); ok {
+			if opened == "" {
+				whole = false
+			} else {
+				add(opened)
+			}
+			continue
+		}
 		var named struct {
 			App string `json:"app"`
 		}
@@ -113,6 +137,32 @@ func callApps(name, app, script string, steps json.RawMessage) (apps []string, w
 		add(found)
 	}
 	return apps, whole
+}
+
+// launchTarget is the app a launch_app step opens, {"launch_app": {"name": …}} or {"tool": "launch_app", "args": {…}}:
+// its name or bundle id, "" when it names neither (not the call's default app: what opens then is the backend's
+// choice). ok is false for any other step.
+func launchTarget(s map[string]json.RawMessage) (opened string, ok bool) {
+	var tool string
+	args := s["launch_app"]
+	if raw, has := s["tool"]; has {
+		_ = json.Unmarshal(raw, &tool)
+	}
+	switch {
+	case tool == "launch_app":
+		args = s["args"]
+	case tool != "" || args == nil:
+		return "", false
+	}
+	var a struct {
+		Name     string `json:"name"`
+		BundleID string `json:"bundle_id"`
+	}
+	_ = json.Unmarshal(args, &a)
+	if opened = strings.TrimSpace(a.Name); opened == "" {
+		opened = strings.TrimSpace(a.BundleID)
+	}
+	return opened, true
 }
 
 // appsOn is what m's Cua Driver knows of the apps named: bundle id and name, by the name given (case aside); a name
@@ -263,8 +313,26 @@ func (h *Manager) approveApps(ctx context.Context, m *Machine, by asker, tool st
 	return true, ok
 }
 
+// computerAppsOwner binds an opt-in request to the manager whose settings the client displayed. The hub routes
+// machine requests to their current owner, regardless of ManagerHeader; checking here also works through an older
+// hub. The receiver's identity is immutable, so a delayed handover cannot turn this into another manager's write.
+func (h *Manager) computerAppsOwner(w http.ResponseWriter, r *http.Request) bool {
+	if expected := r.URL.Query().Get("expected_manager"); expected != "" && expected != h.computerAppsManager() {
+		writeErrCode(w, http.StatusConflict, "machine_owner_changed", i18n.Err("hub-computer_apps.owner_changed"))
+		return false
+	}
+	return true
+}
+
+func (h *Manager) computerAppsManager() string {
+	return cmp.Or(h.opts.ManagerID, assistantwire.AssistantID)
+}
+
 // getComputerApps: GET /api/v1/machines/{mid}/computer/apps, the apps always allowed on this Mac.
 func (h *Manager) getComputerApps(w http.ResponseWriter, r *http.Request, m *Machine) {
+	if !h.computerAppsOwner(w, r) {
+		return
+	}
 	all, err := h.approvedApps(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -279,11 +347,25 @@ func (h *Manager) getComputerApps(w http.ResponseWriter, r *http.Request, m *Mac
 	if apps == nil {
 		apps = []approvedApp{}
 	}
-	writeJSON(w, map[string]any{"apps": apps})
+	// The identity acknowledges support for expected_manager; old clients ignore this extra field.
+	writeJSON(w, map[string]any{"apps": apps, "manager": h.computerAppsManager()})
 }
 
-// deleteComputerApp: DELETE /api/v1/machines/{mid}/computer/apps/{bundle}, asked again next time.
+// revokeComputerApp is safe through an older hub: legacy managers do not match this alias, while this receiver
+// requires and enforces its immutable identity before delegating to the existing persisted mutation.
+func (h *Manager) revokeComputerApp(w http.ResponseWriter, r *http.Request, m *Machine) {
+	if r.URL.Query().Get("expected_manager") == "" {
+		writeErrCode(w, http.StatusPreconditionRequired, "expected_manager_required", i18n.Err("hub-computer_apps.owner_required"))
+		return
+	}
+	h.deleteComputerApp(w, r, m)
+}
+
+// deleteComputerApp: DELETE /api/v1/machines/{mid}/computer/apps/{bundle}, removing only the saved approval.
 func (h *Manager) deleteComputerApp(w http.ResponseWriter, r *http.Request, m *Machine) {
+	if !h.computerAppsOwner(w, r) {
+		return
+	}
 	id := r.PathValue("bundle")
 	computerAppsMu.Lock()
 	all, err := h.approvedApps(r.Context())

@@ -40,7 +40,7 @@ type fakeInbox struct {
 	failing   map[string]error  // Collect fails
 	cfg       assistantwire.InboxConfig
 	// model is every inbox purpose's model (nil: none set up), models by purpose over it: manager.json's "ai" and its
-	// triage / judge / kb connections in the hello (models.go's baselines; translation and drafts are kb's).
+	// triage / judge / kb connections in the hello (models_resolve.go's baselines; translation and drafts are kb's).
 	model   *ai.Client
 	models  map[string]*ai.Client
 	mail    *fakeMail
@@ -296,7 +296,7 @@ func (in *fakeInbox) answer(ctx context.Context, p AppCall) (json.RawMessage, bo
 		if raw, err = g.GroupTool(ctx, a.Call); err == nil {
 			var v any
 			_ = json.Unmarshal(raw, &v)
-			b, _ := json.Marshal(pruneAvatars(v)) // as the hub cuts it for the model (compactJSON)
+			b, _ := json.Marshal(pruneAvatars(v)) // as extmgr cuts it for the model (compactJSON)
 			out = map[string]any{"result": string(b)}
 		}
 	case assistantwire.InboxGroupFallback:

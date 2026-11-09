@@ -83,6 +83,8 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			by = h.byMachine
 		case strings.Contains(pattern, "/assistant/conversations/{id}/"):
 			by = h.byConversation
+		case strings.Contains(pattern, "/todos/{id}"):
+			by = h.byTodo
 		}
 		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) })
 	}
@@ -442,12 +444,7 @@ func busCodedError(err error) error {
 	return err
 }
 
-// assistantHello is manager.hello's answer for the assistant, kept as what it last got.
-func (h *Hub) assistantHello(ctx context.Context) assistantwire.Hello {
-	return h.assistantHelloFor(ctx, assistantwire.AssistantID)
-}
-
-// assistantHelloFor is assistantHello for manager id.
+// assistantHelloFor is manager.hello's answer for manager id, kept as what it last got.
 func (h *Hub) assistantHelloFor(ctx context.Context, id string) assistantwire.Hello {
 	hello, _ := assistantLink{h}.Hello(ctx)
 	hello = h.placedFor(hello, id)

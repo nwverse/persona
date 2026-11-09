@@ -10,7 +10,7 @@ import Testing
 struct ManagerGroupsTests {
     private static let header = "X-Persona-Manager"
 
-    /// The mock hub's three installed managers (助手 the default, 工作 online, 家里 offline) and one still installing.
+    /// The mock hub's roster: the default (`assistant`), `m-1` online, `m-2` offline, and `m-3` still installing.
     private static let roster = #"""
     {"default":"assistant","managers":[
       {"id":"assistant","name":"助手","online":true,"default":true,"builtin":true},
@@ -33,7 +33,7 @@ struct ManagerGroupsTests {
     """#
 
     private static func detail(_ id: String, enabled: Bool = true) -> String {
-        #"{"id":"\#(id)","name":"\#(id)","kind":"connectors","status":"running","enabled":\#(enabled),"auto_upgrade":true,"# +
+        #"{"id":"\#(id)","name":"\#(id)","kind":"connectors","status":"running","source":"installed","origin":"market:m1/\#(id)","enabled":\#(enabled),"auto_upgrade":true,"# +
             #""contributes":{"connectors":["\#(id)"]},"form":{"fields":[{"name":"base_url","type":"string"}]},"config":{},"# +
             #""secrets":[{"name":"api_key","title":"API Key","set":false}],"permissions":[],"# +
             #""contributions":[{"point":"connectors","id":"\#(id)","title":"\#(id)","enabled":true,"can_disable":true}]}"#

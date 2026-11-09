@@ -7,8 +7,9 @@
 // A write (actions.do) comes only once the hub's gate let it through; the program never starts one itself.
 //
 // A program answers two openings: init and the bare method names (connector protocol 2 on its own), and the plugin
-// protocol's initialize with the same methods in the connector namespace (connector.status, …; docs/extensions/extensions.md). The
-// hub starts its connector programs as plugins; the bare opening stays for one release.
+// protocol's initialize with the same methods in the connector namespace (connector.status, …; docs/extensions/extensions.md).
+// The extension manager runs connector programs as plugins (connector/proc with a Link). connector/proc still opens a
+// program it starts itself (Config.Path) with init, as its tests and the conformance kit do, so both openings stay.
 package serve
 
 import (
@@ -25,6 +26,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -33,28 +35,35 @@ import (
 
 // Methods the hub calls.
 const (
-	MInit      = "init" // InitParams → Manifest: build the connector and start it
-	MManifest  = "manifest"
-	MStatus    = "status"
-	MLoginStep = "login.step"
-	MLogout    = "logout"
-	MChanges   = "archive.changes"
-	MCollect   = "inbox.collect"
-	MReply     = "inbox.reply"
-	MTools     = "tools.list"
-	MCall      = "tools.call"
-	MActions   = "actions.list"
-	MDescribe  = "actions.describe"
-	MDo        = "actions.do" // only once the hub's gate let it through
-	MRecall    = "recall"     // take a sent message back: only once the user agreed, and only for a connector that declares recall
-	MThread    = "thread.page"
-	MMedia     = "thread.media"
+	MInit        = "init" // InitParams → Manifest: build the connector and start it
+	MManifest    = "manifest"
+	MStatus      = "status"
+	MLoginStep   = "login.step"
+	MLogout      = "logout"
+	MChanges     = "archive.changes"
+	MCollect     = "inbox.collect"
+	MReply       = "inbox.reply"
+	MCatalog     = "catalog.list"
+	MCatalogCall = "catalog.call"
+	MTools       = "tools.list"
+	MCall        = "tools.call"
+	MActions     = "actions.list"
+	MDescribe    = "actions.describe"
+	MDo          = "actions.do" // only once the hub's gate let it through
+	MRecall      = "recall"     // take a sent message back: only once the user agreed, and only for a connector that declares recall
+	MThread      = "thread.page"
+	MMedia       = "thread.media"
 	// The knowledge base's items (connector.Items) and an archived message's attachment (connector.ArchiveMedia).
 	MItems        = "items.list"
 	MDocTitle     = "items.doc_title"
 	MArchiveMedia = "archive.media"
 	// The live state for the assistant's snapshot (connector.Snapshot): SnapshotParams → connector.SnapshotData.
 	MSnapshot = "snapshot.get"
+	// History import (connector.History, connector.HistoryAnchors; docs/protocol/connector-protocol.md "History"),
+	// read-only: the conversations to import, one page of one of them, and the owner's messages to read around.
+	MHistoryChats   = "history.chats"   // {} → HistoryChatsResult
+	MHistory        = "archive.history" // HistoryParams → connectorwire.HistoryPage
+	MHistoryAnchors = "history.anchors" // HistoryAnchorsParams → connectorwire.HistoryAnchors
 	// Relating new messages to events (connector.Grouper): connector.GroupToolCall → any JSON,
 	// connector.GroupFallback → connector.GroupFallbackResult; with meta (connector.EventWriter)
 	// connector.GroupAppend → connector.InboxThing.
@@ -171,6 +180,10 @@ type (
 		Next    string                `json:"next,omitempty"`
 		More    bool                  `json:"more,omitempty"`
 	}
+	// HistoryChatsResult is history.chats' answer.
+	HistoryChatsResult struct {
+		Chats []connectorwire.HistoryChat `json:"chats"`
+	}
 	CollectResult struct {
 		Things []connector.InboxThing `json:"things,omitempty"`
 	}
@@ -238,6 +251,12 @@ type (
 		Contribution string `json:"contribution,omitempty"` // under the plugin protocol: the connector's id
 		Scope        string `json:"scope"`
 	}
+)
+
+// The history queries go on the wire as they are (with the contribution under the plugin protocol).
+type (
+	HistoryParams        = connectorwire.HistoryQuery        // archive.history's
+	HistoryAnchorsParams = connectorwire.HistoryAnchorsQuery // history.anchors'
 )
 
 // Error codes a program answers with (rpc.Error.Code), for callers that act on the kind of failure.
@@ -569,6 +588,8 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 		}
 		b, next, more, err := a.Changes(ctx, p.Cursor, p.Limit)
 		return ChangesResult{Batches: b, Next: next, More: more}, err
+	case MHistoryChats, MHistory, MHistoryAnchors:
+		return historyCall(ctx, c, method, params)
 	case MCollect:
 		in, ok := connector.As[connector.Inbox](c)
 		if !ok {
@@ -586,6 +607,16 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 			return nil, err
 		}
 		return struct{}{}, in.Reply(ctx, p)
+	case MCatalog:
+		sources, err := connector.ReadCatalog(ctx, c)
+		return connector.CatalogResult{Sources: sources}, err
+	case MCatalogCall:
+		var p connector.CatalogQuery
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		text, err := connector.CallCatalog(ctx, c, p)
+		return CallResult{Text: text}, err
 	case MTools:
 		t, ok := connector.As[connector.ReadTools](c)
 		if !ok {
@@ -795,6 +826,45 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 		return RecallResult{Recalled: true}, nil
 	}
 	return nil, &rpc.Error{Code: CodeUnknownMethod, Message: "unknown method " + method}
+}
+
+// historyCall answers history.chats, archive.history and history.anchors for a connector declaring them. The query
+// is checked and its limit cut to connectorwire.HistoryMost before the connector sees it; what the connector answers,
+// error included, goes back as it is.
+func historyCall(ctx context.Context, c connector.Connector, method string, params json.RawMessage) (any, error) {
+	h, ok := connector.As[connector.History](c)
+	if !ok {
+		return nil, noCapability(c, "history")
+	}
+	switch method {
+	case MHistoryChats:
+		chats, err := h.HistoryChats(ctx)
+		if chats == nil {
+			chats = []connectorwire.HistoryChat{}
+		}
+		return HistoryChatsResult{Chats: chats}, err
+	case MHistory:
+		var q HistoryParams
+		if err := json.Unmarshal(params, &q); err != nil {
+			return nil, err
+		}
+		if err := q.Check(); err != nil {
+			return nil, err
+		}
+		return h.History(ctx, q.Clamped())
+	}
+	a, ok := connector.As[connector.HistoryAnchors](c)
+	if !ok {
+		return nil, noCapability(c, "history_anchors")
+	}
+	var q HistoryAnchorsParams
+	if err := json.Unmarshal(params, &q); err != nil {
+		return nil, err
+	}
+	if err := q.Check(); err != nil {
+		return nil, err
+	}
+	return a.HistoryAnchors(ctx, q.Clamped())
 }
 
 // recallError is a connector's failed Recall as the wire says it: the code of the connector.Err* it wraps (one it

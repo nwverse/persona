@@ -6,7 +6,7 @@
 // is lib/providers.ts and lib/launcher-presets.ts. It reads the main conversation's readiness (4.3 B.3 / B.4): with a
 // Claude Code that already answers, "Use it for the main conversation and new Agents" starts off; a key saved for a computer with no Claude Code
 // says so (the main conversation still starts claude there) with how to install it.
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import {
   assignByDefault,
@@ -20,6 +20,7 @@ import {
   presetDefaultModel,
   presetHost,
   presetModelLabel,
+  presetRunsClaude,
   presetSubtitle,
   presetTestBody,
   presetTestable,
@@ -92,6 +93,10 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const [probeModel, setProbeModel] = useState("");
   const [discovering, setDiscovering] = useState(false);
   const [found, setFound] = useState<{ n: number; error?: string } | null>(null);
+  const connectionGeneration = useRef(0);
+  const discoverySeq = useRef(0);
+  const connectionTestSeq = useRef(0);
+  const modelToTest = probeModel.trim() || testModel(f);
   // the hub's providers (built-in ones, then the extensions'); null while loading
   const [presets, setPresets] = useState<LauncherPreset[] | null>(null);
   const [presetsError, setPresetsError] = useState("");
@@ -111,6 +116,25 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const preset = presets?.find((p) => p.id === choice);
   // a hub with built-in presets names a provider itself and takes assign; an older one needs the name and knows no assign
   const hubNames = useStore((s) => hubHas(s.features, BUILTIN_PRESETS_FEATURE, true));
+
+  // Settings keeps this component mounted when closed. A request belongs to one opening and connection,
+  // even if the user later returns to the same provider or restores the same input values.
+  useLayoutEffect(() => {
+    ++connectionGeneration.current;
+    setDiscovering(false);
+    setFound(null);
+    setTesting(false);
+    setTest(null);
+    return () => { ++connectionGeneration.current; };
+  }, [existing, choice, f.name, f.kind, f.agent, f.api, f.base_url, f.auth, f.api_key, f.headers, f.headers_touched]);
+
+  // Changing the probe model retires only its test; model edits must still merge with pending discovery.
+  useLayoutEffect(() => {
+    ++connectionTestSeq.current;
+    setTesting(false);
+    setTest(null);
+    return () => { ++connectionTestSeq.current; };
+  }, [modelToTest]);
 
   useEffect(() => {
     if (existing === null) return;
@@ -184,33 +208,41 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
 
   const runTest = async () => {
     if (hasLegacyChat) return;
-    const model = probeModel.trim() || testModel(f);
+    const generation = connectionGeneration.current;
+    const seq = ++connectionTestSeq.current;
+    const current = () => generation === connectionGeneration.current && seq === connectionTestSeq.current;
     setTesting(true);
     setTest(null);
     try {
-      setTest(await api<TestResult>("/launchers/test", { method: "POST", json: probeBody(f, old?.name ?? null, model) }));
+      const result = await api<TestResult>("/launchers/test", { method: "POST", json: probeBody(f, old?.name ?? null, modelToTest) });
+      if (current()) setTest(result);
     } catch (e) {
-      setTest({ ok: false, ms: 0, error: errorText(e) });
+      if (current()) setTest({ ok: false, ms: 0, error: errorText(e) });
     } finally {
-      setTesting(false);
+      if (current()) setTesting(false);
     }
   };
   const runDiscover = async () => {
     if (hasLegacyChat) return;
+    const generation = connectionGeneration.current;
+    const seq = ++discoverySeq.current;
+    const current = () => generation === connectionGeneration.current && seq === discoverySeq.current;
     setDiscovering(true);
     setFound(null);
     try {
       const r = await api<{ models?: ProviderModel[]; error?: string }>("/launchers/discover", { method: "POST", json: probeBody(f, old?.name ?? null) });
+      if (!current()) return;
       const list = r.models ?? [];
       setF((x) => {
+        if (!current()) return x;
         const models = mergeDiscovered(x.models, list, x.kind === "api" && x.api === "chat");
         return { ...x, models, model: x.model || models.find((m) => m.checked)?.id || "" };
       });
       setFound({ n: list.length, error: r.error });
     } catch (e) {
-      setFound({ n: 0, error: errorText(e) });
+      if (current()) setFound({ n: 0, error: errorText(e) });
     } finally {
-      setDiscovering(false);
+      if (current()) setDiscovering(false);
     }
   };
 
@@ -220,13 +252,20 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     setError("");
     try {
       if (step === "key" && preset) {
-        // never decide on "not known yet": a Claude Code that already answers must not be moved off (4.3 B.3)
-        await readinessSettled();
-        const before = currentReadiness();
-        const give = hubNames && (assignSet ?? assignByDefault(claudeWorks(before), keyTest && !keyTest.running ? keyTest.result : null));
+        // a direct API cannot run the main conversation or Agents: nothing to assign, so nothing to wait for
+        const direct = !presetRunsClaude(preset);
+        let give = false;
+        let noClaude = false;
+        if (!direct) {
+          // never decide on "not known yet": a Claude Code that already answers must not be moved off (4.3 B.3)
+          await readinessSettled();
+          const before = currentReadiness();
+          give = hubNames && (assignSet ?? assignByDefault(claudeWorks(before), keyTest && !keyTest.running ? keyTest.result : null));
+          noClaude = claudeMissing(before);
+        }
         const result = await api<AddResult>("/launchers", { method: "POST", json: presetBody(preset, pf.name, pf.api_key, pf.model, give) });
         onSaved();
-        setAdded({ result, asked: give, fallback: pf.name.trim() || presetTitle(preset), noClaude: claudeMissing(before) });
+        setAdded({ result, asked: give, fallback: pf.name.trim() || presetTitle(preset), noClaude, direct });
         setStep("done");
         void readinessChanged();
       } else {
@@ -516,7 +555,8 @@ function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAss
       ) : (
         <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.key_test_responses")}</p>
       )}
-      {assign !== null && (
+      {!presetRunsClaude(preset) && <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.direct_note")}</p>}
+      {assign !== null && presetRunsClaude(preset) && (
         <div className="flex items-center gap-3 rounded-card bg-surface p-3 shadow-btn">
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] text-ink">{t("settings-providerwizard.assign_label")}</span>
@@ -581,8 +621,9 @@ function KeyTestStatus({ keyTest, hasKey, onRetest, onOther }: { keyTest: KeyTes
 }
 
 /** What saving a preset gave: the hub's answer, and whether the readiness said, before it, that the computer has no
- *  Claude Code (after it the step may read `unknown`: the hub does not say a provider of its own misses claude). */
-type Added = { result: AddResult; asked: boolean; fallback: string; noClaude: boolean };
+ *  Claude Code (after it the step may read `unknown`: the hub does not say a provider of its own misses claude).
+ *  `direct`: a direct API, which the main conversation and Agents cannot run on (no Claude Code involved). */
+type Added = { result: AddResult; asked: boolean; fallback: string; noClaude: boolean; direct: boolean };
 
 /** The computer has no Claude Code: now (asked again after saving) or before saving and not found since. */
 function stillNoClaude(added: Added, r: Readiness | null): boolean {
@@ -596,7 +637,7 @@ function DoneStep({ added, readiness }: { added: Added; readiness: Readiness | n
   const name = added.result.launcher?.display_name || added.result.launcher?.name || added.fallback;
   const s = assignSummary(added.result, added.asked);
   const machine = readiness?.machine?.name ?? "";
-  const noClaude = stillNoClaude(added, readiness);
+  const noClaude = !added.direct && stillNoClaude(added, readiness);
   // "the main conversation can use it" only where the key went to it
   const toMain = added.asked && !!added.result.assigned?.includes("assistant");
   return (
@@ -611,7 +652,11 @@ function DoneStep({ added, readiness }: { added: Added; readiness: Readiness | n
           {k}
         </p>
       ))}
-      {!s.assigned && <p className="max-w-[420px] text-[12.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.done_pick_later")}</p>}
+      {!s.assigned && (
+        <p className="max-w-[420px] text-[12.5px] leading-relaxed text-ink-3">
+          {added.direct ? t("settings-providerwizard.direct_note") : t("settings-providerwizard.done_pick_later")}
+        </p>
+      )}
       {noClaude && (
         <div data-testid="wizard-no-claude" className="mt-2 flex w-full max-w-[460px] items-start gap-2.5 rounded-card bg-orange-tint p-3 text-left">
           <Icon name="warning" size={14} stroke={2.2} className="mt-0.5 shrink-0 text-orange" />

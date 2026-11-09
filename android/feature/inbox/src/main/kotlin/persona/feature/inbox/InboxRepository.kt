@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.util.UUID
+import persona.core.contracts.SessionKey
 import persona.core.contracts.LarkReaction
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.MailTransport
@@ -57,7 +58,7 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
         error("建议尚未接入") // i18n-ignore: developer error for a repository without the hub
 
     /** "Hand to AI": the item as context with what to do, queued for Persona's main conversation or a running Agent. */
-    suspend fun handOff(request: InboxHandOffRequest): Unit = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub
+    suspend fun handOff(request: InboxHandOffRequest): SessionKey? = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub
     fun replyUpdates(target: ReplyTarget): Flow<Unit> = kotlinx.coroutines.flow.emptyFlow()
     suspend fun replyStatus(target: ReplyTarget, clientId: String): ReplyDelivery = ReplyDelivery.Ready
     suspend fun verifyReply(target: ReplyTarget, clientId: String): ReplyDelivery = ReplyDelivery.Unknown
@@ -109,6 +110,17 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     /** "Mute this repository / chat / sender": the item and the open ones of its source it covers are done at once; a failure puts them back. */
     suspend fun mute(record: InboxRecord, option: InboxMuteOption): Unit = error("静音尚未接入") // i18n-ignore: developer error
     suspend fun unmute(id: String): Unit = error("静音尚未接入") // i18n-ignore: developer error
+
+    /** "Rules" (docs/assistant/inbox.md "Policies"): every source's rules, newest first; [record]'s manager's, else the default's. */
+    suspend fun inboxPolicies(record: InboxRecord? = null): List<InboxPolicy> = error("Inbox policies unavailable")
+    /**
+     * Sets [target]'s rule (POST from its item, PATCH when it has one): the open, triaged items it covers take [tier] at
+     * once, back if it fails. Setting neither part removes it. Returns the hub's rule, null when removed.
+     */
+    suspend fun savePolicy(target: InboxPolicyTarget, tier: InboxPolicyTier, twin: InboxPolicyTwin): InboxPolicy? =
+        error("Inbox policies unavailable")
+    /** Removes a rule by its id ("Rules" › Remove). */
+    suspend fun removePolicy(id: String): Unit = error("Inbox policies unavailable")
 
     /** A chat's "Pinned messages", a page at a time ([accountId] null: the hub's current account, which the page names). */
     suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?): LarkChatPinsPage = error("Chat pins unavailable")

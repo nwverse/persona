@@ -150,6 +150,8 @@ final class AppModel {
     /// Mode's hub, which is one for the whole process: several models side by side, each a device of its own (the
     /// shared sync scenarios with two devices, `SyncDevice`).
     @ObservationIgnored var linkHooksForTests: (transport: APIClient.Transport, socket: () -> LocalSocket)?
+    /// Unit tests: every group's link counts as up (true) or down (false) without a socket (`isLive`, the outbox's sends).
+    @ObservationIgnored var linksUpForTests: Bool?
     /// Unit tests: no machines, agents or cards, whatever `init` restored. A simulator paired by an earlier run keeps
     /// its last snapshot, and a test of everything the model holds (the watch summary) would count those too (#1638).
     func forgetRestoredForTests() {
@@ -176,8 +178,6 @@ final class AppModel {
     var toast: Toast?
     /// The extension page opened from a notification, widget or shortcut; not written to UserDefaults.
     var extensionOpen: ExtensionSystemOpen?
-    /// A Mac whose live screen is up (`ScreenDrawer`, RootView presents it; #1343): opened from the chat's running
-    /// work, its ··· menu, the machine page or a tool's details.
     /// The live screen asked for (VNC); a window of its own shows it, over whatever is presented (#1604).
     var screenOpen: ScreenOpen? { didSet { if screenOpen != oldValue { ScreenWindow.shared.show(screenOpen) } } }
     /// What a chat's model last did on each Mac (`ComputerActivity`), kept by the open chat: the live screen shows it
@@ -268,6 +268,8 @@ final class AppModel {
     @ObservationIgnored private(set) var chats: [SessionKey: ChatStore] = [:]
     /// The groups whose outbox is going out now (`flushOutbox`): one group sending does not hold back another.
     @ObservationIgnored var flushingOutbox = Set<String>()
+    /// Per group: the one retry of its waiting messages due in a few seconds (`retryOutboxSoon`).
+    @ObservationIgnored var outboxRetry: [String: Task<Void, Never>] = [:]
     /// Per group: the task asking a member-connected group's center whether it answers again (HubLinks.watchCenter).
     @ObservationIgnored var centerWatch: [String: Task<Void, Never>] = [:]
     @ObservationIgnored let outboxWriter = Debouncer(.milliseconds(300))
@@ -1178,7 +1180,12 @@ final class AppModel {
     /// The hub-level group's socket is up.
     var isLive: Bool { live.state == .connected }
     /// A group's socket is up.
-    func isLive(_ group: String) -> Bool { socket(group)?.state == .connected }
+    func isLive(_ group: String) -> Bool {
+        #if DEBUG
+        if let linksUpForTests { return linksUpForTests }
+        #endif
+        return socket(group)?.state == .connected
+    }
 
 
     /// Starts (or continues, with the last epoch and seq the view holds) a session's terminal stream. grid: drive it at
@@ -1369,6 +1376,8 @@ final class AppModel {
         if plan.refetch { AgentSync.shared.schedule() }
         // A new socket is a new client for the hub: the Files / Git panes' folders are told again and refreshed (#3089).
         fsLive.reconnected(group: group)
+        // Waiting messages get a whole minute on the new socket before they fail (`OutboxWait`).
+        restartOutboxWaits(group)
         // Ports whose question failed while the hub was unreachable are asked again (#4302).
         portPresence.reconnected(group: group)
         // Paths whose lookup failed while the hub was unreachable are looked up again (#4352).
@@ -1700,6 +1709,12 @@ final class AppModel {
             if !store.liveIsAgents, store.landed(items, pending: deltas.pendingText(key)) {
                 deltas.drop(key)
                 ChatTrace.shared.note(key, "landed live=\(store.liveText.count)")
+            } else if backlog, !store.liveIsAgents, !store.liveText.isEmpty {
+                // A page of the subscription's catch-up is in: the assistant's live text the hub does not send again
+                // after the last one is stale (#1966). Every page: a capped catch-up says more_after and the rest comes
+                // another way, and the re-send or any delta cancels the fallback.
+                ChatTrace.shared.note(key, "backlog live=\(store.liveText.count)")
+                store.backlogArrived()
             }
         case .screen(let key, let text, let status):
             let c = chat(key)
@@ -2825,13 +2840,13 @@ final class AppModel {
     func renameSession(_ k: SessionKey, tab: String?, title: String?) async {
         guard session(k)?.canTerminal == true, let api = api(k.group) else { return }
         let tab = tab?.trimmingCharacters(in: .whitespacesAndNewlines), title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        edit(machine: k.machineRef) { s in
-            guard s.sessionID == k.sessionID else { return }
-            if let tab, !tab.isEmpty { s.slotName = tab }
-            if let title, !title.isEmpty { s.title = title }
-        }
         do {
             try await api.renameSession(k, tabName: tab?.isEmpty == false ? tab : nil, title: title?.isEmpty == false ? title : nil)
+            edit(machine: k.machineRef) { s in
+                guard s.sessionID == k.sessionID else { return }
+                if let tab, !tab.isEmpty { s.slotName = tab }
+                if let title, !title.isEmpty { s.title = title }
+            }
             toast = Toast(String(localized: "Renamed"), style: .success)
         } catch { show(error) }
         await refresh()
@@ -2987,11 +3002,14 @@ struct Toast: Identifiable, Equatable {
     let message: String
     let style: Style
     let action: Action?
+    /// A second button before `action` (Undo beside View).
+    let secondary: Action?
 
-    init(_ message: String, style: Style = .info, action: Action? = nil) {
+    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil) {
         self.message = message
         self.style = style
         self.action = action
+        self.secondary = secondary
     }
 
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }

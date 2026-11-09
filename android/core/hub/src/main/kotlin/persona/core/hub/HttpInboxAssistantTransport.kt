@@ -118,6 +118,12 @@ class HttpInboxAssistantTransport private constructor(
             else url("api", "v1", "lark", "conversations", requireNotNull(feedId), "messages")
         return json(target, buildJsonObject { put("text", text); put("client_id", clientId) })
     }
+    override suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject {
+        require(itemId.isNotBlank() && text.isNotBlank() && clientId.isNotBlank())
+        return json(url("api", "v1", "inbox", itemId, "handoff"), buildJsonObject {
+            put("text", text); put("client_id", clientId)
+        })
+    }
     override suspend fun suggestion(itemId: String, version: Long, action: String, text: String?, clientId: String): JsonObject {
         require(itemId.isNotBlank() && clientId.isNotBlank() && action in setOf("confirm", "reject", "instruct"))
         return try {
@@ -249,6 +255,21 @@ class HttpInboxAssistantTransport private constructor(
     override suspend fun unmuteInbox(id: String) {
         require(id.isNotBlank())
         json(url("api", "v1", "inbox", "mutes", id), method = "DELETE")
+    }
+
+    override suspend fun inboxPolicies() = json(url("api", "v1", "inbox", "policies"))
+    override suspend fun setInboxPolicy(itemId: String, tag: String, tier: String, twin: String): JsonObject {
+        require(itemId.isNotBlank() && tag.isNotBlank())
+        return json(url("api", "v1", "inbox", "policies"),
+            buildJsonObject { put("item_id", itemId); put("tag", tag); put("tier", tier); put("twin", twin) })
+    }
+    override suspend fun updateInboxPolicy(id: String, tier: String, twin: String): JsonObject {
+        require(id.isNotBlank())
+        return json(url("api", "v1", "inbox", "policies", id), buildJsonObject { put("tier", tier); put("twin", twin) }, method = "PATCH")
+    }
+    override suspend fun removeInboxPolicy(id: String) {
+        require(id.isNotBlank())
+        json(url("api", "v1", "inbox", "policies", id), method = "DELETE")
     }
 
     override suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?) = json(

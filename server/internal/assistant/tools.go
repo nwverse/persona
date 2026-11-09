@@ -27,9 +27,9 @@ import (
 
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
-var toolNames = []string{"ask_user", "notify_user", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
+var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
 	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
-	"kb_search", "kb_list", "kb_get", "kb_update", "persona_settings", "secret_run",
+	"kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_new", "conversation_send", "task_plan", "task_review",
@@ -91,26 +91,41 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	if name == "kb_update" { // health stays in the health space (docs/assistant/health.md "Isolation")
+	// Health stays in the health space (docs/assistant/health.md "Isolation"): it writes nothing to the knowledge base,
+	// nor changes or starts what is imported into it (kb_history_status only reads).
+	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
 		if space, _ := s.selfSpace(ctx, self); space == SpaceHealth {
 			return "", errors.New("the health space doesn't write the knowledge base: health information stays in its conversations and memory")
 		}
 	}
 	switch name {
+	case "supervision_finish":
+		return s.toolSupervisionFinish(ctx, self, args)
 	case "ask_user":
 		return s.toolAskUser(ctx, machine, self, args)
 	case "view_show", "view_update", "view_get":
 		return s.toolView(ctx, machine, self, name, args)
 	case "task_plan":
-		return s.toolTaskPlan(ctx, self, args)
+		return s.toolTaskPlanFrom(ctx, machine, self, args)
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
 	case "task_review":
-		return s.toolTaskReview(ctx, self, args) // supervise_review.go
+		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
+		if err == nil {
+			var a struct {
+				Verdict string `json:"verdict"`
+			}
+			if json.Unmarshal(args, &a) == nil && (a.Verdict == reviewAccepted || a.Verdict == reviewNeedsUser) {
+				s.promoteSupervision(self)
+			}
+		}
+		return res, err
 	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
 		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
 		return s.toolKB(ctx, name, args)
+	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":
+		return s.toolKBHistory(ctx, name, args) // kb_history_tools.go
 	case "interaction_answer":
 		return s.toolInteractionAnswer(ctx, self, args)
 	case "secret_run":
@@ -134,6 +149,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body, Asked: true})
 		s.channelsPushed(machine, self, a.Title, a.Body) // the Feishu bot and the channels with pushes on (channels.go)
+		s.promoteSupervision(self)
 		return "Notification sent.", nil
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
@@ -196,6 +212,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			DismissNotice bool `json:"dismiss_notice"`
 			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go).
 			Task *sendTask `json:"task"`
+			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
+			Attachments []string `json:"attachments"`
 		}
 		_ = json.Unmarshal(args, &a)
 		am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
@@ -211,6 +229,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
+		}
+		atts, err := cleanAttachments(a.Attachments)
+		if err == nil {
+			atts, err = s.checkAttachments(ctx, machine, self, atts)
+		}
+		if err != nil {
+			return "", fmt.Errorf("%w; nothing was sent", err)
 		}
 		if a.Task != nil { // refused before the user is asked to confirm a send that would not go
 			if err := s.sendTaskAllowed(ctx, self, am, c, *a.Task, a.Text); err != nil {
@@ -228,20 +253,37 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				return "", err
 			}
 		}
+		text := a.Text
+		if a.Task == nil {
+			if err := s.ensureTodosLoaded(ctx); err != nil {
+				return "", err // Unknown task ownership must not strip message provenance.
+			}
+			if assigned, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && assigned.Supervision != nil && assigned.Supervision.Supervisor != self {
+				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
+			}
+		}
+		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
+		// pictures in the <attached_images> block a picture sent straight to the agent ends with (#2437).
+		params := sendParams(c.SessionID, text, a.DismissNotice)
+		var handed handedAttachments
+		if mentioned := s.mentionedAttachments(ctx, machine, self, a.Text, atts); len(atts)+len(mentioned) > 0 {
+			handed = s.handAttachments(ctx, machine, am.ID, atts, mentioned)
+			params["text"] = withAttachments(text, handed)
+		}
 		if c.Status != proto.StatusOffline {
-			if err := s.call(ctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, a.Text, a.DismissNotice), nil); err != nil {
+			if err := s.call(ctx, am.ID, DeviceSessionSend, params, nil); err != nil {
 				return "", task.sendFailed(ctx, s, err)
 			}
-			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + task.sent(ctx, s, a.Text), nil
+			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
 		}
 		// Not running (a finished task's agent is closed: hub tasks_close.go): its node resumes it first, which can
 		// take minutes and goes on if this call stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
-		if err := s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, a.Text, a.DismissNotice), nil); err != nil {
+		if err := s.call(sctx, am.ID, DeviceSessionSend, params, nil); err != nil {
 			return "", task.sendFailed(sctx, s, err)
 		}
-		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + task.sent(sctx, s, a.Text), nil
+		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text), nil
 	case "agent_interrupt":
 		return s.toolAgentInterrupt(ctx, machine, self, args) // agent_control.go
 	case "agent_supervise":
@@ -261,6 +303,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				Branch string `json:"branch"`
 			} `json:"worktree"`
 			Ultracode bool `json:"ultracode"`
+			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
+			Attachments []string `json:"attachments"`
 		}
 		_ = json.Unmarshal(args, &a)
 		am, ok := s.machineByName(ctx, a.Machine)
@@ -271,13 +315,43 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Model = strings.TrimSpace(a.Model); a.Model != "" && !proto.ValidModelID(a.Model) {
 			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
 		}
+		atts, err := cleanAttachments(a.Attachments)
+		if err == nil {
+			atts, err = s.checkAttachments(ctx, machine, self, atts)
+		}
+		if err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
+		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
+		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
+		tier, runs := strings.TrimSpace(a.Tier), ""
+		if tier != "" {
+			t, err := s.tierModel(ctx, tier)
+			if err != nil {
+				return "", fmt.Errorf("%w; no agent was started", err)
+			}
+			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
+				tier = "" // a launcher of its own: the tier gives it nothing
+			} else {
+				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+				if s.applyModel(ctx, "agent.new", picks) == nil { // one that can't run is the start's to say
+					l, _ := picks["launcher"].(string)
+					m, _ := picks["model"].(string)
+					e, _ := picks["effort"].(string)
+					runs = ModelTier{Launcher: l, Model: m, Effort: e}.runs()
+				}
+			}
+		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
 		}
-		if a.Model != "" { // the user sees what it will run on before saying yes
+		switch { // the user sees what it will run on before saying yes
+		case runs != "":
+			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
+		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		}
 		if a.Ultracode {
@@ -297,10 +371,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 		defer cancel()
 		// The tab is named from the prompt as written; the agent gets its project's background before it (#2820).
-		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tier": a.Tier, "tab_name": s.tabName(sctx, a.Prompt)}
-		if err := s.applyStartTier(sctx, params); err != nil {
-			return "", err
-		}
+		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "tab_name": s.tabName(sctx, a.Prompt)}
 		params["prompt"] = s.withProjectContext(sctx, am.ID, a.Cwd, a.Prompt)
 		if a.Ultracode {
 			params["ultracode"] = true
@@ -308,7 +379,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := s.applyModel(sctx, "agent.new", params); err != nil {
 			return "", err
 		}
-		// A launcher that failed its health check here runs on a machine where it works (launcher_health.go).
+		// A launcher that failed its health check here runs on a machine where it works (launcher_health_check.go).
 		picked, _ := params["launcher"].(string)
 		launcher := s.startLauncher(ctx, picked)
 		alt, note, moved := s.healthDetour(ctx, am, launcher)
@@ -319,6 +390,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if note != "" {
 			note = " Note: " + note + "."
 		}
+		if runs != "" {
+			note = " Preset " + tier + ": runs on " + runs + "." + note
+		}
 		if branch != "" { // the machine's engine makes the worktree (herdr's or Orca's own), the agent starts in it
 			wt, err := s.newWorktree(sctx, am.ID, a.Cwd, branch)
 			if err != nil {
@@ -327,6 +401,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Cwd = wt.Path
 			params["cwd"], params["workspace_id"] = wt.Path, wt.WorkspaceID
 			note = fmt.Sprintf(" It runs in a new worktree on branch %s.", wt.Branch) + note
+		}
+		// The user's attachments, after any detour: to the machine the agent starts on (#2437).
+		if mentioned := s.mentionedAttachments(ctx, machine, self, a.Prompt, atts); len(atts)+len(mentioned) > 0 {
+			handed := s.handAttachments(sctx, machine, am.ID, atts, mentioned)
+			params["prompt"] = withAttachments(params["prompt"].(string), handed)
+			note += handed.said()
 		}
 		// Remember the sessions already there, so an unanswered start can adopt only the session it created:
 		// UpdatedAt is last sign of life, so a cwd match alone could be another agent already busy there. The
@@ -511,6 +591,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
+	s.promoteSupervision(sessionID)
 	r, err := s.ask(ctx, ix)
 	if errors.Is(err, errUserSpoke) {
 		return prompts.RenderQuestionUserSpoke(), nil
@@ -626,6 +707,9 @@ func (s *Service) Action(ctx context.Context, a Action) (ActionResult, error) {
 		if err := json.Unmarshal(a.Answer, &r); err != nil {
 			return ActionResult{}, err
 		}
+	}
+	if mine, err := s.toolLoopAnswer(ctx, a.InteractionID, r); mine {
+		return ActionResult{OK: err == nil}, err
 	}
 	if mine, err := s.workAnswer(ctx, a.InteractionID, r); mine {
 		return ActionResult{OK: err == nil}, err

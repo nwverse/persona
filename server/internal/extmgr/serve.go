@@ -137,6 +137,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/v1/machines/{mid}/computer/clipboard", withMachine(h.computerClipboard))
 	api.HandleFunc("GET /api/v1/machines/{mid}/computer/apps", withMachine(h.getComputerApps))
 	api.HandleFunc("DELETE /api/v1/machines/{mid}/computer/apps/{bundle}", withMachine(h.deleteComputerApp))
+	api.HandleFunc("DELETE /api/v1/machines/{mid}/computer/apps/revoke/{bundle}", withMachine(h.revokeComputerApp))
 	api.HandleFunc("GET /api/v1/machines/{mid}/browser", withMachine(h.getBrowser))
 	api.HandleFunc("PUT /api/v1/machines/{mid}/browser", withMachine(h.putBrowser))
 	api.HandleFunc("POST /api/v1/machines/{mid}/browser/{action}", withMachine(h.postBrowserJob))
@@ -468,6 +469,13 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 	case extwire.HubSettingsTool:
 		text, err := h.toolPersonaSettings(ctx, a.MachineID, a.SessionID, a.Arguments)
 		return map[string]any{"text": text}, err
+	case extwire.HubAudit:
+		var au extwire.Audit
+		if err := json.Unmarshal(params, &au); err != nil || au.Extension == "" || au.Action != extwire.AuditPermissionModeRefused {
+			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions: not an audit the hub records"}
+		}
+		h.audit(ctx, au.Extension, au.Action, "extension:"+au.Extension, au.Detail)
+		return map[string]any{}, nil
 	}
 	return nil, fmt.Errorf("extensions: no hub call %q", method)
 }

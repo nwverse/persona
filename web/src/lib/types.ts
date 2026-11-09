@@ -139,6 +139,8 @@ export interface TriageSwitches {
   auto_continue: boolean;
   wake: boolean;
   decide: boolean;
+  /** Detect repeated tool calls during a turn (off when absent). */
+  tool_loop?: boolean;
   /** Remind When Seen, Unanswered (#5096): remind once when an agent asked the user something and it stays unanswered after they saw
    *  it. Rule-based, no tokens, so it is on when absent and does not depend on `enabled`. */
   reply_reminder?: boolean;
@@ -161,8 +163,12 @@ export interface Session {
   also_open_in?: string[];
   /** Node-verified physical working directory; the original cwd stays available for existing session flows. */
   workspace_cwd?: string;
-  /** The main checkout of the repository cwd belongs to, when the host knows it (#2840: Paseo's worktrees); "By repo" groups by it. */
+  /** The main checkout of the repository cwd belongs to: the node reads it off git (#1805), Paseo names its own (#2840).
+   *  "By repo" groups by it. */
   repo_root?: string;
+  /** The top of the git working tree cwd is in (repo_root for the main checkout) and its branch, from the node (#1805). */
+  worktree?: string;
+  branch?: string;
   machine_id: string;
   session_id: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
@@ -482,7 +488,7 @@ export interface Item {
   queued?: boolean;
   wake?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
@@ -493,13 +499,26 @@ export interface Item {
   compact?: CompactInfo;
   /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by you (lib/injected.ts). */
   injected?: Injected;
+  /** Display provenance, independent of the model-facing role. Unknown kinds remain non-user sources. */
+  source?: MessageSource;
+  /** Client-only promotion evidence transferred from a removed Fold.supervision_user during an overlapping merge. */
+  supervisionUser?: boolean;
+}
+
+/** Message provenance supplied by the assistant, not a group-chat member or a model role. */
+export interface MessageSource {
+  kind: "conversation" | "patrol" | "followup" | "supervision" | (string & {});
+  conversation_id?: string;
+  title?: string;
 }
 
 /** What a message Persona wrote for the model is (docs/protocol/protocol.md "Messages Persona injects"). */
 export interface Injected {
   kind: "task_notice" | "followup" | "system" | (string & {});
-  /** task_notice: done | needs | interrupted | failed; followup: once | daily | interval | wake; system: lost_tasks */
+  /** task_notice: done | needs | interrupted | failed; followup: once | daily | interval | wake; system: lost_tasks | supervise */
   state?: string;
+  /** Supervision without a level is legacy triage; other injections remain informational. */
+  level?: "info" | "triage" | "user";
   title?: string;
   machine?: string;
   todo_id?: string;
@@ -582,6 +601,8 @@ export interface Interaction {
   dialog?: ScreenDialog;
   /** Who asks when it is not Claude Code: "codex", "traex", or an agent runtime's agent ("dsh"; docs/integrations/runtimes.md). */
   agent?: string;
+  /** Display label supplied by the source (for example a script request). */
+  agent_label?: string;
   /** What "always allow" allows here; another agent's card offers it only with this. */
   always_label?: string;
   /** Permission scopes remembered by the hub for this conversation. */

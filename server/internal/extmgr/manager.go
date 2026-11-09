@@ -135,6 +135,9 @@ type Manager struct {
 		now        func() time.Time // the admin UI's clock (tests move it)
 	}
 
+	// kbPostsMu drains admitted connector posts before disabling ingestion and deleting saved content.
+	kbPostsMu sync.RWMutex
+
 	// apiMux are the manager's routes (Handler).
 	apiMux *http.ServeMux
 
@@ -156,6 +159,9 @@ type Manager struct {
 	// read. Tests put another in its place.
 	ruleStore userRuleStore
 	userRules userRules
+
+	// images are the pictures extensions serve through the hub (extension_images.go).
+	images imageProxy
 }
 
 // New is the manager of opts; nothing runs until Run.

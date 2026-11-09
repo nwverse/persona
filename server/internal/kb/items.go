@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -20,24 +21,56 @@ type ItemSource interface {
 	DocTitle(ctx context.Context, url string) string
 }
 
-// CollectItems stores new meetings and events and fills in titles of documents seen in chats.
-func (e *Engine) CollectItems(ctx context.Context, src ItemSource) error {
+// CollectItems stores new meetings and events and fills in titles of documents seen in chats. With a selection
+// (Engine.Selection), a document is stored only when it selects it (Selection.DocSelected): one it does not select is
+// not written, and one already stored is left as it is (the selection stops writes; only Prune deletes, by days).
+func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...string) error {
+	if e.Store.ReadOnly() {
+		return ErrReadOnly
+	}
+	source := ""
+	if len(sources) > 0 {
+		source = sources[0]
+	}
 	items, err := src.Items(ctx)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
+	sel, ret := e.selection(), e.Retention()
 	for _, w := range items {
 		it := ItemFromWire(w)
+		it.Source = source
+		if it.Kind == KindDoc && sel != nil && !sel.DocSelected(ret, DocFacts{Source: source, ID: it.ID, Signals: it.Signals}) {
+			continue
+		}
 		old, ok := e.Store.Item(it.Kind, it.ID)
 		if ok {
-			if old.Title == it.Title && old.At.Equal(it.At) {
+			// An ID alone cannot identify an owner: legacy or colliding items stay
+			// with their original source unless a stored chat proves ownership.
+			owner := e.itemSource(old)
+			if owner != source {
 				continue
 			}
-			it.Tagging, it.Projects, it.Note, it.Seen = old.Tagging, old.Projects, old.Note, old.Seen
-			it.Tagging.TaggedAt = time.Time{} // changed: tag again
+			if old.Source == it.Source && old.Title == it.Title && old.At.Equal(it.At) {
+				if !slices.Equal(kbwire.CanonicalSignals(old.Signals), it.Signals) { // canonical: a reordering is no change
+					// Only why it concerns the owner moved: keep them as the source says now, without tagging it again.
+					old.Signals = it.Signals
+					if err := e.Store.PutItem(old); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			carryOver(&it, old)
 		} else {
 			it.Seen = now
+			if it.Kind == KindDoc && sel != nil {
+				// Past its days already (an old document a source still lists): not written, as Prune would delete it.
+				if days, ok := sel.DocDays(DocFacts{Source: source, ID: it.ID, Signals: it.Signals}); ok && docExpired(&it, now, days) {
+					continue
+				}
+			}
 		}
 		if err := e.Store.PutItem(&it); err != nil {
 			return err
@@ -45,9 +78,13 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource) error {
 	}
 	n := 0
 	for _, it := range e.Store.Items(KindDoc) {
-		if it.Title != "" || n >= 10 || ctx.Err() != nil {
+		if it.Title != "" || n >= 10 || ctx.Err() != nil || e.itemSource(it) != source {
 			continue
 		}
+		if x := sel.Item(source, ItemDoc, it.ID); x != nil && !x.Read { // the user keeps it from being read
+			continue
+		}
+		it.Source = source
 		n++
 		if t := src.DocTitle(ctx, it.URL); t != "" {
 			it.Title = t
@@ -57,6 +94,20 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource) error {
 		_ = e.Store.PutItem(it)
 	}
 	return nil
+}
+
+// itemSource recovers legacy attribution only from an existing source chat.
+func (e *Engine) itemSource(it *Item) string {
+	if it.Source != "" {
+		return it.Source
+	}
+	if c, found := e.Store.Chat(it.Where); found {
+		if c.Connector != "" {
+			return c.Connector
+		}
+		return c.Source
+	}
+	return ""
 }
 
 type itemTags struct {
@@ -108,10 +159,14 @@ func (e *Engine) TagItems(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		e.Store.applyMu.Lock()
 		now := time.Now().UTC()
 		for _, t := range out.Items {
 			it := byID[t.ID]
 			if it == nil {
+				continue
+			}
+			if _, exists := e.Store.Item(it.Kind, it.ID); !exists {
 				continue
 			}
 			applyTags(&it.Tagging, t.Importance, int(t.Relevance), t.Tags, now)
@@ -127,6 +182,7 @@ func (e *Engine) TagItems(ctx context.Context) error {
 			_ = e.Store.PutItem(it)
 			e.index(it.Kind, it.ID, it.Title, it.Tagging, it.Note, it.At)
 		}
+		e.Store.applyMu.Unlock()
 		// Ones the model skipped: mark tagged anyway so they do not come back every run.
 		for _, it := range batch {
 			if it.TaggedAt.IsZero() {
@@ -158,13 +214,14 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 	// Files come through Find's cache (findCache.text): a file unchanged since an earlier search is one stat, not a
 	// read and a fold, and one without every word is skipped whole. Search stops at limit, so it leaves the pruning
 	// of files no longer there to Find, which sees them all; the cache is bounded either way (findCacheBytes).
+	recording := e.Store.recordingSearchView()
 	gen := e.find.begin()
 	var hits []Hit
 	scan := func(p string) {
 		if len(hits) >= limit {
 			return
 		}
-		t, _, ok := e.find.text(p, gen)
+		t, _, ok := e.searchText(p, gen, recording)
 		if !ok || !hasAll(t.lower, ws) {
 			return
 		}
@@ -342,4 +399,13 @@ func (e *Engine) Prompt(projects, chats int) string {
 
 func digestEntry(x Entry) prompts.KBDigestEntry {
 	return prompts.KBDigestEntry{ID: x.ID, Name: x.Name, Importance: x.Importance, OneLine: x.OneLine, Relevance: x.Relevance}
+}
+
+// carryOver gives an update of a stored item what the source does not send (tags, projects, note, first seen); the
+// item is tagged again, as it changed. The Tagging it copies carries the mark that it was read from disk, so a write
+// after the item was deleted meanwhile (a prune, a forget) does not bring it back (putEntity skips a persisted item
+// that is no longer there).
+func carryOver(it, old *Item) {
+	it.Tagging, it.Projects, it.Note, it.Seen = old.Tagging, old.Projects, old.Note, old.Seen
+	it.Tagging.TaggedAt = time.Time{}
 }

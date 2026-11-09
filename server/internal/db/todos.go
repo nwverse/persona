@@ -26,8 +26,9 @@ type TodoRow struct {
 	PlanID string `json:"plan_id"`
 	// StartError: the task's agent did not start, and why; such a todo is done (#1077). Empty otherwise.
 	StartError string `json:"start_error"`
-	// DoneBy is who marked it done: "" the user (or a failed start), DoneByAuto the hub's judge (#1092), with
-	// DoneReason. ReopenedAt: when the user last reopened it after it was done.
+	// DoneBy is who marked it done: "" the user (or a failed start), DoneByAuto the hub's judge (#1092),
+	// DoneByReview an accepted review, or DoneByCancelled a cancellation, with DoneReason.
+	// ReopenedAt: when the user last reopened it after it was done.
 	DoneBy     string     `json:"done_by"`
 	DoneReason string     `json:"done_reason"`
 	ReopenedAt *time.Time `json:"reopened_at"`
@@ -53,9 +54,12 @@ const (
 // DoneByAuto marks a todo the hub closed because its task's work was judged finished (docs/assistant/todos.md "Auto-complete").
 const DoneByAuto = "auto"
 
-// DoneByReview marks a todo its supervisor (the main conversation's assistant) closed after reviewing the work, with
+// DoneByReview marks a todo its supervisor (the main conversation's assistant) accepted after reviewing the work, with
 // DoneReason (#3124).
 const DoneByReview = "review"
+
+// DoneByCancelled marks a cancelled task; further agent work cannot reopen it (#1851).
+const DoneByCancelled = "cancelled"
 
 type TodoSpaceRow struct {
 	TodoID    string    `json:"todo_id"`
@@ -700,6 +704,9 @@ func (d *DB) linkTodoAgentWithSource(ctx context.Context, todoID, machineID, ses
 			releasedTodoIDs = append(releasedTodoIDs, oid)
 		}
 		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
 
 		if len(releasedTodoIDs) > 0 {
 			_, err = tx.Exec(ctx, `UPDATE todo_agents SET released_at = $3 WHERE machine_id = $1 AND session_id = $2 AND released_at IS NULL AND todo_id != $4`,

@@ -347,7 +347,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	go n.startWhenConfigured(ctx) // polling and the engine's events, once the hub said which engine (engine.go)
 	go n.warmTranscripts(ctx)
 	go n.reapAssistants(ctx)
-	go n.meterUsage(ctx)
+	go n.meterUsage(ctx, n.stateReady)
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
@@ -396,16 +396,30 @@ func (n *Node) loadState(ctx context.Context) bool {
 	defer n.ultracodeStateLoaded()
 	n.state.mu.Lock()
 	n.state.persist = func(id string, v sessionState) {
-		_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		if n.peer != nil {
+			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		}
 	}
 	n.state.mu.Unlock()
 	legacyPath := filepath.Join(n.dir, "sessions.json")
-	if legacy := legacyState(legacyPath); len(legacy) > 0 {
+	if legacy := legacyState(legacyPath, n.logf); len(legacy) > 0 {
+		allOk := true
 		for id, v := range legacy {
-			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+			if n.peer == nil {
+				allOk = false
+				break
+			}
+			if err := n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v}); err != nil {
+				allOk = false
+				n.logf("legacy migration: state.put for %s failed: %v", id, err)
+			}
 		}
 		n.state.merge(legacy)
-		_ = os.Rename(legacyPath, legacyPath+".migrated")
+		if allOk {
+			_ = os.Rename(legacyPath, legacyPath+".migrated")
+		} else {
+			n.logf("legacy migration: kept %s for retry because not all entries could be notified", legacyPath)
+		}
 	}
 	return n.fetchState(ctx)
 }
@@ -428,6 +442,9 @@ func (n *Node) reloadState(ctx context.Context) bool {
 
 // fetchState is one try of state.load: what it brings is merged under what this connection already has.
 func (n *Node) fetchState(ctx context.Context) bool {
+	if n.peer == nil {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(ctx, stateLoadTimeout)
 	defer cancel()
 	var res struct {
@@ -506,6 +523,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Skip             int           `json:"skip"`
 		Turns            int           `json:"turns"`
 		LazyImages       bool          `json:"lazy_images"`
+		UserInputs       bool          `json:"user_inputs"`
 		FoldWork         bool          `json:"fold_work"`
 		FromSeq          int           `json:"from_seq"`
 		ThroughSeq       int           `json:"through_seq"`
@@ -535,6 +553,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Configured     bool            `json:"configured"` // launchers.models, .probe, .http, .model.check: hub.json names this launcher
 		Guest          *guestParams    `json:"guest"`      // assistant.send: a new guest conversation (assistant_guest.go)
 		Raw            json.RawMessage `json:"-"`
+
+		ParentWorkspaceID string `json:"parent_workspace_id"` // worktree.create: independent of the Git source
+		AutoName          bool   `json:"auto_name"`           // worktree.create: host-generated branch and path
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -1014,7 +1035,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "worktree.prepare": // "New worktree…": what the dialog starts from (worktree.go)
 		return n.worktreePrepare(ctx, p.Kind, p.WorkspaceID, p.Cwd)
 	case "worktree.create": // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
-		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path)
+		if p.AutoName {
+			if strings.TrimSpace(p.Branch) != "" || strings.TrimSpace(p.Path) != "" {
+				return nil, errors.New("Choose automatic naming or an explicit branch and path")
+			}
+			return n.worktreeCreateAutomatic(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.ParentWorkspaceID)
+		}
+		return n.worktreeCreate(ctx, p.Kind, p.WorkspaceID, p.Cwd, p.Branch, p.Path, p.ParentWorkspaceID)
 	case "worktree.add", "worktree.status", "worktree.remove": // a new agent's own worktree (agentworktree.go, #6115)
 		var a struct {
 			NameHint     string `json:"name_hint"`
@@ -1029,6 +1056,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return n.worktreeStatus(ctx, p.Kind, p.Cwd)
 		}
 		return n.worktreeRemove(ctx, p.Kind, p.Path, a.DeleteBranch, a.Force)
+	case "worktree.snapshot": // a reviewer's own copy of an agent's change (reviewsnapshot.go, #2173)
+		var a struct {
+			NameHint string `json:"name_hint"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.worktreeSnapshot(ctx, p.Kind, p.Cwd, a.NameHint)
 	case "tabs.close":
 		return ok(n.closeTab(ctx, p.Kind, p.TabID))
 	case "tabs.rename":
@@ -1076,11 +1109,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		f, err := n.file(p.SessionID)
 		if err != nil {
 			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat, not an error
+				if p.UserInputs {
+					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
+				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
 			return nil, err
 		}
-		n.refresh(p.SessionID, f)
+		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
+			return nil, err
+		}
+		if p.UserInputs {
+			return f.UserInputs(ctx)
+		}
 		// Items are kept without their image data; a caller that did not ask for lazy images (an older hub) gets it.
 		items := func(items []proto.Item) []proto.Item {
 			if !p.LazyImages {
@@ -1239,7 +1280,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "fs.stat":
 		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd)}, nil
 	case "space.rename":
-		return ok(n.renameSpace(ctx, p.WorkspaceID, p.Name))
+		name, err := n.renameSpace(ctx, p.WorkspaceID, p.Name)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true, "name": name}, nil
+	case "worktree.rename":
+		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
 		return ok(n.renameSession(ctx, p.SessionID, p.TabName, p.Title))
 	case "todo.sync_session_tokens":
