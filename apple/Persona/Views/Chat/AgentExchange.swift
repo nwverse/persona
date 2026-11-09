@@ -79,7 +79,7 @@ struct ReportExchange: View {
             }
             .buttonStyle(.plain)
             .disabled(item.ref.flatMap { store.todos[$0] } == nil)
-            ExchangeText(text: ReviewText.reportLine(kind: kind, text: item.text ?? "", step: item.step, steps: item.steps),
+            ExchangeText(text: ReviewText.reportLine(kind: kind, text: ExchangeText.withoutHeadingMarks(item.text ?? ""), step: item.step, steps: item.steps),
                          shown: layout.shownLines, pinKey: "report-" + item.id)
                 .chatBoxed(Theme.ChatBox.persona)
         }

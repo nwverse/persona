@@ -195,6 +195,10 @@ struct ChatLayoutTests {
         #expect(ExchangeText.withoutHeadingMarks("#123 is a PR, not a heading") == "#123 is a PR, not a heading")
         // A folded line's header: the words without the marks.
         #expect(ExchangeText.plain("**Fix** the `cache` first") == "Fix the cache first")
+        // A report's heading after its kind's prefix ("Says it is done: ## Result") loses its marks too.
+        let report = ReviewText.reportLine(kind: "done", text: ExchangeText.withoutHeadingMarks("## Result\n**Done**"))
+        #expect(!String(ExchangeText.linked(report).characters).contains("#"))
+        #expect(String(ExchangeText.linked(report).characters).hasSuffix("Result\nDone"))
     }
 
     /// The boxes' words are the primary color: black on the light boxes, white on the dark ones, both well past 4.5:1;
