@@ -59,7 +59,10 @@ struct MessageShareCard: View {
         .background(dark ? Color(white: 0.11) : .white, in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .shadow(color: .black.opacity(dark ? 0.4 : 0.08), radius: 16, y: 6)
         .padding(24)
+        // The gradient fills the whole image: the renderer can size it a little taller than the card is laid out
+        // (a table measures itself in two passes), which left a transparent band above and below it.
         .frame(width: width)
+        .frame(maxHeight: .infinity)
         .background(LinearGradient(colors: dark ? [Color(hex: 0x1C2440), Color(hex: 0x2B1D3F)] : [Color(hex: 0xDCE8FF), Color(hex: 0xF1E4FF)],
                                    startPoint: .topLeading, endPoint: .bottomTrailing))
         .environment(\.colorScheme, dark ? .dark : .light)

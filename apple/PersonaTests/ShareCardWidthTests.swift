@@ -35,6 +35,23 @@ struct ShareCardWidthTests {
         #expect(ShareCardWidth.natural(ShareCardExportTests.reply) > ShareCardWidth.base - ShareCardWidth.chrome)
     }
 
+    /// No transparent band above or below the card (its gradient reaches every edge).
+    @MainActor @Test(arguments: [false, true]) func theGradientFillsTheImage(dark: Bool) throws {
+        let image = try #require(MessageShareCard.render(ShareCardExportTests.message, dark: dark)?.cgImage)
+        for y in [0, image.height / 2, image.height - 1] {
+            #expect(try alpha(image, x: image.width / 2, y: y) == 255, "row \(y) of \(image.height)")
+        }
+    }
+
+    private func alpha(_ image: CGImage, x: Int, y: Int) throws -> UInt8 {
+        var pixel: [UInt8] = [0, 0, 0, 0]
+        let space = CGColorSpaceCreateDeviceRGB()
+        let ctx = try #require(CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: space,
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.draw(image, in: CGRect(x: -x, y: -(image.height - 1 - y), width: image.width, height: image.height))
+        return pixel[3]
+    }
+
     @Test func theWideBlocksAreTablesAndFencedCode() {
         let text = """
         Intro line | not a table
