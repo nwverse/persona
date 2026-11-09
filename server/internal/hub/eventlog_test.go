@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// The log owns event_seq: a body that carries its own at the top level (a manager's ws.broadcast, a node's
-// hook.event) goes out with the hub's only, or the apps would read the sender's number (the last of two) as their
-// resume cursor. A body that has the name only deeper down or as text comes back byte for byte.
+// The log owns event_seq: a body that carries its own at the top level (a node's hook.event; a manager's
+// ws.broadcast loses its own earlier, in relayBroadcastFrom) goes out with the hub's only, or the apps would read the
+// sender's number (the last of two) as their resume cursor. A body that has the name only deeper down or as text comes back byte for byte.
 func TestStampEventOwnsTheKey(t *testing.T) {
 	for in, want := range map[string]string{
 		`{"event_seq":999999,"type":"task_plan"}`:                    `{"event_seq":7,"type":"task_plan"}`,
