@@ -333,10 +333,11 @@ func rolloutPath(home, id string) string {
 		return ""
 	}
 	matches, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+"*.jsonl"))
+	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadID(home, path) != id })
 	if len(matches) == 0 {
 		matches, _ = filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+"*.jsonl"))
+		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadID(home, path) != id })
 	}
-	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadID(home, path) != id })
 	if len(matches) == 0 {
 		// A directory changed in the last second may change again within its mtime's granularity (a coarse clock
 		// tick) without its mtime moving: no miss kept on it.

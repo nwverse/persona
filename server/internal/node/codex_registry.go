@@ -172,7 +172,7 @@ func (n *Node) registerCodex(home, thread, path string) string {
 	} else if old.path != "" && old.path != path {
 		// A process may still hold an older segment. Do not replace the current transcript with it.
 		if previous, err := os.Stat(old.path); err == nil {
-			if next, err := os.Stat(path); err == nil && previous.ModTime().After(next.ModTime()) {
+			if next, err := os.Stat(path); err == nil && (previous.ModTime().After(next.ModTime()) || previous.ModTime().Equal(next.ModTime()) && old.path > path) {
 				path = old.path
 			}
 		}

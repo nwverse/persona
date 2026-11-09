@@ -58,6 +58,15 @@ func TestCodexContinuationHasOneIdentityAndCurrentTranscript(t *testing.T) {
 	if got := n.transcriptPath(remoteRaw); got != path {
 		t.Fatalf("current transcript = %q, want %q", got, path)
 	}
+	for _, file := range []string{original, path} {
+		if err := os.Chtimes(file, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.registerCodex(home, remoteRaw, original)
+	if got := n.transcriptPath(remoteRaw); got != path {
+		t.Fatal("equal filesystem timestamps changed the selected continuation")
+	}
 	out, err := request(t, n, "session.items", map[string]any{"session_id": remoteRaw, "limit": 80})
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +133,11 @@ func TestOldCodexContinuationLookup(t *testing.T) {
 		}
 		if err := os.Rename(original, path); err != nil {
 			t.Fatal(err)
+		}
+		if archived {
+			// A child with a matching filename prefix must not hide the archived parent named by metadata.
+			active := filepath.Join(filepath.Dir(original), "rollout-active-"+remoteRaw+"_"+remoteOther+".jsonl")
+			continuationFixture(t, active, remoteOther, remoteRaw)
 		}
 		expireRollouts(home, true)
 		n.configureCodex(proto.CodexConfig{Homes: []string{home}})
