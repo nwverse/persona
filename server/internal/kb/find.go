@@ -510,16 +510,29 @@ type message struct {
 }
 
 // messages splits a day file into messages: "- HH:MM name: text" and the indented lines that continue it.
+// Other lines (blank lines, headings) do not end a message.
 func messages(raw string) []message {
 	var out []message
+	// The last message's continuation lines, joined into its text once it ends: appending each one to the text
+	// would copy the whole message again per line, quadratic in a long paste.
+	var more []string
+	end := func() {
+		if len(more) > 0 {
+			m := &out[len(out)-1]
+			m.text = m.text + "\n" + strings.Join(more, "\n")
+			more = more[:0]
+		}
+	}
 	for i, l := range strings.Split(raw, "\n") {
 		switch {
 		case strings.HasPrefix(l, "- "):
+			end()
 			out = append(out, message{n: i + 1, text: strings.TrimPrefix(l, "- ")})
 		case strings.HasPrefix(l, "  ") && len(out) > 0:
-			out[len(out)-1].text += "\n" + strings.TrimSpace(l)
+			more = append(more, strings.TrimSpace(l))
 		}
 	}
+	end()
 	return out
 }
 

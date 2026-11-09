@@ -522,31 +522,27 @@ func (s *Store) Since(chatID string, t time.Time, max int) string {
 			continue
 		}
 		raw, _ := os.ReadFile(s.path(KindChat, chatID, "messages", d+".md"))
+		// The kept messages' lines, joined once below: appending each continuation line to its message would copy
+		// the whole message again per line, quadratic in a long paste.
 		var keep []string
-		cur := ""
-		flush := func() {
-			if cur != "" {
-				keep = append(keep, cur)
-			}
-			cur = ""
-		}
+		open := false // the last "- " line was kept, so the indented lines that continue it are too
 		for _, l := range strings.Split(string(raw), "\n") {
 			switch {
 			case strings.HasPrefix(l, "- "):
-				flush()
+				open = false
 				if len(l) >= 7 {
 					if at, err := time.ParseInLocation("2006-01-02 15:04", d+" "+l[2:7], zone); err == nil && at.Before(t.Truncate(time.Minute)) {
 						continue
 					}
 				}
-				cur = l
-			case strings.HasPrefix(l, "  ") && cur != "":
-				cur += "\n" + l
+				keep = append(keep, l)
+				open = true
+			case strings.HasPrefix(l, "  ") && open:
+				keep = append(keep, l)
 			default:
-				flush()
+				open = false
 			}
 		}
-		flush()
 		if len(keep) > 0 {
 			fmt.Fprintf(&b, "## %s\n%s\n", d, strings.Join(keep, "\n"))
 		}
