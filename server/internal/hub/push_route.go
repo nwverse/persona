@@ -78,25 +78,48 @@ func (p *Pusher) routeOfID(id string) (pushRoute, bool) {
 	return p.routeOf(d), true
 }
 
-// pushed notes how a push to d went: err nil, it went.
+// pushed notes how a push to d's own token went: err nil, it went.
 func (p *Pusher) pushed(d Device, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err == nil {
-		cur, ok := p.devices[d.DeviceID]
-		if !ok || cur.APNSToken != d.APNSToken || cur.RelayURL != d.RelayURL {
-			return
-		}
-		delete(p.failed, d.DeviceID)
-		cur.LastPushAt = p.now().UTC()
-		p.devices[d.DeviceID] = cur
-		if p.acceptedDirty == nil {
-			p.acceptedDirty = map[string]bool{}
-		}
-		p.acceptedDirty[d.DeviceID] = true
+	if err != nil {
+		p.failed[d.DeviceID] = pushFailure{text: clipRelayError(err.Error()), at: p.now().UTC()}
 		return
 	}
-	p.failed[d.DeviceID] = pushFailure{text: clipRelayError(err.Error()), at: p.now().UTC()}
+	if p.acceptedLocked(d) {
+		delete(p.failed, d.DeviceID)
+	}
+}
+
+// pushedAs is pushed for a push of pushType. A Live Activity push goes to the activity's own token, not d's, so its
+// answer says nothing about d's way: it neither sets nor clears push_failed. Accepted, it still shows the app is
+// installed.
+func (p *Pusher) pushedAs(d Device, pushType string, err error) {
+	if pushType != "liveactivity" {
+		p.pushed(d, err)
+		return
+	}
+	if err == nil {
+		p.mu.Lock()
+		p.acceptedLocked(d)
+		p.mu.Unlock()
+	}
+}
+
+// acceptedLocked notes that APNs or the relay took a push for d: d's LastPushAt, saved by maintenance. It is false,
+// and notes nothing, when the device registered another token or relay since. p.mu is held.
+func (p *Pusher) acceptedLocked(d Device) bool {
+	cur, ok := p.devices[d.DeviceID]
+	if !ok || cur.APNSToken != d.APNSToken || cur.RelayURL != d.RelayURL {
+		return false
+	}
+	cur.LastPushAt = p.now().UTC()
+	p.devices[d.DeviceID] = cur
+	if p.acceptedDirty == nil {
+		p.acceptedDirty = map[string]bool{}
+	}
+	p.acceptedDirty[d.DeviceID] = true
+	return true
 }
 
 // settingsOnly: a row only notification settings made (an Android phone, a browser, the simulator), which never

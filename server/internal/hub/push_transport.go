@@ -39,11 +39,11 @@ func (p *Pusher) sendDirect(d Device, r apns.Request) (apns.Result, error) {
 	}
 	switch {
 	case err != nil:
-		p.pushed(d, err)
+		p.pushedAs(d, r.PushType, err)
 	case res.Status != 200 && !res.Gone():
-		p.pushed(d, fmt.Errorf("APNs %d %s", res.Status, res.Reason))
+		p.pushedAs(d, r.PushType, fmt.Errorf("APNs %d %s", res.Status, res.Reason))
 	case res.Status == 200:
-		p.pushed(d, nil)
+		p.pushedAs(d, r.PushType, nil)
 	}
 	if tries > 1 {
 		if err == nil && res.Status == 200 {
@@ -73,7 +73,7 @@ func (p *Pusher) postRelay(d Device, req relayproto.PushRequest) (res relayResul
 	}
 	defer func() {
 		if !res.gone {
-			p.pushed(d, err)
+			p.pushedAs(d, req.Type, err)
 		}
 	}()
 	res, status, err := p.postRelayRetrying(d, req)
