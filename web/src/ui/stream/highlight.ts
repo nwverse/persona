@@ -99,7 +99,9 @@ const observers = new Map<Element | null, Observer>();
 let pending: Entry[] = [];
 let frame = false;
 
-/** The nearest ancestor that scrolls vertically (null: the page); remembered per ancestor, so a chat's blocks walk up once. */
+/** The nearest ancestor that scrolls vertically (null: the page); remembered per ancestor, so a chat's blocks walk up once.
+ *  An ancestor that sets only `overflow-x` computes `overflow-y: auto` as well and is taken too: its blocks are then all
+ *  near and colored at once, which is correct, just not lazy. None of the containers that hold Markdown does that. */
 const rootOf = new WeakMap<Element, Element | null>();
 function scrollRoot(el: Element): Element | null {
   const path: Element[] = [];

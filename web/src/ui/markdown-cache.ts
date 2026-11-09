@@ -12,7 +12,8 @@ import ReactMarkdown, { type Options } from "react-markdown";
 /** Rollback switch: off draws every block through <ReactMarkdown> again, as before #2465. */
 export const markdownCache = { on: true };
 
-/** At most this many characters of keys (the source, mostly) are kept; the least recently drawn blocks go first. */
+/** At most this many characters of keys (the source, mostly) are kept; the least recently drawn blocks go first. A tree
+ *  takes about 13 bytes of heap per character (9 MB for a 200-turn chat's 722 KB), so this is roughly 25 MB at most. */
 const MAX_CHARS = 2_000_000;
 /** At most this many blocks: well above a long conversation's count, so drawing one again in order does not push out
  *  the blocks it is about to draw (a 200-turn chat has about 600). */
