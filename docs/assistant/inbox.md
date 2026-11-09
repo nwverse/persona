@@ -212,6 +212,8 @@ Triage, drafting, AI twin, done state, and retention use hub's generic logic.
 
 - **GitHub** (`server/internal/connector/github/inbox.go`): with no public hub endpoint for webhooks, poll `/notifications` (unread only), following `X-Poll-Interval` (usually 60 seconds),
   with `If-Modified-Since`; 304 fetches no details. Every 10 minutes, fetch unconditionally (reading notifications on GitHub may not change Last-Modified). Fetch PR / issue, comments, and reviews only for changed threads, up to 30 per round.
+  Read up to 5 pages of 50 (only the first page sends `If-Modified-Since`). A thing missing from the list counts as read elsewhere only when the whole list was read (it ended on a short page);
+  with 250 or more unread, or when a later page fails, nothing is marked read that round.
   With under one tenth of request quota remaining, poll notifications only and show "Request quota nearly exhausted."
   A rate limit (429, or 403 for a secondary limit or a used-up hour) pauses the background reads, the poll included, until `Retry-After` or `X-RateLimit-Reset`: the poll waits it out instead of failing, so the watch is not restarted early.
 - Included `reason`: PRs requesting my review (`review_requested`), mentions (`mention`), team mentions (`team_mention`), new comments / reviews by others on my PRs / issues (`author`),
