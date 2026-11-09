@@ -53,11 +53,15 @@ func (s *Service) clearToolLoop(k [2]string, newTurn bool) {
 // toolLoopsChanged invalidates cards and model calls as soon as a node reports a changed candidate.
 // The event is a complete list for one machine; its turn budget survives a candidate change.
 func (s *Service) toolLoopsChanged(d DeviceSessions) {
+	s.work.mu.Lock()
+	if len(s.work.loops) == 0 {
+		s.work.mu.Unlock()
+		return
+	}
 	byID := make(map[string]proto.Session, len(d.Sessions))
 	for _, c := range d.Sessions {
 		byID[c.SessionID] = c
 	}
-	s.work.mu.Lock()
 	changed := false
 	for k, st := range s.work.loops {
 		if k[0] != d.MachineID || st.since.IsZero() {
@@ -93,7 +97,7 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 		for _, c := range v.sessions(d.ID) {
 			k := [2]string{d.ID, c.SessionID}
 			seen[k] = true
-			if c.Assistant || c.Status != proto.StatusWorking || c.ReadOnlyReason != "" || len(c.Queued) != 0 || c.ToolLoop == nil || c.ToolLoop.Since.IsZero() || v.isMuted(d.ID, c.SessionID) {
+			if !eligibleToolLoop(c) || v.isMuted(d.ID, c.SessionID) {
 				s.clearToolLoop(k, false)
 				continue
 			}
@@ -218,8 +222,12 @@ func (s *Service) reviewToolLoop(ctx context.Context, k [2]string, st *toolLoopS
 	s.publishSoon()
 }
 
+func eligibleToolLoop(c proto.Session) bool {
+	return c.Status == proto.StatusWorking && !c.Assistant && c.ReadOnlyReason == "" && len(c.Queued) == 0 && c.ToolLoop != nil && !c.ToolLoop.Since.IsZero()
+}
+
 func matchesToolLoop(c proto.Session, loop proto.ToolLoop) bool {
-	return c.Status == proto.StatusWorking && !c.Assistant && c.ReadOnlyReason == "" && len(c.Queued) == 0 && c.ToolLoop != nil && c.ToolLoop.Since.Equal(loop.Since) && c.ToolLoop.Tool == loop.Tool
+	return eligibleToolLoop(c) && c.ToolLoop.Since.Equal(loop.Since) && c.ToolLoop.Tool == loop.Tool
 }
 
 func (s *Service) toolLoopAnswer(ctx context.Context, id string, r proto.Resolution) (bool, error) {

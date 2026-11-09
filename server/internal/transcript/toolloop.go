@@ -283,7 +283,8 @@ func (d *LoopDetector) add(c loopCall) {
 	}
 	d.history = append(d.history, c)
 	if len(d.history) > 90 {
-		d.history = append([]loopCall(nil), d.history[len(d.history)-90:]...)
+		copy(d.history, d.history[len(d.history)-90:])
+		d.history = d.history[:90]
 	}
 	for period := 1; period <= 3; period++ {
 		minCount := period * 3
