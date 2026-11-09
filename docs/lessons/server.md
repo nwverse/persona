@@ -1461,3 +1461,17 @@ A source validation result and a deployment result are different facts. Keep rel
 logs and receipts regardless of whether GitHub accepts commit statuses. Default both
 release workers to no status writes; explicit opt-in retains all three transitions,
 including errors. Never fabricate a success to remove an old failing status.
+## A skip decided from two counters, and a test that swaps a served peer (2026-11-10, #2439)
+
+`sendSessions` skips a byte-identical list only when no `sessions.list` answer is pending and the epoch has not moved;
+an answer moves the epoch and then drops the pending count when it ends. Read the pending count first and the epoch
+second. Read the other way round, an answer that starts and ends between the two reads leaves the old epoch and a zero
+count, and the list is skipped behind an answer the manager may have taken instead. With a 20 µs pause injected between
+the reads, 199 of 200 runs skipped; with the order swapped, 0 of 200. Without the pause it never showed in 2 million
+runs, which is why only reasoning about the order, not a test, catches it.
+
+A test helper that has already started `go n.peer.Serve(...)` must not assign `n.peer` afterwards: the goroutine reads the
+field, so `-race` reports it, and it may end up serving the new peer too. Pass what the test needs (here a writer that
+records the node's lines) into the constructor, and serve the peer through a local variable. A rule test also needs
+steps that differ only in the guarded rule: revs followed by a list that differs anyway, or a `call` that waits for the
+pending count to drop, pass with the rule deleted.

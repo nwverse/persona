@@ -61,6 +61,7 @@ import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } fr
 import type { Route } from "../lib/router";
 import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
+import { TaskCompletionCheck } from "./TaskCompletionCheck";
 import { useTodoField } from "./use-todo-field";
 import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
@@ -1150,6 +1151,8 @@ function TodoDetail({
 
       {/* Stage Bar (#2776): progress from plan to verified, from the hub's todo; nothing on hubs that don't send it. */}
       <TodoStageBar stage={todo.stage} prURL={todo.pr_url} className="mt-4" />
+
+      {todo.origin && <TaskCompletionCheck todo={todo} />}
 
       {/* Notes / Description */}
       <div className="mt-4">
