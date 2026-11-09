@@ -1,5 +1,23 @@
 # Lessons: hub / node and networking
 
+## Finish a revocation's activity push before forgetting its target (#1864)
+
+Push registration IDs differ from credential IDs: select the registrations bound
+to the revoked credential, not just a row whose device ID happens to match. A call
+to `sendLiveActivity` only queues a goroutine; direct and relay transports recheck
+the registration before dispatch. Calling `end` before `signedOut` is therefore
+insufficient unless the revocation waits for the end attempts to finish. Send empty
+content with immediate dismissal, even for a foreground app or disabled activity
+preference, without resetting the fleet state or activities of other credentials.
+Database revocation already removes the device and its activity rows, so capture
+the live tokens from memory and do not try to persist them back after retirement.
+Transport acceptance is not proof that the phone dismissed the activity; the
+Apple-side rejected-credential fallback remains separate work.
+
+Database fixtures must also survive `go test -count`: `setupTestDB` does not clear
+`admin_sessions`. Give test sessions unique IDs and delete their own rows with
+`t.Cleanup` before the store closes; a fixed ID, even `t.Name()`, repeats within one process.
+
 ## Retained extension lists need installed managers (#1918)
 
 A relay can retain an offline manager's GET answer while the merged list drops it before the relay is called. For merged retained GET routes, enumerate installed bus identities as well as live managers; keep ordinary lists such as inbox and todos online-only. Never discover owners by scanning cache keys: a removed manager can still have cached answers. Fail closed when the installed roster cannot be read, and test the real relay warm-up followed by disconnect, missing cache, revocation, and an offline default. In external mode even the identity named `assistant` is removable: only seed it when `builtinManager` says it is built in, and return unavailable for an empty roster rather than reviving a cached default.
@@ -1250,3 +1268,11 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A scratch buffer for such bytes is a `sync.Pool` of the encoder's own, not `jsontext.Encoder.AvailableBuffer`: `encoding/json` resets its pooled encoder for each value, and the available buffer shrinks with it. A nested value is written with `jsonv2.MarshalWrite` into a `bytes.Buffer` set on the output slice, so it is not marshalled and then copied.
 - Lowering a text only to test a literal gate copies it every time (`transcript.AskOf`, three copies per list row): `lazyre.Regexp.MayMatchLowered` tests the gate on the text as `strings.ToLower` would have it, without copying an ASCII text, and the caller lowers only when it says true.
 - A catalog of anchored templates tried in turn (`i18n.DeploymentText`, `InboxText`, `ComputerText`) runs every regexp on a text that matches none: keep each template's literal pieces and run its regexp only on a text that starts with the first, ends with the last and holds the others.
+
+## Hot paths: re-reading every row of a list that barely changed, a catalog tried end to end (2026-11-09, #1986)
+
+- A list decorated again on every publish re-read every row's question (`transcript.AskOf` on the last words of each of 8,200 sessions). Keep the answer per machine and session with the text it was read from, and read again only when the text differs (`asksMemo`); a complete list drops the rows it no longer carries, a subset keeps them. Prove it with a table of lists that change between calls, each decorated warm and fresh.
+- To find out whether a list changed since it was last sent, compare its bytes as they are encoded (`changedWriter`), not after encoding them into a new slice: an unchanged list then costs no copy.
+- An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`).
+- A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
+- Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
