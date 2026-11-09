@@ -161,8 +161,29 @@ type receiptBody struct {
 	PR      string         `json:"pr,omitempty"`
 	Machine string         `json:"machine,omitempty"`
 	Review  *receiptReview `json:"review,omitempty"`
+	// Reroute names the machine a flexible task was moved off and where it landed, with the health-check reason;
+	// absent when it ran where it was asked (#2271).
+	Reroute *PlanReroute `json:"reroute,omitempty"`
 	// Error: what the model service answered when the turn was cut off (interrupted), for the card's detail.
 	Error string `json:"error,omitempty"`
+}
+
+// rerouteOfTask resolves the recorded machine reroute for the plan task that runs todoID: nil when the task has no
+// plan, the plan no longer holds it, or it was never moved (#2271).
+func (s *Service) rerouteOfTask(ctx context.Context, todoID, planID string) *PlanReroute {
+	if planID == "" {
+		return nil
+	}
+	p, err := s.loadPlan(ctx, planID)
+	if err != nil || p == nil {
+		return nil
+	}
+	for i := range p.Tasks {
+		if p.Tasks[i].TodoID == todoID {
+			return p.Tasks[i].Reroute
+		}
+	}
+	return nil
 }
 
 type receiptReview struct {
@@ -184,8 +205,17 @@ var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 // finds the work finished.
 func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	time.Sleep(s.settleDelay(ctx)) // a turn that ends to ask, or goes on at once, is not the end
+	s.taskTurnSettled(ctx, machine, sid)
+}
+
+// taskTurnSettled is taskTurnEnded once the turn stayed still: after its sleep, or afterSettle's timer.
+func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
+		return
+	}
+	if current, ok := s.todoNow(t.ID); ok && (current.Cancelled() || current.AgentAborted(machine, sid)) {
+		s.logf("task %s: cancelled or agent %s/%s aborted: skipping turn end", t.ID, machine, sid)
 		return
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
@@ -276,7 +306,7 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		if latest, ok := s.session(cctx, last.MachineID, last.SessionID); ok &&
 			(latest.Status != last.Status || latest.Rev != last.Rev || latest.LastText != last.LastText || !latest.UpdatedAt.Equal(last.UpdatedAt)) &&
 			s.takeTaskAnswerRetry(machine, sid) {
-			go s.taskTurnEnded(context.WithoutCancel(ctx), machine, sid)
+			s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, machine, sid)
 		}
 		return
 	}
@@ -300,7 +330,12 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	if _, answer := turnExchange(items); answer != "" {
 		text = answer
 	}
-	body := receiptBody{Title: t.Title, State: "done", Summary: clipMarkdown(text, 600), Machine: name}
+	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
+		s.logf("task %s: cancelled or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
+		return
+	}
+	body := receiptBody{Title: t.Title, State: "done", Summary: clipMarkdown(text, 600), Machine: name,
+		Reroute: s.rerouteOfTask(cctx, t.ID, t.PlanID)}
 	// Persona follows up on a supervised stop through sigReview or sigIdle after judgment; the receipt need not wait.
 	// needs_user waits on the user instead. Read the latest todo in case it changed while reading the reply.
 	if current, ok := s.todoNow(t.ID); ok && current.DoneAt == nil {

@@ -19,6 +19,7 @@ Scripts are grouped by purpose and resolve their own repository root. Build/depl
 
 ## Shared tools
 
+- `mock/turn_folding_hub.py` serves isolated synthetic Apple chats for running/completed execution and compaction with a failed tool. Run it on an unused loopback port and point `AppleTurnFoldingTests` at it; never use a production hub for this suite.
 - `persona_config.py` reads private build/deploy configuration and generates Xcode settings without changing registered app IDs.
 - `persona_identity.py --service hub|node|link` resolves only a matching canonical service's root. It honors unit resets, ordered drop-ins, XDG paths, HOME-only environment files and unset rules; it never executes configuration or exposes other credentials. `--prepare` creates only the selected directory, with no directory aliases. `--prefix` resolves remote paths using the remote HOME.
 - `privacy_check.py` scans repository/staged content. Git hooks, web builds and CI use it.
@@ -31,6 +32,7 @@ Use synthetic fixtures and an isolated outer HOME for script tests. Server tests
 ```sh
 n=0 failed=""
 for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do
+  grep -q unittest "$f" || continue  # a verification script, not a suite: CI skips it too (scripts/ci/python-tests.py)
   n=$((n + 1))
   (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"
 done

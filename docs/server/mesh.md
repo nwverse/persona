@@ -130,7 +130,7 @@ project refresh, Moments fetching, and Live Activity push. Member hub-level data
 
 ## Paths via members (node streams)
 
-(`peer_node.go`. Since 2026-11-04, the computers at each end belong to their respective managers ([machines.md](machines.md) ("Who connects computers")): the primary's manager asks the primary hub for this stream
+(`peer_node.go`. Since 2026-11-04, the computers at each end belong to their respective managers ([machines.md](machines.md) ("Who connects to computers")): the primary's manager asks the primary hub for this stream
 (`GET /api/v1/bus/relay?hub=<member>&machine=<id>`); the member hub hands it to its own manager to open (`devices.accept` kind `node`). References below to a "hub" opening a node mean that hub's manager.)
 When the primary connects a computer listed only in a member's hub.json (or also listed locally, but the member's path is currently better), it sends an HTTP upgrade request over the link:
 `GET /api/v1/peer/node`, headers `Upgrade: persona-node`, `X-Persona-Peer-Node: <member hub_id>/<its machine id>`, `X-Persona-Peer-From: <primary>`, forwarded hop by hop to that member.

@@ -3,8 +3,10 @@ package node
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -18,13 +20,21 @@ type quickMeta struct {
 	activity time.Time // last real exchange; zero when unknown
 	queue    []string
 	loop     *proto.LoopInfo
+	toolLoop toolLoopScan
 	goal     *proto.GoalInfo        // from backgroundTasks too: a goal is often set at the start of a long transcript
 	plan     *proto.PlanInfo        // from the same scan (bgPlan): a TodoWrite is often far back in a long turn
 	bg       []proto.BackgroundTask // from backgroundTasks: the tail alone misses tasks started earlier in a long turn
 	bgWait   bool                   // bg and loop are not known yet (a big first read is running)
 	wf       []proto.Workflow       // workflow runs, as the transcript tells them (bgWorkflows)
 	wfScript map[string]string      // their script files by run id
-	cwd      string
+	// cwd: where the session runs. An agent's latest directory (Claude Code writes the shell's directory after each
+	// Bash `cd` into every line), but where it started when that latest one is an assistant or health directory; for
+	// a conversation that started in an assistant or health directory, that directory, wherever its `cd`s took it
+	// since (#2368).
+	cwd string
+	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
+	// a first prompt bigger than the head read).
+	start    string
 	model    string
 	surface  string // the client it runs in (transcript.Meta.Surface)
 	lastText string
@@ -67,6 +77,8 @@ type quickMeta struct {
 	// turnErr: the latest turn failed on the model service, as the agent's record says it (transcript.Meta.TurnError…:
 	// a Codex rollout's task_complete, #2185; Claude Code's own reply for a failed request, #1710).
 	turnErr turnFailure
+	// modelFallback comes from the incremental scan as well: the fallback may outlast the quick tail.
+	modelFallback *proto.ModelRefusal
 	// rewound: the lines session.rewind, or a rewind seen in the terminal, went back over (File.RewoundLines), which
 	// Claude writes nothing for; kept from read to read, the tail leaves them out (applyRewound).
 	rewound []string
@@ -75,7 +87,7 @@ type quickMeta struct {
 // turnFailure is how the latest turn failed on the model service (Session.TurnError…): its text, its kind, a usage
 // limit's reset (zero: not known), whether the CLI goes on by itself after it and whether the turn did work first.
 type turnFailure struct {
-	text, kind         string
+	text, kind, code   string
 	resetsAt           time.Time
 	resumes, afterWork bool
 }
@@ -83,6 +95,7 @@ type turnFailure struct {
 // set puts the failure into a session; none clears what the session says of one.
 func (f turnFailure) set(s *proto.Session) {
 	s.TurnError, s.TurnErrorKind, s.TurnErrorResumes, s.TurnErrorAfterWork = f.text, f.kind, f.resumes, f.afterWork
+	s.TurnErrorCode = f.code
 	s.TurnErrorResetsAt = nil
 	if !f.resetsAt.IsZero() {
 		t := f.resetsAt.UTC()
@@ -97,6 +110,9 @@ func reported(text, kind string, rollout turnFailure) turnFailure {
 	f := turnFailure{text: text, kind: kind}
 	if rollout.text != "" && rollout.kind == kind {
 		f.resetsAt, f.afterWork = rollout.resetsAt, rollout.afterWork
+		if rollout.text == text {
+			f.code = rollout.code
+		}
 	}
 	return f
 }
@@ -121,7 +137,10 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 			m.wf, m.wfScript = n.bgWorkflows(path)
 			m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 			m.plan = n.bgPlan(path)
+			n.mergeModelFallback(path, &m)
 			n.mu.Lock()
+			current := n.metas[path]
+			m.toolLoop = current.toolLoop
 			n.metas[path] = m
 			n.mu.Unlock()
 		}
@@ -135,12 +154,22 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 		return m
 	}
 	m = readQuickMetaSince(path, st, m) // m: the last read's, zero when there is none
+	if m.start == "" {
+		// A first prompt bigger than the head read (an inline image) hides where the session started: the node's own
+		// assistant or health project says it (#2368).
+		if dir := n.assistantDirOfProject(filepath.Base(filepath.Dir(path))); dir != "" {
+			m.cwd = dir
+		}
+	}
 	m.readAt = time.Now()
 	m.bg, m.loop, m.goal, m.bgWait = n.backgroundTasks(path)
 	m.wf, m.wfScript = n.bgWorkflows(path)
 	m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 	m.plan = n.bgPlan(path)
+	n.mergeModelFallback(path, &m)
 	n.mu.Lock()
+	current := n.metas[path]
+	m.toolLoop = current.toolLoop
 	n.metas[path] = m
 	n.mu.Unlock()
 	return m
@@ -160,6 +189,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	defer f.Close()
 	var tm transcript.Meta
+	start := "" // the first cwd: tm.Cwd moves with every `cd` the head's lines record, and the tail's overwrite it
 	// The first prompt is usually in the first 32 KB. A Codex rollout puts its instructions first (the assistant's
 	// AGENTS.md and snapshot: 74 KB in), so up to 256 KB is read while it has not turned up.
 	head := make([]byte, 32*1024)
@@ -169,6 +199,9 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			if bytes.Contains(line, []byte(`"cwd"`)) || bytes.Contains(line, []byte(`"type":"user"`)) ||
 				bytes.Contains(line, []byte(`"type":"UserMessage"`)) { // Codex rollouts: session_meta, then the first prompt
 				transcript.ParseLine(0, line, &tm)
+				if start == "" {
+					start = tm.Cwd
+				}
 				if tm.Cwd != "" && tm.FirstUser != "" {
 					break
 				}
@@ -183,6 +216,10 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	first := tm.FirstUser
 	tm.ReadingTail()
 	off := max(st.Size()-quickTail, 0)
+	if off > 0 && prev.size >= off && prev.size <= st.Size() {
+		// All newly appended rows are in the tail, so it can invalidate the previous fallback itself.
+		tm.ModelFallback = prev.modelFallback
+	}
 	// The tail's lines in the transcript's tree: a turn the user went back over (a rewind in the terminal, then a recap
 	// beside it) is not where the agent's last words come from (transcript/branch.go).
 	var tail transcript.Tail
@@ -232,6 +269,15 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	rewound := tail.Settle(&tm)
 	m.title, m.cwd, m.model, m.lastText, m.first, m.activity, m.queue = tm.Title, tm.Cwd, tm.Model, tm.LastText, first, tm.LastActivity, tm.Queue
+	m.start = start
+	if identity.IsAssistantDir(start) || start != "" && identity.IsAssistantDir(m.cwd) {
+		// An assistant or health conversation is where it started: its space, CLAUDE.md, memory and resume project.
+		// A `cd` into a skill's folder had it listed as an agent there (#2368). The other way round, an agent whose
+		// `cd` landed in an assistant or health directory (one started in the home directory) is not one of their
+		// conversations: listed there at rest, the hub took it for one. An exact assistant or health directory is
+		// only ever where a session started.
+		m.cwd = start
+	}
 	m.surface = tm.Surface
 	if m.surface == "" {
 		m.surface = prev.surface // Claude writes it on every line, a rollout on its first: the head read above has it
@@ -256,7 +302,8 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	m.turnOpen = tm.Codex && (tm.TurnOpen || off > 0 && !tm.TurnClosed)
 	m.claudeTurn = !tm.Codex && tm.TurnOpen
-	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, resetsAt: tm.TurnErrorResetsAt,
+	m.modelFallback = tm.ModelFallback
+	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, code: tm.TurnErrorCode, resetsAt: tm.TurnErrorResetsAt,
 		resumes: tm.TurnErrorResumes, afterWork: tm.TurnErrorAfterWork}
 	if tm.TurnErrorKind == proto.TurnErrorUsageLimit && !tm.TurnErrorResumesSaid() && prev.size > 0 && prev.size <= st.Size() {
 		// Claude Code's notice that it goes on by itself is written once, at the first refused turn; the wait's wakes

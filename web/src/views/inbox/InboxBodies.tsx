@@ -170,20 +170,34 @@ const FRAME_HEAD =
 
 function MailFrame({ html }: { html: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const manager = useItemManager();
   const [height, setHeight] = useState(240);
+  // undoes what the last load hooked onto the frame's document. The observer lives in this window: left connected, it
+  // keeps that document and this frame's state alive, one more on each load and on each frame that goes (a new mail of
+  // the thread, Show translation, another item).
+  const release = useRef<(() => void) | null>(null);
+  useEffect(() => () => release.current?.(), []);
 
   const onLoad = () => {
+    release.current?.();
+    release.current = null;
     const doc = ref.current?.contentDocument;
     if (!doc) return;
     const fit = () => setHeight(Math.max(80, Math.ceil(doc.body.getBoundingClientRect().height)));
     fit();
-    new ResizeObserver(fit).observe(doc.body);
-    doc.addEventListener("click", (e) => {
+    const sizes = new ResizeObserver(fit);
+    sizes.observe(doc.body);
+    const click = (e: MouseEvent) => {
       const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
       if (!a) return;
       e.preventDefault();
-      if (/^(https?:|mailto:)/i.test(a.href)) openLink(a.href);
-    });
+      if (/^(https?:|mailto:)/i.test(a.href)) openLink(a.href, undefined, manager);
+    };
+    doc.addEventListener("click", click);
+    release.current = () => {
+      sizes.disconnect();
+      doc.removeEventListener("click", click);
+    };
   };
 
   return (
@@ -209,7 +223,7 @@ export function DocBody({ item }: { item: InboxItem }) {
   return (
     <div className="mx-auto max-w-[760px] px-4 py-4 sm:px-6">
       <div className="flex flex-wrap items-center gap-2">
-        <Button tone="secondary" icon="external" onClick={() => openLink(doc.url, item.title)}>{t("inbox-inboxbodies.open_doc", { kind })}</Button>
+        <Button tone="secondary" icon="external" onClick={() => openLink(doc.url, item.title, item.manager)}>{t("inbox-inboxbodies.open_doc", { kind })}</Button>
         {doc.reply && (
           <span className="flex items-center gap-1.5 text-[12px] text-ink-3">
             <Glyph name="reply" size={12} />

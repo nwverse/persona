@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
@@ -77,6 +78,9 @@ type Service struct {
 
 	startingAssistants assistantStarts // machine_privacy.go
 
+	// running is Run's context: it ends when the service stops (runCtx).
+	running atomic.Pointer[context.Context]
+
 	titles     titleBook         // titles.go
 	prefs      settingsBook      // profile.go
 	main       mainBook          // start.go
@@ -86,6 +90,7 @@ type Service struct {
 	relays     relayBook         // conversations.go
 	quiet      quietBook         // quiet.go
 	supervise  superviseBook     // supervise_signals.go
+	autoRuns   autoReviewBook    // supervise_autoreview.go
 	reports    reportBook        // reports.go
 	upReports  reportRate        // agent_control.go: report_to_supervisor
 	noteRate   reportRate        // todo_decisions.go: todo_decision_add
@@ -114,6 +119,7 @@ type Service struct {
 	inbox      inboxBook         // inbox.go
 	board      boardBook         // workspace_board.go: the workspace board
 	viewEvents viewNotifications // views.go: only coalesced notifications; contents are stored first
+	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
 
 	devs          Devices // the computers (devices.go); nil: no fleet
 	agentArchives agentArchiveBook
@@ -132,6 +138,8 @@ type Service struct {
 
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
+	sessionsSeen func(DeviceSessions)
 }
 
 var _ Handler = (*Service)(nil)
@@ -205,6 +213,14 @@ func todoWriter(r *http.Request) bool {
 	return fullRole(r) || r.Header.Get(RoleHeader) == roleExtension
 }
 
+// runCtx ends when the service stops: Run's context; background before Run (tests).
+func (s *Service) runCtx() context.Context {
+	if p := s.running.Load(); p != nil {
+		return *p
+	}
+	return context.Background()
+}
+
 // owner is how the assistant calls the user: manager.json's assistant.owner, else the Chinese word for "user".
 func (s *Service) owner(ctx context.Context) string {
 	if o := strings.TrimSpace(s.hello(ctx).Owner); o != "" {
@@ -230,6 +246,18 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
+		if text, ok := p["text"].(string); ok {
+			source, _ := p["message_source"].(*proto.MessageSource)
+			if source == nil {
+				source = prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: text})
+			}
+			if source != nil {
+				p["message_source"] = source
+				p["text"] = prompts.MessageSourceText(text, source)
+			}
+		}
+	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
@@ -330,12 +358,13 @@ func (s *Service) device(ctx context.Context, id string) (Device, bool) {
 
 // startParams are what a new conversation starts with.
 type startParams struct {
-	Text           string `json:"text"`
-	PermissionMode string `json:"permission_mode,omitempty"`
-	Purpose        string `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
-	Space          string `json:"space,omitempty"`   // "health" starts it in the health space (docs/assistant/health.md)
-	Origin         string `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
-	OriginRef      string `json:"origin_ref,omitempty"`
+	Text           string               `json:"text"`
+	PermissionMode string               `json:"permission_mode,omitempty"`
+	Purpose        string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
+	Space          string               `json:"space,omitempty"`   // "health" starts it in the health space (docs/assistant/health.md)
+	Origin         string               `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
+	OriginRef      string               `json:"origin_ref,omitempty"`
+	Source         *proto.MessageSource `json:"source,omitempty"`
 }
 
 // kbReady: there is a knowledge base (kb.go; on, opened or about to).
@@ -404,7 +433,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	snap.Partial = snap.Partial || !ok
 	for id, o := range origins {
 		v := view(id, o.machine)
-		v.Origin, v.OriginRef = o.origin, o.ref
+		v.Origin, v.OriginRef, v.OpenedBy = o.origin, o.ref, o.ext
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
@@ -448,6 +477,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
+	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
@@ -459,20 +489,33 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 // TurnStarted: one of a task's agents is working; what was going to be done about an agent's last turn is off.
 func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
+	s.turnStartedObserved(ctx, r, true)
+}
+
+func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn bool) {
 	s.taskWorking(ctx, r.MachineID, r.SessionID)
-	s.workStarted(ctx, r.MachineID, r.SessionID, time.Now())
+	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
 }
 
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
+	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
-	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+	s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
+	// A review's reviewer answered (supervise_autoreview.go).
+	go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
-	go s.launcherLimitTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
 	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
+}
+
+// afterSettle runs settled for machine's session sid once its turn stayed still (settleDelay, read now), on a timer:
+// a goroutine asleep through the window would hold a stack per pending turn end (#2472). Each call is its own run.
+func (s *Service) afterSettle(ctx context.Context, settled func(context.Context, string, string), machine, sid string) {
+	time.AfterFunc(s.settleDelay(ctx), func() { settled(ctx, machine, sid) })
 }
 
 // InteractionResolved: the user dealt with a card of a task's agent: the conversation keeps a record of it, and the
@@ -498,6 +541,10 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 // SessionsChanged: messages from other conversations go to those no longer running; the todos follow the list
 // (todo_sessions.go).
 func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
+	if f := s.sessionsSeen; f != nil {
+		f(d)
+	}
+	s.toolLoopsChanged(d)
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)

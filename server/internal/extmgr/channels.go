@@ -480,12 +480,3 @@ func (h *Manager) unbindChannel(ctx context.Context, id string) error {
 	}
 	return h.connectorLogout(ctx, pc.item.Connector, l) // the assistant forgets what the channel waited on
 }
-
-func firstNonEmpty(s ...string) string {
-	for _, x := range s {
-		if strings.TrimSpace(x) != "" {
-			return x
-		}
-	}
-	return ""
-}

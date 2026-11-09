@@ -1,6 +1,8 @@
 {
   "name_anthropic": "Anthropic",
   "desc_anthropic": "Claude の公式 API",
+  "name_openai": "OpenAI（公式）",
+  "desc_openai": "翻訳やトリアージなどの直接 API タスク向けの OpenAI Responses 公式 API",
   "name_deepseek": "DeepSeek",
   "desc_deepseek": "従量課金",
   "name_kimi": "Kimi（中国版）",
@@ -14,5 +16,7 @@
   "name_minimax": "MiniMax（中国版）",
   "desc_minimax": "minimax.cn、中国本土のアカウントが必要",
   "name_minimax_intl": "MiniMax",
-  "desc_minimax_intl": "MiniMax の国際版、従量課金"
+  "desc_minimax_intl": "MiniMax の国際版、従量課金",
+  "name_grok": "Grok",
+  "desc_grok": "xAI、従量課金。メインチャットと Agents では使えません"
 }

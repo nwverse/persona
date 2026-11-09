@@ -3,7 +3,7 @@
 A self-hosted hub doesn't have the APNs key of the Apple Team that owns the App, so it can't send pushes. The push relay is a `personad relay` run by the App's publisher:
 it holds the APNs key and hands pushes to APNs on behalf of every hub. The hub encrypts the notification content with the phone's public key, the relay only forwards ciphertext,
 and the phone decrypts it in the Notification Service Extension before showing it. A hub that has its own APNs key (`~/.persona/apns.json`) keeps talking to APNs directly and never goes through the relay.
-The Mac version works the same way: its Notification Service Extension target is `PersonaMacNotify` (product `PersonaNotify.appex`; the module and principal notification class still use `PersonaNotify`, `docs/apple/mac.md` ("Remote push (Mac)"), #432), and the private key lives in the data protection keychain, shared with the extension.
+The Mac version works the same way: its Notification Service Extension target is `PersonaMacNotify` (product `PersonaNotify.appex`; the module and principal notification class still use `PersonaNotify`, `docs/apple/mac.md` ("Remote push (Mac)"), #432), and the private key lives in the data protection keychain, shared with the extension. Apple Vision Pro builds the same extension as `PersonaVisionNotify` (#1981, `docs/apple/vision.md`).
 
 ```
 hub ──(HPKE ciphertext + grant)──▶ relay ──(APNs key)──▶ APNs ──▶ phone: Notification Service Extension decrypts → shows
@@ -46,7 +46,8 @@ The relay builds the APNs `aps` itself. The hub can only provide ciphertext and 
 | `liveactivity` | The `aps` given by the hub (only keys used by Live Activities are allowed), push type `liveactivity`, topic with `.push-type.liveactivity` appended |
 
 - "New message" is the fallback: it's shown when the extension fails to decrypt, times out, the device hasn't been unlocked since boot (private key unreadable), or the ciphertext has expired. **It never falls back to plaintext.**
-- The hub SHA-256 hashes `collapse_id` before giving it to the relay (the original value is the interaction id).
+- The fallback always rings. Once the extension opens the push, the sealed `aps` decides the sound as well: one without `sound` (`personad notify --silent`, `"silent": true`, a push hushed by quiet hours) arrives quiet, the same as with direct APNs (`PushCrypto.apply`).
+- The hub SHA-256 hashes `collapse_id` before giving it to the relay (for a card the original value is the interaction id, or for another manager's card `card:` and a hash of the manager and the id).
 
 ### Live Activities are plaintext
 
@@ -107,6 +108,7 @@ lost alerts and Live Activity updates. Live Activity pushes carry `aps.timestamp
 - Notification Service Extension `PersonaNotify`: if `e` is present, decrypt it and swap in the title / subtitle / body / category (the notification's buttons) / thread / interruption level / userInfo;
   without `e` (direct pushes never carry `mutable-content`, so the extension isn't invoked) the notification is shown as-is.
 - Silent pushes (`background`) are decrypted in the App process; `persona_wake` wakes the connection as before, and `resolved_interaction_ids` removes the notifications of cards that are over (#4349, only to apps that registered with `features: ["withdraw"]`).
+- MCP forms and links (`INTERACTION_ELICITATION`, no buttons) are pushed only to apps that registered with `features: ["elicitation"]`, sealed like any other alert. Their alert carries neither the link to open nor a form's values ([protocol.md](../protocol/protocol.md) "MCP elicitation", #2433).
 
 ## Which way a device is pushed (#5998)
 

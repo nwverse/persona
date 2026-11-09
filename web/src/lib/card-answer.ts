@@ -4,7 +4,7 @@ import { t } from "../i18n";
 import { ApiError, enc, errorText } from "./api";
 import { endedText, type Resolution, type ResolveResult } from "./answered";
 import { fields } from "./elicitation";
-import { sessionCan } from "./format";
+import { interactionCanAnswer } from "./format";
 import { apiOp } from "./ops";
 import { endInteraction, getSession, keepDelegated } from "./store";
 import { isSecretRun } from "./tool-detail";
@@ -39,7 +39,7 @@ function redacted(ix: Interaction, body: Resolution): Resolution {
 }
 
 export async function answerCard(ix: Interaction, body: Resolution): Promise<CardAnswer> {
-  if (!sessionCan(getSession(ix.machine_id, ix.session_id), "approve")) return { ok: false, error: t("chat-interactions.approve_not_allowed") };
+  if (!interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id))) return { ok: false, error: t("chat-interactions.approve_not_allowed") };
   if (isSecretRun(ix) && !isSecretRunAnswer(body)) return { ok: false, error: t("chat-interactions.secret_run_card_only") };
   try {
     // one op id for this answer: sent again through a gap (a hub restart), it is taken once
@@ -52,9 +52,11 @@ export async function answerCard(ix: Interaction, body: Resolution): Promise<Car
       keepDelegated(ix, r);
       return { ok: true, already };
     }
-    // Handed back now, or the hub says it was handed back already: the agent waits on the computer (#4877).
+    // Handed back now, or the hub says it was handed back already: the agent waits on the computer (#4877). A hand back
+    // leaves a receipt too, as an answer does: the hub takes no other answer for this card any more, so the card must
+    // not just vanish (answered-lookup still counts the agent as waiting).
     const handedBack = already ? res.status === "dismissed" : r.dismiss === true;
-    endInteraction(ix.id, r.dismiss === true && !already ? undefined : { ix, resolution: r, already, handedBack });
+    endInteraction(ix.id, { ix, resolution: r, already, handedBack });
     return { ok: true, already };
   } catch (e) {
     if (e instanceof ApiError && e.status === 410) {

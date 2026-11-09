@@ -743,6 +743,36 @@ func TestInteractions(t *testing.T) {
 	}
 }
 
+func TestLoopInteractionRestart(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	for _, id := range []string{"tool_loop_kept", "tool_loop_orphan", "tool_loop_expiring"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "box", SessionID: "session", Kind: proto.IxQuestion, CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.PutSetting(ctx, "agents.tool_loops", []any{map[string]any{"card": map[string]any{"id": "tool_loop_kept"}}, map[string]any{"expired_id": "tool_loop_expiring"}, map[string]any{"silenced": true}}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		var value any
+		_, _ = d.TakeSetting(ctx, "agents.tool_loops", &value)
+	}()
+	if _, err := d.ExpireStaleInteractions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"tool_loop_kept": "pending", "tool_loop_expiring": "pending", "tool_loop_orphan": "cancelled"} {
+		if status, _, err := d.InteractionOutcome(ctx, id); err != nil || status != want {
+			t.Fatalf("%s status = %s, %v; want %s", id, status, err, want)
+		}
+	}
+	if err := d.FinishInteraction(ctx, "tool_loop_expiring", "expired", nil); err != nil {
+		t.Fatal(err)
+	}
+	if status, _, err := d.InteractionOutcome(ctx, "tool_loop_expiring"); err != nil || status != "expired" {
+		t.Fatalf("restored expiry status = %s, %v", status, err)
+	}
+}
+
 // The startup lookup of pending interactions can use the partial index instead of scanning every past interaction.
 func TestPendingInteractionsIndexed(t *testing.T) {
 	d, ctx := open(t), context.Background()
@@ -1001,7 +1031,7 @@ func TestInboxItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want the old done item gone", len(rows))
+		t.Fatalf("rows = %d, want the old done item left out", len(rows))
 	}
 	var it struct {
 		Count int `json:"count"`
@@ -1010,9 +1040,9 @@ func TestInboxItems(t *testing.T) {
 		t.Fatalf("row = %s", rows[0])
 	}
 	// Deleted for good: a source taken back.
-	_ = d.PutInboxItem(ctx, "imessage:1", []byte(`{"id":"imessage:1"}`), now, nil)
-	if err := d.DeleteInboxItems(ctx, []string{"imessage:1"}); err != nil {
-		t.Fatal(err)
+	_ = d.PutInboxItem(ctx, "imessage:1", []byte(`{"id":"imessage:1","source":"imessage"}`), now, nil)
+	if gone, err := d.DeleteInboxSource(ctx, "imessage", nil); err != nil || len(gone) != 1 || gone[0] != "imessage:1" {
+		t.Fatalf("delete the source: %v %v", gone, err)
 	}
 	if rows, _ := d.InboxItems(ctx, now.Add(-8*24*time.Hour)); len(rows) != 1 {
 		t.Fatalf("rows after delete = %d", len(rows))

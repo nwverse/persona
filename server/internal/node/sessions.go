@@ -2,8 +2,10 @@ package node
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -57,7 +60,10 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	seen := map[string]bool{}
 	livePanes := map[string]bool{} // the resting Claudes' panes, whose screens are read for a dialog
 	now := time.Now()
-	for id, a := range agents {
+	// In id order, not the map's: the list is sorted by UpdatedAt with a stable sort, and rows that tie on it (live panes
+	// with no transcript yet all have none) came out in a new order on every pass, each one a whole new list for the hub.
+	for _, id := range slices.Sorted(maps.Keys(agents)) {
+		a := agents[id]
 		if !onList[id] { // a pane on Claude's agents list stays idle: the transcript is its parked session's (claudebg.go)
 			a.AgentStatus = n.claudeStatus(id, a, now)
 		}
@@ -139,6 +145,7 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 				m.turnErr.set(&s)
 				s.Activity, s.ActivityAt = m.activityOf()
 				setContext(&s, m)
+				s.ModelFallback = m.modelFallback
 				if a.Agent != "codex" && a.Agent != traexAgent {
 					s.PermissionMode, s.Effort = n.currentModes(id, m)
 				}
@@ -223,6 +230,10 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	for _, s := range n.codexSessions(seen) {
 		out = append(out, s)
 	}
+	for _, s := range n.codexAssistantsAtRest(seen) {
+		out = append(out, s)
+		seen[s.SessionID] = true
+	}
 	offlineRows := n.offline(seen)
 	n.markInterrupted(offlineRows, seen) // the restart cut these off (#1917)
 	for _, s := range offlineRows {
@@ -239,7 +250,11 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 		if s.Cwd != "" && n.cwdBlocked(s.Cwd) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
 			continue
 		}
+		if s.Status == proto.StatusWorking && (s.Agent == "" || s.Agent == "claude" || s.Agent == "codex") {
+			s.ToolLoop = n.toolLoopOf(s.SessionID)
+		}
 		s.WorkspaceCwd = n.sessionWorkspaceCwd(s.Cwd)
+		fillGitPlace(&s)          // project, worktree and branch for the apps' tree (gitplace.go)
 		s.CanFork = n.forkable(s) // "Branch to New Chat" (fork.go)
 		keptSessions = append(keptSessions, s)
 	}
@@ -257,7 +272,9 @@ func (n *Node) decorate(s *proto.Session) {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
 		s.Compaction = st.Compaction
-		if s.Cwd == "" {
+		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
+		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd
 		}
 	}
@@ -352,7 +369,8 @@ func (n *Node) pollAgents(ctx context.Context) {
 // publish pushes a rebuilt list to the hub: the whole list when anything it shows changed, else only the revs that
 // moved (a transcript grew: a few bytes instead of the list, so the app can pull those sessions). It returns the
 // revs that moved. Runtimes (runtimes.go) publish through it too when their list changes. Nothing goes while the hub
-// has yet to say whether botmux's sessions are listed (botmuxPending).
+// has yet to say whether botmux's sessions are listed (botmuxPending), nor a list the manager holds already, byte for
+// byte (sessions_sent.go).
 func (n *Node) publish(list []proto.Session) map[string]int64 {
 	if n.botmuxPending() {
 		return nil
@@ -370,9 +388,9 @@ func (n *Node) publish(list []proto.Session) map[string]int64 {
 		return revs
 	}
 	if changed {
-		_ = n.peer.Notify("sessions.changed", map[string]any{"sessions": list})
+		n.sendSessions(list)
 	} else if len(revs) > 0 {
-		_ = n.peer.Notify("sessions.revs", map[string]any{"revs": revs})
+		n.sendRevs(revs)
 	}
 	return revs
 }

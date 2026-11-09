@@ -71,6 +71,9 @@ type Hub struct {
 	mutesSend sync.Mutex // one send of the mutes to the managers at a time (fleet_link.go)
 	mutes     *Pins      // muted spaces / agents (no pushes); loaded from settings on first use
 
+	todoOwnersMu sync.RWMutex
+	todoOwners   map[string]string // todo id -> manager id
+
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
 	sessionsSent map[string][]sentSession
@@ -79,6 +82,10 @@ type Hub struct {
 	mu      sync.Mutex
 	clients map[*client]struct{}
 	events  *eventLog // what was broadcast lately, numbered (eventlog.go); guarded by mu
+
+	// linkDesktops: the computers whose Persona Link says the user is at them (desktops.go); guarded by mu.
+	linkDesktops linkDesktops
+
 	// stopping: a planned stop has begun (beginStop, docs/operations/hub-restart.md): what the stop itself causes (machines going
 	// offline, their questions ending) is not news for the apps, which reconnect to the next hub in a moment.
 	stopping atomic.Bool
@@ -96,6 +103,7 @@ type Hub struct {
 	// phoneToolsMu: one phone tool registration written at a time, so the rows and phoneTools agree on the latest.
 	// Never held with mu taken first; the write it covers runs outside mu (#5358).
 	phoneToolsMu sync.Mutex
+	phoneWrites  phoneWriteQueue
 
 	// askVia replaces fleet.ask in tests that play the manager (waitInteraction).
 	askVia func(context.Context, proto.Interaction) (proto.Resolution, error)
@@ -155,6 +163,14 @@ type Store interface {
 	CleanupClientOps(ctx context.Context, before time.Time) error
 	ReplacePhoneTools(ctx context.Context, registration db.PhoneToolRegistration) error
 	PhoneTools(ctx context.Context) ([]db.PhoneToolRegistration, error)
+	FindQueuedPhoneWrite(ctx context.Context, tool string, args json.RawMessage) (*db.PhoneWrite, error)
+	EnqueuePhoneWrite(ctx context.Context, id, tool string, args json.RawMessage) (*db.PhoneWrite, error)
+	PhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
+	QueuedPhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
+	ClaimPhoneWrite(ctx context.Context, id string) (bool, error)
+	FinishPhoneWrite(ctx context.Context, id, state string, result json.RawMessage) error
+	CancelPhoneWrite(ctx context.Context, id string) (*db.PhoneWrite, error)
+	RecoverPhoneWrites(ctx context.Context) error
 	ClaimSend(ctx context.Context, id, machine, session string) (string, error)
 	SettleSend(ctx context.Context, id, state string) error
 	UpsertDevice(ctx context.Context, d db.Device) error
@@ -255,6 +271,9 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.importLegacy(ctx)
 	h.loadUserLang(ctx)
 	h.loadPhoneTools()
+	if err := h.startPhoneWrites(ctx); err != nil {
+		return err
+	}
 	h.push = newPusher(cfg.dir, h.store, h.logf)
 	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
@@ -262,6 +281,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.push.hubID = h.hubID
 	h.push.userLang = h.userLang
 	h.push.userLoc = h.userLocation
+	h.push.devicesChanged = func() { go h.fleetClientsChanged() } // a phone that takes MCP forms by push (fleet_link.go)
 	go h.push.maintenanceLoop(ctx)
 	// The machines are the manager's to connect (devices_link.go); until it reports them they show as before a
 	// restart (what it handed over), before the assistant's process starts and takes that hand-over.
@@ -340,6 +360,7 @@ var phoneToolsTimeout = 5 * time.Second
 // setPhoneTools saves a phone's tools, then lists them. The write runs outside h.mu, the hub's global lock: a stalled
 // database used to stop every broadcast and client message with it (#5358).
 func (h *Hub) setPhoneTools(registration db.PhoneToolRegistration) {
+	defer h.wakePhoneWrites()
 	h.phoneToolsMu.Lock()
 	defer h.phoneToolsMu.Unlock()
 	if h.store != nil {
@@ -392,11 +413,34 @@ func (h *Hub) phoneToolList() []proto.Tool {
 	if tools == nil {
 		tools = []proto.Tool{}
 	}
-	return tools
+	return h.withPhoneWriteTools(tools)
 }
 
 func (h *Hub) callPhone(ctx context.Context, name string, args json.RawMessage) proto.ToolResult {
+	if result, handled := h.phoneWriteTool(ctx, name, args); handled {
+		return result
+	}
+	args, queue, err := phoneQueueOption(name, args)
+	if err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
+	if queue && h.store != nil {
+		lookupCtx, cancel := context.WithTimeout(ctx, phoneToolsTimeout)
+		existing, err := h.store.FindQueuedPhoneWrite(lookupCtx, name, args)
+		cancel()
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+		if existing != nil {
+			h.wakePhoneWrites()
+			go h.requestPhoneWake(name)
+			return phoneWriteResult(existing)
+		}
+	}
 	c := h.phoneClient(name)
+	if c == nil && queue {
+		return h.enqueuePhoneWrite(ctx, name, args)
+	}
 	if c == nil {
 		c = h.wakePhone(ctx, name)
 	}
@@ -452,10 +496,11 @@ var phoneConfirmedTools = map[string]bool{
 	"phone_health_write_sample":   true,
 }
 
-// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
-func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+// requestPhoneWake selects a provider and asks iOS to wake it without waiting for a connection.
+// It reports whether a provider can be woken, including when a recent request throttles this push.
+func (h *Hub) requestPhoneWake(name string) bool {
 	if !h.push.ready() {
-		return nil
+		return false
 	}
 	h.mu.Lock()
 	var candidates []db.PhoneToolRegistration
@@ -497,10 +542,18 @@ func (h *Hub) wakePhone(ctx context.Context, name string) *client {
 	}
 	h.mu.Unlock()
 	if len(candidates) == 0 {
-		return nil
+		return false
 	}
 	if len(wakeIDs) > 0 {
 		h.push.wakeDevices("tool", wakeIDs)
+	}
+	return true
+}
+
+// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
+func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+	if !h.requestPhoneWake(name) {
+		return nil
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
