@@ -1960,8 +1960,8 @@ struct ChatView: View {
     /// How the chat draws (#1666): the new conversation layout in Persona's conversations on iPhone and iPad.
     private var layout: ChatLayout { ChatLayoutSettings.shared.layout(assistant: style == .assistant) }
 
-    /// Where a slide opens the right-edge navigator (window coordinates): the band along the list's right edge,
-    /// below the top bar floating over it.
+    /// Where a finger held still opens the right-edge navigator (window coordinates): the band along the list's right
+    /// edge, below the top bar floating over it.
     private var scrubBand: () -> CGRect {
         let room = headerRoom
         return { [scratch] in
@@ -1972,7 +1972,7 @@ struct ChatView: View {
 
     #if os(iOS)
     /// The right-edge navigator's finger (`EdgeScrubGesture`): opens on the messages the user typed, picks as it moves,
-    /// goes to the picked one as it lets go.
+    /// goes to the picked one as it lets go, if it moved to one (#2615).
     private func scrubbed(_ p: CGPoint, _ phase: UIGestureRecognizer.State) {
         let y = p.y - scratch.listFrame.minY
         switch phase {
@@ -1984,7 +1984,9 @@ struct ChatView: View {
         case .changed:
             if scrub.move(to: y) { EdgeScrubHaptics.tick() }
         case .ended:
-            if let mark = withAnimation(Theme.Motion.state, { scrub.close() }) { jumpToLine(mark.id) }
+            // The tick it opened on is only where the finger happened to be: letting go there is no choice.
+            let chosen = scrub.moved
+            if let mark = withAnimation(Theme.Motion.state, { scrub.close() }), chosen { jumpToLine(mark.id) }
         default:
             withAnimation(Theme.Motion.state) { _ = scrub.close() }
         }
