@@ -299,13 +299,13 @@ func TestSelfSettingsBlocksClaudeDirsThroughTheManager(t *testing.T) {
 	if out := run(`{"action":"add","key":"agents.blocked_claude_dirs","value":{"machine":"box","pattern":"~/.automation/*"}}`); !strings.HasPrefix(out, "Blocked") {
 		t.Fatalf("add: %s", out)
 	}
-	if got := m.blockedClaudeDirs(ctx); len(got) != 1 || got[0] != "~/.automation/*" {
+	if got := m.claudeDirsState(ctx).Blocked; len(got) != 1 || got[0] != "~/.automation/*" {
 		t.Fatalf("the manager keeps %v", got)
 	}
 	if out := run(`{"action":"remove","key":"agents.blocked_claude_dirs","id":"box:~/.automation/*"}`); !strings.HasPrefix(out, "Unblocked") {
 		t.Fatalf("remove: %s", out)
 	}
-	if got := m.blockedClaudeDirs(ctx); len(got) != 0 {
+	if got := m.claudeDirsState(ctx).Blocked; len(got) != 0 {
 		t.Fatalf("still blocked: %v", got)
 	}
 }
@@ -398,7 +398,7 @@ func TestAWarmMachineIsNotConnectedYet(t *testing.T) {
 	h := newTestHub(t)
 	report := func(s devicewire.State) {
 		s.Machine.ID, s.Machine.Name, s.Machine.Kind = "box", "Box", "ssh"
-		h.applyDeviceStates(devicewire.States{Machines: []devicewire.State{s}})
+		h.applyDeviceStatesFrom(devicesOwner, devicewire.States{Machines: []devicewire.State{s}})
 	}
 	report(devicewire.State{Machine: proto.Machine{Online: true}, WarmUntil: time.Now().Add(time.Minute)})
 	m := h.machineByID("box")

@@ -12,12 +12,6 @@ import (
 // node runs in a dedicated directory on one machine; the hub tells them apart from the agents by that directory, and
 // relays the assistant's routes to it (assistant_link.go).
 
-// assistantCwd is the machine's manager's assistant directory on it, or "" while the machine has not reported its
-// home.
-func (m *Machine) assistantCwd() string {
-	return m.assistantCwdOf(m.hub.machineOwner(m.cfg.ID))
-}
-
 // assistantCwdOf is manager id's assistant directory on m (identity.AssistantDirName: the built-in's "assistant",
 // another's "assistant-<id>"), or "" while m has not reported its home.
 func (m *Machine) assistantCwdOf(id string) string {

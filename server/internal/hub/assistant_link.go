@@ -24,7 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The assistant (internal/assistant) is a process of its own on the bus (docs/assistant/assistant.md "Boundary with the hub"); the hub
+// The assistant (internal/assistant) is a process of its own on the bus (docs/assistant/assistant.md "Boundary with hub"); the hub
 // starts it beside itself (assistant_process.go). This file is the hub's end: assistantLink answers the assistant's
 // calls (manager.hello, device.call, app.call, notify.request, manager.snapshot, ws.broadcast; registered on the bus
 // below) with the hub's own functions, the hub keeps the snapshot the assistant last reported (the session lists the
@@ -43,8 +43,6 @@ type assistantState struct {
 	sessions map[string]assistantwire.SessionView // by session id; replaced, never written into
 	tasks    []assistantwire.TaskView             // nil while its schedule could not be read; replaced, never written into
 	profile  *assistantwire.Profile               // its settings (assistant_profile.go); nil before it reported them
-
-	resyncAt atomic.Int64 // when the hub last asked for the whole snapshot (UnixNano)
 
 	toolsMu sync.Mutex
 	tools   []proto.Tool // its MCP tools (assistant.tools), asked for when it connects
@@ -116,33 +114,8 @@ func (h *Hub) startConversationOnce() http.HandlerFunc {
 	}
 }
 
-// assistantTasks are the assistant's scheduled tasks as it reported them; false while it could not read them.
-func (h *Hub) assistantTasks() ([]assistantwire.TaskView, bool) {
-	a := h.assistantReported()
-	defer a.mu.RUnlock()
-	return a.tasks, a.tasks != nil
-}
-
-// assistantReported is the last snapshot, read-locked. With none yet, or a partial one (the database did not answer
-// it), the assistant is asked for the whole of it again (manager.resync, at most every few seconds); it answers with
-// a snapshot, which pushes the lists it changes.
-func (h *Hub) assistantReported() *assistantState { return h.reportedOf(assistantwire.AssistantID) }
-
-// reportedOf is assistantReported for manager id.
-func (h *Hub) reportedOf(id string) *assistantState {
-	a := h.assistantOf(id)
-	a.mu.RLock()
-	need := !a.got || a.partial
-	a.mu.RUnlock()
-	if now := time.Now().UnixNano(); need && now-a.resyncAt.Load() > int64(5*time.Second) {
-		a.resyncAt.Store(now)
-		_ = h.notifyBus(id, assistantwire.EventResync, map[string]any{})
-	}
-	a.mu.RLock()
-	return a
-}
-
-// assistantLink is the hub's side of assistantwire.Hub.
+// assistantLink is the hub's side of assistant.Hub: the bus handlers below answer each call with its ...From method
+// for the manager that made it (the tests' in-process forms are in assistant_link_helpers_test.go).
 type assistantLink struct{ h *Hub }
 
 // Hello is what of the hub's own the manager needs: the machines and where the hub would run the assistant, the
@@ -174,11 +147,7 @@ func (l assistantLink) Hello(context.Context) (assistantwire.Hello, error) {
 	return out, nil
 }
 
-func (l assistantLink) DeviceCall(ctx context.Context, p assistantwire.DeviceCall) (json.RawMessage, error) {
-	return l.deviceCallFrom(ctx, assistantwire.AssistantID, p)
-}
-
-// deviceCallFrom is DeviceCall from manager from: the machines it lists are its own (the others' are in "others":
+// deviceCallFrom answers device.call from manager from: the machines it lists are its own (the others' are in "others":
 // known, not its to use).
 func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assistantwire.DeviceCall) (json.RawMessage, error) {
 	h := l.h
@@ -254,11 +223,7 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 	return out, nil
 }
 
-func (l assistantLink) AppCall(ctx context.Context, p assistantwire.AppCall) (json.RawMessage, error) {
-	return l.appCallFrom(ctx, assistantwire.AssistantID, p)
-}
-
-// appCallFrom is AppCall from manager from: one naming a machine only on a machine of its own (ownership.go), and
+// appCallFrom answers app.call from manager from: one naming a machine only on a machine of its own (ownership.go), and
 // what concerns a manager (its settings, its extensions' pushes) is from's.
 func (l assistantLink) appCallFrom(ctx context.Context, from string, p assistantwire.AppCall) (json.RawMessage, error) {
 	h := l.h
@@ -318,25 +283,7 @@ func (h *Hub) appTool(ctx context.Context, from, app string, params json.RawMess
 	return json.Marshal(proto.TextResult(res, false))
 }
 
-// NotifyRequest delivers a push the manager decided on (fleet_link.go deliverPush): every device whose settings
-// take it.
-func (l assistantLink) NotifyRequest(_ context.Context, p assistantwire.NotifyRequest) error {
-	return l.h.deliverPush(p.Notification)
-}
-
-// Broadcast sends the assistant's live update to the apps as it is (ws.broadcast, relayBroadcast).
-func (l assistantLink) Broadcast(_ context.Context, b assistantwire.Broadcast) {
-	if err := l.h.relayBroadcast(b.Message); err != nil {
-		l.h.logf("assistant: broadcast: %v", err)
-	}
-}
-
-// Snapshot keeps what the assistant reported for the hub's own features.
-func (l assistantLink) Snapshot(ctx context.Context, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
-	return l.snapshotFrom(ctx, assistantwire.AssistantID, s)
-}
-
-// snapshotFrom is Snapshot from manager from.
+// snapshotFrom keeps what manager from reported (manager.snapshot) for the hub's own features.
 func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
 	h := l.h
 	a := h.assistantOf(from)
@@ -421,7 +368,7 @@ func init() {
 		res, err := assistantLink{h}.snapshotFrom(ctx, c.managerID(), s)
 		return res, busCodedError(err)
 	})
-	// ws.broadcast is relayBroadcast's (bus_forward.go), the same as Broadcast's.
+	// ws.broadcast is relayBroadcastFrom's (bus_forward.go).
 }
 
 // busCodedError puts what the assistant's code tells errors apart by on the wire as a code: a machine the hub does

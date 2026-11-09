@@ -265,7 +265,10 @@ func TestAssistantLinkScheduleCalls(t *testing.T) {
 	if keep := h.assistantProfile().Keep; len(keep) != 2 || keep[0].SessionID != "main-0001" || keep[1].SessionID != "trip-0002" {
 		t.Fatalf("the profile keeps the main conversation and the tasks' own: %v", keep)
 	}
-	if tasks, ok := h.assistantTasks(); !ok || len(tasks) != 1 || tasks[0].RunSessionID != "trip-0002" {
+	h.assistant.mu.RLock()
+	tasks := h.assistant.tasks
+	h.assistant.mu.RUnlock()
+	if len(tasks) != 1 || tasks[0].RunSessionID != "trip-0002" {
 		t.Fatalf("the tasks as reported: %+v", tasks)
 	}
 }

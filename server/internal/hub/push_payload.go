@@ -17,18 +17,9 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-func (p *Pusher) notifyInteraction(ix proto.Interaction, machine string) {
-	p.sendLocalized(func(l i18n.Lang) map[string]any { return interactionPayloadIn(l, ix, machine) }, ix.ID, func(p NotifyPrefs) bool { return p.Input })
-}
-
-// interactionPayload is the alert for a new interaction. `category` must match a UNNotificationCategory the app
-// registers (apple/Persona/App/NotificationActions.swift): that is what puts Allow / Deny / Approve on the notification, and the
-// buttons answer `interaction_id` through the resolve API.
-func interactionPayload(ix proto.Interaction, machine string) map[string]any {
-	return interactionPayloadIn(i18n.Default, ix, machine)
-}
-
-// interactionPayloadIn is interactionPayload written in l.
+// interactionPayloadIn is the alert for a new interaction, written in l. `category` must match a
+// UNNotificationCategory the app registers (apple/Persona/App/NotificationActions.swift): that is what puts Allow /
+// Deny / Approve on the notification, and the buttons answer `interaction_id` through the resolve API.
 func interactionPayloadIn(l i18n.Lang, ix proto.Interaction, machine string) map[string]any {
 	title := ""
 	if key, ok := map[string]string{
@@ -179,10 +170,6 @@ func questionAlertBody(l i18n.Lang, qs []proto.Question) string {
 		lines = append(lines, i18n.T(l, "push.question_more", i18n.Args{"count": rest}))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func (p *Pusher) notifyDone(machineID, machine, sessionID, title, text string, wants func(NotifyPrefs) bool) {
-	p.sendLocalized(func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }, "", wants)
 }
 
 func donePayloadIn(l i18n.Lang, machineID, machine, sessionID, title, text string) map[string]any {
