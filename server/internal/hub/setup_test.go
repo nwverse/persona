@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
@@ -523,7 +526,8 @@ func TestSetupAddsTheLocalMachineLater(t *testing.T) {
 }
 
 // Setup reads who keeps what as the hub does, from the hub's own settings and migrating nothing: a machine whose manager
-// is gone does not count, and none recorded reads as none.
+// is gone does not count, none recorded reads as none, and so does a database without the hub's settings (a hub from
+// before them); any other failure is one, naming the setting.
 func TestSetupReadsTheKeptMachines(t *testing.T) {
 	url := os.Getenv("PERSONA_TEST_DATABASE_URL")
 	if url == "" {
@@ -553,6 +557,35 @@ func TestSetupReadsTheKeptMachines(t *testing.T) {
 	put(map[string]string{"host1": assistantwire.AssistantID, "remote1": "gone-" + randomHex(6)})
 	if kept, err := keptMachines(ctx, cfg); err != nil || !maps.Equal(kept, map[string]string{"host1": assistantwire.AssistantID}) {
 		t.Fatalf("kept %v %v, want host1 by the built-in manager only", kept, err)
+	}
+	put("not a map")
+	if kept, err := keptMachines(ctx, cfg); err == nil || !strings.Contains(err.Error(), machinesKeptKey) {
+		t.Fatalf("a value that does not read: %v %v, want an error naming %s", kept, err, machinesKeptKey)
+	}
+
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+	schema := "setup_kept_" + randomHex(6)
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE") })
+	u, err := neturl.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	if kept, err := keptMachines(ctx, &Config{DatabaseURL: u.String()}); err != nil || len(kept) != 0 {
+		t.Fatalf("no hub_settings: %v %v, want nothing kept", kept, err)
+	}
+	var tables int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = $1`, schema).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("%d tables in %s afterwards (%v), want none: setup migrates nothing", tables, schema, err)
 	}
 }
 

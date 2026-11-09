@@ -408,7 +408,7 @@ func (e *setupEnv) localMachine(ctx context.Context, cfg *setupConfig) error {
 	kept, err := e.keptMachines(ctx, cfg.Config)
 	if err != nil {
 		e.report("config", false, "hub.json 里没有电脑，但读不了哪些电脑归管理者管（"+err.Error()+"），这次没补本机",
-			"在管理界面的「电脑」里加上这台电脑，或者数据库恢复后重跑 personad hub setup")
+			"看管理界面的「电脑」里有没有这台电脑，没有就加上；修好后重跑 personad hub setup")
 		return nil
 	}
 	if len(kept) > 0 {
@@ -435,7 +435,7 @@ func keptMachines(ctx context.Context, cfg *Config) (map[string]string, error) {
 	defer cancel()
 	database, err := db.Attach(ctx, cfg.DatabaseURL, db.HubSet)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read %s: %w", machinesKeptKey, err)
 	}
 	defer database.Close()
 	h := &Hub{cfg: cfg, store: database, logger: log.New(io.Discard, "", 0)}
@@ -444,7 +444,7 @@ func keptMachines(ctx context.Context, cfg *Config) (map[string]string, error) {
 		if errors.As(err, &pe) && pe.Code == "42P01" {
 			return nil, nil // no hub_settings: a hub from before managers kept machines
 		}
-		return nil, err
+		return nil, fmt.Errorf("read %s: %w", machinesKeptKey, err)
 	}
 	return h.devices.kept, nil
 }
