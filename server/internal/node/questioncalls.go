@@ -228,10 +228,20 @@ func (q *questionCalls) handBack(in hookInput, attempt string, outstanding []str
 	for _, id := range outstanding {
 		mark(id)
 	}
-	for _, id := range q.pending[key] {
+	pending := q.pending[key]
+	kept := pending[:0]
+	for _, id := range pending {
+		if _, done := q.completed[key+"\x00"+id.id]; done {
+			kept = append(kept, id) // a late PermissionRequest still consumes this exact completion
+			continue
+		}
 		mark(id.id)
 	}
-	delete(q.pending, key)
+	if len(kept) == 0 {
+		delete(q.pending, key)
+	} else {
+		q.pending[key] = kept
+	}
 	q.markHandBackLocked(attemptKey, now)
 	return true
 }

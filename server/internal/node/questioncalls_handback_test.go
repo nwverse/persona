@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -83,6 +84,11 @@ func TestQuestionHandBackSkipsAlreadyCompletedPending(t *testing.T) {
 	q.before(pre, now)
 	if id := q.pair(in, "a3", false, now); id != "toolu_third" {
 		t.Fatalf("an already-completed pending id blocked the next question: %q", id)
+	}
+	_, answered, stop, id := q.watch(context.Background(), in, "a0", false)
+	defer stop()
+	if id != "toolu_first" || !answered() {
+		t.Fatalf("the late first PermissionRequest lost its completed pairing: id=%q answered=%v", id, answered())
 	}
 }
 
