@@ -40,8 +40,10 @@ type WorkState struct {
 	Artifacts []WorkArtifact `json:"artifacts,omitempty"`
 	// CI is the manager's durable watch of the pull request this turn awaits.
 	CI *WorkCI `json:"ci,omitempty"`
-	// RetiredAt marks the latest todo retirement while its turn may still settle.
-	RetiredAt *time.Time `json:"retired_at,omitempty"`
+	// RetiredAt marks a todo retirement; RetiredTurnAt is the stopped turn as
+	// reported by its node, when it could be read at retirement.
+	RetiredAt     *time.Time `json:"retired_at,omitempty"`
+	RetiredTurnAt *time.Time `json:"retired_turn_at,omitempty"`
 	// Questions are what the user is to decide (on user), as the card asks them.
 	Questions []Question `json:"questions,omitempty"`
 	// InteractionID is the card the hub made for a decision (on user), while it is pending.

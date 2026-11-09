@@ -27,20 +27,44 @@ func (s *Service) retireTodoWork(keys ...[2]string) {
 		}
 		e, ok := s.work.entries[k]
 		if !ok {
-			e = &db.SessionWork{MachineID: k[0], SessionID: k[1], TurnAt: now}
+			e = &db.SessionWork{MachineID: k[0], SessionID: k[1]}
 			s.work.entries[k] = e
 		}
 		if e.InteractionID != "" {
 			delete(s.work.cards, e.InteractionID)
 		}
 		e.WakeAt, e.Work.WakeAt, e.Work.CI, e.InteractionID, e.Work.InteractionID = nil, nil, nil, "", ""
-		e.Work.RetiredAt = &now
+		e.Work.RetiredAt, e.Work.RetiredTurnAt = &now, nil
 		e.UpdatedAt = now
 		saved := *e
 		s.work.mu.Unlock()
 		s.saveWork(saved)
 		s.publishSoon()
+		s.bindRetiredTurn(k, now)
 	}
+}
+
+// bindRetiredTurn attaches the node's own stopped-turn timestamp to a durable
+// retirement. If it cannot be read, the marker stays until a new TurnStarted.
+func (s *Service) bindRetiredTurn(k [2]string, retiredAt time.Time) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, ok := s.session(ctx, k[0], k[1])
+	if !ok || c.Status != proto.StatusDone && c.Status != proto.StatusIdle || c.UpdatedAt.IsZero() {
+		return
+	}
+	s.work.mu.Lock()
+	current := s.work.entries[k]
+	if current == nil || current.Work.RetiredAt == nil || !current.Work.RetiredAt.Equal(retiredAt) {
+		s.work.mu.Unlock()
+		return
+	}
+	turn := c.UpdatedAt.UTC()
+	current.Work.RetiredTurnAt = &turn
+	current.UpdatedAt = time.Now().UTC()
+	saved := *current
+	s.work.mu.Unlock()
+	s.saveWork(saved)
 }
 
 // workStarted: a session began working (again). Whatever the manager was going to do for its last turn is off; a card
@@ -49,6 +73,8 @@ func (s *Service) workStarted(ctx context.Context, machine, sid string, now time
 	k := [2]string{machine, sid}
 	s.work.mu.Lock()
 	s.work.init()
+	s.work.started[k] = now
+	delete(s.work.viewed, k)
 	if s.work.triaging[k] {
 		s.work.generation[k]++
 	}
@@ -57,7 +83,7 @@ func (s *Service) workStarted(ctx context.Context, machine, sid string, now time
 		s.work.mu.Unlock()
 		return
 	}
-	e.Work.RetiredAt = nil // a later turn can work on a reopened task
+	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a later turn can work on a reopened task
 	by := "user"
 	if now.Sub(s.work.sent[k]) < 2*time.Minute {
 		by = "hub"
@@ -97,8 +123,13 @@ func (s *Service) workSeen(machine, sid string, at time.Time) {
 	if at.After(previousSeen) {
 		s.work.seen[k] = at
 	}
-	if s.work.triaging[k] && !at.Before(s.work.tried[k].turn) {
-		s.work.generation[k]++
+	started := s.work.started[k]
+	currentView := started.IsZero() || !at.Before(started)
+	if currentView {
+		s.work.viewed[k] = true
+		if s.work.triaging[k] {
+			s.work.generation[k]++
+		}
 	}
 	e, ok := s.work.entries[k]
 	if !ok || e.Work.Phase == "" {
@@ -108,7 +139,7 @@ func (s *Service) workSeen(machine, sid string, at time.Time) {
 	first := previousSeen.Before(e.TurnAt) && !at.Before(e.TurnAt)
 	phase, on, turn := e.Work.Phase, e.Work.On, e.TurnAt
 	var cancelled *db.SessionWork
-	if !at.Before(turn) && e.Work.CI != nil && e.WakeAt != nil {
+	if currentView && e.Work.CI != nil && e.WakeAt != nil {
 		e.Work.CI, e.Work.WakeAt, e.WakeAt = nil, nil, nil
 		e.UpdatedAt = time.Now().UTC()
 		saved := *e
@@ -154,9 +185,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	s.work.mu.Lock()
 	s.work.init()
 	prev, had := s.work.entries[k]
-	if had && prev.Work.RetiredAt != nil && !c.UpdatedAt.After(*prev.Work.RetiredAt) {
+	if had && prev.Work.RetiredAt != nil && (prev.Work.RetiredTurnAt == nil || sameTurn(c, *prev.Work.RetiredTurnAt) || !c.UpdatedAt.After(*prev.Work.RetiredTurnAt)) {
 		s.work.mu.Unlock()
-		return // the todo ended before this turn settled
+		return // the todo ended before this turn settled, or its identity is unknown
 	}
 	if s.work.triaging[k] {
 		s.work.mu.Unlock()

@@ -316,6 +316,7 @@ func TestCIWatchCancelsWhenUserViewsTurn(t *testing.T) {
 	s, f := workService(t)
 	c := stopped("ci", "PR #12 CI")
 	f.sessions["box"] = []proto.Session{c}
+	s.workStarted(ctx, "box", "ci", turnEnd.Add(-30*time.Second))
 	at := turnEnd.Add(10 * time.Minute)
 	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &at}}
 	startCIWatch(c, &e, turnEnd, "", "")
@@ -933,6 +934,121 @@ func TestCIWatchRetiredDuringSettleSurvivesRestartAndReopen(t *testing.T) {
 			got = entryOf(t, restarted, "ci")
 			if got.Work.RetiredAt != nil || got.WakeAt == nil || got.Work.CI == nil {
 				t.Fatalf("new turn did not register watch: %+v", got)
+			}
+		})
+	}
+}
+
+func TestCIRetirementUsesNodeTurnIdentityAcrossClockSkew(t *testing.T) {
+	for _, offset := range []time.Duration{-time.Hour, time.Hour} {
+		t.Run(offset.String(), func(t *testing.T) {
+			ctx := context.Background()
+			f := newFakeHub()
+			st := &workMemStore{}
+			c := stopped("ci", "PR #12 CI")
+			c.UpdatedAt = time.Now().UTC().Add(offset)
+			f.sessions["box"] = []proto.Session{c}
+			f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+			s := newServiceOn(t, f, st)
+			if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+				t.Fatal(err)
+			}
+			s.retireTodoWork([2]string{"box", "ci"})
+			e := entryOf(t, s, "ci")
+			if e.Work.RetiredTurnAt == nil || !e.Work.RetiredTurnAt.Equal(c.UpdatedAt) {
+				t.Fatalf("node identity not recorded: %+v", e)
+			}
+			restarted := newServiceOn(t, f, st)
+			if !restarted.loadWork(ctx) {
+				t.Fatal("could not restore retirement")
+			}
+			restarted.workTurnSettled(ctx, "box", "ci")
+			if e := entryOf(t, restarted, "ci"); e.Work.CI != nil || e.WakeAt != nil {
+				t.Fatalf("retired turn revived: %+v", e)
+			}
+			// A later completed turn can be recognized even if TurnStarted was
+			// missed during the manager restart: both times are from the node.
+			c.UpdatedAt = c.UpdatedAt.Add(time.Minute)
+			f.setSessions("box", c)
+			restarted.workTurnSettled(ctx, "box", "ci")
+			if e := entryOf(t, restarted, "ci"); e.Work.CI == nil || e.WakeAt == nil {
+				t.Fatalf("new node turn blocked: %+v", e)
+			}
+		})
+	}
+}
+
+func TestCIViewedDuringSettleIgnoresNodeClockSkew(t *testing.T) {
+	for _, offset := range []time.Duration{-time.Hour, time.Hour} {
+		t.Run(offset.String(), func(t *testing.T) {
+			ctx := context.Background()
+			s, f := workService(t)
+			localStart := time.Now().UTC().Add(-2 * time.Minute)
+			c := stopped("ci", "PR #12 CI")
+			c.UpdatedAt = localStart.Add(time.Minute).Add(offset)
+			f.sessions["box"] = []proto.Session{c}
+			f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+			s.workStarted(ctx, "box", "ci", localStart)
+			s.workSeen("box", "ci", localStart.Add(90*time.Second))
+			s.workTurnSettled(ctx, "box", "ci")
+			e := entryOf(t, s, "ci")
+			if e.Work.CI != nil || e.WakeAt != nil {
+				t.Fatalf("viewed turn gained watch: %+v", e)
+			}
+		})
+	}
+}
+
+func TestCIRetirementWithoutNodeIdentityWaitsForNewStart(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "PR #12 CI")
+	c.UpdatedAt = time.Now().UTC().Add(time.Hour)
+	f.sessions["box"] = []proto.Session{c}
+	f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+	// Node lookup is unavailable during retirement, and a future node timestamp
+	// cannot establish that this is a later turn.
+	f.answerNode(DeviceSessionGet, func(_ string, _ json.RawMessage) (any, error) { return nil, errors.New("offline") })
+	s.retireTodoWork([2]string{"box", "ci"})
+	e := entryOf(t, s, "ci")
+	if e.Work.RetiredAt == nil || e.Work.RetiredTurnAt != nil {
+		t.Fatalf("unexpected retirement: %+v", e)
+	}
+	// Restore ordinary node lookup for triage.
+	f.mu.Lock()
+	delete(f.nodes, DeviceSessionGet)
+	f.mu.Unlock()
+	s.workTurnSettled(ctx, "box", "ci")
+	if e := entryOf(t, s, "ci"); e.Work.CI != nil || e.WakeAt != nil {
+		t.Fatalf("unknown identity revived turn: %+v", e)
+	}
+	s.workStarted(ctx, "box", "ci", time.Now().UTC())
+	c.UpdatedAt = c.UpdatedAt.Add(time.Minute)
+	f.setSessions("box", c)
+	s.workTurnSettled(ctx, "box", "ci")
+	if e := entryOf(t, s, "ci"); e.Work.CI == nil || e.WakeAt == nil {
+		t.Fatalf("new start did not clear retirement: %+v", e)
+	}
+}
+
+func TestCIActiveWatchViewIgnoresNodeClockSkew(t *testing.T) {
+	for _, offset := range []time.Duration{-time.Hour, time.Hour} {
+		t.Run(offset.String(), func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := workService(t)
+			localStart := time.Now().UTC().Add(-2 * time.Minute)
+			s.workStarted(ctx, "box", "ci", localStart)
+			nodeTurn := localStart.Add(time.Minute).Add(offset)
+			wake := time.Now().Add(time.Minute)
+			e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: nodeTurn, WakeAt: &wake, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, WakeAt: &wake, CI: &proto.WorkCI{Number: 12}}}
+			s.putWork(ctx, e)
+			s.workSeen("box", "ci", localStart.Add(-time.Second))
+			if entryOf(t, s, "ci").Work.CI == nil {
+				t.Fatal("older view cancelled current watch")
+			}
+			s.workSeen("box", "ci", localStart.Add(90*time.Second))
+			if got := entryOf(t, s, "ci"); got.Work.CI != nil || got.WakeAt != nil {
+				t.Fatalf("view failed to cancel: %+v", got)
 			}
 		})
 	}

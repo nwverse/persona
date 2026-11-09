@@ -151,6 +151,8 @@ type workBook struct {
 	tried      map[[2]string]triedTurn // the turn a triage was last attempted on, and when
 	sent       map[[2]string]time.Time // when the manager itself last sent the session something
 	seen       map[[2]string]time.Time // the turn whose first look was recorded
+	started    map[[2]string]time.Time // local time of the latest turn-start event
+	viewed     map[[2]string]bool      // a view since that event
 	approved   map[[2]string]approval  // a risky next step the user said yes to, for the wait it ends
 	// answering marks cards whose answer is being delivered to the agent: a repeated callback in the send window
 	// (a redelivered webhook, a second tap, phone and watch together) is the same answer, not a second one.
@@ -180,12 +182,20 @@ func (b *workBook) init() {
 		b.tried = map[[2]string]triedTurn{}
 		b.sent = map[[2]string]time.Time{}
 		b.seen = map[[2]string]time.Time{}
+		b.started = map[[2]string]time.Time{}
+		b.viewed = map[[2]string]bool{}
 		b.approved = map[[2]string]approval{}
 		b.answering = map[string]bool{}
 		b.writes = map[[2]string]*sync.Mutex{}
 	}
 	if b.generation == nil {
 		b.generation = map[[2]string]uint64{}
+	}
+	if b.started == nil {
+		b.started = map[[2]string]time.Time{}
+	}
+	if b.viewed == nil {
+		b.viewed = map[[2]string]bool{}
 	}
 }
 
@@ -464,7 +474,7 @@ func (s *Service) putTriageWork(e db.SessionWork, generation uint64) bool {
 		s.work.mu.Unlock()
 		return false
 	}
-	if seen := s.work.seen[key]; e.Work.CI != nil && !seen.IsZero() && !seen.Before(e.TurnAt) {
+	if e.Work.CI != nil && s.work.viewed[key] {
 		e.WakeAt, e.Work.WakeAt, e.Work.CI = nil, nil, nil
 	}
 	e.UpdatedAt = time.Now().UTC()
@@ -512,7 +522,7 @@ func (s *Service) workReport(ctx context.Context) *WorkReport {
 			continue // unsure: nothing shown
 		}
 		w := e.Work
-		w.CI, w.RetiredAt = nil, nil // internal state stays in the manager's store
+		w.CI, w.RetiredAt, w.RetiredTurnAt = nil, nil, nil // internal state stays in the manager's store
 		w.TurnAt = e.TurnAt
 		r.Sessions = append(r.Sessions, SessionWork{MachineID: e.MachineID, SessionID: e.SessionID, Work: w})
 	}
