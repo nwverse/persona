@@ -43,8 +43,9 @@ func Xlsx(src []byte, title string) ([]byte, error) {
 	return writeXlsx(spec, title)
 }
 
-// XlsxFromCSV is a one-sheet workbook of CSV src, its first row the header. Numbers
-// stay numeric only when serialization preserves their exact value; IDs like 007 stay text.
+// XlsxFromCSV is a one-sheet workbook of CSV src, its first row the header. Integers stay
+// numeric only when serialization keeps them exact, decimals when it changes no more than
+// 15-digit rounding; IDs like 007 stay text.
 func XlsxFromCSV(src []byte, name, title string) ([]byte, error) {
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(src, []byte("\xef\xbb\xbf"))))
 	r.FieldsPerRecord = -1

@@ -7,10 +7,16 @@ import (
 
 // csvNumberExact compares the original decimal with the number cellXML would write.
 // Comparing floats here would already have lost the digits CSV needs to preserve.
+// Integer literals are often identifiers, so they must survive exactly. Decimals and
+// exponents are measurements (a float's shortest form often has 16-17 digits): they may
+// round to the 15 significant digits a spreadsheet keeps, but must not change further.
 func csvNumberExact(src string, f float64) bool {
 	digits, scale, negative, ok := csvDecimal(src)
 	if !ok {
 		return false
+	}
+	if strings.ContainsAny(src, ".eE") {
+		digits, scale = csvRound(digits, scale, 15)
 	}
 	written, writtenScale, writtenNegative, ok := csvDecimal(strconv.FormatFloat(f, 'g', 15, 64))
 	return ok && digits == written && scale == writtenScale && negative == writtenNegative
@@ -52,4 +58,27 @@ func csvDecimal(src string) (digits string, scale int, negative, ok bool) {
 	digits = strings.TrimRight(src, "0")
 	scale += len(src) - len(digits)
 	return digits, scale, negative, true
+}
+
+// csvRound rounds a csvDecimal (no leading or trailing zeros) half up to n significant digits.
+func csvRound(digits string, scale, n int) (string, int) {
+	if len(digits) <= n {
+		return digits, scale
+	}
+	b := []byte(digits[:n])
+	scale += len(digits) - n
+	carry := digits[n] >= '5'
+	for i := n - 1; carry && i >= 0; i-- {
+		if b[i] == '9' {
+			b[i] = '0'
+		} else {
+			b[i]++
+			carry = false
+		}
+	}
+	if carry {
+		b = append([]byte{'1'}, b...)
+	}
+	rounded := strings.TrimRight(string(b), "0")
+	return rounded, scale + len(b) - len(rounded)
 }
