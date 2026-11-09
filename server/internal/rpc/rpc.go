@@ -9,6 +9,7 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -229,12 +230,21 @@ func (p *Peer) write(m message) error {
 	return p.writeContext(context.Background(), m)
 }
 
+// encodeLine is json.Marshal(m) and its newline, encoded into one buffer: the same bytes and errors without copying
+// the line once more to append the newline.
+func encodeLine(m message) ([]byte, error) {
+	var b bytes.Buffer
+	if err := json.NewEncoder(&b).Encode(m); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
 func (p *Peer) writeContext(ctx context.Context, m message) error {
-	b, err := json.Marshal(m)
+	b, err := encodeLine(m)
 	if err != nil {
 		return err
 	}
-	b = append(b, '\n')
 	if p.Limits.FrameBytes > 0 && len(b) > p.Limits.FrameBytes {
 		return errFrameBudget
 	}
@@ -310,6 +320,12 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 
 // Notify sends a one-way event.
 func (p *Peer) Notify(event string, params any) error {
+	// Bytes already encoded go into the envelope as they are: its Marshal checks, compacts and escapes them as this
+	// one would, with the same errors, so the line is the same without encoding them twice (a computer's session list
+	// each time it changes). An empty one is what json.Marshal says it is (an error).
+	if raw, ok := params.(json.RawMessage); ok && len(raw) > 0 {
+		return p.write(message{Event: event, Params: raw})
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
