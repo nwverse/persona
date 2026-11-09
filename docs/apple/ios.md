@@ -422,6 +422,19 @@ Chat page:
   toast explains. BeautifulUI `BUIPermissionForm` asks Approve Bash?, Approve / Always approve (scope explained) / Deny,
   Codex reason above command, input means deny with reason; DEBUG `-showSampleCodexApproval YES`, `-showSampleCodexQuestion YES`,
   `CodexCardsTests` mock `MOCK_CODEX=1`, includes BeautifulUI.
+- MCP forms and links (#2322, `docs/protocol/protocol.md` "MCP elicitation"; `Shared/Elicitation.swift`, `Views/Interactions/ElicitationForm.swift`): the iOS app alone declares
+  `elicitation` in `client_hello`, with `platform` / `version` set to the two halves of its `X-Persona-Client` so the hub also lists these cards in `GET /api/v1/interactions`
+  (`LiveConnection.helloFeatures`); the Mac and visionOS apps don't, so with only those open the request goes to the terminal. The rules are the web's and Android's
+  (`Elicitation`: the bounded JSON Schema subset, validation, the answer), unit-tested on the web's cases (`ElicitationTests`). MCP Form Needs You: who asks (subagent, MCP server
+  and its config source), the message, a row per field in the server's order (`JSONDecoder` drops key order, so `Elicitation.withFieldOrder` reads it off the raw event or
+  pending list and keeps it in the app's own `app_field_order`): text, email, URL and date fields with their keyboards, `SecretField` for passwords (never prefilled, never kept,
+  cleared as sent), Yes / No with neither picked, one choice or several as option rows; a bad value says so under the field and keeps Submit off. Decline / Submit, Cancel under
+  them; a form outside the subset says so and offers Decline / Hand Back to Computer. MCP Link Needs You: who asks, where it opens, the whole URL, Open Link in the app's link card
+  (the chat's `openLink`, as every link in a conversation; signing in again there is accepted), and Continue only once this card opened that exact http(s) link.
+  What was typed and opened is kept per card in memory while it is pending (`ElicitationDrafts`, never a secret), so folding the card loses nothing. Receipts
+  (`Answered.answerLines`) say declined, canceled or opened, or list the values with secrets hidden. Siri / Shortcuts never accept one (`ApproveFirstIntent`), and the
+  watch summary leaves them out (`Interaction.showsOnWatch`: an older watch build would fail to decode the whole summary). Not pushed while the app is closed (#2433).
+  `ElicitationCardTests` mock `MOCK_ELICITATION=1` / `=unsupported`.
 - Input: above (at most 4 photos, resized 1600px; library videos uploaded as files to computer, message file card, protocol.md ("Sending video"); / shortcuts; Send becomes red Interrupt while working).
 - Navigation subtitle: Machine · Model · State.
 
