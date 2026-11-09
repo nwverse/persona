@@ -6,6 +6,7 @@
 import { t } from "../i18n";
 import { api, ApiError, errorText, sessionPath } from "./api";
 import { pickedLauncher, pickedModel, conversationKey } from "./assistant-chat";
+import { startConversation } from "./assistant-start";
 import { uuid } from "./format";
 import { navigate } from "./router";
 import { getState, refreshAssistant, setOutbox } from "./store";
@@ -13,7 +14,7 @@ import { chooseManager, chosenManager, noteConversation, otherManager, ownerHead
 import { apiOp, isTransient } from "./ops";
 import { echoed, isEcho, type Seen, type Sent } from "./echo";
 import { parseUserText, type ChatLine, type UserMessage } from "./turns";
-import type { AssistantInfo, Item, Session } from "./types";
+import type { AssistantInfo, Item } from "./types";
 
 export interface OutboxImage {
   mime: string;
@@ -87,6 +88,7 @@ export function noteWritten(id: string, at: number) {
 /** When a line was written, for placeFailed: an exchange's message (this page's time for one sent from here; else the
  *  computer's, two minutes' slack for its clock, so a near tie leaves the failed message below); none for other lines. */
 function lineWritten(line: ChatLine): number | undefined {
+  if (line.kind === "supervision") return line.lines.map(lineWritten).find((at) => at !== undefined);
   if (line.kind !== "segment" || !line.seg.user) return undefined;
   const mine = line.seg.user.client_msg_id ? written.get(line.seg.user.client_msg_id) : undefined;
   if (mine !== undefined) return mine;
@@ -134,6 +136,12 @@ function update(key: string, id: string, patch: Partial<OutboxEntry>) {
 }
 
 const claimedBy = new Map<string, Set<string>>();
+
+/** A fresh page for the tests: which transcript lines answered a sent message is kept for as long as the page runs
+ *  (one answers no later message with the same words), so cases with the same chat and line ids start without it. */
+export function resetOutboxClaimsForTests() {
+  claimedBy.clear();
+}
 
 /** Drops what the transcript now has (ChatView calls it with the latest user messages and the tagged items). */
 export function settleOutbox(mid: string, sid: string, users: Seen[]) {
@@ -243,7 +251,7 @@ export async function askPersona(text: string): Promise<void> {
     return;
   }
   const chosen = chosenManager() ?? undefined;
-  const r = await api<{ session: Session }>("/assistant/conversations", { method: "POST", json: { prompt: text, main: true } });
+  const r = await startConversation({ prompt: text, main: true });
   // the manager the page showed when it started (it named that one): the conversation's requests go there
   noteConversation(r.session.session_id, chosen);
   noteSent(r.session.machine_id, r.session.session_id, { text });
@@ -265,7 +273,7 @@ export async function askPersonaOf(owner: string | undefined, text: string): Pro
     adoptConversation(owner, a.main);
     return { sent: sendToMain(a.machine_id, a.main, text) };
   }
-  const r = await api<{ session: Session }>("/assistant/conversations", { method: "POST", json: { prompt: text, main: true }, headers });
+  const r = await startConversation({ prompt: text, main: true }, headers);
   adoptConversation(owner, r.session.session_id);
   noteSent(r.session.machine_id, r.session.session_id, { text });
   void refreshAssistant().catch(() => {});

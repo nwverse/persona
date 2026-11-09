@@ -763,6 +763,7 @@
       "type": "object",
       "properties": {
         "kind": {"type": "string", "enum": ["docs", "meetings", "events"]},
+        "source": {"type": "string", "description": "The connector the item belongs to. A program may leave it out: the knowledge base sets it to the calling connector's id, whatever the program sends."},
         "id": {"type": "string"},
         "title": {"type": "string"},
         "url": {"type": "string"},

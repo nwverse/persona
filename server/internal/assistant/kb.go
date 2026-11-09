@@ -72,11 +72,14 @@ type kbState struct {
 	passed  bool // the one-time passes ran (once a process)
 	notOpen time.Time
 
-	mu         sync.Mutex
-	archivedAt map[string]time.Time        // connector id → when its archive was last asked (kb_sources.go)
-	agentAt    map[string]time.Time        // agent → when its turn last went into a project timeline (kb_bus.go)
-	waiting    []assistantwire.KBAgentTurn // turns that came before it opened
-	postsDirty atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
+	// sourceWrites lets deletion finish after already running connector reads and writes.
+	sourceWrites sync.Mutex
+	postWrites   sync.Mutex // separate: a connector read may synchronously submit posts
+	mu           sync.Mutex
+	archivedAt   map[string]time.Time        // connector id → when its archive was last asked (kb_sources.go)
+	agentAt      map[string]time.Time        // agent → when its turn last went into a project timeline (kb_bus.go)
+	waiting      []assistantwire.KBAgentTurn // turns that came before it opened
+	postsDirty   atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
 
 	history   kbHistoryShared  // the history import (kb_history.go)
 	selection kbSelectionState // what is brought in and kept (kb_selection.go)

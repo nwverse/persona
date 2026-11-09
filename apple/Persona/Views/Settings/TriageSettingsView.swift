@@ -5,6 +5,7 @@ import SwiftUI
 /// against on or as steps in time (`TriageExampleView`, #1413).
 struct TriageSettingsView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var model: TriageSettingsModel?
 
     var body: some View {
@@ -86,21 +87,14 @@ struct TriageSettingsView: View {
 
     private func switchRow(_ key: WritableKeyPath<TriageSwitches, Bool>, _ title: String, _ hint: String, _ symbol: String,
                            id: String) -> some View {
-        Toggle(isOn: Binding {
+        // One line, as its description is under it; at the accessibility sizes as many as it takes, where one line cut
+        // it to its first two characters (#1796).
+        SettingsSwitchRow(title: title, detail: hint, symbol: symbol, titleLines: typeSize.isAccessibilitySize ? nil : 1,
+                          accessibilityID: id, isOn: Binding {
             model?.switches?[keyPath: key] ?? false
         } set: { on in
             Task { await model?.set(key, on) }
-        }) {
-            Label {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title).lineLimit(1)
-                    Text(hint).font(Theme.Font.caption).foregroundStyle(.secondary)
-                }
-            } icon: {
-                ThemedIcon(symbol)
-            }
-        }
+        })
         .disabled(model?.canChange(key) != true)
-        .accessibilityIdentifier(id)
     }
 }

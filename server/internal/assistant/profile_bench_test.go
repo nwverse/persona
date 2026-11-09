@@ -4,12 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+// isolated runs the calling test again in a fresh process and reports whether this is that process. TotalAlloc is
+// process-wide and other tests can leave asynchronous work alive, so allocation bounds are measured there; the parent
+// returns once the child passed.
+func isolated(t *testing.T) bool {
+	t.Helper()
+	const child = "PERSONA_TEST_ALLOCATION_CHILD"
+	if os.Getenv(child) == "1" {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
+	cmd.Env = append(os.Environ(), child+"=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("isolated allocation check: %v\n%s", err, output)
+	}
+	return false
+}
 
 // assistantInventory is a manager whose machine lists 8,200 sessions, 14 of them the assistant's conversations.
 func assistantInventory(tb testing.TB) *Service {
@@ -52,6 +74,9 @@ func BenchmarkAssistantViewLargeInventory(b *testing.B) {
 // The view copies only the assistant's 14 conversations out of the machine's 8,200 sessions: 100,665 bytes a view
 // measured, where it allocated 12.3 MB when it copied the whole list to pick them.
 func TestAssistantViewCopiesOnlyItsConversations(t *testing.T) {
+	if !isolated(t) {
+		return
+	}
 	s := assistantInventory(t)
 	ctx := context.Background()
 	const runs = 50

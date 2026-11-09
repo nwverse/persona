@@ -24,14 +24,14 @@ const adminUploadPath = "/api/v1/admin/extensions/upload"
 // legacyAdminUploadPath is adminUploadPath before #1844, where the admin UI out there still uploads.
 const legacyAdminUploadPath = "/api/v1/admin/plugins/upload"
 
-// Previews stage packages of up to plugin.PackageMost bytes on disk for 10 minutes: one at a time, and at most
-// pluginPreviewsPer in pluginPreviewWindow, so a stolen session cannot fill the disk.
+// Previews stage packages of up to extension.PackageMost bytes on disk for 10 minutes: one at a time, and at most
+// extensionPreviewsPer in extensionPreviewWindow, so a stolen session cannot fill the disk.
 const (
 	extensionPreviewsPer   = 10
 	extensionPreviewWindow = 10 * time.Minute
 )
 
-// pluginGate holds previews to one at a time and pluginPreviewsPer a window.
+// extensionGate holds previews to one at a time and extensionPreviewsPer a window.
 type extensionGate struct {
 	mu     sync.Mutex
 	busy   bool
@@ -64,7 +64,7 @@ func (g *extensionGate) begin(now time.Time) (end func(), retry time.Duration, b
 	}, 0, false
 }
 
-// AdminPlugins is GET /api/v1/admin/plugins.
+// AdminExtensions is GET /api/v1/admin/plugins.
 type AdminExtensions struct {
 	Extensions []any `json:"extensions"`
 	CanInstall bool  `json:"can_install"`
@@ -237,6 +237,7 @@ func (h *Manager) adminExtensionRoutes(mux *http.ServeMux) {
 			writeExtensionResponseError(w, r, http.StatusBadRequest, "rollback_failed", err)
 			return
 		}
+		h.extensionUpgrades().rolledBackByUser(r.Context(), np.Record.ID, p.Record.Version)
 		h.logf("admin: rolled plugin %s back to %s", np.Record.ID, np.Record.Version)
 		writeJSON(w, detailOut(r, ps.detail(r.Context(), np)))
 	}))
