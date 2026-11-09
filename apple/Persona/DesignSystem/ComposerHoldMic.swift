@@ -106,7 +106,7 @@ struct ComposerHoldMic: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(dictation.isListening ? String(localized: "Stop Dictation") : String(localized: "Dictate"))
             .accessibilityHint("Touch and hold to dictate. Slide left to cancel, or up to keep dictating.")
-            .accessibilityAction { ComposerMicButton.toggle(dictation, text: $text) }
+            .accessibilityAction { dictation.toggle(into: $text) }
             .accessibilityIdentifier(id)
             .shellScaled()
     }
@@ -137,7 +137,7 @@ struct ComposerHoldMic: View {
                     hold.finish(DictationHold.onRelease(value.translation, velocity: value.velocity), dictation, text: $text,
                                 reduceMotion: reduceMotion)
                 } else if !decided {
-                    ComposerMicButton.toggle(dictation, text: $text) // a tap
+                    dictation.toggle(into: $text) // a tap
                 }
                 decided = false
             }

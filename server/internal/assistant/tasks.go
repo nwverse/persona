@@ -22,6 +22,17 @@ import (
 // task, an answered question, a receipt, a message sent straight to a task — is the conversation's feed, kept apart
 // from Claude's transcript.
 
+// PlanReroute records that a flexible task was moved off its requested machine because its launcher failed a health
+// check, naming both machines by their display names and the health check's reason, so a card/receipt can show where
+// the work was meant to run and where it landed instead (#2271).
+type PlanReroute struct {
+	// FromMachine is the display name of the machine the task was first placed on; it stays the original across
+	// repeated moves. ToMachine is where it runs now; Reason is healthDetour's note (failure kind and clipped error).
+	FromMachine string `json:"from_machine"`
+	ToMachine   string `json:"to_machine"`
+	Reason      string `json:"reason,omitempty"`
+}
+
 // PlanTask is one task of a plan, as the assistant proposed it and the user may have edited it.
 type PlanTask struct {
 	Title   string `json:"title"`
@@ -43,6 +54,9 @@ type PlanTask struct {
 	// assistant.start_requested_tasks on it starts without the card's "Start".
 	UserRequested bool   `json:"user_requested,omitempty"`
 	Why           string `json:"why,omitempty"`
+	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
+	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
+	Reroute *PlanReroute `json:"reroute,omitempty"`
 	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work; ExpectMinutes: how long it
 	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
 	DoneWhen      []string `json:"done_when,omitempty"`
@@ -51,6 +65,16 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
+	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
+	// when the plan is made; "" for none.
+	Project string `json:"project,omitempty"`
+	// Attachments: pictures and files the user gave the assistant for this task, by their paths on AttachFrom, the
+	// assistant's computer (#2437, attachments.go); Mentioned: those of them the prompt names by path without listing
+	// them. Checked when the plan is made; copied to the task's computer when it starts. AttachFrom and Mentioned are
+	// the server's, never what the tool call says.
+	Attachments []string `json:"attachments,omitempty"`
+	Mentioned   []string `json:"mentioned,omitempty"`
+	AttachFrom  string   `json:"attach_from,omitempty"`
 	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
 	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
 	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
@@ -142,6 +166,16 @@ type tasksState struct {
 	reusing map[string]bool
 	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome, waitTaskOutcomes).
 	outcomeRuns sync.WaitGroup
+	// todayLocks: a conversation's id -> the lock ensureToday holds from looking for the day's "Today" card to
+	// appending it, so that concurrent opens of a chat make one card, not one each.
+	todayLocks cardLocks
+	// planEdits: a plan's lock, by its id, while one of its started tasks changes (patchPlanTask; kept only while held or
+	// waited on, as a card's). The tasks are one blob that movePlan writes whole, so two tasks changing at once (their
+	// starts failing together) would each write back the other's old fields.
+	planEdits cardLocks
+	// trustMu serializes the read-modify-writes of tasks.trust (trustKinds, forgetTrust), so that two plans
+	// remembered at once, or a forget racing a remember, do not drop each other's kinds.
+	trustMu sync.Mutex
 }
 
 func newTasksState() tasksState {
@@ -216,6 +250,29 @@ func (s *Service) movePlan(ctx context.Context, p *TaskPlan, from string) (bool,
 	}
 	raw, _ := json.Marshal(p.Tasks)
 	return st.UpdateTaskPlan(ctx, p.ID, from, p.State, raw, p.UpdatedAt)
+}
+
+// patchPlanTask changes task i of started plan planID with change, writes the plan back and tells the apps. The plan
+// stays locked from reading it until the apps are told, so what its other tasks record meanwhile stays, and the apps get
+// the plan in the order it was written (they keep the last one they got). Telling them is a one-way broadcast, so the
+// lock never waits on an answer; change must not call the hub or a node. A plan with no task i, or not started (any
+// more), is left as it is.
+func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, change func(*PlanTask)) error {
+	s.tasks.planEdits.acquire(planID)
+	defer s.tasks.planEdits.release(planID)
+	p, err := s.loadPlan(ctx, planID)
+	if err != nil {
+		return err
+	}
+	if i < 0 || i >= len(p.Tasks) || p.State != planStarted {
+		return nil
+	}
+	change(&p.Tasks[i])
+	if ok, err := s.movePlan(ctx, p, planStarted); err != nil || !ok {
+		return err
+	}
+	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	return nil
 }
 
 // appendFeed adds an item to a conversation's feed and tells the clients.
@@ -338,27 +395,52 @@ func trustKey(t PlanTask) string {
 	return t.Machine + "|" + t.Cwd + "|" + kind
 }
 
+// trustedKinds is the kinds the user lets start without asking; none when they cannot be read, so that a plan asks.
+// What writes tasks.trust reads it with trustedKindsErr instead.
 func (s *Service) trustedKinds(ctx context.Context) map[string]bool {
+	have, err := s.trustedKindsErr(ctx)
+	if err != nil {
+		s.logf("tasks: trust: read: %v", err)
+		return map[string]bool{}
+	}
+	return have
+}
+
+// trustedKindsErr is trustedKinds with the read's error: a write built on a failed read would replace every kind
+// remembered before.
+func (s *Service) trustedKindsErr(ctx context.Context) (map[string]bool, error) {
 	out := map[string]bool{}
 	st := s.store()
 	if st == nil {
-		return out
+		return out, nil
 	}
 	var keys []string
-	if ok, err := st.Setting(ctx, trustSetting, &keys); err == nil && ok {
+	ok, err := st.Setting(ctx, trustSetting, &keys)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		for _, k := range keys {
 			out[k] = true
 		}
 	}
-	return out
+	return out, nil
 }
 
+// trustKinds remembers the kinds of tasks so that similar plans start without asking. When the kinds remembered
+// before cannot be read it remembers nothing: the next similar plan asks again, and no kind is lost.
 func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 	st := s.store()
 	if st == nil {
 		return
 	}
-	have := s.trustedKinds(ctx)
+	s.tasks.trustMu.Lock()
+	defer s.tasks.trustMu.Unlock()
+	have, err := s.trustedKindsErr(ctx)
+	if err != nil {
+		s.logf("tasks: trust: not remembering %d tasks' kinds: read: %v", len(tasks), err)
+		return
+	}
 	for _, t := range tasks {
 		have[trustKey(t)] = true
 	}
