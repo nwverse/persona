@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// execHub replaces this process with `self hub run`: the hub runs as it did before the supervisor (its own pid, the
-// container's signals straight to it).
-func execHub(self string, env []string) error {
-	return syscall.Exec(self, []string{self, "hub", "run"}, env)
+// execHub replaces this process with `bin args…` (`personad hub run`, `persona-hub run`): the hub runs as it did
+// before the supervisor (its own pid, the container's signals straight to it).
+func execHub(bin string, args, env []string) error {
+	return syscall.Exec(bin, append([]string{bin}, args...), env)
 }
 
 // ownGroup has cmd start a session of its own, which is a process group of its own too. What it starts stays in that

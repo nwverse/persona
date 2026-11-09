@@ -49,6 +49,23 @@ As part of moving hub business logic into managers (`docs/assistant/assistant.md
 - **Visible differences**: only those under "disconnected" above. The old connector interface the hub read one chat at a time (`connector.Chats`; no connector implements it since the Lark gateway path was removed)
   is no longer read; plugin posts never used it.
 
+## Deleting a connector's saved knowledge (#1836)
+
+The connector settings actions `DELETE /api/v1/connectors/{id}/archive` and `DELETE /api/v1/connectors/{id}/data` share the same knowledge-base cleanup.
+The former switches off knowledge ingestion; the latter switches off the connector and also removes its Inbox entries. They remove:
+
+- Chats and people owned by the connector, including conversations filed under its declared `archive_sources`, with messages, attachments and summaries.
+- Archived posts whose `source` is this connector, including their Markdown and metadata; the Moments index is rewritten from the remaining posts.
+- Documents, meetings and events whose `source` is this connector, with their database index rows.
+- References to the removed entities in projects, the connector's archive cursor and deleted chats' history-import state. Affected projects are marked dirty for rewriting from the remaining content.
+
+The deletion result and audit include `chats`, `people`, `posts` and `items` counts; the HTTP result also includes `inbox` (zero for archive-only deletion).
+New connector ingestion records `connector` on chats and people and `source` on items; document links discovered in chats inherit the chat's connector.
+These fields identify the writer separately from the archive namespace. Explicit ownership prevents one connector from deleting another's records even when their archive source names overlap.
+For older chats and people without `connector`, the connector's own namespace and its unshared archive aliases remain usable for deletion; another registered connector's ID is never an alias for this purpose.
+Legacy items without `source` are deleted only when `where` identifies a chat being deleted. Items without a known owner or source chat, posts without `source`, and legacy records under shared aliases remain saved because their writer cannot be established safely. Old timeline lines that identify chats only by a shared display name also remain; deleting those lines would risk removing another source's history.
+Turning knowledge ingestion off stops items as well as conversations and posts (`docs/extensions/connectors.md`, "Settings › Connectors"). Re-enabling it lets the connector sync again from the reset cursor.
+
 ## Recordings (#3235)
 
 Transcribed text from phone recordings (and watch recordings relayed through the phone) is synced by the phone via `PUT /api/v1/recordings/{id}` ([protocol.md](../protocol/protocol.md) ("Recording sync"), [recording.md](../apple/recording.md)); audio is not uploaded.
@@ -81,6 +98,8 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     messages/YYYY-MM-DD.md  # Full text, one file per day, appended to (imported history merged in); deleted after 365 days
     attachments/YYYY-MM-DD/ # Images, files; deleted after 30 days (per source: kb.attachment_days_by_source)
     summary.md              # Compressed context (AI-maintained, rolling updates)
+    .receipts.json          # Live-ingestion source/chat message IDs and original times (bookkeeping, not searched)
+    .ingest.json            # Pending live-ingestion recovery intent, removed after completion
   people/<person id>/       # One directory per person: Lark lark-<userId>, mail mail-<address>
     meta.json               # Name, chats, linked projects, tags
     summary.md              # Who they are, relationship to me, recent conversations with me
@@ -110,6 +129,8 @@ Every chat, person, project, document, meeting and event has three fields, gener
 | `importance` | `P0` / `P1` / `P2` / `P3` | Importance: P0 critical (manager, core project, production incident), P1 important, P2 normal, P3 ignorable |
 | `relevance` | 0–100 | Relevance to me: directly addressed / my responsibility → high; merely seen in a group → low |
 | `tags` | String array | No preset list; AI generates 2–6 short terms, preferring existing tags (`kb_tags` returns existing tags and counts) |
+
+A value the model writes that doesn't fit is dropped on its own, not with the rest of its answer. An `importance` other than `P0`–`P3` is ignored. A `relevance` written as a numeric string (`"80"`) or a fraction counts as that number, rounded. Anything else, including a number outside 0–100, is ignored and the existing score stays (`server/internal/kb/score.go`, #1099). Before this, a quoted score failed the chat's whole summary, a project's rewrite, a recording's title and summary, or a batch of up to 40 tagged items.
 
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
@@ -171,6 +192,45 @@ Every chat, person, project, document, meeting and event has three fields, gener
    Messages outside text retention are never written: initial chat archives, initial email ingestion and imported history all stop at midnight on the earliest retained day (`kb.Engine.textCutoff`,
    using the same `text_days` as cleanup's `Engine.Prune`),
    otherwise another initially archived chat writes expired daily files again after cleanup (observed in production 2026-11-02: 47 returned 6 seconds after deletion).
+
+### Connector replay and recovery (#1343)
+
+Live connector batches go through `Engine.Ingest`. A nonempty `SourceMessage.ID` is a stable identity within the exact source and chat, recorded in that chat's
+`.receipts.json`. `Position` is a pagination token, not an identity. Repeated or reordered IDs add no line and change neither `messages` nor `pending`; distinct IDs
+with identical timestamp, sender and text remain distinct. The archive is append-only: the first durable version of an ID wins, so redelivering an edited source
+message does not update its old text or attachments. Sources that need to archive revisions must give those revisions distinct IDs.
+
+Ingestion installs `.ingest.json` before replacing any affected day file. It holds complete intended day contents (preserving all original bytes), receipts and chat
+metadata, including both counters. Each file is replaced through a temporary file, flushed and renamed. Recovery repeats those replacements and removes the intent
+only after all succeed. A writable `NewStore` finishes pending intents before returning; `Ingest`, history, compression and archive metadata updates also recover
+before reading counters. Until recovery succeeds, other writes to that chat refuse to overwrite the pending snapshots, timezone conversion waits, and cleanup
+keeps the files. A read-only open refuses an unfinished intent because it cannot repair it. Remove the filesystem obstruction and retry the operation or reopen
+the writable store; retain the intent for recovery. The directory has one owning writer, with concurrent callers serialized by the Store's locks. Operations needing
+both persistence locks acquire metadata before message files, matching project commit's frozen-input check when it reads the timeline.
+
+The connector checkpoint advances only after every batch on its page succeeds, using atomic replacement so a failed replacement preserves the previous cursor.
+A failed later batch, an interrupted ingestion, or failure between ingestion and checkpoint can therefore replay a page without adding any already receipted ID.
+This transaction covers archive text, identity and chat metadata; people/document indexing and change notifications remain derived, best-effort work. A replay
+refreshes the chat's database index from its durable metadata. Compression compares both the latest timestamp and pending count before clearing work or advancing
+its coverage boundary; distinct IDs arriving during a model call can share the same timestamp or minute. A refusal uses the same snapshot gate: it settles an
+unchanged batch without a summary, but leaves concurrent work pending and eligible without adding a refusal cooldown. Ingesting a new ID in a previously
+settled minute moves coverage back to that minute so later processing can read it. Other model failures retain their backoff; paused or cancelled calls do not
+settle pending work.
+
+New attachment filenames use a full SHA-256 digest of the raw message ID, plus the attachment index and bounded extension, under `attachments/<day>/messages/`.
+The separate subdirectory also protects old filenames that happen to resemble the new hashes.
+This avoids the older sanitized-name collisions from punctuation, case-insensitive filesystems and truncated long IDs. Distinct raw IDs cannot overwrite each
+other's saved attachment through those filename collisions. Missing IDs use a fresh random filename per attachment, preserving append behavior without inventing
+a durable source identity. Existing filenames and Markdown links stay untouched; a known receipted ID skips downloads on replay, including after restart. The
+first newly receipted delivery from a legacy unreceipted archive may create a new hashed file alongside its old file; it does not overwrite or relink that old file.
+Attachment retention still deletes the same day directories.
+
+Compatibility is explicit: messages without IDs keep the previous append behavior, and a retry may append them again; a `Position` or text hash cannot safely
+invent an identity. Existing Markdown has no IDs to reconstruct. The first newly receipted delivery can therefore repeat an older unreceipted line with matching
+text. Direct `AppendMessages` writes and imported history keep their existing behavior and do not reconstruct live receipts; history's formatted-text matching
+remains described below. No public message wire fields or Markdown line format change. Receipts expire with their original text day during pruning (original
+instants keep them correct across timezone changes). Pruning does not decrement `messages` or `pending`, matching existing behavior. Forgetting a source removes
+its entire chat directories, including receipts and any completed recovery state, so importing it again is allowed.
 
 ### History import
 
@@ -433,6 +493,8 @@ Reworked after feedback on 2026-10-31: "I find results but can't locate them aft
 - Search as you type (#2632): the Engine remembers data read by the previous search, then only `stat`s and rereads changes: directory listings (directory mtime),
   original and lowercase file content (mtime + size, up to 64 MB total; excess is read every time), and entries of each kind (mtime + size of all JSON files).
   Files and directories changed within 2 seconds are not cached, avoiding invisible same-timestamp rewrites with unchanged size. On synthetic ~33 MB archives (37k files), median warm search ~360 ms → 85 ms, cold ~350 ms → 270 ms (`go test -bench BenchmarkFind ./internal/kb`, median of 5); cache ~35 MB, results identical to uncached (`find_test.go`). 35 MB is a lower bound: the synthetic data has almost no uppercase, so original and lowercase are the same string stored once; files with uppercase (English names, Build, etc.) need both, roughly 2× text size. With uppercase on every line, the same archive reaches the 64 MB cap (36k of 37k files cached, others reread); warm search remains ~85 ms.
+- Find keeps of each file only what a result can show: its first 3 distinct matching lines and a count up to 99 (`hitsPerResult`, `foundCap`); a file whose text folds to itself has its lines matched as written instead of folded one by one. `kb_search` (`Search`) takes the data dir's files from the same cached walk instead of walking the whole directory on every call, so all of `history/` is skipped (its `messages/` too) and a data dir that is a symlink is searched. Results are otherwise identical to the previous code (`find_hits_test.go`, `search_walk_test.go`; `BenchmarkFind/every`, `BenchmarkSearch`).
+- Opening a chat from a search (`Matches`) checks each day for all the words through the same cache and reads only the days that have them, instead of reading and folding every day until it has 40 hits. In a 365-day chat of the synthetic archive, a rare word takes ~9 ms → 2 ms right after a Find; a new engine pays one more `stat` per day (~+10-20%, ~9 ms → 10 ms), and a common word that fills the limit within a few days stays ~0.5 ms (`BenchmarkMatches`; results identical to reading every file, `matches_test.go`).
 - Find only counts lines in the files opening an entry shows (`Matches`): profile, timeline and metadata (`summary.md`, `log.md`, `meta.json`; a recording's `transcript.md`), a chat's day files, a doc's JSON. Bookkeeping under an entry (`moments-judged.json`, `handles.json`, any other file) is not searched, so every result with hits shows them once opened (`TestFindAgreesWithMatches`). A limit of zero or less gives no results.
 - Opening an entry shows **Search "term"** at the top: every hit in this entry, with one message before and after each message hit. Tapping opens that day (`KBDayView`), scrolls to and highlights the message, and allows paging to adjacent days.
 - Going back no longer errors: the Knowledge page itself is pushed by `navigationDestination(isPresented:)`; using `NavigationLink(value:)` inside to push an entry

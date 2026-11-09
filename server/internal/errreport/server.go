@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Build is what the hub and the manager say of themselves in a report.
@@ -57,8 +57,8 @@ func (b Build) Line(line string) wire.ErrorReport {
 }
 
 var (
-	goFunc  = regexp.MustCompile(`^(\S+)\(.*\)$`)
-	goFile  = regexp.MustCompile(`^\t(.+):(\d+)(?: \+0x[0-9a-f]+)?$`)
+	goFunc  = lazyre.New(`^(\S+)\(.*\)$`)
+	goFile  = lazyre.New(`^\t(.+):(\d+)(?: \+0x[0-9a-f]+)?$`)
 	ownCode = "github.com/nwverse/persona/"
 )
 
@@ -125,7 +125,7 @@ func goFilePath(p string) string {
 const Reported = "[reported]"
 
 // errorLine says whether a log line is an error worth a report.
-var errorLine = regexp.MustCompile(`(?i)\bpanic\b|\berror\b|\berr\b[:=]|\bfailed\b|\bfailure\b|\bfatal\b| -> 5\d\d \(`)
+var errorLine = lazyre.New(`(?i)\bpanic\b|\berror\b|\berr\b[:=]|\bfailed\b|\bfailure\b|\bfatal\b| -> 5\d\d \(`)
 
 // IsErrorLine says whether a log line is an error.
 func IsErrorLine(line string) bool { return errorLine.MatchString(line) }

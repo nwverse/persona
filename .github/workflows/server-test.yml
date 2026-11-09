@@ -4,20 +4,43 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: server-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}-server
+  cancel-in-progress: true
 jobs:
   server:
-    name: Server lint, tests and builds
+    name: Server ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [node, managers, other, build]
+    env:
+      CI_SERVER_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - id: go
+        uses: actions/setup-go@v5
         with:
           go-version-file: server/go.mod
-          cache-dependency-path: |
-            server/go.sum
-            sdk/go/go.sum
+          cache: false
+      - name: Restore shard Go caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: server-go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.shard }}-${{ hashFiles('server/go.sum', 'sdk/go/go.sum') }}-${{ hashFiles('server/**/*.go', 'sdk/go/**/*.go') }}
+          restore-keys: |
+            server-go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.shard }}-${{ hashFiles('server/go.sum', 'sdk/go/go.sum') }}-
+            server-go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.shard }}-
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.shard == 'other'
+        with:
+          bun-version: '1.4.2'
       - name: Server checks
-        run: scripts/ci/server.sh
+        run: scripts/ci/server.sh "$CI_SERVER_SHARD"

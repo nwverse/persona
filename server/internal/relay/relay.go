@@ -24,12 +24,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apns"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/pushcrypto"
 	"github.com/nwverse/persona/server/internal/relayproto"
 )
@@ -132,8 +132,8 @@ func (s *Server) open(tok string) (grant, error) {
 	return g, nil
 }
 
-var hexToken = regexp.MustCompile(`^[0-9a-fA-F]{32,400}$`)
-var hexCollapse = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+var hexToken = lazyre.New(`^[0-9a-fA-F]{32,400}$`)
+var hexCollapse = lazyre.New(`^[0-9a-f]{1,64}$`)
 
 // Handler is the relay's HTTP API under /relay/v1.
 func (s *Server) Handler() http.Handler {
@@ -179,7 +179,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// PushRequest is what a hub posts (hub/push.go builds it).
+// PushRequest is what a hub posts (hub/push_send.go builds it).
 type PushRequest = relayproto.PushRequest
 
 // liveActivityKeys are the aps keys a Live Activity push may carry (hub/liveactivity.go liveActivityPayload).
@@ -402,9 +402,24 @@ func Run(ctx context.Context, path string) error {
 	if err != nil {
 		return fmt.Errorf("relay listen: %w", err)
 	}
-	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	hs := newHTTPServer(srv.Handler())
 	log.Printf("relay on %s (key %s, topics %v)", cfg.Listen, cfg.APNs.KeyID, cfg.Topics)
 	return serve(ctx, ln, hs)
+}
+
+// Connection limits of the relay's listener, which may face the internet directly (proxy_secret unset). A request body
+// is at most maxBody, so readTimeout (headers and body) cuts off a client that stalls its body; idleTimeout closes
+// keep-alive connections that go quiet. There is no WriteTimeout: the answers are small JSON, and push bounds its APNs
+// send to 15 s itself. Variables so tests can shrink them.
+var (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 30 * time.Second
+	idleTimeout       = 2 * time.Minute
+)
+
+// newHTTPServer is the relay's http.Server around h, with the connection limits above.
+func newHTTPServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout, IdleTimeout: idleTimeout}
 }
 
 // shutdownGrace is how long serve lets in-flight requests (an APNs send can take up to 15 s) finish after ctx ends.

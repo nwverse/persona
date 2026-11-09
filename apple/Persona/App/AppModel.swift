@@ -83,6 +83,7 @@ final class AppModel {
                 let run = index[key.session]?.workflows?.first { $0.toolUseID == key.call }
                 if cell.value != run { cell.value = run }
             }
+            dropSpentUltracodeAsks()
             // Only the spaces a view watches (`siblings(of:)`): working out every space's tabs sorted each one on every
             // push, with no chat open to show them (#343).
             if !spaceCells.isEmpty {
@@ -133,11 +134,29 @@ final class AppModel {
     }
     /// When each group's whole list of pending interactions was last asked for (NotificationWithdrawal.stale).
     @ObservationIgnored var interactionsListedAt: [String: Date] = [:]
-    /// Interactions ended locally (answered, cancelled or gone): snapshots will not restore them (#1688).
+    /// Interactions ended locally (answered, cancelled or gone), by `uid`: neither the full list nor a card frame brings
+    /// them back (#1688, #1521). By `uid`, not the hub's id: another group's card with the same id is another card.
     @ObservationIgnored var endedInteractionIDs: Set<String> = []
+    /// What the app's timed waits sleep on (`settleSend`'s wait for a transcript copy): the wall clock. The shared sync
+    /// replay's own (`SyncClock`), so that a case's minutes take none.
+    @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
+    /// Where the snapshot and the outbox are kept (`StateCache`): the app's Caches/state (nil), or a folder of a test's
+    /// own, so that its model starts from what the test wrote, not from what the simulator's app saved (#1637).
+    let stateFolder: URL?
     #if DEBUG
     /// Unit tests: the client every group's requests go to (`FakeHub.client`) instead of the paired hubs'.
     @ObservationIgnored var apiForTests: APIClient?
+    /// Unit tests: the socket and the requests of every link made from now on (`makeLink`) go to these, not to Demo
+    /// Mode's hub, which is one for the whole process: several models side by side, each a device of its own (the
+    /// shared sync scenarios with two devices, `SyncDevice`).
+    @ObservationIgnored var linkHooksForTests: (transport: APIClient.Transport, socket: () -> LocalSocket)?
+    /// Unit tests: no machines, agents or cards, whatever `init` restored. A simulator paired by an earlier run keeps
+    /// its last snapshot, and a test of everything the model holds (the watch summary) would count those too (#1638).
+    func forgetRestoredForTests() {
+        machines = []
+        sessionsByMachine = [:]
+        interactions = [:]
+    }
     #endif
     /// Cards being answered, and whether the hub ended them meanwhile: a failed answer puts back only the ones it did not.
     @ObservationIgnored private var answering = AnsweringInteractions()
@@ -266,7 +285,9 @@ final class AppModel {
     var isDemo: Bool { links.first?.isDemo == true }
     static let demoKey = "demo.on"
 
-    init() {
+    init(stateFolder: URL? = nil) {
+        self.stateFolder = stateFolder
+        RetiredPreferences.clear(from: .standard)
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
         connection = ConnectionStatus()
@@ -276,7 +297,7 @@ final class AppModel {
         // too, Demo Mode from a clean start (UI tests, `launchPersona`).
         if UserDefaults.standard.bool(forKey: "openWelcome") {
             HubStore.save(HubRegistry()) // known empty: deletes the registry and the old single pairing
-            StateCache.remove(Self.snapshotName("")) // and the lists it left: Demo Mode would show them (a paired app)
+            StateCache.remove(Self.snapshotName(""), in: stateFolder) // and the lists it left: Demo Mode would show them (a paired app)
             UserDefaults.standard.removeObject(forKey: Self.demoKey)
         }
         #endif
@@ -312,8 +333,7 @@ final class AppModel {
         if registry.hubs.isEmpty, !registryUnreadable, UserDefaults.standard.bool(forKey: Self.demoKey) {
             links = [makeLink("", .demo)]
         }
-        // Last known machines, agents and pending interactions: the lists are there offline and on a cold start.
-        if isPaired { restoreSnapshot(); restoreOutbox() }
+        if isPaired { restoreSaved() }
         WatchSync.shared.configProvider = { [weak self] in self.flatMap { $0.watchConfigs().configs[""] ?? $0.watchConfigs().configs.values.first } }
         WatchSync.shared.configsProvider = { [weak self] in
             guard let self, !self.isDemo, !self.registry.hubs.isEmpty else { return nil }
@@ -367,6 +387,7 @@ final class AppModel {
     /// Saves the registry, unless it could not be read: writing then would replace the real one (or delete it, empty).
     func saveRegistry(_ r: HubRegistry) {
         HubStore.save(r, known: !registryUnreadable)
+        syncExtensionSurfaces()
     }
 
     /// The keychain could not be read at launch: try again (the app came to the front, the phone was unlocked), and
@@ -381,8 +402,7 @@ final class AppModel {
             applyPersonaPalette()
         }
         guard isPaired else { return }
-        restoreSnapshot()
-        restoreOutbox()
+        restoreSaved()
         start()
         PushRegistrar.shared.registerIfPossible()
     }
@@ -417,6 +437,7 @@ final class AppModel {
         if link(hubGroup) == nil, let first = links.first { hubGroup = first.group }
         applyPersonaPalette()
         relabelMachines()
+        syncExtensionSurfaces()
     }
 
 
@@ -429,6 +450,12 @@ final class AppModel {
         link.live.onConnected = { [weak self] in self?.didConnect(group) }
         link.live.onChange = { [weak self] in self?.connection.update() }
         link.live.credential = { [weak self] config in DeviceCredentialTrade.current(config, traded: self?.tradedTokens ?? [:]) }
+        #if DEBUG
+        if let hooks = linkHooksForTests {
+            link.transportForTests = hooks.transport
+            link.live.makeLocalForTests = hooks.socket
+        }
+        #endif
         return link
     }
 
@@ -519,6 +546,7 @@ final class AppModel {
             r.hubs[i].deviceID = nil
             r.hubs[i].tradedPairing = nil
             r.hubs[i].watch = nil
+            r.hubs[i].watchDeviceID = nil
             if let ssh { r.hubs[i].ssh = ssh }
             group = r.hubs[i].group
             tunnels.adopt(SSHTunnels.pairingID, as: r.hubs[i].id)
@@ -576,6 +604,25 @@ final class AppModel {
         demo.live.connect(.demo)
         toast = Toast(String(localized: "Demo mode is on. All data is made up."))
     }
+
+    #if DEBUG
+    /// The sync scenarios (PersonaTests/Sync): this model talks to one made-up hub through the demo config's socket and
+    /// requests, as Demo Mode does, whatever the simulator has paired.
+    func connectOnly(_ config: ServerConfig) {
+        for link in links { link.live.disconnect() }
+        let link = makeLink("", config)
+        links = [link]
+        hubGroup = ""
+        // Fixture frames replace the scenario inventory, not a paired app's restored snapshot.
+        // Keep chat caches and the outbox: relaunch scenarios intentionally exercise their persistence.
+        machines = []
+        sessionsByMachine = [:]
+        sessionLists.forget()
+        pendingSessions = [:]
+        interactions = [:]
+        link.live.connect(config)
+    }
+    #endif
 
     /// Out of Demo Mode (Sign Out or pairing): what it showed goes with it.
     private func leaveDemo() {
@@ -675,6 +722,12 @@ final class AppModel {
 
 
     // MARK: Derived
+
+    /// A session whose `delta` is an agent's message as it shows (a Claude session Persona started, a runtime's), not
+    /// the headless assistant's whole reply: a listed session that is not the assistant's, or a chat already given one.
+    func streamsAgentReplies(_ key: SessionKey) -> Bool {
+        existingChat(key)?.liveIsAgents == true || session(key).map { !$0.assistant } ?? false
+    }
 
     /// One session, for views about it: its `rev`, `updatedAt` and last line may be older than the list's
     /// (`SessionCell`). An action that sends what the session is now reads `latest(_:)`.
@@ -875,7 +928,9 @@ final class AppModel {
                 assistantCurrent = main
                 try await api.send(main, text: text)
             } else {
-                let s = try await api.startConversation(prompt: text, main: true)
+                let s = try await AssistantStart.run(receipts: hubFeatures.contains(AssistantStart.feature)) { op in
+                    try await api.startConversation(prompt: text, main: true, opID: op)
+                }
                 began(s, text: text)
                 assistantCurrent = s.key
                 await refreshAssistant()
@@ -1007,7 +1062,10 @@ final class AppModel {
         guard sessionLists.lists[key.group]?.paged == true, let api = api(key.group), detailFetching.insert(key).inserted else { return }
         defer { detailFetching.remove(key) }
         do {
-            let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "")
+            // Not in the list: there is no detail to add. This runs on its own whenever a chat opens, so a session the
+            // list does not have (hidden from it, or gone) is not a chat error. A transcript that cannot be read is
+            // still reported, by the read of the transcript itself.
+            guard let full = try await api.sessionListDetail(key, title: latest(key)?.title ?? "") else { return }
             guard self.api(key.group)?.config.url == api.config.url else { return }
             let list = (sessionsByMachine[key.machineRef] ?? []).filter { $0.key != key } + [full]
             applySessions([key.machineRef: list])
@@ -1021,6 +1079,7 @@ final class AppModel {
         subscribers[key, default: []].insert(owner)
         guard first else { return }
         let store = chat(key)
+        forgetAgentLive(key) // a delta that crossed the last unsubscribe
         Task { await refreshSessionDetail(key) }
         socket(key.group)?.send(subscribeMessage(key))
         if socket(key.group)?.state != .connected && !store.loadedOnce { Task { await loadInitial(key) } }
@@ -1030,7 +1089,20 @@ final class AppModel {
         guard var owners = subscribers[key], owners.remove(owner) != nil else { return }
         guard owners.isEmpty else { subscribers[key] = owners; return }
         subscribers[key] = nil
+        forgetAgentLive(key)
         socket(key.group)?.send(["type": "unsubscribe", "machine_id": key.machineID, "session_id": key.sessionID])
+    }
+
+    /// An agent's live text holds only while its chat is subscribed: the hub sends `delta` to subscribers alone, so the
+    /// `""` that ended it while nobody here was subscribed never comes, and on subscribing again the hub sends the live
+    /// text only while a message is still being written (`sendLiveText`; the node checks it again on its new watch). Kept,
+    /// the old words would be drawn again under a later message of the turn (only the latest message and a late copy
+    /// of the one before are matched). So it goes when the subscription ends and again when one starts, as the web's
+    /// chat starts each time it opens with none. The main chat's live text keeps its own rules.
+    private func forgetAgentLive(_ key: SessionKey) {
+        guard let store = existingChat(key), store.liveIsAgents else { return }
+        deltas.drop(key)
+        store.dropLive()
     }
 
     /// The socket of a group.
@@ -1309,7 +1381,7 @@ final class AppModel {
             deltas.drop(key)
             // A delta that cleared it may have been lost with the old socket. A resumed hub sends the current one
             // right after the catch-up, so the answer goes on being written instead of blanking for a moment.
-            if plan.refetch { chat(key).liveText = "" }
+            if plan.refetch { chat(key).dropLive() }
             link.live.send(subscribeMessage(key))
         }
         guard plan.refetch else { return }
@@ -1327,7 +1399,7 @@ final class AppModel {
     /// pushes delivered before then that it does not have are over (#3513).
     func replaceInteractions(_ group: String, _ list: [Interaction], askedAt: Date? = nil) {
         var all = interactions.filter { $0.value.group != group }
-        for ix in list where all[ix.uid] == nil && !endedInteractionIDs.contains(ix.id) {
+        for ix in list where all[ix.uid] == nil && !endedInteractionIDs.contains(ix.uid) {
             all[ix.uid] = ix
         }
         if all != interactions { interactions = all }
@@ -1440,8 +1512,16 @@ final class AppModel {
     private func applyPendingSessions() {
         sessionsFlushScheduled = false
         let pending = pendingSessions
+        guard !pending.isEmpty else { return } // landed early (`landPendingSessions`)
         pendingSessions = [:]
         applySessions(pending)
+    }
+
+    /// Lands the session lists that came and wait for the rest of their burst now: a request that reads its session right
+    /// after it returns sees what the hub pushed meanwhile (`setUltracode`).
+    func landPendingSessions() {
+        guard !pendingSessions.isEmpty else { return }
+        applyPendingSessions()
     }
 
     /// Machines' new session lists, whether they came whole (`sessions`) or as a delta (`sessions_delta`): the pages
@@ -1489,13 +1569,14 @@ final class AppModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.sessionsCoalesce) { [weak self] in self?.applyPendingSessions() }
     }
 
-    private func handle(_ ev: ServerEvent, group: String) {
+    func handle(_ ev: ServerEvent, group: String) {
         #if DEBUG || PERF_SIGNPOST
         PerfTrace.push(Self.perfName(ev))
         #endif
         let isHub = group == hub?.group
         switch ev {
         case .hello(let hello):
+            let previousSurfaceCapabilities = extensionSurfaceCapabilities
             link(group)?.received(hello)
             if let page = sessionLists.lists[group], page.loaded, !page.query.legacy, page.paged != hello.features.contains("sessions_list"), let link = link(group) {
                 page.cancel()
@@ -1519,6 +1600,10 @@ final class AppModel {
             #endif
             for (key, handler) in terminalHandlers where key.group == group { handler(.reconnected) }
             learned(hello, group: group)
+            if extensionSurfaceCapabilities != previousSurfaceCapabilities {
+                syncExtensionSurfaces()
+                pushWatchConfigs()
+            }
             // Marks the last socket may have swallowed, or an HTTP request that failed, go again over this one.
             for key in seenOutbox.unanswered(group: group, at: Date()) { deliverSeen(key) }
         case .terminal(let key, let event):
@@ -1601,6 +1686,9 @@ final class AppModel {
             if isHub { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
+            #if os(iOS)
+            ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
+            #endif
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
@@ -1608,7 +1696,8 @@ final class AppModel {
             ChatTrace.shared.note(key, ChatTrace.batch(items, span: span, backlog: backlog, gap: gap, resets: store.resets, covered: store.covered))
             settle(key, gap)
             // The streamed message landed in the transcript: stop drawing its live copy (and the newer one kept back).
-            if store.landed(items, pending: deltas.pendingText(key)) {
+            // An agent's is matched against the newest items by the store itself (`ChatStore.agentStreamed`).
+            if !store.liveIsAgents, store.landed(items, pending: deltas.pendingText(key)) {
                 deltas.drop(key)
                 ChatTrace.shared.note(key, "landed live=\(store.liveText.count)")
             }
@@ -1624,27 +1713,36 @@ final class AppModel {
             if text.isEmpty != chat(key).liveText.isEmpty {
                 ChatTrace.shared.note(key, text.isEmpty ? "delta clear live=\(chat(key).liveText.count)" : "delta start")
             }
+            // An agent's (a Claude session Persona started, a runtime's) is its message as it shows, matched against the
+            // transcript; the headless assistant's is its whole reply so far.
+            let agents = streamsAgentReplies(key)
             switch deltas.offer(key, text, now: .now) {
-            case .draw(let t) where t.isEmpty: chat(key).clearLive(newest: newest)
-            case .draw(let t): chat(key).liveText = t
+            case .draw(let t): chat(key).streamed(t, agents: agents, newest: newest)
             case .later(let wait):
                 DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
                     guard let self, let t = self.deltas.due(key, now: .now) else { return }
-                    self.chat(key).liveText = t
+                    self.chat(key).streamed(t, agents: agents)
                 }
             case .kept: break
             }
         case .interaction(let ix):
-            let isNew = interactions[ix.uid] == nil
+            // Ended here (answered, cancelled, gone) stays ended, as in the full list (`replaceInteractions`, #1688): the
+            // pending-card snapshot after a hello that resumed still lists a card until the node ends it, and one this
+            // device had answered came back answerable (#1521). A failed answer takes the id out first (`putBack`).
+            guard !endedInteractionIDs.contains(ix.uid) else { break }
+            let announces = Delegated.announces(ix, replacing: interactions[ix.uid])
             interactions[ix.uid] = ix
-            if isNew { Haptics.attention() }
+            if announces { Haptics.attention() }
             WatchSync.shared.push(summary: watchSummary())
-        case .interactionResolved(let id):
-            endedInteractionIDs.insert(id)
+        case .interactionResolved(let id, let assistant):
             let uid = group.isEmpty ? id : group + "|" + id
+            endedInteractionIDs.insert(uid)
             answering.hubEnded(uid)
+            if let assistant, let ix = interactions[uid] { keepDelegated(ix, assistant) }
             interactions[uid] = nil
             WatchSync.shared.push(summary: watchSummary())
+        case .interactionReanswered(let id, let answers):
+            noteReanswer(group.isEmpty ? id : group + "|" + id, answers)
         case .toolCall(let callID, let name, let args):
             Task { await runPhoneTool(callID: callID, name: name, args: args, group: group) }
         case .hookEvent:
@@ -1669,6 +1767,7 @@ final class AppModel {
         case .delta: "delta"
         case .interaction: "interaction"
         case .interactionResolved: "interaction_resolved"
+        case .interactionReanswered: "interaction_reanswered"
         case .toolCall: "tool_call"
         case .hookEvent: "hook"
         case .revs: "revs"
@@ -1746,13 +1845,16 @@ final class AppModel {
     /// session's source allows. Every place that answers or greys a card asks this.
     func canAnswer(_ ix: Interaction) -> Bool { ix.canAnswer(session: session(ix.sessionKey)) }
 
+    /// This device's answer to the card is on its way (the card is hidden meanwhile).
+    func isAnswering(_ uid: String) -> Bool { answering.contains(uid) }
+
     func resolve(_ ix: Interaction, _ r: Resolution) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「操作发到哪」).
         guard canAnswer(ix), let api = api(ix.group) else { return }
         // No network: the card stays as it is (taking it away and bringing it back a moment later read as "done").
         guard connection.networkUp else { notDone(); return }
         interactions[ix.uid] = nil
-        endedInteractionIDs.insert(ix.id)
+        endedInteractionIDs.insert(ix.uid)
         answering.begin(ix.uid)
         defer { answering.finish(ix.uid) }
         // One op id for this answer: a retry through a hub restart (the request died with the old process, a proxy
@@ -1761,7 +1863,10 @@ final class AppModel {
         let op = UUID()
         do {
             let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op) }
-            if res.already == true, let existing = res.resolution {
+            if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
+                // The assistant answered first: its answer shows in the chat, where the user may change it.
+                keepDelegated(ix, AssistantAnswer(answers: existing.answers ?? [:], reason: existing.reason ?? ""))
+            } else if res.already == true, let existing = res.resolution {
                 // Resolved already on server, show what was effective
                 let lines = Answered.answerLines(ix, existing)
                 let text = (lines.first?.answer.isEmpty == false) ? String(localized: "Already answered: \(lines.first!.answer)") : String(localized: "Already answered")
@@ -1786,8 +1891,50 @@ final class AppModel {
     /// A card whose answer failed, back among the pending ones, unless the hub has ended it meanwhile (#3922).
     private func putBack(_ ix: Interaction) {
         guard answering.putsBack(ix.uid) else { return }
-        endedInteractionIDs.remove(ix.id)
+        endedInteractionIDs.remove(ix.uid)
         interactions[ix.uid] = ix
+    }
+
+    // MARK: Questions the assistant answered (#544)
+
+    /// Questions the assistant answered for the user, oldest first: each stays in its chat with what it answered and
+    /// why until put away, at most `Delegated.kept` of them.
+    private(set) var delegatedAnswers: [DelegatedAnswer] = []
+    /// What the user changed an answer to, by `uid` (this device's Change Answer, or `interaction_reanswered`).
+    private(set) var reanswered: [String: [String: String]] = [:]
+
+    func delegated(for key: SessionKey) -> [DelegatedAnswer] { delegatedAnswers.filter { $0.interaction.sessionKey == key } }
+
+    private func keepDelegated(_ ix: Interaction, _ answer: AssistantAnswer) {
+        guard ix.kind == .question, !delegatedAnswers.contains(where: { $0.id == ix.uid }) else { return }
+        delegatedAnswers.append(DelegatedAnswer(interaction: ix, answers: answer.answers, reason: answer.reason, at: .now))
+        if delegatedAnswers.count > Delegated.kept { delegatedAnswers.removeFirst(delegatedAnswers.count - Delegated.kept) }
+    }
+
+    /// Puts an answered question's card away; what was changed stays for Session Info.
+    func dropDelegated(_ uid: String) { delegatedAnswers.removeAll { $0.id == uid } }
+
+    /// The hub names only the questions that changed: an earlier change to another question of the card stays.
+    private func noteReanswer(_ uid: String, _ answers: [String: String]) {
+        guard !answers.isEmpty else { return }
+        reanswered[uid, default: [:]].merge(answers) { _, new in new }
+    }
+
+    /// The new answer reaches the agent as a message, so Change Answer takes what sending does, not answering a card.
+    func canChangeAnswer(_ d: DelegatedAnswer) -> Bool { session(d.interaction.sessionKey)?.canSend == true }
+
+    /// Change Answer: nil once the changed answers reached the agent, else why not.
+    func reanswer(_ d: DelegatedAnswer, answers: [String: String]) async -> String? {
+        guard let api = api(d.interaction.group) else { return String(localized: "Can't reach the hub. That action didn't go through.") }
+        do {
+            try await api.reanswer(d.interaction.id, answers: answers, manager: d.interaction.manager)
+        } catch {
+            return Delegated.reanswerError(error)
+        }
+        noteReanswer(d.id, answers)
+        Haptics.success()
+        toast = Toast(String(localized: "Your new answer was sent to the agent"), style: .success)
+        return nil
     }
 
     /// Unsent composer text per chat (also where an edited queued message lands); kept across launches.
@@ -1809,6 +1956,30 @@ final class AppModel {
             }
             Haptics.success()
             toast = Toast(delete ? String(localized: "Removed from the queue") : String(localized: "Moved back to the input box. Edit it and send again."), style: .success)
+        } catch {
+            show(error)
+        }
+    }
+
+    /// Moves a queued message one place up or down (#6088): the queue is pulled back and re-queued in the new order.
+    func moveQueued(_ key: SessionKey, index: Int, by step: Int) async {
+        guard allowSend(key), let api = api(key.group), let queue = session(key)?.queued,
+              let keep = QueueOrder.moved(count: queue.count, index: index, by: step) else { return }
+        do {
+            _ = try await api.editQueue(key, keep: keep)
+            Haptics.tap()
+        } catch {
+            show(error)
+        }
+    }
+
+    /// Gives the agent its queued messages now instead of at its next tool boundary (#6088).
+    func sendQueuedNow(_ key: SessionKey) async {
+        guard allowSend(key), let api = api(key.group) else { return }
+        do {
+            try await api.sendQueuedNow(key)
+            Haptics.success()
+            toast = Toast(String(localized: "Sent to the agent now [Queue Strip]"), style: .success)
         } catch {
             show(error)
         }
@@ -2062,6 +2233,73 @@ final class AppModel {
         }
     }
 
+    // MARK: Claude Code's ultracode switch (#1307, docs/apple/ios.md "Claude Code ultracode")
+
+    /// What this device asked of a session's ultracode switch (`Ultracode.Ask`), until the session moved past it.
+    private(set) var ultracodeAsks: [SessionKey: Ultracode.Ask] = [:]
+
+    /// The ask still in force for the session as its page draws it (`session(_:)`); nil once it moved past it.
+    func ultracodeAsk(_ key: SessionKey) -> Ultracode.Ask? {
+        guard let ask = ultracodeAsks[key], let s = session(key), !Ultracode.askSpent(s, ask: ask) else { return nil }
+        return ask
+    }
+
+    /// Forgets an ask once its session moved past it, or is gone, at each update of the lists (as the web's
+    /// `useUltracodeAsk`). `askSpent` does not stay true: a change queued later, from another device, would make an
+    /// answered ask look like this device's again, and the switch would say "Applies next turn" for what it once asked.
+    private func dropSpentUltracodeAsks() {
+        for (key, ask) in ultracodeAsks where !ask.sending {
+            if let s = session(key), !Ultracode.askSpent(s, ask: ask) { continue }
+            ultracodeAsks[key] = nil
+        }
+    }
+
+    /// POST …/modes {"ultracode": on}, on its own (never with the model or effort). The switch stands where it was put
+    /// until the node's push answers; a failure, a refusal too, puts it back and says why once. Returns whether the hub
+    /// took it (maybe queued for the turn: `ultracodePending`).
+    @discardableResult
+    func setUltracode(_ key: SessionKey, on: Bool) async -> Bool {
+        guard ultracodeAsks[key]?.sending != true, allowSend(key), let api = api(key.group) else { return false }
+        ultracodeAsks[key] = Ultracode.Ask(on: on, sending: true)
+        do {
+            try await api.setUltracode(key, on: on)
+            // A push that came while the request was out (the node's "queued", often) lands first: `answered` is the
+            // session as the page draws it now, or the ask would look spent and the queue read as another device's.
+            landPendingSessions()
+            ultracodeAsks[key] = Ultracode.Ask(on: on, sending: false, answered: session(key))
+            Haptics.success()
+            return true
+        } catch {
+            ultracodeAsks[key] = nil
+            if !error.isCancellation {
+                toast = Toast(String(localized: "Couldn't switch ultracode: \(Ultracode.errorText(error))"), style: .error)
+                Haptics.error()
+            }
+            return false
+        }
+    }
+
+    /// Takes the resume notice away (POST …/modes {"ultracode_dismiss_lost": true}): gone at once, back if the hub says no.
+    func dismissUltracodeLost(_ key: SessionKey) async {
+        guard let api = api(key.group), let before = latest(key)?.ultracodeLostAt else { return }
+        patchSession(key) { $0.ultracodeLostAt = nil }
+        do {
+            try await api.dismissUltracodeLost(key)
+        } catch {
+            if latest(key)?.ultracodeLostAt == nil { patchSession(key) { $0.ultracodeLostAt = before } }
+            guard !error.isCancellation else { return }
+            toast = Toast(String(localized: "Couldn't dismiss the notice: \(Ultracode.errorText(error))"), style: .error)
+            Haptics.error()
+        }
+    }
+
+    /// Changes one listed session in place, until the hub's next list says otherwise.
+    private func patchSession(_ key: SessionKey, _ change: (inout Session) -> Void) {
+        guard var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }) else { return }
+        change(&list[i])
+        sessionsByMachine[key.machineRef] = list
+    }
+
     func keys(_ key: SessionKey, _ keys: [String], text: String = "") async {
         guard session(key)?.canTerminal == true else { return }
         do { try await api(key.group)?.keys(key, keys: keys, text: text) } catch { show(error) }
@@ -2225,6 +2463,12 @@ final class AppModel {
         launcherDefaults = [:]
     }
 
+    /// The list a start picks from (New Agent, Run Agent Here): always read again, and the cache with it. Each launcher's
+    /// health on the computer (#1643) changes behind the cache: a start that fails can block one, one that works clears it.
+    func launchersForStart(_ machine: MachineRef) async throws -> [Launcher] {
+        try await launchers(machine, refresh: true)
+    }
+
     func launchers(_ machine: MachineRef, refresh: Bool = false) async throws -> [Launcher] {
         if !refresh, let cached = launcherCache[machine] { return cached }
         guard let api = api(machine.group) else { return [] }
@@ -2288,13 +2532,6 @@ final class AppModel {
 
     /// Agents (not the assistant) waiting on the user, not muted: the Agents tab's badge, the shell's Agents.
     var agentsWaiting: Int { badges.agents }
-
-    /// Settings › Appearance › Old Layout (2026-11-01, docs/apple/ios.md「新外壳」): on, the iPhone keeps the four tabs exactly as before;
-    /// off (the default), it is the ChatGPT-style shell (Assistant | Agents, the drawer, Settings as a sheet). Kept for a few days
-    /// of transition. iPad, iPhone Duo open and the Mac always use their own layouts.
-    var oldLayout: Bool = UserDefaults.standard.bool(forKey: "ui.oldLayout") {
-        didSet { UserDefaults.standard.set(oldLayout, forKey: "ui.oldLayout") }
-    }
 
     /// The shell's Settings sheet is up. Here and not in the shell's state: picking a style in it rebuilds the whole tree
     /// (`look`), and the rebuilt shell puts the sheet back on the same page (`settingsPath`).
@@ -2364,10 +2601,17 @@ final class AppModel {
     /// Each group's snapshot: "dev" for the default group (what it always was), "dev.<group>" for the others.
     static func snapshotName(_ group: String) -> String { group.isEmpty ? "dev" : "dev." + group }
 
+    /// A paired launch: last known machines, agents and pending interactions, so the lists are there offline and on a
+    /// cold start, and what was on its way (`restoreOutbox`).
+    func restoreSaved() {
+        restoreSnapshot()
+        restoreOutbox()
+    }
+
     private func restoreSnapshot() {
         var allMachines: [Machine] = [], allSessions: [Session] = [], allInteractions: [Interaction] = []
         for g in groupIDs {
-            guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self) else { continue }
+            guard let snap = StateCache.load(Self.snapshotName(g), as: DevSnapshot.self, in: stateFolder) else { continue }
             allMachines += snap.machines.map { var m = $0; m.group = g; return m }
             allSessions += snap.sessions.map { var s = $0; s.group = g; return s }
             allInteractions += snap.interactions.map { var i = $0; i.group = g; return i }
@@ -2388,7 +2632,8 @@ final class AppModel {
                 StateCache.save(Self.snapshotName(g), DevSnapshot(
                     machines: self.machines.filter { $0.group == g },
                     sessions: self.sessionsByMachine.filter { $0.key.group == g }.values.flatMap { $0 },
-                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant))
+                    interactions: Array(self.interactions.values.filter { $0.group == g }), assistant: assistant),
+                    in: self.stateFolder)
             }
         }
     }
@@ -2406,7 +2651,7 @@ final class AppModel {
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
-            StateCache.remove(Self.snapshotName(g))
+            StateCache.remove(Self.snapshotName(g), in: stateFolder)
             ChatCache.removeGroup(g)
             PinsStore.forget(suffix: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
@@ -2580,13 +2825,13 @@ final class AppModel {
     func renameSession(_ k: SessionKey, tab: String?, title: String?) async {
         guard session(k)?.canTerminal == true, let api = api(k.group) else { return }
         let tab = tab?.trimmingCharacters(in: .whitespacesAndNewlines), title = title?.trimmingCharacters(in: .whitespacesAndNewlines)
-        edit(machine: k.machineRef) { s in
-            guard s.sessionID == k.sessionID else { return }
-            if let tab, !tab.isEmpty { s.slotName = tab }
-            if let title, !title.isEmpty { s.title = title }
-        }
         do {
             try await api.renameSession(k, tabName: tab?.isEmpty == false ? tab : nil, title: title?.isEmpty == false ? title : nil)
+            edit(machine: k.machineRef) { s in
+                guard s.sessionID == k.sessionID else { return }
+                if let tab, !tab.isEmpty { s.slotName = tab }
+                if let title, !title.isEmpty { s.title = title }
+            }
             toast = Toast(String(localized: "Renamed"), style: .success)
         } catch { show(error) }
         await refresh()
@@ -2668,7 +2913,7 @@ final class AppModel {
             let (machines, _, ixs) = try await (m, s, i)
             guard self.link(group) === link else { return } // removed meanwhile
             replaceMachines(group, machines)
-            if page.paged { page.invalidate() }
+            // refresh() already reconciles the loaded paging window and its counts.
             replaceInteractions(group, ixs, askedAt: asked)
             link.live.ensureConnected()
         } catch {

@@ -2,9 +2,9 @@ package transcript
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -44,10 +44,10 @@ func (m *Meta) applyQueue(op, content string) {
 }
 
 // caveatRe drops Claude Code's note that the lines around it came from a local command (context for the model).
-var caveatRe = regexp.MustCompile(`(?s)<local-command-caveat>.*?</local-command-caveat>`)
+var caveatRe = lazyre.New(`(?s)<local-command-caveat>.*?</local-command-caveat>`)
 
-var teammateRe = regexp.MustCompile(`(?s)<teammate-message([^>]*)>\s*(.*?)\s*</teammate-message>`)
-var teammateIDRe = regexp.MustCompile(`teammate_id="([^"]*)"`)
+var teammateRe = lazyre.New(`(?s)<teammate-message([^>]*)>\s*(.*?)\s*</teammate-message>`)
+var teammateIDRe = lazyre.New(`teammate_id="([^"]*)"`)
 
 func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []proto.Item {
 	trimmed := legacyLarkAgent(strings.TrimSpace(caveatRe.ReplaceAllString(pastedRe.ReplaceAllString(ContextRe.ReplaceAllString(s, ""), ""), "")))
@@ -98,8 +98,8 @@ func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []p
 			return nil
 		}
 		if name == "/compact" && strings.TrimSpace(args) == "" {
-			// Persona compacts an idle assistant conversation itself (node/assistant.go): a notice, not a message the
-			// user sent, and not activity that would make the conversation unread.
+			// Persona compacts an idle assistant conversation itself (node/assistant_reap.go): a notice, not a message
+			// the user sent, and not activity that would make the conversation unread.
 			it := mk(0, "system", proto.KindNotice)
 			it.Text = CompactNotice
 			return []proto.Item{it}

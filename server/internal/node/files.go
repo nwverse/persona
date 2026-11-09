@@ -306,6 +306,20 @@ const maxDirEntries = 2000
 // resolveDir turns a listing request's path (empty: cwd, ~/, relative to cwd) into the clean path shown to the app and
 // the real path behind it, refused when the path guard says so.
 func (n *Node) resolveDir(path, cwd string) (shown, real string, err error) {
+	path = n.expandPath(path, cwd)
+	if path == "" {
+		return "", "", fmt.Errorf("empty path")
+	}
+	real, err = n.realPath(absPath(path))
+	if err != nil {
+		return "", "", explainDenied(path, n.home, err)
+	}
+	return path, real, nil
+}
+
+// expandPath turns a path as the app gives it (~/…, relative to cwd, empty for cwd itself) into a clean one; "" when
+// there is nothing to go by. Links are not followed.
+func (n *Node) expandPath(path, cwd string) string {
 	path = strings.TrimSpace(path)
 	switch {
 	case path == "":
@@ -316,14 +330,9 @@ func (n *Node) resolveDir(path, cwd string) (shown, real string, err error) {
 		path = filepath.Join(cwd, path)
 	}
 	if path == "" {
-		return "", "", fmt.Errorf("empty path")
+		return ""
 	}
-	path = filepath.Clean(path)
-	real, err = n.realPath(absPath(path))
-	if err != nil {
-		return "", "", explainDenied(path, n.home, err)
-	}
-	return path, real, nil
+	return filepath.Clean(path)
 }
 
 // listDir lists a directory for the file tree: directories first, then files, each by name (case-insensitive).

@@ -4,13 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/dialogwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Defined in the contract package dialogwire (docs/server/architecture.md "Contract packages"); the old names stay.
@@ -30,23 +30,23 @@ const (
 // answer is checked (node): the revision covers what the window shows.
 const DialogLines = 40
 
-var numberedRE = regexp.MustCompile(`^(\s*)(?:([❯›>])\s*)?(\d)\.\s+(\S.*)$`)
+var numberedRE = lazyre.New(`^(\s*)(?:([❯›>])\s*)?(\d)\.\s+(\S.*)$`)
 
 // cursorRE is the selected row of an unnumbered list: `❯ No, exit`.
-var cursorRE = regexp.MustCompile(`^(\s*)❯\s+(\S.*)$`)
+var cursorRE = lazyre.New(`^(\s*)❯\s+(\S.*)$`)
 
 // boxRE is a multi-select option's check box before its label: `[ ] Phone`, `[✔] Computer`.
-var boxRE = regexp.MustCompile(`^\[([ ✔✓xX])\]\s*(.*)$`)
+var boxRE = lazyre.New(`^\[([ ✔✓xX])\]\s*(.*)$`)
 
 // previewRE is the box beside the options of a question with previews (AskUserQuestion's preview field), from the
 // gap before it to the end of the row: `1. Yes         ┌──────────┐`, `2. Change      │ Line one │`.
-var previewRE = regexp.MustCompile(`\s{2,}[┌│└].*$`)
+var previewRE = lazyre.New(`\s{2,}[┌│└].*$`)
 
 // previewNote is the hint under that box.
 const previewNote = "Notes: press n to add notes"
 
 // submitRE is the row under a multi-select question's options that sends them, maybe under the cursor.
-var submitRE = regexp.MustCompile(`^\s*(❯)?\s*(Submit|Next)$`)
+var submitRE = lazyre.New(`^\s*(❯)?\s*(Submit|Next)$`)
 
 // ParseDialog reads the dialog at the bottom of a plain screen, or nil when there is none.
 func ParseDialog(plain string) *Dialog {
@@ -324,10 +324,10 @@ func unnumbered(lines []string) *Dialog {
 }
 
 // tabsRE is AskUserQuestion's tab bar: "←  ☒ Env  ☐ Platform  ✔ Submit  →" (a multi-select or multi-question dialog).
-var tabsRE = regexp.MustCompile(`^←\s+(.*?)\s+→$`)
+var tabsRE = lazyre.New(`^←\s+(.*?)\s+→$`)
 
 // gapRE parts the tab bar's tabs (two spaces or more; a header may have one).
-var gapRE = regexp.MustCompile(`\s{2,}`)
+var gapRE = lazyre.New(`\s{2,}`)
 
 // The review tab's lines (Claude Code 2.1.316).
 const (
@@ -466,8 +466,8 @@ func legacyHash(d *Dialog, window string) {
 // block this request in 1:59, to avoid holding up an unattended session"; earlier builds say deny), and the dashed
 // rules it draws around the command asked about.
 var (
-	deadlineRE = regexp.MustCompile(`(?i)^⚠?\s*.*\bwill automatically (block|deny|allow|approve|accept|reject)\b.*\bin \d+:\d{2}\b`)
-	dashedRE   = regexp.MustCompile(`^[╌┄┈╍┅┉-]{8,}$`)
+	deadlineRE = lazyre.New(`(?i)^⚠?\s*.*\bwill automatically (block|deny|allow|approve|accept|reject)\b.*\bin \d+:\d{2}\b`)
+	dashedRE   = lazyre.New(`^[╌┄┈╍┅┉-]{8,}$`)
 )
 
 // joinWrapped puts rows the terminal wrapped back into one text: no space where a row ends inside CJK text.
