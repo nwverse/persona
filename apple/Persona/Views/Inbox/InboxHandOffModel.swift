@@ -118,7 +118,7 @@ final class InboxHandOffModel {
             load: { try await api().inboxItem($0) },
             handOff: { id, text, clientID in
                 let answer = try await api().inboxHandoff(id, text: text, clientID: clientID)
-                if let it = answer.item { InboxStore.shared.put(it) }
+                if let it = answer.item { InboxStore.shared.put(it, manager: item.manager) }
                 return answer.session
             },
             showMain: { key, text, clientID in

@@ -46,6 +46,9 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     /// The manager it belongs to, as the hub stamps a merged list (docs/protocol/protocol.md "Per-manager routing"); nil
     /// from a hub before managers. What is done to it goes to that manager (`APIClient.manager(_:)`).
     var manager: String?
+    /// Its place in the list: each manager numbers its own items, so two managers may both have an `id`.
+    var key: String { Self.key(id: id, manager: manager) }
+    static func key(id: String, manager: String?) -> String { manager.map { "\($0)\u{0}\(id)" } ?? id }
     /// Inbox phase 1 (docs/assistant/inbox.md): the section the hub put an open item in (action | working | fyi | noise;
     /// nil from an older hub: the list goes by `tier`), urgent (someone waits), the manager's recap, the processing
     /// conversation, the current suggestion, the chain and related items. Older hubs leave them all out.
@@ -599,8 +602,29 @@ nonisolated struct InboxBulkResult: Decodable, Sendable, Equatable {
     nonisolated struct Skip: Decodable, Sendable, Equatable {
         var id: String
         var reason: String
+        /// The manager that was asked (`stamped`); its answer names none.
+        var manager: String? = nil
+        var key: String { InboxItem.key(id: id, manager: manager) }
+
+        enum CodingKeys: String, CodingKey { case id, reason }
     }
     var changed: [InboxItem]
     var unchanged: [String]
     var skipped: [Skip]
+
+    static let none = InboxBulkResult(changed: [], unchanged: [], skipped: [])
+
+    /// The answer of the manager asked, its items stamped with it as its list stamped them (`InboxItem.key`).
+    func stamped(_ manager: String?) -> InboxBulkResult {
+        guard let manager else { return self }
+        return InboxBulkResult(changed: changed.map { var it = $0; it.manager = it.manager ?? manager; return it },
+                               unchanged: unchanged,
+                               skipped: skipped.map { var s = $0; s.manager = manager; return s })
+    }
+
+    mutating func add(_ other: InboxBulkResult) {
+        changed += other.changed
+        unchanged += other.unchanged
+        skipped += other.skipped
+    }
 }

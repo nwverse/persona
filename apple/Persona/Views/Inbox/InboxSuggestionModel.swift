@@ -30,7 +30,7 @@ final class InboxSuggestionModel {
         InboxSuggestionModel(itemID: itemID, send: { id, body in
             guard let api = AppModel.shared.api?.manager(manager) else { throw APIError(status: 0, message: String(localized: "Not connected to the hub [Inbox Suggestion Model e21521]")) }
             return try await api.inboxSuggestion(id, body)
-        }, apply: { InboxStore.shared.put($0) })
+        }, apply: { InboxStore.shared.put($0, manager: manager) })
     }
 
     /// send / start / got it / confirm, with `text` when the user changed the words (edit).
