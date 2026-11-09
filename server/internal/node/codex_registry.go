@@ -169,6 +169,13 @@ func (n *Node) registerCodex(home, thread, path string) string {
 	old := r.threads[id]
 	if path == "" {
 		path = old.path
+	} else if old.path != "" && old.path != path {
+		// A process may still hold an older segment. Do not replace the current transcript with it.
+		if previous, err := os.Stat(old.path); err == nil {
+			if next, err := os.Stat(path); err == nil && (previous.ModTime().After(next.ModTime()) || previous.ModTime().Equal(next.ModTime()) && old.path > path) {
+				path = old.path
+			}
+		}
 	}
 	r.threads[id] = codexSource{home, thread, path}
 	return id
@@ -241,9 +248,8 @@ func (n *Node) discoverCodex() {
 				if !pathWithin(path, home) { // Windows paths do not tell case apart (codex_desktop.go)
 					continue
 				}
-				match := rolloutIDRe.FindStringSubmatch(path)
-				if match != nil {
-					id := n.registerCodex(home, match[1], path)
+				if thread := rolloutThreadID(home, path); thread != "" {
+					id := n.registerCodex(home, thread, path)
 					liveRollouts[id] = holder
 				}
 			}

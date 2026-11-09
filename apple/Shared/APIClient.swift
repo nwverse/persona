@@ -787,10 +787,12 @@ nonisolated struct APIClient: Sendable {
     func createToken(name: String, kind: String) async throws -> NewToken {
         try JSON.decoder.decode(NewToken.self, from: try await request("POST", "/api/v1/auth/tokens", body: ["name": name, "kind": kind]))
     }
-    func deviceTokens() async throws -> DeviceTokens {
-        try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens"))
+    func deviceTokens(timeout: TimeInterval = 30) async throws -> DeviceTokens {
+        try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens", timeout: timeout))
     }
-    func revokeToken(_ id: String) async throws { _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)") }
+    func revokeToken(_ id: String, timeout: TimeInterval = 30) async throws {
+        _ = try await request("DELETE", "/api/v1/auth/tokens/\(id)", timeout: timeout)
+    }
 
     /// A QR code's modules as the hub draws them: rows of "0" / "1".
     struct QRRows: Decodable, Hashable, Sendable { var size: Int; var rows: [String] }
@@ -1392,7 +1394,9 @@ nonisolated struct APIClient: Sendable {
     }
 
     func interactions() async throws -> [Interaction] {
-        stamp(try await get("/api/v1/interactions", as: InteractionsResponse.self).interactions)
+        let data = try await request("GET", "/api/v1/interactions")
+        // An MCP form's fields in their server's order, which the decoded dictionaries don't keep.
+        return stamp(Elicitation.withFieldOrders(try JSON.decoder.decode(InteractionsResponse.self, from: data).interactions, from: data))
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
@@ -1514,6 +1518,14 @@ nonisolated struct APIClient: Sendable {
     }
     func setNotifyPrefs(device: String, _ prefs: NotifyPrefs) async throws -> NotifyPrefs {
         try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: prefs))
+    }
+    /// The managers this device mutes, alone (the PUT merges): the hub keeps only those of its roster.
+    func setMutedManagers(device: String, _ ids: [String]) async throws -> NotifyPrefs {
+        try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: MutedManagersPut(ids: ids)))
+    }
+    /// Quiet hours alone (the PUT merges); the hub refuses bad times or an unknown zone (400).
+    func setQuietHours(device: String, _ quiet: QuietHours) async throws -> NotifyPrefs {
+        try JSON.decoder.decode(NotifyPrefs.self, from: try await request("PUT", "/api/v1/devices/\(device)/prefs", body: QuietHoursPut(quiet: quiet)))
     }
 }
 

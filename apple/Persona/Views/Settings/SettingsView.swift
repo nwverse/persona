@@ -121,20 +121,15 @@ struct SettingsView: View {
 
                 ChannelsEntryRow()
 
-                ConnectorsSection()
-
-                // What Persona sent in the user's name through the connectors (#5278, docs/extensions/connectors.md "Sent as the user").
-                if !model.isDemo {
-                    Section {
-                        Group {
-                            NavigationLink(value: SettingsPage.sent) {
-                                SettingsRow(title: String(localized: "Sent as You"), symbol: Theme.Icon.sentAsYou, tint: Theme.Hue.orange)
-                            }
-                            .settingsListRow(SettingsPage.sent)
-                            .accessibilityIdentifier("settings.sent")
+                Section {
+                    Group {
+                        NavigationLink(value: SettingsPage.connectors) {
+                            SettingsRow(title: String(localized: "Connectors"), symbol: Theme.Icon.connectors, tint: Theme.accent)
                         }
-                        .bareListRow()
+                        .settingsListRow(SettingsPage.connectors)
+                        .accessibilityIdentifier("settings.connectors")
                     }
+                    .bareListRow()
                 }
 
                 // Extensions (docs/extensions/extensions.md): only with a hub that has the plugin base.
@@ -207,13 +202,16 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings.managers")
                             Button { showPair = true } label: { SettingsRow(title: String(localized: "Pair Again"), symbol: "qrcode.viewfinder", tint: Theme.accent) }
                                 .modifier(SettingsButtonLook())
+                                .disabled(model.hubSignOut != nil) // a hub paired now would go with the disconnect
                             Button(role: .destructive) { confirmUnpair = true } label: {
                                 SettingsRow(title: model.isMultiHub ? String(localized: "Disconnect All Hubs") : String(localized: "Disconnect and Forget Server"), symbol: Theme.Icon.end, tint: Theme.danger)
                                     #if os(macOS)
                                     .foregroundStyle(Theme.danger) // a plain row on the Mac: red says what it does
                                     #endif
+                                    .trailingProgress(model.hubSignOut == .all)
                             }
                             .modifier(SettingsButtonLook())
+                            .disabled(model.hubSignOut != nil)
                         }
                         .bareListRow()
                     } header: {
@@ -282,7 +280,7 @@ struct SettingsView: View {
             .onAppear(perform: openDebugPage)
             #endif
             .confirmationDialog("After disconnecting, you'll need to scan the code to pair again.", isPresented: $confirmUnpair, titleVisibility: .visible) {
-                Button("Disconnect", role: .destructive) { model.unpair() }
+                Button("Disconnect", role: .destructive) { Task { await model.disconnectAll() } }
             }
             .sheet(isPresented: $showPair) { PairView() }
             #if os(iOS) || os(visionOS)
@@ -354,7 +352,8 @@ struct SettingsView: View {
             p.append(SettingsPage.managers)
             if let id = d.string(forKey: "openManagerPage") { p.append(SettingsPage.manager(id)) }
         }
-        else if d.bool(forKey: "openSentAsYou") { p.append(SettingsPage.sent) }
+        else if d.bool(forKey: "openSentAsYou") { p = SettingsPage.sentPath }
+        else if d.bool(forKey: "openConnectors") { p.append(SettingsPage.connectors) }
         else if d.bool(forKey: "openSkills") { p.append(SettingsPage.skills) }
         else if flag("openExtensions") || str("openExtension") != nil { // Settings › Extensions (› one (› a page of it))
             p.append(SettingsPage.plugins)
@@ -394,8 +393,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
-        else if d.string(forKey: "openAppearance") == "chat" { p.append(SettingsPage.chatLayout) } // New Conversation Layout (#1666)
-        else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
+        else if let a = d.string(forKey: "openAppearance"), a != "chat" { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
                      : a == "scheme" ? SettingsPage.colorScheme : SettingsPage.persona)
         }
@@ -459,8 +457,6 @@ enum SettingsPage: Hashable {
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
-    /// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`).
-    case chatLayout
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -489,8 +485,13 @@ enum SettingsPage: Hashable {
     /// Settings › Managers, and one manager by its id (docs/assistant/managers.md).
     case managers
     case manager(String)
-    /// Settings › Sent as You: what Persona sent in the user's name through the connectors (docs/extensions/connectors.md "Sent as the user").
+    /// Settings › Connectors, with individual sources and the sent ledger beneath it.
+    case connectors
+    /// Settings › Connectors › Records sent as you (docs/extensions/connectors.md "Sent as the user").
     case sent
+
+    /// One canonical path for current callers and legacy Sent destinations.
+    static var sentPath: NavigationPath { NavigationPath([SettingsPage.connectors, .sent]) }
 
 }
 
@@ -517,7 +518,6 @@ private struct SettingsDestinations: ViewModifier {
         case .themeColor: ThemeColorSettingsPage()
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
-        case .chatLayout: ChatLayoutSettingsPage()
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
         #else
@@ -544,6 +544,7 @@ private struct SettingsDestinations: ViewModifier {
         case .localProxy(let id): HubLocalProxyPage(hubID: id)
         case .managers: ManagersView()
         case .manager(let id): ManagerDetailView(id: id)
+        case .connectors: ConnectorsView()
         case .sent: SentView()
         case .hub: HubSettingsPage()
         case .skills: SkillsPage()
