@@ -4,7 +4,8 @@ import { t } from "../../i18n";
 const exampleSources = import.meta.glob<string>("../../../../schema/extension/examples/View.*.json", { query: "?raw", import: "default", eager: true });
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import { ExtensionUIStreamSession, NATIVE_STREAM_COMPONENTS, nativeStreamSlots } from "../../lib/extension-ui-stream";
 import type { Component, UIStreamRequest, UIStreamSnapshot, View } from "../../lib/extension-wire";
 import { ExtensionStreamSections, type ExtensionStreamSectionsProps } from "./ExtensionStreamSections";
@@ -17,6 +18,8 @@ vi.hoisted(() => {
 const identity = { owner: "demo-owner", hubGroup: "demo-group", extension: "example", contribution: "native", navigation: "root" };
 let root: Root, host: HTMLDivElement, session: ExtensionUIStreamSession;
 const options: ExtensionStreamSectionsProps = { identity, fallback: <p>Legacy fallback</p> };
+// the code views are their own chunk (lib/lazy-page.ts, #1794): in before anything is drawn
+beforeAll(() => loadPages(), 60_000);
 afterEach(async () => { vi.useRealTimers(); if (root) await act(async () => root.unmount()); session?.close(); host?.remove(); vi.unstubAllGlobals(); });
 function tree(items: Component[], view: Partial<View> = {}): UIStreamSnapshot {
   return { protocol: 1, session: "demo-session", epoch: "demo-epoch", version: 1, root_key: "root", view: { sections: [{ key: "main", items }, { key: "other", items: [] }], ...view } };
@@ -135,6 +138,25 @@ describe("independent native boundary regressions", () => {
     expect(node("thumbnail").querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Synthetic thumbnail");
     await replace("thumbnail", { type: "row", key: "thumbnail", title: "Synthetic thumbnail", thumbnail: { url: "https://example.com/ready.png" } });
     expect(node("thumbnail").querySelector<HTMLImageElement>("img")!.src).toBe("https://example.com/ready.png");
+  });
+  it("constrains long streamed stat values without losing their full text", async () => {
+    const stats = (value: string): Component => ({ type: "stat_grid", key: "stats", stats: [
+      { label: "Open", value: "12.34" }, { label: "Previous", value: "12.00" },
+      { label: "Volume", value }, { label: "Range", value: "2.18%" },
+      { label: "Turnover", value: "0.31%" }, { label: "Ratio", value: "38.13" },
+    ] });
+    const value = "123456789.00 units";
+    await mount(tree([stats(value)]));
+    const displayed = [...node("stats").querySelectorAll<HTMLDivElement>("div")].find((el) => !el.children.length && el.textContent === value)!;
+    expect(displayed.parentElement!.classList.contains("min-w-0")).toBe(true);
+    expect(displayed.classList.contains("truncate")).toBe(true);
+    expect(displayed.title).toBe(value);
+    expect(node("stats").textContent).toContain("2.18%");
+    await replace("stats", stats(value + " updated"));
+    const updated = [...node("stats").querySelectorAll<HTMLDivElement>("div[title]")].find((el) => el.title === value + " updated")!;
+    expect(updated.textContent).toBe(value + " updated");
+    expect(updated.title).toBe(value + " updated");
+    expect(updated.classList.contains("truncate")).toBe(true);
   });
   it("preserves native metric and stat tones", async () => {
     await mount(tree([{ type: "metric", key: "metric", label: "Warning", value: "0", tone: "danger" }, { type: "stat_grid", key: "stats", stats: [{ label: "Good", value: "0", tone: "positive" }, { label: "Watch", value: "0", tone: "caution" }] }]));

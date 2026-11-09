@@ -14,8 +14,10 @@ func ComputerText(l Lang, text string) string {
 	if text == "" || l == "" {
 		return text
 	}
-	for _, form := range computerTemplates() {
-		match := form.pattern.FindStringSubmatch(text)
+	forms := computerTemplates()
+	for _, n := range forms.candidates(text) {
+		form := &forms.forms[n]
+		match := form.match(text)
 		if match == nil {
 			continue
 		}
@@ -28,7 +30,7 @@ func ComputerText(l Lang, text string) string {
 	return text
 }
 
-var computerTemplates = sync.OnceValue(makeComputerTemplates)
+var computerTemplates = sync.OnceValue(func() *templateIndex { return indexTemplates(makeComputerTemplates()) })
 
 func makeComputerTemplates() []deploymentTemplate {
 	forms := makeCatalogTemplates(func(key string) bool {

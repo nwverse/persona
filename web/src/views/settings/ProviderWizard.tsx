@@ -6,7 +6,7 @@
 // is lib/providers.ts and lib/launcher-presets.ts. It reads the main conversation's readiness (4.3 B.3 / B.4): with a
 // Claude Code that already answers, "Use it for the main conversation and new Agents" starts off; a key saved for a computer with no Claude Code
 // says so (the main conversation still starts claude there) with how to install it.
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import {
   assignByDefault,
@@ -35,6 +35,7 @@ import {
   formModel,
   formProblems,
   mergeDiscovered,
+  legacyChatClears,
   newForm,
   probeBody,
   providerBody,
@@ -85,11 +86,16 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [advanced, setAdvanced] = useState(false);
+  const [clearLegacyChat, setClearLegacyChat] = useState(false);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
   const [probeModel, setProbeModel] = useState("");
   const [discovering, setDiscovering] = useState(false);
   const [found, setFound] = useState<{ n: number; error?: string } | null>(null);
+  const connectionGeneration = useRef(0);
+  const discoverySeq = useRef(0);
+  const connectionTestSeq = useRef(0);
+  const modelToTest = probeModel.trim() || testModel(f);
   // the hub's providers (built-in ones, then the extensions'); null while loading
   const [presets, setPresets] = useState<LauncherPreset[] | null>(null);
   const [presetsError, setPresetsError] = useState("");
@@ -110,10 +116,30 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   // a hub with built-in presets names a provider itself and takes assign; an older one needs the name and knows no assign
   const hubNames = useStore((s) => hubHas(s.features, BUILTIN_PRESETS_FEATURE, true));
 
+  // Settings keeps this component mounted when closed. A request belongs to one opening and connection,
+  // even if the user later returns to the same provider or restores the same input values.
+  useLayoutEffect(() => {
+    ++connectionGeneration.current;
+    setDiscovering(false);
+    setFound(null);
+    setTesting(false);
+    setTest(null);
+    return () => { ++connectionGeneration.current; };
+  }, [existing, choice, f.name, f.kind, f.agent, f.api, f.base_url, f.auth, f.api_key, f.headers, f.headers_touched]);
+
+  // Changing the probe model retires only its test; model edits must still merge with pending discovery.
+  useLayoutEffect(() => {
+    ++connectionTestSeq.current;
+    setTesting(false);
+    setTest(null);
+    return () => { ++connectionTestSeq.current; };
+  }, [modelToTest]);
+
   useEffect(() => {
     if (existing === null) return;
     setError("");
     setAdvanced(false);
+    setClearLegacyChat(false);
     setTest(null);
     setFound(null);
     setProbeModel("");
@@ -160,10 +186,11 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
 
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
   const problems = formProblems(f, isNew, !!old?.has_key);
-  const responses = f.kind === "api" && f.api === "responses";
+  const openAI = f.kind === "api" && (f.api === "responses" || f.api === "chat");
+  const hasLegacyChat = Object.keys(legacyChatClears(old)).length > 0;
   const presetFlow = isNew && choice !== CUSTOM;
   const presetReady = !!preset && (hubNames || !!pf.name.trim()) && !launcherNameProblem(pf.name) && !!pf.api_key.trim() && !keyTest?.running;
-  const canSave = step === "key" ? presetReady : !problems.connect && !problems.models && !problems.advanced;
+  const canSave = step === "key" ? presetReady : !problems.connect && !problems.models && !problems.advanced && (!hasLegacyChat || clearLegacyChat);
 
   const pick = (id: string) => {
     setError("");
@@ -179,32 +206,42 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   };
 
   const runTest = async () => {
-    const model = probeModel.trim() || testModel(f);
+    if (hasLegacyChat) return;
+    const generation = connectionGeneration.current;
+    const seq = ++connectionTestSeq.current;
+    const current = () => generation === connectionGeneration.current && seq === connectionTestSeq.current;
     setTesting(true);
     setTest(null);
     try {
-      setTest(await api<TestResult>("/launchers/test", { method: "POST", json: probeBody(f, old?.name ?? null, model) }));
+      const result = await api<TestResult>("/launchers/test", { method: "POST", json: probeBody(f, old?.name ?? null, modelToTest) });
+      if (current()) setTest(result);
     } catch (e) {
-      setTest({ ok: false, ms: 0, error: errorText(e) });
+      if (current()) setTest({ ok: false, ms: 0, error: errorText(e) });
     } finally {
-      setTesting(false);
+      if (current()) setTesting(false);
     }
   };
   const runDiscover = async () => {
+    if (hasLegacyChat) return;
+    const generation = connectionGeneration.current;
+    const seq = ++discoverySeq.current;
+    const current = () => generation === connectionGeneration.current && seq === discoverySeq.current;
     setDiscovering(true);
     setFound(null);
     try {
       const r = await api<{ models?: ProviderModel[]; error?: string }>("/launchers/discover", { method: "POST", json: probeBody(f, old?.name ?? null) });
+      if (!current()) return;
       const list = r.models ?? [];
       setF((x) => {
-        const models = mergeDiscovered(x.models, list);
+        if (!current()) return x;
+        const models = mergeDiscovered(x.models, list, x.kind === "api" && x.api === "chat");
         return { ...x, models, model: x.model || models.find((m) => m.checked)?.id || "" };
       });
       setFound({ n: list.length, error: r.error });
     } catch (e) {
-      setFound({ n: 0, error: errorText(e) });
+      if (current()) setFound({ n: 0, error: errorText(e) });
     } finally {
-      setDiscovering(false);
+      if (current()) setDiscovering(false);
     }
   };
 
@@ -224,7 +261,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
         setStep("done");
         void readinessChanged();
       } else {
-        const body = providerBody(f, old);
+        const body = providerBody(f, old, clearLegacyChat);
         await api(isNew ? "/launchers" : `/launchers/${enc(String(body.name))}`, { method: isNew ? "POST" : "PUT", json: body });
         toast(isNew ? t("settings-providerwizard.added", { name: String(body.name) }) : t("settings-providerwizard.saved", { name: String(body.name) }), "ok");
         onSaved();
@@ -323,6 +360,11 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
           ))}
         </ol>
 
+        {hasLegacyChat && <label className="flex items-start gap-2 rounded-card bg-inset p-3 text-[12px] leading-relaxed text-ink-2">
+          <input type="checkbox" className="mt-0.5 shrink-0" checked={clearLegacyChat} onChange={(e) => setClearLegacyChat(e.target.checked)} />
+          <span>{t("settings-providerwizard.chat_clear_legacy")}</span>
+        </label>}
+
         {step === "pick" && <PickStep presets={presets} error={presetsError} choice={choice} onPick={pick} />}
 
         {step === "key" && preset && (
@@ -353,12 +395,12 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
             )}
             {isNew && f.kind === "api" && (
               <Labelled label={t("settings-providerwizard.api_protocol")}>
-                <Segmented<ProviderForm["api"]> label={t("settings-providerwizard.api_protocol")} value={f.api} onChange={set("api")} options={[{ v: "messages", label: "Anthropic Messages" }, { v: "responses", label: "OpenAI Responses" }]} />
+                <Segmented<ProviderForm["api"]> wrap label={t("settings-providerwizard.api_protocol")} value={f.api} onChange={set("api")} options={[{ v: "messages", label: "Anthropic Messages" }, { v: "responses", label: "OpenAI Responses" }, { v: "chat", label: t("settings-providerwizard.protocol_chat") }]} />
               </Labelled>
             )}
             <TextField label={t("settings-providerwizard.base_url")} value={f.base_url} onChange={set("base_url")} mono inputMode="url" placeholder="https://…"
-              hint={responses ? t("settings-providerwizard.url_responses_hint") : t("settings-providerwizard.url_gateway_hint")} />
-            {!responses && (
+              hint={f.kind === "api" && f.api === "chat" ? t("settings-providerwizard.url_chat_hint") : openAI ? t("settings-providerwizard.url_responses_hint") : t("settings-providerwizard.url_gateway_hint")} />
+            {!openAI && (
               <Labelled label={t("settings-providerwizard.auth")} hint={f.auth === "bearer" ? t("settings-providerwizard.auth_bearer_hint") : t("settings-providerwizard.auth_key_hint")}>
                 <Segmented<ProviderForm["auth"]> label={t("settings-providerwizard.auth")} value={f.auth} onChange={set("auth")} options={[{ v: "bearer", label: "Bearer" }, { v: "api_key", label: "x-api-key" }]} />
               </Labelled>
@@ -368,14 +410,14 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
                 <div className="flex flex-wrap items-center gap-2">
                   <input value={probeModel} onChange={(e) => setProbeModel(e.target.value)} placeholder={testModel(f) || t("settings-providerwizard.test_model")} aria-label={t("settings-providerwizard.test_model")} autoComplete="off" spellCheck={false}
                     className={cx(FIELD, "h-8 w-full min-w-0 px-2.5 font-mono text-[12.5px] sm:w-auto sm:flex-1")} />
-                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.connect} onClick={() => void runTest()}>
+                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.connect || hasLegacyChat} onClick={() => void runTest()}>
                     {t("settings-providerwizard.test")}
                   </Button>
-                  <Button tone="secondary" icon="download" busy={discovering} disabled={!!problems.connect} onClick={() => void runDiscover()}>
+                  <Button tone="secondary" icon="download" busy={discovering} disabled={!!problems.connect || hasLegacyChat} onClick={() => void runDiscover()}>
                     {t("settings-providerwizard.discover")}
                   </Button>
                 </div>
-                <p className="text-[11px] text-ink-3">{t("settings-providerwizard.test_cost")}</p>
+                <p className="text-[11px] text-ink-3">{hasLegacyChat ? t("settings-providerwizard.chat_probe_legacy") : t("settings-providerwizard.test_cost")}</p>
                 {test && (
                   <p role="status" className={cx("flex items-start gap-1.5 text-[12px]", test.ok ? "text-green" : "text-red")}>
                     <Icon name={test.ok ? "check" : "warning"} size={12} stroke={2.4} className="mt-0.5 shrink-0" />
@@ -642,6 +684,7 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
     setAdding("");
   };
   const checked = f.models.filter((m) => m.checked).length;
+  const chat = f.kind === "api" && f.api === "chat";
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -653,10 +696,11 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
       ) : (
         <ul aria-label={t("settings-providerwizard.models")} className="overflow-hidden rounded-card bg-surface shadow-btn">
           {f.models.map((m, i) => (
-            <ModelRow key={m.id + i} m={m} isDefault={m.checked && f.model === m.id} onChange={(p) => update(i, p)} onDefault={() => setF((x) => ({ ...x, model: m.id }))} />
+            <ModelRow key={m.id + i} m={m} showEffort={!chat} isDefault={m.checked && f.model === m.id} onChange={(p) => update(i, p)} onDefault={() => setF((x) => ({ ...x, model: m.id }))} />
           ))}
         </ul>
       )}
+      {chat && <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.chat_effort_hint")}</p>}
       <div className="flex gap-2">
         <input value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !composing(e.nativeEvent) && (e.preventDefault(), add())} placeholder={t("settings-providerwizard.add_model_id")} aria-label={t("settings-providerwizard.add_model_id")} autoComplete="off" spellCheck={false} className={cx(INPUT, "font-mono")} />
         <Button tone="secondary" icon="plus" disabled={!adding.trim()} onClick={add}>
@@ -667,7 +711,7 @@ function ModelList({ f, setF }: { f: ProviderForm; setF: React.Dispatch<React.Se
   );
 }
 
-function ModelRow({ m, isDefault, onChange, onDefault }: { m: FormModel; isDefault: boolean; onChange: (p: Partial<FormModel>) => void; onDefault: () => void }) {
+function ModelRow({ m, showEffort, isDefault, onChange, onDefault }: { m: FormModel; showEffort: boolean; isDefault: boolean; onChange: (p: Partial<FormModel>) => void; onDefault: () => void }) {
   const toggleEffort = (e: string) => {
     const efforts = m.efforts.includes(e) ? m.efforts.filter((x) => x !== e) : EFFORT_LEVELS.filter((x) => x === e || m.efforts.includes(x));
     onChange({ efforts, default_effort: efforts.length && !efforts.includes(m.default_effort) ? "" : m.default_effort });
@@ -700,7 +744,7 @@ function ModelRow({ m, isDefault, onChange, onDefault }: { m: FormModel; isDefau
             <input value={m.context_window} onChange={(e) => onChange({ context_window: e.target.value })} inputMode="numeric" placeholder="200000" aria-label={t("settings-providerwizard.context_window", { id: m.id })}
               className={cx(SMALL, "w-[104px] font-mono tabular-nums")} />
           </label>
-          <div role="group" aria-label={t("settings-providerwizard.efforts_supported", { id: m.id })} className="flex flex-wrap gap-1">
+          {showEffort && <><div role="group" aria-label={t("settings-providerwizard.efforts_supported", { id: m.id })} className="flex flex-wrap gap-1">
             {EFFORT_LEVELS.map((e) => (
               <button key={e} type="button" aria-pressed={m.efforts.includes(e)} onClick={() => toggleEffort(e)}
                 className={cx("touch-hit h-6 whitespace-nowrap rounded-chip px-2 text-[11px] transition-colors duration-150", m.efforts.includes(e) ? "bg-accent-tint font-medium text-accent" : "bg-inset text-ink-3 shadow-hairline hover:text-ink-2")}>
@@ -718,7 +762,7 @@ function ModelRow({ m, isDefault, onChange, onDefault }: { m: FormModel; isDefau
                 </option>
               ))}
             </select>
-          </label>
+          </label></>}
         </div>
       )}
     </li>
@@ -735,6 +779,8 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
   const list = useId();
   const ids = useMemo(() => f.models.filter((m) => m.checked).map((m) => m.id), [f.models]);
   const launcher = f.kind !== "api";
+  const chat = !launcher && f.api === "chat";
+  if (chat) return <p className="text-[11.5px] leading-relaxed text-ink-3">{t("settings-providerwizard.chat_advanced_hint")}</p>;
   const tier = (k: "opus_model" | "sonnet_model" | "haiku_model" | "fable_model" | "small_model", label: string, hint?: string) => (
     <Labelled label={label} hint={hint}>
       <input value={f[k]} onChange={(e) => set(k)(e.target.value)} list={list} placeholder={t("settings-providerwizard.same_as_default")} aria-label={label} autoComplete="off" spellCheck={false} className={cx(INPUT, "font-mono")} />
