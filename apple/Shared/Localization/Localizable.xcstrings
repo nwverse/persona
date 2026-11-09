@@ -1,6 +1,41 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld child worktrees" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktree"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktrees"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子ワークツリー%lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个子工作树"
+          }
+        }
+      }
+    },
     "Avatar [Agent Row Style]": {
       "extractionState": "manual",
       "localizations": {
