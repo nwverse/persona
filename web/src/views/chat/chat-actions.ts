@@ -19,9 +19,34 @@ export interface ChatActions {
   /** "Branch to new chat" from a reply (its item id): set only when the session can be forked. */
   fork?: (itemId: string) => void;
   /** "Rewind to here" (#2436) on a message of yours: set for a session in a terminal that takes messages. `block` is why it is
-   *  off for now ("" = on: Claude only, working…); `run` goes back to before the message (its UserMessage.id) and puts it
-   *  in the composer, rejecting with the reason in the message. */
-  rewind?: { block: string; run: (messageId: string, text: string, restore: RewindRestore) => Promise<void> };
+   *  off for now ("" = on: Claude only, working…), live: it changes each time the session starts or stops working, and only
+   *  an open menu reads it, so that does not render every message's actions again. `run` goes back to before the message
+   *  (its UserMessage.id) and puts it in the composer, rejecting with the reason in the message. */
+  rewind?: { block: LiveValue<string>; run: RewindRun };
+}
+
+export type RewindRun = (messageId: string, text: string, restore: RewindRestore) => Promise<void>;
+
+/** A value that changes while the rest of the chat's actions stay the same: read where it shows (useSyncExternalStore). */
+export interface LiveValue<T> {
+  get: () => T;
+  subscribe: (listener: () => void) => () => void;
+}
+
+export function liveValue<T>(value: T): LiveValue<T> & { set: (next: T) => void } {
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    subscribe: (l) => {
+      listeners.add(l);
+      return () => void listeners.delete(l);
+    },
+    set: (next) => {
+      if (Object.is(next, value)) return;
+      value = next;
+      listeners.forEach((l) => l());
+    },
+  };
 }
 
 export const ChatActionsContext = createContext<ChatActions | null>(null);

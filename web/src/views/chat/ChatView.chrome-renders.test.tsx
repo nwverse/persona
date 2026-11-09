@@ -2,7 +2,7 @@
 // Each item pushed to the open conversation renders ChatView again (its transcript changed). The header and the composer
 // around it did not change, so they stay put: counted through a leaf each one draws (the header's "Session info" dialog,
 // the composer's context chips, the composer footer's mode chips).
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -35,6 +35,19 @@ vi.mock("../../lib/store", async (load) => ({
     return () => live.listeners.delete(l);
   },
 }));
+// every render of the agent's persisted words (Answer draws them through Markdown with `fade` given, set or not): counted
+const words = vi.hoisted(() => [] as { text: string; fade?: boolean }[]);
+vi.mock("../../ui/Markdown", async (load) => {
+  const real = await load<typeof import("../../ui/Markdown")>();
+  const { createElement } = await import("react");
+  return { ...real, Markdown: (p: ComponentProps<typeof real.Markdown>) => ("fade" in p && words.push({ text: p.text, fade: p.fade }), createElement(real.Markdown, p)) };
+});
+// every message's actions ask for the chat's actions each time they render: counted
+const asks = vi.hoisted(() => ({ n: 0 }));
+vi.mock("./chat-actions", async (load) => {
+  const real = await load<typeof import("./chat-actions")>();
+  return { ...real, useChatActions: () => (asks.n++, real.useChatActions()) };
+});
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
@@ -99,6 +112,44 @@ it("an agent's page: pushed items leave its header and composer alone, a session
   await settle();
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.modes).toBeGreaterThan(0);
+});
+
+it("a pushed reply renders its own words once, mounting them fading, and no other words", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  for (let seq = 1; seq <= 3; seq++) await push(seq);
+  words.length = 0;
+  await push(4);
+  expect(words).toEqual([{ text: "row 4", fade: true }]);
+});
+
+// the first page: this many exchanges, a question and its reply each
+const serve = (exchanges: number) => {
+  const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
+  fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+};
+
+it("a turn starting or ending renders the message actions of its own exchange only", async () => {
+  const flip = async (sid: string, exchanges: number) => {
+    serve(exchanges);
+    await open(<ChatView mid="mac" sid={sid} inPage />, row({ session_id: sid }));
+    asks.n = 0;
+    for (const state of ["idle", "working"] as const) {
+      act(() => applyCompleteSessions([row({ session_id: sid, status: state, state })]));
+      await settle();
+    }
+    return asks.n;
+  };
+  const one = await flip("s1", 1);
+  expect(one).toBeGreaterThan(0); // the exchange that ended, and started again
+  expect(await flip("s2", 6)).toBe(one);
+});
+
+it("finished exchanges before the last two skip drawing while off screen, from a guessed height", async () => {
+  serve(5);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const sections = [...host.querySelectorAll<HTMLElement>("section[data-segment]")];
+  expect(sections.map((s) => s.classList.contains("seg-cv"))).toEqual([true, true, true, false, false]);
+  expect(sections[0].style.getPropertyValue("--seg-est")).toMatch(/^[1-9]\d*px$/);
 });
 
 it("the assistant: the header draws again only when what its face reads changes", async () => {

@@ -168,6 +168,24 @@ struct InboxPolicyModelTests {
         #expect(inbox.items.map(\.tier) == ["fyi", "noise"] && inbox.items[0] == mine)
     }
 
+    @Test func aRuleFromAnotherManagersListIsSavedOnThatManager() async throws {
+        // The Rules list stamps each manager's rules with it: Edit saves on the one it came from.
+        let hub = FakeHub()
+        var named: [String?] = []
+        hub.on("PATCH", "/api/v1/inbox/policies/p2") { req in
+            named.append(req.headers["X-Persona-Manager"])
+            return Data(#"{"applied":0}"#.utf8)
+        }
+        var p2 = try #require(try Self.list().first { $0.id == "p2" })
+        p2.manager = "m-2"
+        let target = InboxPolicyTarget(policy: p2)
+        #expect(target.manager == "m-2" && target.id.hasPrefix("m-2:"))
+        let m = InboxPolicyModel(target: target, deps: deps(hub, Inbox([])))
+        m.tier = .fyi
+        #expect(await m.save())
+        #expect(named == ["m-2"])
+    }
+
     @Test func aFailedSavePutsTheItemsBack() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/inbox/policies", json: #"{"policies":[]}"#)

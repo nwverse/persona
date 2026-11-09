@@ -656,10 +656,11 @@ func (e *askEnv) notices() []string {
 }
 
 // closeDone marks the todo done the way the user does, and waits for what that sets going (its outcome recording).
+// Nothing else finishes a task meanwhile, as a WaitGroup's Add from zero must not race its Wait.
 func (e *askEnv) closeDone(id string) {
 	e.t.Helper()
 	e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
-	e.s.waitTaskOutcomes()
+	e.s.tasks.outcomeRuns.Wait()
 }
 
 // 4. A to-do that is done shows its topic what will be told and when, as soon as its outcome is recorded, and tells the

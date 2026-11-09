@@ -1,17 +1,21 @@
-// Under Vitest the catalog plugin inlines each catalog as one module (i18n-catalogs.ts). These tests pin that the
-// inlined catalog holds exactly the strings the import form builds, so tests see the same keys as the page.
+// The build and Vitest inline each catalog as one module (i18n-catalogs.ts); the dev server imports each namespace
+// file. These tests pin that the inlined catalog holds exactly the strings the import form builds, so the page and
+// the tests see the same keys whichever form loaded them, and that the client catalog's two parts make up the whole.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { catalogFiles, catalogModule, i18nCatalogs } from "./i18n-catalogs";
+import { catalogFallbacks, catalogFiles, catalogModule, i18nCatalogs } from "./i18n-catalogs";
 import { flatten } from "./src/i18n/locales/flatten";
+import startupNamespaces from "./src/i18n/startup-namespaces.json";
 
-type Catalog = { default: Record<string, string> };
+type Catalog = { default: Record<string, string>; fallbacks: Record<string, Record<string, string>> };
 
 const metas = import.meta.glob("./src/i18n/locales/*/_meta.json");
 const client = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=client" });
 const admin = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=admin" });
+const startup = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=client-startup" });
+const rest = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=client-rest" });
 /** flatten() over a language's namespace files of one kind, keyed like the import form's entries. The files are read
  *  from disk, not through an eager import.meta.glob: that made ~900 JSON modules, the slowest import of the suite. */
 function expected(lang: string, kind: "client" | "admin"): Record<string, string> {
@@ -39,13 +43,23 @@ describe("i18n catalogs under Vitest", () => {
     it(`${lang}: the inlined admin catalog equals flatten() of its admin-*.json files`, async () => {
       expect((await admin[key]()).default).toEqual(expected(lang, "admin"));
     });
+    it(`${lang}: client-startup holds the startup namespaces and client-rest the others, together the client catalog`, async () => {
+      const [whole, first, second] = await Promise.all([client[key](), startup[key](), rest[key]()]);
+      const listed = (k: string) => startupNamespaces.includes(k.split(".")[0]);
+      expect(Object.keys(first.default).every(listed)).toBe(true);
+      expect(Object.keys(second.default).some(listed)).toBe(false);
+      expect({ ...first.default, ...second.default }).toEqual(whole.default);
+      const fallbacks: Catalog["fallbacks"] = {};
+      for (const part of [first, second]) for (const [l, entries] of Object.entries(part.fallbacks)) fallbacks[l] = { ...fallbacks[l], ...entries };
+      expect(fallbacks).toEqual(whole.fallbacks);
+    });
   }
 });
 
 describe("catalogModule", () => {
   const meta = fileURLToPath(new URL("./src/i18n/locales/en/_meta.json", import.meta.url));
 
-  it("emits one import per namespace file outside tests, as the build bundles it", () => {
+  it("emits one import per namespace file for the dev server", () => {
     const code = catalogModule(meta, "client");
     const files = catalogFiles(meta, "client");
     expect(files.length).toBeGreaterThan(1);
@@ -69,6 +83,31 @@ describe("catalogModule", () => {
     // en falls back only to zh-Hans: its files feed `fallbacks`
     const zh = fileURLToPath(new URL("./src/i18n/locales/zh-Hans/_meta.json", import.meta.url));
     expect(watched).toEqual([meta, ...catalogFiles(meta, "client"), ...catalogFiles(zh, "client")]);
+  });
+
+  it("inlines in the build, with the strings and fallbacks the import form gives, and imports when serving", () => {
+    const vitest = process.env.VITEST;
+    const plugin = i18nCatalogs as unknown as {
+      configResolved(config: { command: string }): void;
+      load(this: { addWatchFile(file: string): void }, id: string): string;
+    };
+    const load = (command: string) => {
+      plugin.configResolved({ command });
+      return plugin.load.call({ addWatchFile: () => {} }, `\0i18n-catalog:client:${meta}.js`);
+    };
+    delete process.env.VITEST;
+    try {
+      const code = load("build");
+      // the module's two exports, evaluated as a bundle would
+      const run = new Function(code.replace(/^export default /m, "const d = ").replace(/^export const fallbacks = /m, "const f = ") + "\nreturn [d, f];");
+      const [catalog, fallbacks] = run() as [Record<string, string>, Record<string, Record<string, string>>];
+      expect(catalog).toEqual(expected("en", "client"));
+      expect(fallbacks).toEqual(catalogFallbacks(fileURLToPath(new URL("./src/i18n/locales/en", import.meta.url)), "client"));
+      expect(load("serve")).toBe(catalogModule(meta, "client"));
+    } finally {
+      process.env.VITEST = vitest;
+      plugin.configResolved({ command: "serve" });
+    }
   });
 
   it("splits client and admin namespaces by the admin- prefix", () => {

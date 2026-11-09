@@ -284,6 +284,10 @@
     <string name="agents_new_use_directory">このディレクトリを使用</string>
     <string name="agents_new_retry_check">結果を再確認</string>
     <string name="agents_new_start">チャットを開始</string>
+    <string name="agents_new_recent">最近</string>
+    <string name="agents_new_recent_separator">" · "</string>
+    <string name="agents_new_recent_remove">最近から削除</string>
+    <string name="agents_new_recent_clear">最近の設定をすべて消去</string>
     <string name="agents_mode_follow">ランチャーに従う</string>
     <string name="agents_mode_default">毎回確認</string>
     <string name="agents_mode_accept_edits">ファイルを自動編集</string>
@@ -437,6 +441,7 @@
     <string name="agents_handoff_directory">作業ディレクトリ</string>
     <string name="agents_handoff_mode_default">デフォルト（default）</string>
     <string name="agents_handoff_mode_bypass">すべて許可（bypassPermissions）</string>
+    <string name="agents_handoff_mode_named">%1$s（%2$s）</string>
     <string name="agents_handoff_pick_agent">既存のエージェントを選択</string>
     <string name="agents_handoff_no_agents">実行中のエージェントはありません</string>
     <string name="agents_handoff_no_agents_hint">今すぐタスクを割り当てられるアクティブなエージェントはありません。</string>
