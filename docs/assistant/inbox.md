@@ -141,7 +141,7 @@ a summary up to 40 characters, and a short reason:
   `read_error` reports a failed source read in the latest round (`timeout` / `rate_limited` / `failed`; unknown codes become `failed`), and `read_reason` is a human-readable sentence in all three languages.
   Existing items remain; previously collected data still present in a hub-held round is also used. Clear the diagnostic on the next successful read. Memory only: after hub or manager restart, it is unknown until the next round.
   Memory only, recomputed per round for read sources; unread sources retain status until removed. Nothing waiting yields `{"state": "ok", "waiting": 0}`.
-  Apps use it for the waiting-for-triage banner below.
+  Apps use it for the waiting-for-triage banner below, and Android and web show sources with a `read_error` in a quiet neutral notice under it, one line per source, "name: `read_reason`" (#1849; mock `MOCK_INBOX_UNREAD`).
 - **Waiting-for-triage banner** (#1773, consistent on web, iOS / Mac, Android): if `triage.state` is not `ok` and `waiting > 0`, show a non-dismissible caution-colored (orange) banner at the top of the Inbox list, below search / filters and above the first section.
   It follows list refresh (Inbox pushes, reconnect, pull-to-refresh), disappearing on recovery to `ok`. Older hubs without `triage` show none.
   - Text: with exactly one waiting source (`waiting > 0` in `sources`, with `name`), "{waiting} {name} messages waiting for triage: {reason}"; otherwise "{waiting} messages waiting for triage: {reason}."
