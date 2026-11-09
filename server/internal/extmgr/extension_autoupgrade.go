@@ -51,9 +51,11 @@ const (
 // from by hand, as opposed to one that did not come up.
 const skippedByUser = "user"
 
-// autoUpgradePausedDisabled is ExtensionView.AutoUpgradePaused for an extension switched off: its own switch is kept,
-// and applies again once the extension is on.
-const autoUpgradePausedDisabled = "disabled"
+// Reasons why ExtensionView.AutoUpgradePaused suspends the saved auto-upgrade switch without changing it.
+const (
+	autoUpgradePausedDisabled      = "disabled"
+	autoUpgradePausedMarketRemoved = "market_removed"
+)
 
 // extensionUpgradeSettings are the switches and what the hub remembers (the hub's settings, key plugin_upgrades).
 type extensionUpgradeSettings struct {
@@ -636,6 +638,15 @@ func (u *extensionUpgrades) decorate(ctx context.Context, v *ExtensionView, p *e
 	v.AutoUpgrade = &own
 	if !p.Record.Enabled {
 		v.AutoUpgradePaused = autoUpgradePausedDisabled
+	}
+	// Load registration state before treating a missing entry as removal. An unreadable catalog is still registered.
+	if u.h.marketsLoad(ctx) == nil {
+		ms := u.h.marketsState()
+		ms.mu.Lock()
+		if ms.byID[upgradesFrom(p)] == nil {
+			v.AutoUpgradePaused = autoUpgradePausedMarketRemoved
+		}
+		ms.mu.Unlock()
 	}
 	if up, _, _, ok := u.candidateIn(p, u.h.contextLang(ctx)); ok {
 		v.Upgrade = &up
