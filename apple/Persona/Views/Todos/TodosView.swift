@@ -14,6 +14,8 @@ struct TodosView: View {
     @State private var showCreate = false
     @State private var creatingTitle = ""
     @State private var creatingNotes = ""
+    /// The New To-Do sheet's notes mic (#2188).
+    @State private var dictation = Dictation()
     @State private var expandedDone = false
     /// A to-do opened from the calendar (and, in DEBUG screenshots, `-openTodoTitled <text>`: the first whose title has it).
     @State private var pushed: TodoDetailRoute?
@@ -218,11 +220,17 @@ struct TodosView: View {
                     TextField(String(localized: "Title"), text: $creatingTitle)
                         .lineLimit(1)
                         .onSubmit { add() }
-                    TextField(String(localized: "Notes (sent along when handed to an agent)"), text: $creatingNotes, axis: .vertical)
-                        .lineLimit(3...8)
+                    HStack(alignment: .top, spacing: Theme.Space.s) {
+                        TextField(String(localized: "Notes (sent along when handed to an agent)"), text: $creatingNotes, axis: .vertical)
+                            .lineLimit(3...8)
+                        FieldMicButton(dictation: dictation, text: $creatingNotes, id: "todo.new.notes.mic")
+                            .font(Theme.Font.body)
+                            .foregroundStyle(Theme.accent)
+                    }
                 }
             }
             .themedPage()
+            .onDisappear(perform: stopDictation) // cancelled, swiped away or added
             .navigationTitle("New To-Do")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -243,6 +251,7 @@ struct TodosView: View {
     private func add() {
         let t = creatingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
+        stopDictation() // what is saved is what the field shows
         let n = creatingNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         // The sheet closes only once the todo is saved: a failed save keeps the typed title and notes.
         Task {
@@ -253,6 +262,10 @@ struct TodosView: View {
                 AppModel.shared.show(error)
             }
         }
+    }
+
+    private func stopDictation() {
+        if dictation.isListening { dictation.stop() }
     }
 }
 
