@@ -157,6 +157,27 @@ func TestUpdateSettingsWriteAfterRecoveryPreservesHistory(t *testing.T) {
 	}
 }
 
+// A choice the database did not save is refused and not kept in memory either, where an update waiting for idle and
+// the view broadcast to the apps would act on it until the next read.
+func TestUpdateSettingsFailedWriteKeepsStoredSettings(t *testing.T) {
+	u, st, want := updaterWithStoredSettings(t)
+	u.h.build = update.Make("v1-202611021500", "release", "202611021500", "https://example.com/dl")
+	st.writeErr = errors.New("database unavailable")
+	mux := http.NewServeMux()
+	u.routes(mux)
+	w := httptest.NewRecorder()
+	logRequests(u.h, mux).ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/v1/hub/update/settings", strings.NewReader(`{"auto":true}`)))
+	if w.Code != http.StatusServiceUnavailable || st.puts != 1 {
+		t.Fatalf("failed write: status = %d, puts = %d, body = %s", w.Code, st.puts, w.Body.String())
+	}
+	if !reflect.DeepEqual(u.settings, want) {
+		t.Fatalf("unsaved settings kept in memory: %+v", u.settings)
+	}
+	if v := u.view(); v.Auto || !v.AutoNotice {
+		t.Fatalf("view shows the unsaved choice: auto = %v, auto_notice = %v", v.Auto, v.AutoNotice)
+	}
+}
+
 func TestUpdateRecordWaitsForSettingsRecovery(t *testing.T) {
 	u, st, want := updaterWithStoredSettings(t)
 	st.readErr = errors.New("database unavailable")

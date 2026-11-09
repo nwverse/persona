@@ -16,7 +16,7 @@ struct TranslationSettingsView: View {
     var body: some View {
         SettingsForm {
             Section {
-                Toggle(isOn: $enabled) { Label("Auto-Translate", systemImage: Theme.Icon.translate) }
+                SettingsSwitchRow(title: String(localized: "Auto-Translate"), symbol: Theme.Icon.translate, isOn: $enabled)
                 ModelConfigurationLink(title: String(localized: "Translation Model"), purposeID: "translate")
             } footer: {
                 Text("Content not in the target language is translated automatically, and you can switch back to the original anytime. Translation uses the translation model in Model Configuration.")
@@ -28,14 +28,14 @@ struct TranslationSettingsView: View {
                     }
                 }
                 Section {
-                    Toggle(isOn: $mail) { Label("Mail [Assistant View 3d708e]", systemImage: Theme.Icon.mail) }
+                    SettingsSwitchRow(title: String(localized: "Mail [Assistant View 3d708e]"), symbol: Theme.Icon.mail, isOn: $mail)
                     // Feishu chats are picked from the hub's (`/api/v1/lark/…`, the Lark extension's).
                     if larkChats {
                         Button { picking = true } label: {
                             LabeledContent {
                                 Text(chats.isEmpty ? String(localized: "None [Translation Settings View bcb53d]") : String(localized: "\(chats.count) Chats [Claude Dirs Section 537bee]")).foregroundStyle(.secondary).lineLimit(1)
                             } label: {
-                                Label { Text("Lark Chats").foregroundStyle(Color.primary) } icon: { Image(systemName: Theme.Icon.conversation) }
+                                Label { Text("Lark Chats").foregroundStyle(Color.primary) } icon: { ThemedIcon(Theme.Icon.conversation) }
                             }
                         }
                         .accessibilityHint("Choose Lark chats to translate")
@@ -120,7 +120,7 @@ struct TranslationChatPicker: View {
                             LarkAvatarImage(name: c.name, url: conv?.avatar, isGroup: conv?.isGroup ?? true, size: Theme.Size.wellM)
                             Text(c.name).foregroundStyle(.primary).lineLimit(1)
                             Spacer(minLength: Theme.Space.s)
-                            Image(systemName: on ? Theme.Icon.successFilled : Theme.Icon.unchecked)
+                            ThemedIcon(on ? Theme.Icon.successFilled : Theme.Icon.unchecked)
                                 .foregroundStyle(on ? Theme.accent : Color.secondary)
                         }
                     }

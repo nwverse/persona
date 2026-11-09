@@ -100,7 +100,7 @@ final class AgentsPushPopRaceTests: XCTestCase {
         self.hub = hub
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-ui.oldLayout", "NO", "-holdChromeOpen", "YES",
+        app.launchArguments = ["-pairURL", pair, "-tab", "dev", "-holdChromeOpen", "YES",
                                "-runtimeCLI", "\(Self.port)", "-runtimeCLIToken", Self.token]
         app.launchPinned()
         let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["允许"]

@@ -3,17 +3,17 @@ package usagesource
 import (
 	"encoding/json"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func decodeJSON(data []byte, out any) error { return json.Unmarshal(data, out) }
 
-var lengthKind = regexp.MustCompile(`^(\d+)(m|h|d|w)$`)
+var lengthKind = lazyre.New(`^(\d+)(m|h|d|w)$`)
 
 // KindMinutes is the length of a window from what a gateway calls it: "five_hour" / "5h" → 300, "weekly" / "7d" →
 // 10080, "hourly", "daily", "monthly" (30 days) and "<n>m|h|d|w". A kind with the length as one of its words

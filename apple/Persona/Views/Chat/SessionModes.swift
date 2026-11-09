@@ -11,8 +11,8 @@ nonisolated enum SessionModes {
 
     static let permissionModes: [Option] = [
         Option(id: "default", title: String(localized: "Ask First"), detail: String(localized: "Asks you before editing files or running commands"), symbol: Theme.Icon.askFirst),
-        Option(id: "acceptEdits", title: String(localized: "Auto-Edit"), detail: String(localized: "Edits files without asking, still asks before commands"), symbol: "pencil.line"),
-        Option(id: "plan", title: String(localized: "Plan Only"), detail: String(localized: "Reads code and writes a plan, acts only once you approve"), symbol: "list.bullet.clipboard"),
+        Option(id: "acceptEdits", title: String(localized: "Auto-Edit"), detail: String(localized: "Edits files without asking, still asks before commands"), symbol: Theme.Icon.editFile),
+        Option(id: "plan", title: String(localized: "Plan Only"), detail: String(localized: "Reads code and writes a plan, acts only once you approve"), symbol: Theme.Icon.plan),
         Option(id: "auto", title: String(localized: "Auto", comment: "Permission mode: the agent judges the risk itself"), detail: String(localized: "Judges the risk itself and does safe things right away"), symbol: "wand.and.sparkles"),
         Option(id: "bypassPermissions", title: String(localized: "Allow Everything"), detail: String(localized: "Never asks. Only available when starting"), symbol: Theme.Icon.allowEverything),
     ]
@@ -84,9 +84,17 @@ nonisolated enum SessionModes {
         }
     }
 
-    /// What applying a model pick sends: the alias, unless the session already runs it.
+    /// The launcher whose /model list and typed IDs a session's switch offers: the session's own, plain claude when it
+    /// started without one (the web's `sessionLauncher`).
+    static func launcher(_ s: Session?) -> String {
+        guard let l = s?.launcher, !l.isEmpty else { return "claude" }
+        return l
+    }
+
+    /// What applying a model pick sends: the alias, unless the session already runs it (Default too, while it runs a
+    /// typed ID: that is not the default, #1644).
     @MainActor static func modelPatch(_ picked: String, current: String?) -> String? {
-        picked == PromptItems.claudeModelID(current) ? nil : picked
+        picked == PromptItems.runningModelID(current) ? nil : picked
     }
 
     static func modeTint(_ id: String?) -> Color {
@@ -108,8 +116,14 @@ nonisolated enum SessionModes {
     struct ComposerTitle: Equatable, Sendable {
         var model: String
         var effort: String?
-        /// For VoiceOver and the UI tests: "Opus 5.5 High".
-        var spoken: String { effort.map { "\(model) \($0)" } ?? model }
+        /// The workflow mark after the effort (#1307): ultracode on, or a Codex thread at "ultra".
+        var mark: Ultracode.Mark? = nil
+        /// For VoiceOver and the UI tests: "Opus 5.5 High", "Opus 5.5 High, ultracode on".
+        var spoken: String {
+            let words = effort.map { "\(model) \($0)" } ?? model
+            guard let extra = mark?.spoken else { return words }
+            return words + String(localized: ", ", comment: "List separator") + extra
+        }
     }
 
     /// "Opus 5.5" + "High"; the model alone; "Thinking" + "High" with no model known; nil with neither.
@@ -159,6 +173,8 @@ struct SessionModeBar: View {
     let key: SessionKey
     var session: Session?
     @State private var changing = false
+    /// "Other Model…": a model ID typed by hand (#1644).
+    @State private var typingModel = false
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -171,7 +187,7 @@ struct SessionModeBar: View {
                 Menu {
                     Picker("Permission Mode", selection: Binding(get: { mode ?? "" }, set: { new in change(mode: new) })) {
                         ForEach(options(SessionModes.switchableModes(session), current: mode)) { o in
-                            Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id)
+                            Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id)
                         }
                     }
                     .pickerStyle(.inline)
@@ -183,40 +199,58 @@ struct SessionModeBar: View {
                 .accessibilityLabel("Permission Mode: \(SessionModes.modeLabel(mode) ?? SessionModes.unknown)")
             }
             Menu {
+                // Claude Code's ultracode (#1307): its own switch under the effort, not a level of it (declared before it where
+                // the menu lists its items the other way round, `UltracodeMenuSection.leadsEffort`).
+                if UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
                 Picker("Thinking Effort", selection: Binding(get: { effort ?? "" }, set: { new in change(effort: new) })) {
                     ForEach(SessionModes.effortOptions(session)) { o in
-                        Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id)
+                        Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id)
                     }
                 }
                 .pickerStyle(.inline)
+                if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
                 // The model in the same chip (#3119, the web's #2434): Claude Code takes `/model`, typed by the node.
                 if SessionModes.switchesModel(session) {
                     let busy = SessionModes.modelBusy(session)
                     Section("Model [Assistant View c98e11]") {
-                        Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.claudeModelID(session?.model) }, set: { id in change(model: id) })) {
-                            ForEach(PromptItems.claudeModels, id: \.id) { m in
+                        // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it.
+                        Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model) }, set: { id in change(model: id) })) {
+                            ForEach(PromptItems.runningModels(session?.model), id: \.id) { m in
                                 Text(m.name).tag(m.id)
                             }
                         }
                         .pickerStyle(.inline)
                         .disabled(busy != nil)
+                        Button { typingModel = true } label: { Label("Other Model…", systemImage: Theme.Icon.keyboard) }
+                            .disabled(busy != nil)
+                            .accessibilityIdentifier("sessionModes.otherModel")
                         // A menu draws no section footers: the note is a row of its own (not tappable).
                         Text(busy ?? String(localized: "The model you pick also becomes the default for new sessions"))
                     }
                 }
             } label: {
                 ModeChip(symbol: SessionModes.effort(effort)?.symbol ?? Theme.Icon.effort,
-                         text: effort.map { String(localized: "Thinking \(SessionModes.effortLabel($0) ?? $0) [Session Modes e77236]") } ?? String(localized: "Thinking Effort"), tint: .secondary, known: effort != nil)
+                         text: effort.map { String(localized: "Thinking \(SessionModes.effortLabel($0) ?? $0) [Session Modes e77236]") } ?? String(localized: "Thinking Effort"), tint: .secondary, known: effort != nil,
+                         mark: Ultracode.chipMark(session))
             }
             .labelOnlyMenu()
-            .accessibilityLabel(SessionModes.switchesModel(session)
-                ? String(localized: "Thinking effort and model: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]")), \(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model"))")
-                : String(localized: "Thinking effort: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]"))"))
+            .accessibilityLabel(effortSpoken)
             if changing { ProgressView().controlSize(.mini) }
             Spacer(minLength: 0)
         }
         .disabled(changing)
         .animation(Theme.Motion.standard, value: changing)
+        .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: session) }
+    }
+
+    /// The effort chip read out, with ", ultracode on" while it carries the mark (#1307).
+    private var effortSpoken: String {
+        let effort = session?.effort
+        let words = SessionModes.switchesModel(session)
+            ? String(localized: "Thinking effort and model: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]")), \(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model"))")
+            : String(localized: "Thinking effort: \(SessionModes.effortLabel(effort) ?? String(localized: "Unknown [Session Modes 4d8c1c]"))")
+        guard let extra = Ultracode.chipMark(session)?.spoken else { return words }
+        return words + String(localized: ", ", comment: "List separator") + extra
     }
 
     /// The switchable options plus the current one when it is not among them (bypassPermissions, an unknown mode).
@@ -239,7 +273,7 @@ struct SessionModeBar: View {
 
 /// The shell composer's model menu for a running conversation (#1091): the model (a choice where Claude Code takes
 /// `/model`, otherwise the one it runs), the effort, and the permission mode a level down. Effort and mode are the same
-/// choices as `SessionModeBar`, which the old layout keeps above its composer.
+/// choices as the `SessionModeBar` used above platform composers.
 struct SessionModesMenu: View {
     @Environment(AppModel.self) private var model
     let key: SessionKey
@@ -250,11 +284,15 @@ struct SessionModesMenu: View {
     var setsModes = true
     /// Only the effort can change, among the session's own levels (a Codex thread on its app-server, `Session.setsEffortOnly`).
     var setsEffortOnly = false
+    /// "Other Model…" where a model can be picked: the composer opens `SessionTypedModelSheet` (#1644).
+    var otherModel: (() -> Void)? = nil
 
-    /// The button's title for this conversation.
+    /// The button's title for this conversation; the effort carries the workflow mark while ultracode is on (#1307).
     static func title(_ session: Session?, setsModes: Bool) -> SessionModes.ComposerTitle? {
-        SessionModes.composerTitle(model: SessionModes.modelName(session?.model),
-                                   effort: setsModes ? SessionModes.effortLabel(session?.effort) : nil)
+        var title = SessionModes.composerTitle(model: SessionModes.modelName(session?.model),
+                                               effort: setsModes ? SessionModes.effortLabel(session?.effort) : nil)
+        if setsModes { title?.mark = Ultracode.chipMark(session) }
+        return title
     }
 
     var body: some View {
@@ -267,34 +305,48 @@ struct SessionModesMenu: View {
         }
         Section("Model [Assistant View c98e11]") {
             if picksModel {
-                Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.claudeModelID(session?.model) }, set: { id in
-                    guard id != PromptItems.claudeModelID(session?.model) else { return }
-                    model.sendNow(key, text: "/model \(id)", images: []) // photos and quotes stay for the message
+                // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it, and Default switches back.
+                Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model) }, set: { id in
+                    guard case .send(let text) = PromptItems.modelPick(id, running: session?.model) else { return }
+                    model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
                 })) {
-                    ForEach(PromptItems.claudeModels, id: \.id) { m in
+                    ForEach(PromptItems.runningModels(session?.model), id: \.id) { m in
                         Text(m.name).tag(m.id)
                     }
                 }
                 .pickerStyle(.inline)
+                if let otherModel {
+                    // Goes through POST …/modes (the node's checks), not a typed `/model` message.
+                    let busy = SessionModes.modelBusy(session)
+                    Button(action: otherModel) {
+                        Label { Text("Other Model…"); if let busy { Text(busy) } } icon: { ThemedIcon(Theme.Icon.keyboard) }
+                    }
+                    .disabled(busy != nil)
+                    .accessibilityIdentifier("sessionModes.otherModel")
+                }
             } else {
                 Text(SessionModes.modelName(session?.model) ?? String(localized: "Unknown model")) // what it runs; changed where it was started
             }
         }
         if setsModes || setsEffortOnly {
+            // Claude Code's ultracode (#1307): its own switch under the effort, not a level of it (declared before it where
+            // the menu lists its items the other way round, `UltracodeMenuSection.leadsEffort`).
+            if UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
             Section("Thinking Effort") {
                 Picker("Thinking Effort", selection: Binding(get: { effort ?? "" }, set: { new in change(effort: new) })) {
                     ForEach(SessionModes.effortOptions(session)) { o in
-                        Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id)
+                        Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id)
                     }
                 }
                 .pickerStyle(.inline)
             }
+            if !UltracodeMenuSection.leadsEffort { UltracodeMenuSection(key: key, session: session) }
         }
         if setsModes {
             Picker(selection: Binding(get: { mode ?? "" }, set: { new in change(mode: new) })) {
                 let list = SessionModes.switchableModes(session)
                 ForEach(list + (mode.flatMap { m in list.contains { $0.id == m } ? nil : SessionModes.mode(m) }.map { [$0] } ?? [])) { o in
-                    Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id)
+                    Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id)
                 }
             } label: {
                 Label("Permission Mode: \(SessionModes.modeLabel(mode) ?? SessionModes.unknown)", systemImage: SessionModes.mode(mode)?.symbol ?? Theme.Icon.askFirst)
@@ -309,6 +361,22 @@ struct SessionModesMenu: View {
     }
 }
 
+/// "Other Model…" for a running Claude Code session (#1644): a model ID typed by hand, with the IDs typed before for its
+/// launcher on that computer, goes through POST …/modes (the node types `/model <id>` behind its own checks), never as a
+/// message.
+struct SessionTypedModelSheet: View {
+    @Environment(AppModel.self) private var model
+    let key: SessionKey
+    var session: Session?
+
+    var body: some View {
+        TypedModelSheet(machine: key.machineRef, launcher: SessionModes.launcher(session), initial: PromptItems.unlistedModel(session?.model) ?? "",
+                        note: String(localized: "The model you pick also becomes the default for new sessions")) { id in
+            Task { await model.setModes(key, model: id) }
+        }
+    }
+}
+
 /// The model menu's warning while everything is allowed (Allow Everything): red (a destructive item: its words and its shield),
 /// as the composer's button used to be. Picking it does nothing; the permission mode is chosen a few rows up.
 struct BypassWarning: View {
@@ -319,7 +387,7 @@ struct BypassWarning: View {
                 Text("Edits files and runs commands without asking")
             } icon: {
                 // A menu draws its images in the accent unless they carry their own colors.
-                Image(systemName: Theme.Icon.allowEverything).symbolRenderingMode(.palette).foregroundStyle(Theme.danger)
+                ThemedIcon(Theme.Icon.allowEverything).symbolRenderingMode(.palette).foregroundStyle(Theme.danger)
             }
         }
         .tint(Theme.danger)
@@ -332,13 +400,20 @@ struct ModeChip: View {
     var text: String
     var tint: Color
     var known = true
+    /// The workflow mark after the label (#1307): ultracode on, or a Codex thread at "ultra". The chip's menu says it
+    /// to VoiceOver (`SessionModeBar.effortSpoken`).
+    var mark: Ultracode.Mark? = nil
 
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
-            Image(systemName: symbol).font(Theme.Font.labelStrong)
+            ThemedIcon(symbol).font(Theme.Font.labelStrong)
             Text(text).lineLimit(1)
-            Image(systemName: Theme.Icon.choices).font(Theme.Font.labelHeavy).imageScale(.small).opacity(0.6)
+            if mark != nil {
+                UltracodeMark(font: Theme.Font.labelStrong, spoken: nil).transition(.opacity)
+            }
+            ThemedIcon(Theme.Icon.choices).font(Theme.Font.labelHeavy).imageScale(.small).opacity(0.6)
         }
+        .animation(UltracodeMark.motion, value: mark)
         .font(Theme.Font.labelMedium)
         .foregroundStyle(known ? (tint == .secondary ? Color.primary : tint) : Color.secondary)
         .padding(.horizontal, Theme.Space.m)
@@ -359,7 +434,7 @@ struct NewSessionModePicker: View {
             Menu {
                 Picker("Permission Mode", selection: $mode) {
                     Text("Use Launcher's").tag("")
-                    ForEach(modes) { o in Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id) }
+                    ForEach(modes) { o in Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id) }
                 }
                 .pickerStyle(.inline)
             } label: {
@@ -370,7 +445,7 @@ struct NewSessionModePicker: View {
             Menu {
                 Picker("Thinking Effort", selection: $effort) {
                     Text("Use Launcher's").tag("")
-                    ForEach(SessionModes.startEffortLevels) { o in Label { Text(o.title); Text(o.detail) } icon: { Image(systemName: o.symbol) }.tag(o.id) }
+                    ForEach(SessionModes.startEffortLevels) { o in Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id) }
                 }
                 .pickerStyle(.inline)
             } label: {

@@ -71,33 +71,23 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             record.item.copy(doneAt = if (done) java.time.Instant.now().toString() else null)
         } ?: record.item
     })
-    fun list(settings: InboxListSettings): InboxListResult {
+    fun list(settings: InboxListSettings): InboxConversationView {
         val original = buildInboxList(
-        items = items, interactions = snapshot.interactions, sessions = snapshot.sessions, mutes = snapshot.mutes, settings = settings,
+            items = items, interactions = snapshot.interactions, sessions = snapshot.sessions,
+            mutes = snapshot.mutes, settings = settings,
         )
-        if (conversations == null) return original
-        val matching = original.groups.flatMap { it.rows }.map { it.id }.toSet()
-        val native = conversationList.rows.filter { row -> row.records.any { it.item.id in matching } }
-        val nativeIds = native.flatMap { it.records }.map { it.item.id }.toSet()
-        val order = listOf("action", "fyi", "read-pending", "noise", "done")
-        val grouped = order.mapNotNull { id ->
-            val base = original.groups.firstOrNull { it.id == id }
-            val added = native.filter { it.section != InboxConversationSection.Read && it.section.groupId == id }
-                .map { InboxRow(InboxRowType.Item, it.itemId) }
-            val rows = added + base?.rows.orEmpty().filterNot { it.type == InboxRowType.Item && it.id in nativeIds }
-            if (rows.isEmpty()) null else InboxGroup(id, base?.title ?: persona.core.contracts.CoreText.plain(res.getString(R.string.inbox_conversations_read_pending)),
-                rows, if (id in settings.expanded) rows else emptyList(), id !in settings.expanded)
-        }
-        return original.copy(groups = grouped)
+        return conversationInboxView(original, if (conversations == null) null else conversationList, settings, pending,
+            persona.core.contracts.CoreText.plain(res.getString(R.string.inbox_conversations_read_pending)))
     }
-    val conversationRows = conversationList.rows.associateBy { it.itemId }
-    val result = list(InboxListSettings(source, kind, query, expanded.toSet() + section))
+    val view = list(InboxListSettings(source, kind, query, expanded.toSet() + section))
+    val result = view.list
+    val conversationRows = view.conversations.associateBy { it.itemId }
     // In progress: the hub says so (`status`, inbox phase 1), or, from an older hub, the AI twin is drafting a reply.
     fun working(row: InboxRow) = row.type == InboxRowType.Item && records[row.id]?.agentWorking == true
     // A hub that sends `status` calls the section In progress; an older hub's is the AI twin's "Persona is working on it" as before.
     val eventHub = snapshot.records.any { it.item.status != null }
     // The summary speaks for the whole inbox, so it reads the unfiltered list.
-    val overall = if (query.isEmpty() && source.isEmpty() && kind.isEmpty()) result else list(InboxListSettings())
+    val overall = if (query.isEmpty() && source.isEmpty() && kind.isEmpty()) result else list(InboxListSettings()).list
     val workingRows = result.groups.filter { it.id != "done" }.flatMap { it.rows }.filter(::working)
     val triageGroups = result.groups.mapNotNull { group ->
         if (group.id == "done") group else {
@@ -185,29 +175,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     var showMutes by remember { mutableStateOf(false) }
-    var readingFyi by remember { mutableStateOf(false) }
-    var fyiRetry by remember { mutableStateOf<List<InboxReadSnapshot>?>(null) }
-    var fyiNotice by remember { mutableStateOf<String?>(null) }
-    fun readFyi(group: InboxGroup, retry: List<InboxReadSnapshot>? = null) {
-        val controller = conversations ?: run { fyiNotice = res.getString(R.string.inbox_conversations_read_skipped); return }
-        if (readingFyi) return
-        val keys = group.rows.mapNotNull { conversationRows[it.id]?.key }.toSet()
-        val captured = retry ?: controller.captureFyi().filter { it.key in keys }
-        val notCaptured = if (retry == null) group.rows.size - captured.size else 0
-        readingFyi = true
-        scope.launch {
-            try {
-                val read = controller.readFyi(captured)
-                fyiRetry = read.failed.takeIf { it.isNotEmpty() }
-                fyiNotice = when {
-                    read.failed.isNotEmpty() -> res.getString(R.string.inbox_conversations_read_failed)
-                    notCaptured > 0 || read.skipped.isNotEmpty() -> res.getString(R.string.inbox_conversations_read_skipped)
-                    else -> res.getString(R.string.inbox_conversations_read_success)
-                }
-            } catch (e: CancellationException) { throw e }
-            finally { readingFyi = false }
-        }
-    }
+    val sectionReader = rememberInboxSectionReader(conversations, conversationRows)
     if (showMutes) InboxMutesSheet(repository, onDismiss = { showMutes = false })
     LaunchedEffect(repository) { refresh(collectNow = false) }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
@@ -306,10 +274,9 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 item("error") { StatusText(message, isError = true) }
             }
             if (preferenceError) item("preference-error") { StatusText(stringResource(R.string.inbox_filters_not_saved), isError = true) }
-            fyiNotice?.let { notice -> item("fyi-read-result") {
-                JNotice(notice, actionLabel = fyiRetry?.let { stringResource(R.string.inbox_retry) }, onAction = fyiRetry?.let { retry -> {
-                    groups.firstOrNull { it.id == "fyi" }?.let { readFyi(it, retry) }
-                } })
+            sectionReader.notice?.let { notice -> item("section-read-result") {
+                JNotice(notice, actionLabel = sectionReader.retry?.let { stringResource(R.string.inbox_retry) },
+                    onAction = sectionReader.retry)
             } }
             if (groups.isEmpty() && !loadingFirst) item("empty") {
                 val filtered = query.isNotEmpty() || source.isNotEmpty() || kind.isNotEmpty() || section.isNotEmpty()
@@ -338,10 +305,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             filter(currentFilters.copy(section = if (section == group.id) "" else section,
                                 expanded = if (group.id in expanded) expanded - group.id else expanded + group.id))
                         }),
-                        action = if (group.id in setOf("fyi", "noise")) ({
-                            JTextButton(if (group.id == "fyi") stringResource(R.string.inbox_conversations_read_all) else stringResource(R.string.inbox_clear_all), {
-                                if (group.id == "fyi") readFyi(group) else markAll(allTargets(listOf(group)), InboxBulkAction.Done)
-                            }, enabled = !readingFyi)
+                        action = if (group.id in setOf("action", "fyi", "noise")) ({
+                            JTextButton(if (group.id != "noise") stringResource(R.string.inbox_conversations_read_all) else stringResource(R.string.inbox_clear_all), {
+                                if (group.id != "noise") sectionReader.read(group) else markAll(allTargets(listOf(group)), InboxBulkAction.Done)
+                            }, enabled = !sectionReader.busy)
                         }) else null,
                     )
                 }
@@ -363,7 +330,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         InboxConversationItemRow(conversation, navigator, position, onlineSince,
                             done = done, busy = conversation.records.any { it.item.id in pending },
                             onHandOff = { handingOff = conversation.itemId },
-                            onDone = { markAll(conversation.records.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) },
+                            onDone = { markAll(conversation.records.filter { it.item.isDone == done }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) },
                                 if (done) InboxBulkAction.Reopen else InboxBulkAction.Done) })
                     } ?: records[row.id]?.let { record ->
                         val done = pending[record.item.id] ?: record.item.isDone

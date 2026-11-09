@@ -58,6 +58,7 @@
   "protocol_version": "协议版本是 {current}，hub 要 {required}",
   "wrong_id": "程序自报的 id 是「{current}」，不是「{required}」",
   "wrong_version": "程序自报的版本是「{current}」，不是「{required}」",
+  "attached_version": "独立运行的程序是 {current} 版，这个管理者批准的是 {approved} 版。在 hub 机器上（personad extension upgrade {id} <它的 remote: 来源>）批准这个版本之前不会使用它",
   "socket_connect": "连不上 {path}：{err}",
   "program_missing": "没有找到 {name} 的程序（{path}）",
   "sandbox_start": "{name} 的沙箱起不来：{err}",

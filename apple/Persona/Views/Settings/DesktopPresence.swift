@@ -10,7 +10,7 @@ struct DesktopPresenceRow: View {
     var body: some View {
         Button { showSheet = true } label: {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: Theme.Icon.laptop)
+                ThemedIcon(Theme.Icon.laptop)
                     .foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.iconS)
                 Text(DesktopDevice.bannerTitle(model.desktops))
@@ -50,10 +50,8 @@ struct DesktopPresenceSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Toggle(isOn: Binding(get: { model.muteWhileDesktop }, set: { on in Task { await model.setMuteWhileDesktop(on) } })) {
-                        Label("Phone Muted", systemImage: Theme.Icon.muted)
-                    }
-                    .accessibilityIdentifier("desktops.mute")
+                    SettingsSwitchRow(title: String(localized: "Phone Muted"), symbol: Theme.Icon.muted, accessibilityID: "desktops.mute",
+                                      isOn: Binding(get: { model.muteWhileDesktop }, set: { on in Task { await model.setMuteWhileDesktop(on) } }))
                 } footer: {
                     Text("While Persona is online on a Mac, this iPhone stops sending “Needs you” and “Agent done” notifications and the Mac alerts you instead. Reminders you asked Persona to set still come through.")
                 }

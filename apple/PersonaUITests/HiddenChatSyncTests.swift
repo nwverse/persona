@@ -66,14 +66,12 @@ final class HiddenChatSyncTests: XCTestCase {
         self.app = app
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         // Pair before choosing the initial page; clear any Agent stack restored by the preceding test.
-        app.launchArguments = ["-pairURL", pair, "-openWelcome", "YES", "-demo.on", "NO", "-ui.oldLayout", "NO",
-                               "-dev.openChat", "", "-tab", "assistant", "-newAssistant", "YES"]
+        app.launchArguments = ["-pairURL", pair, "-openWelcome", "YES", "-demo.on", "NO",                                "-dev.openChat", "", "-tab", "assistant", "-newAssistant", "YES"]
         app.launchPinned()
         LiveActivityShots.allowNotifications()
         XCTAssertTrue(app.buttons["assistant-sidebar-button"].firstMatch.waitForExistence(timeout: 20))
         app.terminate()
-        app.launchArguments = ["-pairURL", pair, "-openWelcome", "NO", "-demo.on", "NO", "-ui.oldLayout", "NO",
-                               "-openChatsFresh", "YES", "-showScrollState", "YES", "-dev.openChat", "",
+        app.launchArguments = ["-pairURL", pair, "-openWelcome", "NO", "-demo.on", "NO",                                "-openChatsFresh", "YES", "-showScrollState", "YES", "-dev.openChat", "",
                                "-runtimeCLI", String(cliPort), "-runtimeCLIToken", cliToken,
                                "-app.tab", isAssistant ? "assistant" : "chats", "-tab", isAssistant ? "assistant" : "dev"]
             + (isAssistant ? ["-openAssistant", key] : ["-openSession", key])

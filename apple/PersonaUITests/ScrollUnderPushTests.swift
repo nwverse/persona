@@ -8,7 +8,7 @@ import XCTest
 /// frame of the scroll (`PerfScroll`, `-perfCounts YES`): what is on screen moves with the finger or the glide only.
 ///   PORT=18797 MOCK_AGENTS=1 MOCK_CHURN=1 MOCK_LONG_HISTORY=1 python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_CHURN_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/ScrollUnderPushTests
-/// Both layouts: TEST_RUNNER_PERSONA_LAYOUT=shell runs it in the shell (docs/operations/testing.md).
+/// Runs in the iPhone's Shell (docs/operations/testing.md).
 final class ScrollUnderPushTests: XCTestCase {
     private var hub = ""
     private var app: XCUIApplication!

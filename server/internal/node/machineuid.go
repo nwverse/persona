@@ -4,8 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The computer's own id (docs/server/mesh.md "Machine identity"): two hubs that both reach this computer tell it is the same one by
@@ -15,7 +16,7 @@ import (
 
 const machineUIDFile = "machine-uid"
 
-var uidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var uidPattern = lazyre.New(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // MachineUIDPath is where the id lives, under dir (~/.persona).
 func MachineUIDPath(dir string) string { return filepath.Join(dir, machineUIDFile) }

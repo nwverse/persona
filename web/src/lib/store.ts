@@ -625,7 +625,7 @@ function onMessage(msg: Record<string, unknown>) {
       break;
     case "machines":
       machinesRev++;
-      set({ machines: msg.machines as Machine[] });
+      set({ machines: stableMachines(state.machines, (msg.machines as Machine[] | null) ?? []) });
       break;
     case "sessions_list":
       // A hint is not a checkpoint. Even resumed connections must check the HTTP epoch.
@@ -656,9 +656,11 @@ function onMessage(msg: Record<string, unknown>) {
       upsertSession(s);
       break;
     }
-    case "interaction":
-      changeInteraction((msg.interaction as Interaction).id, msg.interaction as Interaction);
+    case "interaction": {
+      const ix = msg.interaction as Interaction;
+      if (!endedHere.has(ix.id)) changeInteraction(ix.id, ix);
       break;
+    }
     case "interaction_resolved":
       if (msg.answered_by === "assistant") answeredForUser(msg);
       changeInteraction(msg.id as string, null);
@@ -725,7 +727,22 @@ export function saveMutes(mutes: AgentMutes): Promise<void> {
 export function applyMachine(m: Machine) {
   if (!state.machines.some((x) => x.id === m.id)) return;
   machinesRev++;
-  set({ machines: state.machines.map((x) => (x.id === m.id ? { ...x, ...m } : x)) });
+  set({ machines: stableMachines(state.machines, state.machines.map((x) => (x.id === m.id ? { ...x, ...m } : x))) });
+}
+
+/** `next`, with each machine that is the same as `prev`'s of that id (sameValue) kept as `prev`'s object, and `prev`
+ *  itself when nothing changed: the hub sends its whole list again on events that often leave this page's as it was
+ *  (an extension's features, a device report), and a new array of new rows redrew every view that reads the list. */
+function stableMachines(prev: Machine[], next: Machine[]): Machine[] {
+  const before = new Map(prev.map((m) => [m.id, m]));
+  let same = prev.length === next.length;
+  const out = next.map((m, i) => {
+    const old = before.get(m.id);
+    const kept = old && sameValue(old, m) ? old : m;
+    same &&= kept === prev[i];
+    return kept;
+  });
+  return same ? prev : out;
 }
 
 /** "Pin" (optimistic): PUT /pins; throws when the hub refuses, with the pins put back. */
@@ -842,7 +859,7 @@ function changeInteraction(id: string, ix: Interaction | null) {
 
 /** The pending interactions from a snapshot asked for at revision `before`, with what changed since. */
 export function mergeInteractions(snapshot: Interaction[], before: number): Interaction[] {
-  const out = new Map(snapshot.map((i) => [i.id, i]));
+  const out = new Map(snapshot.filter((i) => !endedHere.has(i.id)).map((i) => [i.id, i]));
   for (const [id, c] of ixChanges) {
     if (c.rev <= before) continue;
     out.delete(id);
@@ -853,11 +870,21 @@ export function mergeInteractions(snapshot: Interaction[], before: number): Inte
 
 const ANSWERED_MS = 20_000;
 
+// Cards this page ended (answered, found over, handed back), newest last. Until the node ends one, the hub's pending
+// cards still list it: the snapshot after a hello that resumes the stream sends it again as an `interaction` frame, and
+// a full list read after the answer has it too. It is never answerable here again (#1541). A failed answer does not end
+// its card, so nothing has to come off this list.
+const endedHere = new Set<string>();
+const ENDED_KEPT = 500;
+
 /**
  * An interaction this page answered (or found over when it tried): its card goes at once, without waiting for the
  * hub's interaction_resolved, which may be late or lost with a socket. With `answer` it shows answered for a while.
  */
 export function endInteraction(id: string, answer?: AnsweredCard) {
+  endedHere.delete(id);
+  endedHere.add(id);
+  if (endedHere.size > ENDED_KEPT) endedHere.delete(endedHere.values().next().value!);
   changeInteraction(id, null);
   if (!answer) return;
   const card = { ...answer, at: answer.at ?? Date.now(), withdrawn: answer.withdrawn || answer.already === true || resolvedSeen.has(id) };
@@ -1019,7 +1046,7 @@ export async function refresh() {
     patch.sessions = by;
   }
   if (interactions.status === "fulfilled") patch.interactions = mergeInteractions(interactions.value.interactions ?? [], before);
-  if (machines.status === "fulfilled" && machinesAt === machinesRev) patch.machines = machines.value.machines ?? [];
+  if (machines.status === "fulfilled" && machinesAt === machinesRev) patch.machines = stableMachines(state.machines, machines.value.machines ?? []);
   if (mutes.status === "fulfilled" && mutesAt === mutesSaves.rev) patch.mutes = { spaces: mutes.value.spaces ?? [], sessions: mutes.value.sessions ?? [], allowed: mutes.value.allowed ?? [] };
   if (pins.status === "fulfilled" && pinsAt === pinsSaves.rev) patch.pins = pinsOf(pins.value);
   set(patch);
@@ -1241,6 +1268,7 @@ export function reset() {
   cursor = NO_CURSOR; // another login: another stream
   ixChanges.clear();
   resolvedSeen.clear();
+  endedHere.clear();
   // a /todos or /assistant answer still on its way belongs to the old login
   todosAsked.forget();
   assistantAsked.forget();

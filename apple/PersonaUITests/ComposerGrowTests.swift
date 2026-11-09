@@ -5,20 +5,16 @@ import XCTest
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps screenshots of one line and several.
 final class ComposerGrowTests: XCTestCase {
     @MainActor func testTypingGrowsTheComposerOverTheKeyboard() throws {
-        try grows(layout: ["-ui.oldLayout", "NO"])
+        try grows()
     }
 
-    @MainActor func testTypingGrowsTheComposerInTheOldLayout() throws {
-        try grows(layout: ["-ui.oldLayout", "YES"])
-    }
-
-    @MainActor private func grows(layout: [String]) throws {
+    @MainActor private func grows() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
             throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant"] + layout
+        app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant"]
         app.launchPinned()
         let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 15), "no composer:\n\(app.debugDescription)")

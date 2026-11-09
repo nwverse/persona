@@ -1,19 +1,28 @@
 package persona.feature.agents
 
+import androidx.compose.ui.autofill.ContentDataType
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,12 +32,16 @@ import persona.core.contracts.InteractionField
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.answer.AnswerAction
+import persona.core.domain.answer.AnswerDraft
 import java.time.Instant
 
-/** The assistant's password card (`secret_run`, #1137) in the Agents tab: the computer and the commands, "Fill this in on
- *  your iPhone" instead of "allow it on the web or on iPhone", and only Decline. */
+/**
+ * The assistant's password card (`secret_run`, #1137, #1581) in the Agents tab: the computer and the commands, a
+ * password field, Decline and Run, as in the chat. Run hands over the typed password once and empties the field.
+ */
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [35], qualifiers = "zh")
+// Tall enough for the whole card: taps land only inside the window.
+@Config(sdk = [35], qualifiers = "zh-w400dp-h1200dp")
 class SecretRunRequestCardTest {
     @get:Rule val rule = createComposeRule()
 
@@ -41,22 +54,52 @@ class SecretRunRequestCardTest {
             put("commands", JsonArray(commands.map { JsonPrimitive(it) })); put("delivery", "stdin")
         },
         fields = listOf(InteractionField(key = "password", label = "Password", secret = true)))
+    private val typed = "correct horse battery staple"
+    private val answers = mutableListOf<Pair<AnswerAction, AnswerDraft>>()
 
-    @Test fun showsTheCommandsAndOnlyDeclines() {
-        val answers = mutableListOf<AnswerAction>()
-        rule.setContent {
-            PersonaTheme(style = AppStyle.Glass, darkTheme = false, reduceMotion = true) {
-                RequestCard(card, "hub", AgentsMetadata(), now, online = true, delivery = null, onOpen = {},
-                    onAnswer = { _, action, _, _ -> answers += action })
-            }
+    private fun field() = rule.onNode(hasSetTextAction())
+    private fun typedLength() = field().fetchSemanticsNode().config[SemanticsProperties.EditableText].text.length
+
+    private fun show() = rule.setContent {
+        PersonaTheme(style = AppStyle.Glass, darkTheme = false, reduceMotion = true) {
+            RequestCard(card, "hub", AgentsMetadata(), now, online = true, delivery = null, onOpen = {},
+                onAnswer = { _, action, draft, _ -> answers += action to draft })
         }
+    }
+
+    @Test fun showsTheCommandsAPasswordFieldDeclineAndRun() {
+        show()
         rule.onAllNodesWithText("用你的密码在 Mac mini 上运行").onFirst().assertExists()
         rule.onAllNodesWithText("Install the launch daemon for the backup job").onFirst().assertExists()
         commands.forEach { rule.onNodeWithText(it, useUnmergedTree = true).assertExists() }
-        rule.onAllNodesWithText("请在 iPhone 上填写").onFirst().assertExists()
+        rule.onAllNodesWithText("请在 iPhone 上填写").assertCountEquals(0)
         // No "允许" or "总是允许…", and not the generic fields note ("…才能允许，请到网页或 iPhone 上处理…").
         rule.onAllNodes(hasText("允许", substring = true), useUnmergedTree = true).assertCountEquals(0)
+        rule.onAllNodes(hasSetTextAction()).assertCountEquals(1)
+        field().assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+        field().assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDataType, ContentDataType.None))
+        rule.onNodeWithText("运行").assertIsNotEnabled()
         rule.onNodeWithText("拒绝").assertIsEnabled().performClick()
-        assertEquals(listOf(AnswerAction.Deny), answers)
+        assertEquals(listOf(AnswerAction.Deny to AnswerDraft()), answers)
+    }
+
+    @Test fun runHandsOverTheTypedPasswordOnceAndEmptiesTheField() {
+        show()
+        field().performTextInput(typed)
+        field().performImeAction()
+        assertTrue(answers.isEmpty())
+        rule.onNodeWithText("运行").assertIsEnabled().performClick()
+        assertEquals(listOf(AnswerAction.Allow to AnswerDraft(password = typed)), answers)
+        assertEquals(0, typedLength())
+        rule.onNodeWithText("运行").assertIsNotEnabled().performClick()
+        assertEquals(1, answers.size)
+    }
+
+    @Test fun declineEmptiesTheField() {
+        show()
+        field().performTextInput(typed)
+        rule.onNodeWithText("拒绝").performClick()
+        assertEquals(listOf(AnswerAction.Deny to AnswerDraft()), answers)
+        assertEquals(0, typedLength())
     }
 }

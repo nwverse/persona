@@ -1,4 +1,4 @@
-import { t } from "../i18n";
+import { formatDate, t } from "../i18n";
 import { reviewState, type Supervision } from "./supervision";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
@@ -9,6 +9,7 @@ import type { AgentState, Machine, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
 import { stateName } from "./state-labels";
+import { usageLimitAgent } from "./usage-limit";
 
 export type TodoAgentSource = "manual" | "space" | "spawned" | "chat";
 
@@ -35,6 +36,15 @@ export interface Todo {
   id: string;
   title: string;
   notes?: string;
+  /** When it is due (#1683, docs/assistant/todos.md "Due date, reminder, priority"): a moment, or a day ("YYYY-MM-DD",
+   * due by its end in the user's time zone); at most one. Unset from hubs without them. */
+  due_at?: string | null;
+  due_date?: string | null;
+  /** When the phone is pushed about it, and when that was done (a new time is pushed again). */
+  remind_at?: string | null;
+  reminded_at?: string | null;
+  /** "high" or "low"; unset or "" is normal. */
+  priority?: string;
   done_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -87,13 +97,14 @@ export function heldDelivery(todo: Todo): TodoDelivery | null {
   return d.state === "pr" || d.state === "merged" || d.state === "off" ? d : null;
 }
 
-export type TodoStatus = "done" | "needs_you" | "interrupted" | "unread" | "working" | "follow_up" | "not_started" | "failed";
+export type TodoStatus = "done" | "needs_you" | "interrupted" | "usage_limit" | "unread" | "working" | "follow_up" | "not_started" | "failed";
 
 /** Where a status sorts, as the task board orders its sections (lib/task-board.ts): what the user must act on first —
  *  Needs you, Awaiting review (rank 2, see todoRank), Failed to start — then Working, Finished, Stopped, Done (#4896). */
 export const TODO_STATUS_RANK: Record<TodoStatus, number> = {
   needs_you: 0,
   interrupted: 1,
+  usage_limit: 1.5, // after Interrupted, before Awaiting review (todoRank returns 2)
   failed: 3,
   working: 4,
   not_started: 5,
@@ -126,6 +137,7 @@ export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" |
   done: { label: stateName("done"), tone: "off" },
   needs_you: { label: stateName("needs_you"), tone: "amber" },
   interrupted: { label: stateName("interrupted"), tone: "red" },
+  usage_limit: { label: t("lib-usage-limit.short"), tone: "amber" },
   unread: { label: stateName("unread"), tone: "green" },
   working: { label: stateName("working"), tone: "amber" },
   follow_up: { label: stateName("follow_up"), tone: "idle" },
@@ -170,7 +182,9 @@ export function makeSessionLookup(sessions: Session[] | Record<string, Session[]
  * 0. Didn't start: a task agent opened from a conversation never started and the hub ended it (start_error, #1077)
  * 1. Done: the user marked it done (done_at != null)
  * 2. Needs you: an attached agent needs you (a question, an approval)
- * 2.5 Interrupted: an attached agent's turn ended on a model API error (turn_error, #1516), unfinished, waiting for you to continue it
+ * 2.5 Interrupted: an attached agent's turn ended on a model API error (turn_error, #1516), unfinished, waiting for you to continue it.
+ *     A subscription usage limit is not this (usage_limit, below).
+ * 2.6 Usage limit: an attached agent is stopped on a subscription usage limit that has not reset yet
  * 3. Unread: an attached agent finished and you have not seen it
  * 4. Working: an attached agent is working or starting
  * 5. Follow-up: every attached agent is stopped (seen, not running, failed to start)
@@ -184,6 +198,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
 
   let hasNeedsYou = false;
   let hasInterrupted = false;
+  let hasLimit = false;
   let hasUnread = false;
   let hasWorking = false;
 
@@ -198,13 +213,15 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
       hasNeedsYou = true;
       break;
     }
-    if (interruptedAgent(s)) hasInterrupted = true;
+    if (usageLimitAgent(s)) hasLimit = true;
+    else if (interruptedAgent(s)) hasInterrupted = true;
     else if (st === "unread") hasUnread = true;
     else if (st === "working" || s?.starting) hasWorking = true;
   }
 
   if (hasNeedsYou) return "needs_you";
   if (hasInterrupted) return "interrupted";
+  if (hasLimit) return "usage_limit";
   if (hasUnread) return "unread";
   if (hasWorking) return "working";
   return "follow_up";
@@ -212,7 +229,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
 
 /** The agent stopped on a model API error (the hub's turn_error): cut off, not finished (#1516). */
 export function interruptedAgent(s?: Session): boolean {
-  if (!s?.turn_error) return false;
+  if (!s?.turn_error || usageLimitAgent(s)) return false;
   const st = stateOf(s);
   return st === "unread" || st === "idle";
 }
@@ -226,20 +243,71 @@ export function interruption(s?: Session): { reason: string; canContinue: boolea
 }
 
 /**
- * The todo list's order, the task board's (#4896): by todoRank — Needs you, Interrupted, Awaiting review, Failed to start, Working, Not started, Finished,
- * Stopped, Done — then newest first. A task that did not start has done_at too, but it is the user's to retry or remove,
- * so it does not sink with the done ones.
+ * The todo list's order, the task board's (#4896): what needs the user (Needs you, Interrupted, Awaiting review) first;
+ * then the open ones by due date, earliest (an overdue one) first, those without one after (#1683); then by todoRank —
+ * Failed to start, Working, Not started, Finished, Stopped, Done — then newest first. A task that did not start has
+ * done_at too, but it is the user's to retry or remove, so it does not sink with the done ones.
  */
 export function sortTodos(todos: Todo[], lookup?: SessionLookup): Todo[] {
   return [...todos].sort((a, b) => {
     const rA = todoRank(a, todoStatus(a, lookup));
     const rB = todoRank(b, todoStatus(b, lookup));
+    if ((rA <= 2 || rB <= 2) && rA !== rB) return rA - rB;
+    if (!a.done_at && !b.done_at) {
+      const dA = todoDueBy(a);
+      const dB = todoDueBy(b);
+      if (dA !== undefined && dB !== undefined && dA !== dB) return dA - dB;
+      if ((dA === undefined) !== (dB === undefined)) return dA === undefined ? 1 : -1;
+    }
     if (rA !== rB) return rA - rB;
 
     const tA = a.created_at ? Date.parse(a.created_at) || 0 : 0;
     const tB = b.created_at ? Date.parse(b.created_at) || 0 : 0;
     if (tA !== tB) return tB - tA;
     return a.id.localeCompare(b.id);
+  });
+}
+
+/** The local midnight starting a todo's due_date ("YYYY-MM-DD"), in ms; undefined without a readable one. */
+export function todoDueDay(todo: Todo): number | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(todo.due_date ?? "");
+  if (!m) return undefined;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+}
+
+/** The moment a todo is due by, in ms: its due_at, or the end of its due day; undefined without either. */
+export function todoDueBy(todo: Todo): number | undefined {
+  if (todo.due_at) {
+    const at = Date.parse(todo.due_at);
+    if (!Number.isNaN(at)) return at;
+  }
+  const day = todoDueDay(todo);
+  if (day === undefined) return undefined;
+  const end = new Date(day);
+  end.setDate(end.getDate() + 1);
+  return end.getTime() - 1000;
+}
+
+/** An open todo whose due moment has passed. */
+export function isOverdue(todo: Todo, now = Date.now()): boolean {
+  const by = todoDueBy(todo);
+  return !todo.done_at && by !== undefined && by < now;
+}
+
+/** A todo's due date as the list and the detail show it ("Thu, Nov 12, 18:00", or the day alone; the year only when it
+ * is not this one); undefined without one. */
+export function todoDueText(todo: Todo, now = Date.now()): string | undefined {
+  const at = todo.due_at ? Date.parse(todo.due_at) : NaN;
+  const day = todoDueDay(todo);
+  const when = !Number.isNaN(at) ? at : day;
+  if (when === undefined) return undefined;
+  const sameYear = new Date(when).getFullYear() === new Date(now).getFullYear();
+  return formatDate(when, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: sameYear ? undefined : "numeric",
+    ...(!Number.isNaN(at) ? { hour: "2-digit", minute: "2-digit" } : {}),
   });
 }
 
@@ -255,6 +323,7 @@ export function mostUrgentAgent(
 
   const score = (st: AgentState | "failed", s?: Session) => {
     if (interruptedAgent(s)) return 3.5; // after one waiting on the user, before one done
+    if (usageLimitAgent(s)) return 3.4;
     switch (st) {
       case "needs_you":
         return 4;
@@ -499,7 +568,18 @@ export async function createTodo(title: string, notes?: string): Promise<Todo> {
   return r.todo;
 }
 
-export async function updateTodo(id: string, patch: { title?: string; notes?: string; done?: boolean }): Promise<Todo> {
+/** A todo change as PATCH takes it; due_at / due_date / remind_at null clears them (#1683). */
+export interface TodoPatch {
+  title?: string;
+  notes?: string;
+  done?: boolean;
+  due_at?: string | null;
+  due_date?: string | null;
+  remind_at?: string | null;
+  priority?: string;
+}
+
+export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
   const r = await api<{ todo: Todo }>(`/todos/${enc(id)}`, {
     method: "PATCH",
     json: patch,

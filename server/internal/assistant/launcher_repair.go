@@ -81,7 +81,7 @@ func (s *Service) repairMachine(ctx context.Context, d Device, cfg healthConfig)
 	}
 	var left []LauncherHealth
 	for _, r := range todo {
-		if now, ok := s.launcherHealth(ctx, d.ID, r.Launcher); ok && now.State == healthFailing {
+		if now, ok := s.launcherHealth(ctx, d.ID, r.Launcher); ok && now.State == healthFailing && now.repairNow() { // not a usage limit met since
 			left = append(left, now)
 		}
 	}
@@ -165,6 +165,7 @@ func (s *Service) startRepairAgent(ctx context.Context, broken Device, left []La
 		s.recordStartFailure(ctx, am.ID, launcher, err)
 		return err
 	}
+	s.recordStartSuccess(ctx, am.ID, launcher)
 	sid := res.Session.SessionID
 	// A quiet todo with no conversation: the hub pushes nothing about its agent, and nothing tells a conversation.
 	title := fmt.Sprintf("修复 %s 上的启动器", broken.Name)

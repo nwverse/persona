@@ -19,7 +19,7 @@ final class ShellChatLinkOnceTests: XCTestCase {
 
     @MainActor func testAnAgentsChatSaysConnectingOnce() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-probes", "YES", "-tab", "dev", "-dev.folded", "",
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-tab", "dev", "-dev.folded", "",
                                "-dev.openChat", "macbook/a1f3c2d4-0000-4000-8000-000000000006", "-showConnection", "connecting"]
         app.launchPinned()
         let any = app.descendants(matching: .any)

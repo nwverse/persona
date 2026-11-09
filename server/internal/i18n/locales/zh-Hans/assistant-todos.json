@@ -1,0 +1,10 @@
+{
+  "remind_subtitle": "待办提醒",
+  "remind_body": "到点了",
+  "remind_due": "截止 {when}",
+  "remind_overdue": "已过截止 {when}",
+  "remind_late": "本该 {when} 提醒",
+  "delete_card": "删除待办「{title}」",
+  "complete_card": "把任务「{title}」标为完成（它的 Agent 停下后会被关闭）",
+  "reopen_card": "重新打开任务「{title}」"
+}
