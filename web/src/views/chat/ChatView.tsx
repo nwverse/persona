@@ -20,7 +20,7 @@ import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, sav
 import { PREVIEW_FEATURE } from "../../lib/preview";
 import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
-import { planProgress } from "../../lib/work-groups";
+import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
 import { keepFailed, noteWritten, outboxKey, placeFailed, retryOutbox, SENT_GRACE_MS, settleOutbox, type OutboxEntry } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
@@ -60,7 +60,7 @@ import { publishPlan } from "../../lib/plan-store";
 import { ChatContext, FreshWords, LiveClockContext, type ChatContextValue } from "./chat-context";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
-import { navRailTicks } from "../../lib/nav-rail";
+import { navRailTicks, type NavRailSource } from "../../lib/nav-rail";
 import { NavRail } from "./NavRail";
 import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
@@ -695,8 +695,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
-  // the question rail (#1739): one tick per question of yours among the loaded lines — the model picks them, NavRail
-  // draws them in the side margin and this view jumps (only what is loaded counts; the rail never pages history in)
+  // The loaded-message adapter is deliberately separate from the rail's gestures. An independent-index adapter
+  // can replace its ticks and resolve missing target content in select, without fetching while hovering.
   const railTicks = useMemo(() => navRailTicks(lines), [lines]);
   /** Brings a row into view in the chat's own scroller (scrollIntoView would also scroll an opening group's clipped
    *  box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
@@ -719,6 +719,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     },
     [landRow],
   );
+  const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, select: railJump }), [railTicks, railJump]);
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
   const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
@@ -763,9 +764,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wfKey = workflowCallsKey(runs);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const wfCalls = useMemo(() => workflowCalls(runs), [wfKey]);
+  // a Persona conversation's work lines open while it runs wherever it is opened, the Agents page's /s/<machine>/<id> too
+  const lineStyle = workLineStyle(assistant, (session ?? archivedHere)?.assistant);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──
@@ -1018,7 +1021,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {(tr.notLive || (mainCache && tr.items.length > 0 && (tr.error || refreshError))) && <NotLivePill error={mainCache ? tr.error || refreshError : undefined} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
         <div ref={scrollRef} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">
           <ChatActionsContext.Provider value={actions}>
-          <div className="mx-auto flex w-full max-w-[880px] flex-col gap-7 px-5 pt-6 pb-10 sm:px-8">
+          <div data-chat-content className="mx-auto flex w-full max-w-[880px] flex-col gap-7 px-5 pt-6 pb-10 sm:px-8">
             {session?.start_error && (session.start_error_code ? (
               // a refusal with a code (#1642): the hub's whole sentence in the user's language, its remedy last, under a title
               <div role="alert" data-testid="start-error-coded" className="rounded-control bg-inset px-3 py-2 text-[13px]">
@@ -1112,8 +1115,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           {!readOnly && <CommentMarks scroller={scroller} />}
           </ChatActionsContext.Provider>
         </div>
-        {/* the rail sits in the chat area's side margin; it renders nothing when the chat is narrow or short */}
-        <NavRail ticks={railTicks} scroller={scrollEl} onJump={railJump} reset={`${mid}/${sid}`} />
+        {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}
+        <NavRail ticks={railSource.ticks} scroller={scrollEl} onJump={railSource.select} reset={`${mid}/${sid}`} />
         {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
       </div>
