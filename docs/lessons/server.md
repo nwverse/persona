@@ -1,5 +1,27 @@
 # Lessons: hub / node and networking
 
+## A credential bound to an id outlives the entry (#1869)
+
+Deleting a Link computer in admin removed its hub.json entry but left its credential and unused pairing codes valid: the link only failed while no entry had that id, so adding the id again, for any computer, let the old one back in. Now deleting a computer in admin, rejecting it, and a pending one expiring revoke what is bound to its id (`device_tokens.machine_id`, `pair_tokens.machine_id`), and so does adding a computer under an id not in use, from the admin console, an app or `personad hub pair --add`. An entry dropped another way (a manager's `drop_machines`, a hand edit of hub.json) is not revoked then, only when its id is added again through the hub; one written back into hub.json by hand is not covered at all. The revocation filters on the role it means, because a peer hub's credential binds its hub id in the same column.
+
+## Finish a revocation's activity push before forgetting its target (#1864)
+
+Push registration IDs differ from credential IDs: select the registrations bound
+to the revoked credential, not just a row whose device ID happens to match. A call
+to `sendLiveActivity` only queues a goroutine; direct and relay transports recheck
+the registration before dispatch. Calling `end` before `signedOut` is therefore
+insufficient unless the revocation waits for the end attempts to finish. Send empty
+content with immediate dismissal, even for a foreground app or disabled activity
+preference, without resetting the fleet state or activities of other credentials.
+Database revocation already removes the device and its activity rows, so capture
+the live tokens from memory and do not try to persist them back after retirement.
+Transport acceptance is not proof that the phone dismissed the activity; the
+Apple-side rejected-credential fallback remains separate work.
+
+Database fixtures must also survive `go test -count`: `setupTestDB` does not clear
+`admin_sessions`. Give test sessions unique IDs and delete their own rows with
+`t.Cleanup` before the store closes; a fixed ID, even `t.Name()`, repeats within one process.
+
 ## Retained extension lists need installed managers (#1918)
 
 A relay can retain an offline manager's GET answer while the merged list drops it before the relay is called. For merged retained GET routes, enumerate installed bus identities as well as live managers; keep ordinary lists such as inbox and todos online-only. Never discover owners by scanning cache keys: a removed manager can still have cached answers. Fail closed when the installed roster cannot be read, and test the real relay warm-up followed by disconnect, missing cache, revocation, and an offline default. In external mode even the identity named `assistant` is removable: only seed it when `builtinManager` says it is built in, and return unavailable for an empty roster rather than reviving a cached default.
@@ -580,6 +602,8 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Unified model configuration
 
+- Provider deletion must check dynamic extension purposes as well as the fixed category and Lark /agent IDs (#1839). Resolve the current extensions' effective bindings and use their display names in the existing localized refusal; an extension-only override is otherwise invisible to the guard. Build purpose IDs with `StorageKey()`, so a renamed extension still protects its saved provider. Regress deletion through HTTP, assert the provider and override remain unchanged on 409, and check deletion succeeds after switching or resetting the binding when no current purpose still uses it.
+
 - A managed-provider read failure is not an empty list (#1365). Read the whole raw setting reliably before changing providers, deciding assignments or resolving deletion dependencies; preserve readable sealed records so users can explicitly replace or remove corrupt credentials. Keep the confirmed snapshot through nested model resolution under the configuration lock, and publish that same committed snapshot to nodes. Decrypt only where import matching or node publication needs credentials. Reconnects and profile/trust notifications must omit a replacement on read or credential errors, and a safe committed edit must log and defer unsafe publication; only a genuinely missing setting permits first creation. Regress with selective failures at individual reads while writes remain available, full sealed-record equality, zero writes or node pushes on rejection, and a healthy retry.
 
 - A "provider" isn't necessarily a runnable launcher: direct API configurations can't be sent to nodes or listed for new sessions; filter purpose selections by API / launcher / plugin capabilities. UI or `ANTHROPIC_MODEL` changes alone don't guarantee the model is used; shell launchers may clear environment variables. Verify argument forwarding and pass the model to the actual executor.
@@ -626,6 +650,7 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- Deleting a connector is broader than deleting an archive namespace (#1836): include its alternate chat sources, posts and items, plus indexes and project references. Record the connector at ingestion, separately from a chat's namespace, and stamp item ownership before the unchanged-item fast path. Never infer legacy ownership from an item ID, title or a shared archive alias; use explicit provenance or a known source chat, leaving ambiguous records intact. Deletion tests need another connector's records, shared aliases and unowned legacy data, not only a single source.
 - A connector's knowledge-base switch must gate every ingestion path (#1835): conversations, items (documents, meetings and events), document-title lookups and program-initiated posts. Filtering the source list alone leaves direct calls open after a switch changes. Check both the feed and the main switch at the call boundary too; a shared extension process may keep running after its connector is disabled. `Registry.Feeds` does not include `Registry.Enabled`. Test both switches independently, with a connector that still answers calls, and assert that neither source reads nor post forwarding occur while off.
 - An asynchronous dedupe answer must recheck a user's split, record its verdict and merge under the same project-mutation lock as unmerge. The verdict-file mutex prevents lost JSON updates but cannot stop an already queued merge from reversing a completed split. A verdict write failure must stop the merge.
 - A checkpoint after append is a replay window (#1343): connector pages can repeat after a cursor failure, a later batch failure or a process interruption.
@@ -788,6 +813,7 @@ home volume (docs/operations/link.md "Without systemd").
 
 ## File preview foundations (2026-11-04, #1292)
 
+- **JPEG pixels are stored before EXIF orientation** (#1303): apply all eight primary-image orientations, including mirrors, before sizing a thumbnail; re-encoding alone drops the orientation metadata. Keep metadata scans bounded and separate from nested/thumbnail IFDs. A derived thumbnail's ETag also needs a processing version, but clients must reach that validator: revalidate persisted disk thumbnails once per launch even when a listing's size/time match, and give browser thumbnail URLs a new page-load identity. Test both upgrade orders with a seeded old image; a new client may see an old node first. Unupdated clients can retain their private caches until they refresh or upgrade.
 - **Go `mime.TypeByExtension` varies by machine**: it reads `/etc/mime.types` and other system files; docx / xlsx / ipynb / heic may be known on one machine and empty on another, making MIME-selected viewers differ for the same file. Keep a fixed preview-type table in node (`node/filemime.go`); outside it, consult the system, then sniff initial bytes.
 - **`qlmanage -t` hangs on locked Macs** (still running after 30 seconds measured), without errors. System thumbnail tools need timeouts, cooldown after a timeout, and one concurrent execution: a file list may request dozens, otherwise node fills with stuck processes waiting on every thumbnail.
 - **Hub and web share an origin; isolate inline files**: standalone `Content-Disposition: inline` SVG / HTML scripts run as the web app and can read localStorage tokens. Inline only images, audio/video, PDF, with `Content-Security-Policy: sandbox`; PDF is exempt because Chrome won't display sandboxed PDFs.
@@ -1218,6 +1244,10 @@ Go's `http.Client` follows a 301, 302 or 303 as a GET for any method but GET and
 - A dropped bus connection can wrap the offline error even after a request was sent. Notification choices use the send-aware forwarding path: only a definitely offline manager releases the receipt; a lost response keeps an unknown receipt so reconnecting cannot execute the same tap again.
 - Hub tests isolate `HOME` in `TestMain`. A subprocess such as the architecture guard's `go list -deps` can then lose the downloaded toolchain and module caches even though the parent `go test` compiled successfully. Before running tests with a downloaded `GOTOOLCHAIN`, export `GOPATH`, `GOMODCACHE` and `GOCACHE` from their original `go env` values; retain the isolated home rather than disabling it.
 
+## GitHub's bounded thread window starts at the REST tail (#1590)
+
+Ascending REST pages 1–5 retain the oldest 500 entries. Discover the last page from Link metadata, read enough tail pages to cover 500, then trim: a partial final page can require six physical pages. Keep pagination metadata beside the cached body on fresh and conditional reads. An unchanged first-page ETag does not establish an unchanged last page; prefer updated 304 Link metadata, and make one unconditional discovery read when a 304 omits it. A refreshed discovery establishes the earliest request admission order for its selected tail pages: their individual TTLs may otherwise reuse pre-append bodies. Keep completion timestamps for TTLs separately, publish immutable representations, and fence cache replacement by admission order so a late partial response or 304 cannot supersede a newer full page. Extract page numbers while keeping the original endpoint, and bound requests independently of the total history. Exercise the real Thread merge and every retained cursor with synthetic HTTP lists larger than the window.
+
 ## A source read newest first must not let an older entry replace a newer one
 
 A connector that folds several notifications into one thread (GitHub CI failures per repository and branch) read them newest first and let each replace the thread's thing, so the oldest one read won. It went unseen while the in-memory `seen` set skipped notifications already read; after every restart the whole unread backlog was read again, a few per poll, and the open item's time walked back by hours while its count rose once per step (#1527). Keep the newest per key by comparing times, never by reading order, and have the consumer ignore a step older than what it holds: a restart, a retry or a second page can each hand it an earlier one. Test it with a backlog larger than one poll's budget, read after a restart.
@@ -1250,3 +1280,11 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A scratch buffer for such bytes is a `sync.Pool` of the encoder's own, not `jsontext.Encoder.AvailableBuffer`: `encoding/json` resets its pooled encoder for each value, and the available buffer shrinks with it. A nested value is written with `jsonv2.MarshalWrite` into a `bytes.Buffer` set on the output slice, so it is not marshalled and then copied.
 - Lowering a text only to test a literal gate copies it every time (`transcript.AskOf`, three copies per list row): `lazyre.Regexp.MayMatchLowered` tests the gate on the text as `strings.ToLower` would have it, without copying an ASCII text, and the caller lowers only when it says true.
 - A catalog of anchored templates tried in turn (`i18n.DeploymentText`, `InboxText`, `ComputerText`) runs every regexp on a text that matches none: keep each template's literal pieces and run its regexp only on a text that starts with the first, ends with the last and holds the others.
+
+## Hot paths: re-reading every row of a list that barely changed, a catalog tried end to end (2026-11-09, #1986)
+
+- A list decorated again on every publish re-read every row's question (`transcript.AskOf` on the last words of each of 8,200 sessions). Keep the answer per machine and session with the text it was read from, and read again only when the text differs (`asksMemo`); a complete list drops the rows it no longer carries, a subset keeps them. Prove it with a table of lists that change between calls, each decorated warm and fresh.
+- To find out whether a list changed since it was last sent, compare its bytes as they are encoded (`changedWriter`), not after encoding them into a new slice: an unchanged list then costs no copy.
+- An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`, `isolatedSessionAllocation` in `hub/sessions_push_test.go`, #2050). Repeated garbage collection clears pools but does not stop unrelated goroutines; a synchronized allocation in another goroutine is still included in the measured callback's `TotalAlloc` delta. Rerun the whole test in the child, preserving its fixtures, functional assertions, collection cadence and allocation ceilings. Bound and reap the child, propagate its failures, and verify a child receipt rather than treating an early return as isolation. Check the source revision before attributing two failures to the same missing guard: a newer revision may already isolate one of them.
+- A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
+- Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
