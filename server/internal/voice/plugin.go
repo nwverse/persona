@@ -119,7 +119,7 @@ func Run(ctx context.Context) error {
 	logger := log.New(os.Stderr, "", 0)
 	socket := extensionEnv("SOCKET")
 	if socket == "" {
-		return errors.New("PERSONA_EXTENSION_SOCKET is not set: this runs under the Persona hub as its built-in voice extension (docs/extensions/extensions.md「内置语音扩展」)")
+		return errors.New("PERSONA_EXTENSION_SOCKET is not set: this runs under the Persona hub as its built-in voice extension (docs/extensions/extensions.md \"Built-in voice extension\")")
 	}
 	cfg, err := LoadConfig()
 	if err != nil {

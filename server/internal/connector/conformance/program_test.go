@@ -550,7 +550,7 @@ func TestConnectorProgramLive(t *testing.T) {
 func TestConnectorProgramFixtureServerLive(t *testing.T) {
 	program, server := os.Getenv("PERSONA_TEST_CONNECTOR_PROGRAM"), os.Getenv("PERSONA_TEST_CONNECTOR_FIXTURE_SERVER")
 	if program == "" || server == "" {
-		t.Skip("set PERSONA_TEST_CONNECTOR_PROGRAM (a connector program's launcher) and PERSONA_TEST_CONNECTOR_FIXTURE_SERVER (a compatible fixture server's script) to run it (docs/protocol/connector-protocol.md「一致性测试」)")
+		t.Skip("set PERSONA_TEST_CONNECTOR_PROGRAM (a connector program's launcher) and PERSONA_TEST_CONNECTOR_FIXTURE_SERVER (a compatible fixture server's script) to run it (docs/protocol/connector-protocol.md \"Conformance tests\")")
 	}
 	checkLive(t, program, startFixtureServer(t, server))
 }
