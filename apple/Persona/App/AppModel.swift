@@ -248,6 +248,12 @@ final class AppModel {
         didSet {
             let v = assistantCurrent?.path ?? ""
             UserDefaults.standard.set(v, forKey: "assistant.current")
+            #if DEBUG
+            if assistantCurrent != oldValue {
+                let name = { (k: SessionKey?) in k == nil ? "none" : k == self.assistantMain ? "main" : "other" }
+                ShellTrace.shared.note("current \(name(oldValue))->\(name(assistantCurrent)) by \(ShellTrace.caller())")
+            }
+            #endif
         }
     }
     var debugShowNewChat = false

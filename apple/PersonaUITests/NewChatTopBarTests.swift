@@ -38,8 +38,14 @@ final class NewChatTopBarTests: XCTestCase {
             _ = waitUntil(15) { new.isEnabled && !self.welcome(app).exists }
             RunLoop.current.run(until: Date().addingTimeInterval(1))
             let before = app.shellShown
-            new.tap()
-            if !welcome(app).waitForExistence(timeout: 5) {
+            if ProcessInfo.processInfo.environment["NEWCHAT_TAP"] == "center" {
+                new.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            } else {
+                new.tap()
+            }
+            let came = welcome(app).waitForExistence(timeout: 5)
+            print("NEWCHAT run \(run) \(came ? "ok" : "nothing"): " + (app.shellShown?.trace ?? []).filter { $0.contains("touch") || $0.contains("new conversation") || $0.contains("current") }.joined(separator: " | "))
+            if !came {
                 failed += 1
                 shot(app, "shell main run \(run) nothing")
                 let after = app.shellShown

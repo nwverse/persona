@@ -130,6 +130,15 @@ struct ShellWindowHooks: UIViewRepresentable {
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             if down == 0 { touching(true) }
             down += touches.count
+            #if DEBUG
+            // Which UIKit view each touch landed on, and the views around it: what took a tap meant for something else (#2189).
+            for t in touches {
+                let p = t.location(in: nil)
+                var chain: [String] = [], v = t.view
+                while let u = v, chain.count < 5 { chain.append(String(describing: type(of: u)).prefix(40).description); v = u.superview }
+                ShellTrace.shared.note("touch \(Int(p.x)),\(Int(p.y)) on \(chain.joined(separator: "<"))")
+            }
+            #endif
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) { lift(touches) }

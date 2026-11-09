@@ -307,6 +307,9 @@ struct AssistantView: View {
     }
 
     private func newConversation() {
+        #if DEBUG
+        ShellTrace.shared.note("new conversation from \(current == nil ? "none" : current == model.assistantMain ? "main" : "other")")
+        #endif
         withAnimation(Theme.Motion.standard) {
             model.assistantCurrent = nil
             pending = nil
