@@ -43,6 +43,18 @@ func BenchmarkSendSessions(b *testing.B) {
 	}
 }
 
+// A list the manager holds already is encoded into the buffer kept for it and dropped, allocating nothing (#2826): it
+// was 9 allocations and 67 KB for 80 rows.
+func TestSessionsChangedSkipAllocatesNothing(t *testing.T) {
+	n, _ := testNode(t)
+	n.peer = rpc.New("n", io.Discard)
+	list := sentRows(80)
+	n.sendSessions(list)
+	if a := testing.AllocsPerRun(20, func() { n.sendSessions(list) }); a != 0 {
+		t.Errorf("a list held already allocates %.0f times, want none", a)
+	}
+}
+
 // sessions.changed carries the bytes json.Marshal gives for {"sessions": list}: null for no list, [] for an empty one,
 // HTML characters, U+2028 and U+2029 escaped, invalid UTF-8 replaced. A list json.Marshal cannot encode sends nothing,
 // and the next list goes out whatever the last one was.

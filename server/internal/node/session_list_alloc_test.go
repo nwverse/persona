@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -96,6 +97,18 @@ func BenchmarkSessionList(b *testing.B) {
 				n.sessionList(context.Background(), false)
 			}
 		})
+	}
+}
+
+// A list is built in one slice of its own size (#2826): 300 rows of a runtime cost 1.09 times the rows' bytes, the rest
+// being the seen set and the sort's positions. Grown from nil, copied into the rows kept and with the runtime's rows in
+// a slice of their own first, they cost 10.5 times. The bound is the cost measured then, plus 3%.
+func TestSessionListAllocatesOneList(t *testing.T) {
+	const rows = 300
+	n := runtimeListNode(t, rows)
+	per := bytesPerRun(20, func() { n.sessionList(context.Background(), false) })
+	if most := 1.125 * rows * float64(unsafe.Sizeof(proto.Session{})); per > most {
+		t.Errorf("a list of %d rows allocates %.0f bytes, want at most %.0f", rows, per, most)
 	}
 }
 

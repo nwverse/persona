@@ -1442,6 +1442,25 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A buffer sized from the first row grows several times for a list of 150: size a whole-list encode from the average length of the rows last sent (`Machine.rowLen`).
 - A catalog per language read as one keeps every language once any text is needed: the first `i18n.T` parsed and kept all three (1.2 MB live). Give each language its own `sync.OnceValue` (`i18n.catalogOf`): a process that speaks en keeps en, plus zh-Hans for a missing key and `Has` (0.38 to 0.76 MB). The reverse templates match every language, so they read the others without keeping them (`readCatalog`). Prove it in a process of its own, as other tests parse every language (`TestCatalogsParsedPerLanguage`).
 
+## Hot paths: a node list copied three times, a list marshalled only to be compared (2026-11-10, #2826)
+
+- A `proto.Session` is 1,520 bytes, so every copy of a node's list is a megabyte-scale allocation and slices grown by
+  `append` from nil cost about twice that again. `sessionList` copied the runtimes' rows into a slice of their own,
+  appended every row to a list grown from nil, then copied each kept row into a second one: 4.8 MB and 2.7 ms for 300
+  rows, 63% of a node's allocation under churn. Size one slice from the last list, have the sources append into it
+  (`runtimeRegistry.appendSessions`, `appendOffline`), and filter in place with a write index behind the read index
+  (`out[j] = *s`, `clear` the tail). Run anything that reads the whole list, such as `resolveCodexHierarchy`, before
+  the filter drops rows: a subagent finds its project through a parent the keep pass may drop.
+- A stable sort of large structs moves each one many times (`sort.SliceStable` and `slices.SortStableFunc` both do
+  insertion and rotation passes): 250 us of a 300-row list. Sort the positions with the same comparator, then follow
+  each cycle of the permutation once (`sortNewestFirst`, 50 us); ties keep their order because the positions sort
+  stably.
+- Bytes kept to skip a resend need not be built through `json.Marshal(map[string]any{...})`: `sendSessions` built
+  67 KB per 80 rows only to find them equal to the last list. Write them with `proto.AppendSession` into a buffer kept
+  under the same mutex, swap it with `last` when the list goes, and fall back to `json.Marshal` of the whole value for
+  any row the appender leaves to encoding/json, so the bytes and the errors stay its. Compare against `json.Marshal`
+  for nil, empty, HTML characters, U+2028 and invalid UTF-8 (`TestSessionsChangedBytesAreJSONMarshal`).
+
 ## Transport source is not pane origin (#994)
 
 A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
