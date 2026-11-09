@@ -160,6 +160,7 @@ func New(o Options) *Service {
 	s.profileRoutes()
 	s.readinessRoutes()
 	s.startRoutes()
+	s.workoutRoutes()
 	s.scheduleRoutes()
 	s.placeRoutes()
 	s.taskRoutes()
