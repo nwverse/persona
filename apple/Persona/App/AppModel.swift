@@ -1755,6 +1755,10 @@ final class AppModel {
             // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
             if isHub { Task { await personas.reload(api) } }
+        case .look(let id, let effective):
+            // Another device chose an avatar, or the hub went back to the default. Like every hub-level setting, the
+            // avatar is the current hub's: another group's choice is its own (docs/protocol/multi-hub.md).
+            if isHub { Task { await personas.follow(id, effective: effective, api: api) } }
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
@@ -1885,6 +1889,7 @@ final class AppModel {
         case .inbox: "inbox"
         case .todos: "todos"
         case .personas: "personas"
+        case .look: "look"
         case .managers: "managers"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"

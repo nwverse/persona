@@ -2499,7 +2499,7 @@ Extensions add avatars to Persona: name, avatar image (multisize PNG, optional S
 
 - **Retired bundled IDs**: neither disk packs nor extension reports can reclaim them. A saved retired or unknown choice receives `current.effective: "persona"`; the raw ID and timestamp remain for compatibility. Clients never try to draw a removed built-in option.
 - **Disable** the extension or contribution: selection remains, `current.effective` returns `persona`; re-enabling restores it. **Uninstall**: if its avatar is selected, reset selection to `persona` and broadcast `look`.
-- **Migration from old local client settings** (iOS `UserDefaults persona.id`, Android `persona` in `persona-appearance`, web `localStorage persona.persona`):
+- **Migration from old local client settings** (iOS / iPadOS / macOS `UserDefaults persona.id.v2` / `persona.id`, once per device: docs/apple/persona.md "On the phone", Android `persona` in `persona-appearance`, web `localStorage persona.persona`):
   connect to a hub with `/api/v1/looks`; if hub `current.id` is `null` and a local choice was explicitly made → `PUT {"id": local selection, "if_unset": true}`, honoring the response (the first connected device's choice becomes everyone's); if the hub already has a choice → use it;
   no local choice → do not upload; old hub (404) → use the local choice as before. Local selection remains a cache, displayed on startup without waiting for the hub.
 

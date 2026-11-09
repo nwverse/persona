@@ -295,12 +295,13 @@ final class AvatarUploadModel: Identifiable {
     }
 
     /// The new avatar in the store's list, on the phone and chosen. The list is read after the hub answered: a refresh
-    /// that was under way may have asked before the avatar was made (`PersonaStore.reload`).
+    /// that was under way may have asked before the avatar was made (`PersonaStore.reload`). The upload's `choose` chose
+    /// it on the hub already: it is not sent again.
     private func adopt(_ look: UploadedLook, api: APIClient) async -> Bool {
         let store = deps.store()
         if !store.offered.contains(where: { $0.id == look.id }) { await store.reload(api) }
         guard let p = store.offered.first(where: { $0.id == look.id }) else { return false }
-        await store.choose(p, api: api)
+        await store.choose(p, api: api, onHub: true)
         return store.current.id == look.id && store.chosenID == look.id
     }
 
@@ -381,7 +382,7 @@ final class AvatarUploadsModel {
         }
         error = nil
         let store = deps.store()
-        if store.chosenID == p.id { await store.choose(.builtin, api: api) }
+        if store.chosenID == p.id { await store.choose(.builtin, api: api, onHub: true) } // the hub chose it already
         // Read after the delete: a refresh under way may still list it.
         await store.reload(api)
         return true
