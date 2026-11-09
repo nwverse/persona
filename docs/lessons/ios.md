@@ -249,7 +249,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   Real hub pushes a machine's sessions every 2 seconds with new `updated_at`; state + last-update sorting reordered spaces on 36% of pushes and jumped the screen.
   - Sort by a time independent of each output: working sessions by work start (`Session.sortDate`, `SpaceGroup.sortDate`).
   - Hold pushes during touch, inertia, covered pages or another tab; land together 0.5 seconds after stopping, at most 5 seconds even with continuous scrolling;
-    never hold needs-you, questions, offline or errors (`docs/apple/ios-state.md` ("Timeliness")). The list reads only an intermediary (`AgentsFeed`,
+    never hold needs-you, questions, offline or errors (`docs/apple/ios-state.md` ("Timely (bounded)")). The list reads only an intermediary (`AgentsFeed`,
     `withObservationTracking` following the model), with an unobserved hold switch. A list `@State` snapshot would redraw at scroll start.
   - Holding must actually block pushes. These leaks still reevaluate each push:
     - Reading the model in `onChange` / `onScrollPhaseChange` counts as body observation.
@@ -665,6 +665,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   (`Tab.workbench` collided with `-workbench`, renamed `-openWorkbench`). Use `open…` / `show…` names unlike type members and register in `release.sh`.
   Stored properties also collide (2026-10-31, `AgentsListMenu.Actions`.openMonitor vs `-openMonitor` stopped TestFlight 50). For new properties,
   first build locally `xcodebuild build -configuration Release -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO` and run `release.sh` `strings` checks on `Release-iphoneos/Persona.app/Persona`.
+  It happened again with `WorkspaceSidebarCard.openAgent` vs `-openAgent` (2026-11-09, #1675 stopped TestFlight 214, renamed `selectAgent` in #2179):
+  name closure properties `select…` / `on…`, not `open…` / `show…`. `@State` / `@Binding` / `@Environment` properties are stored as `_name` and never collide.
+  A quick check against the source: the list in `release.sh` into a file, then
+  `git grep -hoE '(var|let|case)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' -- 'apple/*.swift' ':!apple/PersonaTests' ':!apple/PersonaUITests' ':!apple/Persona/Debug' | awk '{print $2}' | sort -u | grep -xF -f <list>`
+  (each hit that is not a property wrapper or a Mac-only case is a collision).
 - Launch-argument defaults are `strings` (`-dev.compact YES` is "YES"). Read booleans / numbers with `bool(forKey:)` / `integer(forKey:)` / `double(forKey:)` like AppStorage,
   not `object(forKey:) as? Bool`, which silently falls back (#1473 `StoredValue` broke `-dev.compact YES`; `CompactListShots` showed cards instead of compact rows, #2147).
 - Live Activities (`docs/apple/live-activity.md`): ActivityKit uses default JSONDecoder for `content-state`; `Date` values start 2001; pass Unix-second numbers.
@@ -674,11 +679,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   Island numbers (TPM, tokens, load) consume push budget: hub sends only displayed fields, two significant figures, at most once per minute per device.
   Sharing with another app on 18 Pro gives two width-limited 28 pt compact activities (second clipped);17 Pro and others use minimal.
   Only iOS 27 `isDynamicIslandLimitedInWidth` reports width limitation; app cannot know presentation or other apps. Compact / minimal provide no width, making `ViewThatFits` useless.
-  Screenshot both models (`scripts/app/island_peer.sh` + `LiveActivityShots`, `docs/apple/live-activity.md` ("Sharing Dynamic Island with other apps")).
+  Screenshot both models (`scripts/app/island_peer.sh` + `LiveActivityShots`, `docs/apple/live-activity.md` ("Sharing the Dynamic Island with other apps")).
 - Missing shared keychain groups (push-relay `.push` private key; avatar `.look` also used builds 92–103) silently fall back, while simulator always works:
   build 92 extension signatures had no groups (unsigned archive + ad-hoc signing without entitlements, empty `$(AppIdentifierPrefix)`), always default avatar / system blue.
   Use `$(DEVELOPMENT_TEAM).` prefix in plist; after entitlement / signing changes run `scripts/release/entitlements.py check` on exported ipa (`docs/operations/release.md` ("entitlements")).
-- Simulator Live Activity rendering is insufficient (2026-11-02, build 98 signing fixed but device still default, even built-in avatar; `docs/apple/live-activity.md` ("Why build 98 still failed")):
+- Simulator Live Activity rendering is insufficient (2026-11-02, build 98 signing fixed but device still default, even built-in avatar; `docs/apple/live-activity.md` ("Why build 98 was still wrong")):
   - Put rendered data in ContentState and oversized images in App Group files. **Live Activity extensions cannot read / write keychain on device**:
     build 103 app shared-group write / read succeeded, extension never wrote one diagnostic (simulator both work; Apple only documents its separate sandbox).
     Unchanged-content updates may not redraw; content must really change.
@@ -1460,3 +1465,14 @@ A worktree's display name and its Agents' conversation names are different comma
 
 - **What went wrong**: the Persona chat's avatar menu nests "Launcher" › each launcher › its models. The models are read a moment after the bar comes up. An `.id` on the innermost menu (built from the list) was not enough: the "Launcher" menu around it had none, kept the launchers' submenus it was built with before the lists came in, and the claude submenu showed only Default and "Other Model…" for as long as the app ran, although the state had all ten models. Whether a run saw it depended on when the outer menu happened to be built first, so a passing UI test proved little.
 - **Now**: every level of a nested `Menu` whose items come from state that loads or changes gets an `.id` built from that state (`AssistantTopBar.launcherMenuID` on "Launcher", the list and pick on each launcher). When a menu's items look stale, log the state first: if it is right, the menu was not built again.
+
+## App Intents that say yes to an agent need `.requiresAuthentication` (2026-11-09, #1878)
+
+- An App Intent without `authenticationPolicy` gets `.alwaysAllowed`. Siri runs it on a locked phone, and the hub
+  credentials (`kSecAttrAccessibleAfterFirstUnlock`) are readable then, so Approve First Pending allowed permissions and
+  approved plans while nobody had unlocked the phone; the notification and Live Activity buttons for the same card asked first.
+- An intent that allows a permission or approves a plan declares `.requiresAuthentication`, as notification actions use
+  `.authenticationRequired`, and a test pins it (`IntentsTests.approvingFromSiriNeedsUnlock`,
+  `FleetIntentsTests.sayingYesNeedsUnlock`). The policy covers the whole intent, so its other replies wait for the unlock too.
+  Ask Claude and Give an Agent a Task still send messages from a locked phone; changing that is a separate decision.
+- An entry that never shows the plan in full approves plans in `acceptEdits`, never `bypassPermissions`.

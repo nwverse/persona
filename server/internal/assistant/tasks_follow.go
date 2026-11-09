@@ -124,7 +124,7 @@ func (s *Service) taskWaits(ctx context.Context, t Todo) bool {
 }
 
 // taskWorking: one of the task's agents started a turn. The agent of a task the hub closed meanwhile (judged done,
-// reviewed) works on it again — sent more by agent_send, which resumes a closed one, or by the user: the task is open
+// accepted) works on it again — sent more by agent_send, which resumes a closed one, or by the user: the task is open
 // again first, as a change asked for on its "Please verify" card reopens it (#3457), so this turn is followed
 // (interrupted or done receipt, judgment) and the task shows in progress, not done (#5892).
 func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
@@ -186,6 +186,10 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	time.Sleep(s.settleDelay(ctx)) // a turn that ends to ask, or goes on at once, is not the end
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
+		return
+	}
+	if current, ok := s.todoNow(t.ID); ok && (current.Cancelled() || current.AgentAborted(machine, sid)) {
+		s.logf("task %s: cancelled or agent %s/%s aborted: skipping turn end", t.ID, machine, sid)
 		return
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
@@ -299,6 +303,10 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	text := strings.TrimSpace(last.LastText)
 	if _, answer := turnExchange(items); answer != "" {
 		text = answer
+	}
+	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
+		s.logf("task %s: cancelled or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
+		return
 	}
 	body := receiptBody{Title: t.Title, State: "done", Summary: clipMarkdown(text, 600), Machine: name}
 	// Persona follows up on a supervised stop through sigReview or sigIdle after judgment; the receipt need not wait.
