@@ -7,9 +7,9 @@ What it adds, under /api/v1/extensions and the old /api/v1/plugins alike:
   GET  …/voice/info                            protocol 2 and its features (404 with MOCK_VOICE=p1: an extension too old)
   GET  …/voice/-/                              its settings page (Settings › Extensions › the voice extension)
   GET  …/voice/models, …/voice/voices          as the protocol 1 mock has them; /voices fails, waits or says stale
-                                               on demand (#2411): MOCK_VOICE_VOICES=fail|slow|flaky|stale, the same
-                                               per request with ?mock=…, or for the rest of the run with
-                                               GET /mock/voice2?voices=fail|slow|flaky|stale|ok
+                                               on demand (#2411): MOCK_VOICE_VOICES=fail|slow|slowfail|flaky|stale|
+                                               none, the same per request with ?mock=…, or for the rest of the run
+                                               with GET /mock/voice2?voices=fail|slow|slowfail|flaky|stale|none|ok
   GET  …/voice/ws                              a start with protocol 2 and a target gets the script below; any other
                                                start is handed to mock_hub.py's protocol 1 script unchanged
   GET  /mock/voice2                            what the app sent (starts, texts, interrupts, resends, the PCM frames: how
@@ -42,11 +42,13 @@ FEATURES = ["target", "runs", "asks", "resume", "suspend"]
 LOG = {"starts": [], "texts": [], "interrupts": 0, "resends": [], "audio": 0, "audio_bytes": 0, "audio_sizes": {}, "audio_silent": 0, "steps": [], "closes": 0, "voices": 0}
 PREFIXES = ("/api/v1/extensions", "/api/v1/plugins")
 # How GET …/voices answers (#2411): "" its list; fail a 502 (the hub could not reach the extension); slow its list
-# after VOICES_DELAY seconds (the pickers' Loading voices…); flaky a 502 for the first two asks, then its list (the
-# pickers' retry); stale its list marked stale (the hub answered with the last good one).
+# after VOICES_DELAY seconds (the pickers' Loading voices…); slowfail a 502 after VOICES_DELAY seconds (a failure
+# that takes longer than a picker's reopen gap: no asking in a loop while the menu redraws); flaky a 502 for the
+# first two asks, then its list (the pickers' retry); stale its list marked stale (the hub answered with the last
+# good one); none an empty list (a model without voices: the pickers' None for this model).
 VOICES = {"mode": os.environ.get("MOCK_VOICE_VOICES", ""), "failed": 0}
 VOICES_DELAY = float(os.environ.get("MOCK_VOICE_VOICES_DELAY") or "6")
-VOICES_MODES = ("", "ok", "fail", "slow", "flaky", "stale")
+VOICES_MODES = ("", "ok", "fail", "slow", "slowfail", "flaky", "stale", "none")
 
 # The script's steps, as (seconds after ready, name); the names are what /mock/voice2 lists as they happen.
 STEPS = [
@@ -96,12 +98,17 @@ def install(hub):
         if how == "flaky" and VOICES["failed"] < 2:
             VOICES["failed"] += 1
             how = "fail"
+        if how == "slowfail":
+            time.sleep(VOICES_DELAY)
+            how = "fail"
         if how == "fail":
             handler.send_json({"error": "plugin voice is not answering: connection refused"}, 502)
             return
         if how == "slow":
             time.sleep(VOICES_DELAY)
         out = dict(hub.VOICE_VOICES.get(q.get("model", [hub.VOICE_MODELS["default"]])[0], {"voices": []}))
+        if how == "none":
+            out = {"voices": []}
         if how == "stale":
             out["stale"] = True
         handler.send_json(out)
@@ -149,8 +156,8 @@ def install(hub):
 
     hub.MOCK_HELP.append("MOCK_VOICE=setup|p1  语音扩展：需要设置（还没填 Key）/ 协议 1 的旧扩展（/info 404）；"
                          "iOS 语音模式的协议 2 脚本见 scripts/mock/voice_mock.py，GET /mock/voice2 看 App 发了什么")
-    hub.MOCK_HELP.append("MOCK_VOICE_VOICES=fail|slow|flaky|stale  语音扩展的音色列表：502 / 晚 MOCK_VOICE_VOICES_DELAY 秒（默认 6）/ "
-                         "前两次 502 / 标成 stale；运行中用 GET /mock/voice2?voices=… 改（#2411）")
+    hub.MOCK_HELP.append("MOCK_VOICE_VOICES=fail|slow|slowfail|flaky|stale|none  语音扩展的音色列表：502 / 晚 MOCK_VOICE_VOICES_DELAY 秒（默认 6）/ "
+                         "晚 MOCK_VOICE_VOICES_DELAY 秒再 502 / 前两次 502 / 标成 stale / 空列表；运行中用 GET /mock/voice2?voices=… 改（#2411）")
     return route
 
 

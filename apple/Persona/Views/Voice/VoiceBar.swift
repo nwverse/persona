@@ -335,7 +335,7 @@ struct VoiceBar: View {
                     voices.retry()
                 } label: {
                     Text("Voice")
-                    Text("Couldn't load voices · Retry")
+                    Text("Couldn't load · Retry")
                     Theme.Icon.image(Theme.Icon.voiceTimbre)
                 }
             }

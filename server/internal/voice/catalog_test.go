@@ -163,6 +163,30 @@ func TestVoicesFallBackToTheBuiltInList(t *testing.T) {
 	}
 }
 
+// A named model's fallback is its own last good list or the built-in one, never another model's or another
+// upstream's: their voices may not exist for it.
+func TestVoicesNeverFallBackToAnotherModelsList(t *testing.T) {
+	up := newListService(t)
+	other := newListService(t)
+	tc := newTestCatalog(Provider{URL: up.url(), Key: "k"})
+	tc.cfg.Providers = append(tc.cfg.Providers, Provider{ID: "rt2", URL: other.url(), Key: "k"})
+	other.voicesPrefix.Store("o")
+	if v, err := tc.voices(t.Context(), "rt/m1"); err != nil || ids(v) != "v_m1" {
+		t.Fatalf("m1: %+v %v", v, err)
+	}
+	if v, err := tc.voices(t.Context(), "rt2/m2"); err != nil || ids(v) != "o_m2" {
+		t.Fatalf("rt2/m2: %+v %v", v, err)
+	}
+	up.voicesFail.Store(http.StatusBadGateway)
+	other.voicesFail.Store(http.StatusBadGateway)
+	for _, model := range []string{"rt/m2", "rt2/m1"} {
+		v, err := tc.voices(t.Context(), model)
+		if err != nil || !v.Stale || v.Default != "marin" || len(v.Voices) != len(liveVoices) {
+			t.Fatalf("%s while failing, never read: the built-in list, got %+v %v", model, v, err)
+		}
+	}
+}
+
 // A service without a voices list (404) has the built-in voices as its list: not stale, kept like any good answer.
 func TestVoicesOfAServiceWithoutAList(t *testing.T) {
 	up := newListService(t)

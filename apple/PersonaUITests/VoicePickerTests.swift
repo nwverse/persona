@@ -83,6 +83,18 @@ final class VoicePickerTests: XCTestCase {
         return nil
     }
 
+    /// The voice starts the mock has had so far (each with the voice it asked for).
+    private func starts(_ hub: String) -> [[String: Any]] {
+        (try? mock(hub, voices: "ok")["starts"] as? [[String: Any]]) ?? []
+    }
+
+    /// The system's microphone prompt, the first time a call starts on the simulator.
+    @MainActor private func allowMicrophone() {
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons
+            .matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
+        if allow.waitForExistence(timeout: 5) { allow.tap() }
+    }
+
     @MainActor private func closeMenu(_ app: XCUIApplication) {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         Thread.sleep(forTimeInterval: 0.6)
@@ -127,11 +139,11 @@ final class VoicePickerTests: XCTestCase {
         openMore(app)
         let failed = voiceItem(app, "音色")
         XCTAssertTrue(failed.waitForExistence(timeout: 5))
-        XCTAssertTrue(containing(app, "音色列表没读到").waitForExistence(timeout: 5), "no Couldn't load voices · Retry:\n\(app.debugDescription)")
+        XCTAssertTrue(containing(app, "列表没读到").waitForExistence(timeout: 5), "no Couldn't load · Retry:\n\(app.debugDescription)")
         Thread.sleep(forTimeInterval: 0.6)
         shot(app, "menu-failed")
         try mock(hub, voices: "ok")
-        containing(app, "音色列表没读到").tap()
+        containing(app, "列表没读到").tap()
         Thread.sleep(forTimeInterval: 1.5)
         openMore(app)
         XCTAssertTrue(voiceItem(app, "音色：温柔").waitForExistence(timeout: 5), "Retry did not get the list:\n\(app.debugDescription)")
@@ -144,15 +156,12 @@ final class VoicePickerTests: XCTestCase {
         let hub = try hub
         try mock(hub, voices: "ok")
         let app = try launch(Self.agent + ["-openVoice", "silent"])
-        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons
-            .matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
-        if allow.waitForExistence(timeout: 5) { allow.tap() }
+        allowMicrophone()
         let status = element(app, "voice-status")
         XCTAssertTrue(status.waitForExistence(timeout: 30), "no voice bar:\n\(app.debugDescription)")
         // The script's question holds the bar's line still for a while (the menu closes when the line's layout changes).
         XCTAssertTrue(element(app, "voice-asking").waitForExistence(timeout: 20), "the script never asked")
-        let starts = { (try? self.mock(hub, voices: "ok")["starts"] as? [[String: Any]]) ?? [] }
-        let first = starts().count
+        let first = starts(hub).count
         let current = try XCTUnwrap(steadyVoiceItem(app, "音色："), "no Voice item:\n\(app.debugDescription)")
         // Another voice than the one it has (an earlier run may have kept one on the device).
         let (name, id) = current.label.contains("沉稳") ? ("元气", "lively") : ("沉稳", "calm")
@@ -161,8 +170,8 @@ final class VoicePickerTests: XCTestCase {
         XCTAssertTrue(other.waitForExistence(timeout: 5), "no voices in the submenu:\n\(app.debugDescription)")
         other.tap()
         let deadline = Date.now.addingTimeInterval(10)
-        while Date.now < deadline, starts().count == first { Thread.sleep(forTimeInterval: 0.2) }
-        XCTAssertEqual(starts().last?["voice"] as? String, id, "the new connection did not start with the voice picked")
+        while Date.now < deadline, starts(hub).count == first { Thread.sleep(forTimeInterval: 0.2) }
+        XCTAssertEqual(starts(hub).last?["voice"] as? String, id, "the new connection did not start with the voice picked")
         XCTAssertTrue(status.waitForExistence(timeout: 10), "the call ended")
         XCTAssertFalse(element(app, "voice-ended").exists, "the call ended")
         XCTAssertNotNil(steadyVoiceItem(app, "音色：" + name), "the menu does not name the new voice:\n\(app.debugDescription)")
@@ -195,6 +204,14 @@ final class VoicePickerTests: XCTestCase {
         app = try launch(["-tab", "settings", "-openExtension", "voice"])
         XCTAssertTrue(element(app, "voice-timbre-setting").waitForExistence(timeout: 30))
         XCTAssertTrue(containing(app, "元气").waitForExistence(timeout: 10), "the pick was not kept")
+        app.terminate()
+        // The next call starts with it.
+        let first = starts(hub).count
+        app = try launch(Self.agent + ["-openVoice", "silent"])
+        allowMicrophone()
+        let deadline = Date.now.addingTimeInterval(30)
+        while Date.now < deadline, starts(hub).count == first { Thread.sleep(forTimeInterval: 0.3) }
+        XCTAssertEqual(starts(hub).last?["voice"] as? String, "lively", "the next call did not start with the voice picked in Settings")
         app.terminate()
 
         try mock(hub, voices: "fail")

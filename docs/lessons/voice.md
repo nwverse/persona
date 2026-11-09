@@ -392,6 +392,11 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   `Text` right in the label (docs/lessons/ios.md, #1307).
 - **A SwiftUI `Menu`'s items appear when it opens**: `onAppear` on an item is the cue to ask again for a list that is missing. A menu drawn again as
   the state changes (loading → failed) must not turn that into a loop: an open asks only 2 s after the last ask began (`VoiceVoicesLoader.reopenGap`).
+  Checked with a failure slower than the gap (the mock's `slowfail`, 3 s): with the menu closed the asks followed 2, 5, 15 s only; with it open
+  for 25 s, one ask on opening and then the same backoff, no loop.
+- **A menu item's second line wraps instead of truncating**: "Couldn't load voices · Retry" took two lines in English and Japanese
+  (「声の一覧を読み込めませんでした · 再試行」) in the iPhone 17 Pro's ⋯ menu, and `.lineLimit` does not reach a menu. The words have to be short in
+  every language ("Couldn't load · Retry", 「読み込めません · 再試行」); look at the menu in all three languages, not only the one the tests run in.
 
 ## The web voice mode (#2273, 2026-11-09)
 

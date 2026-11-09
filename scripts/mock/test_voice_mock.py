@@ -92,7 +92,8 @@ class VoiceMockTests(unittest.TestCase):
             sock.bind(("127.0.0.1", 0))
             cls.port = sock.getsockname()[1]
         cls.log = tempfile.TemporaryFile()
-        env = {"PATH": os.environ.get("PATH", ""), "PORT": str(cls.port), "MOCK_VOICE": "1", "MOCK_VOICE_PACE": "0.1"}
+        env = {"PATH": os.environ.get("PATH", ""), "PORT": str(cls.port), "MOCK_VOICE": "1", "MOCK_VOICE_PACE": "0.1",
+               "MOCK_VOICE_VOICES_DELAY": "0.3"}
         cls.process = subprocess.Popen([sys.executable, "-I", str(HUB)], env=env, stdout=cls.log, stderr=cls.log)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -146,6 +147,10 @@ class VoiceMockTests(unittest.TestCase):
         self.assertEqual(self.status(base + "&mock=fail")[0], 502)
         code, body = self.status(base + "&mock=stale")
         self.assertEqual((code, body["stale"], body["default"]), (200, True, "soft"))
+        self.assertEqual(self.status(base + "&mock=none"), (200, {"voices": []}))
+        began = time.monotonic()
+        self.assertEqual(self.status(base + "&mock=slowfail")[0], 502)
+        self.assertGreaterEqual(time.monotonic() - began, 0.3, "slowfail answers late")
         try:
             self.assertEqual(self.get("/mock/voice2?voices=fail")["voices_mode"], "fail")
             self.assertEqual(self.status(base)[0], 502)

@@ -36494,26 +36494,26 @@
         }
       }
     },
-    "Couldn't load voices · Retry" : {
-      "comment" : "Voice chat's More menu: the list of voices could not be read; tapping asks again",
+    "Couldn't load · Retry" : {
+      "comment" : "Voice chat's More menu, under Voice: the list of voices could not be read; tapping asks again. Keep it short: one line in a menu",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Couldn't load voices · Retry"
+            "value" : "Couldn't load · Retry"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "声の一覧を読み込めませんでした · 再試行"
+            "value" : "読み込めません · 再試行"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音色列表没读到 · 重试"
+            "value" : "列表没读到 · 重试"
           }
         }
       }
@@ -71957,7 +71957,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このモデルには選べる声がありません"
+            "value" : "選べる声がありません"
           }
         },
         "zh-Hans" : {
