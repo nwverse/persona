@@ -8,20 +8,22 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 var (
-	ansiRE  = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
-	oscRE   = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
-	solidRE = regexp.MustCompile(`^[─━]{8,}$`)
+	ansiRE  = lazyre.New(`\x1b\[[0-?]*[ -/]*[@-~]`)
+	oscRE   = lazyre.New(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+	solidRE = lazyre.New(`^[─━]{8,}$`)
 	// A labeled rule over the input box: a named session (`──── my-session ─`).
-	labeledRE = regexp.MustCompile(`^─{2,}\s.*─$`)
+	labeledRE = lazyre.New(`^─{2,}\s.*─$`)
 	// Claude's IDE pill right after the ❯ (`[⧉ 3 lines selected] `): not input, and clearing keys leave it.
-	idePillRE = regexp.MustCompile(`^[ \x{00a0}]?\[⧉ [^\]\n]+\] ?`)
+	idePillRE = lazyre.New(`^[ \x{00a0}]?\[⧉ [^\]\n]+\] ?`)
 	// A paste or an image Claude folded into a placeholder is content, however it is colored.
-	placeholderRE = regexp.MustCompile(`\[(?:Pasted text #\d+|Image #\d+)`)
+	placeholderRE = lazyre.New(`\[(?:Pasted text #\d+|Image #\d+)`)
 	// The new-session tip in an empty box, `Try "how does <filepath> work?"`, drawn without color under NO_COLOR.
-	tipRowRE = regexp.MustCompile(`^Try "[^"]+"$`)
+	tipRowRE = lazyre.New(`^Try "[^"]+"$`)
 )
 
 // Plain drops ANSI escapes and carriage returns.
@@ -84,7 +86,7 @@ type run struct {
 	dim, inverse bool
 }
 
-var escRE = regexp.MustCompile(`\x1b(?:\[([0-?]*)[ -/]*([@-~])|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
+var escRE = lazyre.New(`\x1b(?:\[([0-?]*)[ -/]*([@-~])|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
 
 // sgrRuns splits an ANSI line by dim (SGR 2) and inverse (SGR 7); 38/48/58 colors are skipped whole, so the 2 of
 // `38;2;r;g;b` is not dim.
@@ -339,16 +341,16 @@ func BoxStyle(ansi string) string {
 	return strings.Join(parts, "·")
 }
 
-var sgrParams = regexp.MustCompile(`^\x1b\[[0-9;:]*m$`)
+var sgrParams = lazyre.New(`^\x1b\[[0-9;:]*m$`)
 
 // ClearKeys empty a one-row Claude input box: the row after the cursor, then before it (Ovis, measured on 2.1.295).
 var ClearKeys = []string{"ctrl+k", "ctrl+u"}
 
 // selectedRE is a cursor on a numbered choice: `❯ 1. Yes` (Claude), `› 1. Allow` (Codex).
-var selectedRE = regexp.MustCompile(`^\s*[❯›>]\s*\d+\.\s+\S`)
+var selectedRE = lazyre.New(`^\s*[❯›>]\s*\d+\.\s+\S`)
 
 // footerRE is a dialog's key hint line: `Enter to confirm · Esc to cancel`, `Esc to cancel` under a picker.
-var footerRE = regexp.MustCompile(`(?i)\b(?:esc to (?:cancel|go back|close)|enter to (?:confirm|select|set))\b`)
+var footerRE = lazyre.New(`(?i)\b(?:esc to (?:cancel|go back|close)|enter to (?:confirm|select|set))\b`)
 
 // Choosing: the bottom of the screen is a dialog — a key hint footer, or a numbered choice with a cursor below the
 // last rule (above it is history: an old message may read `❯ 1. …`) — where typed text would pick an option or land
@@ -379,13 +381,13 @@ func Choosing(plain string) bool {
 // historyRE starts a row of the conversation above a dialog: the user's prompt at the left edge (`❯ fix it`), the
 // agent's words (⏺), a tool's output (⎿), a finished turn (✻). A dialog's cursor on a numbered choice can be at the
 // left edge too (`❯ 1. Preview`, AskUserQuestion 2.1.316): isHistory leaves it out.
-var historyRE = regexp.MustCompile(`^(?:❯ |\s*[⏺⎿✻])`)
+var historyRE = lazyre.New(`^(?:❯ |\s*[⏺⎿✻])`)
 
 // codexHistoryRE is the same on a Codex screen (#3214), which has no rule under its conversation: a row at the left
 // edge with the agent's or a status's • (`• Ran …`, `• Working (5s • esc to interrupt)`), the user's › (the input box
 // is one too: no dialog is open while it shows), an event's ✔ ✗ ■, or a finished turn's "Worked for 2s • 9:41 PM".
 // Codex indents its dialogs under them; the › at the edge on an approval's option is the cursor (selectedRE).
-var codexHistoryRE = regexp.MustCompile(`^(?:[•✔✗■] |› )|^\s*Worked for \d`)
+var codexHistoryRE = lazyre.New(`^(?:[•✔✗■] |› )|^\s*Worked for \d`)
 
 // isHistory leaves out the dialog's own cursor rows: a numbered choice (selectedRE) and a multi-select question's
 // Submit / Next row, which a ❯ puts at the left edge too (`❯    Submit`).
@@ -446,7 +448,7 @@ func DialogHead(plain string) string {
 func pickerEdge(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "▔▔▔") }
 
 // noticeFooterRE is the key hint of a notice that only asks to be read: `Enter to continue · Esc to cancel`.
-var noticeFooterRE = regexp.MustCompile(`(?i)^enter to continue\b(?:\s*·\s*esc to (?:cancel|close|go back))?$`)
+var noticeFooterRE = lazyre.New(`(?i)^enter to continue\b(?:\s*·\s*esc to (?:cancel|close|go back))?$`)
 
 // NoticeOnly: the dialog at the bottom of a plain screen is a notice that Enter only closes (Claude Code's auto mode
 // billing notice, 2.1.309: "Enter to continue · Esc to cancel") — its footer says nothing else, and it has no

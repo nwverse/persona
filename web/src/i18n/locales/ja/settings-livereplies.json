@@ -1,0 +1,11 @@
+{
+  "title": "リアルタイム返信 · {name}",
+  "label": "書きながら返信を送る",
+  "detail_on": "Web と iPhone・Mac のアプリに返信が行ごとに届き、文字を早く確認できます",
+  "detail_off": "Claude が返信を保存してから表示されます",
+  "footer": "オンにすると、Persona がこのコンピューターで起動した Claude Code セッションは Claude が書いている途中の返信を送るため、Web と iPhone・Mac の Persona アプリで文字を早く確認できます。代わりに、このコンピューターのターミナルでは返信が一語ずつではなく数行ずつ表示されます。この設定はハブに保存され、~/.claude/settings.json は変更しません。上の「オンラインの全マシンに適用」がオンのときは、ほかのオンラインのコンピューターも一緒に変わります。変更はその後に起動したセッションに適用され、実行中のセッションは Claude を再起動すると切り替わります。",
+  "load_failed": "このコンピューターの設定を読み込めません：{error}",
+  "retry": "再試行",
+  "toast_value": "{title}：{value} · {summary}",
+  "toast_failed": "{title}：{summary}"
+}

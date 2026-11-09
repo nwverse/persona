@@ -12,9 +12,9 @@ final class VideoFileUITests: XCTestCase {
         defer { app.terminate() }
         for pass in 0..<2 {
             if pass == 0 {
-                // Keep playback acceptance separate from the shell's cold-start file-scope race.
+                // Use the shipping Shell route for playback acceptance too.
                 app.launchArguments = ["-pairURL", pair, "-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000001",
-                                       "-openAgentsFresh", "YES", "-openChatsFresh", "YES", "-ui.oldLayout", "YES"]
+                                       "-openAgentsFresh", "YES", "-openChatsFresh", "YES"]
                 app.launchPinned()
             }
             let chip = app.buttons["file-chip-/Users/me/code/weather/media/preview.mp4"].firstMatch

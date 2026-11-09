@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -205,7 +205,7 @@ func clipGitOutput(s string) string {
 	return s
 }
 
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+var ansiEscape = lazyre.New(`\x1b\[[0-9;?]*[A-Za-z]`)
 
 // conflictFiles are the files git lists under "would be overwritten" or as CONFLICT lines.
 func conflictFiles(out string) []string {
@@ -371,7 +371,7 @@ func (n *Node) gitBranches(ctx context.Context, cwd string) (map[string]any, err
 	return map[string]any{"branches": append(local, remote...)}, nil
 }
 
-var branchName = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+var branchName = lazyre.New(`^[A-Za-z0-9._/-]+$`)
 
 // gitSwitch switches to branch (a remote one gets a local branch tracking it), or creates it from from (empty: HEAD).
 // Uncommitted changes that the switch would overwrite are listed first and nothing is switched; the others go along,

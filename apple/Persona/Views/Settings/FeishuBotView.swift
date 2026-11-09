@@ -207,7 +207,7 @@ struct FeishuBotView: View {
                         .font(Theme.Font.caption).foregroundStyle(.secondary)
                 }
             } icon: {
-                Image(systemName: Theme.Icon.replyReminder).foregroundStyle(Theme.accent)
+                ThemedIcon(Theme.Icon.replyReminder).foregroundStyle(Theme.accent)
             }
         }
         .disabled(model.saving)
@@ -236,17 +236,9 @@ struct FeishuBotView: View {
         return st.owner == nil ? Theme.caution : Theme.positive
     }
 
-    private func feature(_ key: WritableKeyPath<FeishuBotStatus.Features, Bool>, _ symbol: String, _ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
-        Toggle(isOn: Binding(get: { model.features[keyPath: key] }, set: { on in Task { await model.set(key, on) } })) {
-            Label {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(title)
-                    Text(detail).font(Theme.Font.caption).foregroundStyle(.secondary)
-                }
-            } icon: {
-                Image(systemName: symbol).foregroundStyle(Theme.accent)
-            }
-        }
+    private func feature(_ key: WritableKeyPath<FeishuBotStatus.Features, Bool>, _ symbol: String, _ title: LocalizedStringResource, _ detail: LocalizedStringResource) -> some View {
+        SettingsSwitchRow(title: String(localized: title), detail: String(localized: detail), symbol: symbol, iconColor: Theme.accent,
+                          isOn: Binding(get: { model.features[keyPath: key] }, set: { on in Task { await model.set(key, on) } }))
         .disabled(model.saving)
     }
 

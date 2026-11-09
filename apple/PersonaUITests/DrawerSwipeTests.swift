@@ -21,9 +21,9 @@ final class DrawerSwipeTests: XCTestCase {
     @MainActor private func launch(_ open: String) -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistant", open, "-showDrawerProbe", "YES"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistant", open, "-showDrawerProbe", "YES", "-probes", "YES"]
         app.launchPinned()
-        XCTAssertTrue(app.buttons["persona-avatar"].waitForExistence(timeout: 15), "the Persona tab did not open")
+        XCTAssertTrue(app.buttons["shell-assistant"].waitForExistence(timeout: 15), "the Persona tab did not open")
         return app
     }
 
@@ -116,28 +116,26 @@ final class DrawerSwipeTests: XCTestCase {
         XCTAssertTrue(isOpen(app), "a drag to the right on code at its left edge did not open the sidebar")
     }
 
-    /// The tab bar fades away while the sidebar is out (it is not hidden: that would lay the page out again) and is
-    /// back, tappable, once it is in — also when the sidebar's own Settings switched tabs.
-    @MainActor func testTabBarFadesAndComesBack() throws {
+    /// Settings from the drawer closes it; dismissing Settings restores the chat and both page switches.
+    @MainActor func testDrawerSettingsClosesBeforeSwitchingPages() throws {
         let app = launch(main)
-        let agents = app.tabBars.buttons["Agents"]
-        XCTAssertTrue(agents.waitForExistence(timeout: 5) && agents.isHittable, "no tab bar")
+        let agents = app.buttons["shell-agents"].firstMatch
+        XCTAssertTrue(agents.waitForExistence(timeout: 5) && agents.isHittable, "no Agents switch")
         drag(app, from: point(app, 0.3, 0.5), dx: 220, dy: 20)
         XCTAssertTrue(isOpen(app))
-        XCTAssertFalse(agents.isHittable, "the tab bar is still there over the sidebar")
-        // The sidebar's Settings, at the right of its foot (the tab bar's Settings under it is faded away).
-        // (Its own identifier is the sidebar's: the container's wins.) Inside the sidebar's width, not the tab bar's.
-        let edge = app.windows.firstMatch.frame.width * 0.85 // the sidebar is most of the width; the tab bar's Settings is at its far right
-        let settings = app.buttons.matching(NSPredicate(format: "label == '设置'")).allElementsBoundByIndex
-            .first { $0.frame.maxX <= edge + 1 && $0.isHittable }
-        XCTAssertNotNil(settings, "the sidebar's 设置 is covered:\n\(app.debugDescription)")
-        settings?.tap()
-        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5), "设置 did not open")
-        XCTAssertTrue(agents.isHittable, "the tab bar did not come back on 设置")
-        agents.tap()
-        app.tabBars.buttons["Persona"].tap()
-        XCTAssertTrue(app.buttons["persona-avatar"].waitForExistence(timeout: 5))
-        XCTAssertFalse(sidebar(app).exists, "back on the Persona tab the sidebar is still out")
+        XCTAssertFalse(agents.isHittable, "the page switch is reachable under the drawer")
+        let settings = app.drawerSettingsButton
+        XCTAssertTrue(settings.waitForExistence(timeout: 5) && settings.isHittable, "the drawer's Settings is covered:\n\(app.debugDescription)")
+        settings.tapCenter()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5), "Settings did not open")
+        let close = app.buttons["settings-close"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "Settings has no close button")
+        close.tapCenter()
+        XCTAssertTrue(agents.waitForExistence(timeout: 5) && agents.isHittable, "the page switch did not return")
+        ShellFinger(app).switchTo(agents: true, "Agents after closing Settings")
+        ShellFinger(app).switchTo(agents: false, "Assistant after closing Settings")
+        XCTAssertTrue(app.buttons["shell-assistant"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(sidebar(app).exists, "the drawer is still open after returning to Assistant")
         XCTAssertTrue(agents.isHittable)
     }
 
