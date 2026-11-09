@@ -213,17 +213,19 @@ func precompressedSite(t testing.TB, site fstest.MapFS) fstest.MapFS {
 func TestWebAppServesPrecompressedAssetsAsThePlainFiles(t *testing.T) {
 	js := strings.Repeat("export const answer = 42; // a hashed chunk\n", 100)
 	plain := fstest.MapFS{
-		"index.html":              {Data: []byte("<html>" + strings.Repeat("<p>app</p>", 200) + "</html>")},
-		"sw.js":                   {Data: []byte(js)},
-		"assets/App-1.js":         {Data: []byte(strings.Repeat(js, 25))}, // past io.Copy's 32 KB buffer
-		"assets/styles-2.css":     {Data: []byte(strings.Repeat("a{color:red}\n", 200))},
-		"assets/icon-3.png":       {Data: append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0, 1, 2, 3}, 600)...)},
-		"assets/small-4.js":       {Data: []byte("export {};")},
-		"admin/index.html":        {Data: []byte("<html>admin</html>")},
-		"admin/assets/admin-5.js": {Data: []byte(js)},
+		"index.html":               {Data: []byte("<html>" + strings.Repeat("<p>app</p>", 200) + "</html>")},
+		"sw.js":                    {Data: []byte(js)},
+		"assets/App-1.js":          {Data: []byte(strings.Repeat(js, 25))}, // past io.Copy's 32 KB buffer
+		"assets/styles-2.css":      {Data: []byte(strings.Repeat("a{color:red}\n", 200))},
+		"assets/icon-3.png":        {Data: append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0, 1, 2, 3}, 600)...)},
+		"assets/small-4.js":        {Data: []byte("export {};")},
+		"admin/index.html":         {Data: []byte("<html>admin</html>")},
+		"admin/assets/admin-5.js":  {Data: []byte(js)},
+		"third-party-licenses.txt": {Data: []byte(strings.Repeat("MIT License, Copyright (c) the authors\n", 100))},
 	}
 	stored := precompressedSite(t, plain)
-	if _, ok := stored["assets/App-1.js"]; ok || stored["assets/App-1.js.gz"] == nil || stored["sw.js"] == nil {
+	if _, ok := stored["assets/App-1.js"]; ok || stored["assets/App-1.js.gz"] == nil || stored["sw.js"] == nil ||
+		stored["third-party-licenses.txt.gz"] == nil {
 		t.Fatalf("not precompressed as the build does: %v", slices.Sorted(maps.Keys(stored)))
 	}
 	oracle := gzipResponses(t.Logf, webFrom(t.TempDir(), plain))
@@ -242,7 +244,8 @@ func TestWebAppServesPrecompressedAssetsAsThePlainFiles(t *testing.T) {
 		{"If-Modified-Since", "GET", map[string]string{"Accept-Encoding": browser, "If-Modified-Since": "Mon, 02 Jan 2006 15:04:05 GMT"}},
 	}
 	paths := []string{"/assets/App-1.js", "/assets/styles-2.css", "/assets/icon-3.png", "/assets/small-4.js", "/",
-		"/s/laptop/abc", "/sw.js", "/admin/assets/admin-5.js", "/assets/gone-6.js", "/assets/App-1.js.gz"}
+		"/s/laptop/abc", "/sw.js", "/admin/assets/admin-5.js", "/assets/gone-6.js", "/assets/App-1.js.gz",
+		"/third-party-licenses.txt", "/third-party-licenses.txt.gz"}
 	decoded := func(w *httptest.ResponseRecorder) string {
 		if w.Header().Get("Content-Encoding") == "gzip" {
 			return gunzip(t, w.Body.Bytes())
@@ -281,5 +284,111 @@ func TestWebAppServesPrecompressedAssetsAsThePlainFiles(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/assets/broken-7.js", nil))
 	if w.Code != http.StatusInternalServerError || w.Header().Get("Cache-Control") != "" {
 		t.Fatalf("broken stored asset: %d, Cache-Control %q", w.Code, w.Header().Get("Cache-Control"))
+	}
+}
+
+// A first-screen asset the web build also wrote as name.br goes out as that copy, as it is stored, only to a GET that
+// takes br, for the built-in copy; every other request gets what it got before (the oracle: the same site without
+// the .br copies). The copy itself is never a file of its own. Go has no brotli decoder, so the copy here is opaque
+// bytes: what counts is that they are sent unchanged; a real build is checked end to end in the PR.
+func TestWebAppServesStoredBrotliCopies(t *testing.T) {
+	js := strings.Repeat("export const answer = 42; // a first-screen chunk\n", 100)
+	plain := fstest.MapFS{
+		"index.html":          {Data: []byte("<html>app</html>")},
+		"assets/App-1.js":     {Data: []byte(js)},
+		"assets/styles-2.css": {Data: []byte(strings.Repeat("a{color:red}\n", 200))}, // no .br copy
+	}
+	br := []byte("\x1b\x00brotli copy of App-1.js")
+	withCopy := maps.Clone(plain)
+	withCopy["assets/App-1.js.br"] = &fstest.MapFile{Data: br}
+	stored := precompressedSite(t, withCopy)
+	if stored["assets/App-1.js.br"] == nil || stored["assets/App-1.js.gz"] == nil {
+		t.Fatalf("not as the build leaves it: %v", slices.Sorted(maps.Keys(stored)))
+	}
+	oracle := gzipResponses(t.Logf, webFrom(t.TempDir(), plain))
+	h := gzipResponses(t.Logf, webFrom(t.TempDir(), stored))
+	browser := "gzip, deflate, br, zstd"
+	for _, c := range []struct {
+		name, method, path, accept, rangeHeader string
+		brotli                                  bool // the stored copy, else the oracle's answer
+		status                                  int
+	}{
+		{"browser", "GET", "/assets/App-1.js", browser, "", true, 200},
+		{"br only", "GET", "/assets/App-1.js", "br", "", true, 200},
+		{"br;q=0", "GET", "/assets/App-1.js", "gzip, br;q=0", "", false, 200},
+		{"gzip only", "GET", "/assets/App-1.js", "gzip", "", false, 200},
+		{"star", "GET", "/assets/App-1.js", "*", "", false, 200},
+		{"identity", "GET", "/assets/App-1.js", "", "", false, 200},
+		{"HEAD", "HEAD", "/assets/App-1.js", browser, "", false, 200},
+		{"Range", "GET", "/assets/App-1.js", browser, "bytes=10-99", false, 206},
+		{"no copy", "GET", "/assets/styles-2.css", browser, "", false, 200},
+		{"the copy itself", "GET", "/assets/App-1.js.br", browser, "", false, 404},
+		{"the copy itself, identity", "GET", "/assets/App-1.js.br", "", "", false, 404},
+	} {
+		serve := func(h http.Handler) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(c.method, c.path, nil)
+			if c.accept != "" {
+				r.Header.Set("Accept-Encoding", c.accept)
+			}
+			if c.rangeHeader != "" {
+				r.Header.Set("Range", c.rangeHeader)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			return w
+		}
+		got := serve(h)
+		if got.Code != c.status {
+			t.Errorf("%s: status %d, want %d", c.name, got.Code, c.status)
+			continue
+		}
+		if c.brotli {
+			hd := got.Header()
+			if hd.Get("Content-Encoding") != "br" || !bytes.Equal(got.Body.Bytes(), br) ||
+				!strings.HasPrefix(hd.Get("Content-Type"), "text/javascript") || !slices.Contains(hd.Values("Vary"), "Accept-Encoding") ||
+				!strings.Contains(hd.Get("Cache-Control"), "immutable") || hd.Get("X-Content-Type-Options") != "nosniff" {
+				t.Errorf("%s: got %v %q, want the stored brotli copy", c.name, hd, got.Body.Bytes())
+			}
+			continue
+		}
+		want := serve(oracle)
+		wantH, gotH := want.Header().Clone(), got.Header().Clone()
+		if wantH.Get("Content-Encoding") == "gzip" {
+			gotH.Del("Content-Length")
+		}
+		decoded := func(w *httptest.ResponseRecorder) string {
+			if w.Header().Get("Content-Encoding") == "gzip" {
+				return gunzip(t, w.Body.Bytes())
+			}
+			return w.Body.String()
+		}
+		if got.Code != want.Code || !reflect.DeepEqual(gotH, wantH) || decoded(got) != decoded(want) {
+			t.Errorf("%s: got %d %v, want %d %v", c.name, got.Code, gotH, want.Code, wantH)
+		}
+	}
+	// The data dir (deploy.sh web) has the copies too, and sends none of them: plain files, compressed as they go.
+	dir := t.TempDir()
+	for name, f := range withCopy {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, f.Data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disk := gzipResponses(t.Logf, webFrom(dir, nil))
+	for _, c := range []struct {
+		path   string
+		status int
+		body   string
+	}{{"/assets/App-1.js", 200, js}, {"/assets/App-1.js.br", 404, ""}} {
+		r := httptest.NewRequest("GET", c.path, nil)
+		r.Header.Set("Accept-Encoding", browser)
+		w := httptest.NewRecorder()
+		disk.ServeHTTP(w, r)
+		if w.Code != c.status || w.Header().Get("Content-Encoding") == "br" || c.status == 200 && gunzip(t, w.Body.Bytes()) != c.body {
+			t.Errorf("data dir %s: %d %v", c.path, w.Code, w.Header())
+		}
 	}
 }

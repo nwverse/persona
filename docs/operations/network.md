@@ -81,7 +81,7 @@ Replacing a certificate while keeping the private key preserves the pin. Replaci
 Default pairing tokens last 10 minutes and redeem a device token once. After redemption they remain at most 2 more minutes, never beyond original expiry. This supports old iOS pairing; see [protocol](../protocol/protocol.md#临时配对). Only `hub pair --legacy` prints the main token; public sources always reject it.
 
 Computer links (persona-link, [link.md](link.md)) also use only this TLS port and pin the fingerprint obtained at pairing, including on LAN; hub rejects their plaintext requests except loopback.
-TLS terminates at hub, which authenticates link credentials and forwards the connection unchanged to the computer-connection manager (2026-11-04, [machines.md](../server/machines.md), "Who connects computers").
+TLS terminates at hub, which authenticates link credentials and forwards the connection unchanged to the computer-connection manager (2026-11-04, [machines.md](../server/machines.md), "Who connects to computers").
 Forwarding uses `GET /api/v1/bus/relay` with the manager's own bus token (same as the bus: only `Authorization: Bearer jb_…`, TLS required for public sources; device credentials cannot open it, nor can it open app endpoints).
 
 ## Candidate addresses and DDNS

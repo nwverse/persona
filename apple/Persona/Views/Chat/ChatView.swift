@@ -879,37 +879,19 @@ struct ChatView: View {
 
     /// What builds the lines from the blocks, with what is open now.
     private var lineBuilder: ChatLines {
-        ChatLines(openWork: openWork, openAll: Self.debugOpenAll, opensLive: Self.opensLiveWork(style), openRuns: openRuns,
+        ChatLines(openWork: openWork, openAll: Self.debugOpenAll, openRuns: openRuns,
                   openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
-                  foldsIntoRun: foldsIntoRun, showsFolded: showsFolded, foldSupervision: style == .assistant,
+                  foldsIntoRun: foldsIntoRun, foldSupervision: style == .assistant,
                   openSupervision: openSupervision, openAllSupervision: Self.debugOpenSupervision, active: shownRoundActive)
     }
     private func unfoldWork(_ lines: [ChatLine]) -> [ChatLine] { lineBuilder.unfold(lines) }
-    private func isOpen(_ work: String) -> Bool { lineBuilder.isOpen(work, live: work == liveWorkID) }
+    private func isOpen(_ work: String) -> Bool { lineBuilder.isOpen(work, live: false) }
     private func isOpen(_ work: String, live: Bool) -> Bool { lineBuilder.isOpen(work, live: live) }
-    /// Opens or folds a work line from wherever it is (a jump to a step): flipping it in `openWork` flips it from how
-    /// it starts, folded or (running, `opensLive`) open.
+    /// Opens or folds a work line from wherever it is (including a jump to a step).
     private func flipWork(_ id: String) {
         if openWork.contains(id) { openWork.remove(id) } else { openWork.insert(id) }
     }
 
-    /// The assistant shows its running work line open, its tool calls listed as they come; the Agents chat folds it (#1614).
-    static func opensLiveWork(_ style: ChatStyle) -> Bool { style == .assistant }
-
-    /// The running turn's work line, if one is drawn.
-    private var liveWorkID: String? {
-        guard Self.opensLiveWork(style) else { return nil } // only the assistant's chat needs it: no lookup elsewhere
-        return currentLines().last { if case .work(_, _, true, _, _) = $0.content { true } else { false } }?.id
-    }
-
-    /// The running work line stopped running (its turn ended, or a message started the next exchange): folded again,
-    /// whatever the user did with it while it ran (#1614). Only where running lines start open.
-    private func liveWorkEnded(_ id: String?) {
-        guard let id, Self.opensLiveWork(style), id != liveWorkID, openWork.contains(id) else { return }
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) { _ = openWork.remove(id) }
-    }
     private func isRunOpen(_ id: String) -> Bool { openRuns.contains(id) != Self.debugOpenRuns }
     private func runID(holding call: String, group: String, items: [WorkItem]) -> String? {
         lineBuilder.runID(holding: call, group: group, items: items)
@@ -921,20 +903,9 @@ struct ChatView: View {
         return !store.tasks.started.contains(id) && store.tasks.notes[id] == nil
     }
 
-    /// A subagent still at work keeps its card in view under its folded work line; done, it folds with the line.
-    /// A foreground one only while its line runs (with no result after that, it was cut off). A Workflow call's card
-    /// stays in view while the hub lists its run, running or ended (#3436): its end (the chip, a failed run's error)
-    /// shows where it was being watched, and the card folds itself to its head.
-    private func showsFolded(_ call: ToolCall, live: Bool) -> Bool {
-        if WorkflowCallCard.isWorkflow(call) { return WorkflowCallCard.staysOut(call, listed: workflowCalls) }
-        guard SubagentCard.isAgent(call), let id = call.use.toolUseID else { return false }
-        guard live || store.tasks.started.contains(id) else { return false }
-        return SubagentCardStatus.of(call, tasks: store.tasks, agent: subagentsByCall[id]) == .running
-    }
     /// The background subagents the hub says stopped: a card's state that is not in the chat's items (`LinesKey`).
     private var quietSubagents: Set<String> { Set(subagentsByCall.filter { !$0.value.running }.keys) }
-    /// The Workflow calls whose run the hub lists (#3436): drawn as their run's card, out of the chips and the fold
-    /// (`LinesKey`). The same while a run only makes progress or ends.
+    /// Listed Workflow calls keep their own cards inside opened work summaries, outside chip runs (`LinesKey`).
     private var workflowCalls: Set<String> { Set((session?.workflows ?? []).compactMap(\.toolUseID)) }
 
     static func foldAPIErrors(_ lines: [ChatLine]) -> [ChatLine] { ChatLines.foldAPIErrors(lines) }
@@ -2107,7 +2078,7 @@ struct ChatView: View {
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
         } else {
-            // No room of its own above: the newest message is one row gap over its first row (`newestGap`, #1108).
+            // No room of its own above: the list's margin at its newest end is the room over its first row (`newestGap`).
             mainFooter
         }
     }
@@ -2362,7 +2333,7 @@ struct ChatView: View {
         return LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
             // Newest first (the list is drawn upside down): the end sentinel, live text, unsent messages, lines (a failed
             // message among them, before the first line written after it).
-            // It takes no room: the rows' spacing alone is the gap to the footer, as between any two rows (#1108).
+            // It takes no room: past it come only the rows' spacing and the list's room at its end (`endRoom`).
             Color.clear
                 .frame(height: Theme.Size.line)
                 .padding(.bottom, -Theme.Size.line)
@@ -2476,10 +2447,12 @@ struct ChatView: View {
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
-        // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has no
-        // margin: the rows' spacing is its gap to the footer (`newestGap`).
+        // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has the
+        // room that says the conversation ends there (`endRoom`); it scrolls with the rows, so a little way up they still
+        // go right down to the footer.
         // The header floats over the list (Agents): the oldest end leaves its full height free, so nothing hides
         // under it; the list's own frame never changes as it folds, so folding never moves the messages.
+        .contentMargins(.top, Self.endRoom, for: .scrollContent)
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
@@ -2599,7 +2572,6 @@ struct ChatView: View {
         .onChange(of: lines.count, initial: true) { _, _ in landEntry(lines) }
         .onChange(of: store.backlogBuilt) { _, _ in landEntry(lines) }
         .onChange(of: liveTurnID) { _, _ in contentArrived(foldChrome: false) }
-        .onChange(of: liveWorkID) { old, _ in liveWorkEnded(old) }
         .task(id: awaitDeadline) {
             guard let end = awaitDeadline, end > .now else { return }
             try? await Task.sleep(for: .seconds(end.timeIntervalSinceNow + 0.1))
@@ -3125,10 +3097,14 @@ struct ChatView: View {
     /// Back: out of files / Git to the chat first, then off the page.
     /// The widest the conversation gets: lines longer than this are hard to read.
     static let readableWidth: CGFloat = 760
-    /// From the newest row's bottom to the footer's first row: the rows' spacing, as between any two rows (#1108); the
-    /// end marker takes no room and neither the list nor the footer adds a margin there. The first message of a new
-    /// conversation is laid out with it before the chat takes over (`FirstMessagePending`, #1911).
-    static let newestGap: CGFloat = Theme.Space.l
+    /// The list's margin at its newest end (its top: the list is upside down): scrolled to the end, the newest message
+    /// stands clearly off the footer, so the end reads as the end (#2016). It scrolls with the rows; a little way up
+    /// they reach the footer as before.
+    static let endRoom: CGFloat = Theme.Space.xxl
+    /// From the newest row's bottom to the footer's first row at the end: the rows' spacing (#1108) and `endRoom`; the
+    /// end marker takes no room and the footer adds none. The first message of a new conversation is laid out with it
+    /// before the chat takes over (`FirstMessagePending`, #1911).
+    static let newestGap: CGFloat = Theme.Space.l + endRoom
 
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
@@ -3791,7 +3767,7 @@ struct ChatView: View {
         case .thinking(let i):
             if style == .dev && live { ThinkingRow(item: i) }
         case .tools(let steps):
-            if style == .dev && live { ToolGroupView(steps: steps, isLatest: isLatest) } else { AssistantToolsRow(steps: steps) }
+            if style == .dev && live { ToolGroupView(steps: steps) } else { AssistantToolsRow(steps: steps) }
         case .notice(let i): NoticeRow(item: i)
         case .recap(let i): RecapCard(item: i)
         case .image(let i):
@@ -6036,9 +6012,9 @@ final class ChatScratch {
         var feed: [String] = []
         /// The running turn's next words are streaming (`ChatLines.lines`).
         var streaming = false
-        /// The subagents the hub says stopped: their cards fold with their work lines (`ChatLines.showsFolded`).
+        /// Subagent status affects the running summary even when all cards are folded.
         var quietAgents: Set<String> = []
-        /// The Workflow calls whose run the hub lists: their cards stay out of the fold and the chips (#3436).
+        /// Listed Workflow calls keep their own cards outside chip runs, inside the work summary.
         var workflowCalls: Set<String> = []
         /// Today, in an assistant conversation: on a new day yesterday's task cards are lines and give back the hand-offs
         /// they took in (`SentToAgents.takenIn`, #1668).
