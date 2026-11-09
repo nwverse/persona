@@ -255,7 +255,7 @@ func LoadConfig() (*Config, error) {
 
 // runningHubConfig is hub.json for the commands that only talk to the hub running on this machine (pair, peer,
 // manager-code, assistant-token). It never writes, not even the state directory: a hub.json one of them made would make
-// a later `persona-hub setup` take this machine for a hub that has already run (setup.go, config).
+// a later `persona-hub setup` take this machine for a hub that has already run (setup_config.go, config).
 func runningHubConfig() (*Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -270,8 +270,12 @@ var (
 		"the hub with persona-hub setup (or personad hub setup)")
 )
 
-// readConfigFile is <dir>/hub.json over the defaults, with the environment's overrides. It never writes: a missing file
-// is errNoHubJSON, one without a token errNoHubToken (LoadConfig fills both in).
+// readConfigFile is <dir>/hub.json over the defaults, with the environment's overrides. It never writes content: a
+// missing file is errNoHubJSON, one without a token errNoHubToken (LoadConfig fills both in). A file copied in by
+// hand keeps cp's 0644, so on every read it is made the owner's only the way tunnel.readJSON does: the file holds the
+// master token and the database password, and every load path (the hub's start and the commands that only talk to a
+// running hub) goes through here. On Windows POSIX permission bits do not apply, so the mode checks in the callers'
+// tests are gated on GOOS.
 func readConfigFile(dir string) (*Config, error) {
 	path := filepath.Join(dir, "hub.json")
 	b, err := os.ReadFile(path)
@@ -280,6 +284,11 @@ func readConfigFile(dir string) (*Config, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return nil, fmt.Errorf("%s is readable by others and cannot be made private: %w", path, err)
+		}
 	}
 	cfg := defaultConfig()
 	cfg.Token = "" // the file's, never one made up here
@@ -290,7 +299,7 @@ func readConfigFile(dir string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if _, ok := raw.get("token"); !ok {
+	if _, ok := raw.Get("token"); !ok {
 		return nil, fmt.Errorf("%s has no token: %w", path, errNoHubToken)
 	}
 	for _, machine := range cfg.Machines {
@@ -318,11 +327,11 @@ var errHubJSONKept = errors.New("hub.json kept as it is")
 // meantime is kept.
 func initConfigFile(dir string) error {
 	err := editHubJSON(dir, func(o *jsonObject) error {
-		if _, ok := o.get("token"); ok {
+		if _, ok := o.Get("token"); ok {
 			return errHubJSONKept
 		}
 		if _, err := os.Stat(filepath.Join(dir, "hub.json")); err == nil {
-			return o.set("token", randomHex(24)) // as defaultConfig makes it
+			return o.Set("token", randomHex(24)) // as defaultConfig makes it
 		} else if !os.IsNotExist(err) {
 			return err
 		}

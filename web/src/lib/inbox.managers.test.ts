@@ -106,6 +106,30 @@ describe("mutes, rules and the Trail are each manager's", () => {
     expect(header(3)).toBeNull();
   });
 
+  it("unmutes and removes the rule of the manager a list was read from after it became the default", async () => {
+    fetcher.mockResolvedValueOnce(ok({ mutes: [{ id: "u1", source: "lark", tag: "chat", value: "oc_1", name: "Example group" }] }));
+    const mutes = await listInboxMutes("m-1");
+    fetcher.mockResolvedValueOnce(ok({ policies: [{ id: "p1", source: "lark", tag: "chat", value: "oc_1", name: "Example group" }] }));
+    const rules = await listInboxPolicies("m-1");
+    setRosterDefault("m-1");
+    fetcher.mockResolvedValueOnce(ok({}));
+    await unmuteInbox(mutes[0]);
+    expect(header(3)).toBe("m-1");
+    fetcher.mockResolvedValueOnce(ok({}));
+    await removeInboxPolicy(rules[0]);
+    expect(header(4)).toBe("m-1");
+    // one manager: the lists are read unstamped, and nothing is named
+    fetcher.mockResolvedValueOnce(ok({ mutes: [{ id: "u2", source: "lark", tag: "chat", value: "oc_2", name: "Another group" }] }));
+    const [mine] = await listInboxMutes();
+    fetcher.mockResolvedValueOnce(ok({ policies: [{ id: "p2", source: "lark", tag: "chat", value: "oc_2", name: "Another group" }] }));
+    const [rule] = await listInboxPolicies();
+    fetcher.mockResolvedValueOnce(ok({}));
+    await unmuteInbox(mine);
+    fetcher.mockResolvedValueOnce(ok({}));
+    await removeInboxPolicy(rule);
+    expect([5, 6, 7, 8].map(header)).toEqual([null, null, null, null]);
+  });
+
   it("sets, lists and removes a rule of the item's manager, which reaches only its items", async () => {
     const b = getInbox().items[1];
     fetcher.mockResolvedValueOnce(ok({ policy: { id: "p1", source: "lark", tag: "chat", value: "oc_1", name: "Example group", tier: "noise" } }));

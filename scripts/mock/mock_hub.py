@@ -38,7 +38,8 @@ def features():
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
                 ["sessions_list", "sessions_lookup"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
-                ["preview"] if os.environ.get("MOCK_PREVIEW") else [])
+                ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
+                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"])
 
 
 def identity():
@@ -252,6 +253,12 @@ def later(minutes=0, hours=0):
 def day_from_now(days):
     """A to-do's due_date ("YYYY-MM-DD", #1683) this many days from now (negative: past)."""
     return (NOW + timedelta(days=days)).date().isoformat()
+
+
+def today_at(hour, minute=0, days=0):
+    """A to-do's due_at at a clock time on this machine (#2029's calendar: 18:00 today, not 50 hours from now), as UTC."""
+    local = (NOW.astimezone() + timedelta(days=days)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _mock_qr(text, n=29):
@@ -1703,8 +1710,9 @@ TODOS_INIT = [
         "id": "todo_weather",
         "title": "天气 App 发 1.3 版",
         "notes": "1.3 的内容：主屏幕小组件、网络层补测试、发布说明。周五前提交审核。",
-        # Due at a moment (#1683): the list shows it under the title, the detail page edits it.
-        "due_at": later(hours=50),
+        # Due at a moment (#1683): the list shows it under the title, the detail page edits it; on the calendar (#2029)
+        # beside the blog's at the same time.
+        "due_at": today_at(18),
         # The stage bar on the todo detail (#2776): how far the work got, and the PR it is in.
         "stage": "develop",
         "pr_url": "https://example.com/pull/128",
@@ -1801,6 +1809,7 @@ TODOS_INIT = [
     {
         "id": "todo_blog",
         "title": "博客迁移到 Astro",
+        "due_at": today_at(18),
         "notes": "32 篇文章都能正常构建，旧链接全部加了 301 跳转。",
         # The stage bar on the todo detail (#2776): how far the work got, and the PR it is in.
         "stage": "review",
@@ -1827,6 +1836,7 @@ TODOS_INIT = [
     {
         "id": "todo_orders",
         "title": "排查 /orders 接口变慢",
+        "due_at": today_at(16),
         "notes": "慢在订单列表的 N+1 查询，正在改成一次 JOIN 并补索引。",
         "done_at": None,
         "created_at": ago(hours=6),
@@ -1850,6 +1860,7 @@ TODOS_INIT = [
     {
         "id": "todo_review",
         "title": "检查 PR #42",
+        "due_at": today_at(10),  # #2029: the calendar's day has a morning, an afternoon and an evening
         "notes": "PR #42 看完了：逻辑没问题，留了两条关于命名的小建议。",
         "done_at": None,
         "created_at": ago(hours=8),
@@ -1988,8 +1999,8 @@ def format_todo(t):
 
 
 def apply_todo_plan(t, body):
-    """A POST / PATCH body's due_at | due_date, remind_at and priority (#1683, server/internal/assistant/todo_plan.go):
-    null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
+    """A POST / PATCH body's due_at | due_date, remind_at, priority (#1683, server/internal/assistant/todo_plan.go) and
+    project (#2581): null or "" clears; a new reminder time is pushed again. The error to answer with 400, else None."""
     if "due_at" in body or "due_date" in body:
         at, day = body.get("due_at") or None, body.get("due_date") or None
         if at and day: return "give due_at or due_date, not both"
@@ -2003,6 +2014,14 @@ def apply_todo_plan(t, body):
         pr = "" if pr == "normal" else pr
         if pr not in ("", "high", "low"): return "priority must be high, normal or low"
         t["priority"] = pr
+    if "project" in body:  # a knowledge-base project's slug or name, "" for none (#2581, todo_project.go)
+        name = (body.get("project") or "").strip()
+        if not name:
+            t.pop("project", None)
+        else:
+            e = next((e for e in KB["projects"] if name in (e["id"], e["name"]) and not e.get("extra", "").endswith("ignored")), None)
+            if e is None: return f"no knowledge-base project {name!r}"
+            t["project"] = e["id"]
     return None
 
 
@@ -2876,6 +2895,14 @@ if os.environ.get("MOCK_WORKFLOW") == "1":
         for _a in _w["agents"]:
             ITEMS[_a["session_id"]] = [it("user", "text", 14, text="%s：审这一块，列出问题" % _a["label"]),
                                        it("assistant", "text", 13, text=_a.get("last_text") or "这一块看完了，没有发现问题。")]
+# MOCK_MENTIONS=1 (#2319, the composer's @ list): the review agent read two files of its folder, each call alone between
+# replies, so the hub leaves them unfolded (fold_work) and they are this chat's files in the app (PersonaUITests/MentionMenuTests).
+if os.environ.get("MOCK_MENTIONS"):
+    ITEMS[REVIEW] = (_REVIEW_BEFORE + [it("user", "text", 100, text="看一下 PR #42")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/README.md"}, "# Weather", 99)
+                     + [it("assistant", "text", 98, text="先看了 README，再看小组件的改动。")]
+                     + tool("Read", {"file_path": "/Users/me/code/weather/WeatherWidget/Provider.swift"}, "1\timport WidgetKit", 97)
+                     + [it("assistant", "text", 95, text="PR #42 看完了：逻辑没问题，留了两条关于命名的小建议。")])
 ITEMS[CODEX_LIVE] = (
     [it("user", "text", 12, text="把三个环境的部署变量合到一个 env 文件里")]
     + tool("Bash", {"command": "ls deploy/env"}, "dev.env\nprod.env\nstaging.env", 8)
@@ -3084,17 +3111,25 @@ if MOCK_TASKS:
         # what is in progress. The Accept button posts to /api/v1/todos/{id}/accept (accept_brief below).
         _feed("feed_brief", 1.5, "brief", "morning", {
             "title": "早报", "at": ago(minutes=1.6), "hours": 12,
-            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 4800, "nudged": True},
+            # A card and a question name the chat they came from (machine_id / session_id, #2320): the apps open it. The second
+            # card names none, as a card from no chat (or a hub from before) does.
+            "waiting": [{"id": "ix_mock_1", "title": "Mock 用协议注入还是保留单例？", "from": "来自 Agent「网络层测试」", "link": "http://127.0.0.1/s/macbook/mock",
+                         "machine_id": "macbook", "session_id": TESTS, "waited_s": 4800, "nudged": True},
                         {"id": "ix_mock_2", "title": "需要你批准", "from": "来自 Persona", "waited_s": 300}],
+            # The newest rows of each, the totals counting all of them ("and 5 more"; iPhone folds them behind the heading).
             "failed": [{"kind": "task", "id": "todo_task_align", "title": "设置页按钮对齐", "at": ago(hours=3), "why": "rpc: connection closed"},
                        {"kind": "routine", "id": "patrol", "ref": "run_mock", "title": "巡检", "at": ago(hours=5), "why": "Persona 停机，错过了时间", "skipped": True}],
-            "failed_total": 2,
-            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)}], "done_total": 1,
+            "failed_total": 3,
+            "done": [{"id": "todo_task_blog", "title": "博客迁移到 Astro", "at": ago(hours=2)},
+                     {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
+            # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)}],
+                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
-                       "link": "http://127.0.0.1/s/macbook/mock", "waited_s": 26 * 3600},
+                       "link": "http://127.0.0.1/s/macbook/mock", "machine_id": "macbook", "session_id": TESTS, "waited_s": 26 * 3600},
                       {"id": "lt_mock_2", "title": "发布说明里要不要写内部编号？", "from": "来自 Agent「发布」", "waited_s": 3 * 3600}],
             "later_total": 2,
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
@@ -3231,6 +3266,30 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_SUPERVISION=1: native quiet-round coverage, with synthetic audit and visible promotion receipts only.
+    if os.environ.get("MOCK_SUPERVISION") == "1":
+        TASK_FEED[ASK1] = []
+        _quiet = "检查示例任务的进展，不需要用户处理。"
+        _visible = "示例任务需要用户选择发布窗口。"
+        ITEMS[ASK1] = [
+            it("user", "text", 5, text="帮我检查示例任务的进展。", client_msg_id="mock-supervision-user-1"),
+            it("assistant", "text", 4.9, text="我会跟进，有需要你决定的事情再告诉你。"),
+            it("user", "text", 4.8, text=_quiet, injected={"kind": "system", "state": "supervise", "level": "triage", "line": "督办：检查示例任务"}),
+            it("assistant", "tool_use", 4.7, tool_use_id="mock-supervision-read", tool_name="Bash", tool_input={"command": "printf 'synthetic checks passed'", "description": "Inspect synthetic task checks"}),
+            it("user", "tool_result", 4.6, tool_use_id="mock-supervision-read", text="synthetic checks passed"),
+            it("assistant", "text", 4.5, text="示例任务的测试通过，无需你处理。"),
+            it("assistant", "tool_use", 4.4, tool_use_id="mock-supervision-finish", tool_name="mcp__persona__supervision_finish", tool_input={"visibility": "silent", "summary": "Synthetic checks passed"}),
+            it("user", "tool_result", 4.3, tool_use_id="mock-supervision-finish", text='{"visibility":"silent"}'),
+            it("assistant", "recap", 4.2, text="示例督办上下文已保存。"),
+            it("assistant", "text", 4.1, text="后台核对也完成了，继续静默跟进。"),
+            it("user", "text", 3, text="下一条真实输入仍在督办记录之外。", client_msg_id="mock-supervision-user-2", queued=True),
+            it("assistant", "text", 2.9, text="是的，这条消息正常显示。"),
+            it("user", "text", 2.8, text=_visible, injected={"kind": "system", "state": "supervise", "level": "user", "line": "督办：需要你决定"}),
+            it("assistant", "text", 2.7, text="需要你决定：示例任务今天发布，还是明天发布？"),
+        ]
+        ITEMS[ASK1].sort(key=lambda x: x["ts"])
+        for _i, _x in enumerate(ITEMS[ASK1]):
+            _x["seq"] = _i + 1
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -4770,6 +4829,11 @@ PREFS = {"input": True, "done": "long", "live_activity": True, "lock_details": F
          # quiet hours (#5806): never set until a client sets them; MOCK_QUIET_HOURS=1 starts with 23:00–07:00 on
          "quiet": {"enabled": True, "start": "23:00", "end": "07:00"} if os.environ.get("MOCK_QUIET_HOURS") else {"enabled": False, "start": "", "end": ""}}  # one device is enough
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
+DEVICES = []  # POST /api/v1/devices, newest last (GET /mock/devices): each one's id, kind and push `features` (#2433)
+# The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
+# (GET /mock/hello): the hub lists MCP elicitation cards in REST answers only when the two match (docs/protocol/protocol.md
+# "MCP elicitation").
+HELLO = {}
 # Settings › Connectors › Lark bot (GET/PUT /api/v1/bots/feishu); MOCK_BOT=pairing shows a code waiting, =off a fresh hub.
 FEISHU_BOT = {"enabled": True, "app_id": "cli_example0001", "domain": "https://open.feishu.cn", "has_secret": True,
               "from_config": False, "connected": True, "bot_name": "Persona", "target": "主对话",
@@ -5012,6 +5076,35 @@ ITEM_MUTES = {
 }
 for _x in INBOX:
     if _x["id"] in ITEM_MUTES: _x["mutes"] = ITEM_MUTES[_x["id"]]
+
+# Folders (docs/assistant/inbox.md "Folders", #2463): GET/PUT /api/v1/inbox/folders and PUT /api/v1/inbox/{id}/folder.
+# MOCK_INBOX_FOLDERS=1 turns automatic folders on and files most items (one by hand); the rest stay unfiled.
+FOLDER_CFG = {"enabled": bool(os.environ.get("MOCK_INBOX_FOLDERS")), "rules": ""}
+if os.environ.get("MOCK_INBOX_FOLDERS"):
+    FOLDER_CFG["rules"] = "Messages from build and alert bots go to work/alerts/<service>"
+    for _id, _f, _by in [("lark:f1:100", "projects/atlas/release", "model"), ("lark:f2:200", "projects/atlas/design", "user"),
+                         ("mail:acc1:t1:501", "work/talks", "model"), ("lark:f3:300", "personal/hiking", "model"),
+                         ("mail:acc1:t2:502", "personal/shopping", "model"), ("mail:acc1:t3:503", "subscriptions/newsletters", "model"),
+                         ("github:review12", "work/reviews/example-repo", "model"), ("github:ci7", "work/alerts/ci", "model")]:
+        for _x in INBOX:
+            if _x["id"] == _id: _x["folder"], _x["folder_by"] = _f, _by
+
+
+def folder_state(query):
+    """GET /api/v1/inbox/folders: the settings and the folders the listed items are filed in, most used first."""
+    by = {}
+    for x in inbox_for(query):
+        if not x.get("folder"): continue
+        f = by.setdefault(x["folder"], {"path": x["folder"], "count": 0, "open": 0})
+        f["count"] += 1
+        if not x.get("done_at"): f["open"] += 1
+    return dict(FOLDER_CFG, folders=sorted(by.values(), key=lambda f: (-f["count"], f["path"])))
+
+
+def normalize_folder(s):
+    """The hub's normalizeFolder, enough for the mock."""
+    segs = [" ".join(seg.split())[:40] for seg in str(s).replace("\\", "/").split("/")]
+    return "/".join([x for x in segs if x and x not in (".", "..")][:6])
 SOURCE_NAMES = {"lark": "飞书", "mail": "邮件", "github": "GitHub", "imessage": "信息", "telegram": "Telegram"}
 # The mutes the user set (GET/POST/DELETE /api/v1/inbox/mutes); MOCK_MUTES=1 starts with two.
 MUTES = [] if not os.environ.get("MOCK_MUTES") else [
@@ -5135,6 +5228,33 @@ def inbox_triage_from(spec):
 
 
 INBOX_TRIAGE = inbox_triage_from(os.environ.get("MOCK_INBOX_TRIAGE", ""))
+
+
+# Sources the hub could not read this round (triage.sources[].read_error / read_reason, #1849; the hub's inbox_admit.go).
+# MOCK_INBOX_UNREAD=<name>[:<code>[:<reason>]],… : each name is marked not read (code timeout | rate_limited | failed,
+# default timeout); with no reason the source has no read_reason (the apps' own words). Adds `triage` (ok) if unset.
+def inbox_unread_into(triage, spec):
+    """The triage block with MOCK_INBOX_UNREAD's sources marked not read; triage as it was when spec is empty."""
+    if not spec:
+        return triage
+    out = copy.deepcopy(triage) if triage is not None else {"state": "ok", "waiting": 0}
+    sources = out.setdefault("sources", [])
+    for i, entry in enumerate(x for x in spec.split(",") if x.strip()):
+        parts = entry.split(":", 2)
+        name = parts[0].strip()
+        code = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "timeout"
+        src = next((x for x in sources if x.get("name") == name), None)
+        if src is None:
+            src = {"source": "unread%d" % (i + 1), "name": name, "state": "ok", "waiting": 0}
+            sources.append(src)
+        src["read_error"] = code
+        if len(parts) > 2 and parts[2].strip():
+            src["read_reason"] = parts[2].strip()
+    sources.sort(key=lambda x: x["source"])
+    return out
+
+
+INBOX_TRIAGE = inbox_unread_into(INBOX_TRIAGE, os.environ.get("MOCK_INBOX_UNREAD", ""))
 
 
 def inbox_list(query):
@@ -7856,6 +7976,54 @@ if os.environ.get("MOCK_REPORT_FOLD") == "1":
     mock_report_fold()
 
 
+# MOCK_PEER_FOLD=1: messages other sessions sent an agent (#2010): a long progress report folds to three lines with
+# Expand, a short one stays whole with no button. Synthetic text.
+PEERS = "a1f3c2d4-0000-4000-8000-0000000c1e0a"
+
+
+def mock_peer_fold():
+    report = ("## 搜索改版：索引重建完成\n\n今天把站内搜索从前端索引换成了服务端索引，下面是进展和还没做的事。\n\n"
+              "- 索引覆盖全部 412 篇文档，中文按词切分，英文按词干；重建一次 38 秒。\n"
+              "- 搜索结果按标题、小标题、正文三档加权，同分时新文档在前。\n"
+              "- 结果页加了高亮和所在章节的路径，点开直接跳到对应的小标题。\n"
+              "- 旧的前端索引文件已经从构建里去掉，首页的包小了 1.2 MB。\n\n"
+              "还没做：\n\n- 拼写纠错（「接口」打成「借口」时给出建议）。\n- 搜索词的统计，等隐私说明定下来再加。\n\n"
+              "有一处要你定：版本切换后，搜索只搜当前版本，还是所有版本一起搜、当前版本排前面？")
+    ITEMS[PEERS] = [
+        it("user", "text", 40, text="文档站改版拆给了两个会话，它们的进展会直接发到这里，你来汇总"),
+        it("assistant", "text", 39, text="好的，收到它们的消息后我来汇总，有要你定的事会单独列出来。"),
+        it("user", "text", 12, text=report, **{"from": "docs-search"}),
+        it("user", "text", 8, text="深色主题的对比度修好了，截图在 PR 里。", **{"from": "docs-theme"}),
+        it("assistant", "text", 6, text="两边都有进展：搜索的索引重建完了，深色主题的对比度也修好了。有一件要你定：版本切换后搜索的范围。"),
+    ]
+    SESSIONS.append(sess("macbook", PEERS, "文档站改版", "/Users/me/code/docs-site", "done", "unread", "docs-site", 18, "peers", 1, 6,
+                         "有一件要你定：版本切换后搜索的范围。"))
+
+
+if os.environ.get("MOCK_PEER_FOLD") == "1":
+    mock_peer_fold()
+
+
+# MOCK_REPLY_BREAKS=1: a reply written line by line (#2088): bold lines with steps right under them, one list numbered
+# on from 5, and a bold line with its sentence on the next line; in an Agents chat and at the end of Persona's
+# conversation. Synthetic text.
+BREAKS = "a1f3c2d4-0000-4000-8000-0000000c1e0b"
+BREAKS_REPLY = ("有两种做法：\n\n**直接在测试环境复现**\n1. 用昨天的构建装一台测试机\n2. 按报告里的步骤操作一遍\n"
+                "3. 录屏，记下出错的那一步\n4. 把录屏发到群里\n\n**也可以先看日志，更快**\n5. 附上出错时间前后五分钟的日志\n"
+                "6. 标出第一条报错\n7. 对照最近的改动找原因\n\n**怎么确认修好了**\n同样的步骤再走一遍，页面不再卡住，日志里没有新的报错。")
+
+
+def mock_reply_breaks():
+    ITEMS[BREAKS] = [it("user", "text", 6, text="设置页偶尔卡住，怎么查？"), it("assistant", "text", 5, text=BREAKS_REPLY)]
+    SESSIONS.append(sess("macbook", BREAKS, "设置页卡住", "/Users/me/code/shop-app", "done", "unread", "shop-app", 19, "breaks", 1, 5,
+                         "怎么确认修好了。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="设置页偶尔卡住，怎么查？"), it("assistant", "text", 1, text=BREAKS_REPLY)]
+
+
+if os.environ.get("MOCK_REPLY_BREAKS") == "1":
+    mock_reply_breaks()
+
+
 # MOCK_WORK_GROUPS=1: one finished conversation with every way a work group reads (#1963, web): a short run (five steps
 # or fewer, an empty thought and one with words, a command with and without a description), a long run with an edit
 # and its diff, one that only read and searched, a delivered report between two steps (it stays out of the fold), and
@@ -8694,7 +8862,7 @@ def _zip(files):
 _PNG_DOT = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 
 
-def _bar_png(w=360, h=150, heights=(0.45, 0.62, 0.78, 0.93)):
+def _bar_png(w=360, h=150, heights=(0.45, 0.62, 0.78, 0.93), dark=False):
     """A small bar chart as a PNG (zlib, no imaging library): pictures inside the mock's Word and PowerPoint files."""
     import zlib
     bars = list(zip((40, 110, 180, 250), heights))
@@ -9221,12 +9389,121 @@ def ext_look_personas():
     return out
 
 
+# ---------- uploaded looks (docs/apple/persona.md "Uploading an image", #2404) ----------
+# POST /api/v1/looks/uploads makes a package in a temporary directory, as the hub does in personas/u-<hex>; the mock
+# keeps the image as it came for every size and state (the hub scales it and draws the states). DELETE takes it away.
+# MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404); =demo: one uploaded look at start.
+UPLOADED_LOOKS = tempfile.mkdtemp(prefix="mock-look-uploads-")
+PERSONA_ROOTS.append(UPLOADED_LOOKS)
+UPLOAD_STATES = ("idle", "thinking", "working", "needs_you", "offline")
+
+
+def _png_rgba(w, h, pixel):
+    """A PNG of w×h, pixel(x, y) → (r, g, b, a), without Pillow."""
+    rows = b"".join(b"\x00" + bytes(c for x in range(w) for c in pixel(x, y)) for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def _demo_upload_png(side=256):
+    """A made-up picture for the seeded upload: a warm gradient with two eyes."""
+    def px(x, y):
+        d = min(1.0, ((x - side / 2) ** 2 + (y - side * 0.47) ** 2) ** 0.5 / (side * 0.7))
+        if ((x - side * 0.37) ** 2 + (y - side * 0.42) ** 2) ** 0.5 < side * 0.05 or ((x - side * 0.63) ** 2 + (y - side * 0.42) ** 2) ** 0.5 < side * 0.05:
+            return (48, 36, 36, 255)
+        return (int(250 - 60 * d), int(196 - 90 * d), int(140 - 70 * d), 255)
+    return _png_rgba(side, side, px)
+
+
+def make_uploaded_look(name, image, subtitle="", lid=None):
+    lid = lid or "u-" + uuid.uuid4().hex[:8]
+    root = os.path.join(UPLOADED_LOOKS, lid)
+    os.makedirs(os.path.join(root, "avatar"))
+    os.makedirs(os.path.join(root, "dot"))
+    sizes = {}
+    for side in (64, 128, 256, 512):
+        open(os.path.join(root, "avatar", "%d.png" % side), "wb").write(image)
+        sizes[str(side)] = "avatar/%d.png" % side
+    for st in UPLOAD_STATES:
+        open(os.path.join(root, "dot", st + ".png"), "wb").write(image)
+    m = {"format": 1, "id": lid, "name": name, "avatar": {"sizes": sizes, "safe": 1},
+         "dot": {"size": 144, "states": {st: {"file": "dot/%s.png" % st} for st in UPLOAD_STATES}},
+         "app_icon_fallback": "persona", "source": {"kind": "upload", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}
+    if subtitle:
+        m["subtitle"] = subtitle
+    json.dump(m, open(os.path.join(root, "persona.json"), "w"), ensure_ascii=False, indent=2)
+    return lid
+
+
+if os.environ.get("MOCK_LOOK_UPLOADS") == "demo":
+    make_uploaded_look("豆豆", _demo_upload_png(), lid="u-demo0001")
+
+
+def _push_live(msg):
+    for send, _ in list(LIVE):
+        try:
+            send(msg)
+        except Exception:
+            pass
+
+
+def look_uploads_route(handler, method, p, raw):
+    if os.environ.get("MOCK_LOOK_UPLOADS") == "off" or not p.startswith("/api/v1/looks/uploads"):
+        return False
+    if p == "/api/v1/looks/uploads" and method == "POST":
+        body = json.loads(raw or b"{}")
+        name = (body.get("name") or "").strip()
+        if not name:
+            handler.send_json({"error": "给形象起个名字", "code": "no_name"}, 400)
+            return True
+        data = body.get("image") or ""
+        if data.startswith("data:") and ";base64," in data:
+            data = data.split(";base64,", 1)[1]
+        try:
+            image = base64.b64decode(data + "=" * (-len(data) % 4))
+        except Exception:
+            image = b""
+        if not (image.startswith(b"\x89PNG") or image.startswith(b"\xff\xd8") or image[8:12] == b"WEBP" or image.startswith(b"GIF8")):
+            handler.send_json({"error": "这个文件不是 Persona 能读的图片，请用 PNG、JPEG、WebP 或 GIF", "code": "not_image"}, 400)
+            return True
+        lid = make_uploaded_look(name, image, (body.get("subtitle") or "").strip())
+        looks = looks_list()
+        out = {"look": next(l for l in looks if l["id"] == lid)}
+        _push_live({"type": "personas"})
+        if body.get("choose"):
+            LOOK_CHOICE.update(id=lid, updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            out["current"] = look_current(looks)
+            _push_live({"type": "look", "id": lid, "effective": lid})
+        handler.send_json(out)
+        return True
+    lid = p[len("/api/v1/looks/uploads/"):]
+    if method == "DELETE" and lid and "/" not in lid:
+        root = os.path.join(UPLOADED_LOOKS, lid)
+        if not os.path.isdir(root) or lid.startswith("."):
+            if any(x["id"] == lid for x in personas()):  # a package of the hub's not made from an upload
+                handler.send_json({"error": "这里只能删除用上传的图片做的形象", "code": "not_uploaded"}, 409)
+            else:
+                handler.send_json({"error": "这个形象已经不在 hub 上了", "code": "not_found"}, 404)
+            return True
+        shutil.rmtree(root)
+        _push_live({"type": "personas"})
+        if LOOK_CHOICE["id"] == lid:
+            LOOK_CHOICE.update(id="persona", updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            _push_live({"type": "look", "id": "persona", "effective": "persona"})
+        handler.send_json({"current": look_current()})
+        return True
+    return False
+
+
 def looks_list():
     out = [{"id": i, "source": "builtin", "name": n, "names": ns, "app_icon": i} for i, n, ns in BUILTIN_LOOKS]
     ext = _ext_looks()
     for p in personas() + ext_look_personas():
         m = p["manifest"]
         v = {"id": p["id"], "source": "hub", "name": m.get("name", ""), "app_icon": "persona", "rev": p["rev"], "bytes": p["bytes"], "manifest": m}
+        if (m.get("source") or {}).get("kind") == "upload":
+            v["uploaded"] = True
         for k in ("names", "subtitle", "subtitles"):
             if k in m:
                 v[k] = m[k]
@@ -9558,6 +9835,89 @@ def wire_state():
 def wire_reset():
     with WIRE_LOCK:
         WIRE.update(rules=[], held=[], log=[])
+
+
+# MOCK_SYNC_CASE=<file>#<name> (or just <name>): the mock plays that shared chat sync case for the case's one chat
+# (spec/fixtures/sync, #2766): scripts/mock/sync_case.py holds the case's hub state, answers the chat's reads and the
+# apps' sockets from it, holds their writes until the case replies, and plays the next step on POST /mock/case/step
+# (GET /mock/case: where it is, what each device asked). An app paired with `token=mock-<device>` is that device.
+CASE = None
+if os.environ.get("MOCK_SYNC_CASE"):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import sync_case
+    CASE = sync_case.CaseHub(sync_case.load(os.environ["MOCK_SYNC_CASE"]))
+
+
+def case_json(h, obj, status=200):
+    """The case's own answer, as the hub's: nothing of the mock's (managers, faults) added to it."""
+    data = json.dumps(obj, ensure_ascii=False).encode()
+    h.send_response(status)
+    h.send_header("Content-Type", "application/json; charset=utf-8")
+    h.send_header("Content-Length", str(len(data)))
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(data)
+
+
+def case_route(h, method, p, q, body):
+    """A request the case answers (True), or one left to the rest of the mock (False)."""
+    global CASE
+    if p == "/api/v1/ws":
+        sync_case.serve_socket(h, CASE)
+        return True
+    if p == "/mock/case" and method == "GET":
+        case_json(h, CASE.state())
+        return True
+    if p == "/mock/case/load" and method == "POST":  # another case in the same mock (its sockets closed first)
+        try:
+            case = sync_case.load(json.loads(body or b"{}").get("case", ""))
+        except (ValueError, KeyError, OSError) as e:
+            case_json(h, {"error": str(e)}, 400)
+            return True
+        CASE.close()
+        CASE = sync_case.CaseHub(case)
+        case_json(h, CASE.state())
+        return True
+    if method == "GET" and MOCK_WEB and not p.startswith(("/api/", "/mock/")):
+        # MOCK_WEB=<web/dist> with a case: the built web app itself, so a browser talks to the mock directly (a dev
+        # server's proxy answers a cut connection with an error of its own, which the page takes as a definite failure)
+        root = os.path.realpath(MOCK_WEB)
+        f = os.path.realpath(os.path.join(root, p.lstrip("/")))
+        if not (f.startswith(root + os.sep) and os.path.isfile(f)):
+            f = os.path.join(root, "index.html")
+        types = {".js": "text/javascript", ".css": "text/css", ".html": "text/html; charset=utf-8", ".svg": "image/svg+xml",
+                 ".json": "application/json", ".webmanifest": "application/manifest+json", ".png": "image/png", ".woff2": "font/woff2"}
+        with open(f, "rb") as fh:
+            data = fh.read()
+        h.send_response(200)
+        h.send_header("Content-Type", types.get(os.path.splitext(f)[1], "application/octet-stream"))
+        h.send_header("Content-Length", str(len(data)))
+        h.end_headers()
+        h.wfile.write(data)
+        return True
+    if p == "/mock/case/step" and method == "POST":
+        try:
+            case_json(h, CASE.step())
+        except sync_case.CaseError as e:
+            case_json(h, {"error": str(e)}, 409)
+        return True
+    device = CASE.device_of(sync_case.token_of(h))
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError:
+        data = {}
+    r = CASE.handle(device, method, p, q, h.headers, data if isinstance(data, dict) else {})
+    if r is None:
+        return False
+    if r is sync_case.CUT:  # the connection broke: no answer at all
+        h.close_connection = True
+        try:
+            h.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        return True
+    case_json(h, r[1], r[0])
+    return True
 # /mock/paging?on=1: pages of history as the hub cuts them (node.go PageTurns): the latest page and the backlog of a
 # first subscribe hold the last 2 whole turns, an older page `turns` more; otherwise the whole history comes at once.
 # ChatFollowTests' cold start at a saved place far up needs it (#597). /mock/reset turns it off.
@@ -9576,6 +9936,81 @@ def mock_png(w=48, h=32):
 
 
 MOCK_PNG = mock_png()
+
+# MOCK_FULL_PAGE=1: the main conversation as a long page for Full Page (#1609): long text with Markdown (headings, lists,
+# a table, a code block), a picture the user sent, a picture a call looked at, persona-card charts, an HTML page (Full
+# Page draws its text summary), then turns enough to put most of it off screen.
+if os.environ.get("MOCK_FULL_PAGE") == "1":
+    _fp_card = lambda d: "```persona-card\n" + json.dumps(d, ensure_ascii=False) + "\n```"
+    _fp_days = ["11/3", "11/4", "11/5", "11/6", "11/7", "11/8", "11/9"]
+    _fp_view = {"fallback": "三个方案的得分：A 9 分，B 7 分，C 6 分；A 最高。", "sections": [{"title": "三个方案的得分", "items": [
+        {"type": "html", "title": "三个方案的得分", "height": 220,
+         "html": "<h3>三个方案</h3><p>A：需要你的事优先，9 分；B：运行看板，7 分；C：助手入口，6 分。</p>"}]}]}
+    _fp_chart = base64.b64encode(_bar_png(480, 200)).decode()
+    _fp = [
+        it("user", "text", 60, text="把这周的进展整理成一页给我，配上我拍的白板"),
+        it("user", "image", 60, image={"mime": "image/png", "data": mock_png(480, 320), "width": 480, "height": 320}),
+        it("assistant", "text", 59, text="""## 本周进展
+
+**整体**：三个项目按计划推进，一个延期两天。下面按项目列出，最后是下周要你拍板的事。
+
+### 1. 天气小组件
+- 小、中两种尺寸做完了，深浅色都过了设计走查。
+- 夜间刷新改成每三小时一次，白天每小时一次。
+- 锁屏小组件放到 1.5 版，先把锁屏上的隐私处理好。
+
+### 2. 照片同步脚本
+- 计划写好了，等你批准后开始改。
+- 预计两天：第一天改扫描逻辑，第二天补测试。
+
+### 3. 网络层单元测试
+- 选了 Swift Testing，已补 42 个用例，覆盖率从 61% 到 78%。
+- 还差重试和超时两块，延期两天，周三前补齐。
+
+| 项目 | 状态 | 在哪台电脑 | 预计完成 |
+| --- | --- | --- | --- |
+| 天气小组件 | 进行中 | MacBook | 11/12 |
+| 照片同步脚本 | 等你批准 | Mac Studio | 11/14 |
+| 网络层单元测试 | 延期两天 | MacBook | 11/13 |
+
+小组件的数据结构是这样的：
+
+```swift
+struct FleetEntry: TimelineEntry {
+    let date: Date
+    let needsYou: Int
+    let working: Int
+    let unseen: Int
+}
+```
+
+白板上的三个方案我按得分排了一下，详见下面的图。"""),
+        it("assistant", "tool_use", 58, tool_use_id="toolu_fp_chart", tool_name="Read",
+           tool_input={"file_path": "/Users/me/code/weather/reports/chart.png"}),
+        it("user", "image", 58, tool_use_id="toolu_fp_chart", image={"mime": "image/png", "data": _fp_chart, "width": 480, "height": 200}),
+        it("user", "tool_result", 58, tool_use_id="toolu_fp_chart", text="chart.png"),
+        it("user", "text", 57, text="画几张图看看这周的数据"),
+        it("assistant", "text", 56, text="\n\n".join([
+            "这周一共完成 **23 个任务**，比上周多 5 个；周五最忙。",
+            _fp_card({"type": "bar", "title": "每天完成的任务", "unit": "个",
+                      "points": [{"label": d, "value": v} for d, v in zip(_fp_days, [2, 4, 3, 5, 6, 2, 1])]}),
+            _fp_card({"type": "line", "title": "等你处理的事", "unit": "件", "note": "周五最多，7 件",
+                      "points": [{"label": d, "value": v} for d, v in zip(_fp_days, [3, 2, 4, 5, 7, 2, 1])]}),
+            _fp_card({"type": "stacked_bar", "subtitle": "这周 Agent 的时间", "total": {"value": 62, "unit": "小时"},
+                      "segments": [{"label": "写代码", "value": 31}, {"label": "跑测试", "value": 18}, {"label": "等你", "value": 9}],
+                      "rest": {"label": "空闲", "value": 4}}),
+            _fp_card({"type": "stat", "title": "这周完成", "value": 23, "unit": "个任务", "note": "上周 18 个"})])),
+        it("user", "text", 55, text="三个方案做成一个可以点的页面"),
+        it("assistant", "text", 54, text="做好了，点开可以看每个方案的得分。\n\n```persona-view\n" + json.dumps(_fp_view, ensure_ascii=False) + "\n```"),
+    ]
+    for _n, (_q, _a) in enumerate([
+            ("下周一的会几点？", "下周一上午 10:00 设计评审，会议室 3；下午 4:30 和李雷 1:1。"),
+            ("照片同步脚本先改哪里？", "先改扫描逻辑：现在每次全量扫描相册，改成只看上次同步之后的新照片，能省掉九成时间。"),
+            ("网络层的测试还差哪些？", "还差两块：\n\n1. 重试：断网后第三次重试成功、三次都失败。\n2. 超时：请求超时、读超时分开测。"),
+            ("小组件的刷新会不会太耗电？", "白天每小时一次、夜里三小时一次，一天大约 20 次，在系统给的配额里，耗电可以忽略。"),
+            ("好，周三再看一次", "好的，周三上午我再把进展整理一遍发给你。")]):
+        _fp += [it("user", "text", 50 - 2 * _n, text=_q), it("assistant", "text", 49 - 2 * _n, text=_a)]
+    ITEMS[ASK1] = _fp
 
 # MOCK_CHAT_IMAGES=1: the blog conversation gets a screenshot the agent took (an image item of its tool's result) and
 # one it showed before its answer, for the chat's thumbnails and the image viewer. Made-up page, inline bytes; seqs
@@ -9744,10 +10179,10 @@ def personal_listed(hidden):
     return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files);
-# ?reset=1 starts over. The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
+# ?reset=1 starts over; ?gone=1 puts the branch on an upstream deleted on the remote (#1884). The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
 # reading it refuse; POST git/pr opens one, git/pr/merge merges it or sets it to merge when ready.
 def git_write_fresh():
-    return {"branch": "widget-hourly", "upstream": "", "ahead": 2, "fail": None, "files": [
+    return {"branch": "widget-hourly", "upstream": "", "ahead": 2, "gone": False, "fail": None, "files": [
         {"path": "WeatherWidget/Provider.swift", "index": ".", "worktree": "M", "added": 12, "deleted": 3, "binary": False},
         {"path": "WeatherWidget/WidgetView.swift", "index": "A", "worktree": ".", "added": 18, "deleted": 0, "binary": False},
         {"path": "Sources/App/main.swift", "index": "M", "worktree": "M", "added": 2, "deleted": 1, "binary": False},
@@ -9813,7 +10248,7 @@ def git_write_status(root):
     head = MOCK_COMMITS[0] if w["ahead"] <= 2 else dict(MOCK_COMMITS[0], hash="e" * 40, short="eeeeeee", subject=w.get("last", MOCK_COMMITS[0]["subject"]))
     return {"is_repo": True, "root": root, "branch": w["branch"], "head": head, "upstream": w["upstream"], "ahead": w["ahead"],
             "behind": 0, "stashes": len(w["stashes"]), "commits": ([head] if head is not MOCK_COMMITS[0] else []) + MOCK_COMMITS[:29],
-            "files": [dict(f) for f in w["files"]]}
+            "files": [dict(f) for f in w["files"]], **({"gone": True} if w["gone"] else {})}
 
 
 def git_branches():
@@ -9858,7 +10293,7 @@ def git_write(h, p, body):
             if not body.get("set_upstream"): return h.send_json({"error": "no upstream", "code": "git_no_upstream"}, 409)
             w["upstream"] = "origin/" + w["branch"]
             w["branches"].append(("origin/" + w["branch"], True))
-        w["ahead"] = 0
+        w["ahead"], w["gone"] = 0, False
         out["output"] = "To github.com:example/weather.git\n*\trefs/heads/%s:refs/heads/%s\t[new branch]" % (w["branch"], w["branch"])
     elif op == "switch":
         name = body.get("branch", "")
@@ -9870,7 +10305,7 @@ def git_write(h, p, body):
             w["upstream"], w["ahead"] = "origin/" + name, 0
         else:
             w["upstream"], w["ahead"] = ("origin/" + name if ("origin/" + name, True) in w["branches"] else ""), 0
-        w["branch"] = name
+        w["branch"], w["gone"] = name, False
     elif op == "stash":
         o = body.get("op")
         if o == "push":
@@ -11768,6 +12203,30 @@ PLUGINS["example-gateway"] = {
             "icon": "chart", "badge": {"text": "3", "tone": "danger"}},
            # UI version 3's components and pages (docs/extensions/extensions.md "UI version 3"): -openPlugin example-gateway -openPluginPage notes
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
+# MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and
+# Linux) and launchers (format launcher) from the hub's lists, and steps whole numbers (#2385). Its auto-reply launcher
+# names one the hub no longer has, so its picker keeps it, marked.
+if os.environ.get("MOCK_EXTENSION_PICKERS"):
+    PLUGINS["example-agent-chat"] = {
+        "id": "example-agent-chat", "name": "Example 聊天", "kind": "connectors", "status": "running", "version": "0.4.0", "source": "installed",
+        "enabled": True, "description": "以你的身份接入 Example 聊天：消息进收件箱；在聊天里发 /agent 交给助手，被 @ 时可让 AI 代答。",
+        "contributes": {"connectors": ["exampleagentchat"]}, "publisher": "example", "origin": "market:3f2a9c1d0b/example-agent-chat",
+        "form": {"fields": [
+            {"name": "agent", "type": "boolean", "title": "聊天里的 /agent", "default": False,
+             "description": "在聊天里发「/agent 要求」，交给助手处理并以你的身份回复"},
+            {"name": "agent_machine", "type": "string", "format": "machine", "os": ["darwin", "linux"], "title": "/agent 在哪台电脑上跑",
+             "description": "空着用助手那台"},
+            {"name": "agent_launcher", "type": "string", "format": "launcher", "title": "/agent 用的启动器", "description": "空着用助手的"},
+            {"name": "agent_reply_mode", "type": "string", "title": "/agent 回复方式", "default": "quote",
+             "enum": [{"value": "quote", "title": "引用回复"}, {"value": "thread", "title": "回复到话题"}]},
+            {"name": "agent_continue_hours", "type": "integer", "title": "「同一聊天」接着多久（小时）", "minimum": 1, "maximum": 72, "default": 4,
+             "description": "距上一条 /agent 多少小时内接着那段对话（1–72）"},
+            {"name": "auto_reply", "type": "string", "title": "别人 @我 时 AI 代答", "default": "off",
+             "enum": [{"value": "off", "title": "关"}, {"value": "all", "title": "所有聊天"}, {"value": "allowlist", "title": "只在白名单里的聊天"}]},
+            {"name": "auto_reply_launcher", "type": "string", "format": "launcher", "title": "代答用的启动器", "description": "空着用 /agent 的"}]},
+        "config": {"agent_machine": "server", "auto_reply_launcher": "cc_retired"}, "secrets": [],
+        "permissions": [_RUNS, {"key": "network", "title": "访问网络", "detail": "chat.example.com"}]}
+
 # A plugin whose program runs on computers (docs/extensions/extensions.md "Programs running on computers", #1830): its field picking them asks
 # before one is switched on (the hub's x-confirm), each machine's row says how the program is there (nodes).
 PLUGINS["example-helper"] = {
@@ -12944,6 +13403,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
     "PORT=<端口>  监听端口，默认 18760；0 表示自动分配（启动时打印 mock hub on <地址>:<端口>）",
@@ -13155,6 +13615,22 @@ def model_configuration(include_uses=False):
     return catalog
 
 
+# The model profiles (GET /api/v1/model-profiles, docs/assistant/model-profiles.md) with the Agent presets of #2225: performance
+# in use, as the templates are when first made.
+MOCK_PRESETS = {"quick": {"launcher": "sonnetcc", "description": "Small, quick fixes"},
+                "review": {"launcher": "claude", "model": "opus", "effort": "high", "description": "Code review and design"}}
+
+
+def model_defaults_profiles(h, p):
+    """GET /api/v1/model-profiles under MOCK_MODEL_DEFAULTS. False otherwise."""
+    if not MODEL_DEFAULTS or p != "/api/v1/model-profiles":
+        return False
+    h.send_json({"revision": 1, "active": "performance", "events": [], "profiles": [
+        {"id": "performance", "name": "Performance", "active": True, "changes": [], "tiers": MOCK_PRESETS},
+        {"id": "economy", "name": "Economy", "changes": ["agent.new"], "tiers": {"quick": MOCK_PRESETS["quick"]}}]})
+    return True
+
+
 def model_defaults_launchers(h, p, q):
     """GET /api/v1/machines/{mid}/launchers with the purpose's "Default: …" (hub launcherDefault). False otherwise."""
     if not MODEL_DEFAULTS or not (p.startswith("/api/v1/machines/") and p.endswith("/launchers")):
@@ -13167,8 +13643,13 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    h.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                                    {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default})
+    out = {"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+                                              {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default}
+    if pid == "agent.new":
+        # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
+        out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
+        out["tiers_profile"] = {"id": "performance", "name": "Performance"}
+    h.send_json(out)
     return True
 
 
@@ -13301,6 +13782,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
         if self.token_refused(): return
+        if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
@@ -13335,6 +13817,7 @@ class H(BaseHTTPRequestHandler):
                 if kind != "none": GIT_W.update(upstream="origin/" + GIT_W["branch"], ahead=0)
                 GIT_W["pr"] = None if kind == "none" else git_pr_make(kind, GIT_W["branch"])
             if "pr_fail" in q: GIT_W["pr_fail"] = q["pr_fail"][0] or None
+            if q.get("gone"): GIT_W.update(upstream="origin/" + GIT_W["branch"], ahead=0, gone=True)
             return self.send_json({"branch": GIT_W["branch"], "ahead": GIT_W["ahead"], "files": len(GIT_W["files"])})
         if p == "/mock/git-pull" and os.environ.get("MOCK_GIT_PULL"):
             if "mode" in q:
@@ -13417,6 +13900,7 @@ class H(BaseHTTPRequestHandler):
         if plugins_route(self, p, None): return
         if voice_route(self, p, q): return
         if model_defaults_launchers(self, p, q): return  # area: model defaults
+        if model_defaults_profiles(self, p): return  # area: model defaults
         if pins_route(self, p): return
         if chat_pins_route(self, p, parse_qs(urlparse(self.path).query)): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
@@ -13517,7 +14001,9 @@ class H(BaseHTTPRequestHandler):
             t = next((x for x in TODOS if x["id"] == tid), None)
             if not t: return self.send_json({"error": "待办不存在"}, 404)
             return self.send_json({"todo": format_todo(t)})
-        if p == "/api/v1/interactions": return self.send_json({"interactions": out_by_machine(mock_interactions())})
+        if p == "/api/v1/interactions":
+            HELLO["request_client"] = self.headers.get("X-Persona-Client")
+            return self.send_json({"interactions": out_by_machine(mock_interactions())})
         if p == "/api/v1/fleet":
             return self.send_json({"fleet": mock_fleet() if MOCK_FLEET else {"phase": "", "needsYou": 0, "working": 0, "unread": 0, "items": []}})
         if p == "/api/v1/interactions/history":
@@ -13525,6 +14011,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/delegate": return self.send_json(*mock_delegate(q))
         if p == "/mock/reanswered": return self.send_json({"reanswered": REANSWERED})
         if p == "/mock/resolved": return self.send_json({"resolved": RESOLVED})
+        if p == "/mock/devices": return self.send_json({"devices": DEVICES})
+        if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
                 return self.send_json({"registrations": [x["registration"] for x in PHONES.values()], "results": TOOL_RESULTS})
@@ -13790,6 +14278,7 @@ class H(BaseHTTPRequestHandler):
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
             return self.send_json({"mutes": OTHER_MUTES.get(other[0], []) if other else MUTES})
+        if p == "/api/v1/inbox/folders": return self.send_json(folder_state(q))
         if p == "/api/v1/inbox/policies":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -14166,7 +14655,7 @@ class H(BaseHTTPRequestHandler):
         if not stem: stem, dot, ext = ext, "", ""
         path = "/tmp/%s-%s%s%s" % (stem, datetime.now().strftime("%Y%m%d-%H%M%S"), dot, ext)
         if video: FILES[path] = b"".join(body)  # downloadable again, like a node's temp file (#981)
-        UPLOADS.append({"name": name, "size": n, "path": path})
+        UPLOADS.append({"name": name, "size": n, "path": path, "machine": urlparse(self.path).path.split("/")[4]})
         return self.send_json({"path": path, "name": path.rsplit("/", 1)[1], "size": n})
 
     def do_POST(self):
@@ -14175,6 +14664,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
@@ -14190,6 +14680,10 @@ class H(BaseHTTPRequestHandler):
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]
             return self.send_json({"ok": True, "restart_required": False})
+        if p == "/api/v1/devices":  # a push registration: kept without its token, key or grant
+            d = json.loads(self.last_body or b"{}")
+            DEVICES.append({k: d.get(k) for k in ("device_id", "kind", "features")})
+            return self.send_json({"ok": True, "push": {"route": "relay"}})
         if p == "/mock/frames":
             run = json.loads(self.last_body or b"{}")
             run["test"] = run.get("name") or FRAMES["label"]
@@ -14200,6 +14694,7 @@ class H(BaseHTTPRequestHandler):
                 lark_messaging.route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if pins_route(self, p): return
         if file_ops_route(self, p, self.last_body): return
+        if look_uploads_route(self, self.command, p, self.last_body): return
         if looks_route(self, self.command, p, self.last_body): return
         if recordings_route(self, self.command, p): return
         if machine_rename_route(self, self.command, p, self.last_body): return
@@ -14963,6 +15458,25 @@ class H(BaseHTTPRequestHandler):
             pid = p.rsplit("/", 1)[1]
             PLACES[:] = [x for x in PLACES if x["id"] != pid]
             return self.send_json({"ok": True})
+        if p == "/api/v1/inbox/folders" and self.command == "PUT":
+            body = json.loads(self.last_body or b"{}")
+            if "enabled" in body: FOLDER_CFG["enabled"] = bool(body["enabled"])
+            if "rules" in body: FOLDER_CFG["rules"] = str(body["rules"] or "").strip()
+            return self.send_json(folder_state({}))
+        if p.startswith("/api/v1/inbox/") and p.endswith("/folder") and self.command == "PUT":
+            iid = unquote(p[len("/api/v1/inbox/"):-len("/folder")])
+            inbox_item = next((x for x in INBOX if x["id"] == iid), None)
+            if not inbox_item: return self.send_json({"error": "no such inbox item"}, 404)
+            folder = json.loads(self.last_body or b"{}").get("folder")
+            if folder is None:
+                inbox_item.pop("folder", None); inbox_item.pop("folder_by", None)
+            else:
+                f = normalize_folder(folder)
+                if not f and str(folder).strip(): return self.send_json({"error": "folder must have at least one name between the slashes"}, 400)
+                inbox_item["folder_by"] = "user"
+                if f: inbox_item["folder"] = f
+                else: inbox_item.pop("folder", None)
+            return self.send_json(dict({k: v for k, v in inbox_item.items() if k != "context"}, version=inbox_version(inbox_item)))
         if p == "/api/v1/inbox/policies" and self.command == "POST":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -15017,6 +15531,18 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/translate":  # marks the texts, enough to see where they show
             body = json.loads(self.last_body or b"{}")
             return self.send_json({"texts": ["【译】" + t for t in body.get("texts", [])]})
+        if p.startswith("/api/v1/inbox/") and p.endswith("/done") and self.command == "POST":
+            iid, body = unquote(p[len("/api/v1/inbox/"):-len("/done")]), json.loads(self.last_body or b"{}")
+            x = next((x for x in INBOX if x["id"] == iid), None)
+            if x is None: return self.send_json({"error": "no such inbox item"}, 404)
+            if body.get("done"):
+                x["done_at"], x["done_by"] = ago(minutes=0), "dismissed" if body.get("dismiss") else "user"
+            else:
+                x.pop("done_at", None), x.pop("done_by", None)
+            for send, _ in list(LIVE):
+                try: send({"type": "inbox"})
+                except Exception: pass
+            return self.send_json(dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)))
         if p.startswith("/api/v1/inbox/") and p.endswith("/doc/status"):
             iid, ch = p[len("/api/v1/inbox/"):-len("/doc/status")], json.loads(self.last_body or b"{}")
             for x in INBOX:
@@ -15726,6 +16252,7 @@ class H(BaseHTTPRequestHandler):
                             hb_condition.notify()
                     with FAULT_LOCK:
                         client["features"] = set(declared)
+                    HELLO.update(features=declared, platform=msg.get("platform"), version=msg.get("version"))
                     send({"type": "client_hello_ack", "heartbeat": dict(heartbeat)})
                     continue
                 if msg.get("type") == "ping":
@@ -16057,6 +16584,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -16114,6 +16642,7 @@ if os.environ.get("MOCK_MOMENTS_FEED"):  # the project's posts say which feed th
 MOCK_HELP.append("MOCK_MOMENTS_FEED=<名字>  知识库的公司圈帖子带 feed（项目的「相关<名字>」和存档帖子页的标题用它；不设时叫「公司圈」）")
 MOCK_HELP.append("MOCK_NO_LARK=1  没装接飞书的扩展的 hub：features 里没有 lark / lark_moments / lark_attachments，/api/v1/lark/… 404，连接器里没有飞书")
 MOCK_HELP.append("MOCK_INBOX_TRIAGE=<状态>[:<条数>[:<来源名，逗号隔开>[:<原因>]]]  收件箱列表带 triage（新条目在等分拣，#1773）：unconfigured / paused / error / timeout / behind / ok；不设时没有 triage（老 hub）")
+MOCK_HELP.append("MOCK_INBOX_UNREAD=<来源名>[:<代码>[:<原因>]],…  收件箱 triage 的这些来源这一轮没读到（read_error / read_reason，#1849）：代码 timeout / rate_limited / failed；不写原因就没有 read_reason")
 
 # ---------- area: commenting in the Feishu document reader (#1290) ----------
 # MOCK_DOC_COMMENTS=1: the plugin says `lark_doc_comments`; GET /api/v1/lark/raw/documents/comments has three made-up

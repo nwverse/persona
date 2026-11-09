@@ -174,7 +174,7 @@ enum LauncherName {
     var presetsFlow: Bool { isNew && deps.features().contains(Self.presetsFeature) }
     var preset: LauncherPreset? { presets.first { $0.id == presetID } }
     /// "Where to get a model": the built-in providers that say where to sign up.
-    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.signup != nil } }
+    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.runsClaude && $0.signup != nil } }
     var presetNameProblem: String? { LauncherName.problem(presetName) }
     private var trimmedKey: String { presetKey.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A key long enough to be worth testing on its own: a test costs a request, so not on every keystroke.
@@ -462,7 +462,7 @@ enum LauncherName {
                              smallModel: "", subagentModel: "", customModel: "", customModelName: "", customModelDescription: "",
                              args: [], apiKey: trimmedKey, preset: p.id,
                              displayName: presetDisplayName.trimmingCharacters(in: .whitespaces),
-                             assign: assign ? Self.assignPurposes : nil)
+                             assign: p.runsClaude && assign ? Self.assignPurposes : nil)
     }
 
     /// Adds the preset's provider; false (with `error`) when the hub refused it.

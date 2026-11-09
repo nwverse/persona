@@ -315,6 +315,7 @@ Limitations: SwiftUI does not recognize synthetic momentum as momentum, and the 
     Mac now sends `register_desktop` (`AppModel.registration`, tested); phone_* accepts only iPhone. If Mac is open but iPhone absent, Claude cannot get phone data, as intended.
     **This Mac** is removed from Mac's **Settings › Connectors** (the hub no longer calls its tools); welcome text says data comes from Persona on iPhone.
     On iPhone, a top Agents row says **Persona on Mac is signed in**, opening **Mute Phone** (while Mac is online, Mac handles Needs You / Agent Done notifications instead of phone pushes; explicitly requested assistant reminders still push), sign-in time, and sign-out for that Mac (revokes device credentials, requires re-pairing). Protocol: `desktops` / `register_desktop` in `docs/protocol/protocol.md`.
+    With this App frozen, Persona Link takes over presence on a Mac: while you are at it, its menu bar App counts as a desktop for **Mute Phone**, for the "Needs you" cards only ([link.md](../operations/link.md) "Presence").
     Mac now exchanges pairing tokens for device credentials with kind `desktop` (`AppModel.credentialKind`, tested); the hub stores `other`, same permissions, computer icon in **Settings › Devices**.
     Macs that exchanged credentials before this change still show phone in the list; only a label, corrected by revoking and pairing again (unchanged).
 - Temporary implementations, to refine later: outer sidebar and page split are separate layers (six entries in an HStack column, page a three-column split with empty first column); `TabView(.page)` paging becomes default style / arrow paging;
@@ -421,7 +422,7 @@ Causes found (main-thread samples):
 
 ## SSH tunnels (Mac)
 
-Same implementation as iOS (`apple/Packages/PersonaSSH`, see [network.md, "Connecting to the hub through an SSH tunnel"](../operations/network.md#经-ssh-隧道连-hub直连不通时的后备) and [ios.md, "SSH tunnel"](ios.md#ssh-隧道直连不通时的后备891)): **Settings › Hub › SSH Tunnel**, and **Connect via SSH Tunnel** on the pairing page.
+Same implementation as iOS (`apple/Packages/PersonaSSH`, see [network.md, "Connecting to hub through SSH"](../operations/network.md#connecting-to-hub-through-ssh-fallback-when-direct-access-fails) and [ios.md, "SSH tunnels"](ios.md#ssh-tunnels-fallback-when-direct-connections-fail-891)): **Settings › Hub › SSH Tunnel**, and **Connect via SSH Tunnel** on the pairing page.
 The sandboxed App cannot invoke `/usr/bin/ssh` or read `~/.ssh`, so the tunnel runs in-process and the App generates its own key; loopback listeners use the existing `com.apple.security.network.server`
 entitlement (also used by port forwarding). Mac does not enter the background lifecycle; the tunnel stays open and switches back within 2 minutes once direct connectivity works.
 Screenshots: `mac_shot.sh`'s `-macSnapshot` does not read the keychain; provide a test key with `-seedSSHKey` (`docs/operations/testing.md` ("SSH tunnel")); screenshot-mode public-key comments always use device name "Mac", never the actual Mac name.
@@ -440,6 +441,7 @@ Dock context menu (`apple/Mac/App/MacDockMenu.swift`, tested): **Needs You / Don
   When Agent Finishes: Never / Long Tasks Only (this turn's `long_turn_seconds`, default over 60 seconds) / Every Time). Exclusions: the currently open chat while App is foreground, muted sessions,
   newly appearing sessions, done immediately after an answer (same stop), completed Persona chats (questions still notify), cards the assistant is still looking at (`delegating`, #544: a session whose only cards are those gets no Needs You notification until the hub hands one over), demo mode, and the first 3 seconds after WebSocket's first connection
   (the preconnection list is exit-time cache; differences on first refresh concern events while the App was closed; timed from connection, not launch, so late network does not flood notifications).
+  Inside this device's quiet hours (`NotifyPrefs.quiet`, `QuietHours.active`) nothing says an Agent finished, and Needs You comes without a sound and passive, as the hub's pushes do then (#1863).
   The state-change notification includes the turn's earliest card; the same card never notifies twice. If state arrives one beat before the card event, the 3-second grace period still deduplicates it.
   Request notification permission after pairing / at launch (`PushRegistrar`, same as iPhone: remote pushes while closed display only if previously authorized); watcher asks again if it needs to notify before authorization, then sends after approval (items added during the prompt are lost).
   Closed or disconnected Apps receive hub pushes, see "Remote push (Mac)" below. Muting / unmuting immediately updates the Dock badge.
@@ -613,63 +615,9 @@ chat image decoding is off-main (`ChatThumbnail` already decodes in `Task.detach
 
 Below are all iOS App features as checked for Mac before the freeze. This is a record: open items are not planned work, and new features add no rows.
 
-All reviewed on 2026-11-01: five parallel groups checked offscreen screenshots (demo and `scripts/mock/mock_hub.py` fake data, light/dark) and unit tests (`PersonaMacTests`), fixing what they could; a reviewer then tried to disprove every check, unchecking disproved items and stating what was and was not observed.
-After review: 106 [x], 118 [ ]. Each unchecked item explains why: "check at the Mac" means unlock and click/type/look, "not done" means unimplemented, "not on Mac" means intentionally unavailable.
-From the evening of 2026-11-02, real-window checks continued on Mac mini (#403): isolated acceptance copy (separate bundle id + `CFFIXED_USER_HOME`) + demo / `scripts/mock/mock_hub.py`, cua-driver clicking/typing/viewing real windows, plus offscreen captures and mock request logs. New checks explain real-window observations, partial ones name remaining work. Now 151 [x], 71 [ ].
-Awaiting your confirmation: the `-showSampleScreen` Terminal Is Asking sample previously contained names resembling internal tools/services; commit "chore: the sample terminal dialog uses made-up names only" replaced all with invented names; old screenshots may retain old text.
-
-### Roles for real-window acceptance (since 2026-11-03)
-
-Two roles:
-
-- **Development session** (coding Agent):
-  - Read issue, change code;
-  - Prepare tested window: build, launch isolated acceptance copy and mock hub;
-  - Write acceptance checklist;
-  - Review executor Fail / Uncertain items from returned screenshots, and if needed inspect personally after its run ends.
-- **Executor** (another cheaper model): operate via cua, capture, compare against expectations, return per-item report and evidence.
-  - Invoked through the machine's configured headless-Agent channel in an independent context; development reads only its report.
-  - Channel, commands and parameters are machine-local in `CLAUDE.local.md`.
-
-Why: about 70% of #403's overnight tokens went to cua operation, screenshots and reading images, accumulating in the growing development context and reread every step.
-
-**While executor runs**:
-- Development does not touch UI; only one Agent uses cua at a time;
-- Run batches in background: about 5 items took 12–14 minutes (2026-11-03); split larger sets and run sequentially within one background command.
-
-**When development inspects UI**, conserve tokens too:
-- Read text via accessibility tree with `query`;
-- View resized/cropped screenshots;
-- Use offscreen capture when possible, not real windows.
-
-**Writing acceptance checklists**: the executor sees only the checklist, not development context.
-- Supply tested pid and window_id.
-- Boundaries: only this window and its menus; never click wallpaper (triggers Show Desktop); no foreground delivery unless an item requests it; no file changes.
-- Observable expectations: which button/text appears, never "looks normal".
-- State conditions for conditional items: avatar-menu Interrupt appears only while working, Connection Details only when not online.
-- If accessibility and screenshot disagree, visible screenshot wins.
-- Save one screenshot proving each item's conclusion at that moment (menu open, state changed).
-- One report line per item: number, Pass / Fail / Uncertain, evidence. Append immediately to a report file after each item: the channel outputs only at completion, so timeout killing loses everything (2026-11-03 batch hung on the last item for 15 minutes, losing two prior results).
-- Per-item timeout (e.g. 4 minutes); report Uncertain from current evidence and continue.
-- Fixed scrolling amounts (up 3 times, specified distance), not "scroll until item appears": executor may spend minutes searching back and forth.
-- Sheet text input must specify foreground delivery: background accessibility insertion displays text without triggering App search (see `docs/lessons/testing.md`).
-  Also specify how to locate sheet fields (same lesson); omission once cost 8 minutes stuck on a sheet.
-- Context menus: first `bring_to_front` the copy, then foreground right-click. Foreground delivery otherwise restores the prior App and closes the menu, leading to "no context menu" (false terminal-menu failure 2026-11-03).
-- Describe subtle controls and locations: terminal Close is the centered handle atop the sheet; omission led to clicking Window Size at top-left and reporting no close.
-- Do not use sheet-screenshot pixel coordinates (2026-11-04): macOS 26 SwiftUI `SheetPresentationWindow` bounds differ from cua captures
-  (main-window area scaled into the image); derived screen coordinates miss controls, falsely suggesting broken buttons (#1132).
-  Specify the element under `AXSheet` in the main window accessibility tree: AXPress if supported; for real mouse, read frame and click center in screen coordinates (`scope:"desktop"`).
-- Gesture-based sheet controls (double-click modifier lock, single/double quick commands) need real mouse: accessibility double_click is two AXPress calls, interpreted as two slow clicks;
-  get element frame under `AXSheet` and click screen-coordinate center with `scope:"desktop"` (`count:2` for double-click; two Uncertain reports from this on 2026-11-04).
-- Terminal scrollback tests use non-takeover terminal (mock only `MOCK_TERMINAL_STREAM=1`): takeover intentionally sends wheel to the program (`terminal_input.scroll`),
-  which the mock logs without scrolling, causing "cannot scroll back" (2026-11-03 s5c).
-
-**Baseline before switching roles** (2026-11-03): executor repeated 3 known results: suggestion pills (Pass), message context action bar (Fail, #501), avatar menu (Pass).
-- First run: 1 matched, 2 Uncertain, all evidence correct.
-  - Action bar: accessibility listed Copy / Select / Quote / Share, but they were not visible.
-  - Avatar menu: checklist incorrectly made conditional items mandatory.
-- Revised using the guidance above; second run matched all 3. Executor touched no other windows.
-
+Each unchecked item explains why: "check at the Mac" means unlock and click/type/look, "not done" means unimplemented, "not on Mac" means intentionally unavailable.
+Items are checked with offscreen captures, `PersonaMacTests`, and real-window checks on an isolated acceptance copy (separate bundle id + `CFFIXED_USER_HOME`) against demo or `scripts/mock/mock_hub.py`.
+How the checklist was reviewed, and the roles and rules for real-window checks driven by a separate executor model, are in `docs/archive/apple/mac-records.md`.
 
 ## 0. App shell / navigation
 - [x] 4 tabs with badges: Persona (pending assistant questions), Agents (pending interactions, excluding muted), Inbox (inbox action count), Settings (Demo badge in demo) — Persona/Views/RootView.swift

@@ -1,5 +1,5 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { answerCard } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
@@ -28,6 +28,7 @@ import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { alwaysScope } from "../../lib/always-scope";
 import { StatusMark } from "../../ui/StatusMark";
+import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
@@ -93,7 +94,11 @@ type CardKeys = ReturnType<typeof useCardKeys>;
  * so the footer's `sticky` follows the dock's scrolling and the buttons stay at its bottom edge while the card is taller
  * than the dock. `-bottom-1` cancels the dock's `p-1` (`bottom-0` would leave 4px of the body under the buttons).
  */
+/** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
+const AskedByVoice = createContext(false);
+
 function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys }) {
+  const asked = useContext(AskedByVoice);
   return (
     <div {...(cardKeys?.root ?? {})} aria-label={title} className="shrink-0 overflow-clip rounded-card bg-surface shadow-card outline-none focus-visible:ring-2 focus-visible:ring-accent" style={{ animation: `fade-up 350ms ${EASE} both` }}>
       <div className="px-3.5 pt-3 pb-2.5">
@@ -102,24 +107,34 @@ function Card({ title, kicker, onDismiss, busy, children, footer, looking = fals
             <div className={cx("mb-0.5 flex items-center gap-1.5 text-[11px] font-medium", looking ? "text-ink-3" : "text-attention")}>
               <StatusMark state={looking ? "working" : "needs_you"} size="sm" label={false} />
               {kicker}
+              {/* the card stays a quiet surface: a neutral chip, the voice's color only on its mark */}
+              {asked && (
+                <span data-testid="voice-asking" className="ml-0.5 inline-flex min-w-0 items-center gap-1 rounded-full bg-inset px-1.5 py-px text-[10.5px] font-medium whitespace-nowrap text-ink-2 shadow-hairline">
+                  <Icon name="voice" size={10} stroke={2.4} className="shrink-0 text-ai" />
+                  <span className="truncate">{t("voice.asking_mark")}</span>
+                </span>
+              )}
             </div>
             <div className="text-[13.5px] font-medium text-ink">{title}</div>
           </div>
-          {onDismiss && (
+        </div>
+        <div className="mt-2">{children}</div>
+        {/* Hand back (dismiss) leaves the request to the computer's terminal, and the hub takes no other answer for this card
+            after it: so it says so in words on a row of its own (Android's action row), never a bare × that reads as "close" */}
+        {onDismiss && (
+          <div className="mt-2 flex">
             <button
               type="button"
               aria-label={t("chat-interactions.hand_back")}
-              title={t("chat-interactions.hand_back")}
               onClick={onDismiss}
               disabled={busy}
               data-card-answer
-              className="touch-hit flex size-6 shrink-0 items-center justify-center rounded-[6px] text-ink-3 transition-colors enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40"
+              className="touch-hit -ml-1.5 rounded-[6px] px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40"
             >
-              <Icon name="x" size={14} stroke={2.2} />
+              {t("chat-interactions.hand_back")}
             </button>
-          )}
-        </div>
-        <div className="mt-2">{children}</div>
+          </div>
+        )}
       </div>
       {/* data-card-actions: what answers the card (with hand back above), for the sync scenarios (spec/fixtures/sync) */}
       <div data-card-actions className="sticky -bottom-1 flex items-center justify-between gap-2 border-t border-line bg-inset px-3 py-2">{footer}</div>
@@ -997,17 +1012,19 @@ export function receiptAbout(ix: Interaction): string {
 
 /** A card this page answered: what was asked and the picks, read-only, for a moment (lib/store.ts endInteraction). */
 export function AnsweredCard({ card }: { card: Answered }) {
-  const lines = answerLines(card.ix, card.resolution);
+  // handed back: its head says so, and the line under it is which request went back to the computer, not those words again
+  const handedBack = card.resolution.dismiss === true;
+  const lines = handedBack ? [] : answerLines(card.ix, card.resolution);
   // a card with one unlabeled answer ("Allow", "Approve", a terminal option) says what it was about (#4353): which command was
   // allowed, not only that something was
-  const about = lines.length === 1 && !lines[0].label && card.resolution.dismiss !== true ? receiptAbout(card.ix) : "";
+  const about = handedBack || (lines.length === 1 && !lines[0].label) ? receiptAbout(card.ix) : "";
   return (
     <div role="status" data-answered={card.ix.id} className="shrink-0 overflow-hidden rounded-card bg-surface px-3.5 py-2.5 shadow-card" style={{ animation: `fade-up 300ms ${EASE} both` }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-green">
             <Icon name="check" size={11} stroke={3} />
-            {card.resolution.dismiss === true ? t("chat-interactions.handed_back") : t("chat-interactions.answered")}
+            {handedBack ? t("chat-interactions.handed_back") : t("chat-interactions.answered")}
           </div>
           <div className="flex flex-col gap-1">
             {about && <span data-answered-about className="block truncate text-[12px] text-ink-3" title={about}>{about}</span>}
@@ -1041,8 +1058,9 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : ix.kind === "permission" ? <PermissionCard ix={ix} />
     : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
+  const asked = useVoiceAsking(ix);
   // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was
-  return <div data-card={ix.id} className="contents">{canApprove ? card : <fieldset disabled>{card}</fieldset>}</div>;
+  return <div data-card={ix.id} className="contents"><AskedByVoice.Provider value={asked}>{canApprove ? card : <fieldset disabled>{card}</fieldset>}</AskedByVoice.Provider></div>;
 }
 
 /**

@@ -85,13 +85,6 @@ func (m *Machine) isOnline() bool {
 	return m.online
 }
 
-// setSessions keeps the node's list (tests set it; the devices keep their own).
-func (m *Machine) setSessions(list []proto.Session) {
-	m.mu.Lock()
-	m.sessions = slices.Clone(list)
-	m.mu.Unlock()
-}
-
 // devicesPeer is a computer's node through the devices in this process.
 type devicesPeer struct {
 	d  Devices
@@ -176,9 +169,6 @@ func (h *Manager) machinesNow() []*Machine {
 	h.machines = order
 	return slices.Clone(order)
 }
-
-// newMachine is a computer (tests put it in h.machines, h.byID).
-func newMachine(_ *Manager, cfg MachineConfig) *Machine { return &Machine{cfg: cfg} }
 
 func (h *Manager) machineByID(id string) *Machine {
 	if id == "" {
