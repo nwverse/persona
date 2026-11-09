@@ -336,7 +336,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		stop()
 		<-keyDone
 	}()
-	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects the computers").
+	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects to computers").
 	var bh *BusHub
 	var svc *Service
 	var ext *extmgr.Manager

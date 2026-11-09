@@ -123,7 +123,7 @@ type HubInfo struct {
 	// (its status, sign-in hints, a bot's replies) reads in it. Read at each start; empty means zh-Hans.
 	Locale string `json:"locale,omitempty"`
 	// Capabilities are what this hub does that a plugin may go by ("inbox_group": it relates a connector's batches of
-	// new messages to inbox events, docs/assistant/inbox.md "Event synthesis"). Absent or without one: the hub does not do it.
+	// new messages to inbox events, docs/assistant/inbox.md "Event grouping"). Absent or without one: the hub does not do it.
 	Capabilities []string `json:"capabilities,omitempty"`
 	// URL and Token are the hub's API on this machine and a token of the scopes it was granted (permissions.hub; also
 	// PERSONA_HUB_URL / PERSONA_HUB_TOKEN when the hub runs it): a new one each start, revoked when it stops for good.

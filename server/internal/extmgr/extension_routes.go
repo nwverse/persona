@@ -189,7 +189,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		}
 	}
 	// marketOr is owner for installing, upgrading, rolling back and removing, or a device with full rights when it is a
-	// plugin of a registered market (its package pinned by the market's index; docs/extensions/extensions.md "Extension markets").
+	// plugin of a registered market (its package pinned by the market's index; docs/extensions/extensions.md "Extension marketplace").
 	marketOr := func(w http.ResponseWriter, r *http.Request, ofMarket func() bool) bool {
 		if ps() == nil {
 			writeExtensionResponseError(w, r, http.StatusServiceUnavailable, "no_plugins", i18n.ErrEnglish("extension-status.not_set_up"))

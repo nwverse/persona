@@ -13,7 +13,7 @@ import (
 // ContributionKey names one contribution: "<point>/<id>" (Record.DisabledContributions).
 func ContributionKey(point, id string) string { return point + "/" + id }
 
-// SwitchedElsewhere says whether a contribution's switch is not the extension's own (docs/extensions/extensions.md "Contribution switches"):
+// SwitchedElsewhere says whether a contribution's switch is not the extension's own (docs/extensions/extensions.md "Turning contributions on and off"):
 // a connector's is the connector's switch (Settings › Connectors, the inbox and the archive keep using it), and a channel bound
 // to a connector goes with that connector.
 func (m *Manifest) SwitchedElsewhere(point, id string) bool {

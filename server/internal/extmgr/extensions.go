@@ -1016,7 +1016,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		for _, c := range m.Channels() {
 			params.Active["channel"] = append(params.Active["channel"], c.ID)
 		}
-		for point := range m.Contributes { // the rest, without what the user switched off (docs/extensions/extensions.md "Contribution switches")
+		for point := range m.Contributes { // the rest, without what the user switched off (docs/extensions/extensions.md "Turning contributions on and off")
 			if ids := m.Items(point); len(ids) > 0 && point != "connectors" && point != "channel" {
 				params.Active[point] = ids
 			}

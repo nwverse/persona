@@ -149,7 +149,7 @@ func readErrorOf(err error) string {
 func isMigrated(id string) bool { return slices.Contains(connector.MigratableConnectors, id) }
 
 // thingRulesMost is the most of a thing's rules the model gets (runes; the rest is cut): what the convention's
-// triage_rules setting allows (docs/extensions/extensions.md "Agreed settings").
+// triage_rules setting allows (docs/extensions/extensions.md "Conventional settings").
 const thingRulesMost = 4000
 
 // vetThings holds a connector's things to its manifest: a tier the inbox does not know is dropped (the model
