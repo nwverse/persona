@@ -529,7 +529,7 @@ nonisolated enum Theme {
     static let systemSidebar = Color(light: 0xE6E9EE, dark: 0x191C20)
 
     /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner and
-    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), and those stop with Reduce Motion (the spinner
+    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md) and the dot of a held mic (`DictationHold`), and those stop with Reduce Motion (the spinner
     /// is the system's).
     enum Motion {
         static let state = Animation.snappy(duration: 0.25)
@@ -576,6 +576,66 @@ nonisolated enum Theme {
         static let springBack = Animation.spring(duration: 0.3, bounce: 0.25)
         /// The stationary sidebar rises only this far as the page slides off it; no horizontal parallax or zoom.
         static let drawerLift = Theme.Space.s
+
+        // The composer, after Telegram's input panel (docs/apple/ios.md, New shell, "Input motion"): only its timings and curves.
+        /// The draft gaining or losing a line: short, so the field never trails behind the typing.
+        static let composerGrow = Animation.easeInOut(duration: 0.1)
+        /// The keyboard's own spring on iOS 26 (critically damped): the box opening as the keyboard rises moves with it.
+        static let keyboard = Animation.interpolatingSpring(mass: 1, stiffness: 555.027, damping: 47.118)
+        /// Send taking the round button's place and leaving it: it grows out of a point near the right edge.
+        static let composerSwap = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        /// What fades with the swap fades faster than it grows, and clears a slight blur.
+        static let composerSwapFade = Animation.easeInOut(duration: 0.2)
+        static let composerSwapBlur: CGFloat = 4
+        /// Where send grows from: this small, not zero, so the scale animation has a size to start at.
+        static let composerSwapFrom: CGFloat = 0.001
+        /// An icon swapped inside the round button shrinks to this and fades as the next grows from it.
+        static let composerSwapScale: CGFloat = 0.2
+        /// Send pressed down shrinks, slowly, and comes back quicker when let go.
+        static let composerPressScale: CGFloat = 0.75
+        static let composerPress = Animation.easeOut(duration: 0.4)
+        static let composerRelease = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.25)
+        /// A quote bar over the field slides in by its own height while the box grows with it; it fades in quicker than
+        /// it fades out.
+        static let composerAccessory = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        static let composerAccessoryIn = Animation.easeInOut(duration: 0.15)
+        static let composerAccessoryOut = Animation.easeInOut(duration: 0.2)
+        /// Holding the mic: the circle under the finger springs up from a small one; the strip and the lock come with it.
+        static let holdAppear = Animation.spring(duration: 0.5, bounce: 0.3)
+        static let holdAppearScale: CGFloat = 0.2
+        static let holdLeave = Animation.easeOut(duration: 0.18)
+        /// The recording dot's blink, one way (it blinks while the finger holds, and stops with Reduce Motion).
+        static let holdBlink = Animation.easeInOut(duration: 0.5)
+    }
+
+    /// Hold the mic to dictate, slide left to drop it, slide up to keep it going hands-free: Telegram's thresholds
+    /// for its voice button (`DictationHold`).
+    enum Hold {
+        /// A touch held this long is a hold; let go sooner it is a tap (dictation on or off, as before).
+        static let delay: Duration = .milliseconds(190)
+        /// While the finger is down, this far left drops what was heard, this far up locks.
+        static let cancelDistance: CGFloat = 150
+        static let lockDistance: CGFloat = 110
+        /// Let go: a shorter slide counts, or a quick flick.
+        static let releaseCancelDistance: CGFloat = 100
+        static let releaseLockDistance: CGFloat = 60
+        static let flickSpeed: CGFloat = 400
+        /// How far up the lock's progress runs, and how far the label stays put before it follows the finger, at half its pace.
+        static let lockTravel: CGFloat = 105
+        static let labelDeadZone: CGFloat = 8
+        static let labelFollow: CGFloat = 0.5
+        static let labelFade: CGFloat = 10
+        /// The lock's arrow is gone a little past halfway up.
+        static let lockArrowFade: CGFloat = 1.6
+        /// The circle under the finger, and how small it gets as the finger slides toward cancel.
+        static let circle: CGFloat = 96
+        static let circleSlide: CGFloat = 300
+        static let circleSmallest: CGFloat = 0.4
+        /// The lock's pill above the mic: its size, and how far above the mic's centre it sits.
+        static let lockWidth: CGFloat = 40
+        static let lockHeight: CGFloat = 72
+        static let lockShrink: CGFloat = 32
+        static let lockLift: CGFloat = 122
     }
 
     /// Categories with no meaning beyond telling them apart (memory types).

@@ -99014,6 +99014,28 @@
         }
       }
     },
+    "Slide to cancel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slide to cancel"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スライドでキャンセル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滑动取消"
+          }
+        }
+      }
+    },
     "Slider" : {
       "localizations" : {
         "en" : {
@@ -117348,6 +117370,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Touch and hold to dictate. Slide left to cancel, or up to keep dictating." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touch and hold to dictate. Slide left to cancel, or up to keep dictating."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長押しで音声入力。左にスライドでキャンセル、上にスライドで入力を続けます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按住听写。左滑取消，上滑可松手继续听写。"
+          }
+        }
+      }
     },
     "Touch and hold an item in the Inbox to mute its repo, conversation, or sender." : {
       "localizations" : {
