@@ -471,3 +471,6 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   Providers with `ssh` still dial through that machine.
 - **Checking it**: `server/internal/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
   TLS server, for both `GET /models` and the session dial.
+
+- **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
+  After HTTP Hijack, detach already-buffered bytes from the returned reader before applying probe deadlines: that reader still uses `net/http`'s connection reader, which cancels the request on a read timeout even after hijacking. Probe the raw connection and preserve the detached bytes instead; otherwise a banner or an idle client closes the entire tunnel. Real CONNECT banner tests catch this even when direct connection-helper tests pass.
