@@ -36516,6 +36516,54 @@
       },
       "extractionState" : "manual"
     },
+    "Couldn't load voices" : {
+      "comment" : "The voice chat's Voice row: the list of voices could not be read",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't load voices"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "声の一覧を読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音色列表没读到"
+          }
+        }
+      }
+    },
+    "Couldn't load · Retry" : {
+      "comment" : "Voice chat's More menu, under Voice: the list of voices could not be read; tapping asks again. Keep it short: one line in a menu",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't load · Retry"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み込めません · 再試行"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表没读到 · 重试"
+          }
+        }
+      }
+    },
     "Couldn't load. Try again." : {
       "localizations" : {
         "en" : {
@@ -60093,6 +60141,30 @@
       },
       "extractionState" : "manual"
     },
+    "Loading voices…" : {
+      "comment" : "Voice chat: the list of voices is being read",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading voices…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "声を読み込み中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在读取音色…"
+          }
+        }
+      }
+    },
     "Loading… [File Viewer 86b6d0]" : {
       "localizations" : {
         "en" : {
@@ -72009,6 +72081,30 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "None for this model" : {
+      "comment" : "Voice chat: the voice model offers no voices to choose",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None for this model"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選べる声がありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个模型没有可选的音色"
+          }
+        }
+      }
     },
     "None of the computers with this launcher are online." : {
       "localizations" : {
@@ -125951,6 +126047,30 @@
       },
       "extractionState" : "manual"
     },
+    "Voice chats on this device speak with this voice. You can also change it during a chat, under ⋯." : {
+      "comment" : "Footer under the Voice row on the voice extension's settings page",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voice chats on this device speak with this voice. You can also change it during a chat, under ⋯."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスの音声チャットはこの声で話します。チャット中も「⋯」から変更できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台设备上的语音对话用这个音色。对话中也可以在「⋯」里换。"
+          }
+        }
+      }
+    },
     "Voice Ended" : {
       "localizations" : {
         "en" : {
@@ -126135,6 +126255,30 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Voice: %@" : {
+      "comment" : "Voice chat More menu: the Voice submenu, named with the current voice",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voice: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "声：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "音色：%1$@"
+          }
+        }
+      }
     },
     "Waiting [File Attach 26c8cf]" : {
       "localizations" : {
