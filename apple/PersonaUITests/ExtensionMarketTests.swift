@@ -101,22 +101,29 @@ final class ExtensionMarketTests: XCTestCase {
     }
 
     /// A market plugin's Update section (docs/extensions/extensions.md「自动升级」): its own switch, the newer version that waits for the
-    /// user with what it asks for more, opening the market's upgrade; the Markets page's switch for all of them. The mock's
+    /// user with what it asks for more, previewing the upgrade; the Markets page's switch for all of them. The mock's
     /// MOCK_PLUGIN_UPGRADE picks the state (needs_permission by default; the screenshots of the others are named by it).
     @MainActor func testAutoUpgrade() throws {
         let state = env["PERSONA_PLUGIN_UPGRADE"] ?? "needs_permission"
         let app = try launch(["-openExtension", "example-gateway"])
+        XCTAssertTrue(app.switches["plugin-enabled"].firstMatch.waitForExistence(timeout: 15), "no extension page:\n\(app.debugDescription)")
+        // Updates comes after the configuration and pages since the host-owned layout (#2509).
         let toggle = app.switches["plugin-auto-upgrade"].firstMatch
-        XCTAssertTrue(toggle.waitForExistence(timeout: 15), "no 自动升级 switch:\n\(app.debugDescription)")
+        scrollTo(toggle, in: app)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no 自动升级 switch:\n\(app.debugDescription)")
         XCTAssertEqual(toggle.value as? String, "1", "on by default")
         shot(app, "auto-upgrade-\(state)")
         if state == "renamed" { // MOCK_PLUGIN_UPGRADE=renamed (#2511)
-            // The row says the ID changes, and Review opens the market page under the new ID, not "no longer has it".
+            // The row says the ID changes, and Review previews the new ID's version for this extension.
+            let upgrade = app.buttons["plugin-upgrade"].firstMatch
+            scrollTo(upgrade, in: app)
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "example-gateway-next")).firstMatch.exists,
                           "the ID change is not said:\n\(app.debugDescription)")
-            app.buttons["plugin-upgrade"].firstMatch.tap()
-            XCTAssertTrue(app.buttons["market-upgrade"].waitForExistence(timeout: 10), "the renamed upgrade did not open:\n\(app.debugDescription)")
-            shot(app, "auto-upgrade-renamed-market")
+            upgrade.tap()
+            XCTAssertTrue(app.buttons["market-confirm"].waitForExistence(timeout: 10), "the renamed upgrade did not open:\n\(app.debugDescription)")
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "example-gateway-next")).firstMatch.exists,
+                          "the preview does not say the ID changes:\n\(app.debugDescription)")
+            shot(app, "auto-upgrade-renamed-preview")
             return
         }
         guard state == "needs_permission" else { return }
@@ -129,9 +136,9 @@ final class ExtensionMarketTests: XCTestCase {
         toggle.switches.firstMatch.tap()
         sleep(1)
         XCTAssertEqual(toggle.value as? String, "1", "not switched on again")
-        // Review opens the market's upgrade, where the permissions are agreed to.
+        // Review previews the upgrade in place (#2509), where the permissions are agreed to.
         app.buttons["plugin-upgrade"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["market-upgrade"].waitForExistence(timeout: 10), "the market's upgrade did not open:\n\(app.debugDescription)")
+        XCTAssertTrue(app.buttons["market-confirm"].waitForExistence(timeout: 10), "the upgrade's preview did not open:\n\(app.debugDescription)")
         shot(app, "auto-upgrade-confirm")
     }
 

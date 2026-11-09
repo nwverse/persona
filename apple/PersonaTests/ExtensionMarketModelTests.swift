@@ -178,15 +178,13 @@ struct ExtensionMarketModelTests {
         #expect(upgraded == .object(["preview_id": .string("pv2"), "permissions_digest": .string("d2")]))
     }
 
-    /// A rename (#2511): the extension's upgrade row opens the market page under the new ID, and a page opened under
-    /// the old one (a link from before the rename) still finds it and upgrades the installed extension.
+    /// A rename (#2511): the upgrade row says the ID changes, and a market page opened under the old ID (a link from
+    /// before the rename) still finds the extension and upgrades the installed one.
     @Test func aRenamedExtensionIsFoundUnderEitherID() async throws {
         let upgrade = try JSON.decoder.decode(ExtensionUpgrade.self, from: Data(
             #"{"id":"old-gateway","market":"m1","from":"1.0.0","to":"1.1.0","state":"needs_permission","rename_from":"old-gateway","rename_to":"example-gateway","detail":"ID 从 old-gateway 改为 example-gateway"}"#.utf8))
-        #expect(upgrade.id == "old-gateway" && upgrade.marketID == "example-gateway")
+        #expect(upgrade.id == "old-gateway" && upgrade.renameTo == "example-gateway")
         #expect(ExtensionText.upgradeDetail(upgrade) == "ID 从 old-gateway 改为 example-gateway", "the hub's words for the ID change, not a permissions change")
-        let plain = try JSON.decoder.decode(ExtensionUpgrade.self, from: Data(#"{"id":"p","market":"m1","from":"1","to":"2","state":"off"}"#.utf8))
-        #expect(plain.marketID == "p")
 
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins/-/catalog", json: Self.catalog(#"""

@@ -12344,7 +12344,9 @@ def _ext_make_preview(c):
         added = [x for x in c["permissions"] if x not in cur.get("permissions", [])]
         pv.update({"upgrade": True, "from": cur.get("version"), "more_permissions": bool(added)})
         if added: pv["added_permissions"] = added
-        if renamed: pv["rename_from"] = renamed["id"]
+        if renamed:  # the hub's notice leads the warnings (extension.Preview.In)
+            pv["rename_from"] = renamed["id"]
+            pv["warnings"] = ["此次更新会将扩展 ID 从 %s 更改为 %s，需要明确确认。设置和数据仍属于同一个安装。" % (renamed["id"], c["id"])]  # i18n-ignore: the hub's words
     _PREVIEWS[pid] = c
     _PREVIEW_BODIES[pid] = pv
     return pv
@@ -12741,7 +12743,9 @@ def markets_route(handler, p, body):
                  and (not words or words in "\n".join([c["id"], c["name"], c["description"], c.get("publisher", "")] + c.get("tags", [])).lower())]
         handler.send_json({"markets": list(MARKETS.values()), "plugins": items, "platform": "linux-amd64"}); return True
     if p == "/api/v1/plugins/-/catalog/preview" and method == "POST":
-        c = next((c for c in CATALOG if c["market"] == req.get("market") and c["id"] == req.get("plugin")), None)
+        same = [c for c in CATALOG if c["market"] == req.get("market")]
+        # An installed extension's old ID previews its successor, as the hub does (#2511).
+        c = next((c for c in same if c["id"] == req.get("plugin")), None) or next((c for c in same if c.get("replaces") == req.get("plugin")), None)
         if not c or c.get("problem"):
             handler.send_json({"error": (c or {}).get("problem") or "这个市场里没有插件 %s" % req.get("plugin"), "code": "invalid_plugin"}, 400); return True
         pv = _ext_make_preview(c)

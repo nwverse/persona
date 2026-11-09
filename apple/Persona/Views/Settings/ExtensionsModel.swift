@@ -42,14 +42,36 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     /// Whose it is (docs/protocol/protocol.md "Per-manager routing"): the hub stamps every item of its merged list, and
     /// every manager lists its own built-ins, so one id can be there once per manager. nil: a hub from before managers.
     var manager: String?
+    var attached: ExtensionAttached?
+    var sandbox: ExtensionSandbox?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, upgrade, nodes, auth, tools, manager
+        case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, upgrade, nodes, auth, tools, manager, attached, sandbox
         case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 
     /// Its identity in a merged list: the id and the manager (the same built-in is listed under each).
     var listKey: String { manager.map { "\($0)/\(id)" } ?? id }
+}
+
+/// An independently running extension connected to the manager's sockets.
+nonisolated struct ExtensionAttached: Codable, Hashable, Sendable {
+    var online: Bool
+    var since: Date?
+    var error: String?
+    var version: String?
+}
+
+/// The manager's sandbox state; egress preserves its counters without assuming their schema.
+nonisolated struct ExtensionSandbox: Codable, Hashable, Sendable {
+    var enabled: Bool
+    var `default`: Bool
+    var chosen: Bool
+    var active: Bool
+    var why: String?
+    var detail: String?
+    var trusted: Bool?
+    var egress: [String: JSONValue]
 }
 
 /// An extension's program on one machine (docs/extensions/extensions.md「在电脑上运行的程序」).
@@ -103,9 +125,6 @@ nonisolated struct ExtensionUpgrade: Codable, Hashable, Sendable, Identifiable {
     var skippedBy: String?
     /// The new version's ID when it changes the extension's ID (`id` stays the installed one).
     var renameTo: String?
-
-    /// The ID its market lists the new version under: the market page to open for it (#2511).
-    var marketID: String { renameTo ?? id }
 
     enum CodingKeys: String, CodingKey {
         case id, name, market, from, to, state, detail
@@ -426,19 +445,23 @@ enum ExtensionText {
     static func saveFooter(_ fields: [ExtensionField]) -> String? {
         let all = fields.flatMap { $0.type == "object" ? ($0.fields ?? []) : [$0] }
         let now = all.filter { $0.items?.format == "machine" }.map { String(localized: "「\($0.label)」", comment: "A field's name in quotes") }
-        if now.isEmpty { return String(localized: "When you're done, tap Save at the top right; the extension restarts after saving. Empty fields use the extension's defaults.") }
+        if now.isEmpty { return String(localized: "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults.") }
         if now.count == all.count { return nil }
         let names = list(now)
-        return String(localized: "Switches in \(names) take effect right away. For the rest, tap Save at the top right when you're done; the extension restarts after saving. Empty fields use the extension's defaults.")
+        return String(localized: "Switches in \(names) take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults.")
     }
 
     /// The Update section's line for a newer version: what happens to it (docs/extensions/extensions.md「自动升级」).
     static func upgradeDetail(_ u: ExtensionUpgrade) -> String {
         let why = u.detail.flatMap { $0.isEmpty ? nil : $0 }
         switch u.state {
-        // A rename is confirmed for the ID change, which the hub says (#2511).
-        case "needs_permission" where u.renameTo != nil: return why ?? morePermissions(u.addedPermissions ?? [])
-        case "needs_permission": return morePermissions(u.addedPermissions ?? [])
+        case "needs_permission":
+            // A rename is confirmed for the ID change, not for permissions: the hub's words, or ours for a version
+            // Check for Updates found (#2511).
+            if let renameTo = u.renameTo {
+                return why ?? String(localized: "Changes the extension ID from \(u.id) to \(renameTo). Needs your confirmation; its settings and data stay.")
+            }
+            return morePermissions(u.addedPermissions ?? [])
         case "waiting_idle": return String(localized: "Updates automatically when the extension is idle")
         case "available": return String(localized: "Updates automatically later")
         case "off": return String(localized: "Auto-update is off")
@@ -451,8 +474,8 @@ enum ExtensionText {
         }
     }
 
-    /// The auto-upgrade switch as shown: off while it is paused (the extension switched off), else the extension's own.
-    static func autoUpgradeShown(_ p: HubExtension) -> Bool { p.autoUpgradePaused == nil && (p.autoUpgrade ?? true) }
+    /// The saved preference remains visible while upgrades are paused.
+    static func autoUpgradeShown(_ p: HubExtension) -> Bool { p.autoUpgrade ?? true }
 
     /// Whether the line asks something of the user (its row opens the upgrade in the market).
     static func upgradeAction(_ u: ExtensionUpgrade) -> String? {
@@ -576,6 +599,7 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
     private(set) var error: String?
     private(set) var changingContribution: String?
     private(set) var changingEnabled = false
+    private(set) var changingAutoUpgrade = false
     var disableConfirmation: ExtensionDisableConfirmation?
     /// The hub's word on a field it refused, by its dotted path ("proxy.host").
     private(set) var fieldErrors: [String: String] = [:]
@@ -610,7 +634,7 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         }
     }
 
-    var canSave: Bool { dirty && numberProblems.isEmpty && !saving && !changingEnabled && changingContribution == nil }
+    var canSave: Bool { dirty && numberProblems.isEmpty && !saving && !changingEnabled && !changingAutoUpgrade && changingContribution == nil }
 
     func load() async {
         guard !loading else { return }
@@ -674,6 +698,10 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
     }
 
     func setAutoUpgrade(_ on: Bool) async {
+        guard !changingAutoUpgrade, !loading, !saving, !changingEnabled, changingContribution == nil,
+              let detail, ExtensionSettingsPolicy(detail: detail).canAutoUpgrade else { return }
+        changingAutoUpgrade = true
+        defer { changingAutoUpgrade = false }
         await run(preservingDraft: true) { api in try await api.setExtension(self.id, autoUpgrade: on) }
     }
 
@@ -733,10 +761,13 @@ nonisolated enum ExtensionSecretSave: Equatable, Sendable {
         do {
             guard let api else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
             let d = try await call(api)
-            let editing = preservingDraft ? draftKey.flatMap { deps.drafts.values[$0] } : nil
+            let editing = preservingDraft && detail != nil ? draft : nil
+            let numbers = preservingDraft && detail != nil ? numberText : nil
+            let kept = editing ?? (preservingDraft ? draftKey.flatMap { deps.drafts.values[$0]?.config } : nil)
+            let keptNumbers = numbers ?? (preservingDraft ? draftKey.flatMap { deps.drafts.values[$0]?.numbers } : nil)
             detail = d
-            draft = editing?.config ?? d.config
-            numberText = editing?.numbers ?? [:]
+            draft = kept ?? d.config
+            numberText = keptNumbers ?? [:]
             error = nil
             return true
         } catch let e as APIError where e.code == "invalid_config" {
