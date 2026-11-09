@@ -3145,6 +3145,15 @@ if MOCK_TASKS:
                           "done_when": ["List this week's merged changes"], "reviews": [], "updated_at": ago(minutes=20)})
         next(i for i in TASK_FEED[ASK1] if i["kind"] == "today")["body"]["pending_review"] = [
             {"id": "todo_task_release", "title": "整理发布说明"}]
+    # MOCK_TASKS_AUTO_REVIEW=1 (with MOCK_TASKS_PENDING_REVIEW=1): the independent reviewer looked at the release notes
+    # task's change first (#2173): nothing blocking, one finding, its report under the criteria.
+    if os.environ.get("MOCK_TASKS_AUTO_REVIEW") == "1":
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_release" and _t.get("supervision"):
+                _t["supervision"]["auto_review"] = {
+                    "id": "rv_mock", "state": "clean", "round": 0, "count": 1, "blocking": 0,
+                    "findings": "1. P2 docs/release-notes.md:12 the fixes section lists #41 twice: drop the second line",
+                    "started_at": ago(minutes=24), "ended_at": ago(minutes=20)}
     # MOCK_TASKS_NOTICE=1: the line the hub writes when a routine runs again once the computer and model are ready
     # (#4253, kind notice, drawn by the clients since #4305), last in the conversation.
     if os.environ.get("MOCK_TASKS_NOTICE") == "1":

@@ -77,6 +77,23 @@ type AutoReview struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// Why a run failed or was cancelled, and what the supervisor hears when its rework did not reach the agent: model
+// input (the supervisor's message, prompts/assistant/supervise.md), Chinese like it, and not shown to people as is.
+const (
+	whyNoDiff        = "读不到这次的改动："                 // i18n-ignore: the supervisor's prompt
+	whyNoChange      = "没有可评审的代码改动"                // i18n-ignore: the supervisor's prompt
+	whyNoCopy        = "没能为评审建一份改动的副本："            // i18n-ignore: the supervisor's prompt
+	whyNoReviewerErr = "评审员没开起来："                  // i18n-ignore: the supervisor's prompt
+	whyNoMarker      = "评审员没按格式给出结论"               // i18n-ignore: the supervisor's prompt
+	whyDecided       = "督办已经给出了结论"                 // i18n-ignore: the supervisor's prompt
+	whyReworkUnsent  = "独立评审发现了阻断问题，但返工没送到 Agent：" // i18n-ignore: the supervisor's prompt
+	whySilent        = "评审员什么都没说"                  // i18n-ignore: the supervisor's prompt
+	whyAgentWorks    = "Agent 又开始工作了"              // i18n-ignore: the supervisor's prompt
+	whyTodoDone      = "任务已经结束"                    // i18n-ignore: the supervisor's prompt
+	whyTimeout       = "评审超时"                      // i18n-ignore: the supervisor's prompt
+	whyNoReviewer    = "评审员没开起来"                   // i18n-ignore: the supervisor's prompt
+)
+
 // Limits of a run.
 var (
 	// autoReviewStartWait: a run with no reviewer after this long never got one (the hub restarted while starting it).
@@ -165,11 +182,11 @@ func (s *Service) runAutoReview(ctx context.Context, todoID string, run AutoRevi
 	}
 	rev, scope, err := s.reviewChange(ctx, run.MachineID, run.Cwd)
 	if err != nil {
-		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: "读不到这次的改动：" + err.Error()})
+		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: whyNoDiff + err.Error()})
 		return
 	}
 	if len(rev.Files) == 0 && !rev.Truncated {
-		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: "没有可评审的代码改动"})
+		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: whyNoChange})
 		return
 	}
 	diff, omitted := reviewDiff(*rev)
@@ -179,7 +196,7 @@ func (s *Service) runAutoReview(ctx context.Context, todoID string, run AutoRevi
 	err = s.call(qctx, run.MachineID, "worktree.snapshot", map[string]any{"cwd": run.Cwd, "name_hint": t.Title}, &snap)
 	cancel()
 	if err != nil || snap.Path == "" {
-		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: "没能为评审建一份改动的副本：" + errText(err)})
+		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: whyNoCopy + errText(err)})
 		return
 	}
 	if !s.updateAutoReview(ctx, todoID, run.ID, func(a *AutoReview) { a.Worktree = snap.Path }) {
@@ -211,7 +228,7 @@ func (s *Service) runAutoReview(ctx context.Context, todoID string, run AutoRevi
 		err = errors.New(cmp.Or(res.Session.StartError, "no session"))
 	}
 	if err != nil {
-		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: "评审员没开起来：" + err.Error()})
+		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: whyNoReviewerErr + err.Error()})
 		return
 	}
 	sid := res.Session.SessionID
@@ -458,11 +475,11 @@ func (s *Service) endAutoReview(ctx context.Context, todoID, id string, e review
 				a.State = autoBlocking
 			}
 			if !marked {
-				a.State, a.Error = autoFailed, "评审员没按格式给出结论"
+				a.State, a.Error = autoFailed, whyNoMarker
 			}
 		}
 		if st := v.state(cur); a.State != autoCancelled && (st != "" && st != reviewRework || v.Round != a.Round || cur.DoneAt != nil) {
-			a.State, a.Error = autoCancelled, cmp.Or(a.Error, "督办已经给出了结论") // the supervisor decided meanwhile
+			a.State, a.Error = autoCancelled, cmp.Or(a.Error, whyDecided) // the supervisor decided meanwhile
 		}
 		switch {
 		case a.State == autoCancelled:
@@ -500,7 +517,7 @@ func (s *Service) endAutoReview(ctx context.Context, todoID, id string, e review
 			// The agent did not get it: the supervisor hears the task stopped short, with why.
 			s.logf("task %s: review rework: %v", todoID, err)
 			s.signal(superviseSignal{Todo: todoID, Kind: sigIdle, Key: "review@" + id,
-				Detail: "独立评审发现了阻断问题，但返工没送到 Agent：" + err.Error()})
+				Detail: whyReworkUnsent + err.Error()})
 		}
 	case pending:
 		s.logf("task %s: waits for review (reviewed: %s)", todoID, ended.State)
@@ -518,7 +535,7 @@ func (s *Service) autoReviewTurnEnded(ctx context.Context, machine, sid string) 
 	}
 	reply := s.reviewerReply(ctx, machine, sid)
 	if strings.TrimSpace(reply) == "" {
-		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: "评审员什么都没说"})
+		s.endAutoReview(ctx, todoID, run.ID, reviewEnd{failed: whySilent})
 		return
 	}
 	s.endAutoReview(ctx, todoID, run.ID, reviewEnd{reply: reply})
@@ -563,7 +580,7 @@ func (s *Service) reviewerReply(ctx context.Context, machine, sid string) string
 // autoReviewWorking: one of supervised task t's agents started a turn: a review running on its last work is moot.
 func (s *Service) autoReviewWorking(ctx context.Context, t Todo) {
 	if v := t.Supervision; v != nil && v.AutoReview != nil && v.AutoReview.State == autoRunning {
-		s.endAutoReview(ctx, t.ID, v.AutoReview.ID, reviewEnd{cancelled: "Agent 又开始工作了"})
+		s.endAutoReview(ctx, t.ID, v.AutoReview.ID, reviewEnd{cancelled: whyAgentWorks})
 	}
 }
 
@@ -588,11 +605,11 @@ func (s *Service) autoReviewTick(ctx context.Context, now time.Time) {
 		}
 		switch {
 		case t.DoneAt != nil:
-			s.endAutoReview(ctx, t.ID, a.ID, reviewEnd{cancelled: "任务已经结束"})
+			s.endAutoReview(ctx, t.ID, a.ID, reviewEnd{cancelled: whyTodoDone})
 		case now.Sub(a.StartedAt) > cfg.Timeout():
-			s.endAutoReview(ctx, t.ID, a.ID, reviewEnd{failed: "评审超时"})
+			s.endAutoReview(ctx, t.ID, a.ID, reviewEnd{failed: whyTimeout})
 		case a.SessionID == "" && now.Sub(a.StartedAt) > autoReviewStartWait:
-			s.endAutoReview(ctx, t.ID, a.ID, reviewEnd{failed: "评审员没开起来"})
+			s.endAutoReview(ctx, t.ID, a.ID, reviewEnd{failed: whyNoReviewer})
 		case a.SessionID != "":
 			c, ok := s.session(ctx, a.MachineID, a.SessionID)
 			if !ok || c.Starting || c.Status == proto.StatusWorking {
