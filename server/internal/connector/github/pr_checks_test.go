@@ -106,3 +106,22 @@ func TestPRChecksHonorsSecondaryRateLimit(t *testing.T) {
 		t.Fatalf("sent %d requests while rate limited", requests)
 	}
 }
+
+func TestPRChecksRejectsOver1000Runs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/example/repo/pulls/12":
+			fmt.Fprint(w, `{"head":{"sha":"abc"}}`)
+		case "/repos/example/repo/commits/abc/check-runs":
+			fmt.Fprint(w, `{"total_count":1001,"check_runs":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	m := &machine{tokens: []string{oldToken}}
+	c := New(Config{Auth: AuthConfig{FromMachine: "box"}, APIRoot: server.URL}, "box", m.fetch)
+	if _, err := c.PRChecks(context.Background(), "example/repo", 12); err == nil {
+		t.Fatal("accepted an incomplete capped check set")
+	}
+}

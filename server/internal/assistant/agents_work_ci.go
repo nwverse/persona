@@ -24,8 +24,8 @@ var ciPRNumber = lazyre.New(`(?i)\b(?:pr|pull request)\s*#?([1-9][0-9]*)\b`)
 var ciBareNumber = lazyre.New(`(?:^|[^A-Za-z0-9_/#])#([1-9][0-9]*)\b`)
 var ciArtifactNumber = lazyre.New(`^#?[1-9][0-9]*$`)
 var ciArtifactRepo = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$`)
-var ciWaitSignal = lazyre.New(`(?i)\b(ci|checks?|pipeline|workflows?|builds?|tests?)\b|持续集成|构建|测试|检查|ビルド|テスト|チェック`) // i18n-ignore: match model output
-var ciOtherWait = lazyre.New(`(?i)\b(review|reviews|approval|deployment|deploy)\b|审核|审查|评审|部署|上线|レビュー|承認|デプロイ`)     // i18n-ignore: match model output
+var ciWaitSignal = lazyre.New(`(?i)\b(ci|checks?|pipeline|workflows?|builds?|tests?)\b|持续集成|构建|测试|检查|ビルド|テスト|チェック`)                 // i18n-ignore: match model output
+var ciOtherWait = lazyre.New(`(?i)\b(review|reviews|approval|deployment|deploy|feedback)\b|审核|审查|评审|部署|上线|反馈|レビュー|承認|デプロイ|フィードバック`) // i18n-ignore: match model output
 
 // startCIWatch records only an unambiguous PR. A number without a repository
 // can be checked only against the session directory's current branch.
@@ -35,7 +35,7 @@ func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply 
 		return
 	}
 	wait := w.Wait + " " + w.Line
-	if ciOtherWait.MatchString(wait) || !ciWaitSignal.MatchString(wait+" "+c.LastText+" "+reply) {
+	if ciOtherWait.MatchString(wait) || !ciWaitSignal.MatchString(wait) {
 		return
 	}
 	texts := []string{w.Wait, w.Line, c.LastText, ask, reply}
@@ -104,6 +104,7 @@ func (s *Service) startCIPoll(ctx context.Context, key [2]string, now time.Time)
 
 type ciResult struct {
 	pending     bool
+	sourceError bool // no source produced a usable result
 	failures    []string
 	count       int
 	fingerprint string
@@ -149,7 +150,7 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 	}
 	if c.Cwd == "" {
 		if retryable {
-			return ciResult{pending: true, count: 1}, time.Time{}, true
+			return ciResult{sourceError: true}, time.Time{}, true
 		}
 		return ciResult{}, time.Time{}, false
 	}
@@ -171,20 +172,20 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 		unavailable := errors.As(err, &re) && (re.Code == proto.CodeNoGh || re.Code == proto.CodeNotSignedIn || re.Code == "method_not_found")
 		unavailable = unavailable || strings.Contains(text, "unknown method") || strings.Contains(text, "method_not_found") || strings.Contains(text, "unknown json field")
 		if retryable || !unavailable {
-			return ciResult{pending: true, count: 1}, time.Time{}, true
+			return ciResult{sourceError: true}, time.Time{}, true
 		}
 		return ciResult{}, time.Time{}, false
 	}
 	if result.PR == nil || result.PR.Number != ci.Number {
 		if retryable {
-			return ciResult{pending: true, count: 1}, time.Time{}, true
+			return ciResult{sourceError: true}, time.Time{}, true
 		}
 		return ciResult{}, time.Time{}, false
 	}
 	match := ciPRURL.FindStringSubmatch(result.PR.URL)
 	if len(match) != 3 || ci.Repo != "" && !strings.EqualFold(ci.Repo, match[1]) {
 		if retryable {
-			return ciResult{pending: true, count: 1}, time.Time{}, true
+			return ciResult{sourceError: true}, time.Time{}, true
 		}
 		return ciResult{}, time.Time{}, false
 	}
@@ -195,7 +196,7 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 	}
 	if !result.PR.ChecksComplete || result.PR.HeadOID == "" || len(result.PR.Checks) >= 100 {
 		if retryable {
-			return ciResult{pending: true, count: 1}, time.Time{}, true
+			return ciResult{sourceError: true}, time.Time{}, true
 		}
 		return ciResult{}, time.Time{}, false
 	}
@@ -266,6 +267,27 @@ func (s *Service) pollCI(ctx context.Context, e db.SessionWork, c proto.Session,
 		s.replaceCI(e, current)
 		return "", true
 	}
+	// A provider error is not a pending check. A permanently unusable source
+	// must not hold the agent forever; actual checks and rate limits are uncapped.
+	if result.sourceError {
+		ci.Observed, ci.ObservedAt = "", time.Time{}
+		ci.SourceErrors = min(max(ci.SourceErrors, 0), 3) + 1
+		if ci.SourceErrors >= 3 {
+			current.Work.CI = nil
+			at := ci.FallbackAt
+			if at.Before(now) {
+				at = now.UTC()
+			}
+			current.WakeAt, current.Work.WakeAt = &at, &at
+		} else {
+			current.Work.CI = &ci
+			at := now.Add(time.Minute * time.Duration(1<<(ci.SourceErrors-1))).UTC()
+			current.WakeAt, current.Work.WakeAt = &at, &at
+		}
+		s.replaceCI(e, current)
+		return "", true
+	}
+	ci.SourceErrors = 0
 	// An empty set does not establish that the PR has a CI source. Give checks
 	// time to register, then use the ordinary scheduled wake.
 	if reset.IsZero() && result.count == 0 && !now.Before(ci.FallbackAt) {

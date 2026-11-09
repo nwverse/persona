@@ -60,14 +60,15 @@ type WorkState struct {
 
 // WorkCI records the target and fallback across manager restarts.
 type WorkCI struct {
-	Repo       string    `json:"repo,omitempty"`
-	Number     int       `json:"number"`
-	FallbackAt time.Time `json:"fallback_at"`
-	Polls      int       `json:"polls,omitempty"`
-	Observed   string    `json:"observed,omitempty"`
-	ObservedAt time.Time `json:"observed_at,omitzero"`
-	TodoProof  string    `json:"todo_proof,omitempty"` // closed todo versions checked for this turn
-	Message    string    `json:"message,omitempty"`
+	Repo         string    `json:"repo,omitempty"`
+	Number       int       `json:"number"`
+	FallbackAt   time.Time `json:"fallback_at"`
+	Polls        int       `json:"polls,omitempty"`
+	SourceErrors int       `json:"source_errors,omitempty"`
+	Observed     string    `json:"observed,omitempty"`
+	ObservedAt   time.Time `json:"observed_at,omitzero"`
+	TodoProof    string    `json:"todo_proof,omitempty"` // closed todo versions checked for this turn
+	Message      string    `json:"message,omitempty"`
 }
 
 // WorkAgent names another agent (WorkState.Agent).

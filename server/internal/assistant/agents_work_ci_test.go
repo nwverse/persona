@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/github"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestCIWatchWaitsForEveryCheckAndSendsOnce(t *testing.T) {
@@ -1302,6 +1303,157 @@ func TestCIWatchNewTurnProofSurvivesTwoRestarts(t *testing.T) {
 			}
 			first.waitWorkEvents()
 			second.waitWorkEvents()
+		})
+	}
+}
+
+func TestCIWatchRequiresCIWaitIntent(t *testing.T) {
+	for _, tc := range []struct {
+		name, wait, line, reply string
+		want                    bool
+	}{
+		{"feedback with incidental tests", "customer feedback", "Waiting for feedback", "Tests and CI passed for PR #12", false},
+		{"other wait with incidental CI", "waiting for a customer", "Awaiting a response", "CI checks passed on PR #12", false},
+		{"user testing feedback", "user test feedback", "Waiting for feedback", "PR #12 CI passed", false},
+		{"actual CI checks", "CI checks", "Waiting for CI", "PR #12 is open", true},
+		{"actual build", "build", "Waiting for build", "PR #12 is open", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := stopped("ci", tc.reply)
+			at := turnEnd.Add(10 * time.Minute)
+			e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &at, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: tc.wait, Line: tc.line, WakeAt: &at}}
+			startCIWatch(c, &e, turnEnd, "", tc.reply)
+			if (e.Work.CI != nil) != tc.want {
+				t.Fatalf("watch %+v, want %v", e.Work.CI, tc.want)
+			}
+		})
+	}
+}
+
+func TestCIWatchUnusableSourcesFallBack(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		connectorErr, nodeErr error
+	}{
+		{"incomplete connector and old node", errors.New("incomplete check runs"), errors.New("unknown method git.pr")},
+		{"more than 1000 checks", errors.New("incomplete check runs"), errors.New("unknown method git.pr")},
+		{"missing directory", nil, &rpc.Error{Code: "git_detached", Message: "HEAD is detached: no branch"}},
+		{"not a repository", nil, &rpc.Error{Code: "git_detached", Message: "HEAD is detached: no branch"}},
+		{"detached head", nil, &rpc.Error{Code: "git_detached", Message: "HEAD is detached: no branch"}},
+		{"not GitHub", nil, &rpc.Error{Code: "git_not_github", Message: "none of the git remotes are GitHub hosts"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, f := workService(t)
+			c := stopped("ci", "CI https://github.com/example/repo/pull/12")
+			f.sessions["box"] = []proto.Session{c}
+			fallback := turnEnd.Add(10 * time.Minute)
+			e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &fallback, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &fallback}}
+			startCIWatch(c, &e, turnEnd, "", "")
+			s.putWork(ctx, e)
+			if tc.connectorErr != nil {
+				s.ext = fakeCIExtensions{call: func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error) {
+					return github.PRCheckSnapshot{}, time.Time{}, true, tc.connectorErr
+				}}
+			}
+			f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) { return nil, tc.nodeErr })
+			for attempt := 1; attempt <= 3; attempt++ {
+				before := entryOf(t, s, "ci")
+				if before.WakeAt == nil {
+					t.Fatal("source retry was not scheduled")
+				}
+				now := *before.WakeAt
+				s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, now)
+				got := entryOf(t, s, "ci")
+				if attempt < 3 {
+					if got.Work.CI == nil || got.Work.CI.SourceErrors != attempt || got.WakeAt == nil || !got.WakeAt.After(now) {
+						t.Fatalf("attempt %d state %+v", attempt, got)
+					}
+					if attempt == 1 {
+						encoded, err := json.Marshal(got.Work)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var restored proto.WorkState
+						if err := json.Unmarshal(encoded, &restored); err != nil {
+							t.Fatal(err)
+						}
+						got.Work = restored
+						s.putWork(ctx, got)
+					}
+				} else if got.Work.CI != nil || got.WakeAt == nil || !got.WakeAt.Equal(fallback) {
+					t.Fatalf("did not fall back at original time: %+v", got)
+				}
+			}
+		})
+	}
+}
+
+func TestCIWatchPendingAndRateLimitsDoNotExhaustSourceRetries(t *testing.T) {
+	ctx := context.Background()
+	s, f := workService(t)
+	c := stopped("ci", "CI https://github.com/example/repo/pull/12")
+	f.sessions["box"] = []proto.Session{c}
+	fallback := turnEnd.Add(10 * time.Minute)
+	e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &fallback, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &fallback}}
+	startCIWatch(c, &e, turnEnd, "", "")
+	e.Work.CI.SourceErrors = 2
+	s.putWork(ctx, e)
+	limited := true
+	s.ext = fakeCIExtensions{call: func(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error) {
+		if limited {
+			return github.PRCheckSnapshot{}, turnEnd.Add(20 * time.Minute), true, nil
+		}
+		return github.PRCheckSnapshot{Count: 1, Pending: true, Fingerprint: "pending"}, time.Time{}, true, nil
+	}}
+	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
+	got := entryOf(t, s, "ci")
+	if got.Work.CI == nil || got.Work.CI.SourceErrors != 0 || got.WakeAt.Before(turnEnd.Add(20*time.Minute)) {
+		t.Fatalf("rate limit lost watch: %+v", got)
+	}
+	limited = false
+	for i := 0; i < 5; i++ {
+		got = entryOf(t, s, "ci")
+		if got.WakeAt == nil {
+			t.Fatal("pending watch has no next poll")
+		}
+		s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, *got.WakeAt)
+	}
+	got = entryOf(t, s, "ci")
+	if got.Work.CI == nil || got.Work.CI.SourceErrors != 0 {
+		t.Fatalf("pending checks lost watch: %+v", got)
+	}
+}
+
+func TestCIWatchCompletedWithSkippedUsesAccurateWording(t *testing.T) {
+	for _, tc := range []struct{ locale, want string }{{"en", "CI finished: no checks failed."}, {"zh-Hans", "CI 已完成：没有检查失败。"}, {"ja", "CI が完了しました。失敗したチェックはありません。"}} {
+		t.Run(tc.locale, func(t *testing.T) {
+			ctx := context.Background()
+			s, f := workService(t)
+			f.hello.Locale = tc.locale
+			c := stopped("ci", "PR #12 CI")
+			f.sessions["box"] = []proto.Session{c}
+			fallback := turnEnd.Add(10 * time.Minute)
+			e := db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd, WakeAt: &fallback, Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitExternal, Wait: "CI", WakeAt: &fallback}}
+			startCIWatch(c, &e, turnEnd, "", "")
+			s.putWork(ctx, e)
+			f.answerNode("git.pr", func(_ string, _ json.RawMessage) (any, error) {
+				return map[string]any{"pr": map[string]any{"number": 12, "url": "https://github.com/example/repo/pull/12", "head_oid": "0123456789abcdef0123456789abcdef01234567", "checks_complete": true, "checks": []map[string]string{{"name": "test", "state": "pass"}, {"name": "optional", "state": "skipped"}}}}, nil
+			})
+			text := ""
+			f.answerNode(DeviceSessionSendOnce, func(_ string, raw json.RawMessage) (any, error) {
+				var a struct {
+					Text string `json:"text"`
+				}
+				_ = json.Unmarshal(raw, &a)
+				text = a.Text
+				return map[string]any{}, nil
+			})
+			s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(time.Minute))
+			s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(3*time.Minute))
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("wake %q does not include %q", text, tc.want)
+			}
 		})
 	}
 }
