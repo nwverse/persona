@@ -22,6 +22,9 @@ func (s *Service) retireTodoWork(keys ...[2]string) {
 	for _, k := range keys {
 		s.work.mu.Lock()
 		s.work.init()
+		if s.work.triaging[k] {
+			s.work.generation[k]++ // a late transcript result must not register another wake
+		}
 		e, ok := s.work.entries[k]
 		if !ok || (e.WakeAt == nil && e.InteractionID == "") {
 			s.work.mu.Unlock()
@@ -127,6 +130,11 @@ func (s *Service) workTurnEnded(ctx context.Context, machine, sid string) {
 	}
 	s.wakeWaitersOn(machine, sid)
 	time.Sleep(settleOf(s.triageCfg(ctx)))
+	s.workTurnSettled(ctx, machine, sid)
+}
+
+// workTurnSettled checks the turn after the settle window.
+func (s *Service) workTurnSettled(ctx context.Context, machine, sid string) {
 	v := s.newWorkView(ctx)
 	c, ok := v.session(machine, sid)
 	if !ok || c.Status == proto.StatusWorking {

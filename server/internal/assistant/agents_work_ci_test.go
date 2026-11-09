@@ -749,20 +749,14 @@ func TestCIWatchViewedDuringSettleDoesNotStart(t *testing.T) {
 	c := stopped("ci", "Waiting for PR #12 CI")
 	f.sessions["box"] = []proto.Session{c}
 	f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
-	f.hello.Agents.Triage.SettleSeconds = 1
-	seen := false
-	h := &ciSwapHub{fakeHub: f}
-	h.onHello = func() {
-		if !seen {
-			seen = true
-			s.workSeen("box", "ci", turnEnd.Add(time.Second))
-		}
+	if !s.loadWork(ctx) {
+		t.Fatal("could not load work")
 	}
-	s.hub = h
-	s.workTurnEnded(ctx, "box", "ci")
-	if !seen {
-		t.Fatal("did not deliver seen during settle")
-	}
+	// Turn ended; the user viewed it while settle was pending, before any
+	// work entry or triage existed. Run the post-settle step directly.
+	s.wakeWaitersOn("box", "ci")
+	s.workSeen("box", "ci", turnEnd.Add(time.Second))
+	s.workTurnSettled(ctx, "box", "ci")
 	got := entryOf(t, s, "ci")
 	if got.Work.CI != nil || got.WakeAt != nil {
 		t.Fatalf("viewed turn registered a watch: %+v", got)
@@ -834,5 +828,57 @@ func TestCIEmptyThenChecksAppear(t *testing.T) {
 	s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "ci"}, turnEnd.Add(13*time.Minute))
 	if sends != 1 {
 		t.Fatalf("got %d wakes", sends)
+	}
+}
+
+func TestCIWatchRetiredWhileTranscriptReadIsBlocked(t *testing.T) {
+	for _, oldEntry := range []bool{false, true} {
+		name := "no entry"
+		if oldEntry {
+			name = "old entry without wake"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s, f := workService(t)
+			c := stopped("ci", "Waiting for PR #12 CI")
+			f.sessions["box"] = []proto.Session{c}
+			f.triage = `{"phase":"blocked","on":"external","line":"CI","wait":{"what":"PR #12 CI","check_minutes":10}}`
+			if oldEntry {
+				s.putWork(ctx, db.SessionWork{MachineID: "box", SessionID: "ci", TurnAt: turnEnd.Add(-time.Hour), Work: proto.WorkState{Phase: proto.WorkDone}})
+			}
+			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			calls := 0
+			h := &ciSwapHub{fakeHub: f}
+			h.onDevice = func(p DeviceCall) {
+				if p.Method == DeviceSessionItems {
+					calls++
+					if calls == 2 {
+						close(entered)
+						select {
+						case <-release:
+						case <-ctx.Done():
+						}
+					}
+				}
+			}
+			s.hub = h
+			go func() { defer close(done); s.triageTurn(ctx, s.newWorkView(ctx), "box", c) }()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("transcript read did not block")
+			}
+			s.retireTodoWork([2]string{"box", "ci"})
+			close(release)
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("triage did not finish")
+			}
+			if got, ok := s.workEntry([2]string{"box", "ci"}); ok && (got.WakeAt != nil || got.Work.CI != nil) {
+				t.Fatalf("retired task got a new watch: %+v", got)
+			}
+		})
 	}
 }
