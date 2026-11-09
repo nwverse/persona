@@ -140,6 +140,8 @@ struct FullPageExportTests {
         let sheet = UIViewController()
         window.rootViewController?.present(sheet, animated: false)
         defer { window.rootViewController?.dismiss(animated: false) }
+        // In the window once presented (the chat's anchor says so when it moves there).
+        for _ in 0..<100 where sheet.view.window == nil { try await Task.sleep(for: .milliseconds(20)) }
         let page = makePage(5, in: window)
         defer { page.setShown(false) }
         let inSheet = UIView()
