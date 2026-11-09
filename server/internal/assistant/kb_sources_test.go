@@ -219,7 +219,8 @@ func TestKBConnectorsReadThroughTheHub(t *testing.T) {
 			return assistantwire.ChangesResult{Next: a.Cursor}, nil
 		}
 		return assistantwire.ChangesResult{Next: "1", Batches: []connector.ChatBatch{
-			{Chat: kb.SourceChat{ID: "g1", Name: "示例群", Kind: "group"}, Messages: []kb.SourceMessage{{ID: "m1", SenderName: "示例用户",
+			// A direct chat: the default selection keeps every message of one (a plain group message it does not).
+			{Chat: kb.SourceChat{ID: "g1", Name: "示例群", Kind: "dm"}, Messages: []kb.SourceMessage{{ID: "m1", SenderName: "示例用户",
 				Type: "FILE", Text: "周报", At: at, Media: []string{"file:ok"}}}},
 			{Source: "posts", Chat: kb.SourceChat{ID: "p9", Name: "公司圈 · 帖子", Kind: "moment"}, Messages: []kb.SourceMessage{{ID: "c1",
 				SenderName: "王五", Type: "TEXT", Text: "评论", At: at}}},

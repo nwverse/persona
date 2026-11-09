@@ -100,3 +100,23 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md` “L
 - **A space-wide rule must be at every entrance to the write** (#5278): the health space's "confirm every write, whatever a rule says" was in `larkCheck` (the gated command) only; the gate proxy, which a script reaches with no command in front, let a write through when a rule allowed it, with no card. Now the address is marked health when it is opened and takes only the grant a card left. When a rule is added to one check, look for the other route to the same write, and test it by calling the address itself. Both must decide the conversation's space from the same place: the process's own, noted when its address is opened. The hook's directory moves with the model's `cd`; and a grant kept under a conversation id needs the address to have that id, which a new Codex conversation gets only when its thread starts (`codexConn.start`).
 
 - **`confirmOutbound` is not a general confirmation**: it asks on the phone only in the health space and returns true at once everywhere else (`assistant/health.go`). A tool that must always ask the user (closing an Agent with `agent_archive` and `close`, changing an assistant setting) builds its own permission card through `s.ask`, as `ownSettingAction` and `archiveAndCloseTool` do, and treats a dismissed, expired or unanswered card as declined.
+
+- **A selection that does not read is not the defaults** (#1523): the knowledge base's default selection stops writing plain group messages, so falling back
+  to it while the settings table is unavailable would silently drop what chats send (the connectors' cursors move on regardless). `kbSelectionNow` keeps
+  everything (every rule on, days null: the behaviour before the selection) until the document reads again, and keeps the last document read while the
+  database is away. That stand-in (`kb.KeepEverything`) is a stopgap, not a document: pruning under it would cut every line to `text_days`, including a
+  mention the user keeps ten years, so `Engine.Prune` skips while `Selection.Stopgap`, and the history import neither revokes nor records an approval by it.
+  A failed read with a document cached pushes the next try a minute out, or every ingest during an outage waits on the database in turn.
+- **A whole read plan does not say `mine`** (#1523): `Selection.ReadChat` returns `whole` without the personal flags, since everything is read anyway. The
+  history import still runs the filter around the owner's messages in a whole read, or the lines around them get the chat's rule (say 30 days) instead of the
+  `mine` rule's longer days; `TestHistoryWholeReadKeepsTheOwnersContext` holds it.
+- **Approve what is read, not which chats** (#1523): the import's approval is a fingerprint of every chat's read plan (`historyPlan.Approved`), compared with
+  `ReadPlan.Wider` before every call, so a selection edit (a `PUT`, or `kb_history_plan`'s `set`) that reads more takes the approval back while one that reads less goes on. A chat's
+  state keeps the narrowest plan it ran under: recording the plan a read started with would let a later widening take a half-narrowed read as complete.
+- **A search hit knows more than the page** (#1523): a source's search says a hit mentions the owner, but the page read around it may not set `mentioned` on
+  the message, and the selection would then drop the very message the window was read for. Positional reads take the hit's word for its own message, as
+  `keepAnchorHits` does for unreadable chats. Only for the mention, never for who sent it: a hit with neither flag counts as the owner's for the window
+  read around it, but setting `mine` on the page's message would write someone else's words as the owner's. The window (`near`) is all it needs.
+- **A mention kept on its own is not near the owner** (#1523): `kb.AnchorFilter` keeps a lone mention without a window (`Keep`), so marking every message
+  it hands out as within the `mine` context made a lone mention `mentions+mine` (the longer days) where daily ingestion says `mentions`. Its `Kept` hook
+  names those; `pick` leaves them out of `near`.

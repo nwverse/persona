@@ -80,6 +80,9 @@ type kbState struct {
 	agentAt      map[string]time.Time        // agent → when its turn last went into a project timeline (kb_bus.go)
 	waiting      []assistantwire.KBAgentTurn // turns that came before it opened
 	postsDirty   atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
+
+	history   kbHistoryShared  // the history import (kb_history.go)
+	selection kbSelectionState // what is brought in and kept (kb_selection.go)
 }
 
 // kbOpened is the open knowledge base and the hub's settings it was opened with.
@@ -98,6 +101,7 @@ type kbIndex interface {
 func (s *Service) kbInit(o *KBOptions) {
 	s.kb.kick = make(chan struct{}, 1)
 	s.kb.wake = make(chan struct{}, 1)
+	s.kbHistoryInit()
 	if o != nil {
 		s.kb.dir, s.kb.keyDir = o.Dir, o.KeyDir
 	}
@@ -167,7 +171,8 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		if err != nil {
 			return nil, err
 		}
-		e := &kb.Engine{Store: st, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, RecordingDaysFunc: s.recordingDaysNow, ExtraDirs: kbReadDirs(set.ExtraDirs)}
+		e := &kb.Engine{Store: st, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, RecordingDaysFunc: s.recordingDaysNow, ExtraDirs: kbReadDirs(set.ExtraDirs),
+			Selection: s.kbSelectionNow}
 		k.cur.Store(&kbOpened{eng: e, set: set})
 		return e, nil
 	}
@@ -202,7 +207,8 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	}
 	s.kbRezone(k.store, loc)
 	e := &kb.Engine{Store: k.store, Model: s.kbModel("inbox.triage"), ModelFor: func(id string) kb.Model { return s.kbModel(id) },
-		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, Changed: s.kbChanged, MineObserved: s.kbObserveOwner}
+		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
+		Selection: s.kbSelectionNow}
 	e.ObserveChanges()
 	e.ExtraDirs = kbReadDirs(set.ExtraDirs)
 	if !k.passed {

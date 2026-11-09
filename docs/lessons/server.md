@@ -671,6 +671,31 @@ home volume (docs/operations/link.md "Without systemd").
   newline as they are, and test it as a property (original lines an exact subsequence of the result, count included) plus a fuzz target. The fuzzer found within seconds that a
   sender name with a line break formatted into two physical lines no reader took for one message, so its duplicate was written again; `Line.Format` now folds line breaks in
   the sender. Day files have no message ids: duplicates are "same minute, sender and text", which is exactly the formatted line.
+- History import (#1239): a source's page `limit` is a hint (one real source answers limit+10 around a position, limit+5 paging back), so go on only from the cursor or
+  positions a page answers, and treat "the same cursor again" as stuck, or a chat is read forever. A paced answer is empty with `more` false too: read `pace` first, then
+  `unreadable`, and only then take it as the start (`HistoryPage.AtStart`).
+- Never retry a history read that timed out, and never cancel one in flight to stop: the source may have served it (and counted it against a limit that trips a circuit
+  breaker after a few failures). The driver's call context is detached from the run's (`context.WithoutCancel` plus its own timeout); every stop switch is checked before the
+  next call instead, and any timeout or unknown code stops everything until a person looks.
+- A slowness baseline must be per method: an image's first chunk legitimately takes 1–2 s where a page takes 0.3 s, so measured against pages every image looks slow. Count
+  the "three slow among the last twenty" window over all calls, though, or a burst of image calls hides slow pages.
+- Positional windows from a search: windows grow when a read finds an anchor the search missed, so persist the anchors and the ranges covered, not the windows; and every read
+  must add coverage (give the gap up when one adds nothing), or a deleted message at a window's edge is asked for forever. Count as covered only what was kept (the read
+  inside the windows as they are then): a review probe showed positions read and dropped outside one window, then inside another a later anchor widened, missing with no
+  omission line. Omission lines need the edge messages' times, so keep those too: after a restart nothing else knows them.
+- "Fall back for a year the search found nothing in" must not include years before the conversation existed: with a 10-year retention every empty year streamed a whole
+  chat below its windows. Learn when the conversation began (one page around position 0) and skip the years before it.
+- Pacing state is safety state: a rest, a `retry_after` pause, the multiplier and the very-slow watch kept only in memory are gone after a redeploy, and the next call goes
+  out after one ordinary interval. Persist them with the status and wait out what is left before the first call.
+- A write that downloads images inside it must be able to abort as a whole: written with placeholders after a stop cut the downloads short, the page's cursor moves on and
+  the images are lost for good (a later read only adds the same message again, with its image, as a duplicate line). `kb.ErrDownloadAborted` from the download aborts
+  `WriteHistory`, and the page is read again after the resume.
+- Every call to a fragile source goes through the same safety path, a tool's too: a list call made from a chat turn was cancelled with the turn and its timeout only made a
+  note, so the next call of the tool asked again. Detach its context, and stop the import on a timeout as the driver does.
+- `filepath.WalkDir` does not follow a link at its root: a backup of a data directory that is a link archived nothing, succeeded, and three runs later had pruned every real
+  backup. Resolve the root first, and fail a backup that kept no file.
+- Attachment days longer than `text_days` only keep files no line points to (the day file is pruned, and a message past the text retention is never written, so its image is
+  never downloaded): `Engine.AttachmentDaysFor` caps them at `text_days`.
 
 ## Port forwarding (docs/operations/ports.md)
 
