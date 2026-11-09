@@ -592,8 +592,8 @@ tap dialog option, hub gets `option` not keys and Dialog changed notice; existin
 `clear_draft` under a new `client_msg_id`, and Resend after Not Now reaches the computer again under a new one (#6425; `GET /mock/resolved`, `GET /mock/sent`). Screenshot `-openSendMessage <text>` sends after 3 seconds (`-openSendDelay <seconds>` overrides).
 
 New Persona chat from elsewhere (`NewConversationEntryTests`, #527): Inbox Hand to AI immediately shows sent message, not No messages yet;
-late transcript shows it once. `PORT=18927 MOCK_ASSISTANT_TRANSCRIPT_SECONDS=8 python3 scripts/mock/mock_hub.py &`,
-`TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18927 xcodebuild test … -only-testing:PersonaUITests/NewConversationEntryTests` (main chat and new chat in supported navigation).
+late transcript shows it once. `PORT=18927 MOCK_SOURCES=1 MOCK_TODO_OFFLINE=1 MOCK_ASSISTANT_TRANSCRIPT_SECONDS=8 python3 scripts/mock/mock_hub.py &`,
+`TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18927 xcodebuild test … -only-testing:PersonaUITests/NewConversationEntryTests` (main chat and new chat in supported navigation; Agent targets require those two fixture flags, and the test checks they are present).
 The main chat goes through the mock's `POST /api/v1/inbox/{id}/handoff` (#1194; what went is in `/mock/sent_to`, its transcript copy carries the `client_id`); `MOCK_HANDOFF=old` makes
 the mock a hub without that route (404). A hand-off whose answer got lost (`POST /mock/fault` lost_receipt) keeps the sheet and says to look in the chat first; sending again goes under
 the same `client_id` (one hand-off in `/mock/sent_to`) and adds how to send it anyway (`testAHandOffThatMayHaveGoneSaysToLookFirst`, light and dark shots in `PERSONA_SHOTS`).
