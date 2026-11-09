@@ -474,49 +474,51 @@ persona-link only relays the summary into its status: it shows nothing itself, a
 
 ## Presence
 
-While you are at a computer whose menu bar App can notify you, the hub counts that computer as a desktop: a phone with "Phone Muted" on leaves the "Needs you" cards to it (#2214).
-This takes over what the native Mac App's `register_desktop` did (`docs/apple/mac.md`), for Persona Link.
+While you are at a computer whose menu bar App can notify you, the hub counts that computer as a desktop: a phone with "Phone Muted" on leaves to it the "Needs you" cards whose notifications the App handed to Notification Center (#2214).
+This takes over what the native Mac App's `register_desktop` did (`docs/apple/mac.md`), for Persona Link. Active mode only: a computer in passive mode is no desktop yet, and its phone gets every card (see "Not yet").
 
 **Who decides**
 - The menu bar App, by what it sees on this Mac; the conditions and the lines it writes are under "Menu bar App" › "Presence".
-- The command-line Link reports no presence (nothing writes its stdin): it cannot show notifications, so muting the phone for it would lose alerts. Nor does the Windows tray yet.
+- The App confirms a card only once it handed the card's notification to Notification Center, on the connection the card came on: `{"rang":{"interaction_id":"<card id>"}}` on persona-link's stdin, the id as the "Needs you" summary names it.
+  A notification dropped before it was handed over (the card left a capped summary or was answered while it waited, the connection went), one Notification Center refused, or any while notifications are off, is not confirmed.
+  A notification handed over is not always shown: Focus or Do Not Disturb on the Mac may still hold it back (see "Not yet").
+- The command-line Link reports nothing (nothing writes its stdin): it cannot show notifications, so muting the phone for it would lose alerts. Nor does the Windows tray yet.
 
 **persona-link** (`internal/link/presence.go`)
-- `run --parent` reads stdin line by line; a line that is not presence is skipped, and the end of stdin still means the App went away.
-- It keeps the latest line and forwards every one, the App's repeats included; it never repeats one by itself, so presence lapses when the App goes quiet.
+- `run --parent` reads stdin line by line; a line that is neither presence nor a confirmation is skipped, and the end of stdin still means the App went away.
+- It keeps the latest presence line and forwards every one, the App's repeats included; it never repeats one by itself, so presence lapses when the App goes quiet.
   An active line older than 120 seconds counts as inactive.
-- Active mode: `{"type":"presence","active","notifies","ttl_ms"}` on the link, as the link comes up and for every line; `ttl_ms` is what is left of the 120 seconds since the App wrote it.
-- Passive mode: the `info` answer carries the same `presence`. The manager reads every connector's `info` one after the other, then waits 30 seconds, so a change reaches it about 30 seconds late, later while other connectors are slow to answer (up to 20 seconds each).
+- On the link: `{"type":"presence","active","notifies","ttl_ms"}` as the link comes up and for every presence line (`ttl_ms` is what is left of the 120 seconds since the App wrote it),
+  and `{"type":"rang","interaction_id"}` for every confirmation that comes while this link is up (one queued before it was the earlier link's, and is dropped).
 
 **The manager** (`internal/devices/presence.go`)
-- Keeps the presence until when it heard it + `ttl_ms` (120 seconds when missing, at most 4 minutes), and reports its desktops to the hub in `devices.desktops`: on every presence it hears (each renewal), when a delivery changes which computers count, after a `devices.state` when the list changed, and in full after each handshake (after the `devices.state`).
+- Keeps the presence until when it heard it + `ttl_ms` (120 seconds when missing, at most 4 minutes), and reports its desktops to the hub in `devices.desktops`: one report at a time from one task, in order, a run of requests making one;
+  on every presence it hears (each renewal), when a delivery may change which computers count (a confirmation never does), after a `devices.state` when the list changed, and in full after each handshake (after the `devices.state`).
   Each says the TTL left, which the hub counts on its own clock. A separate event, so a renewal once a minute does not resend the apps' machine list.
 - Counts only a computer that gets the "Needs you" summary as it is (see "Needs you" above): its Persona Link takes the summary, it is not waiting to be confirmed and not a work computer.
   While the hub cannot say which computers wait to be confirmed, none counts: the summary freezes then, so a new card would reach neither the computer nor the phone. A work computer never counts.
-- Counts only while the computer keeps up with the summary: the link or the connector took one (each change then goes out at once), and no delivery failed since.
-  A send or a post that fails, is refused or times out ends it at once; only a summary taken again brings it back, or an `info` whose `attention_rev` is the summary as it is now (the post was taken after all; an `info` read alone does not).
-  Which cards it stands in for does not rest on this: that is the cards a summary it took rang for (below).
-- A passive connector names its run (`info`'s `instance`, and `X-Persona-Instance` on the answer to a summary it took). Another run, or an `attention_rev` that is empty, holds no summary of the earlier run's: the next one it takes is its menu bar App's baseline.
-- The presence ends when the link drops or another link of the computer takes over (active mode), when `info` stops answering or answers without it (passive mode), and when its time runs out.
+- Counts only while its link keeps up with the summary: it took one (each change then goes out at once), and no send failed since; only a summary taken again brings it back.
+- The presence ends when the link drops or another link of the computer takes over, and when its time runs out.
+- Keeps the confirmations on the link they came on: a new link starts with none; only cards the summary that link holds (or the one on its way to it) lists are kept.
 - **Which cards it leaves to Persona Link.** When it pushes a card, it works out with the summary's own rule whether the card is the one that stands for its agent, notifying, among the listed items (not in More).
-  If so, it waits (up to 2 seconds) until a summary one of its Persona Link desktops with `notifies` took rings for that card: a later summary than the connection's first, which Persona Link takes as its baseline, listing it as notifying first since it was last listed (a summary that is not capped forgets the cards it leaves out, as Persona Link does).
-  Only then does the push say `link_covered`. Another card of the same agent, a card past the cap (also one handed to the user late), or one whose summary was merged with newer cards and listed it in More, goes to the phone.
+  If so, the push waits until one of its Persona Link desktops with `notifies` confirmed that card on its current link, and the desktops as they are then went out to the hub; only then does it say `link_covered` (the hub mutes only for a desktop it knows of, so a report it did not take leaves the card with the phone).
+  The whole wait has one deadline, 2 seconds, and ends with the manager: past it, or without a desktop, the push goes to the phone. Another card of the same agent, a card past the cap (also one handed to the user late), and a card the App did not confirm go to the phone.
 
 **The hub** (`internal/hub/desktops.go`)
 - A computer of the sending manager's own, with `notifies`, is a Persona Link desktop for the TTL it says, counted on the hub's clock from when it takes it and at most 4 minutes; a mesh member's computer does not count yet.
 - "Phone Muted" while only Persona Link desktops are active holds back a "Needs you" card (the APNs card push and the `interaction` WebSocket alert) only when its push says `link_covered` and one of that manager's Persona Link desktops is active.
-  The hub does not judge which cards a Persona Link rang for: the manager says. Cards without `link_covered`, "Agent finished", reply reminders, decisions, `POST /api/v1/notify` alerts and the Live Activity's start alert still go to the phone. A connected native Mac App mutes as before.
+  The hub does not judge which cards a Persona Link took over: the manager says. Cards without `link_covered`, "Agent finished", reply reminders, decisions, MCP forms and links, `POST /api/v1/notify` alerts and the Live Activity's start alert still go to the phone. A connected native Mac App mutes as before.
 - The deadline is checked when an alert goes out, so a computer whose manager or App went quiet stops muting the phone once it passes (2 minutes after the App last spoke); the `desktops` event follows when it lapses, also when a manager's list arrives first and leaves it out.
 - The `desktops` event lists a Persona Link desktop as `{"kind":"link","machine_id","device":"","name","since"}`, only to clients that list `desktops_link` (`docs/protocol/protocol.md`); others get the list as before.
 
 **Old and new**
-- Old menu bar App: writes nothing, so a new persona-link reports nothing. New App with an old persona-link: the old one discards its stdin.
-- Old manager: ignores the `presence` message and the `info` field. Old hub: ignores `devices.desktops`. Either way the phone is never muted for a Persona Link computer.
-- The iOS App lists `desktops_link`. Clients that do not (older iOS builds, Android, the web app) do not show Persona Link desktops; a phone with "Phone Muted" on still has the cards held back while one is active.
-- Old manager: no `link_covered` on its card pushes, so a new hub mutes none of them for a Persona Link desktop.
+- Old menu bar App: writes neither presence nor confirmations, so a new persona-link reports nothing. New App with an old persona-link: the old one discards its stdin.
+- Old manager: ignores the `presence` and `rang` messages, and its card pushes carry no `link_covered`, so a new hub mutes none of them for a Persona Link desktop. Old hub: ignores `devices.desktops` and `link_covered`. Either way the phone gets the cards.
+- The iOS App lists `desktops_link`. Clients that do not (older iOS builds, Android, the web app) do not show Persona Link desktops; a phone with "Phone Muted" on still has the confirmed cards held back while one is active.
 
 **Not yet**
-- Focus on the Mac is not checked.
+- Passive mode: a connector has no way to send a confirmation back within the wait, so a computer in passive mode is no desktop, and the phone gets every card.
+- Focus or Do Not Disturb on the Mac is not checked: a notification the App handed over may stay unseen there while the phone is muted for it.
 - The web app still shows its own notifications while a Persona Link desktop is active.
 
 ## Credentials (active mode)
@@ -663,6 +665,8 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
   - Written at once when either field changes, again every 60 s while `active`, and once to every helper as it starts (inactive too).
   - Idle time is checked when it would pass the limit; while only input is missing, every 10 s; while notifications do not show, once a minute. While locked, asleep or switched away, nothing runs until the next notification.
   - The pipe does not block: a helper that stops reading loses lines instead of stalling the App, and a helper that has gone fails the write (`EPIPE`; SIGPIPE is ignored).
+- `{"rang":{"interaction_id":"<card id>"}}` on the same stdin once a card's notification went to Notification Center (`UNUserNotificationCenter.add` succeeded), on the connection it was for; nothing for a notification that was dropped, refused or not allowed.
+  A confirmation lost (no helper, a full pipe) leaves the card to the phone.
 
 **Pairing window**
 - Select **Connect to hub (active)** or **Let hub connect (passive)** at the top, defaulting to the current mode; viewing doesn't switch. Switching happens when pairing (active: paste and pair; passive: generate link),

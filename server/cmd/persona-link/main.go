@@ -324,34 +324,42 @@ func run(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	var presence *link.PresenceBox
+	var app *fromApp
 	if parent {
-		presence = link.NewPresenceBox()
+		app = &fromApp{presence: link.NewPresenceBox(), confirms: link.NewConfirms()}
 		go func() {
-			readParent(os.Stdin, presence)
+			readParent(os.Stdin, app)
 			stop() // the menu bar app went away, however it did
 		}()
 	}
-	return keepLink(ctx, link.DefaultPath(), logPath, os.Stdout, presence)
+	return keepLink(ctx, link.DefaultPath(), logPath, os.Stdout, app)
 }
 
-// readParent reads the menu bar app's lines on stdin until it closes, the app's presence into box (internal/link
-// presence.go); the rest is not for this build. A line too long to scan ends the scan, not the reading: only stdin's
-// end says the app went away.
-func readParent(r io.Reader, box *link.PresenceBox) {
+// fromApp is what the menu bar app says on stdin (internal/link presence.go): its presence, and the cards whose
+// notifications it handed to Notification Center.
+type fromApp struct {
+	presence *link.PresenceBox
+	confirms *link.Confirms
+}
+
+// readParent reads the menu bar app's lines on stdin until it closes, into app; the rest is not for this build. A line
+// too long to scan ends the scan, not the reading: only stdin's end says the app went away.
+func readParent(r io.Reader, app *fromApp) {
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		if p, ok := link.ParsePresenceLine(sc.Bytes()); ok {
-			box.Set(p, time.Now())
+			app.presence.Set(p, time.Now())
+		} else if card, ok := link.ParseRangLine(sc.Bytes()); ok {
+			app.confirms.Push(card)
 		}
 	}
 	_, _ = io.Copy(io.Discard, r)
 }
 
 // keepLink is `persona-link run`: the link for the link.json at path until ctx ends. Every status goes to stdout as a
-// JSON line and to link.status.json for `persona-link status`; the log to logPath when there is one. presence is the
-// menu bar app's (nil without it).
-func keepLink(ctx context.Context, path, logPath string, stdout io.Writer, presence *link.PresenceBox) error {
+// JSON line and to link.status.json for `persona-link status`; the log to logPath when there is one. app is what the
+// menu bar app says (nil without it).
+func keepLink(ctx context.Context, path, logPath string, stdout io.Writer, app *fromApp) error {
 	release, err := link.LockRun(path)
 	if err != nil {
 		return err
@@ -397,7 +405,7 @@ func keepLink(ctx context.Context, path, logPath string, stdout io.Writer, prese
 		}
 	}
 	log.Printf("persona-link %s started", version)
-	err = link.Run(ctx, link.Options{Path: path, Target: link.AttachSocket(), Version: version,
+	o := link.Options{Path: path, Target: link.AttachSocket(), Version: version,
 		Status: func(s link.Status) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -408,7 +416,11 @@ func keepLink(ctx context.Context, path, logPath string, stdout io.Writer, prese
 			last = s
 			save(s)
 		},
-		Check: check, Redial: redial, Logf: log.Printf, Presence: presence})
+		Check: check, Redial: redial, Logf: log.Printf}
+	if app != nil {
+		o.Presence, o.Confirms = app.presence, app.confirms
+	}
+	err = link.Run(ctx, o)
 	mu.Lock()
 	defer mu.Unlock()
 	ended = true

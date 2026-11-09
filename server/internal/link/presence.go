@@ -7,10 +7,10 @@ import (
 )
 
 // Presence through Persona Link (docs/operations/link.md "Presence"): the menu bar app says on persona-link's stdin
-// whether the user is at this computer and its notifications show, and persona-link passes it on to the hub's manager,
-// which lets a phone with "Phone Muted" leave its "Needs you" cards to this computer. Active mode: a presence message on
-// the link, once it is up and for every line the app writes. Passive mode: the info answer's presence, read every 30 s.
-// Only the menu bar app says it: the command-line persona-link cannot show a notification.
+// whether the user is at this computer and its notifications show, and which cards' notifications it handed to
+// Notification Center; persona-link passes both on to the hub's manager over the link (active mode only), which then
+// lets a phone with "Phone Muted" leave those cards to this computer. Only the menu bar app says them: the command-line
+// persona-link cannot show a notification.
 
 // PresenceTTL is how long a presence counts once said (ttl_ms on the wire). The app says an active one again every
 // 60 s, so one lost line does not let it lapse, and one from an app that went quiet stops counting soon.
@@ -22,8 +22,8 @@ type Presence struct {
 	Notifies bool `json:"notifies"`
 }
 
-// PresenceInfo is presence as the manager is told it: the info answer's presence, and an active link's presence
-// message. TTLMS is what is left of PresenceTTL since the app said it.
+// PresenceInfo is presence as the manager is told it, in a presence message: TTLMS is what is left of PresenceTTL
+// since the app said it.
 type PresenceInfo struct {
 	Active   bool  `json:"active"`
 	Notifies bool  `json:"notifies"`
@@ -42,8 +42,8 @@ func ParsePresenceLine(line []byte) (Presence, bool) {
 	return *l.Presence, true
 }
 
-// PresenceBox keeps the app's latest line for either mode and tells the active link each time one comes. A nil box
-// (persona-link without the app) never has one.
+// PresenceBox keeps the app's latest line and tells the link each time one comes. A nil box (persona-link without
+// the app) never has one.
 type PresenceBox struct {
 	mu   sync.Mutex
 	p    Presence
@@ -85,3 +85,46 @@ func (b *PresenceBox) Latest(now time.Time) (PresenceInfo, bool) {
 
 // Poked receives once after each Set (a run of them may be one).
 func (b *PresenceBox) Poked() <-chan struct{} { return b.poke }
+
+// ParseRangLine reads one line the app wrote once it handed a card's notification to Notification Center:
+// {"rang":{"interaction_id":…}}. Anything else is not one.
+func ParseRangLine(line []byte) (string, bool) {
+	var l struct {
+		Rang *struct {
+			InteractionID string `json:"interaction_id"`
+		} `json:"rang"`
+	}
+	if json.Unmarshal(line, &l) != nil || l.Rang == nil || l.Rang.InteractionID == "" {
+		return "", false
+	}
+	return l.Rang.InteractionID, true
+}
+
+// Confirms carries the cards whose notifications the app handed to Notification Center to the link, as they come. A
+// link passes on only the ones that came while it was up: one that came before was the earlier link's. A full queue
+// drops one, and a nil one (no app) carries none: either way the phone gets that card.
+type Confirms struct{ ch chan string }
+
+func NewConfirms() *Confirms { return &Confirms{ch: make(chan string, 64)} }
+
+// Push queues card for the link.
+func (c *Confirms) Push(card string) {
+	select {
+	case c.ch <- card:
+	default:
+	}
+}
+
+// C receives the queued cards.
+func (c *Confirms) C() <-chan string { return c.ch }
+
+// drop empties the queue.
+func (c *Confirms) drop() {
+	for {
+		select {
+		case <-c.ch:
+		default:
+			return
+		}
+	}
+}

@@ -1,10 +1,12 @@
 package devices
 
 import (
+	"context"
 	"encoding/json"
-	"maps"
 	"slices"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -12,11 +14,11 @@ import (
 )
 
 // Presence through Persona Link (internal/link/presence.go, docs/operations/link.md "Presence"): a computer's menu bar
-// app says the user is at it and its notifications show. The manager keeps what its Persona Link said until the TTL
-// runs out (a presence message in active mode, the info answer in passive mode) and reports it in devices.desktops; the
-// hub counts the computer as a desktop for "Phone Muted". It counts only while it holds the "Needs you" summary as it
-// is now (attentionFor's rule, and the summary delivered to it); and a card's push is left to it only once a summary it
-// took rang for that card (LinkRang).
+// app says the user is at it and its notifications show, and which cards' notifications it handed to Notification
+// Center. The manager keeps what a link said until the TTL runs out and reports the computers that count in
+// devices.desktops; the hub counts them as desktops for "Phone Muted". A card's push is left to such a desktop only
+// once its link confirmed that card (LinkRang). Active mode only: a passive connector has no way to send a confirmation
+// back in time, so it is no desktop yet.
 
 // presence is what a computer's Persona Link said last: active until until (this manager's clock), its notifications
 // showing or not.
@@ -43,7 +45,7 @@ func (m *Machine) keepPresenceLocked(p *link.PresenceInfo, now time.Time) {
 }
 
 // takePresence is a presence message of the machine's live link l. Every one is reported, the same as the last
-// included: the hub needs each renewal. In the background: the link's reading never waits on the hub.
+// included: the hub needs each renewal.
 func (m *Machine) takePresence(l *mgrLink, msg link.Message) {
 	m.mu.Lock()
 	if m.link != l {
@@ -52,54 +54,70 @@ func (m *Machine) takePresence(l *mgrLink, msg link.Message) {
 	}
 	m.keepPresenceLocked(&link.PresenceInfo{Active: msg.Active, Notifies: msg.Notifies, TTLMS: msg.TTLMS}, time.Now())
 	m.mu.Unlock()
-	go m.d.reportDesktops(false)
+	m.d.requestDesktops(false)
 }
 
-// summaryHeld is what a computer's Persona Link holds of the summary: the Rev it took last (sent), whether the last
-// delivery failed, how many deliveries it took (taken), and the cards its summaries listed
-// as notifying (rang: true when the first summary listing one so was not the connection's first, which Persona Link
-// takes as its baseline and rings nothing of; false when it was). A summary that is not capped forgets the cards it
-// does not list, as Persona Link forgets their sessions: one listed again notifies again.
+// summaryHeld is what a link's Persona Link holds of the summary and what its app did with it: the Rev it took last
+// (sent) and its cards (listed), the cards of the one on its way (sending), whether a delivery failed since, and the
+// cards the app confirmed it handed to Notification Center (rang, only ones of the summary it holds or the one on its
+// way, so a few times link.AttentionMaxItems at most).
 type summaryHeld struct {
-	sent   string
-	failed bool
-	taken  int
-	rang   map[string]bool
+	sent    string
+	listed  map[string]bool
+	sending map[string]bool
+	failed  bool
+	rang    []string
 }
 
-// done: the delivery of a ended, taken or not.
+// cardsOf is the cards a lists (not the ones in More).
+func cardsOf(a *link.Attention) map[string]bool {
+	out := map[string]bool{}
+	for _, it := range a.Items {
+		if it.InteractionID != "" {
+			out[it.InteractionID] = true
+		}
+	}
+	return out
+}
+
+// begin: a is on its way. The app may confirm one of its cards before the send returns (the link reads on its own).
+func (h *summaryHeld) begin(a *link.Attention) { h.sending = cardsOf(a) }
+
+// done: the delivery of a ended, taken or not. A summary taken drops the confirmations of cards it no longer lists.
 func (h *summaryHeld) done(a *link.Attention, ok bool) {
+	h.sending = nil
 	if !ok {
 		h.failed = true
 		return
 	}
-	baseline := h.sent == ""
 	h.sent, h.failed = a.Rev, false
-	h.taken++
-	if h.rang == nil {
-		h.rang = map[string]bool{}
-	}
-	listed := map[string]bool{}
-	for _, it := range a.Items {
-		if it.InteractionID == "" {
-			continue
-		}
-		listed[it.InteractionID] = true
-		if _, seen := h.rang[it.InteractionID]; it.Notify && !seen {
-			h.rang[it.InteractionID] = !baseline
-		}
-	}
-	if a.More == 0 {
-		maps.DeleteFunc(h.rang, func(card string, _ bool) bool { return !listed[card] })
-	}
+	h.listed = cardsOf(a)
+	h.rang = slices.DeleteFunc(h.rang, func(card string) bool { return !h.listed[card] })
 }
 
-// holds is whether it keeps up with the summary (cur, the one as it is now, exists): it took one, and no delivery
-// failed since. A newer one is then on its way or about to be (every change goes out at once): counting it as held
-// keeps a desktop from dropping out and back in at each change. A failure, a refusal or a timeout ends it until a
-// delivery is taken again. Which cards a desktop stands in for is LinkRang's, by what it took.
-func (h *summaryHeld) holds(cur string) bool {
-	return cur != "" && h.sent != "" && !h.failed
+// confirm: the app handed card's notification to Notification Center. Only a card of the summary it holds, or of the
+// one on its way, counts.
+func (h *summaryHeld) confirm(card string) {
+	if !h.listed[card] && !h.sending[card] || slices.Contains(h.rang, card) {
+		return
+	}
+	h.rang = append(h.rang, card)
+}
+
+// holds is whether it keeps up with the summary: it took one, and no delivery failed since. A newer one is then on its
+// way or about to be (every change goes out at once): counting it as held keeps a desktop from dropping out and back in
+// at each change. A failure ends it until a delivery is taken again. Which cards a desktop stands in for is the app's
+// confirmations' (LinkRang).
+func (h *summaryHeld) holds() bool { return h.sent != "" && !h.failed }
+
+// takeRang is a rang message of link l: its app handed card's notification to Notification Center. It is kept on l,
+// so it counts only while l is the machine's link (LinkRang): a new link starts with none. It changes no computer's
+// being a desktop, so only LinkRang hears of it.
+func (m *Machine) takeRang(l *mgrLink, card string) {
+	l.heldMu.Lock()
+	l.held.confirm(card)
+	l.heldMu.Unlock()
+	m.d.wakeRang()
 }
 
 // desktopNow is a computer that is a desktop now: what the hub is told, and its deadline on this manager's clock.
@@ -108,104 +126,162 @@ type desktopNow struct {
 	until time.Time
 }
 
-// desktop is the machine as a desktop at now: nil unless its Persona Link said it is active within the TTL, it takes
-// the summary (its hello or info listed attention), the computer is known to get the summary as it is, and it holds
-// the summary as it is now. While the hub cannot say which computers wait to be confirmed the summary freezes: no new
-// card reaches the computer, so it does not count then (the phone keeps them).
-func (m *Machine) desktop(now time.Time) *desktopNow {
+// desktop is the machine as a desktop at now, and its live link: nil unless its link's Persona Link said it is active
+// within the TTL, takes the summary (its hello listed attention) and keeps up with it (it took one: there is one), and
+// the computer is known to get the summary as it is. While the hub cannot say which computers wait to be confirmed the
+// summary freezes: no new card reaches the computer, so it does not count then (the phone keeps them).
+func (m *Machine) desktop(now time.Time) (*desktopNow, *mgrLink) {
 	eligible, _ := m.d.summaryEligible(m.cfg.ID) // false while unknown
 	if !eligible {
-		return nil
+		return nil, nil
 	}
 	m.mu.Lock()
 	l, p := m.link, m.presence // p is never changed in place: keepPresenceLocked makes a new one
 	m.mu.Unlock()
-	if p == nil || !p.until.After(now) {
-		return nil
+	if l == nil || !l.attention || p == nil || !p.until.After(now) {
+		return nil, nil
 	}
-	var held bool
-	switch {
-	case l != nil && l.attention:
-		cur := l.summary()
-		l.heldMu.Lock()
-		held = cur != nil && l.held.holds(cur.Rev)
-		l.heldMu.Unlock()
-	case m.cfg.Kind == kindService:
-		cur := m.d.attentionFor(m.cfg.ID, m.d.config().WebURL)
-		m.mu.Lock()
-		held = m.svc.attention && cur != nil && m.svc.held.holds(cur.Rev)
-		m.mu.Unlock()
-	}
+	l.heldMu.Lock()
+	held := l.held.holds()
+	l.heldMu.Unlock()
 	if !held {
-		return nil
+		return nil, nil
 	}
 	// An entry another one absorbed: the hub knows its computer by that one's id.
 	return &desktopNow{Desktop: devicewire.Desktop{MachineID: m.d.Canonical(m.cfg.ID), Since: p.since, Notifies: p.notifies,
-		TTLMS: max(1, p.until.Sub(now).Milliseconds())}, until: p.until}
+		TTLMS: max(1, p.until.Sub(now).Milliseconds())}, until: p.until}, l
 }
 
-// rang is whether a summary the machine's Persona Link took rang for card.
-func (m *Machine) rang(card string) bool {
-	m.mu.Lock()
-	l, r := m.link, m.svc.held.rang[card]
-	m.mu.Unlock()
-	if l != nil && !r {
-		l.heldMu.Lock()
-		r = l.held.rang[card]
-		l.heldMu.Unlock()
-	}
-	return r
+// desktopsReporter is the state of the one task that sends devices.desktops (reportDesktopsLoop): requests asked so
+// far and dealt with (done, reported closed at each), whether the next must go out unchanged (force), and the last sent
+// (sent, the reporter's alone).
+type desktopsReporter struct {
+	start    sync.Once
+	due      chan struct{}
+	asked    atomic.Uint64
+	force    atomic.Bool
+	mu       sync.Mutex
+	done     uint64
+	reported chan struct{}
+	sent     string
 }
 
-// reportDesktops tells the hub which computers are desktops now (devices.desktops), when that changed: a presence said
-// again moves its deadline, which the hub needs each of. force: the hub may not have it (a handshake). One at a time,
-// each with the list as it is then, so the last one sent is never older than another. It says the TTL left; the hub's
-// own clock counts it down.
-func (d *Devices) reportDesktops(force bool) {
-	if d.stopping.Load() {
-		return
+// runCtx is the context the devices run in (Run's; a test's), background before there is one.
+func (d *Devices) runCtx() context.Context {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.ctx == nil {
+		return context.Background()
 	}
-	d.desktopsMu.Lock()
-	defer d.desktopsMu.Unlock()
-	now := time.Now()
-	list := devicewire.Desktops{Desktops: []devicewire.Desktop{}}
-	key := "" // the list but for what time alone changes (the TTL left)
-	for _, m := range d.cfgMachines() {
-		if p := m.desktop(now); p != nil {
-			list.Desktops = append(list.Desktops, p.Desktop)
-			key += p.MachineID + " " + strconv.FormatInt(p.Since.UnixNano(), 10) + " " +
-				strconv.FormatInt(p.until.UnixNano(), 10) + " " + strconv.FormatBool(p.Notifies) + "\n"
+	return d.ctx
+}
+
+// requestDesktops asks the desktops reporter for a devices.desktops with the computers as they are once it gets to it,
+// and returns the request's number (desktopsReported waits for it). force: also when they did not change (a
+// handshake: the hub may not have them).
+func (d *Devices) requestDesktops(force bool) uint64 {
+	r := &d.desktopsRep
+	if force {
+		r.force.Store(true)
+	}
+	n := r.asked.Add(1)
+	r.start.Do(func() {
+		r.due = make(chan struct{}, 1)
+		r.mu.Lock()
+		r.reported = make(chan struct{})
+		r.mu.Unlock()
+		go d.reportDesktopsLoop(d.runCtx())
+	})
+	select {
+	case r.due <- struct{}{}:
+	default: // one due already covers this one
+	}
+	return n
+}
+
+// reportDesktopsLoop is the desktops reporter: one devices.desktops at a time, in order, each with the computers as they
+// are then, a run of requests coalesced into one. It holds no lock while the hub takes it. A report says the TTL left
+// (the hub's own clock counts it down) and goes out when the computers, a since or a deadline changed, or a request
+// forced it.
+func (d *Devices) reportDesktopsLoop(ctx context.Context) {
+	r := &d.desktopsRep
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.due:
+		}
+		asked, force := r.asked.Load(), r.force.Swap(false)
+		if !d.stopping.Load() {
+			now := time.Now()
+			list := devicewire.Desktops{Desktops: []devicewire.Desktop{}}
+			key := "" // the list but for what time alone changes (the TTL left)
+			for _, m := range d.cfgMachines() {
+				if p, _ := m.desktop(now); p != nil {
+					list.Desktops = append(list.Desktops, p.Desktop)
+					key += p.MachineID + " " + strconv.FormatInt(p.Since.UnixNano(), 10) + " " +
+						strconv.FormatInt(p.until.UnixNano(), 10) + " " + strconv.FormatBool(p.Notifies) + "\n"
+				}
+			}
+			if force || key != r.sent {
+				b, _ := json.Marshal(list)
+				if d.opts.Hub.Notify(devicewire.EventDesktops, json.RawMessage(b)) == nil {
+					r.sent = key
+				}
+			}
+		}
+		r.mu.Lock()
+		if asked > r.done {
+			r.done = asked
+			close(r.reported)
+			r.reported = make(chan struct{})
+		}
+		r.mu.Unlock()
+	}
+}
+
+// desktopsReported waits until the reporter has dealt with request n, or ctx ends (false).
+func (d *Devices) desktopsReported(ctx context.Context, n uint64) bool {
+	r := &d.desktopsRep
+	for {
+		r.mu.Lock()
+		done, wake := r.done >= n, r.reported
+		r.mu.Unlock()
+		if done {
+			return true
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return false
 		}
 	}
-	if !force && key == d.desktopsSent {
-		return
-	}
-	b, _ := json.Marshal(list)
-	if err := d.opts.Hub.Notify(devicewire.EventDesktops, json.RawMessage(b)); err == nil {
-		d.desktopsSent = key
-	}
 }
 
-// delivered is told when a computer's Persona Link took a summary, or a delivery failed: who holds what changed. It
-// wakes LinkRang, and reports the desktops when that may have changed which ones they are: only a computer whose
-// Persona Link said it is active can be one.
-func (d *Devices) delivered() {
+// wakeRang wakes LinkRang: a delivery ended, or an app confirmed a card.
+func (d *Devices) wakeRang() {
 	d.ringMu.Lock()
 	if d.ring != nil {
 		close(d.ring)
 	}
 	d.ring = make(chan struct{})
 	d.ringMu.Unlock()
+}
+
+// delivered is told when a link took a summary or a delivery failed: it wakes LinkRang, and asks for the desktops when
+// which ones they are may have changed: only a computer whose Persona Link said it is active can be one.
+func (d *Devices) delivered() {
+	d.wakeRang()
 	if slices.ContainsFunc(d.cfgMachines(), func(m *Machine) bool {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		return m.presence != nil
 	}) {
-		go d.reportDesktops(false)
+		d.requestDesktops(false)
 	}
 }
 
-// deliveries is closed at the next delivery.
+// deliveries is closed at the next delivery or confirmation (wakeRang).
 func (d *Devices) deliveries() <-chan struct{} {
 	d.ringMu.Lock()
 	defer d.ringMu.Unlock()
@@ -215,33 +291,41 @@ func (d *Devices) deliveries() <-chan struct{} {
 	return d.ring
 }
 
-// LinkRang waits up to within for a summary one of the manager's Persona Link desktops whose notifications show took
-// to ring for card (its interaction id): false at once while there is none when it starts, and when the time is up.
-// Only such a card's push may a desktop take over from the phone (assistantwire.Notification.LinkCovered): a summary
-// merged with newer cards that listed it in More, or one that did not reach the computer, rang for nothing. A desktop
-// that stops counting while it waits (a summary newer than the one just delivered has not gone out yet) is waited for.
-func (d *Devices) LinkRang(card string, within time.Duration) bool {
-	timeout := time.NewTimer(within)
-	defer timeout.Stop()
+// LinkRang waits, all within one deadline (within) and as long as ctx lasts, for one of the manager's Persona Link
+// desktops with notifications showing to have confirmed card (its interaction id) on its live link, and then for the
+// desktops reporter to have sent the hub the desktops as they are, so it knows that desktop before the push comes (a
+// report the hub did not take leaves it without that desktop: it then pushes the phone). False at once while there is no
+// such desktop, a desktop that stops counting while it waits does not end the wait, and when the time is up or ctx ends: the push then goes to the phone
+// (assistantwire.Notification.LinkCovered). A confirmation that came on an earlier link, or on a link whose computer is
+// no desktop now, does not count.
+func (d *Devices) LinkRang(ctx context.Context, card string, within time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
 	for first := true; ; first = false {
 		wake := d.deliveries()
-		now, desktops := time.Now(), false
+		now, desktops, rang := time.Now(), false, false
 		for _, m := range d.cfgMachines() {
-			if p := m.desktop(now); p == nil || !p.Notifies {
+			p, l := m.desktop(now)
+			if p == nil || !p.Notifies {
 				continue
 			}
 			desktops = true
-			if m.rang(card) {
-				d.reportDesktops(false) // the hub hears this desktop before the push that relies on it
-				return true
+			l.heldMu.Lock()
+			rang = slices.Contains(l.held.rang, card)
+			l.heldMu.Unlock()
+			if rang {
+				break
 			}
 		}
-		if first && !desktops {
+		if rang {
+			return d.desktopsReported(ctx, d.requestDesktops(false))
+		}
+		if !desktops && first {
 			return false
 		}
 		select {
 		case <-wake:
-		case <-timeout.C:
+		case <-ctx.Done():
 			return false
 		}
 	}

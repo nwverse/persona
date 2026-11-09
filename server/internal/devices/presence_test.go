@@ -54,7 +54,13 @@ func laptopCfg() devicewire.Config {
 }
 
 // isDesktop: m is a desktop now.
-func isDesktop(m *Machine) bool { return m.desktop(time.Now()) != nil }
+func isDesktop(m *Machine) bool { return desktopOf(m, time.Now()) != nil }
+
+// desktopOf is m as a desktop at now (nil: none).
+func desktopOf(m *Machine, now time.Time) *desktopNow {
+	p, _ := m.desktop(now)
+	return p
+}
 
 // hasPresence: what m's Persona Link said was taken.
 func hasPresence(m *Machine) bool {
@@ -76,7 +82,7 @@ func TestLinkPresenceIsReported(t *testing.T) {
 	before := time.Now()
 	c.send(t, presenceMsg(true, true, 90_000))
 	eventually(t, 5*time.Second, "the presence", func() bool { return isDesktop(m) })
-	first := m.desktop(time.Now())
+	first := desktopOf(m, time.Now())
 	if !first.Notifies || first.Since.Before(before) || first.until.Before(before.Add(90*time.Second)) ||
 		first.until.After(time.Now().Add(90*time.Second)) || first.TTLMS > 90_000 || first.TTLMS < 80_000 {
 		t.Fatalf("desktop %+v", first)
@@ -86,21 +92,21 @@ func TestLinkPresenceIsReported(t *testing.T) {
 		return len(last.Desktops) == 1 && last.Desktops[0].MachineID == "lap" && last.Desktops[0].Since.Equal(first.Since) &&
 			last.Desktops[0].TTLMS > 80_000
 	})
-	if m.desktop(first.until) != nil {
+	if desktopOf(m, first.until) != nil {
 		t.Fatal("still a desktop once its TTL ran out")
 	}
 	// What is said is the TTL left: a report later (a handshake) does not fill it up again.
-	if later := m.desktop(time.Now().Add(30 * time.Second)); later.TTLMS > 60_000 {
+	if later := desktopOf(m, time.Now().Add(30*time.Second)); later.TTLMS > 60_000 {
 		t.Fatalf("30 s later the TTL left is %d ms", later.TTLMS)
 	}
 
 	n, _ := sentDesktops(d)
 	c.send(t, presenceMsg(true, true, 120_000)) // the app's repeat
 	eventually(t, 5*time.Second, "the renewed presence", func() bool {
-		p := m.desktop(time.Now())
+		p := desktopOf(m, time.Now())
 		return p != nil && p.until.After(first.until)
 	})
-	if again := m.desktop(time.Now()); !again.Since.Equal(first.Since) {
+	if again := desktopOf(m, time.Now()); !again.Since.Equal(first.Since) {
 		t.Fatalf("a repeat moved since: %v → %v", first.Since, again.Since)
 	}
 	eventually(t, 5*time.Second, "the repeat reported (the hub would let it lapse)", func() bool {
@@ -114,7 +120,7 @@ func TestLinkPresenceIsReported(t *testing.T) {
 
 	c.send(t, presenceMsg(true, true, 0)) // no ttl_ms: the default
 	eventually(t, 5*time.Second, "the presence again", func() bool { return isDesktop(m) })
-	if p := m.desktop(time.Now()); p.Since.Equal(first.Since) || p.until.After(time.Now().Add(link.PresenceTTL)) {
+	if p := desktopOf(m, time.Now()); p.Since.Equal(first.Since) || p.until.After(time.Now().Add(link.PresenceTTL)) {
 		t.Fatalf("after an inactive one %+v", p)
 	}
 	_ = c.conn.CloseNow()
@@ -124,7 +130,7 @@ func TestLinkPresenceIsReported(t *testing.T) {
 		Features: []string{link.FeatureAttention}})
 	c.next(t, "attention")
 	if l.m != m || isDesktop(m) {
-		t.Fatalf("a new link took the last one's presence: %+v", m.desktop(time.Now()))
+		t.Fatalf("a new link took the last one's presence: %+v", desktopOf(m, time.Now()))
 	}
 }
 
@@ -161,12 +167,12 @@ func TestLinkPresenceTTLIsCapped(t *testing.T) {
 		if ttl < 0 {
 			limit = link.PresenceTTL
 		}
-		if p := m.desktop(time.Now()); p.until.After(time.Now().Add(limit)) || p.TTLMS > limit.Milliseconds() {
+		if p := desktopOf(m, time.Now()); p.until.After(time.Now().Add(limit)) || p.TTLMS > limit.Milliseconds() {
 			t.Fatalf("ttl_ms %d: %+v until %v", ttl, p.Desktop, p.until)
 		}
 	}
 	c.send(t, presenceMsg(true, false, 60_000))
-	eventually(t, 5*time.Second, "notifications off", func() bool { p := m.desktop(time.Now()); return p != nil && !p.Notifies })
+	eventually(t, 5*time.Second, "notifications off", func() bool { p := desktopOf(m, time.Now()); return p != nil && !p.Notifies })
 }
 
 // Only a computer that gets the summary as it is counts (attentionFor's rule): its Persona Link asked for it, it is not
@@ -237,150 +243,50 @@ func TestLinkDesktopHoldsTheSummary(t *testing.T) {
 	eventually(t, 5*time.Second, "a desktop once it holds it", func() bool { return isDesktop(l.m) })
 }
 
-// What a computer holds: nothing until it took one; the first summary taken is the baseline (it rings for nothing); a
-// later one rings for the cards it lists as notifying for the first time; a newer summary not delivered yet still
-// counts once one was taken; a failure ends it until one is taken again. A summary that is not capped forgets the cards it leaves out, as Persona Link forgets
-// their sessions: one listed again notifies again, the baseline's too; a capped one keeps them.
+// What a link holds: nothing until it took a summary, then the summary and its cards; a newer summary not delivered
+// yet still counts; a failure ends it until one is taken again. Confirmations count only for cards of the summary it
+// holds or the one on its way (the app may answer before the send returns), once each, and go when a summary no longer
+// lists their cards.
 func TestSummaryHeld(t *testing.T) {
 	var h summaryHeld
-	a1, a2, a3 := notifying(0, "ix-1"), notifying(0, "ix-1", "ix-2"), notifying(0, "ix-3")
-	a1.Rev, a2.Rev, a3.Rev = "r1", "r2", "r3"
-	if h.holds("r1") {
+	a1, a2 := notifying(0, "ix-1", "ix-2"), notifying(1, "ix-2", "ix-3")
+	a1.Rev, a2.Rev = "r1", "r2"
+	if h.holds() {
 		t.Fatal("held before any summary was taken")
 	}
+	h.confirm("ix-1")
+	if len(h.rang) != 0 {
+		t.Fatal("a confirmation before any summary counts")
+	}
 	h.done(&a1, true)
-	if !h.holds("r1") || h.holds("") || h.rang["ix-1"] {
-		t.Fatalf("after the baseline: %+v", h)
+	if !h.holds() {
+		t.Fatal("not held once taken")
 	}
-	if !h.holds("r2") {
-		t.Fatal("a newer summary on its way after the baseline does not count")
+	h.confirm("ix-1")
+	h.confirm("ix-1")
+	h.confirm("ix-9") // no card of the summary it holds
+	if !slices.Equal(h.rang, []string{"ix-1"}) {
+		t.Fatalf("rang %v", h.rang)
+	}
+	h.done(&a2, false)
+	if h.holds() {
+		t.Fatal("held after a failed delivery")
 	}
 	h.done(&a2, true)
-	if !h.rang["ix-2"] || h.rang["ix-1"] {
-		t.Fatalf("rang %v: ix-2 rang, ix-1 was notifying in the baseline already", h.rang)
+	if !h.holds() || len(h.rang) != 0 {
+		t.Fatalf("after r2 was taken: held %v, rang %v (ix-1 is no longer listed)", h.holds(), h.rang)
 	}
-	h.done(&a3, false)
-	if h.holds("r3") || h.holds("r2") || h.rang["ix-3"] {
-		t.Fatalf("after a failed delivery: %+v", h)
-	}
+	a3 := notifying(0, "ix-3", "ix-4")
+	a3.Rev = "r3"
+	h.begin(&a3)
+	h.confirm("ix-4") // the app was quicker than the send's return
 	h.done(&a3, true)
-	if !h.holds("r3") || !h.rang["ix-3"] {
-		t.Fatalf("after it was taken: %+v", h)
+	if !slices.Equal(h.rang, []string{"ix-4"}) {
+		t.Fatalf("a confirmation of the summary on its way: rang %v", h.rang)
 	}
-	if _, kept := h.rang["ix-1"]; kept {
-		t.Fatalf("rang %v: ix-1 left a summary that is not capped, yet it is remembered", h.rang)
-	}
-	h.done(&a2, true)
-	if !h.rang["ix-1"] {
-		t.Fatalf("rang %v: ix-1 listed again as notifying, Persona Link rings for it again", h.rang)
-	}
-	capped := notifying(1, "ix-9")
-	capped.Rev = "r9"
-	h.done(&capped, true)
-	if !h.rang["ix-1"] || !h.rang["ix-2"] {
-		t.Fatalf("rang %v: a capped summary forgot the cards past its cap", h.rang)
-	}
-}
-
-// Passive mode: each info read takes the presence the connector says (and reports it); one without it ends it, and so
-// does a read that fails. The connector must hold the summary as it is: a post that fails (500), that is refused (429)
-// or that times out ends it until a post is taken again; an info read that goes through does not bring it back.
-func TestConnectorPresence(t *testing.T) {
-	ac := newAttConnector(t)
-	ac.set(func(ac *attConnector) {
-		ac.features = []string{link.FeatureAttention}
-		ac.presence = &link.PresenceInfo{Active: true, Notifies: true, TTLMS: 100_000}
-	})
-	m := serviceMachineAt(t, ac.srv, ac.fp, "jc_test")
-	a := notifying(0, "ix-1")
-	m.d.attention.Store(&a)
-	probe(m) // info, then the summary posted
-	if !isDesktop(m) {
-		probe(m) // the post came after the info read's report: the next read reports it
-	}
-	p := m.desktop(time.Now())
-	if p == nil || !p.Notifies || p.MachineID != "example-service" || p.TTLMS > 100_000 {
-		t.Fatalf("desktop %+v", p)
-	}
-	eventually(t, 5*time.Second, "the presence reported", func() bool {
-		_, last := sentDesktops(m.d)
-		return len(last.Desktops) == 1 && last.Desktops[0].MachineID == "example-service"
-	})
-	n, _ := sentDesktops(m.d)
-	probe(m)
-	if again, _ := sentDesktops(m.d); again <= n {
-		t.Fatal("a renewed presence was not reported")
-	}
-
-	ac.set(func(ac *attConnector) { ac.fail = 1 }) // GET 200, POST 500
-	b := notifying(0, "ix-1", "ix-2")
-	m.d.SetAttention(b)
-	probe(m)
-	if isDesktop(m) {
-		t.Fatal("a desktop whose connector did not take the summary (500)")
-	}
-	eventually(t, 5*time.Second, "the hub told it is no desktop", func() bool {
-		_, last := sentDesktops(m.d)
-		return len(last.Desktops) == 0
-	})
-	m.probeService(context.Background()) // GET 200 alone, no post
-	if isDesktop(m) {
-		t.Fatal("an info read alone made it a desktop again")
-	}
-	probe(m) // the post is taken
-	if !isDesktop(m) {
-		t.Fatal("not a desktop once a post was taken")
-	}
-	if !m.rang("ix-2") || m.rang("ix-1") {
-		t.Fatal("ix-2 was rung for, ix-1 was in the baseline")
-	}
-
-	ac.set(func(ac *attConnector) { ac.refuse = 429 })
-	m.d.SetAttention(notifying(0, "ix-3"))
-	probe(m)
-	if isDesktop(m) {
-		t.Fatal("a desktop whose connector refused the summary (429)")
-	}
-
-	ac.set(func(ac *attConnector) { ac.presence = nil; ac.refuse = 0 })
-	m2 := serviceMachineAt(t, ac.srv, ac.fp, "jc_test")
-	ac.set(func(ac *attConnector) { ac.presence = &link.PresenceInfo{Active: true, Notifies: true, TTLMS: 100_000} })
-	m2.d.attention.Store(&a)
-	probe(m2)
-	probe(m2)
-	if !isDesktop(m2) {
-		t.Fatal("no desktop")
-	}
-	ac.set(func(ac *attConnector) { ac.stall = true })
-	m2.d.SetAttention(b)
-	m2.probeService(context.Background())
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	m2.postAttention(ctx) // times out
-	cancel()
-	if isDesktop(m2) {
-		t.Fatal("a desktop whose connector did not answer the post in time")
-	}
-	ac.set(func(ac *attConnector) { ac.stall = false; ac.held = m2.d.attentionFor(m2.cfg.ID, "").Rev }) // it took it after all
-	m2.probeService(context.Background())
-	if !isDesktop(m2) {
-		t.Fatal("not a desktop once its info says it holds the summary as it is")
-	}
-
-	ac.set(func(ac *attConnector) { ac.presence = nil })
-	probe(m2)
-	if isDesktop(m2) {
-		t.Fatal("still a desktop once the info says nothing")
-	}
-	ac.set(func(ac *attConnector) { ac.presence = &link.PresenceInfo{Active: true, Notifies: true, TTLMS: 100_000} })
-	probe(m2)
-	probe(m2)
-	if !isDesktop(m2) {
-		t.Fatal("no desktop again")
-	}
-	ac.srv.Close()
-	probe(m2)
-	if isDesktop(m2) {
-		t.Fatal("still a desktop once its connector stopped answering")
+	h.confirm("ix-1") // in neither: no longer on its way
+	if !slices.Equal(h.rang, []string{"ix-4"}) {
+		t.Fatalf("a confirmation of a card no summary lists now: rang %v", h.rang)
 	}
 }
 
@@ -394,8 +300,11 @@ func TestDesktopsGoOutOnHandshake(t *testing.T) {
 		_, last := sentDesktops(d)
 		return len(last.Desktops) == 1
 	})
+	settle := func() { d.desktopsReported(context.Background(), d.requestDesktops(false)) }
+	settle()
 	n, _ := sentDesktops(d)
 	d.report(false)
+	settle()
 	if again, _ := sentDesktops(d); again != n {
 		t.Fatalf("an ordinary report resent unchanged desktops (%d → %d)", n, again)
 	}
@@ -403,7 +312,22 @@ func TestDesktopsGoOutOnHandshake(t *testing.T) {
 	f.mu.Lock()
 	from := len(f.notified)
 	f.mu.Unlock()
-	d.report(true)
+	release := f.hold(devicewire.EventState)
+	defer release()
+	reported := make(chan struct{})
+	go func() { d.report(true); close(reported) }()
+	eventually(t, 5*time.Second, "the machines on their way", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.waiting > 0
+	})
+	settle()
+	if again, _ := sentDesktops(d); again != n {
+		t.Fatal("a handshake's desktops went out while the hub had not taken its machines")
+	}
+	release()
+	<-reported
+	settle()
 	again, last := sentDesktops(d)
 	if again != n+1 || len(last.Desktops) != 1 || last.Desktops[0].MachineID != l.m.cfg.ID {
 		t.Fatalf("after a handshake: %d sent, last %+v", again-n, last)
@@ -434,138 +358,155 @@ func TestAbsorbedLinkPresenceUsesTheComputersID(t *testing.T) {
 	})
 }
 
-// LinkRang: false at once without a desktop; a card in the baseline, or listed only past the cap, rang for nothing; a
-// card a later summary the desktop took lists as notifying rang, also when that summary comes while LinkRang waits.
+func rangMsg(card string) link.Message { return link.Message{Type: "rang", InteractionID: card} }
+
+// activeDesktop is a laptop whose Persona Link holds the summary s (its cards) and says the user is at it.
+func activeDesktop(t *testing.T, d *Devices, s link.Attention) (*testLinkClient, *mgrLink) {
+	t.Helper()
+	d.SetAttention(s)
+	c, l := heldLink(t, d, laptopCfg())
+	c.send(t, presenceMsg(true, true, 60_000))
+	eventually(t, 5*time.Second, "the desktop", func() bool { return isDesktop(l.m) })
+	return c, l
+}
+
+// LinkRang counts only the app's confirmations: false at once without a desktop; a card the summary lists but the app
+// did not confirm, or one it confirmed though no summary it holds lists it, rang for nothing; one it confirms while
+// LinkRang waits, or confirmed before it began, rang; and then the hub has been told of the desktop.
 func TestLinkRang(t *testing.T) {
 	d := newTestDevices(t)
 	start := time.Now()
-	if d.LinkRang("ix-1", 5*time.Second) || time.Since(start) > time.Second {
+	if d.LinkRang(context.Background(), "ix-1", 5*time.Second) || time.Since(start) > time.Second {
 		t.Fatal("rang (or waited) with no desktop")
 	}
-	d.SetAttention(notifying(0, "ix-base"))
-	c, l := heldLink(t, d, laptopCfg())
-	c.send(t, presenceMsg(true, true, 60_000))
-	eventually(t, 5*time.Second, "the desktop", func() bool { return isDesktop(l.m) })
-	if d.LinkRang("ix-base", 100*time.Millisecond) {
-		t.Fatal("a card of the baseline rang")
+	c, _ := activeDesktop(t, d, notifying(1, "ix-1", "ix-2", "ix-3"))
+	if d.LinkRang(context.Background(), "ix-1", 100*time.Millisecond) {
+		t.Fatal("a card the app never confirmed rang")
 	}
-	d.SetAttention(notifying(1, "ix-new")) // ix-old is past the cap: in More only
-	c.next(t, "attention")
-	if !d.LinkRang("ix-new", 5*time.Second) {
-		t.Fatal("a card a later summary listed as notifying did not ring")
+	c.send(t, rangMsg("ix-old")) // in More only: the app has nothing of it to show
+	if d.LinkRang(context.Background(), "ix-old", 100*time.Millisecond) {
+		t.Fatal("a confirmation of a card no summary the link took lists counts")
 	}
-	if d.LinkRang("ix-old", 100*time.Millisecond) {
-		t.Fatal("a card in More rang")
+	c.send(t, rangMsg("ix-2"))
+	eventually(t, 5*time.Second, "the confirmation taken", func() bool {
+		return d.LinkRang(context.Background(), "ix-2", 10*time.Millisecond)
+	})
+	n, _ := sentDesktops(d)
+	if n == 0 {
+		t.Fatal("LinkRang said yes before the hub was told of the desktop")
 	}
 	got := make(chan bool, 1)
-	go func() { got <- d.LinkRang("ix-late", 5*time.Second) }()
+	go func() { got <- d.LinkRang(context.Background(), "ix-3", 5*time.Second) }()
 	time.Sleep(50 * time.Millisecond)
-	d.SetAttention(notifying(0, "ix-new", "ix-late"))
+	c.send(t, rangMsg("ix-3"))
 	if !<-got {
-		t.Fatal("a card that rang while LinkRang waited")
+		t.Fatal("a confirmation that came while LinkRang waited")
 	}
 }
 
-// LinkRang waits for a desktop that stops counting while it waits (another delivery ends before the newer summary
-// went out to it) instead of taking it as gone; a desktop whose notifications do not show rings for nothing.
-func TestLinkRangWaitsForTheNewerSummary(t *testing.T) {
+// A desktop that stops counting for a while (its presence lapses, a send fails) does not end a card's wait: a
+// confirmation once it counts again, in time, still covers the card.
+func TestLinkRangOutlivesAGap(t *testing.T) {
 	d := newTestDevices(t)
-	d.SetAttention(notifying(0))
-	c, l := heldLink(t, d, laptopCfg())
-	c.send(t, presenceMsg(true, true, 60_000))
-	eventually(t, 5*time.Second, "the desktop", func() bool { return isDesktop(l.m) })
+	c, l := activeDesktop(t, d, notifying(0, "ix-1", "ix-2"))
 	got := make(chan bool, 1)
-	go func() { got <- d.LinkRang("ix-1", 5*time.Second) }()
-	time.Sleep(50 * time.Millisecond) // LinkRang found the desktop
-	a := notifying(0, "ix-1")
-	d.attention.Store(&a) // the newer summary, not on its way yet: the desktop does not count meanwhile
-	d.delivered()         // another computer's delivery ends
+	go func() { got <- d.LinkRang(context.Background(), "ix-1", 10*time.Second) }()
 	time.Sleep(50 * time.Millisecond)
-	d.spreadAttention()
-	c.next(t, "attention")
+	c.send(t, presenceMsg(false, true, 0))
+	eventually(t, 5*time.Second, "no desktop", func() bool { return !isDesktop(l.m) })
+	c.send(t, rangMsg("ix-2")) // wakes the wait while there is no desktop
+	time.Sleep(50 * time.Millisecond)
+	c.send(t, presenceMsg(true, true, 60_000))
+	eventually(t, 5*time.Second, "the desktop back", func() bool { return isDesktop(l.m) })
+	c.send(t, rangMsg("ix-1"))
 	if !<-got {
-		t.Fatal("a desktop that did not count for a moment was taken as gone")
+		t.Fatal("a gap in the desktop ended the wait")
 	}
+}
 
+// A confirmation counts on the link it came on: a new link of the computer starts with none.
+func TestConfirmationCountsOnItsLinkOnly(t *testing.T) {
+	d := newTestDevices(t)
+	c, l := activeDesktop(t, d, notifying(0, "ix-1"))
+	c.send(t, rangMsg("ix-1"))
+	eventually(t, 5*time.Second, "the confirmation taken", func() bool {
+		return d.LinkRang(context.Background(), "ix-1", 10*time.Millisecond)
+	})
+	c2, _ := dialTestLinkHello(t, d, link.Message{Type: "hello", Machine: "lap", Version: "test", Address: testHubAddress,
+		Features: []string{link.FeatureAttention}})
+	c2.next(t, "attention")
+	c2.send(t, presenceMsg(true, true, 60_000))
+	eventually(t, 5*time.Second, "the new link's desktop", func() bool {
+		p, nl := l.m.desktop(time.Now())
+		return p != nil && nl != l
+	})
+	if d.LinkRang(context.Background(), "ix-1", 100*time.Millisecond) {
+		t.Fatal("a confirmation from the earlier link counts on the new one")
+	}
+}
+
+// A confirmation of a computer that is no desktop now (its Persona Link says the user left, or its notifications do
+// not show) does not count.
+func TestConfirmationOfALinkThatIsNoDesktop(t *testing.T) {
+	d := newTestDevices(t)
+	c, l := activeDesktop(t, d, notifying(0, "ix-1"))
+	c.send(t, rangMsg("ix-1"))
+	eventually(t, 5*time.Second, "the confirmation taken", func() bool {
+		return d.LinkRang(context.Background(), "ix-1", 10*time.Millisecond)
+	})
 	c.send(t, presenceMsg(true, false, 60_000))
-	eventually(t, 5*time.Second, "notifications that do not show", func() bool {
-		p := l.m.desktop(time.Now())
-		return p != nil && !p.Notifies
+	eventually(t, 5*time.Second, "notifications off", func() bool { p := desktopOf(l.m, time.Now()); return p != nil && !p.Notifies })
+	if d.LinkRang(context.Background(), "ix-1", 100*time.Millisecond) {
+		t.Fatal("a desktop whose notifications do not show counts")
+	}
+	c.send(t, presenceMsg(false, true, 0))
+	eventually(t, 5*time.Second, "no desktop", func() bool { return !isDesktop(l.m) })
+	if d.LinkRang(context.Background(), "ix-1", 100*time.Millisecond) {
+		t.Fatal("a computer that is no desktop now counts")
+	}
+}
+
+// LinkRang's deadline covers its wait for the hub to be told of the desktops: with the hub not taking devices.desktops,
+// a card says no once its time is up, also while another card's LinkRang still waits (neither waits behind the other),
+// and the service's end ends a wait at once.
+func TestLinkRangWithinTheDeadlineWhileTheHubIsSlow(t *testing.T) {
+	d := newTestDevices(t)
+	c, _ := activeDesktop(t, d, notifying(0, "ix-1", "ix-2"))
+	c.send(t, rangMsg("ix-1"))
+	c.send(t, rangMsg("ix-2"))
+	eventually(t, 5*time.Second, "the confirmations taken", func() bool {
+		return d.LinkRang(context.Background(), "ix-2", 10*time.Millisecond)
 	})
-	d.SetAttention(notifying(0, "ix-1", "ix-2"))
-	c.next(t, "attention")
+	release := d.host().hold(devicewire.EventDesktops)
+	defer release()
+	d.requestDesktops(true) // the reporter is now stuck in the hub's hands
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := make(chan bool, 1)
+	go func() { first <- d.LinkRang(ctx, "ix-1", time.Minute) }()
+	time.Sleep(50 * time.Millisecond)
+
 	start := time.Now()
-	if d.LinkRang("ix-2", 5*time.Second) || time.Since(start) > time.Second {
-		t.Fatal("a desktop whose notifications do not show rang (or was waited for)")
+	if d.LinkRang(context.Background(), "ix-2", 300*time.Millisecond) {
+		t.Fatal("yes while the hub was never told of the desktop")
 	}
-}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("a wait of 300 ms took %v: past its deadline, or behind the other card's", took)
+	}
+	select {
+	case <-first:
+		t.Fatal("the other card's LinkRang ended before its time")
+	default:
+	}
 
-// A connector that says it holds no summary (it restarted, its summary went stale) takes the next one as Persona Link's
-// baseline again: the cards in it rang for nothing.
-func TestConnectorRestartTakesABaseline(t *testing.T) {
-	ac := newAttConnector(t)
-	ac.set(func(ac *attConnector) {
-		ac.features = []string{link.FeatureAttention}
-		ac.presence = &link.PresenceInfo{Active: true, Notifies: true, TTLMS: 100_000}
-	})
-	m := serviceMachineAt(t, ac.srv, ac.fp, "jc_test")
-	a := notifying(0)
-	m.d.attention.Store(&a)
-	probe(m) // the baseline
-	m.d.SetAttention(notifying(0, "ix-1"))
-	probe(m)
-	if !m.rang("ix-1") {
-		t.Fatal("a card after the baseline did not ring")
-	}
-	ac.set(func(ac *attConnector) { ac.held = "" }) // it restarted
-	m.d.SetAttention(notifying(0, "ix-1", "ix-2"))
-	probe(m)
-	if m.rang("ix-2") {
-		t.Fatal("a card in the restarted connector's first summary rang")
-	}
-}
-
-// A post the answer of which names another run of the connector (it restarted between two info reads) went to its menu
-// bar app as a baseline: the cards in it rang for nothing. Another run named by an info read is the same.
-func TestConnectorNewRunTakesABaseline(t *testing.T) {
-	ac := newAttConnector(t)
-	ac.set(func(ac *attConnector) {
-		ac.features, ac.instance = []string{link.FeatureAttention}, "run-1"
-		ac.presence = &link.PresenceInfo{Active: true, Notifies: true, TTLMS: 100_000}
-	})
-	m := serviceMachineAt(t, ac.srv, ac.fp, "jc_test")
-	a := notifying(0)
-	m.d.attention.Store(&a)
-	probe(m) // the baseline
-	m.d.SetAttention(notifying(0, "ix-1"))
-	sendWoken(context.Background(), m)
-	if !m.rang("ix-1") {
-		t.Fatal("a card after the baseline did not ring")
-	}
-	ac.set(func(ac *attConnector) { ac.instance = "run-2" }) // it restarted (and still says the old rev, as it may)
-	m.d.SetAttention(notifying(0, "ix-1", "ix-2"))
-	sendWoken(context.Background(), m)
-	m.postAttention(context.Background())
-	if m.rang("ix-2") {
-		t.Fatal("a card in the new run's first summary rang")
-	}
-	// A new run holds no summary yet; the info read names it, and the summary posted then is its baseline.
-	ac.set(func(ac *attConnector) { ac.instance, ac.held = "run-3", "" })
-	probe(m)
-	if m.rang("ix-1") || m.rang("ix-2") {
-		t.Fatal("a card of the new run's baseline counts as rung")
-	}
-	m.d.SetAttention(notifying(0, "ix-1", "ix-2", "ix-3"))
-	sendWoken(context.Background(), m)
-	m.postAttention(context.Background())
-	if !m.rang("ix-3") {
-		t.Fatal("a card after the new run's baseline did not ring")
-	}
-	// Another run that took a summary whose answer never came: the info read names it, and what it holds was its
-	// baseline: nothing this manager saw rung counts for it.
-	ac.set(func(ac *attConnector) { ac.instance = "run-4" })
-	m.probeService(context.Background())
-	if m.rang("ix-3") {
-		t.Fatal("a card rung on the earlier run counts for the new one")
+	cancel()
+	select {
+	case ok := <-first:
+		if ok {
+			t.Fatal("yes once the service ended")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the service's end did not end LinkRang")
 	}
 }

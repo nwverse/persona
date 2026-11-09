@@ -10,12 +10,14 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A card's push spares the phone (LinkCovered) only when a summary the manager's Persona Link desktop took rang for it:
-// the card that stands for its agent, notifying, among the listed items. These tests have the manager look at the
-// fleet by hand (as liveLoop does), so what each summary holds is the test's to say, and check every card's push.
+// A card's push spares the phone (LinkCovered) only once the manager's Persona Link desktop confirmed it handed the
+// card's notification to Notification Center, and the manager waits for that only for a card its summary is to ring
+// for (the card that stands for its agent, notifying, among the listed items). These tests have the manager look at the
+// fleet by hand (as liveLoop does) and play the desktop's app (appRings), so what each summary holds and which cards
+// the app confirms is the test's to say; they check every card's push.
 
-// coverFlow is a manager with n blocked agents on "mac" (s01…), one Persona Link desktop that takes every summary the
-// manager hands over (the first as its baseline), and an assistant that decides on questions when told (decided).
+// coverFlow is a manager with n blocked agents on "mac" (s01…), one Persona Link desktop, and an assistant that decides
+// on questions when told (decided).
 type coverFlow struct {
 	s       *Service
 	f       *fakeHub
@@ -66,6 +68,17 @@ func (cf *coverFlow) raise(t *testing.T, ix proto.Interaction) {
 	waitUntil(t, func() bool { _, ok := cf.s.pendingIx(ix.ID); return ok })
 }
 
+// appRings is the desktop's app given the last summary: it hands the notification of every card listed as notifying to
+// Notification Center and confirms it (a card in More, or one no summary lists, it has nothing to show of).
+func (cf *coverFlow) appRings() {
+	all := cf.d.handedAttention()
+	for _, it := range all[len(all)-1].Items {
+		if it.Notify && it.InteractionID != "" {
+			cf.d.confirm(it.InteractionID)
+		}
+	}
+}
+
 // told waits until n cards are the user's (tell rang them).
 func (cf *coverFlow) told(t *testing.T, n int) {
 	t.Helper()
@@ -77,8 +90,8 @@ func permissionCard(id, session string, at time.Time) proto.Interaction {
 		Summary: "npm test", CreatedAt: at.UTC(), ExpiresAt: at.Add(24 * time.Hour).UTC()}
 }
 
-// pushes waits for n card pushes and returns them by card; every one that spared the phone was rung for by a summary
-// the desktop took after its baseline, as its agent's card, notifying.
+// pushes waits for n card pushes and returns them by card; every one that spared the phone was confirmed by the
+// desktop's app.
 func (cf *coverFlow) pushes(t *testing.T, n int) map[string]Notification {
 	t.Helper()
 	out := map[string]Notification{}
@@ -93,8 +106,11 @@ func (cf *coverFlow) pushes(t *testing.T, n int) map[string]Notification {
 		}
 	}
 	for id, p := range out {
-		if p.LinkCovered && !rangIn(cf.d.handedAttention(), id) {
-			t.Fatalf("card %s spared the phone, but no summary the desktop took rang for it", id)
+		cf.d.mu.Lock()
+		confirmed := cf.d.confirmed[id]
+		cf.d.mu.Unlock()
+		if p.LinkCovered && !confirmed {
+			t.Fatalf("card %s spared the phone, but the desktop's app never confirmed it", id)
 		}
 	}
 	return out
@@ -111,6 +127,7 @@ func TestLinkCoverWhenCardsComeTogether(t *testing.T) {
 		cf.told(t, i)
 	}
 	cf.look() // one summary for all 21
+	cf.appRings()
 	start := time.Now()
 	got := cf.pushes(t, 21)
 	if time.Since(start) < linkRangWait/2 {
@@ -142,10 +159,12 @@ func TestLinkCoverQuestionHandedPastTheCap(t *testing.T) {
 	}
 	cf.told(t, 20)
 	cf.look()
+	cf.appRings()
 	cf.pushes(t, 20)
 	cf.decided <- DelegateResult{} // the assistant leaves it to the user: tell rings it
 	cf.told(t, 21)
 	cf.look()
+	cf.appRings()
 	if got := cf.pushes(t, 21); got["q01"].LinkCovered {
 		t.Fatal("a question past the cap spared the phone")
 	}
@@ -160,10 +179,12 @@ func TestLinkCoverSecondCardOfAnAgent(t *testing.T) {
 	cf.raise(t, permissionCard("a1", "s01", base))
 	cf.told(t, 1)
 	cf.look()
+	cf.appRings()
 	start := time.Now()
 	cf.raise(t, permissionCard("b1", "s01", base.Add(time.Second)))
 	cf.told(t, 2)
 	cf.look()
+	cf.appRings()
 	got := cf.pushes(t, 2)
 	if took := time.Since(start); took > linkRangWait/2 {
 		t.Fatalf("the second card waited %v for Persona Link, which never rings for it", took)
@@ -187,5 +208,20 @@ func TestLinkCoverWithoutADesktop(t *testing.T) {
 	cf.raise(t, permissionCard("a1", "s01", time.Now()))
 	if got := cf.pushes(t, 1); got["a1"].LinkCovered || time.Since(start) > linkRangWait {
 		t.Fatal("a card spared the phone, or waited, with no desktop")
+	}
+}
+
+// A card the summary rings for, but whose notification the app never confirms (it dropped it before handing it over,
+// Notification Center refused it, the link went): after the wait it goes to the phone.
+func TestLinkCoverWithoutAConfirmation(t *testing.T) {
+	cf := newCoverFlow(t, 1, false)
+	cf.look()
+	start := time.Now()
+	cf.raise(t, permissionCard("a1", "s01", time.Now()))
+	cf.told(t, 1)
+	cf.look() // the app gets it, but confirms nothing
+	got := cf.pushes(t, 1)
+	if got["a1"].LinkCovered || time.Since(start) < linkRangWait/2 {
+		t.Fatal("an unconfirmed card spared the phone, or did not wait for the confirmation")
 	}
 }

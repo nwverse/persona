@@ -72,6 +72,10 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 	})
 	go l.renames(ctx, o, rep)
 	go l.presence(ctx, o)
+	if o.Confirms != nil {
+		o.Confirms.drop() // the earlier link's: this link reads nothing for the app before it is empty
+		go l.confirms(ctx, o)
+	}
 	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind)
 	drop := func(err error) {
 		cancel(err)
@@ -309,6 +313,20 @@ func (l *link) presence(ctx context.Context, o Options) {
 		case <-ctx.Done():
 			return
 		case <-o.Presence.Poked():
+		}
+	}
+}
+
+// confirms passes on the cards the app rang for while this link is up (presence.go).
+func (l *link) confirms(ctx context.Context, o Options) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case card := <-o.Confirms.C():
+			if err := l.send(ctx, Message{Type: "rang", InteractionID: card}); err != nil && ctx.Err() == nil {
+				o.Logf("link: rang: %v", err)
+			}
 		}
 	}
 }

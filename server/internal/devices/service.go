@@ -67,13 +67,9 @@ type serviceState struct {
 	version string    // the connector's build
 	pairGen int       // bumped when it is paired again
 	// attention: its last info said it takes the "Needs you" summary; attRev: the Rev of the summary it holds, as that
-	// info said or a post since made it (attention.go). held: what its Persona Link holds of it (presence.go).
+	// info said or a post since made it (attention.go).
 	attention bool
 	attRev    string
-	held      summaryHeld
-	// instance: the connector's run, as its info or a taken post last said (link.InstanceHeader): another one holds no
-	// summary of the earlier run's, and its menu bar app takes its first as a baseline.
-	instance string
 	// cred is the pin and credential as the hub last handed them over (devices.connector_cred), kept so the secret
 	// crosses the bus once, not on every probe; forgotten when the connector refuses it or it is paired again.
 	cred *connectorCred
@@ -442,9 +438,6 @@ func (m *Machine) probeService(ctx context.Context) {
 		}
 		was := m.svc.ok
 		m.svc.probed, m.svc.ok, m.svc.rtt, m.svc.err = time.Now(), ok, rtt, err
-		if !ok {
-			m.presence = nil // what an unreachable connector said last no longer stands
-		}
 		if version != "" {
 			m.svc.version = version
 		}
@@ -503,34 +496,11 @@ func (m *Machine) probeService(ctx context.Context) {
 		return
 	}
 	set(true, rtt, "", info.Version)
-	cur := m.d.attentionFor(m.cfg.ID, m.d.config().WebURL)
 	m.mu.Lock()
-	present := false
 	if !m.svcMovedOnLocked(gen) {
 		m.svc.attention, m.svc.attRev = slices.Contains(info.Features, link.FeatureAttention), info.AttentionRev
-		switch {
-		case m.svc.held.taken != st.held.taken:
-			// A post was taken while the info was read: newer than what the info says.
-		case info.Instance != "" && info.Instance != m.svc.instance || info.AttentionRev == "":
-			// Another run, or it holds none (the summary went stale): what it holds is new to its menu bar app.
-			m.svc.held = summaryHeld{sent: info.AttentionRev}
-		case cur != nil && info.AttentionRev == cur.Rev:
-			// It holds the summary as it is: also after a post whose answer did not come in time.
-			m.svc.held.sent, m.svc.held.failed = cur.Rev, false
-		case info.AttentionRev != m.svc.held.sent:
-			m.svc.held.sent = info.AttentionRev // one this manager did not see taken (it restarted): not a baseline
-		}
-		if info.Instance != "" {
-			m.svc.instance = info.Instance
-		}
-		present = m.presence != nil
-		m.keepPresenceLocked(info.Presence, time.Now())
-		present = present || m.presence != nil
 	}
 	m.mu.Unlock()
-	if present {
-		m.d.reportDesktops(false) // the presence's new deadline, or its end (presence.go)
-	}
 	m.wakeAttention() // posted by the machine's own sender: a connector slow to take it holds up no probe
 }
 

@@ -40,6 +40,31 @@ type fakeHost struct {
 	theirs map[string]bool
 	// rename answers devices.rename (nil: unknown_method, as an older hub).
 	rename func(p devicewire.Rename) (devicewire.RenameReply, error)
+
+	// gates holds every event of a kind until its gate is closed (a hub slow to take it, hold); waiting counts the
+	// ones held now.
+	gates   map[string]chan struct{}
+	waiting int
+}
+
+// hold makes the hub take no event of this kind until release.
+func (f *fakeHost) hold(event string) (release func()) {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	if f.gates == nil {
+		f.gates = map[string]chan struct{}{}
+	}
+	f.gates[event] = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.gates, event)
+			f.mu.Unlock()
+			close(gate)
+		})
+	}
 }
 
 func (f *fakeHost) Call(ctx context.Context, method string, params, out any) error {
@@ -120,6 +145,18 @@ func (f *fakeHost) Call(ctx context.Context, method string, params, out any) err
 func (f *fakeHost) Notify(event string, params any) error {
 	raw, _ := json.Marshal(params)
 	f.mu.Lock()
+	gate := f.gates[event]
+	if gate != nil {
+		f.waiting++
+	}
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
+	if gate != nil {
+		f.waiting--
+	}
 	defer f.mu.Unlock()
 	f.notified = append(f.notified, event)
 	switch event {

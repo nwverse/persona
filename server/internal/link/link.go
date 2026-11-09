@@ -73,7 +73,7 @@ func PingTimesMS(every, timeout int64) (time.Duration, time.Duration, bool) {
 
 // Message is one JSON message on the link.
 type Message struct {
-	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention | presence
+	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention | presence | rang
 	// hello (persona-link → hub, the first message): which machine, which build, and the hub URL it went to.
 	Machine string `json:"machine,omitempty"`
 	Version string `json:"version,omitempty"`
@@ -113,6 +113,9 @@ type Message struct {
 	Active   bool  `json:"active,omitempty"`
 	Notifies bool  `json:"notifies,omitempty"`
 	TTLMS    int64 `json:"ttl_ms,omitempty"`
+	// rang (persona-link → hub): the menu bar app handed the notification of this card (its interaction id, as the
+	// summary names it) to Notification Center. Older managers ignore it.
+	InteractionID string `json:"interaction_id,omitempty"`
 }
 
 // Endpoint is a hub URL on its TLS port, or a reverse proxy's https URL with the path the hub sits under (no trailing

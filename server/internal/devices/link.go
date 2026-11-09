@@ -166,6 +166,8 @@ func (d *Devices) acceptLink(conn *websocket.Conn, a devicewire.Accept) {
 			go d.linkRename(l, msg)
 		case "presence":
 			m.takePresence(l, msg)
+		case "rang":
+			m.takeRang(l, msg.InteractionID)
 		}
 	}
 	cause := context.Cause(ctx)

@@ -1,10 +1,8 @@
 package link
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,42 +117,81 @@ func TestLinkSendsPresence(t *testing.T) {
 	wait("on the next link", 2, func(m Message) bool { return !m.Active && m.Notifies })
 }
 
-// Passive mode: the info answer carries the app's latest presence once it said one.
-func TestPassiveInfoCarriesPresence(t *testing.T) {
-	box := NewPresenceBox()
-	c := startConnector(t, newFakeNode(t).path, Options{Presence: box})
-	fp, code := c.invite(t)
-	h := hubFor(t, c.addr, fp)
-	if r := h.pair(code, tokenA); r.status != http.StatusOK {
-		t.Fatalf("pair: %+v", r)
+func TestParseRangLine(t *testing.T) {
+	if card, ok := ParseRangLine([]byte(`{"rang":{"interaction_id":"ix-1"}}`)); !ok || card != "ix-1" {
+		t.Fatalf("%q %v", card, ok)
 	}
-	if info := h.infoOf(tokenA); info.Presence != nil {
-		t.Fatalf("presence before the app said any: %+v", info.Presence)
-	}
-	box.Set(Presence{Active: true, Notifies: true}, time.Now())
-	info := h.infoOf(tokenA)
-	if p := info.Presence; p == nil || !p.Active || !p.Notifies || p.TTLMS <= 0 || p.TTLMS > PresenceTTL.Milliseconds() {
-		t.Fatalf("info %+v", info.Presence)
+	for _, line := range []string{``, `{}`, `{"rang":null}`, `{"rang":{}}`, `{"rang":{"interaction_id":""}}`,
+		`{"presence":{"active":true}}`} {
+		if card, ok := ParseRangLine([]byte(line)); ok {
+			t.Errorf("%q read as a confirmation of %q", line, card)
+		}
 	}
 }
 
-// The connector names its run in its info and on the answer to a summary it took, the same name for the same run: the
-// manager tells from it that a summary went to a new run (its menu bar app's baseline).
-func TestPassiveNamesItsRun(t *testing.T) {
-	_, h := pairedConnector(t)
-	first := h.infoOf(tokenA).Instance
-	if first == "" || h.infoOf(tokenA).Instance != first {
-		t.Fatalf("info names its run %q, then %q", first, h.infoOf(tokenA).Instance)
+// A link passes on the cards the app rang for while it is up, as rang messages; the ones queued before it came up
+// were the earlier link's and are not passed on.
+func TestLinkSendsConfirmations(t *testing.T) {
+	type sent struct {
+		link int32
+		card string
 	}
-	body, _ := json.Marshal(sampleAttention("r1"))
-	req, _ := http.NewRequest(http.MethodPost, h.base+ConnectorAttentionPath, bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+tokenA)
-	resp, err := h.client.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	confirms := NewConfirms()
+	confirms.Push("ix-stale") // queued before any link: not this link's
+	got := make(chan sent, 16)
+	up := make(chan int32, 4)
+	var links atomic.Int32
+	drop := make(chan struct{})
+	srv, _ := fakeHubHello(t, func(c *websocket.Conn, _ Message) {
+		n := links.Add(1)
+		if n == 1 {
+			go func() {
+				<-drop
+				c.CloseNow()
+			}()
+		}
+		up <- n
+		for {
+			_, b, err := c.Read(context.Background())
+			if err != nil {
+				return
+			}
+			var m Message
+			if json.Unmarshal(b, &m) == nil && m.Type == "rang" {
+				got <- sent{n, m.InteractionID}
+			}
+		}
+	})
+	runAgainst(t, srv, "jd_x", Options{Confirms: confirms})
+	// pushUntil pushes card every 50 ms (the link's sender may not run yet) until a rang comes, and checks it.
+	pushUntil := func(what, card string, link int32) {
+		t.Helper()
+		timeout := time.After(10 * time.Second)
+		for tick := time.NewTicker(50 * time.Millisecond); ; {
+			confirms.Push(card)
+			select {
+			case s := <-got:
+				tick.Stop()
+				if s != (sent{link, card}) {
+					t.Fatalf("%s: got %+v, want %s on link %d", what, s, card, link)
+				}
+				return
+			case <-tick.C:
+			case <-timeout:
+				t.Fatalf("no rang: %s", what)
+			}
+		}
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent || resp.Header.Get(InstanceHeader) != first {
-		t.Fatalf("HTTP %d, run %q, want %q", resp.StatusCode, resp.Header.Get(InstanceHeader), first)
+	<-up
+	pushUntil("a card rung for while the link is up", "ix-1", 1)
+	close(drop)
+	<-up
+	for drained := false; !drained; { // repeats of ix-1 the first link sent before it went
+		select {
+		case <-got:
+		default:
+			drained = true
+		}
 	}
+	pushUntil("on the next link", "ix-2", 2)
 }

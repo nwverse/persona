@@ -114,8 +114,9 @@ type Options struct {
 	// Check: look at the link now (the network changed). Redial: drop it and connect again.
 	Check, Redial <-chan struct{}
 	Logf          func(string, ...any)
-	// Presence is the menu bar app's presence (presence.go); nil without the app.
+	// Presence is the menu bar app's presence, Confirms the cards it rang for (presence.go); nil without the app.
 	Presence *PresenceBox
+	Confirms *Confirms
 	// PingEvery, PingTimeout replace the defaults (tests). A hub that says its own heartbeat (endpoints, PingHeader) is
 	// followed on that link or stream instead.
 	PingEvery, PingTimeout time.Duration

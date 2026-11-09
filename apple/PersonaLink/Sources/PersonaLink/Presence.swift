@@ -10,6 +10,26 @@ struct Presence: Equatable {
 
     /// One line for the helper's stdin, newline included: `{"presence":{"active":true,"notifies":true}}`.
     var line: Data { Data(#"{"presence":{"active":\#(active),"notifies":\#(notifies)}}"#.utf8) + Data([0x0A]) }
+
+    /// The line that confirms card's notification went to Notification Center, newline included:
+    /// `{"rang":{"interaction_id":"…"}}`; persona-link passes it on, and the hub may then leave that card to this Mac.
+    static func rangLine(_ card: String) -> Data? {
+        struct Line: Encodable {
+            struct Card: Encodable {
+                var interactionID: String
+                enum CodingKeys: String, CodingKey { case interactionID = "interaction_id" }
+            }
+            var rang: Card
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        do {
+            return try encoder.encode(Line(rang: .init(interactionID: card))) + Data([0x0A])
+        } catch {
+            NSLog("Persona Link: confirmation not encoded: %@", String(describing: error))
+            return nil
+        }
+    }
 }
 
 /// Decides presence from the system's signals and when to write it to the helper. Pure: the caller samples the idle

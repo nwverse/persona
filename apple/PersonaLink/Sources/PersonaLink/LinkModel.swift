@@ -313,10 +313,11 @@ enum LinkText {
                                   access: { [weak self] access in
                                       self?.notificationsOff = !access.allowed
                                       self?.presence.receive(.notifies(access.shows))
-                                  })
+                                  },
+                                  confirm: { [weak self] card in self?.writeHelper(Presence.rangLine(card), what: "confirmation") })
         readConfig()
         startHelper()
-        presence.start(write: { [weak self] line in self?.writePresence(line) })
+        presence.start(write: { [weak self] line in self?.writeHelper(line, what: "presence") })
         Task { await setUpNodeOnce() }
         monitor.pathUpdateHandler = { _ in
             Task { @MainActor in LinkModel.shared.networkChanged() }
@@ -417,15 +418,15 @@ enum LinkText {
         status = s
     }
 
-    /// A presence line for the helper's stdin; none goes out while there is no helper, and the next one gets the state
-    /// as it starts. The pipe does not block (`dontBlock`); a line is far shorter than PIPE_BUF, so it goes whole or not
-    /// at all.
-    private func writePresence(_ line: Data) {
-        guard let input = keepStdin else { return }
+    /// A line for the helper's stdin, presence or a confirmation (Presence.swift). None goes out while there is no
+    /// helper: the next one gets the presence as it starts, and a confirmation lost so leaves the card to the phone. The
+    /// pipe does not block (`dontBlock`); a line is far shorter than PIPE_BUF, so it goes whole or not at all.
+    private func writeHelper(_ line: Data?, what: String) {
+        guard let line, let input = keepStdin else { return }
         do {
             try Self.writeAll(input.fileHandleForWriting, line)
         } catch {
-            NSLog("Persona Link: presence not written to the helper: %@", error.localizedDescription)
+            NSLog("Persona Link: %@ not written to the helper: %@", what, error.localizedDescription)
         }
     }
 

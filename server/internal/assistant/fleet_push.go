@@ -416,14 +416,15 @@ func (s *Service) kbAgentDone(machine string, sess proto.Session) {
 		Title: sess.Title, Line: workLogLine(sess)})
 }
 
-// linkRangWait is how long a card's push waits for Persona Link to ring for it (liveLoop looks within 100 ms, a summary
-// goes out in milliseconds): past it the phone is pushed as ever.
+// linkRangWait is how long a card's push waits, all told, for Persona Link to confirm it (liveLoop looks within 100 ms,
+// a summary goes out and its notification is handed over in milliseconds): past it the phone is pushed as ever.
 const linkRangWait = 2 * time.Second
 
 // notifyInteraction pushes a new card to the devices that take "needs you" pushes. covered: Persona Link's summary is
-// to ring for it (linkCovers); then the push waits until a summary one of the manager's Persona Link desktops took
-// rang for it (LinkRang), and says so (LinkCovered) only if one did: a summary merged with newer cards may list it in
-// More, or not reach the computer.
+// to ring for it (linkCovers); then the push waits until one of the manager's Persona Link desktops confirmed it
+// handed the card's notification to Notification Center (LinkRang), and says so (LinkCovered) only if one did: a
+// summary merged with newer cards may list it in More, a notification may be dropped before it is handed over, a link
+// may go.
 func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covered bool) {
 	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
 		Interaction: &ix}
@@ -432,7 +433,7 @@ func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covere
 		return
 	}
 	go func() {
-		n.LinkCovered = s.devs.LinkRang(ix.ID, linkRangWait)
+		n.LinkCovered = s.devs.LinkRang(s.runCtx(), ix.ID, linkRangWait)
 		s.deliver(n)
 	}()
 }

@@ -112,6 +112,7 @@ func (l *mgrLink) sendAttention() {
 		l.heldMu.Unlock()
 		return
 	}
+	l.held.begin(a)
 	l.heldMu.Unlock()
 	ok := l.send(link.Message{Type: "attention", Attention: a}) == nil
 	l.heldMu.Lock()
@@ -168,49 +169,44 @@ func (m *Machine) postAttention(ctx context.Context) {
 	if err != nil {
 		return // the info read says why
 	}
-	instance, err := m.postConnectorAttention(ctx, cred, gen, a)
+	err = m.postConnectorAttention(ctx, cred, gen, a)
 	m.mu.Lock()
 	if !m.svcMovedOnLocked(gen) {
 		m.svc.attRev = ""
 		if err == nil {
 			m.svc.attRev = a.Rev
 		}
-		if instance != "" && instance != m.svc.instance {
-			m.svc.held, m.svc.instance = summaryHeld{}, instance // it went to a new run: its menu bar app's baseline
-		}
-		m.svc.held.done(a, err == nil)
 	}
 	m.mu.Unlock()
-	m.d.delivered()
 	if err != nil {
 		m.d.logf("[%s] connector: Needs you summary not taken: %v", m.cfg.ID, err)
 	}
 }
 
-// postConnectorAttention is POST link.ConnectorAttentionPath with cred (of pairing gen), and the run that took it
-// (link.InstanceHeader; "" from older connectors); a refusal counts as an info read's does (refused).
-func (m *Machine) postConnectorAttention(ctx context.Context, cred *connectorCred, gen int, a *link.Attention) (string, error) {
+// postConnectorAttention is POST link.ConnectorAttentionPath with cred (of pairing gen); a refusal counts as an info
+// read's does (refused).
+func (m *Machine) postConnectorAttention(ctx context.Context, cred *connectorCred, gen int, a *link.Attention) error {
 	tr, err := connectorTransport(cred.fp, m.cfg.Proxy)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer tr.CloseIdleConnections()
 	body, _ := json.Marshal(a)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+m.cfg.Address+link.ConnectorAttentionPath, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+cred.token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := connectorClient(tr).Do(req)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		herr := connectorError(resp)
 		m.refused(gen, resp.StatusCode, herr, false)
-		return "", herr
+		return herr
 	}
-	return resp.Header.Get(link.InstanceHeader), nil
+	return nil
 }

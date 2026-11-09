@@ -31,9 +31,10 @@ type fleetDevs struct {
 	usage    assistantwire.UsageSummary
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
-	// linkDesktop: a Persona Link desktop of the manager's takes every summary handed over, the first as its baseline
-	// (LinkRang).
+	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
+	// Notification Center (confirm; LinkRang).
 	linkDesktop bool
+	confirmed   map[string]bool
 }
 
 type fleetNode struct {
@@ -204,34 +205,36 @@ func (d *fleetDevs) SetAttention(a link.Attention) {
 	d.attention = append(d.attention, a)
 }
 
-// LinkRang is the devices' (internal/devices LinkRang) with every summary handed over taken by the one Persona Link
-// desktop, if there is one: a card rang once the first summary listing it as notifying was not the first summary.
-func (d *fleetDevs) LinkRang(card string, within time.Duration) bool {
-	deadline := time.Now().Add(within)
+// confirm is the Persona Link desktop's app confirming it handed these cards' notifications to Notification Center.
+func (d *fleetDevs) confirm(cards ...string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.confirmed == nil {
+		d.confirmed = map[string]bool{}
+	}
+	for _, c := range cards {
+		d.confirmed[c] = true
+	}
+}
+
+// LinkRang is the devices' (internal/devices LinkRang): true once the desktop's app confirmed card, false at once
+// without a desktop, and when the time is up or ctx ends.
+func (d *fleetDevs) LinkRang(ctx context.Context, card string, within time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
 	for {
 		d.mu.Lock()
-		on, rang := d.linkDesktop, rangIn(d.attention, card)
+		on, rang := d.linkDesktop, d.confirmed[card]
 		d.mu.Unlock()
 		if !on || rang {
 			return rang
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-ctx.Done():
 			return false
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-// rangIn: the first summary of list that lists card as notifying is not the first summary (the baseline).
-func rangIn(list []link.Attention, card string) bool {
-	for i, a := range list {
-		for _, it := range a.Items {
-			if it.InteractionID == card && it.Notify {
-				return i > 0
-			}
+		case <-time.After(5 * time.Millisecond):
 		}
 	}
-	return false
 }
 
 // handedAttention is every summary handed over so far.

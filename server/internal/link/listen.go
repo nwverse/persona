@@ -2,7 +2,6 @@ package link
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -50,15 +49,12 @@ const (
 
 // passive is one listener's state.
 type passive struct {
-	o Options
-	// instance names this listener's run: a new one holds no summary, and the menu bar app takes its first as a
-	// baseline (info's instance, InstanceHeader).
-	instance string
-	rep      *reporter
-	id       *identity
-	lim      *authLimiter
-	listen   string // as shown: ":18663", or the address it is bound to
-	stopped  chan struct{}
+	o       Options
+	rep     *reporter
+	id      *identity
+	lim     *authLimiter
+	listen  string // as shown: ":18663", or the address it is bound to
+	stopped chan struct{}
 	// handlers: the streams' handlers still running (serve waits for them when it stops).
 	handlers sync.WaitGroup
 
@@ -134,7 +130,7 @@ func runPassive(ctx context.Context, o Options, rep *reporter) {
 		}
 		b = backoff{}
 		s := &passive{o: o, rep: rep, id: id, lim: lim, listen: shownListen(listen, ln.Addr()), cfg: p,
-			streams: map[*pstream]struct{}{}, stopped: make(chan struct{}), instance: rand.Text()}
+			streams: map[*pstream]struct{}{}, stopped: make(chan struct{})}
 		s.serve(ctx, ln)
 	}
 }
@@ -533,10 +529,7 @@ func (s *passive) info(w http.ResponseWriter, r *http.Request) {
 	}
 	s.seen(r)
 	s.keepMachineName(p, r.Header.Get(MachineNameHeader))
-	info := ConnectorInfo{Machine: p.Machine, Version: s.o.Version, Features: []string{FeatureAttention}, Instance: s.instance}
-	if pr, ok := s.o.Presence.Latest(time.Now()); ok {
-		info.Presence = &pr
-	}
+	info := ConnectorInfo{Machine: p.Machine, Version: s.o.Version, Features: []string{FeatureAttention}}
 	s.mu.Lock()
 	if s.attention != nil {
 		info.AttentionRev = s.attention.Rev
@@ -547,17 +540,13 @@ func (s *passive) info(w http.ResponseWriter, r *http.Request) {
 
 // ConnectorInfo is GET ConnectorInfoPath's answer: which computer pairing named and which build, what this connector
 // takes besides streams (FeatureAttention), and the Rev of the summary it holds, so the hub posts one again whenever
-// they differ (a post that failed, a connector that restarted); and the menu bar app's presence (presence.go), once
-// it said any. Older connectors answer only machine and version, and older managers read only those.
+// they differ (a post that failed, a connector that restarted). Older connectors answer only machine and version, and
+// older managers read only those.
 type ConnectorInfo struct {
-	Machine      string        `json:"machine"`
-	Version      string        `json:"version"`
-	Features     []string      `json:"features,omitempty"`
-	AttentionRev string        `json:"attention_rev,omitempty"`
-	Presence     *PresenceInfo `json:"presence,omitempty"`
-	// Instance names this run of the connector (passive.instance), also on a taken summary's answer (InstanceHeader):
-	// another one than before holds no summary of the earlier run's.
-	Instance string `json:"instance,omitempty"`
+	Machine      string   `json:"machine"`
+	Version      string   `json:"version"`
+	Features     []string `json:"features,omitempty"`
+	AttentionRev string   `json:"attention_rev,omitempty"`
 }
 
 // attentionStale is how long a summary is kept after the paired hub last came in: four of its 30 s info reads (a
@@ -600,7 +589,6 @@ func (s *passive) takeAttention(w http.ResponseWriter, r *http.Request) {
 		s.reportLocked()
 	}
 	s.mu.Unlock()
-	w.Header().Set(InstanceHeader, s.instance)
 	w.WriteHeader(http.StatusNoContent)
 }
 
