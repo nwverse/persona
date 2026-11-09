@@ -2,6 +2,11 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A relay push keeps the fallback's sound unless the service extension sets it (#1862)
+
+- The relay writes the outer `aps` itself, `"sound":"default"` included, so the "New message" fallback rings. The notification service extension starts from `request.content.mutableCopy()`, which keeps that sound: replacing the texts, category and interruption level from the sealed payload is not enough. `PushCrypto.apply` sets the sound from the sealed `aps` and clears it when there is none; a silent notification that rings through the relay but not with direct APNs points here.
+- `apple/Shared` compiles for watchOS 10 too, and some UserNotifications APIs don't exist there: `UNNotificationSound(named:)` builds for iOS and the Mac and fails only in the watch build (hosted "iOS and Watch" job). A Mac unit test of shared code does not catch it.
+
 ## Idle-energy profiling and caller attribution (#1634)
 
 - Use an isolated mock hub and keep the build, simulator profile, data and visible-page history identical. Frame-count probes and frozen animations change the workload. A runtime-CLI root rebuild can pin `scenePhase`; use a cold launch and real tab actions instead. Home is asynchronous: verify the background transition before starting its window.
@@ -371,6 +376,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 - Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
 - A `GeometryReader` that ignores the safe area on an edge reports no inset of its own there (`safeAreaInsets.trailing` was 0 on iPhone Duo's outer display, where the system's bars take the right-hand column): a rail meant for that column came out 59 pt wide against the screen edge, half off it. Measure the column as a reader inside the safe area less one that ignores it (`ShellSideRail`, 2026-11-07).
+- Every page on the shell's strip draws its own bar, so each one has to switch to `ShellSideRail` on `\.shellRailEdge`; the moving bar only stands in while the strip slides. The optional Messages page was missed and put its bar back across the top whenever it was in front (#2318); `ShellSideRailTests` checks the pages' rails on an iPhone Duo.
 - When capping chips in horizontal scrolling, do not put `frame(maxWidth:)` / `scaledFrame(maxWidth:)` outside the background (2026-11-05, #3010): `ScrollView(.horizontal)` proposes no width,
   and flexible frames pass that unlimited proposal through. The chip and background measure the entire title while only the frame's occupied space is capped;
   background and space diverge: shorter chips leave larger gaps, large text does not truncate and capsules overlap neighbors.
