@@ -1,6 +1,10 @@
 # Lessons: web UI and interactions
 
 
+## Report evidence is separate from report prose (#2554)
+
+The supervision feed's `body.evidence` is a separate array, not part of `body.text`. Hide that array only in the report renderer: preserve authored links and newlines in the body, as well as review-checklist evidence. The server also carries report evidence into its supervision prompt and uses it to validate completion handoffs; removing the wire field would change supervision behavior and break compatibility. Check the actual feed renderer, including expanded progress reports, rather than filtering URL-shaped text.
+
 ## Extension lifecycle controls use manager metadata, not configuration (#2355)
 
 - `source: installed` does not grant a full-rights web client owner-only management of local or attached installations. Market lifecycle actions follow the manager-owned `origin` and the existing endpoint policy; a manifest field or arbitrary URL cannot grant that capability. Keep unavailable controls visible with a reason rather than inventing an API request.
