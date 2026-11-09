@@ -71,14 +71,16 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     }, IDLE_MS);
   }, []);
 
+  // its ticks and their hover previews are a precise pointer's; a touch screen keeps the margin empty
+  const fine = useFinePointer();
   const measure = useCallback(() => {
     raf.current = 0;
     const sc = view.current;
     if (!sc) return;
-    // Fewer questions than the rail's minimum keeps it away whatever the room is, so there is nothing to measure:
-    // writing no state, mounting a short chat (or one whose lines are still loading) draws no extra frame. The
-    // pointer-wake band goes with it — a strip rect left from an earlier rail would wake an empty margin.
-    if (list.current.length < NAV_RAIL_MIN_TICKS) {
+    // Nothing to draw — too few questions, or no precise pointer — so nothing to measure: no layout reads, and no
+    // state writes, so a short chat and a long chat on a touch screen draw no extra frame on mount or on each scroll.
+    // The pointer-wake band goes with it; a strip rect left from an earlier rail would wake an empty margin.
+    if (!fine || list.current.length < NAV_RAIL_MIN_TICKS) {
       railX.current = null;
       setActive((x) => (x === null ? x : null));
       return;
@@ -103,7 +105,7 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     // a rect read per tick (positions move with the scroll; the elements themselves do not)
     const byId = anchors.current.map;
     setActive(pickActiveTick(now.length, sc.getBoundingClientRect().top + ACTIVE_FUDGE, (i) => byId.get(now[i].id)?.firstElementChild?.getBoundingClientRect().top ?? null));
-  }, []);
+  }, [fine]);
 
   const schedule = useCallback(() => {
     if (raf.current === 0) raf.current = requestAnimationFrame(measure);
@@ -185,8 +187,6 @@ export function NavRail({ ticks, scroller, onJump, reset }: { ticks: NavRailTick
     card.style.top = `${Math.max(0, Math.min(y, rail.clientHeight - h))}px`;
   }, [preview, room, height, ticks]);
 
-  // its ticks and their hover previews are a precise pointer's; a touch screen keeps the margin empty
-  const fine = useFinePointer();
   if (!fine || !room || ticks.length < NAV_RAIL_MIN_TICKS || height < NAV_RAIL_MIN_HEIGHT) return null;
 
   const plan = planNavRailTicks(ticks.length, height);

@@ -1,16 +1,26 @@
 // @vitest-environment jsdom
 // The rail's own drawing rules (lib/nav-rail.test.ts) are pure; these pin what the component does around them: a chat
-// below the tick minimum measures nothing (mounting it draws no extra frame — the panes-renders regression), while a
-// wide chat with enough questions draws a tick per question after its first measure.
+// below the tick minimum, and a touch screen (no precise pointer), measure nothing (mounting draws no extra frame, and
+// scrolling a long touch chat does no layout work — the panes-renders regression), while a wide chat with enough
+// questions draws a tick per question after its first measure.
 import { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NAV_RAIL_MIN_TICKS, type NavRailTick } from "../../lib/nav-rail";
 
-vi.hoisted(() => {
+// `matches` is read live: viewport.ts caches the MediaQueryList, so a later test can flip the pointer without a new list
+const finePointer = vi.hoisted(() => {
+  const state = { matches: true };
   const g = globalThis as Record<string, unknown>;
-  g.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+  g.matchMedia = (query: string) => ({
+    get matches() {
+      return query === "(any-pointer: fine)" ? state.matches : true;
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  });
   g.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+  return state;
 });
 
 const { NavRail } = await import("./NavRail");
@@ -40,6 +50,7 @@ beforeEach(() => {
   commits = 0;
 });
 afterEach(() => {
+  finePointer.matches = true;
   act(() => root.unmount());
   host.remove();
 });
@@ -69,5 +80,29 @@ describe("NavRail", () => {
     await settle();
     expect(commits).toBe(mounted); // no measure state, no redraw — whatever the scroller's size
     expect(host.querySelector("[data-nav-rail]")).toBeNull();
+  });
+
+  it("measures nothing on a touch screen, including while the chat scrolls", async () => {
+    finePointer.matches = false;
+    let reads = 0;
+    const sc = document.createElement("div");
+    Object.defineProperty(sc, "clientWidth", { get() { reads++; return 1200; } });
+    Object.defineProperty(sc, "clientHeight", { get() { reads++; return 600; } });
+    const boxes = vi.spyOn(sc, "getBoundingClientRect");
+    const lines = vi.spyOn(sc, "querySelectorAll");
+    act(() => root.render(
+      <Profiler id="rail" onRender={() => commits++}>
+        <NavRail ticks={Array.from({ length: 8 }, (_, i) => tick(i + 1))} scroller={sc} onJump={() => {}} reset="mac/s1" />
+      </Profiler>,
+    ));
+    await settle();
+    const mounted = commits;
+    sc.dispatchEvent(new Event("scroll"));
+    await settle();
+    expect(host.querySelector("[data-nav-rail]")).toBeNull();
+    expect(commits).toBe(mounted); // scrolling writes no state
+    expect(reads).toBe(0); // no clientWidth / clientHeight
+    expect(boxes).not.toHaveBeenCalled();
+    expect(lines).not.toHaveBeenCalled();
   });
 });
