@@ -632,9 +632,10 @@ Closing is not durable merely because the card vanished: persist the interaction
   quotes or not, and a carriage return then runs what follows. A shell's line editor acts on more than controls
   inside quotes: a tab completes the quoted word, closes the quote and leaves the rest to the shell (bash, zsh), and
   csh ends the command at a line break. So that first message also gets its tabs as spaces, and its line breaks as
-  spaces outside the sh family (`typedArg`, `server/internal/node/start_agent.go`). Match what the agent shows or
-  its transcript records against that inert text, not the text as sent; a runtime is sent the text itself, so the
-  echo tie accepts either.
+  spaces unless a sh-family shell sources it from a start file (`typedArg`, `server/internal/node/start_agent.go`):
+  Orca types the line itself and does not say which shell it opened, so the user's login shell is only a guess there.
+  Match what the agent shows or its transcript records against that inert text, not the text as sent; a runtime is
+  sent the text itself, so the echo tie accepts either.
   Keys sent as keys (`session.keys`) are the one way left to press a control key, on purpose.
 
 ## Profile acceptance must include launcher defaults

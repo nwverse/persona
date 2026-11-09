@@ -80,7 +80,7 @@ func writeStartScript(dir, cmd string) (string, error) {
 func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, created *host.Created, ws, anchor, cmd string, shells ...string) (done func(), err error) {
 	done = func() {}
 	line := cmd
-	if startsFromFile(launch) && n.dir != "" && takesAssign(shells...) {
+	if n.typesStartFile(launch, shells...) {
 		path, err := writeStartScript(n.dir, cmd)
 		if err != nil {
 			n.closeNewTab(ctx, launch, created, ws)
@@ -95,6 +95,11 @@ func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, create
 		return func() {}, startRunError(err)
 	}
 	return done, nil
+}
+
+// typesStartFile: runAgentCommand types `. <file>` into launch's pane whose shells are shells, not the command itself.
+func (n *Node) typesStartFile(launch host.Launcher, shells ...string) bool {
+	return startsFromFile(launch) && n.dir != "" && takesAssign(shells...)
 }
 
 // startsFromFile: the launcher's panes get a start file (herdr, herdr-core) rather than the command typed out.

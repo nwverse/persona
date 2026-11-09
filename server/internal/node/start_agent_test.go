@@ -3,10 +3,13 @@ package node
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 )
 
 func TestOtherAgentStartCommand(t *testing.T) {
@@ -56,7 +59,8 @@ func TestOtherAgentStartCommandLineBreaks(t *testing.T) {
 	}
 }
 
-// startOtherAgent builds its command for the shell of the pane it made: a tcsh pane gets the first message on one line.
+// startOtherAgent builds its command for the shell of the pane it made: a zsh pane sources it from a start file, and a
+// tcsh pane (no `.`) gets it typed out with the first message on one line.
 func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
 	for shell, want := range map[string]string{
 		"/bin/zsh":  "traex 'a b\nc'",
@@ -82,6 +86,33 @@ func TestOtherAgentStartTypesForThePaneShell(t *testing.T) {
 			if got := f.trace("pane.send_input"); len(got) != 1 || got[0] != wantCall {
 				t.Errorf("typed %v, want %s", got, wantCall)
 			}
+			for _, c := range f.calls() {
+				if c.Method == "pane.send_input" && (c.Typed != "") != (shell == "/bin/zsh") {
+					t.Errorf("typed %q: a start file only for zsh", c.Typed)
+				}
+			}
 		})
+	}
+}
+
+// Orca types the command line itself and reports no shell: the login shell is a guess, and when the pane runs csh a
+// line break in the first message would run what follows it, so the message goes on one line.
+func TestOtherAgentStartFlattensForAGuessedShell(t *testing.T) {
+	withPaneShell(t, "/bin/zsh")
+	n, _, o, _, home := orcaNode(t)
+	projDir := filepath.Join(home, "my-project")
+	mkdir(t, projDir)
+	o.SetWorktrees(orcarttest.Worktree("repo1::"+projDir, projDir, "refs/heads/main"))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // until the agent would show up
+	defer cancel()
+	_, _ = n.start(ctx, projDir, traexAgent, "a\nb", "", "", "", "", "", "", "")
+	var typed []string
+	for _, p := range o.Params("terminal.send") {
+		if text, _ := p["text"].(string); strings.Contains(text, traexAgent+" ") {
+			typed = append(typed, text)
+		}
+	}
+	if len(typed) != 1 || !strings.HasSuffix(typed[0], " traex 'a b'\r") || strings.Contains(typed[0], "\n") {
+		t.Errorf("typed %q, want one line ending traex 'a b'", typed)
 	}
 }
