@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A shared completion value does not imply the same handling-chain explanation (#1908). Mutes retain `done_by=read` for compatibility, but must say they were muted, not read elsewhere. Cover existing items, new connector-item admission and grouped events in every hub language, and keep an ordinary-read control.
+
 - Health notification redaction must cover every notification route (#1914). `notify_user` passes through `runTool`, but `phone_notify` goes directly through `mcpCall` to the phone. Apply the existing caller-space check and `healthNotice` before phone dispatch, and assert the forwarded title and body in tests. Device notification-preview settings and a prompt recommendation cannot enforce the space boundary. Keep explicitly requested, phone-confirmed reminders separate from generic notices.
 
 - A PR's check-run endpoint alone is not the complete CI result: commit statuses are separate, and both must be paged. Check the PR head again after reading and reject incomplete or inconsistent pages. The node's older PR reader cannot attest complete rollups and can classify a rerun by its old conclusion; only nodes explicitly marking a complete, status-aware result can be used for a CI wake. Test a failing check alongside a pending one, a changing head, and rate limits.

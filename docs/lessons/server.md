@@ -4,6 +4,26 @@
 
 A relay can retain an offline manager's GET answer while the merged list drops it before the relay is called. For merged retained GET routes, enumerate installed bus identities as well as live managers; keep ordinary lists such as inbox and todos online-only. Never discover owners by scanning cache keys: a removed manager can still have cached answers. Fail closed when the installed roster cannot be read, and test the real relay warm-up followed by disconnect, missing cache, revocation, and an offline default. In external mode even the identity named `assistant` is removable: only seed it when `builtinManager` says it is built in, and return unavailable for an empty roster rather than reviving a cached default.
 
+## Update checks must preserve installation state (#1912)
+
+The hub's `running` flag belongs to the installing process; it is false in the new
+process while that process confirms the update. Guard check-driven state changes
+with both install and confirmation status, under the same mutex as the write.
+Check again after the manifest request: an install can start while it is in flight.
+Successful checks may refresh release metadata and failed checks may advance the
+last-check time, but neither may replace an active update's state, progress or error.
+Apply the guard in the shared check path used by manual, startup and hourly checks,
+and keep automatic installation and held-release recording out of confirmation.
+Regression tests must observe the state while the request is blocked as well as
+after success or failure; checking only the final state misses a transient
+`checking` event that already hid the progress in every client.
+
+In timer tests, wait on a request channel with a timeout and assert the request's
+timestamp, then use `synctest.Wait` before inspecting the completed result. This
+synchronizes the observation without fixed sleeps or a shared request counter.
+Even inside `synctest`, new `time.Sleep` calls fail the repository's sleep ratchet;
+run `scripts/ci/guards.sh` as well as the server build and race checks.
+
 ## Model connection tests must match the runtime (#1732)
 
 A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
@@ -1061,6 +1081,15 @@ The release manifest is read only during self-update, with no later fallback: `n
 "hub has no personad for `<os>/<arch>`" if absent; repeated Redeploy fails. If an old platform binary remains from the previous release, it sends that old version and mismatch persists.
 Now download every platform in the release manifest (four, matching `deploy.sh` and images); the hub platform's node binary is the same as hub itself, so reuse that download.
 For any download/build list derived from current runtime state, consider objects appearing only after update.
+
+## A hub-only update left node builds that passed for the new version (2026-11-09, #1825)
+
+With `auto_update_nodes` off (the default), the hub's self-update replaced only its own binary. `bin/nodes/personad-<os>-<arch>` stayed the previous
+build, and the manager's package lookup takes an unlabelled personad there for a build of the hub's version, ahead of the release site: every
+Redeploy installed the old node (or failed its self-check), and the mismatch could not be fixed from the apps. Now a confirmed hub-only update to
+another version renames those unlabelled builds to `.prev`, so the lookup falls through to the release of the hub's version.
+Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
+must relabel it or move it.
 
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
