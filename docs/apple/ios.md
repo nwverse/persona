@@ -691,6 +691,14 @@ never picks it. The form says the line under the launcher row when the launcher 
 Both read the list with `AppModel.launchersForStart` (fresh, not the cache). Add Provider is offered only for a computer in the hub-level group (the wizard saves there).
 `StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Launcher health in New Agent").
 
+## Recent setups in New Agent (#2134)
+
+Every start from New Agent (the Codex and Claude Code paths, where the per-machine `launcher.` / `mode.` / `effort.` / `cwd.` keys are written) records its setup in `RecentSetupsStore` (`apple/Shared/RecentSetups.swift`, one `StateCache` file `recent-setups`): machine (`MachineRef.path`), folder, launcher (`""` follows Model Configuration), the model the start sent (`""` for the default), agent type, and Claude Code's mode and effort. Ids only, on this device; the rules (record, cards, a machine's model) are `spec/fixtures/recents/`, which `RecentSetupsTests` runs case by case.
+- The form's top section **Recent** (hidden when joining a space) shows at most three cards on the machines offered (`RecentSetupRow`, `Views/NewChat/RecentSetupCards.swift`): folder · machine, then launcher · model · mode · effort; Allow Everything in `Theme.cautionText` with its mark; an offline machine's card gray with Offline and not pickable. A card's context menu has Remove from Recent and Clear Recent Setups.
+- A tap fills every field and focuses First Message; it never starts. Another machine's card is applied once that machine's launchers and directories are in (`pendingFill`, after its saved defaults); the model is picked when `loadModels` moves to that launcher's list (`restoredModel`), before the list comes, so the efforts offered are the model's. A Codex card leaves the machine's Claude mode and effort as they were.
+- Picking a machine (on open or by its card) also restores the model of its latest setup with the launcher it restores (`RecentSetups.model`); none: the default. No new per-machine key: Siri's `newChat.machine`, `launcher.<m>`, `cwd.<m>` are unchanged.
+- UI flow: `RecentSetupsUITests` (`docs/operations/testing.md`, "Recent setups in New Agent").
+
 ## An agent's live reply (#1309)
 
 A Claude session Persona started sends its reply's lines as Claude shows them, before the transcript has them
