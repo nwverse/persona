@@ -1103,7 +1103,26 @@ Apple clients do not draw them as user bubbles or show the model's instructions:
 - Chat-list previews use the assistant's words (`last_text`), which already exclude these messages.
 - `ChatCache` bumped to v9: old cached items lack `injected`.
 
-### Source mentions in the assistant conversation (#2130)
+## Quiet supervision rounds (#2092)
+
+Persona conversations on iOS, iPadOS and macOS share the web's whole-round visibility contract. A `system` / `supervise`
+input with `level: triage` (including legacy inputs without a level) and all following work, answers, recaps and
+continuations become one compact **Supervision record**. The next actual input always starts outside it, even when queued.
+This is independent of New Conversation Layout; Agent conversations retain their existing presentation.
+
+Opening the record restores the original injected input, answers and retained transcript rows. Ordinary work can still
+be expanded separately, including server-folded ranges. Successful Persona `notify_user`, `ask_user`, accepted/needs-user
+`task_review`, a successful `supervision_finish` receipt with user visibility, explicit user-level input or retained
+`fold.supervision_user` promotes the whole round. A pending live `ask_user` stays visible before its result arrives.
+Failed calls, arguments without success receipts and silent finishes do not establish or reverse promotion.
+
+The separate streaming answer stays hidden inside a closed quiet record, including text waiting for its transcript
+item after a turn stops. Frozen history uses its captured live turn, not a later turn's activity. Retained promotion survives overlapping
+page merges and cache serialization; the chat cache schema changes with these fields. Tests: `ChatSupervisionLinesTests`,
+`ChatSupervisionTests` and `SupervisionRoundUITests`. Screenshots use `MOCK_TASKS=1 MOCK_SUPERVISION=1` on a fresh test device;
+`-showSupervisionOpen YES` opens the record, and `-openAllWork YES` exposes its internal work for inspection.
+
+## Source mentions in the assistant conversation (#2130)
 
 Display provenance does not change model input roles. Relayed conversation messages and automated updates use the
 shared `SourceMessage` component on iOS and macOS, and `WatchSourceMessage` on Watch, never a right-aligned user bubble.
