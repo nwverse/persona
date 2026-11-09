@@ -42,6 +42,8 @@ type listAnswer struct {
 	// localize: a 2xx inbox list as its manager gave it, localized as it is merged (inbox_forms.go); nil when the body
 	// is as the app reads it.
 	localize *inboxLocalize
+	// scanned: the merge's scan of body, when mergeList took it first to read the todos' ids; nil when not yet scanned.
+	scanned *scannedAnswer
 }
 
 func (a listAnswer) ok() bool { return a.status >= 200 && a.status < 300 }
@@ -165,22 +167,49 @@ func (h *Hub) mergeList(w http.ResponseWriter, r *http.Request, key string, ask 
 		ask(bw, withBody(r, body), id)
 		ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}
 		if key == "todos" && ans.ok() {
-			var t struct {
-				Todos []struct {
-					ID string `json:"id"`
-				} `json:"todos"`
-			}
-			if json.Unmarshal(ans.body, &t) == nil {
-				for _, td := range t.Todos {
-					if td.ID != "" {
-						h.noteTodoOwner(td.ID, id)
-					}
-				}
-			}
+			h.noteTodoOwners(&ans)
 		}
 		answers = append(answers, ans)
 	}
 	writeMerged(w, key, answers)
+}
+
+// noteTodoOwners notes a's manager as the owner of each todo in a, a 2xx answer to a todos list. It reads the ids from
+// the scan the merge then writes a from, where that scan alone says what decodedTodoIDs reads, else by decoding.
+func (h *Hub) noteTodoOwners(a *listAnswer) {
+	s, use := scanAnswer(a.body, "todos")
+	a.scanned = &scannedAnswer{s: s, use: use}
+	if ids, ok := scannedTodoIDs(s, use); ok {
+		for _, id := range ids {
+			if len(id) > 0 {
+				h.noteTodoOwner(string(id), a.id)
+			}
+		}
+		return
+	}
+	for _, id := range decodedTodoIDs(a.body) {
+		if id != "" {
+			h.noteTodoOwner(id, a.id)
+		}
+	}
+}
+
+// decodedTodoIDs are the ids of a todos list's items as encoding/json reads them, "" for an item without one; none
+// when the body does not decode.
+func decodedTodoIDs(body []byte) []string {
+	var t struct {
+		Todos []struct {
+			ID string `json:"id"`
+		} `json:"todos"`
+	}
+	if json.Unmarshal(body, &t) != nil {
+		return nil
+	}
+	ids := make([]string, len(t.Todos))
+	for i, td := range t.Todos {
+		ids[i] = td.ID
+	}
+	return ids
 }
 
 // pagedList answers a request on one of pagedLists: the one manager's answer (the one it names, an extension's own,

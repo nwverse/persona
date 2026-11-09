@@ -153,6 +153,70 @@ func scanItem(b []byte, i int) (int, itemShape) {
 	}
 }
 
+// scannedAnswer is an answer's scan with how the merge uses it.
+type scannedAnswer struct {
+	s   answerScan
+	use scanUse
+}
+
+// scannedTodoIDs are the ids decodedTodoIDs reads from the body s is a scan of (for "todos"), and whether s alone says
+// them: not when a key could be one of those encoding/json matches regardless of case, is in the list twice or is
+// escaped, nor when an id is anything but plain ASCII.
+func scannedTodoIDs(s answerScan, use scanUse) ([][]byte, bool) {
+	switch use {
+	case scanSkip: // no JSON object (null decodes to no todos, the rest do not decode)
+		return nil, true
+	case scanDecode:
+		return nil, false
+	}
+	for _, m := range s.members { // the list's own key is out of them
+		if bytes.EqualFold(m.key, []byte("todos")) {
+			return nil, false
+		}
+	}
+	ids := make([][]byte, 0, len(s.items))
+	var members []jsonMember
+	for _, it := range s.items {
+		switch it.raw[0] {
+		case 'n': // null: a todo without an id
+			ids = append(ids, nil)
+			continue
+		case '{':
+		default: // no todo: the body does not decode
+			return nil, true
+		}
+		var id []byte
+		var plain bool
+		if members, _, plain = jsonMembers(it.raw, 0, members[:0]); !plain {
+			return nil, false
+		}
+		seen := false
+		for _, m := range members {
+			if !bytes.EqualFold(m.key, []byte("id")) {
+				continue
+			}
+			if seen || string(m.key) != "id" {
+				return nil, false
+			}
+			seen = true
+			switch m.val[0] {
+			case '"':
+				id = m.val[1 : len(m.val)-1]
+				for _, c := range id {
+					if c < 0x20 || c > 0x7e || c == '\\' {
+						return nil, false
+					}
+				}
+			case 'n': // null leaves the id unset
+			default: // an id that is no string: the body does not decode
+				return nil, true
+			}
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
 // jsonMembers appends the members of the object at b[i] ('{') to out and returns where it ends. plain is false when a
 // key is escaped, has a byte outside printable ASCII, or a '<', '>' or '&'.
 func jsonMembers(b []byte, i int, out []jsonMember) (members []jsonMember, end int, plain bool) {

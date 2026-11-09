@@ -269,6 +269,65 @@ func TestWriteMergedMatchesDecoding(t *testing.T) {
 	}
 }
 
+// The todos' owners are read from the merge's scan where it says what decoding reads, else by decoding: the same ids
+// noted for every shape, case-folded or repeated keys and escaped ids included.
+func TestTodoOwnersMatchDecoding(t *testing.T) {
+	for _, body := range []string{
+		`{"todos":[{"id":"t1","title":"a"},{"id":"t2"}]}`,
+		`{"todos":[],"counts":{}}`,
+		`{"todos":null}`,
+		`{"counts":1}`,
+		`null`,
+		`[]`,
+		`{"todos":[1]}`,
+		`{"todos":[null,{"id":"t3"}]}`,
+		`{"todos":[{"title":"no id"},{"id":""},{"id":null}]}`,
+		`{"todos":[{"id":5}]}`,
+		`{"todos":[1,{"id":"t19"}]}`,
+		`{"todos":[{"id":5},{"id":"t20"}]}`,
+		`{"todos":[{"ID":"t4"}]}`,
+		`{"todos":[{"i_d":"x","I-D":"y","id":"t21"}]}`,
+		`{"todos":[{"Id":"t5","id":"t6"}]}`,
+		`{"todos":[{"id":"t7","id":"t8"}]}`,
+		`{"todos":[{"\u0069d":"t9"}]}`,
+		`{"todos":[{"id":"t\u0031"}]}`,
+		`{"todos":[{"id":"t<&>"}]}`,
+		`{"todos":[{"id":"t\"q"}]}`,
+		`{"todos":[{"id":"\u00e9"}]}`,
+		`{"todos":[{"id":"t10"}],"Todos":[{"id":"t11"}]}`,
+		`{"Todos":[{"id":"t12"}]}`,
+		`{"todos":[{"id":"t13"}],"todos":[{"id":"t14"}]}`,
+		`{"todos":{"id":"t15"}}`,
+		`{ "todos" : [ { "id" : "t16" } ] }`,
+		`{"todos":[{"id":"t17","x":{"id":"nested"}}]}`,
+		`{"todos":[{"id":"t18"}]`,
+	} {
+		var want []string
+		for _, id := range decodedTodoIDs([]byte(body)) {
+			if id != "" {
+				want = append(want, id)
+			}
+		}
+		h := &Hub{}
+		a := listOf("m-a", 200, body)
+		h.noteTodoOwners(&a)
+		got := slices.Sorted(maps.Keys(h.todoOwners))
+		slices.Sort(want)
+		if !slices.Equal(got, slices.Compact(want)) {
+			t.Errorf("%s: noted %q, decoding reads %q", body, got, want)
+		}
+		for id, m := range h.todoOwners {
+			if m != "m-a" {
+				t.Errorf("%s: %s noted for %s", body, id, m)
+			}
+		}
+		merged, plain := httptest.NewRecorder(), httptest.NewRecorder()
+		writeMerged(merged, "todos", []listAnswer{a})
+		legacyWriteMerged(plain, "todos", []listAnswer{listOf("m-a", 200, body)})
+		sameResponse(t, body, merged, plain)
+	}
+}
+
 // A 2xx answer of null is no answer, as any other that is not an object; it made the merge panic.
 func TestWriteMergedNullBody(t *testing.T) {
 	rec := httptest.NewRecorder()

@@ -97,7 +97,13 @@ func (h *Hub) forwardInboxList(w http.ResponseWriter, r *http.Request, id string
 
 // scan cuts a as writeDecoded reads it, localized first when its relay left that to the merge.
 func (a *listAnswer) scan(key string) (answerScan, scanUse) {
-	s, use := scanAnswer(a.body, key)
+	var s answerScan
+	var use scanUse
+	if a.scanned != nil {
+		s, use = a.scanned.s, a.scanned.use
+	} else {
+		s, use = scanAnswer(a.body, key)
+	}
 	if a.localize == nil || use != scanMerge {
 		return s, use
 	}
@@ -115,6 +121,7 @@ func (a *listAnswer) localizeWhole() {
 	}
 	if localized := i18n.InboxJSON(a.localize.slot.lang, a.body); !bytes.Equal(localized, a.body) {
 		a.body = localized
+		a.scanned = nil
 		a.header.Del("Content-Length")
 	}
 	a.localize = nil
