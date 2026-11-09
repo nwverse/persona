@@ -137530,6 +137530,75 @@
           }
         }
       }
+    },
+    "%@, offline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, offline"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，离线"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@、オフライン"
+          }
+        }
+      }
+    },
+    "%@ is offline. Messages can be sent once it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is offline. Messages can be sent once it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不在线，回来后才能发消息。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はオフラインです。戻ったらメッセージを送れます。"
+          }
+        }
+      }
+    },
+    "%@ · last synced %@. Messages can be sent once it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · last synced %2$@. Messages can be sent once it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 最后同步于 %2$@。回来后才能发消息。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 最終同期 %2$@。戻ったらメッセージを送れます。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

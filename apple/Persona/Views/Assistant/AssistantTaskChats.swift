@@ -91,7 +91,9 @@ nonisolated struct AssistantTaskChats: Equatable, Sendable {
     static let shared = AssistantTaskChatsStore()
 
     private(set) var known = AssistantTaskChats.none
-    @ObservationIgnored private var loading = false
+    /// The page (group and the manager the Persona page shows) a read is on its way for: one for a page left meanwhile
+    /// doesn't land.
+    @ObservationIgnored private var loading: String?
 
     func update(tasks: [APIClient.ScheduledTask], runs: [APIClient.ScheduleRun]) {
         let next = AssistantTaskChats(tasks: tasks, runs: runs)
@@ -100,11 +102,13 @@ nonisolated struct AssistantTaskChats: Equatable, Sendable {
 
     /// Reads the tasks and runs again; what was known stays when the hub cannot say (offline, no tasks there).
     func refresh(_ api: APIClient?) async {
-        guard let api, !loading else { return }
-        loading = true
-        defer { loading = false }
+        guard let api else { return }
+        let page = api.group + "\u{0}" + (api.shownManager ?? "")
+        guard loading != page else { return }
+        loading = page
+        defer { if loading == page { loading = nil } }
         async let r = try? api.scheduleRuns()
-        guard let tasks = try? await api.scheduledTasks(), let runs = await r else { return }
+        guard let tasks = try? await api.scheduledTasks(), let runs = await r, loading == page else { return }
         update(tasks: tasks, runs: runs)
     }
 }

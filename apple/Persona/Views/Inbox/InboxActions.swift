@@ -169,8 +169,7 @@ struct InboxDraftSheet: View {
             }
             if let key = a.sessionKey {
                 Button {
-                    model.assistantCurrent = model.inHub(key)
-                    model.selectedTab = .assistant
+                    model.openAssistantConversation(model.inHub(key), manager: item.manager)
                     dismiss()
                 } label: {
                     Label("See How the AI Twin Handled It", systemImage: Theme.Icon.list).font(Theme.Font.captionMedium).lineLimit(1)

@@ -808,8 +808,9 @@ struct AssistantSidebar: View {
         // Paint the entire column with it too, including the title, actions and unused space.
         .background(Theme.pageBackground)
         #endif
-        // Which conversations the tasks started: read again as the sidebar comes out and when a conversation came or went.
-        .task(id: out ? all.count : -1) { if out { await taskChats.refresh(model.api) } }
+        // Which conversations the tasks started: read again as the sidebar comes out, when a conversation came or went, and
+        // for another manager's page.
+        .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
         .confirmClose($ending)
         .renameSessionAlert($renaming)
         .sheet(item: $autoList) { route in

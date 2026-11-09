@@ -22,6 +22,9 @@ final class FailedStart {
         /// Why, for the line over the composer; nil when the readiness card says it (`CodedFailure`).
         var reason: String?
         var at: Date
+        /// The manager whose Persona page it was sent from (`AppModel.assistantManagerID`), nil for the default's: that
+        /// page alone shows it and sends it again.
+        var manager: String? = nil
     }
 
     private static let name = "assistant-failed-start"
