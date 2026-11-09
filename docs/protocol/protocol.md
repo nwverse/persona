@@ -1148,7 +1148,7 @@ After rejection or timeout deletion the record is gone (so it looks confirmed), 
 When the hub can't read pending computers (database unreachable), every computer is kept out as pending (the machine list doesn't mark `trust`), re-read every 5 seconds until it succeeds; no timeout deletion happens during that time. When the manager can't read them, requests from computers are refused with the error "the hub's database isn't responding", without saying the computer is waiting for confirmation.
 `error` for `confirm` / `reject` is localized by `Accept-Language` (403 `forbidden`, 404 `not_found`, 409 `not_pending`).
 
-Once confirmed, hello's machine list includes it, and the assistant then pushes keys to it. Issuing a code, redeeming, confirming, rejecting and timeout deletion are all written to the `machine_audit` table (who, when, what was done, no credentials).
+Once confirmed, hello's machine list includes it, and the assistant then pushes keys to it. Issuing a code, redeeming, confirming, rejecting, timeout deletion and deleting it in the admin console (`remove`) are all written to the `machine_audit` table (who, when, what was done, no credentials).
 How a device adds a pending computer: see "Computer pairing codes" under "Temporary pairing" above.
 
 ### Renaming a computer (feature `machine_rename`)

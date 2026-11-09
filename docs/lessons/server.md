@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## A credential bound to an id outlives the entry (#1869)
+
+Deleting a Link computer in admin removed its hub.json entry but left its credential and unused pairing codes valid: the link only failed while no entry had that id, so adding the id again, for any computer, let the old one back in. Now deleting a computer in admin, rejecting it, and a pending one expiring revoke what is bound to its id (`device_tokens.machine_id`, `pair_tokens.machine_id`), and so does adding a computer under an id not in use, from the admin console, an app or `personad hub pair --add`. An entry dropped another way (a manager's `drop_machines`, a hand edit of hub.json) is not revoked then, only when its id is added again through the hub; one written back into hub.json by hand is not covered at all. The revocation filters on the role it means, because a peer hub's credential binds its hub id in the same column.
+
 ## Model connection tests must match the runtime (#1732)
 
 A successful connection probe can still hide a request the model server will reject: exercise the same output-token field and its narrowly scoped fallback as the runtime. Parse SSE events rather than individual `data:` lines, including multiline events and CRLF, and test empty, truncated, refused, and errored replies separately.
