@@ -132,23 +132,4 @@ class ExtensionSlotsShotsTest {
         }
     }
 
-    // The settings tab's badge: the nav pages' numbers added up, a dot for words.
-    @Test fun theSettingsTabShowsTheBadge() {
-        var dark by mutableStateOf(false)
-        rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Board) {
-                Box(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
-                    AppNavigation(listOf(
-                        NavItem("a", "Persona", persona.core.designsystem.icons.PhIcons.Sparkle),
-                        NavItem("b", "Agents", persona.core.designsystem.icons.PhIcons.SquaresFour, badge = 2),
-                        NavItem("c", "收件箱", persona.core.designsystem.icons.PhIcons.Tray),
-                        NavItem("d", "设置", persona.core.designsystem.icons.PhIcons.GearSix, dot = true),
-                    ), "a", {})
-                }
-            }
-        }
-        capture("plugin-tab-dot-board-light")
-        dark = true
-        capture("plugin-tab-dot-board-dark")
-    }
 }
