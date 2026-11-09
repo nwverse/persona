@@ -11,10 +11,6 @@ import (
 // metaPruneEvery: how often scanOffline drops what the node keeps for transcripts that are gone (pruneGoneMetas).
 const metaPruneEvery = time.Minute
 
-// goneSize marks the light quick meta pruneGoneMetas leaves for a transcript that is gone. No file has that size, so a
-// file made again at the path is read again in full.
-const goneSize = -1
-
 var metaPruneAt struct {
 	sync.Mutex
 	at  time.Time
@@ -55,9 +51,9 @@ func (s metaStamp) same(o metaStamp) bool {
 
 // pruneGoneMetas drops what n.metas and n.bgScans hold for transcripts that no longer exist: a long-running node kept a
 // full quick meta and background-task scan (title, last words, background tasks, workflows: several KB, more for long
-// turns) for every transcript it had ever read. present are paths known
-// to exist, which are not stat'ed. A gone path keeps a light meta with just its cwd and mtime: dirsByUse lists the
-// directories of every transcript the node has seen (recent dirs, workDirs), and that list stays as it was.
+// turns) for every transcript it had ever read. present are paths known to exist, which are not stat'ed. dirsByUse
+// lists the directories of every transcript the node has seen (recent dirs, workDirs): a gone one's cwd and mtime go
+// into n.goneDirs, one entry per directory, so that list stays as it was.
 func (n *Node) pruneGoneMetas(present map[string]bool) {
 	check := n.pruneCandidates(present)
 	var gone []string
@@ -69,20 +65,21 @@ func (n *Node) pruneGoneMetas(present map[string]bool) {
 	n.dropGoneMetas(check, gone)
 }
 
-// pruneCandidates are the full metas not in present, with how each looked.
+// pruneCandidates are the metas not in present, with how each looked.
 func (n *Node) pruneCandidates(present map[string]bool) map[string]metaStamp {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	check := map[string]metaStamp{}
 	for p, m := range n.metas {
-		if !present[p] && m.size != goneSize {
+		if !present[p] {
 			check[p] = stampOf(m)
 		}
 	}
 	return check
 }
 
-// dropGoneMetas makes gone paths' metas light and drops their scans, leaving any read again since check was taken.
+// dropGoneMetas drops gone paths' metas and scans, leaving any read again since check was taken. A dropped meta's cwd
+// and mtime are kept in n.goneDirs for dirsByUse.
 func (n *Node) dropGoneMetas(check map[string]metaStamp, gone []string) {
 	if len(gone) == 0 {
 		return
@@ -94,7 +91,13 @@ func (n *Node) dropGoneMetas(check map[string]metaStamp, gone []string) {
 		if !ok || !stampOf(m).same(check[p]) {
 			continue // read again since the stat: the file may be back
 		}
-		n.metas[p] = quickMeta{size: goneSize, cwd: m.cwd, mtime: m.mtime}
+		if m.cwd != "" && m.mtime.After(n.goneDirs[m.cwd]) {
+			if n.goneDirs == nil {
+				n.goneDirs = map[string]time.Time{}
+			}
+			n.goneDirs[m.cwd] = m.mtime
+		}
+		delete(n.metas, p)
 		delete(n.bgScans, p)
 	}
 }

@@ -64,7 +64,8 @@ func heapInUse() int64 {
 }
 
 // A node read 1,000 transcripts that were then deleted: what it kept for each (the quick meta and the background-task
-// scan) goes, and the recent directories built from them stay exactly as they were.
+// scan) goes, all but one small entry per working directory, and the recent directories built from them stay exactly
+// as they were.
 func TestPruneGoneMetas(t *testing.T) {
 	const count = 1000
 	n := &Node{metas: map[string]quickMeta{}, bgScans: map[string]*bgScan{}}
@@ -90,32 +91,30 @@ func TestPruneGoneMetas(t *testing.T) {
 	}
 	before := n.dirsByUse()
 	keptMeta := n.metas[kept]
-	type where struct {
-		cwd   string
-		mtime time.Time
-	}
-	was := make(map[string]where, count)
+	wantDirs := map[string]time.Time{} // each deleted transcript's directory, with its newest one's mtime
 	for _, p := range paths {
-		was[p] = where{n.metas[p].cwd, n.metas[p].mtime}
+		if m := n.metas[p]; m.cwd != "" && m.mtime.After(wantDirs[m.cwd]) {
+			wantDirs[m.cwd] = m.mtime
+		}
+	}
+	if len(wantDirs) < 2 {
+		t.Fatalf("the fixtures should run in several directories: %v", wantDirs)
 	}
 	held := heapInUse() - start
 
 	n.pruneGoneMetas(map[string]bool{kept: true})
-	freed := held - (heapInUse() - start)
-	t.Logf("%d transcripts read, then deleted: the node held %.1f MB (%.1f KB each); the prune freed %.1f MB (%.1f KB each)",
-		count, float64(held)/(1<<20), float64(held)/count/1024, float64(freed)/(1<<20), float64(freed)/count/1024)
+	left := heapInUse() - start
+	t.Logf("%d transcripts read, then deleted: the node held %.1f MB (%.1f KB each); after the prune it holds %.1f KB (%.0f B each)",
+		count, float64(held)/(1<<20), float64(held)/count/1024, float64(left)/1024, float64(left)/count)
 
 	if len(n.bgScans) != 1 || n.bgScans[kept] == nil {
 		t.Fatalf("background-task scans left: %d, want only the existing transcript's", len(n.bgScans))
 	}
-	if len(n.metas) != count+1 {
-		t.Fatalf("metas: %d entries, want %d (a gone transcript keeps a light one)", len(n.metas), count+1)
+	if len(n.metas) != 1 {
+		t.Fatalf("metas: %d entries, want only the existing transcript's", len(n.metas))
 	}
-	for _, p := range paths {
-		want := quickMeta{size: goneSize, cwd: was[p].cwd, mtime: was[p].mtime}
-		if got := n.metas[p]; !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s: gone transcript's meta\n got %+v\nwant %+v", filepath.Base(p), got, want)
-		}
+	if !reflect.DeepEqual(n.goneDirs, wantDirs) {
+		t.Errorf("directories of the gone transcripts\n got %v\nwant %v", n.goneDirs, wantDirs)
 	}
 	if !reflect.DeepEqual(n.metas[kept], keptMeta) {
 		t.Error("an existing transcript's meta changed")
@@ -147,14 +146,15 @@ func TestPruneGoneMetas(t *testing.T) {
 	}
 }
 
-// An entry read again between the snapshot and the re-lock is left alone (the file may be back by then), and a light
-// entry is not stat'ed again.
+// An entry read again between the snapshot and the re-lock is left alone (the file may be back by then); a gone one
+// leaves the cache and is not stat'ed again, its directory kept.
 func TestPruneGoneMetasKeepsEntriesReadMeanwhile(t *testing.T) {
 	dir := t.TempDir()
 	n := &Node{metas: map[string]quickMeta{}, bgScans: map[string]*bgScan{}}
 	back, gone := filepath.Join(dir, "back.jsonl"), filepath.Join(dir, "gone.jsonl")
+	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	for _, p := range []string{back, gone} {
-		n.metas[p] = quickMeta{size: 10, cwd: "/work/project/f1", title: "old", readAt: time.Now()}
+		n.metas[p] = quickMeta{size: 10, cwd: "/work/project/f1", mtime: at, title: "old", readAt: time.Now()}
 		n.bgScans[p] = &bgScan{}
 	}
 	check := n.pruneCandidates(nil)
@@ -167,11 +167,14 @@ func TestPruneGoneMetasKeepsEntriesReadMeanwhile(t *testing.T) {
 	if !reflect.DeepEqual(n.metas[back], fresh) || n.bgScans[back] == nil {
 		t.Errorf("an entry read again was pruned: %+v", n.metas[back])
 	}
-	if m := n.metas[gone]; !reflect.DeepEqual(m, quickMeta{size: goneSize, cwd: "/work/project/f1"}) || n.bgScans[gone] != nil {
+	if m, ok := n.metas[gone]; ok || n.bgScans[gone] != nil {
 		t.Errorf("gone entry not pruned: %+v", m)
 	}
+	if want := map[string]time.Time{"/work/project/f1": at}; !reflect.DeepEqual(n.goneDirs, want) {
+		t.Errorf("directories of the gone transcripts: %v, want %v", n.goneDirs, want)
+	}
 	if check := n.pruneCandidates(nil); len(check) != 1 {
-		t.Errorf("a light entry is a candidate again: %v", check)
+		t.Errorf("candidates after the prune: %v, want only the entry read again", check)
 	}
 }
 
@@ -212,7 +215,7 @@ func TestScanOfflinePrunesGoneMetas(t *testing.T) {
 	if len(n.scanOffline()) == 0 {
 		t.Fatal("the transcripts should be listed")
 	}
-	read := fullMetas(n)
+	read := cachedMetas(n)
 	deleted := 0
 	for _, p := range paths[:4] {
 		if _, ok := n.metas[p]; ok {
@@ -226,15 +229,15 @@ func TestScanOfflinePrunesGoneMetas(t *testing.T) {
 		t.Fatal("none of the deleted transcripts was read (the test's premise)")
 	}
 	n.scanOffline()
-	if full := fullMetas(n); full != read {
-		t.Fatalf("pruned again within a minute: %d full metas, want %d", full, read)
+	if cached := cachedMetas(n); cached != read {
+		t.Fatalf("pruned again within a minute: %d metas, want %d", cached, read)
 	}
 	metaPruneAt.Lock()
 	metaPruneAt.at = time.Time{}
 	metaPruneAt.Unlock()
 	n.scanOffline()
-	if full := fullMetas(n); full != read-deleted {
-		t.Fatalf("%d full metas after the prune, want %d", full, read-deleted)
+	if cached := cachedMetas(n); cached != read-deleted {
+		t.Fatalf("%d metas after the prune, want %d", cached, read-deleted)
 	}
 	for _, p := range paths[:4] {
 		if _, ok := n.bgScans[p]; ok {
@@ -243,14 +246,8 @@ func TestScanOfflinePrunesGoneMetas(t *testing.T) {
 	}
 }
 
-func fullMetas(n *Node) int {
+func cachedMetas(n *Node) int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	full := 0
-	for _, m := range n.metas {
-		if m.size != goneSize {
-			full++
-		}
-	}
-	return full
+	return len(n.metas)
 }

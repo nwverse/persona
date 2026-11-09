@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -180,13 +181,17 @@ func TestSessionMarksCacheSweep(t *testing.T) {
 		if err := os.WriteFile(paths[i], []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if m := sessionMarks(paths[i]); m.First != fmt.Sprintf("run %d", i) {
-			t.Fatalf("%s: %+v", paths[i], m)
+	}
+	start := heapInUse() // the paths are made before: what is measured is the cache's own
+	for i, p := range paths {
+		if m := sessionMarks(p); m.First != fmt.Sprintf("run %d", i) {
+			t.Fatalf("%s: %+v", p, m)
 		}
 	}
 	if n := cached(); n != runs {
 		t.Fatalf("cached %d, want %d", n, runs)
 	}
+	held := heapInUse() - start
 	live := paths[0]
 	for _, p := range paths[1:] {
 		_ = os.Remove(p)
@@ -206,6 +211,10 @@ func TestSessionMarksCacheSweep(t *testing.T) {
 	if n := cached(); n != 1 {
 		t.Fatalf("cached %d after the idle limit, want only the live transcript", n)
 	}
+	left := heapInUse() - start
+	runtime.KeepAlive(paths)
+	t.Logf("%d transcripts with a first prompt of at most %d bytes seen, then deleted: the cache held %.0f KB (%.0f B each), %.0f KB after the sweep",
+		runs, len("run 1999"), float64(held)/1024, float64(held)/runs, float64(left)/1024)
 	marksCache.Lock()
 	_, ok := marksCache.m[live]
 	marksCache.Unlock()
