@@ -336,6 +336,61 @@ func TestListDirMarksIgnored(t *testing.T) {
 	}
 }
 
+// A name git would read as pathspec magic (":!x", ":(glob)y") used to stop check-ignore with a fatal error at that
+// name; it sorts before letters, so a.log and every other name after it lost its Ignored mark.
+func TestListDirMarksIgnoredBesideMagicNames(t *testing.T) {
+	hasGit(t)
+	reviewGitEnv(t)
+	list := func(odd []string) map[string]bool {
+		t.Helper()
+		dir := t.TempDir()
+		gitIn(t, dir, "init", "-q")
+		files := map[string]string{".gitignore": "*.log\n", "a.log": "", "keep.txt": ""}
+		for _, name := range odd {
+			files[name] = ""
+		}
+		for name, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		res, err := (&Node{home: dir}).listDir(dir, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ignored := map[string]bool{}
+		for _, e := range res["entries"].([]DirEntry) {
+			if e.Name != ".git" {
+				ignored[e.Name] = e.Ignored
+			}
+		}
+		if len(ignored) != len(files) {
+			t.Fatalf("listed %v, want the %d files written", ignored, len(files))
+		}
+		return ignored
+	}
+	want := map[string]bool{".gitignore": false, "a.log": true, "keep.txt": false}
+	check := func(got map[string]bool, odd []string) {
+		t.Helper()
+		for name, w := range want {
+			if got[name] != w {
+				t.Errorf("with %q: %s ignored=%v, want %v", odd, name, got[name], w)
+			}
+		}
+		for _, name := range odd {
+			if got[name] {
+				t.Errorf("with %q: %s marked ignored", odd, name)
+			}
+		}
+	}
+	check(list(nil), nil)
+	if runtime.GOOS == "windows" { // ':' cannot be part of a file name there
+		return
+	}
+	odd := []string{":!odd.txt", ":(glob)y", ":^x"}
+	check(list(odd), odd)
+}
+
 // The RPC the hub calls: the JSON of fs.watch becomes the watched set, and an empty one releases it.
 func TestFsWatchRPC(t *testing.T) {
 	n, dir := testNode(t)
