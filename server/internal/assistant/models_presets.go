@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -34,13 +35,14 @@ type builtinPreset struct {
 	Region string `json:"region"`
 }
 
-var builtinPresets = func() []builtinPreset {
+// builtinPresets are read on first use, not whenever personad starts (a hook too, #1308).
+var builtinPresets = sync.OnceValue(func() []builtinPreset {
 	var list []builtinPreset
 	if err := json.Unmarshal(builtinPresetsJSON, &list); err != nil {
 		panic("presets_builtin.json: " + err.Error())
 	}
 	return list
-}()
+})
 
 // presetSlug is the vendor part of a preset id (builtin/deepseek → deepseek, <plugin>/<provider> → <provider>).
 func presetSlug(id string) string {
@@ -61,7 +63,7 @@ func builtinLauncherPresets(l i18n.Lang) []LauncherPreset {
 		return region != "cn"
 	}
 	var head, tail []LauncherPreset
-	for _, b := range builtinPresets {
+	for _, b := range builtinPresets() {
 		pr := b.LauncherPreset
 		pr.Extension = builtinPlugin
 		pr.Models = slices.Clone(pr.Models)

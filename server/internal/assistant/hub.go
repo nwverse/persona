@@ -67,6 +67,7 @@ type (
 	InteractionRaised   = assistantwire.InteractionRaised
 	MessageCard         = assistantwire.MessageCard
 	DeviceSessions      = assistantwire.DeviceSessions
+	StartEnded          = assistantwire.StartEnded
 	HTTPRequest         = assistantwire.HTTPRequest
 	HTTPResponse        = assistantwire.HTTPResponse
 	Profile             = assistantwire.Profile
@@ -83,6 +84,7 @@ type (
 	ChannelMark          = assistantwire.ChannelMark
 	ChannelTurn          = assistantwire.ChannelTurn
 	ChannelReceive       = assistantwire.ChannelReceive
+	ChannelUnbound       = assistantwire.ChannelUnbound
 	ChannelNoted         = assistantwire.ChannelNoted
 	FeishuMessage        = assistantwire.FeishuMessage
 	FeishuAction         = assistantwire.FeishuAction
@@ -109,6 +111,8 @@ const (
 	FeishuPost            = assistantwire.FeishuPost
 	FeishuText            = assistantwire.FeishuText
 	FeishuUpdateCard      = assistantwire.FeishuUpdateCard
+	FeishuPin             = assistantwire.FeishuPin
+	FeishuRecall          = assistantwire.FeishuRecall
 	FeishuCotCreate       = assistantwire.FeishuCotCreate
 	FeishuCotAppend       = assistantwire.FeishuCotAppend
 	FeishuCotComplete     = assistantwire.FeishuCotComplete
@@ -201,6 +205,7 @@ const (
 	EventInteractionRaised   = assistantwire.EventInteractionRaised
 	EventUpdated             = assistantwire.EventUpdated
 	EventResync              = assistantwire.EventResync
+	EventStartEnded          = assistantwire.EventStartEnded
 	CodeNoDevice             = assistantwire.CodeNoDevice
 	CodeMachineOffline       = assistantwire.CodeMachineOffline
 	CodeStaleSnapshot        = assistantwire.CodeStaleSnapshot

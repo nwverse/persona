@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"math"
 	"net/url"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -232,7 +232,7 @@ func cursorOf(raw json.RawMessage) string {
 
 // reasonPattern is what of an account's last error is passed on: its head, a short lowercase token. The rest can be
 // an upstream's free text (an address, a message naming the account) and is dropped.
-var reasonPattern = regexp.MustCompile(`^[a-z_]{1,32}$`)
+var reasonPattern = lazyre.New(`^[a-z_]{1,32}$`)
 
 func reasonOf(lastError string) string {
 	head, _, _ := strings.Cut(strings.TrimSpace(lastError), ":")

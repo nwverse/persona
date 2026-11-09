@@ -226,6 +226,11 @@ def cycle(config, verify_source=None):
         if (directory / "verified.json").exists():
             finish_verified(config, directory, sha, code, complete)
             return
+        if verify_source is None and (directory / "failure.json").exists():
+            # A timer tick is not authorization to retry the same failed artifact.
+            # Leave its failure status and receipts intact; new commits are independent.
+            print("Previous release failed for " + sha + "; explicit recovery or a new source is required")
+            return
         status(config, sha, "pending", "Android tests, release build, signing and Hub publication")
         try:
             with (directory / "release.log").open("a", buffering=1) as log:

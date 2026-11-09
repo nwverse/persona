@@ -257,6 +257,8 @@ export interface AdminExtension {
   read_only?: boolean;
   secrets?: { name: string; title: string; required?: boolean; set: boolean }[];
   permissions: PermissionLine[];
+  /** An extension running on its own that the hub reaches on its sockets (a `remote:` install): how it is connected. */
+  attached?: import("../lib/extensions").ExtensionAttached;
 }
 
 export interface AdminExtensions {

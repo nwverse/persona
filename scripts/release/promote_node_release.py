@@ -15,9 +15,10 @@ from hub_release_paths import release_directory, validate_release_paths
 from manager_artifacts import manager_manifest
 from node_artifacts import prepare_nodes
 from pinned_node_release import validate_target, validate_candidate
+from node_relay_retry import request, transient
 
 
-def relay(root, target, action, params=None):
+def relay(root, target, action, params=None, timeout=50):
     cfg = json.loads((root / 'hub.json').read_text())
     port = cfg.get('listen', ':18660').rsplit(':', 1)[1]
     mid = urllib.parse.quote(target['machine_id'], safe='')
@@ -27,7 +28,7 @@ def relay(root, target, action, params=None):
         f'http://127.0.0.1:{port}/api/v1/machines/{mid}/node-update/{action}',
         method='POST', data=json.dumps(payload).encode(),
         headers={'Authorization': 'Bearer ' + cfg['token'], 'Content-Type': 'application/json'})
-    with urllib.request.urlopen(request, timeout=50) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -54,14 +55,17 @@ def busy(snapshot):
 
 def install(root, target, binary, manifest, timeout):
     deadline = time.monotonic() + timeout
-    while busy(relay(root, target, 'sessions')):
+    def call(action, params=None, retry=False):
+        return request(relay, root, target, action, deadline, params, retry=retry)
+
+    while busy(call('sessions', retry=True)):
         if time.monotonic() >= deadline:
             raise TimeoutError('Node remains busy; no update started')
         time.sleep(2)
     with binary.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     metadata = dict(size=binary.stat().st_size, sha256=digest, version=manifest['version'])
-    begin = relay(root, target, 'begin', metadata)
+    begin = call('begin', metadata)
     transaction = begin.get('id')
     offset = begin.get('offset')
     if not isinstance(transaction, str) or not transaction:
@@ -70,6 +74,7 @@ def install(root, target, binary, manifest, timeout):
     try:
         if type(offset) is not int or not 0 <= offset <= metadata['size']:
             raise ValueError('Invalid node transfer offset')
+        print(json.dumps(dict(phase='transferring', offset=offset, size=metadata['size'])), flush=True)
         with binary.open('rb') as stream:
             stream.seek(offset)
             while offset < metadata['size']:
@@ -78,16 +83,22 @@ def install(root, target, binary, manifest, timeout):
                 data = stream.read(min(256 * 1024, metadata['size'] - offset))
                 if not data:
                     raise ValueError('Candidate truncated during transfer')
-                reply = relay(root, target, 'chunk', dict(id=transaction, offset=offset,
-                                                       data=base64.b64encode(data).decode()))
+                # Retry exactly this transaction, offset and payload. The resident
+                # compares already-written bytes; never issue another begin here.
+                reply = call('chunk', dict(id=transaction, offset=offset,
+                                          data=base64.b64encode(data).decode()), retry=True)
                 offset += len(data)
                 if reply.get('offset') != offset:
                     raise ValueError('Node acknowledged another offset')
+                print(json.dumps(dict(phase='transferring', offset=offset, size=metadata['size'])), flush=True)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Node deadline exhausted before commit')
         try:
-            accepted = relay(root, target, 'commit', {'id': transaction})
-        except urllib.error.HTTPError:
-            raise
-        except (OSError, TimeoutError):
+            accepted = relay(root, target, 'commit', {'id': transaction}, timeout=min(50, remaining))
+        except (OSError, TimeoutError) as error:
+            if not transient(error):
+                raise
             # A lost reply is ambiguous. Only a fresh target handshake and the
             # original guardian's confirmation can turn it into success.
             committed = True
@@ -95,13 +106,18 @@ def install(root, target, binary, manifest, timeout):
             if accepted.get('accepted') is not True:
                 raise ValueError('Node did not accept installation')
             committed = True
-    finally:
+    except BaseException as failure:
         if not committed:
-            relay(root, target, 'abort', {'id': transaction})
+            try:
+                relay(root, target, 'abort', {'id': transaction},
+                      timeout=min(50, max(1, deadline - time.monotonic())))
+            except Exception as cleanup:
+                raise RuntimeError(f'{failure}; node abort also failed: {cleanup}') from failure
+        raise
     last_failure = 'no target handshake'
     while time.monotonic() < deadline:
         try:
-            info = relay(root, target, 'info')
+            info = call('info', retry=True)
         except urllib.error.HTTPError as error:
             if error.code not in (502, 503, 504):
                 raise
@@ -112,9 +128,9 @@ def install(root, target, binary, manifest, timeout):
             if info.get('version') == manifest['version']:
                 if 'manager_update_inventory_v1' not in info.get('capabilities', []):
                     raise ValueError('Replacement lacks the required inventory producer capability')
-                relay(root, target, 'sessions')
+                call('sessions', retry=True)
                 print(json.dumps(dict(phase='applied', version=manifest['version'])), flush=True)
-                relay(root, target, 'confirm', {'version': manifest['version']})
+                call('confirm', {'version': manifest['version']}, retry=True)
                 return info
         time.sleep(2)
     raise TimeoutError('Node not confirmed; its existing recovery guardian owns rollback: ' + last_failure)

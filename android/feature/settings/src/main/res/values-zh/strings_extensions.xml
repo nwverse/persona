@@ -276,6 +276,7 @@
     <!-- Auto-upgrade (docs/extensions/extensions.md "Auto-upgrade") -->
     <string name="settings_ext_upgrade_title">升级</string>
     <string name="settings_ext_upgrade_footer">扩展市场里出了新版本，扩展空闲时自动装上；新版本要的权限变多时先问你。装上后起不来的会退回原来的版本。</string>
+    <string name="settings_ext_upgrade_paused_footer">扩展关闭期间暂停自动升级。重新打开扩展后，恢复你原来的自动升级设置。</string>
     <string name="settings_ext_auto_upgrade">自动升级</string>
     <string name="settings_ext_new_version">有新版本 %1$s</string>
     <string name="settings_ext_auto_upgrade_on">已打开自动升级</string>
@@ -286,6 +287,7 @@
     <string name="settings_ext_upgrade_available">稍后自动升级</string>
     <string name="settings_ext_upgrade_off">自动升级关着</string>
     <string name="settings_ext_upgrade_skipped">上次升级后起不来，已回到 %1$s，不再自动升级到这个版本</string>
+    <string name="settings_ext_upgrade_skipped_user">你从这个版本回滚到了 %1$s，不会再自动升级到它</string>
     <string name="settings_ext_upgrade_failed">没装上</string>
     <string name="settings_ext_upgrade_failed_detail">没装上：%1$s</string>
     <string name="settings_ext_upgrade_incompatible">这台 hub 装不了</string>

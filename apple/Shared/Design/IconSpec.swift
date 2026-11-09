@@ -50,6 +50,12 @@ nonisolated extension Theme.Icon {
         if let s = spec.substitutes[name] { return s }
         return spec.outline ? outline(name) : name
     }
+
+    /// The symbol as an `Image` in the current style's icon language, where a view can't stand: inside `Text`, or as a
+    /// menu item's icon (the item takes only an `Image`). The style's weight comes from the surrounding font there.
+    static func image(_ name: String, in spec: IconSpec = StyleSpec.current.icons) -> Image {
+        Image(systemName: styled(name, in: spec))
+    }
 }
 
 /// Whether SF Symbols has a name on this OS, remembered: `outline` asks on every draw.

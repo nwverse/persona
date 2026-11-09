@@ -78,10 +78,21 @@ func dropDeviceRows(ctx context.Context, tx pgx.Tx, id string) error {
 	if _, err := tx.Exec(ctx, `UPDATE pair_tokens SET expires_at = `+endedNow+` WHERE device_id = $1`, id, time.Now()); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM devices WHERE credential_id = $1 OR device_id = $1`, id); err != nil {
+	if err := lockPushRegistrations(ctx, tx); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `DELETE FROM phone_tools WHERE credential_id = $1 OR device_id = $1`, id)
+	rows, err := devicesIn(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, device := range rows {
+		if device.CredentialID == id || device.Credential == id || device.DeviceID == id {
+			if err := retirePushDevice(ctx, tx, device, "", "revoked"); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM phone_tools WHERE credential_id = $1 OR device_id = $1`, id)
 	return err
 }
 

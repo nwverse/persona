@@ -13,13 +13,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Config is hub.json's "github".
@@ -406,7 +406,7 @@ func (c *Connector) send(ctx context.Context, method, path string, hdr http.Head
 	return c.client.Do(req)
 }
 
-var tokenLike = regexp.MustCompile(`\b(gh[opsur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[0-9a-f]{40})\b`)
+var tokenLike = lazyre.New(`\b(gh[opsur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|[0-9a-f]{40})\b`)
 
 // Scrub blanks anything that looks like a GitHub token in s (an error, a message): tokens never leave the hub.
 func Scrub(s string) string { return tokenLike.ReplaceAllString(s, "[token]") }

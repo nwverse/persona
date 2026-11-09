@@ -7,7 +7,6 @@
 #
 # Env:
 #   PERF_SIM         the assigned, existing simulator udid or name (required if "Persona Perf" is absent)
-#   PERF_LAYOUT      shell (default, the iPhone's default layout) or old
 #   PERF_ITERATIONS  measure() iterations per test (default 5)
 #   PERF_ONLY        space-separated test names to run only those (e.g. "PerfAgentsTests/testAgentsListScroll")
 #   PERF_OUT         where the result bundles and the report go (default /tmp/persona-perf-<time>)
@@ -28,7 +27,6 @@ python3 scripts/persona_config.py xcconfig >/dev/null
 SUITES=("$@")
 [ ${#SUITES[@]} -gt 0 ] || SUITES=(agents assistant inbox settings machines)
 SIM_NAME="${PERF_SIM:-Persona Perf}"
-LAYOUT="${PERF_LAYOUT:-shell}"
 ITER="${PERF_ITERATIONS:-5}"
 OUT="${PERF_OUT:-/tmp/persona-perf-$(date +%Y%m%d-%H%M%S)}"
 DD="${PERF_DD:-/tmp/persona-perf-dd}"
@@ -69,7 +67,7 @@ for rt,ds in json.load(sys.stdin)["devices"].items():
 if [ -z "$UDID" ]; then
   verdict "failed simulator $SIM_NAME does not exist; supply the assigned PERF_SIM"; exit 2
 fi
-log "simulator $UDID, layout $LAYOUT, $ITER iterations, results in $OUT"
+log "simulator $UDID, default navigation, $ITER iterations, results in $OUT"
 
 # 1. The optimized build (no simulator lock: it only compiles).
 if [ "${PERF_SKIP_BUILD:-0}" != 1 ]; then
@@ -148,7 +146,7 @@ for s in "${SUITES[@]}"; do
     trap '\''xcrun simctl shutdown "$UDID" 2>/dev/null'\'' EXIT
     "'"$ROOT"'/scripts/app/sim-boot.sh" "$UDID" >/dev/null || exit 1
     "$@"' _ "$UDID" \
-    env TEST_RUNNER_PERSONA_PERF_HUB="http://127.0.0.1:$port" TEST_RUNNER_PERSONA_LAYOUT="$LAYOUT" \
+    env TEST_RUNNER_PERSONA_PERF_HUB="http://127.0.0.1:$port" \
       TEST_RUNNER_PERSONA_PERF_ITERATIONS="$ITER" \
     "${SLOT[@]}" timeout 5400 xcodebuild test-without-building -project apple/Persona.xcodeproj -scheme Persona \
       -destination "id=$UDID" -derivedDataPath "$DD" -parallel-testing-enabled NO \

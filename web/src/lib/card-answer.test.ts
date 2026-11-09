@@ -83,7 +83,7 @@ it("redacts field and elicitation secrets by schema and name without mutating th
   expect(await answerCard(card, body)).toEqual({ ok: true, already: false });
   expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: body });
   expect(ended[0]?.[1]).toMatchObject({ resolution: {
-    action: "accept", values: { hidden: "<redacted>", api_key: "<redacted>", visible: "keep" },
+    action: "accept", values: { hidden: "<redacted>", api_key: "<redacted>", visible: "<redacted>" },
     content: { hidden: "<redacted>", write: "<redacted>", TOKEN: "<redacted>", visible: "keep", count: 3, enabled: false },
   } });
   expect(body.content.hidden).toBe("synthetic");

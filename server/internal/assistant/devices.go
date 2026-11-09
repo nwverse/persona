@@ -35,8 +35,14 @@ type Devices interface {
 	// another one absorbed: that one), its sessions as its node listed them, when its node's connection began, the
 	// token usage.
 	List() []devices.Summary
+	// MachineResources returns the retained system and latest sample, including a stale sample's timestamp.
+	MachineResources(id string) (*proto.Machine, *proto.MetricSample, *bool)
 	Canonical(id string) string
+	// Sessions copies the whole list out: the caller owns its rows (not their slices, shared and never written into).
 	Sessions(id string) ([]proto.Session, bool)
+	// SessionsWhere copies out only the sessions keep accepts, read in place under the devices' lock (keep must not
+	// change or keep them, nor call the devices): a view that keeps a few rows of a busy machine copies only those.
+	SessionsWhere(id string, keep func(*proto.Session) bool) ([]proto.Session, bool)
 	Session(id, session string) (proto.Session, bool)
 	ConnectedAt(id string) time.Time
 	Usage() assistantwire.UsageSummary

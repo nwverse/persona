@@ -60,6 +60,24 @@ class PortForwarderTest {
         }
     }
 
+    // #3483: close returns only once the port is free. Closing a socket a thread is blocked accepting on only wakes that
+    // thread, so binding the number right after close used to find it still taken whenever the thread had not run yet.
+    @Test fun closeReturnsOnlyOnceItsPortIsFree(): Unit = runBlocking {
+        val unreachable = okhttp3.HttpUrl.Builder().scheme("http").host("127.0.0.1").port(1).build()
+        repeat(50) { round ->
+            val forwarder = PortForwarder(http) { unreachable to "t" }
+            val port = forwarder.localPort(PortForwarder.Key("mac", 0))
+            forwarder.close()
+            val free = runCatching {
+                java.net.ServerSocket().use {
+                    it.reuseAddress = true
+                    it.bind(java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), port), 50)
+                }
+            }
+            assertTrue("round $round: port $port still taken right after close: ${free.exceptionOrNull()}", free.isSuccess)
+        }
+    }
+
     // #3483: a group's stack torn down (re-pair, unpair) frees its ports, so the next pairing's forwarder gets them back.
     @Test fun aClosedOpenerFreesItsPortForTheNext(): Unit = runBlocking {
         val port = java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }

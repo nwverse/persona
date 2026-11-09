@@ -4,7 +4,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -66,6 +66,7 @@ func (n *Node) keptSessions() map[string]bool {
 func (n *Node) scanOffline() []proto.Session {
 	var out []proto.Session
 	files := n.globProjects("*", "*.jsonl")
+	n.maybePruneGoneMetas(files)
 	type cand struct {
 		path string
 		st   os.FileInfo
@@ -151,7 +152,7 @@ func (n *Node) scanOffline() []proto.Session {
 	return out
 }
 
-var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]`)
+var nonAlnum = lazyre.New(`[^A-Za-z0-9]`)
 
 // maxAssistantOffline is how many of the assistant directory's quiet transcripts the list keeps, apart from the 80
 // newest of every other directory.

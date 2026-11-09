@@ -259,6 +259,8 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 		writeJSON(w, map[string]any{"ok": true})
 	})
 	route("GET /api/v1/machines/{mid}/claude-dirs", d.getClaudeDirs)
+	route("GET /api/v1/machines/{mid}/claude-live-replies", d.getLiveReplies)
+	route("PUT /api/v1/machines/{mid}/claude-live-replies", d.putLiveReplies)
 	d.metricsRoutes(mux)
 	d.usageRoutes(mux)
 	d.usageWindowRoutes(mux)

@@ -25,6 +25,7 @@ import SwiftUI
     /// The cards' models, made when the cards are listed (the page pushes what they ask for, `extensionPushes`).
     private var cardModels: [String: ExtensionViewModel] = [:]
     @ObservationIgnored private var lastHub: String?
+    @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored private let deps: ExtensionViewModel.Deps
     @ObservationIgnored private let features: () -> Set<String>
 
@@ -38,6 +39,8 @@ import SwiftUI
 
     /// Asks the hub again for the entries and the cards (a list that cannot be read keeps what there was).
     func reload(for hub: String? = nil) async {
+        reloadGeneration += 1
+        let generation = reloadGeneration
         // Another hub: nothing of the last one's stays on screen while this one's are read.
         if let hub, hub != lastHub {
             lastHub = hub
@@ -52,7 +55,8 @@ import SwiftUI
             return
         }
         // No placement: every slot's at once (not launchers' sections), in the hub's order.
-        guard let all = try? await api.pluginUI(placement: nil) else { return }
+        guard let all = try? await api.pluginUI(placement: nil), generation == reloadGeneration else { return }
+        // A slower reply cannot restore another hub's slots, or slots whose feature was removed.
         do {
             let next = all.filter { $0.placement == "nav_page" }
             if next != pages { pages = next }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 func TestKBEventTopicsAreDeclaredAndRequireConsent(t *testing.T) {
@@ -27,7 +29,7 @@ func TestKBEventTopicsAreDeclaredAndRequireConsent(t *testing.T) {
 		t.Fatalf("topics: %v", after.Topics())
 	}
 	b, _ := json.Marshal(Added(before, after))
-	if !strings.Contains(string(b), EventTopics["kb.changed"]) || !strings.Contains(string(b), EventTopics["kb.forgotten"]) {
+	if !strings.Contains(string(b), permissionText(i18n.Default, "event_kb_changed")) || !strings.Contains(string(b), permissionText(i18n.Default, "event_kb_forgotten")) {
 		t.Fatalf("new subscriptions need consent: %s", b)
 	}
 }

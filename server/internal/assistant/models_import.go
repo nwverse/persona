@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -59,7 +59,7 @@ func strip1M(model string) (string, int) {
 	return strings.TrimSpace(model), 0
 }
 
-var importNameBad = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
+var importNameBad = lazyre.New(`[^A-Za-z0-9_-]+`)
 
 // importName is an alias name made a valid launcher name.
 func importName(alias string) string {
