@@ -29,5 +29,7 @@
   "hint_sent": "あなたの名前で送信した内容と、許可された理由",
   "group_personal": "個人",
   "group_assistant": "アシスタント",
-  "group_system": "システム"
+  "group_system": "システム",
+  "tab_knowledge": "ナレッジの選択",
+  "hint_knowledge": "Persona が読み取り、保存するチャットと文書"
 }

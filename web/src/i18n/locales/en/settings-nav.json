@@ -29,5 +29,7 @@
   "hint_sent": "What Persona sent in your name, and why it was allowed",
   "group_personal": "Personal",
   "group_assistant": "Assistant",
-  "group_system": "System"
+  "group_system": "System",
+  "tab_knowledge": "Knowledge selection",
+  "hint_knowledge": "What chats and documents Persona reads and keeps"
 }
