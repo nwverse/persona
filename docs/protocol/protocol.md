@@ -2255,7 +2255,7 @@ Editing the roster, creating codes and deleting require a full-permission device
 - **Paged lists**: `GET /api/v1/inbox/done` (`items`) pages by a cursor that is one manager's, so it is never merged: the named manager answers, else the default, and every item gets `manager` as in a merged list; the rest (`next`) is that manager's.
 - **Offline managers**: data the hub already retains stays retained with `manager`: their computers (`online: false`, `error` says the assistant is offline) and sessions (`unknown` state), plus GETs whose last response is retained, such as extension lists (`extwire.KeptRoutes`). Items get no additional fields; "Last synced…" uses that manager's `online: false` and `last_seen` from `GET /api/v1/managers`. Operations through it return `503 assistant_offline`.
 
-**Wire format**: each WebSocket text message is one line of `internal/rpc` JSON (the same as hub ↔ node), permessage-deflate, at most 64 MiB per message; both directions can call:
+**Wire format**: each WebSocket text message is one line of `internal/rpc` JSON (the same as hub ↔ node), at most 64 MiB per message; both directions can call. Managers offer permessage-deflate and the hub accepts it when offered; the hub's own manager (its child, or the built-in assistant's service dialing the hub on the same machine) offers none, since compression saves nothing on a local link and costs each end its flate state:
 
 ```jsonc
 // "助手" is the name the hub records for the assistant identity ("Assistant")
