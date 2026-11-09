@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Muted (the inbox's More menu): the repositories, chats and senders muted from an item's menu, in every source,
 /// newest first; with several managers, under each one's name. A swipe or a long press takes one back; nothing it
-/// covered comes back, only what comes in later (docs/assistant/inbox.md「静音」).
+/// covered comes back, only what comes in later (docs/assistant/inbox.md「Muting」).
 struct InboxMutesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: InboxMutesModel

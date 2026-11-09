@@ -188,7 +188,7 @@ struct TodoDetailView: View {
                     }
 
                     if todo.autoDone {
-                        // The hub closed it (docs/assistant/todos.md「自动完成」): say why, and how to undo it.
+                        // The hub closed it (docs/assistant/todos.md「Automatic completion」): say why, and how to undo it.
                         Text(todo.autoDoneReason.map { String(localized: "The agent stopped and the work looked finished, so it was marked done: \($0). If it isn't, tap “Reopen”.") }
                              ?? String(localized: "The agent stopped and the work looked finished, so it was marked done. If it isn't, tap “Reopen”."))
                             .font(Theme.Font.caption)

@@ -1,6 +1,6 @@
 import XCTest
 
-/// A sealed message on a messaging source (#2138, docs/extensions/extension-messaging.md「七」) against scripts/mock/mock_hub.py with
+/// A sealed message on a messaging source (#2138, docs/extensions/extension-messaging.md「Composer modes」) against scripts/mock/mock_hub.py with
 /// MOCK_MESSAGING=1 MOCK_LARK_NATIVE_OLK=1 (PERSONA_MOCK_HUB): the app asks the source's `compose` what it needs and shows
 /// exactly that (unlock the vault, then the cover as a choice), then sends with the token it gave; the sealed chunks
 /// reach the vendor, and the message shows as sealed. No password or text goes anywhere but the mock.

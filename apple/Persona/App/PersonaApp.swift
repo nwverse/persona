@@ -100,7 +100,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
-        // (several groups, docs/protocol/multi-hub.md「截图」).
+        // (several groups, docs/protocol/multi-hub.md「Tests」).
         if let s = UserDefaults.standard.string(forKey: "pairURL"), let cfg = ServerConfig(pairURL: s) {
             let more = ["pairURL2", "pairURL3"].compactMap { UserDefaults.standard.string(forKey: $0).flatMap(ServerConfig.init(pairURL:)) }
             AppModel.shared.adopt([cfg] + more)
@@ -353,7 +353,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     done()
                     return
                 }
-                // The group the push came from (docs/protocol/multi-hub.md「推送」): its hub settles the button, its session opens.
+                // The group the push came from (docs/protocol/multi-hub.md「Push and notifications」): its hub settles the button, its session opens.
                 let key = ref.flatMap(Self.sessionKey)
                 if let key, let reply = NotificationActions.replyText(action: action, text: text) {
                     // Reply on a finished turn: sent in the background, like a button (#3449).

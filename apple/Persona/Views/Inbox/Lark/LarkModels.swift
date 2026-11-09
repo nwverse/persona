@@ -25,7 +25,7 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
     var mentionPosition: String?
     /// Client only: open the chat at this message (a flagged message) instead of the first unread.
     var focus: String?
-    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「多账号」); nil: the hub's
+    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「Multiple accounts」); nil: the hub's
     /// own. Kept in the caches.
     var account: Int?
     /// Client only: whose account it is, shown beside Lark while more than one is signed in.

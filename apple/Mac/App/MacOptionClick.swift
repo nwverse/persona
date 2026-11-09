@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 extension View {
-    /// ⌥-click does `action` instead of what a click on this view does (docs/apple/mac.md「窗口」: ⌥-click a list row to open it in a new window, as
+    /// ⌥-click does `action` instead of what a click on this view does (docs/apple/mac.md「Separate chat windows」: ⌥-click a list row to open it in a new window, as
     /// Finder and Mail): an AppKit layer over the view that only an option-click hits, so the row's link, its list's
     /// selection and the buttons in it never see that click; every other click goes through to them.
     func macOptionClick(_ action: @escaping () -> Void) -> some View {

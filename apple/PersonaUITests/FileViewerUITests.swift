@@ -1,6 +1,6 @@
 import XCTest
 
-/// The file viewer (docs/apple/ios.md「文件查看器」) against scripts/mock/mock_hub.py started with MOCK_FILES=1 (PERSONA_MOCK_HUB):
+/// The file viewer (docs/apple/ios.md「File viewer」) against scripts/mock/mock_hub.py started with MOCK_FILES=1 (PERSONA_MOCK_HUB):
 /// only paths that are there on the conversation's machine become chips; code opens with line numbers, JSON as an
 /// outline, Markdown rendered.
 final class FileViewerUITests: XCTestCase {

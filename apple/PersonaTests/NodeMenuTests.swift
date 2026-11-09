@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The Agents list's node menu (`NodeMenu`, docs/integrations/terminal.md「节点菜单」): what it offers and what it sends.
+/// The Agents list's node menu (`NodeMenu`, docs/integrations/terminal.md「Node menus」): what it offers and what it sends.
 @MainActor struct NodeMenuTests {
     private func session(_ id: String, pane: String? = "w1:p1", state: String = "working", workspace: String? = "w1",
                          space: String = "w1", kind: String? = "herdr", extra: String = "") -> Session {

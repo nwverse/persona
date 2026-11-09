@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Settings › Extensions › Extension Market (docs/extensions/extensions.md「扩展市场」): the plugins of the markets the hub has, searched and filtered by
+// Settings › Extensions › Extension Market (docs/extensions/extensions.md「Extension marketplace」): the plugins of the markets the hub has, searched and filtered by
 // market; one plugin's page with what it may do, installed or upgraded after its preview (the permissions agreed to
 // are the preview's digest) and removed when it came from that market; and the markets themselves (added with an
 // optional token that is never shown again, refreshed, removed). Only with a hub that says `markets: true`.
@@ -254,7 +254,7 @@ enum ExtensionMarketText {
     /// Under a GitHub market's error when it has no token: why a token helps a public repository too.
     static let gitHubTokenHint = String(localized: "Without a token, GitHub allows only 60 reads an hour, shared by every device on your network. A GitHub token raises that to 5,000, public repos included (a fine-grained token with Public repositories and no permissions is enough).")
 
-    /// GitHub's page for a new fine-grained token, filled in for a market (docs/extensions/extensions.md「GitHub 限流」): a name, what
+    /// GitHub's page for a new fine-grained token, filled in for a market (docs/extensions/extensions.md「GitHub rate limits」): a name, what
     /// it is for, a year. No permission: such a token always reads public repositories, which is what lifts the limit.
     static let gitHubTokenURL: URL = {
         var c = URLComponents(string: "https://github.com/settings/personal-access-tokens/new")!

@@ -1,7 +1,7 @@
 #if os(macOS)
 import SwiftUI
 
-// iOS-only SwiftUI API under the same names, with what each means on a Mac (docs/apple/mac.md「做法」): the pages are
+// iOS-only SwiftUI API under the same names, with what each means on a Mac (docs/apple/mac.md「Approach」): the pages are
 // written once, for iOS, and compile here unchanged. Where a Mac has no such thing (a keyboard type, a status bar)
 // the modifier does nothing.
 

@@ -79,7 +79,7 @@ struct RootView: View {
         .task(id: model.checklistPending && model.hubFeatures.contains(AssistantReadiness.feature)) {
             if model.checklistPending { await model.refreshReadiness() }
         }
-        // The plugins' main-navigation entries and cards, for Settings' badge (docs/extensions/extensions.md「UI 插槽」).
+        // The plugins' main-navigation entries and cards, for Settings' badge (docs/extensions/extensions.md「UI slots」).
         .task(id: ExtensionSlots.source(model)) {
             let hub = ExtensionSlots.source(model).hub
             await ExtensionSlots.shared.reload(for: hub)
@@ -345,7 +345,7 @@ private struct TabPage<Page: View>: View, Equatable {
             }
             .equatable()
         }
-        .badge(badge) // Demo Mode is left from Settings; the plugins' entries are on it (docs/extensions/extensions.md「UI 插槽」, badges)
+        .badge(badge) // Demo Mode is left from Settings; the plugins' entries are on it (docs/extensions/extensions.md「UI slots」, badges)
     }
 
     /// Demo; else what the plugins' main-navigation entries' badges add up to (only words: a dot).

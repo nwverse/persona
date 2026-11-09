@@ -395,8 +395,8 @@ nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
     var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
-/// One install or grant the node runs for the machine page (docs/extensions/computer-use.md「一键安装」).
-/// An app the user always allowed the assistant to operate on a Mac (docs/extensions/computer-use.md「锁屏、防睡眠、按 App 批准」c).
+/// One install or grant the node runs for the machine page (docs/extensions/computer-use.md「One-tap installation」).
+/// An app the user always allowed the assistant to operate on a Mac (docs/extensions/computer-use.md「Locking, preventing sleep and per-App approval」c).
 nonisolated struct ComputerApp: Codable, Hashable, Sendable, Identifiable {
     var bundleID: String
     var name: String
@@ -426,9 +426,9 @@ nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var name: String
     var baseURL: String?
     var model: String?
-    /// "codex" for plain codex or an alias running it (docs/integrations/codex.md「从手机新建」); nil: Claude Code.
+    /// "codex" for plain codex or an alias running it (docs/integrations/codex.md「Starting from the phone」); nil: Claude Code.
     var agent: String? = nil
-    /// An agent runtime's launcher that can run the Persona assistant (DSH's, docs/integrations/runtimes.md「助手」).
+    /// An agent runtime's launcher that can run the Persona assistant (DSH's, docs/integrations/runtimes.md「Assistant」).
     var assistant: Bool? = nil
     /// How its last check or start went on the computer the list is for (`GET …/machines/{id}/launchers`,
     /// docs/server/launcher-health.md); nil: never checked, a failure too old to count, or an older hub.
@@ -485,7 +485,7 @@ extension Launcher {
 }
 
 /// What a launcher's agent offers in its own /model menu (`GET /api/v1/machines/{id}/launchers/{name}/models`,
-/// docs/assistant/model-config.md「新建 Agent 选模型」): Claude Code's aliases and its gateway's models, or Codex's model/list.
+/// docs/assistant/model-config.md「Choosing a model for a new Agent」): Claude Code's aliases and its gateway's models, or Codex's model/list.
 nonisolated struct LauncherModels: Codable, Hashable, Sendable {
     /// What the launcher runs: claude, codex, traex, a runtime's.
     var agent: String
@@ -634,7 +634,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var attached: Bool? = nil
     /// Branch to New Chat works for it (a Claude Code conversation the node can copy, #2137); older nodes never say so.
     var canFork: Bool? = nil
-    /// How Persona reaches a Codex in a terminal (docs/integrations/codex.md「守护进程上的会话」): "app_server" (joined on its shared
+    /// How Persona reaches a Codex in a terminal (docs/integrations/codex.md「Sessions on the daemon」): "app_server" (joined on its shared
     /// app-server) or "terminal" (its screen and session record); the note says why it is the terminal.
     var codexRoute: String? = nil
     var codexRouteNote: String? = nil
@@ -758,7 +758,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var attentionReason: String? = nil
     /// Its host stopped its turn on an error it will not retry by itself (a botmux notice), until a message goes in.
     var failureReason: String? = nil
-    /// How the assistant's last turn failed (docs/protocol/protocol.md「错误体」, #3531): the words, their kind, and a code when it
+    /// How the assistant's last turn failed (docs/protocol/protocol.md「Error body」, #3531): the words, their kind, and a code when it
     /// is the model's set-up to fix (not_logged_in / auth_failed / model_route / rate_limited). Nil when it answered and
     /// from older hubs.
     var turnError: String? = nil
@@ -766,7 +766,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var turnErrorCode: String? = nil
     /// Where it lives outside Persona (a botmux session's Feishu topic): Open in Lark.
     var externalURL: String? = nil
-    /// The channels messages came into it from, newest first ("wechat", "feishu"; docs/extensions/channels.md「来源标记」): the
+    /// The channels messages came into it from, newest first ("wechat", "feishu"; docs/extensions/channels.md「Source markers」): the
     /// sidebar draws the latest one's mark. Nil from hubs without channels.
     var channels: [String]? = nil
     /// Who started an assistant conversation (#3266): "user" for the user's own, else what opened it ("inbox": the Inbox's
@@ -1055,7 +1055,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
     }
 }
 
-/// The session triage's switches (`GET / PUT /api/v1/agents/triage`, docs/assistant/agent-work.md「开关」): the triage itself, then
+/// The session triage's switches (`GET / PUT /api/v1/agents/triage`, docs/assistant/agent-work.md「Switches」): the triage itself, then
 /// what it may do, each only while it is on. A switch the hub leaves out is off, apart from `replyReminder`.
 nonisolated struct TriageSwitches: Codable, Hashable, Sendable {
     var enabled = false
@@ -1323,7 +1323,7 @@ nonisolated struct BackgroundTask: Codable, Identifiable, Hashable, Sendable {
 
 nonisolated extension Session {
     /// The same apart from what ticks on every step of a working agent: `rev` (the transcript grew) and `updatedAt`.
-    /// Views that show neither take a push of only those as no change (docs/apple/ios-state.md「第 2 步」).
+    /// Views that show neither take a push of only those as no change (docs/apple/ios-state.md「Step 2」).
     static func sameApartFromTicks(_ a: Session?, _ b: Session?) -> Bool {
         guard var a, var b else { return a == nil && b == nil }
         a.rev = nil
@@ -1335,7 +1335,7 @@ nonisolated extension Session {
 
     /// The same as far as views about this one session show it (`AppModel.session(_:)`: its chat, its top bar, its
     /// menus): apart from the ticks and the last line and step, which only the lists and the task cards show
-    /// (docs/apple/ios-state.md「第 3 步」).
+    /// (docs/apple/ios-state.md「Step 3」).
     static func sameForItsPage(_ a: Session?, _ b: Session?) -> Bool {
         sameApartFromTicks(a.map(\.withoutLine), b.map(\.withoutLine))
     }
@@ -1560,7 +1560,7 @@ nonisolated enum ItemKind: String, Codable, Sendable {
     }
 }
 
-/// A run of the agent's work a page left out (`Item.fold`; docs/protocol/protocol.md「折叠的工作」): its counts for the folded
+/// A run of the agent's work a page left out (`Item.fold`; docs/protocol/protocol.md「Folded work」): its counts for the folded
 /// work line, and its range for fetching it when the line is opened.
 nonisolated struct Fold: Codable, Hashable, Sendable {
     var items: Int
@@ -1569,10 +1569,10 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var until: Date?
     var throughSeq: Int
     var throughID: String
-    /// The images the run's calls looked at (docs/protocol/protocol.md「这一轮看过的图片」): its turn shows them before the answer
+    /// The images the run's calls looked at (docs/protocol/protocol.md「Images viewed this turn」): its turn shows them before the answer
     /// while the run stays folded.
     var images: [FoldImage]? = nil
-    /// The task lists the run's calls left (docs/protocol/protocol.md「折叠的工作」 `fold.tasks`), in order: the chat's plan
+    /// The task lists the run's calls left (docs/protocol/protocol.md「Folded work」 `fold.tasks`), in order: the chat's plan
     /// while its TodoWrite is folded away (`ChatPlan.latest`, #5602).
     var tasks: [FoldTasks]? = nil
     /// The hub proved this supervision round is user-visible, even while its visibility tools are folded away.
@@ -1738,7 +1738,7 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     /// kind == .notice: the context was compacted here (the hub's `compact`, or recognized by the app,
     /// `ChatStore.compactions`). Drawn as a divider across the chat (`CompactDivider`).
     var compact: Compaction?
-    /// User text Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md「Persona 注入的消息」):
+    /// User text Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md「Messages injected by Persona」):
     /// drawn as one line, not a bubble. Set by the hub; nil from older hubs, which `Injected.of` reads off the text.
     var injected: Injected? = nil
     /// Client-retained evidence of user-visible supervision. Survives overlap replacing a promoted work fold and is
@@ -1833,7 +1833,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// password card counts even without its field, so no path allows it without a password, and so does an MCP form or
     /// link, answered only on its card.
     var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || kind == .elicitation }
-    /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「提问和审批」).
+    /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「Questions and approvals」).
     var agent: String?
     /// Why the agent asks for this permission, in its words.
     var reason: String?

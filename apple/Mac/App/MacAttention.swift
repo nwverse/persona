@@ -2,12 +2,12 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// What the Mac does outside its window when an agent needs you or finishes (docs/apple/mac.md「和 iOS 的对应」):
+/// What the Mac does outside its window when an agent needs you or finishes (docs/apple/mac.md「Mapping from iOS」):
 /// the Dock badge (how many cards wait on you) and a system notification for each agent that just turned Needs You /
 /// Done, plus one for every newly arrived card while it is already in Needs You (#4081, a sub-agent's authorization
 /// or a second confirmation for the same agent).
 /// While the app runs it watches its own session list (the WebSocket stays open) and follows the same Settings › Notifications
-/// choices (`NotifyPrefs`); the hub pushes these to the Mac only while it is not connected (docs/apple/mac.md「远程推送（Mac）」).
+/// choices (`NotifyPrefs`); the hub pushes these to the Mac only while it is not connected (docs/apple/mac.md「Remote push」).
 enum MacAttention {
     /// The notifications to post for a session-list change: agents that turned needs-you or finished. Not for the
     /// chat on screen while the app is in front, a muted agent, a session the list just learned about, or a finish

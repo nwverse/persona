@@ -95,7 +95,7 @@ final class InboxStore {
     }
 
     /// Mark All Seen / Clear All (a section), Mac's multi-select, and every Undo: one request for them all on the Done request
-    /// (docs/assistant/inbox.md「全部清理」), one per manager when they are several managers'. Shown at once; the hub files each
+    /// (docs/assistant/inbox.md「Clean up all」), one per manager when they are several managers'. Shown at once; the hub files each
     /// as the list showed it, so one that took new messages since stays open (it goes back here too), and a failure puts
     /// back what that request held. Filing ends with a toast and its Undo, which brings back what was filed.
     func setDone(_ list: [InboxItem], _ done: Bool, undoable: Bool = true) {
@@ -110,7 +110,7 @@ final class InboxStore {
     }
 
     /// Clear All (the view's open items, its filters and search): filed as dismissed in the hub's bulk request
-    /// (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「全部清理」); on a hub without it the Done request instead (recorded as
+    /// (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「Clean up all」); on a hub without it the Done request instead (recorded as
     /// handled there). Same as above: shown at once, put back on a failure, a toast whose Undo sends the hub's `undo`.
     func clean(_ list: [InboxItem]) {
         guard let api = AppModel.shared.api else { return }
