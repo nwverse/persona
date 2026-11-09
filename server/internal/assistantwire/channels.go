@@ -14,8 +14,9 @@ import (
 // open platform's long connection and REST (pairing among them), the plugins' channel programs — and hands the
 // assistant what comes in. The channels' routes are the assistant's (Routes) but binding (POST …/bind: credentials,
 // sign-in fields, pairing): no secret of a channel or the bot passes through the assistant. /api/v1/bots/feishu* stays
-// the hub's. What answers a card in a channel carries the owner's action (OwnerAction): the hub issued it when it
-// handed the owner's press or message over, and takes it once — the assistant can't approve anything on its own.
+// the hub's. What answers a card in a channel carries the owner's action (InteractionsOwnerAction): the hub issued
+// it when it handed the owner's press or message over, and takes it once — the assistant can't approve anything on
+// its own.
 const (
 	// MethodChannelReceive: ChannelReceive → {}: the owner's message from a plugin's channel, taken (not its turn).
 	MethodChannelReceive = "channels.receive"

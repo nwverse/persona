@@ -64,6 +64,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
 		return
 	}
+	if d := in.IdleCloseHours; d != nil && (*d < 0 || *d > maxIdleCloseHours) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("idle_close_hours must be 0–8760"))
+		return
+	}
 	if in.Timezone != "" {
 		if _, err := time.LoadLocation(in.Timezone); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -117,6 +121,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
+		}
+		if in.IdleCloseHours != nil {
+			v.IdleCloseHours = in.IdleCloseHours
 		}
 		if in.DoneNeedsDelivery != nil {
 			v.DoneNeedsDelivery = in.DoneNeedsDelivery

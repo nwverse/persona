@@ -24,6 +24,8 @@ dependencies {
     ksp(libs.room.compiler)
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+    // FixtureReader: the shared chat sync scenarios (spec/fixtures/sync, ChatSyncScenariosTest).
+    testImplementation(testFixtures(project(":core:domain")))
     // The items cache against a real Room database on the JVM (SessionItemsCacheTest).
     testImplementation("org.robolectric:robolectric:4.17")
     androidTestImplementation("androidx.test:runner:1.7.0")

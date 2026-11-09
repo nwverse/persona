@@ -632,6 +632,12 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
   one attempt. The request budgets and the broker's admission limits are unchanged.
   Known limits: within a 15-second budget only the first eight addresses get an attempt (the ninth would start at 20 s; dialing one by one reached no further); and the process path
   bounds sockets per request, not in total: an extension's 128 pending requests can hold up to 512 attempts at once, with no cap across extensions.
+- **TCP connects but TLS stays silent** (#2745): direct CONNECT tunnels with several checked addresses keep the TCP race, then buffer a complete TLS ClientHello (up to 64 KiB). TLS on port 443 and other ports is recognized by its initial handshake record (`0x16`).
+  Each address gets 4 s to write the hello and return its first byte; a silent connection is closed and the hello is replayed to the remaining checked addresses, with each retry's TCP dial included in that budget.
+  Any server byte commits the connection, including a TLS alert: there is no switching after that, and TLS early application data is never replayed. When all addresses fail, the proxy logs the causes and closes the tunnel (CONNECT 200 has already been sent).
+  The responding address is preferred on the next CONNECT to that host:port, but only if it appears in the freshly checked DNS answer. This in-memory hint cache holds at most 1024 destinations.
+  Server-first protocols pass their banner through immediately. Clients get up to 1 s to send a complete hello; idle, incomplete, oversized or unrecognized input falls back to ordinary relay with its bytes preserved, without retries.
+  Single-address destinations, tunnels through an upstream proxy, plain HTTP, HTTP upgrades and the source-runtime fetch broker keep their existing behavior and timeouts. There is no new configuration.
 - Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Node (libraries that apply the proxy themselves), Python and curl all honor them;
   old clients that only honor `HTTPS_PROXY` still can't get out from the sandbox, which is the intended effect.
 
@@ -903,7 +909,7 @@ An option the command does not take, a missing argument or an extra one is refus
 
 ```text
 personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "还缺：…" (missing: …)
-personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set
+personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set, its data directory (data_dir)
 personad extension install <source> [--yes]          First prints what it can do, the dependencies it uses, what gets installed with it and what cannot be found, then asks "继续吗？[y/N]" (continue?);
                                                      installs only on y / yes; --yes skips the question. Afterwards prints "<id> <version>：<status>", and what is missing if settings are missing
 personad extension upgrade <id> <source> [--yes]     Same as install, but upgrades the installed <id>
@@ -1170,6 +1176,7 @@ An extension installed from a package (a marketplace, `file:`, `dir:`, …) can 
 `personad extension detach <id>` (`…/-/detach`) runs the package's program on the hub machine again. Code is in `server/internal/extension/registry_attach.go`.
 
 - **What stays**: the package and its version, the tools installed with it, the settings, the secrets, the data directory, the permissions granted, and what the package contributes without its program (skills, instructions, gates, …). Only where the program runs changes; `origin` still says where the package came from.
+  `data_dir` in the details (`personad extension show <id>`) says where that data directory is, so a program run on its own on the same machine can keep using it in place.
 - **What is checked**: the sockets must be the ones the package's runtime uses (`rpc` for one that speaks the protocol, `http` when it serves HTTP), and the program on them must answer `manifest` (`GET /manifest` for an HTTP-only one) with the package's id and version, so attaching grants nothing the package did not have. Each connection asks again before `initialize` ("Refused" above), so a program swapped for another one or version later gets nothing either.
   A package with no program, or a source runtime one, cannot be attached; one installed from `remote:` has no package and is attached already.
 - **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope (but `agents.permission_mode`) when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
@@ -1378,7 +1385,7 @@ The `-` endpoints below exist only when `features` in `/health` and hello includ
 | Endpoint | Who can call | Notes |
 | --- | --- | --- |
 | `GET /api/v1/extensions` | Any device | `{"extensions": [ExtensionView], "can_install"}`. `ExtensionView`: the old `id`, `name`, `kind` (the first extension point; voice extensions are still `voice`, connectors are `connectors`), `status`, `error`, plus `version`, `source`, `enabled`, `description`, `contributes` (extension point → id), `needs_setup` (what is still missing, human-readable), `warnings` |
-| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, items, min_items, max_items, unique_items, fields}]}`), `config`, `secrets: [{name, title, description, required, set}]`, `permissions` (a few human-readable lines). Ones from manager.json do not return `config` or `secrets` |
+| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, items, min_items, max_items, unique_items, fields}]}`), `config`, `secrets: [{name, title, description, required, set}]`, `permissions` (a few human-readable lines). Ones from manager.json do not return `config` or `secrets`. `data_dir` is the extension's data directory on the manager's machine (the one its program is given there; an attached package keeps it, none for one installed from `remote:`, one from hub.json or manager.json, or one with no program on the manager), returned to the master token over loopback and the admin UI only, never to a device |
 | `PUT /api/v1/extensions/{id}/-/enabled` `{enabled}` | Full-access devices | Returns the details; enabling an extension that uses the Inbox and has no fallback while **Message triage** cannot be called returns 409 `needs_triage_model` ("General Inbox rules" above); the same for install and upgrade |
 | `PUT /api/v1/extensions/{id}/-/config` `{config}` | Full-access devices | Replaces the whole thing; not matching the schema returns 400 `{code: "invalid_config", field, message}` |
 | `PUT /api/v1/extensions/{id}/-/secrets/{name}` `{value}`, `DELETE …` | Full-access devices | At most 16 KB; the value is never echoed and never goes into logs or the audit log |

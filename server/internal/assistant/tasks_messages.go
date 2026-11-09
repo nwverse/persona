@@ -24,7 +24,7 @@ func (s *Service) messageCard(ctx context.Context, itemID string, body MessageCa
 
 // markCardsSent records on the cards about an inbox item put in by at that its reply went out (text: what it said;
 // empty: not known) and tells the clients (tell), which draw them sent; the cards it changed. The inbox says when a
-// reply went out (replyInboxAs).
+// reply went out (replyInboxFrom).
 func (s *Service) markCardsSent(ctx context.Context, itemID string, at time.Time, text string, tell bool) []FeedItem {
 	at = at.UTC()
 	patch, _ := json.Marshal(struct {

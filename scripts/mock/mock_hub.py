@@ -4829,6 +4829,7 @@ PREFS = {"input": True, "done": "long", "live_activity": True, "lock_details": F
          # quiet hours (#5806): never set until a client sets them; MOCK_QUIET_HOURS=1 starts with 23:00–07:00 on
          "quiet": {"enabled": True, "start": "23:00", "end": "07:00"} if os.environ.get("MOCK_QUIET_HOURS") else {"enabled": False, "start": "", "end": ""}}  # one device is enough
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
+DEVICES = []  # POST /api/v1/devices, newest last (GET /mock/devices): each one's id, kind and push `features` (#2433)
 # The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
 # (GET /mock/hello): the hub lists MCP elicitation cards in REST answers only when the two match (docs/protocol/protocol.md
 # "MCP elicitation").
@@ -7975,6 +7976,34 @@ if os.environ.get("MOCK_REPORT_FOLD") == "1":
     mock_report_fold()
 
 
+# MOCK_PEER_FOLD=1: messages other sessions sent an agent (#2010): a long progress report folds to three lines with
+# Expand, a short one stays whole with no button. Synthetic text.
+PEERS = "a1f3c2d4-0000-4000-8000-0000000c1e0a"
+
+
+def mock_peer_fold():
+    report = ("## 搜索改版：索引重建完成\n\n今天把站内搜索从前端索引换成了服务端索引，下面是进展和还没做的事。\n\n"
+              "- 索引覆盖全部 412 篇文档，中文按词切分，英文按词干；重建一次 38 秒。\n"
+              "- 搜索结果按标题、小标题、正文三档加权，同分时新文档在前。\n"
+              "- 结果页加了高亮和所在章节的路径，点开直接跳到对应的小标题。\n"
+              "- 旧的前端索引文件已经从构建里去掉，首页的包小了 1.2 MB。\n\n"
+              "还没做：\n\n- 拼写纠错（「接口」打成「借口」时给出建议）。\n- 搜索词的统计，等隐私说明定下来再加。\n\n"
+              "有一处要你定：版本切换后，搜索只搜当前版本，还是所有版本一起搜、当前版本排前面？")
+    ITEMS[PEERS] = [
+        it("user", "text", 40, text="文档站改版拆给了两个会话，它们的进展会直接发到这里，你来汇总"),
+        it("assistant", "text", 39, text="好的，收到它们的消息后我来汇总，有要你定的事会单独列出来。"),
+        it("user", "text", 12, text=report, **{"from": "docs-search"}),
+        it("user", "text", 8, text="深色主题的对比度修好了，截图在 PR 里。", **{"from": "docs-theme"}),
+        it("assistant", "text", 6, text="两边都有进展：搜索的索引重建完了，深色主题的对比度也修好了。有一件要你定：版本切换后搜索的范围。"),
+    ]
+    SESSIONS.append(sess("macbook", PEERS, "文档站改版", "/Users/me/code/docs-site", "done", "unread", "docs-site", 18, "peers", 1, 6,
+                         "有一件要你定：版本切换后搜索的范围。"))
+
+
+if os.environ.get("MOCK_PEER_FOLD") == "1":
+    mock_peer_fold()
+
+
 # MOCK_REPLY_BREAKS=1: a reply written line by line (#2088): bold lines with steps right under them, one list numbered
 # on from 5, and a bold line with its sentence on the next line; in an Agents chat and at the end of Persona's
 # conversation. Synthetic text.
@@ -9806,6 +9835,72 @@ def wire_state():
 def wire_reset():
     with WIRE_LOCK:
         WIRE.update(rules=[], held=[], log=[])
+
+
+# MOCK_SYNC_CASE=<file>#<name> (or just <name>): the mock plays that shared chat sync case for the case's one chat
+# (spec/fixtures/sync, #2766): scripts/mock/sync_case.py holds the case's hub state, answers the chat's reads and the
+# apps' sockets from it, holds their writes until the case replies, and plays the next step on POST /mock/case/step
+# (GET /mock/case: where it is, what each device asked). An app paired with `token=mock-<device>` is that device.
+CASE = None
+if os.environ.get("MOCK_SYNC_CASE"):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import sync_case
+    CASE = sync_case.CaseHub(sync_case.load(os.environ["MOCK_SYNC_CASE"]))
+
+
+def case_json(h, obj, status=200):
+    """The case's own answer, as the hub's: nothing of the mock's (managers, faults) added to it."""
+    data = json.dumps(obj, ensure_ascii=False).encode()
+    h.send_response(status)
+    h.send_header("Content-Type", "application/json; charset=utf-8")
+    h.send_header("Content-Length", str(len(data)))
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+    h.wfile.write(data)
+
+
+def case_route(h, method, p, q, body):
+    """A request the case answers (True), or one left to the rest of the mock (False)."""
+    global CASE
+    if p == "/api/v1/ws":
+        sync_case.serve_socket(h, CASE)
+        return True
+    if p == "/mock/case" and method == "GET":
+        case_json(h, CASE.state())
+        return True
+    if p == "/mock/case/load" and method == "POST":  # another case in the same mock (its sockets closed first)
+        try:
+            case = sync_case.load(json.loads(body or b"{}").get("case", ""))
+        except (ValueError, KeyError, OSError) as e:
+            case_json(h, {"error": str(e)}, 400)
+            return True
+        CASE.close()
+        CASE = sync_case.CaseHub(case)
+        case_json(h, CASE.state())
+        return True
+    if p == "/mock/case/step" and method == "POST":
+        try:
+            case_json(h, CASE.step())
+        except sync_case.CaseError as e:
+            case_json(h, {"error": str(e)}, 409)
+        return True
+    device = CASE.device_of(h.headers.get("Authorization", "").removeprefix("Bearer ").strip())
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError:
+        data = {}
+    r = CASE.handle(device, method, p, q, h.headers, data if isinstance(data, dict) else {})
+    if r is None:
+        return False
+    if r is sync_case.CUT:  # the connection broke: no answer at all
+        h.close_connection = True
+        try:
+            h.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        return True
+    case_json(h, r[1], r[0])
+    return True
 # /mock/paging?on=1: pages of history as the hub cuts them (node.go PageTurns): the latest page and the backlog of a
 # first subscribe hold the last 2 whole turns, an older page `turns` more; otherwise the whole history comes at once.
 # ChatFollowTests' cold start at a saved place far up needs it (#597). /mock/reset turns it off.
@@ -13693,6 +13788,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path; q = parse_qs(u.query)
         HITS["GET " + p] = HITS.get("GET " + p, 0) + 1
         if self.token_refused(): return
+        if CASE and case_route(self, "GET", p, q, b""): return
         if preview_route and preview_route(self, "GET", p, q): return
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
@@ -13921,6 +14017,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/delegate": return self.send_json(*mock_delegate(q))
         if p == "/mock/reanswered": return self.send_json({"reanswered": REANSWERED})
         if p == "/mock/resolved": return self.send_json({"resolved": RESOLVED})
+        if p == "/mock/devices": return self.send_json({"devices": DEVICES})
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
             with FAULT_LOCK:
@@ -14573,6 +14670,7 @@ class H(BaseHTTPRequestHandler):
             return self.upload()
         self.last_body = self.body()
         p = urlparse(self.path).path
+        if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
@@ -14588,6 +14686,10 @@ class H(BaseHTTPRequestHandler):
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]
             return self.send_json({"ok": True, "restart_required": False})
+        if p == "/api/v1/devices":  # a push registration: kept without its token, key or grant
+            d = json.loads(self.last_body or b"{}")
+            DEVICES.append({k: d.get(k) for k in ("device_id", "kind", "features")})
+            return self.send_json({"ok": True, "push": {"route": "relay"}})
         if p == "/mock/frames":
             run = json.loads(self.last_body or b"{}")
             run["test"] = run.get("name") or FRAMES["label"]
@@ -15435,6 +15537,18 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/translate":  # marks the texts, enough to see where they show
             body = json.loads(self.last_body or b"{}")
             return self.send_json({"texts": ["【译】" + t for t in body.get("texts", [])]})
+        if p.startswith("/api/v1/inbox/") and p.endswith("/done") and self.command == "POST":
+            iid, body = unquote(p[len("/api/v1/inbox/"):-len("/done")]), json.loads(self.last_body or b"{}")
+            x = next((x for x in INBOX if x["id"] == iid), None)
+            if x is None: return self.send_json({"error": "no such inbox item"}, 404)
+            if body.get("done"):
+                x["done_at"], x["done_by"] = ago(minutes=0), "dismissed" if body.get("dismiss") else "user"
+            else:
+                x.pop("done_at", None), x.pop("done_by", None)
+            for send, _ in list(LIVE):
+                try: send({"type": "inbox"})
+                except Exception: pass
+            return self.send_json(dict({k: v for k, v in x.items() if k != "context"}, version=inbox_version(x)))
         if p.startswith("/api/v1/inbox/") and p.endswith("/doc/status"):
             iid, ch = p[len("/api/v1/inbox/"):-len("/doc/status")], json.loads(self.last_body or b"{}")
             for x in INBOX:

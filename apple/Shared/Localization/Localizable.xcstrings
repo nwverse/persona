@@ -1,6 +1,429 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld child worktrees" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktree"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktrees"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子ワークツリー%lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个子工作树"
+          }
+        }
+      }
+    },
+    "%@ stopped, not done yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ stopped, not done yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@は止まりました（未完了）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 停下了，还没完成"
+          }
+        }
+      }
+    },
+    "Interrupted by a model service error" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Interrupted by a model service error"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルサービスのエラーで中断しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型服务出错，中断了"
+          }
+        }
+      }
+    },
+    "Interrupted by a model service error: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Interrupted by a model service error: %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルサービスのエラーで中断しました：%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型服务出错，中断了：%1$@"
+          }
+        }
+      }
+    },
+    "Avatar [Agent Row Style]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avatar"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "头像"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アバター"
+          }
+        }
+      }
+    },
+    "Two Lines [Agent Row Style]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two Lines"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "紧凑两行"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2 行"
+          }
+        }
+      }
+    },
+    "State Cards [Agent Row Style]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "State Cards"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "色条卡片"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状態カード"
+          }
+        }
+      }
+    },
+    "The agent's avatar, its title and time, two lines of what it last said, and where it runs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The agent's avatar, its title and time, two lines of what it last said, and where it runs."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "头像、标题和时间，两行最新的话，再一行写它在哪儿跑。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アバター、タイトルと時刻、最新の発言 2 行、実行場所。"
+          }
+        }
+      }
+    },
+    "Two lines per agent: its title and time, then one line of what it last said.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two lines per agent: its title and time, then one line of what it last said."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个 Agent 两行：标题和时间，再一行最新的话。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントごとに 2 行：タイトルと時刻、最新の発言 1 行。"
+          }
+        }
+      }
+    },
+    "A card per agent, its state's color down the side; the one waiting for you is tinted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A card per agent, its state's color down the side; the one waiting for you is tinted."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个 Agent 一张卡片，左边一条状态色；等你处理的那张整张淡蓝底。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントごとに 1 枚のカード。左端に状態の色があり、あなたを待つカードは色付きです。"
+          }
+        }
+      }
+    },
+    "One line per agent: its state, title and time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One line per agent: its state, title and time."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个 Agent 一行：状态、标题和时间。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェントごとに 1 行：状態、タイトル、時刻。"
+          }
+        }
+      }
+    },
+    "Agents List [Layout]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents List"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents 列表"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エージェント一覧"
+          }
+        }
+      }
+    },
+    "The BeautifulUI style draws its agents as its own capsules; this choice shows in the other styles and in Compact List.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The BeautifulUI style draws its agents as its own capsules; this choice shows in the other styles and in Compact List."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BeautifulUI 风格用自己的胶囊画 Agent；这里的选择在其他风格和细列表里生效。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BeautifulUI スタイルは独自のカプセルでエージェントを描きます。この選択は他のスタイルとコンパクトリストで使われます。"
+          }
+        }
+      }
+    },
+    "By Repository keeps its own tree of worktrees and agents.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Repository keeps its own tree of worktrees and agents."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「按仓库」仍用它自己的工作树和 Agent 树。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「リポジトリ別」は独自のワークツリーとエージェントのツリーを使います。"
+          }
+        }
+      }
+    },
+    "Add tests for the network layer [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add tests for the network layer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "补齐网络层的单元测试"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ネットワーク層のテストを追加"
+          }
+        }
+      }
+    },
+    "Which test framework should it use? I'd go with Swift Testing. [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Which test framework should it use? I'd go with Swift Testing."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用哪个测试框架？我建议用 Swift Testing。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "どのテストフレームワークを使いますか？Swift Testing をおすすめします。"
+          }
+        }
+      }
+    },
+    "Add the weather widget to the home screen [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add the weather widget to the home screen"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "给天气 App 加主屏幕小组件"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "天気アプリにホーム画面ウィジェットを追加"
+          }
+        }
+      }
+    },
+    "Running the tests: 128 of 160 pass so far. [Layout sample]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running the tests: 128 of 160 pass so far."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跑测试：目前 160 个里过了 128 个。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "テスト実行中：これまでに 160 件中 128 件が成功。"
+          }
+        }
+      }
+    },
     "List" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3366,6 +3789,7 @@
       }
     },
     "Open Persona on iPhone to sync extension capabilities.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Persona on iPhone to sync extension capabilities." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "在 iPhone 上打开 Persona 同步扩展能力。" } }, "ja": { "stringUnit": { "state": "translated", "value": "iPhone の Persona を開いて拡張機能の情報を同期してください。" } } } },
+    "Open Persona to sync extension capabilities.": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Persona to sync extension capabilities." } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "打开 Persona 同步扩展能力。" } }, "ja": { "stringUnit": { "state": "translated", "value": "Persona を開いて拡張機能の情報を同期してください。" } } } },
     "Extension Widget": { "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Extension Widget" } }, "zh-Hans": { "stringUnit": { "state": "translated", "value": "扩展小组件" } }, "ja": { "stringUnit": { "state": "translated", "value": "拡張ウィジェット" } } } },
     "Push the fix to beta?": {
       "extractionState": "manual",
@@ -13594,24 +14018,24 @@
       },
       "extractionState" : "manual"
     },
-    "A Responses API key can't be tested here; save it and use it." : {
+    "This API protocol's key can't be tested here; save it and use it." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses 协议的 Key 没法在这里测试，保存后直接用就行。"
+            "value" : "这种协议的 Key 没法在这里测试，保存后直接用就行。"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A Responses API key can't be tested here; save it and use it."
+            "value" : "This API protocol's key can't be tested here; save it and use it."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses プロトコルのキーはここではテストできません。保存してそのまま使えます。"
+            "value" : "この種類のAPIのキーはここではテストできません。保存してそのまま使えます。"
           }
         }
       },
@@ -59070,6 +59494,28 @@
       },
       "extractionState" : "manual"
     },
+    "Last New Chat Check" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last New Chat Check"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回の新しいチャットのチェック"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近一次新对话检查"
+          }
+        }
+      }
+    },
     "Last Received" : {
       "localizations" : {
         "en" : {
@@ -76833,6 +77279,52 @@
       },
       "extractionState" : "manual"
     },
+    "Offline: its mutes show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its mutes show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにミュートが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的静音。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its rules show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its rules show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにルールが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的规则。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Offline: starts once connected" : {
       "localizations" : {
         "en" : {
@@ -87540,6 +88032,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Clear Recent Setups" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Recent Setups"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近の設定をすべて消去"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除最近配置"
+          }
+        }
+      }
+    },
+    "Remove from Recent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Recent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近から削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从最近中移除"
+          }
+        }
+      }
     },
     "Recent" : {
       "localizations" : {
@@ -112064,6 +112602,29 @@
         }
       }
     },
+    "The message couldn't be sent to the agent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message couldn't be sent to the agent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージをエージェントに送信できませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息没能发给这个 Agent"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "The message source can't send encrypted messages right now" : {
       "localizations" : {
         "en" : {
@@ -119194,6 +119755,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "仍要发送的话，改一下「要它做什么」，或重新打开「交给 AI」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话和 Agent 不能用它。信息处理、信息筛选等没有单独选模型的用途，现在可能会改用它；要调整，到「模型配置」里选。"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットとエージェントでは使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。"
           }
         }
       },
@@ -139434,25 +140018,25 @@
         }
       }
     },
-    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. They're in %@, where they were set; changing them here puts them in this device's time zone.": {
+    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. They're in %@, where they were set; changing them here puts them in this device's time zone.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. They're in %@, where they were set; changing them here puts them in this device's time zone."
+            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. They're in %@, where they were set; changing them here puts them in this device's time zone."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。目前按设置时所在的 %@ 计算，在这里改动后改按这台设备的时区计算。"
+            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。只要你有一台设备在免打扰时段内，聊天机器人对未回答卡片的提醒也会顺延。目前按设置时所在的 %@ 计算，在这里改动后改按这台设备的时区计算。"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。現在は設定した場所の %@ で判断します。ここで変更すると、このデバイスのタイムゾーンで判断します。"
+            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。現在は設定した場所の %@ で判断します。ここで変更すると、このデバイスのタイムゾーンで判断します。"
           }
         }
       }
@@ -139526,25 +140110,25 @@
         }
       }
     },
-    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. In this device's time zone.": {
+    "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. In this device's time zone.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. In this device's time zone."
+            "value": "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. In this device's time zone."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。按这台设备的时区计算。"
+            "value": "这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。只要你有一台设备在免打扰时段内，聊天机器人对未回答卡片的提醒也会顺延。按这台设备的时区计算。"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。このデバイスのタイムゾーンで判断します。"
+            "value": "この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。このデバイスのタイムゾーンで判断します。"
           }
         }
       }
@@ -139580,6 +140164,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@。%2$lld件は変更できませんでした：%3$@"
+          }
+        }
+      }
+    },
+    "%@, offline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, offline"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，离线"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@、オフライン"
+          }
+        }
+      }
+    },
+    "%@ is offline. Messages can be sent once it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is offline. Messages can be sent once it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不在线，回来后才能发消息。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ はオフラインです。戻ったらメッセージを送れます。"
+          }
+        }
+      }
+    },
+    "%@ · last synced %@. Messages can be sent once it's back." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · last synced %2$@. Messages can be sent once it's back."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 最后同步于 %2$@。回来后才能发消息。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · 最終同期 %2$@。戻ったらメッセージを送れます。"
           }
         }
       }

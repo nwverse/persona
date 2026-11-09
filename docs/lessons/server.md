@@ -1455,3 +1455,24 @@ When decorating a large session list, reserve the timestamp snapshot by the smal
 A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.
 
 After activating matching native and downloadable packages, reapply an enabled runtime node policy through its existing settings route so managers recheck the new pointer. A filesystem pointer change has no consumer watcher. Check the current policy first so an intervening disable is respected; a failed recheck must not produce a completed publication receipt.
+
+## Idle wakeups: a ticker per watch, a P per core, a fallback that never waits (2026-11-09, #2590)
+
+- A goroutine with a ticker of its own per watched session looks free, but every tick wakes the scheduler, and each tick opened, stat'ed and closed the transcript whether or not it grew. Two tickers per watch (250 ms transcript, 1 s status line) made 4 watched sessions at rest cost +260 ms of CPU and +9,150 context switches a minute over none. One ticker for every watch (`watchPump`), a stat before the open (`transcript.File.Changed`, and the same gate at the start of `refresh`), and goroutines only for work that can be slow (reading new lines, reading a screen) brought it to +60 ms and +2,420. What is left is mostly the 4 Hz tick itself: wakeups of the runtime's timer thread and sysmon, not work. Keep a guard per watch (`reading`, `live.reading`) so a slow parse or screen read skips that watch's ticks, as a busy ticker did, without holding up the others; and a lock taken on a tick must be a `TryLock` (a file being paged answers "changed").
+- An I/O-bound process does not need a P per core. `node --stdio` and `node --attach` cap GOMAXPROCS at 4 (64 on the measuring host): threads 28 to 12 and about 1.7 MB less anonymous memory with 4 watches, CPU within noise. Cap it with `runtime.GOMAXPROCS` at the entry rather than in the environment, so the agents and tools the node starts keep their own default, and only when the default is above the cap: an explicit value stops the runtime from following a container's CPU limit, so a smaller default is left alone. A `GOMAXPROCS` variable always wins.
+- A fallback that fails fast is still a process per call. With the herdr socket missing, every herdr call ran the CLI, which answered `server_not_running` in a few milliseconds, but the node asks about twice a second. Back off a fallback while it keeps giving the same "nothing there" answer, hand that answer back meanwhile so callers and logs see what they saw before, and reset on any success through either path.
+
+## A skip decided from two counters, and a test that swaps a served peer (2026-11-10, #2439)
+
+`sendSessions` skips a byte-identical list only when no `sessions.list` answer is pending and the epoch has not moved;
+an answer moves the epoch and then drops the pending count when it ends. Read the pending count first and the epoch
+second. Read the other way round, an answer that starts and ends between the two reads leaves the old epoch and a zero
+count, and the list is skipped behind an answer the manager may have taken instead. With a 20 µs pause injected between
+the reads, 199 of 200 runs skipped; with the order swapped, 0 of 200. Without the pause it never showed in 2 million
+runs, which is why only reasoning about the order, not a test, catches it.
+
+A test helper that has already started `go n.peer.Serve(...)` must not assign `n.peer` afterwards: the goroutine reads the
+field, so `-race` reports it, and it may end up serving the new peer too. Pass what the test needs (here a writer that
+records the node's lines) into the constructor, and serve the peer through a local variable. A rule test also needs
+steps that differ only in the guarded rule: revs followed by a list that differs anyway, or a `call` that waits for the
+pending count to drop, pass with the rule deleted.

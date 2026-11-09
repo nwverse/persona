@@ -34,6 +34,7 @@
     <string name="agents_action_new_session">New session</string>
     <string name="agents_action_list_settings">List settings</string>
     <string name="agents_search_placeholder">Search spaces, sessions or latest messages</string>
+    <string name="agents_action_search">Search</string>
     <string name="agents_requests_title">Needs your decision</string>
     <plurals name="agents_requests_more">
         <item quantity="one">1 more</item>
@@ -298,6 +299,10 @@
     <string name="agents_new_use_directory">Use this directory</string>
     <string name="agents_new_retry_check">Check result again</string>
     <string name="agents_new_start">Start chat</string>
+    <string name="agents_new_recent">Recent</string>
+    <string name="agents_new_recent_separator">" · "</string>
+    <string name="agents_new_recent_remove">Remove from Recent</string>
+    <string name="agents_new_recent_clear">Clear Recent Setups</string>
     <string name="agents_mode_follow">Follow launcher</string>
     <string name="agents_mode_default">Ask each time</string>
     <string name="agents_mode_accept_edits">Auto-edit files</string>
@@ -452,6 +457,7 @@
     <string name="agents_handoff_directory">Working directory</string>
     <string name="agents_handoff_mode_default">Default (default)</string>
     <string name="agents_handoff_mode_bypass">Allow everything (bypassPermissions)</string>
+    <string name="agents_handoff_mode_named">%1$s (%2$s)</string>
     <string name="agents_handoff_pick_agent">Choose a running agent</string>
     <string name="agents_handoff_no_agents">No agents running</string>
     <string name="agents_handoff_no_agents_hint">No active agent can take a task right now.</string>
