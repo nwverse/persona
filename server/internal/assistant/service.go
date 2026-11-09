@@ -438,7 +438,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // UserSpoke: the user is talking in the conversation again: back in the list, and it works for them, not for a chain
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
-	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, true)
+	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
@@ -457,7 +457,7 @@ func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
-	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, true)
+	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)

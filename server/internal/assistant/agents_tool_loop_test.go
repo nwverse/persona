@@ -192,6 +192,69 @@ func TestToolLoopUserMessageWithdraws(t *testing.T) {
 	}
 }
 
+func TestToolLoopOldSnapshotAfterUserInput(t *testing.T) {
+	for _, input := range []string{"message", "queued"} {
+		t.Run(input, func(t *testing.T) {
+			s, f, c, st := toolLoopFixture(t, `{"decision":"STOP"}`)
+			c.ToolLoop.Count = toolLoopCeiling
+			st.checks = toolLoopMaxChecks
+			s.reviewToolLoop(context.Background(), [2]string{"box", "s1"}, st, *c.ToolLoop, true)
+			if len(s.workCards()) != 1 {
+				t.Fatal("initial loop card missing")
+			}
+			if input == "message" {
+				s.UserSpoke(context.Background(), SessionRef{MachineID: "box", SessionID: "s1"})
+			} else {
+				queued := c
+				queued.Queued = []string{"new instruction"}
+				s.SessionsChanged(context.Background(), DeviceSessions{MachineID: "box", Sessions: []proto.Session{queued}})
+			}
+			// A delayed session read can still contain the candidate from before the user's input.
+			s.considerToolLoop(context.Background(), "box", c)
+			s.work.mu.Lock()
+			current := s.work.loops[[2]string{"box", "s1"}]
+			unsafe := current == nil || !current.silenced || current.pending || current.cardID != ""
+			s.work.mu.Unlock()
+			if unsafe {
+				t.Fatal("old snapshot reopened the loop after user input")
+			}
+			cleared := c
+			cleared.ToolLoop = nil
+			s.SessionsChanged(context.Background(), DeviceSessions{MachineID: "box", Sessions: []proto.Session{cleared}})
+			s.considerToolLoop(context.Background(), "box", c)
+			s.work.mu.Lock()
+			current = s.work.loops[[2]string{"box", "s1"}]
+			unsafe = current == nil || !current.silenced || current.pending || current.cardID != ""
+			s.work.mu.Unlock()
+			if unsafe {
+				t.Fatal("old snapshot reopened after the candidate disappeared")
+			}
+			next := c
+			candidate := *c.ToolLoop
+			candidate.Since = candidate.Since.Add(time.Minute)
+			candidate.Count = 0 // update identity without starting another asynchronous review
+			next.ToolLoop = &candidate
+			f.setSessions("box", next)
+			s.considerToolLoop(context.Background(), "box", next)
+			s.work.mu.Lock()
+			current = s.work.loops[[2]string{"box", "s1"}]
+			newLoop := current != nil && current.since.Equal(candidate.Since) && !current.silenced && current.checks == toolLoopMaxChecks
+			s.work.mu.Unlock()
+			if !newLoop {
+				t.Fatal("a later loop was silenced or lost its turn's model budget")
+			}
+			s.clearToolLoop([2]string{"box", "s1"}, loopTurnChanged)
+			s.work.mu.Lock()
+			current = s.work.loops[[2]string{"box", "s1"}]
+			reset := current != nil && current.checks == 0
+			s.work.mu.Unlock()
+			if !reset {
+				t.Fatal("new turn did not reset the model budget")
+			}
+		})
+	}
+}
+
 func TestToolLoopInterrupt(t *testing.T) {
 	s, f, c, st := toolLoopFixture(t, `{"decision":"STOP"}`)
 	s.reviewToolLoop(context.Background(), [2]string{"box", "s1"}, st, *c.ToolLoop, false)

@@ -97,6 +97,29 @@ func TestToolLoopPollingAndPrivateData(t *testing.T) {
 	}
 }
 
+func TestToolLoopOutputPolling(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		tool  string
+		input any
+	}{
+		{"write_stdin", map[string]any{"session_id": 1, "chars": ""}},
+		{"functions.write_stdin", map[string]any{"session_id": 1}},
+		{"Read", map[string]any{"file_path": "/logs/worker.log", "offset": 100, "limit": 20}},
+		{"Bash", map[string]any{"command": "gh api repos/example/project/actions/runs/1"}},
+	} {
+		t.Run(tc.tool+fmt.Sprint(tc.input), func(t *testing.T) {
+			var d LoopDetector
+			for i := 0; i < 5; i++ {
+				loopMessage(&d, i, tc.tool, tc.input, "same", start.Add(time.Duration(i)*time.Second))
+			}
+			if got := d.Candidate(); got != nil {
+				t.Fatalf("polling produced candidate: %+v", got)
+			}
+		})
+	}
+}
+
 func TestToolLoopOrdinaryCallsAreNotPolling(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
@@ -106,6 +129,10 @@ func TestToolLoopOrdinaryCallsAreNotPolling(t *testing.T) {
 		{"Edit", map[string]any{"file_path": "app.log", "old_string": "wait for it", "new_string": "while true"}},
 		{"Write", map[string]any{"file_path": "/var/log/service.log", "content": "wait while processing"}},
 		{"Read", map[string]any{"file_path": "/logs/example.log"}},
+		{"Read", map[string]any{"file_path": "main.go", "offset": 100, "limit": 20}},
+		{"write_stdin", map[string]any{"session_id": 1, "chars": "submit"}},
+		{"write_stdin", map[string]any{}},
+		{"Bash", map[string]any{"command": "gh api -X POST repos/example/project/actions/runs/1/rerun"}},
 		{"Grep", map[string]any{"pattern": "sleep while wait", "path": "server.log"}},
 		{"Bash", map[string]any{"command": "echo wait while sleep app.log"}},
 		{"Bash", map[string]any{"command": "tail -n 10 main.go"}},

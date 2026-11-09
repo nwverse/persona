@@ -185,6 +185,7 @@ var (
 	loopCICommand   = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+(?:pr[\t ]+checks|run[\t ]+(?:watch|view|list))(?:[\t ]|$)`)
 	loopCIView      = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+pr[\t ]+view(?:[\t ]|$)`)
 	loopCIApi       = lazyre.New(`(?m)(?:^|[;&|()])[\t ]*gh[\t ]+api(?:[\t ]|$)`)
+	loopCIWrite     = lazyre.New(`(?:^|[\t ])(?:-x[\t ]*(?:post|put|patch|delete)|--method(?:=|[\t ]+)(?:post|put|patch|delete)|-f(?:[\t ]|=)|--(?:field|raw-field|input)(?:=|[\t ]))`)
 )
 
 func pollingTool(name string, input json.RawMessage) bool {
@@ -195,6 +196,23 @@ func pollingTool(name string, input json.RawMessage) bool {
 	switch n {
 	case "sleep", "wait", "monitor", "schedulewakeup", "bashoutput", "taskoutput", "get_ci_status", "get_check_runs", "get_check_suites", "get_pipeline_status":
 		return true
+	case "write_stdin", "functions.write_stdin":
+		var in struct {
+			SessionID json.RawMessage `json:"session_id"`
+			Chars     string          `json:"chars"`
+		}
+		return json.Unmarshal(input, &in) == nil && len(in.SessionID) > 0 && string(in.SessionID) != "null" && in.Chars == ""
+	case "read":
+		var in struct {
+			FilePath string `json:"file_path"`
+			Offset   int    `json:"offset"`
+			Limit    int    `json:"limit"`
+		}
+		if json.Unmarshal(input, &in) != nil || in.Offset <= 0 || in.Limit <= 0 {
+			return false
+		}
+		path := strings.ToLower(in.FilePath)
+		return strings.HasSuffix(path, ".log") || strings.Contains(path, ".log.") || strings.HasSuffix(path, "/syslog")
 	case "bash", "functions.bash", "shell", "exec_command":
 	default:
 		return false
@@ -216,7 +234,8 @@ func pollingTool(name string, input json.RawMessage) bool {
 	if loopTailCommand.MatchString(command) && (strings.Contains(command, ".log") || strings.Contains(command, "/log/") || strings.Contains(command, "/logs/") || strings.Contains(command, "syslog")) {
 		return true
 	}
-	return loopCIView.MatchString(command) && strings.Contains(command, "statuscheckrollup") || loopCIApi.MatchString(command) && (strings.Contains(command, "check-runs") || strings.Contains(command, "check-suites"))
+	return loopCIView.MatchString(command) && strings.Contains(command, "statuscheckrollup") ||
+		loopCIApi.MatchString(command) && !loopCIWrite.MatchString(command) && (strings.Contains(command, "check-runs") || strings.Contains(command, "check-suites") || strings.Contains(command, "/actions/runs"))
 }
 
 func (d *LoopDetector) call(id, name string, input json.RawMessage, at time.Time) {

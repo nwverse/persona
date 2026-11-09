@@ -30,18 +30,35 @@ type toolLoopState struct {
 	answering            bool
 }
 
-// clearToolLoop withdraws the card and invalidates any model call. The turn-start event resets its budget.
-func (s *Service) clearToolLoop(k [2]string, newTurn bool) {
+type loopClearReason uint8
+
+const (
+	loopCandidateGone loopClearReason = iota
+	loopUserInput
+	loopTurnChanged
+)
+
+// clearToolLoop withdraws the card and invalidates any model call. Only a new turn resets the model budget.
+func (s *Service) clearToolLoop(k [2]string, reason loopClearReason) {
 	s.work.mu.Lock()
 	s.work.init()
 	state := s.work.loops[k]
 	changed := state != nil && state.cardID != ""
 	if state != nil {
 		delete(s.work.cards, state.cardID)
-		if newTurn {
+		switch {
+		case reason != loopCandidateGone && !state.since.IsZero():
+			checks := state.checks
+			if reason == loopTurnChanged {
+				checks = 0
+			}
+			// Ignore an old session snapshot until the node reports a different loop.
+			s.work.loops[k] = &toolLoopState{since: state.since, tool: state.tool, checks: checks, silenced: true}
+		case reason == loopTurnChanged:
 			delete(s.work.loops, k)
-		} else {
+		case reason == loopUserInput || !state.silenced:
 			s.work.loops[k] = &toolLoopState{checks: state.checks}
+			// Keep a silenced candidate even while it briefly disappears from the node's list.
 		}
 	}
 	s.work.mu.Unlock()
@@ -71,11 +88,18 @@ func (s *Service) toolLoopsChanged(d DeviceSessions) {
 		if ok && matchesToolLoop(c, proto.ToolLoop{Tool: st.tool, Since: st.since}) {
 			continue
 		}
+		if st.silenced && (!ok || c.ToolLoop == nil || len(c.Queued) != 0 || c.Status != proto.StatusWorking) {
+			continue
+		}
 		if st.cardID != "" {
 			delete(s.work.cards, st.cardID)
 			changed = true
 		}
-		s.work.loops[k] = &toolLoopState{checks: st.checks}
+		if ok && len(c.Queued) != 0 {
+			s.work.loops[k] = &toolLoopState{since: st.since, tool: st.tool, checks: st.checks, silenced: true}
+		} else {
+			s.work.loops[k] = &toolLoopState{checks: st.checks}
+		}
 	}
 	s.work.mu.Unlock()
 	if changed {
@@ -98,7 +122,7 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 			k := [2]string{d.ID, c.SessionID}
 			seen[k] = true
 			if !eligibleToolLoop(c) || v.isMuted(d.ID, c.SessionID) {
-				s.clearToolLoop(k, false)
+				s.clearToolLoop(k, loopCandidateGone)
 				continue
 			}
 			s.considerToolLoop(ctx, d.ID, c)
@@ -106,15 +130,17 @@ func (s *Service) checkToolLoops(ctx context.Context) {
 	}
 	// Only a successful list can prove a session is gone; keep cards while a machine is unreachable.
 	s.work.mu.Lock()
-	var missing [][2]string
-	for k := range s.work.loops {
+	removed := false
+	for k, st := range s.work.loops {
 		if d, ok := v.devices[k[0]]; ok && d.Reachable && !v.failed[k[0]] && !seen[k] {
-			missing = append(missing, k)
+			delete(s.work.cards, st.cardID)
+			delete(s.work.loops, k)
+			removed = removed || st.cardID != ""
 		}
 	}
 	s.work.mu.Unlock()
-	for _, k := range missing {
-		s.clearToolLoop(k, true)
+	if removed {
+		s.publishSoon()
 	}
 }
 
