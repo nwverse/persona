@@ -268,7 +268,11 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 		used[name] = true
 		tier := map[string]string{"assistant": "strong", "agent.new": "standard"}[id]
 		if tier != "" {
-			tiers[tier] = ModelTier{Launcher: name, Model: effective.Model, Effort: effective.Effort,
+			model := effective.Model
+			if !proto.ValidModelID(model) {
+				model = "" // configured before #1644 held models to the rule: the launcher's default, as applyModel runs it
+			}
+			tiers[tier] = ModelTier{Launcher: name, Model: model, Effort: effective.Effort,
 				Description: i18n.T(l, "assistant-model_profiles.tier_"+tier)}
 		}
 	}
@@ -293,9 +297,12 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 
 // tierModel is what an Agent started on tier runs on: the tier in the profile in use.
 func (s *Service) tierModel(ctx context.Context, tier string) (ModelTier, error) {
-	p, err := s.activeModelProfile(ctx)
+	p, active, err := s.activeModelProfile(ctx)
 	if err != nil {
 		return ModelTier{}, err
+	}
+	if p == nil && active != "" {
+		return ModelTier{}, errors.New("the model profile in use (" + active + ") no longer exists: switch to another with model_profile_switch, or leave tier out")
 	}
 	if p == nil {
 		return ModelTier{}, errors.New("no model profile is in use: switch to one with model_profile_switch, or leave tier out")

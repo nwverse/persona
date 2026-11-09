@@ -61,13 +61,23 @@ func (s *Service) applyStartTier(ctx context.Context, params map[string]any) err
 	launcher, _ := params["launcher"].(string)
 	model, _ := params["model"].(string)
 	effort, _ := params["effort"].(string)
-	// An explicit different model does not inherit effort intended for the tier's model.
-	if model != "" && model != t.Model {
-		t.Effort = ""
-	}
-	withTier(t, &launcher, &model, &effort)
+	layTier(t, &launcher, &model, &effort)
 	params["launcher"], params["model"], params["effort"] = launcher, model, effort
 	return nil
+}
+
+// layTier lays tier t over a start's launcher, model and effort, and says whether it gave them anything: not when the
+// start names a launcher of its own (withTier). An explicit different model does not inherit effort intended for the
+// tier's model.
+func layTier(t ModelTier, launcher, model, effort *string) bool {
+	if *launcher != "" && *launcher != t.Launcher {
+		return false
+	}
+	if *model != "" && *model != t.Model {
+		t.Effort = ""
+	}
+	withTier(t, launcher, model, effort)
+	return true
 }
 
 func (s *Service) applyTaskTier(ctx context.Context, t *PlanTask) error {
@@ -85,12 +95,14 @@ func (s *Service) applyTaskTier(ctx context.Context, t *PlanTask) error {
 // observes a switch, including a rollback to no profile, and a tier edited in the profile in use.
 func (s *Service) modelProfileContext(ctx context.Context) *prompts.SnapshotProfile {
 	s.models.mu.Lock() // the profiles and the state of one switch, not one from either side of it
-	p, err := s.activeModelProfile(ctx)
+	p, active, err := s.activeModelProfile(ctx)
 	s.models.mu.Unlock()
-	if err != nil {
+	switch {
+	case err != nil:
 		return &prompts.SnapshotProfile{Unreadable: true}
-	}
-	if p == nil {
+	case p == nil && active != "":
+		return &prompts.SnapshotProfile{ID: active, Gone: true}
+	case p == nil:
 		return nil
 	}
 	out := &prompts.SnapshotProfile{ID: p.ID, Name: p.Name}
@@ -101,23 +113,20 @@ func (s *Service) modelProfileContext(ctx context.Context) *prompts.SnapshotProf
 	return out
 }
 
-// activeModelProfile is the profile in use (nil: none; a profile named in use that is gone is one with only its
-// id), read without making the templates.
-func (s *Service) activeModelProfile(ctx context.Context) (*ModelProfile, error) {
+// activeModelProfile is the profile in use and its id, read without making the templates: nil with "" when none is,
+// nil with its id when it is gone (a rollback to a profile deleted since).
+func (s *Service) activeModelProfile(ctx context.Context) (*ModelProfile, string, error) {
 	ps, _, err := s.readModelProfiles(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	st, err := s.readModelProfileState(ctx)
 	if err != nil {
-		return nil, err
-	}
-	if st.Active == "" {
-		return nil, nil
+		return nil, "", err
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == st.Active })
-	if i < 0 {
-		return &ModelProfile{ID: st.Active}, nil
+	if st.Active == "" || i < 0 {
+		return nil, st.Active, nil
 	}
-	return &ps.Profiles[i], nil
+	return &ps.Profiles[i], st.Active, nil
 }

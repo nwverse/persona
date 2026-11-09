@@ -233,7 +233,9 @@ export function startPicks(o: { agent: string; list: LauncherModels | null | und
   const out: { model?: string; effort?: string } = {};
   const m = o.list?.models.find((x) => x.id === o.model);
   if (m) {
-    if (!m.default && !o.list?.locked) out.model = m.id;
+    // the default entry goes too when the model settings' own model would run instead (a preset picked it, #2225; the
+    // picker's "Default" row picks "")
+    if ((!m.default || (o.followed?.model && o.followed.model !== m.id)) && !o.list?.locked) out.model = m.id;
   } else if (o.model && o.list !== null && typedModelOffered(o.agent, o.list) && validModelId(o.model)) {
     out.model = o.model;
   }
@@ -246,8 +248,8 @@ export function startPicks(o: { agent: string; list: LauncherModels | null | und
 export function tierLeftOut(tier: PickerTier, o: { agent: string; list: LauncherModels | null | undefined; followed?: ModelBinding }): string[] {
   const picks = startPicks({ agent: o.agent, list: o.list, model: tier.model ?? "", effort: tier.effort ?? "", followed: o.followed });
   const out: string[] = [];
-  // the list's default is what runs with no model sent: nothing left out
-  if (tier.model && picks.model !== tier.model && !o.list?.models.some((m) => m.id === tier.model && m.default)) out.push(tier.model);
+  // the list's default is what runs with no model sent (startPicks sends it when the model settings would run another)
+  if (tier.model && picks.model !== tier.model && !(o.list?.models.some((m) => m.id === tier.model && m.default) && !o.list?.locked)) out.push(tier.model);
   if (tier.effort && picks.effort !== tier.effort) out.push(tier.effort);
   return out;
 }

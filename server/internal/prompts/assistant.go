@@ -190,11 +190,12 @@ type SnapshotWorkflow struct {
 }
 
 // SnapshotProfile is the model profile in use (docs/assistant/model-profiles.md) with its tiers, the Agent presets
-// agent_start and task_plan take; Unreadable when the profiles could not be read.
+// agent_start and task_plan take; Unreadable when the profiles could not be read, Gone when the one in use was deleted
+// (a rollback to it).
 type SnapshotProfile struct {
-	ID, Name   string
-	Tiers      []SnapshotTier // by name
-	Unreadable bool
+	ID, Name         string
+	Tiers            []SnapshotTier // by name
+	Unreadable, Gone bool
 }
 
 // SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the

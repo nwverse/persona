@@ -13080,6 +13080,22 @@ def model_configuration(include_uses=False):
     return catalog
 
 
+# The model profiles (GET /api/v1/model-profiles, docs/assistant/model-profiles.md) with the Agent presets of #2225: performance
+# in use, as the templates are when first made.
+MOCK_PRESETS = {"quick": {"launcher": "sonnetcc", "description": "Small, quick fixes"},
+                "review": {"launcher": "claude", "model": "opus", "effort": "high", "description": "Code review and design"}}
+
+
+def model_defaults_profiles(h, p):
+    """GET /api/v1/model-profiles under MOCK_MODEL_DEFAULTS. False otherwise."""
+    if not MODEL_DEFAULTS or p != "/api/v1/model-profiles":
+        return False
+    h.send_json({"revision": 1, "active": "performance", "events": [], "profiles": [
+        {"id": "performance", "name": "Performance", "active": True, "changes": [], "tiers": MOCK_PRESETS},
+        {"id": "economy", "name": "Economy", "changes": ["agent.new"], "tiers": {"quick": MOCK_PRESETS["quick"]}}]})
+    return True
+
+
 def model_defaults_launchers(h, p, q):
     """GET /api/v1/machines/{mid}/launchers with the purpose's "Default: …" (hub launcherDefault). False otherwise."""
     if not MODEL_DEFAULTS or not (p.startswith("/api/v1/machines/") and p.endswith("/launchers")):
@@ -13096,8 +13112,7 @@ def model_defaults_launchers(h, p, q):
                                               {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default}
     if pid == "agent.new":
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
-        out["tiers"] = [{"name": "quick", "launcher": "sonnetcc", "description": "Small, quick fixes"},
-                        {"name": "review", "launcher": "claude", "model": "opus", "effort": "high", "description": "Code review and design"}]
+        out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
         out["tiers_profile"] = {"id": "performance", "name": "Performance"}
     h.send_json(out)
     return True
@@ -13341,6 +13356,7 @@ class H(BaseHTTPRequestHandler):
         if plugins_route(self, p, None): return
         if voice_route(self, p, q): return
         if model_defaults_launchers(self, p, q): return  # area: model defaults
+        if model_defaults_profiles(self, p): return  # area: model defaults
         if pins_route(self, p): return
         if chat_pins_route(self, p, parse_qs(urlparse(self.path).query)): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return

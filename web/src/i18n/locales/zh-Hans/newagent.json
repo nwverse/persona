@@ -52,5 +52,5 @@
   "forget_failed": "没能忘记「{id}」：{error}",
   "preset": "预设",
   "preset_hint": "来自 {profile}：一键填好启动器、模型和思考强度，之后仍可修改。",
-  "preset_left_out": "这个启动器用不了 {what}，会按它自己的设置运行。"
+  "preset_left_out": "这里用不上：{what}，会按启动器或模型自己的设置运行。"
 }

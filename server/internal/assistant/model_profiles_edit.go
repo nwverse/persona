@@ -110,10 +110,6 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 				return i18n.Err("assistant-model_profiles.err_value", i18n.Args{"where": name, "field": field})
 			}
 		}
-		// the model goes to the agent as --model: one that is no model id would fail every start on the tier (#1644)
-		if t.Model != "" && !proto.ValidModelID(t.Model) {
-			return i18n.Err("assistant-model_profiles.err_tier_model", i18n.Args{"tier": name, "model": t.Model})
-		}
 		if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
 			return profileEffortErr(name, t.Effort)
 		}
@@ -122,6 +118,16 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 			return i18n.Err("assistant-model_profiles.err_tier_description", i18n.Args{"tier": name, "max": modelTierAbout})
 		}
 		tiers[name] = t
+	}
+	return nil
+}
+
+// checkTierModel is what a tier added or changed needs of its model: it goes to the agent as --model, so one that is no
+// model id would fail every start on the tier (#1644). Tiers saved before this was checked are left as they are: a
+// switch or an edit of something else never stops on them (a start on one says why).
+func checkTierModel(name string, t ModelTier) error {
+	if t.Model != "" && !proto.ValidModelID(t.Model) {
+		return i18n.Err("assistant-model_profiles.err_tier_model", i18n.Args{"tier": name, "model": t.Model})
 	}
 	return nil
 }
@@ -155,8 +161,9 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == id })
 	p := ModelProfile{ID: id}
+	var saved map[string]ModelTier // the tiers as they are: only the ones added or changed are held to checkTierModel
 	if i >= 0 {
-		p = ps.Profiles[i]
+		p, saved = ps.Profiles[i], ps.Profiles[i].Tiers
 		// the values are never written through: a copy of the maps is a copy
 		p.Purposes, p.Launchers, p.Tiers = maps.Clone(p.Purposes), maps.Clone(p.Launchers), maps.Clone(p.Tiers)
 	} else if len(ps.Profiles) >= maxModelProfiles {
@@ -173,6 +180,13 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	ctx = withManagedSnapshot(ctx, stored)
 	if err := checkModelProfile(&p, stored); err != nil {
 		return p, "", err
+	}
+	for name, t := range p.Tiers {
+		if was, ok := saved[name]; !ok || was.Model != t.Model {
+			if err := checkTierModel(name, t); err != nil {
+				return p, "", err
+			}
+		}
 	}
 	now := time.Now().UTC()
 	p.UpdatedAt = now

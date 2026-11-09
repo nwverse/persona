@@ -344,10 +344,11 @@ type pickerTier struct {
 }
 
 // pickerTiers are the presets the New Agent form offers on a machine with these launchers: the tiers of the profile
-// in use, by name, but those whose launcher it cannot start (never a choice that fails; a direct API provider is in
-// no machine's list). None when no profile is in use or it cannot be read: the form then has no preset row.
+// in use, by name, but those whose launcher the machine does not have (a direct API provider is in no machine's list;
+// one whose check failed there is offered, the form marks it). None when no profile is in use or it cannot be read:
+// the form then has no preset row.
 func (s *Service) pickerTiers(ctx context.Context, launchers []ConfiguredLauncher) (*ModelProfile, []pickerTier) {
-	p, err := s.activeModelProfile(ctx)
+	p, _, err := s.activeModelProfile(ctx)
 	if err != nil || p == nil {
 		return nil, nil
 	}

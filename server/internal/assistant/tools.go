@@ -297,17 +297,25 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
-		// The tier is resolved before the user is asked: the card says what the agent runs on, and an unknown tier
-		// asks nothing.
-		tier := strings.TrimSpace(a.Tier)
+		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
+		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
+		tier, runs := strings.TrimSpace(a.Tier), ""
 		if tier != "" {
-			picks := map[string]any{"tier": tier, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
-			if err := s.applyStartTier(ctx, picks); err != nil {
+			t, err := s.tierModel(ctx, tier)
+			if err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
-			a.Launcher, _ = picks["launcher"].(string)
-			a.Model, _ = picks["model"].(string)
-			a.Effort, _ = picks["effort"].(string)
+			if !layTier(t, &a.Launcher, &a.Model, &a.Effort) {
+				tier = "" // a launcher of its own: the tier gives it nothing
+			} else {
+				picks := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+				if s.applyModel(ctx, "agent.new", picks) == nil { // one that can't run is the start's to say
+					l, _ := picks["launcher"].(string)
+					m, _ := picks["model"].(string)
+					e, _ := picks["effort"].(string)
+					runs = ModelTier{Launcher: l, Model: m, Effort: e}.runs()
+				}
+			}
 		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
@@ -315,8 +323,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
 		}
 		switch { // the user sees what it will run on before saying yes
-		case tier != "":
-			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": ModelTier{Launcher: a.Launcher, Model: a.Model, Effort: a.Effort}.runs()})
+		case runs != "":
+			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		}
@@ -355,6 +363,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if note != "" {
 			note = " Note: " + note + "."
+		}
+		if runs != "" {
+			note = " Preset " + tier + ": runs on " + runs + "." + note
 		}
 		if branch != "" { // the machine's engine makes the worktree (herdr's or Orca's own), the agent starts in it
 			wt, err := s.newWorktree(sctx, am.ID, a.Cwd, branch)

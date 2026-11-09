@@ -28,6 +28,8 @@ const TIERS = [
   { name: "review", launcher: "fast", model: "m-review", effort: "high", description: "代码审查和设计" },
 ];
 let tiers: unknown = TIERS;
+let claudeList: unknown = { agent: "claude", models: [{ id: "default", name: "Default", default: true }] };
+let launchers: unknown[] = [{ name: "claude", agent: "claude" }, { name: "fast", agent: "claude" }];
 let fastList: unknown = { agent: "claude", models: [{ id: "default", name: "Default", default: true }, { id: "m-review", name: "Review", efforts: ["low", "high"] }] };
 let host: HTMLDivElement;
 let root: Root;
@@ -39,6 +41,8 @@ beforeEach(() => {
   state.machines = [{ id: "mac", name: "Mac", online: true }];
   launched.length = 0;
   tiers = TIERS;
+  claudeList = { agent: "claude", models: [{ id: "default", name: "Default", default: true }] };
+  launchers = [{ name: "claude", agent: "claude" }, { name: "fast", agent: "claude" }];
   fastList = { agent: "claude", models: [{ id: "default", name: "Default", default: true }, { id: "m-review", name: "Review", efforts: ["low", "high"] }] };
   localStorage.clear();
   localStorage.setItem("new.cwd.mac", "/code/app");
@@ -47,10 +51,8 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes("/model-config/purposes/")) return json({ error: "not found" }, 404);
     if (url.includes("/launchers/fast/models")) return json(fastList);
-    if (url.includes("/launchers/") && url.includes("/models")) return json({ agent: "claude", models: [{ id: "default", name: "Default", default: true }] });
-    if (url.includes("/launchers")) {
-      return json({ launchers: [{ name: "claude", agent: "claude" }, { name: "fast", agent: "claude" }], tiers, tiers_profile: tiers ? { id: "performance", name: "性能" } : undefined });
-    }
+    if (url.includes("/launchers/") && url.includes("/models")) return json(claudeList);
+    if (url.includes("/launchers")) return json({ launchers, tiers, tiers_profile: tiers ? { id: "performance", name: "性能" } : undefined });
     return json({ path: "/code", entries: [] });
   }));
   host = document.createElement("div");
@@ -109,5 +111,45 @@ describe("New agent: presets (#2225)", () => {
     await open();
     expect(hint()).toBeNull();
     expect(document.body.textContent).not.toContain("预设");
+  });
+
+  it("keeps a preset's effort when the one before it ran on another launcher", async () => {
+    claudeList = { agent: "claude", models: [{ id: "default", name: "Default", default: true, efforts: ["low", "medium", "high"] },
+      { id: "opus", name: "Opus", efforts: ["low", "high", "max"] }] };
+    fastList = { agent: "claude", models: [{ id: "default", name: "Default", default: true, efforts: ["low", "high", "max"] }] };
+    tiers = [{ name: "big", launcher: "claude", model: "opus", effort: "max" }, { name: "deep", launcher: "fast", effort: "max" }];
+    await open();
+    act(() => button("big").click());
+    await flush();
+    act(() => button("deep").click());
+    await flush();
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "fast", effort: "max" });
+  });
+
+  it("goes back to the defaults when the picked preset is picked again", async () => {
+    await open();
+    act(() => button("review").click());
+    await flush();
+    act(() => button("review").click());
+    await flush();
+    expect(button("review").getAttribute("aria-checked")).toBe("false");
+    act(() => button("启动").click());
+    expect(launched[0]?.model).toBeUndefined();
+    expect(launched[0]?.effort).toBeUndefined();
+  });
+
+  it("marks a preset whose launcher failed its check here, and keeps nothing after the sheet reopens", async () => {
+    launchers = [{ name: "claude", agent: "claude" }, { name: "fast", agent: "claude", health: { state: "blocked", kind: "auth", error: "没登录", checked_at: "2026-11-09T00:00:00Z" } }];
+    await open();
+    expect(button("review").querySelector("svg")).not.toBeNull();
+    act(() => button("review").click());
+    await flush();
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    expect(button("review").getAttribute("aria-checked")).toBe("false");
+    act(() => button("启动").click());
+    expect(launched[0]?.model).toBeUndefined();
   });
 });

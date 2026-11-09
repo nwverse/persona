@@ -69,8 +69,6 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const [tiers, setTiers] = useState<PickerTier[]>([]);
   const [tiersProfile, setTiersProfile] = useState("");
   const [tier, setTier] = useState<PickerTier | null>(null);
-  // a preset's model, put in once its launcher's list starts over (a new launcher clears the model, below)
-  const tierModel = useRef<{ launcher: string; model: string } | null>(null);
   // ultracode for this start: off whenever the sheet opens, never saved (the server's rule: no choice carries over)
   const [ultracode, setUltracode] = useState(false);
   const features = useStore((s) => s.features);
@@ -190,7 +188,6 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
     setLauncher("");
     setTiers([]);
     setTier(null);
-    tierModel.current = null;
     setModelDefault("");
     setHubDefault(undefined);
     setConfigured(null);
@@ -249,19 +246,27 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
   const followed = followedBinding(launcher, unified ? configured : null);
   const listLauncher = launchersOf === mid ? pickerLauncher(launcher, followed) : "";
   useEffect(() => {
-    const kept = tierModel.current;
-    tierModel.current = null;
-    setModel(kept && kept.launcher === listLauncher ? kept.model : "");
+    // a new launcher starts from its default, but a preset picked for it keeps its model (every pick by hand unmarks it)
+    setModel(tier?.launcher === listLauncher ? (tier.model ?? "") : "");
     setPicking(false);
     setQuery("");
   }, [open, mid, listLauncher]);
   const pickTier = (x: PickerTier) => {
     setHelpFor("");
+    if (tier?.name === x.name) {
+      // picked again: back to the defaults (the model settings' launcher where there is one)
+      setTier(null);
+      if (unified) setLauncher("");
+      setModel("");
+      setEffort("");
+      return;
+    }
+    // the list of another launcher is not this one's: until it is in, nothing is judged by it (the preset's effort stays)
+    if (x.launcher !== listLauncher) setModels({ status: "loading" });
     setTier(x);
     setLauncher(x.launcher);
     setModel(x.model ?? "");
     setEffort(x.effort ?? "");
-    tierModel.current = { launcher: x.launcher, model: x.model ?? "" };
   };
   useEffect(() => {
     if (!open || !mid || !listLauncher) {
@@ -551,19 +556,29 @@ export function NewAgent({ open, onClose, preset }: { open: boolean; onClose: ()
           {tiers.length > 0 && (
             <Field label={t("newagent.preset")}>
               <div role="radiogroup" aria-label={t("newagent.preset")} className="flex flex-wrap gap-1.5">
-                {tiers.map((x) => (
-                  <Choice key={x.name} radio mono selected={tier?.name === x.name} onClick={() => pickTier(x)}
-                    title={[x.description, [x.launcher, x.model, x.effort].filter(Boolean).join(" · ")].filter(Boolean).join("\n")}>
-                    {x.name}
-                  </Choice>
-                ))}
+                {tiers.map((x) => {
+                  // its launcher failed its check here (#1643): still a choice, marked; the list below says why
+                  const block = launcherBlock(launchers.find((l) => l.name === x.launcher));
+                  return (
+                    <Choice key={x.name} radio mono selected={tier?.name === x.name} onClick={() => pickTier(x)}
+                      title={[x.description, tierRuns(x), block?.reason].filter(Boolean).join("\n")}>
+                      <span className="flex items-center gap-1.5">
+                        {block && <Icon name="warning" size={12} className="text-orange" />}
+                        {x.name}
+                      </span>
+                    </Choice>
+                  );
+                })}
               </div>
-              <p data-testid="new-agent-preset-hint" className={cx("mt-1.5 min-w-0 text-[11.5px] [overflow-wrap:anywhere]", tierMissed.length ? "text-orange" : "text-ink-3")}>
-                {tierMissed.length
-                  ? t("newagent.preset_left_out", { what: tierMissed.join(" · ") })
-                  : tier
-                    ? tier.description || [tier.launcher, tier.model, tier.effort].filter(Boolean).join(" · ")
-                    : t("newagent.preset_hint", { profile: tiersProfile })}
+              <p data-testid="new-agent-preset-hint" aria-live="polite" className={cx("mt-1.5 flex min-w-0 items-start gap-1.5 text-[11.5px]", tierMissed.length ? "text-orange" : "text-ink-3")}>
+                {tierMissed.length > 0 && <Icon name="warning" size={12} className="mt-px shrink-0" />}
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  {tierMissed.length
+                    ? t("newagent.preset_left_out", { what: tierMissed.map((v) => (v === tier?.effort ? effortTitle(v) : v)).join(" · ") })
+                    : tier
+                      ? tier.description || tierRuns(tier)
+                      : t("newagent.preset_hint", { profile: tiersProfile })}
+                </span>
               </p>
             </Field>
           )}
@@ -764,6 +779,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+/** What a preset runs on, in a line: its launcher, model and effort (its name). */
+function tierRuns(x: PickerTier): string {
+  return [x.launcher, x.model, x.effort && effortTitle(x.effort)].filter(Boolean).join(" · ");
 }
 
 function Choice({ selected, onClick, title, mono, radio, blocked, children }: { selected: boolean; onClick: () => void; title?: string; mono?: boolean; /** One of a radiogroup. */ radio?: boolean; /** Grayed out: this computer can't start it now (#1643); a click explains instead of picking. */ blocked?: boolean; children: React.ReactNode }) {

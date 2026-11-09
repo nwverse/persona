@@ -89,6 +89,11 @@ func editTiers(ps *modelProfiles, e tierEdit, now time.Time) ([]tierChange, erro
 		if err := checkModelTiers(p.Tiers); err != nil {
 			return nil, fmt.Errorf("%s (%s): %w", p.Name, p.ID, err)
 		}
+		if t, ok := p.Tiers[e.Tier]; ok {
+			if err := checkTierModel(e.Tier, t); err != nil { // only the tier edited: another's old model blocks nothing
+				return nil, fmt.Errorf("%s (%s): %w", p.Name, p.ID, err)
+			}
+		}
 		if len(p.Tiers) == 0 {
 			p.Tiers = nil
 		}
@@ -107,6 +112,14 @@ func editTiers(ps *modelProfiles, e tierEdit, now time.Time) ([]tierChange, erro
 		return nil, fmt.Errorf("no profile named has a tier %s", e.Tier)
 	}
 	return changes, nil
+}
+
+// sameTierChanges: whether two sets of changes are the same, profile by profile.
+func sameTierChanges(a, b []tierChange) bool {
+	same := func(x, y *ModelTier) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
+	return slices.EqualFunc(a, b, func(x, y tierChange) bool {
+		return x.ID == y.ID && same(x.Before, y.Before) && same(x.After, y.After)
+	})
 }
 
 func profileIDs(ps []ModelProfile) string {
@@ -199,7 +212,7 @@ func (s *Service) setModelTiers(ctx context.Context, v json.RawMessage) (*ownCha
 		}
 		return strings.Join(lines, "\n")
 	},
-		apply: func(ctx context.Context) (string, error) { return s.saveTierEdit(ctx, revision, e) },
+		apply: func(ctx context.Context) (string, error) { return s.saveTierEdit(ctx, revision, e, changes) },
 	}, nil
 }
 
@@ -215,10 +228,11 @@ func tierCardText(l i18n.Lang, t *ModelTier) string {
 	return clipped(l, text)
 }
 
-// saveTierEdit makes the edit the user approved, at the revision its card was made from.
-func (s *Service) saveTierEdit(ctx context.Context, revision int64, e tierEdit) (string, error) {
+// saveTierEdit makes the edit the user approved, at the revision its card was made from, and only when it still changes
+// what the card said: templates never saved are made again from the configuration, at the same revision.
+func (s *Service) saveTierEdit(ctx context.Context, revision int64, e tierEdit, card []tierChange) (string, error) {
 	s.models.mu.Lock()
-	text, active, err := s.saveTierEditLocked(ctx, revision, e)
+	text, active, err := s.saveTierEditLocked(ctx, revision, e, card)
 	s.models.mu.Unlock()
 	if err == nil {
 		s.profileEvent(ctx, active)
@@ -226,18 +240,22 @@ func (s *Service) saveTierEdit(ctx context.Context, revision int64, e tierEdit) 
 	return text, err
 }
 
-func (s *Service) saveTierEditLocked(ctx context.Context, revision int64, e tierEdit) (string, string, error) {
+func (s *Service) saveTierEditLocked(ctx context.Context, revision int64, e tierEdit, card []tierChange) (string, string, error) {
 	ps, seeded, err := s.modelProfilesLocked(ctx)
 	if err != nil {
 		return "", "", err
 	}
+	stale := errors.New("the model profiles changed after the card was shown, so nothing was saved: set it again for a new card")
 	if ps.Revision != revision {
-		return "", "", errors.New("the model profiles changed after the card was shown, so nothing was saved: set it again for a new card")
+		return "", "", stale
 	}
 	now := time.Now().UTC()
 	changes, err := editTiers(&ps, e, now)
 	if err != nil {
 		return "", "", err
+	}
+	if !sameTierChanges(changes, card) {
+		return "", "", stale
 	}
 	state, err := s.readModelProfileState(ctx)
 	if err != nil {
@@ -246,10 +264,12 @@ func (s *Service) saveTierEditLocked(ctx context.Context, revision int64, e tier
 	if seeded {
 		state.seed()
 	}
-	by := ProfileActor{Kind: "assistant"}
+	// one event for the edit, however many profiles it changed: <profile>.tiers.<name> each
+	event := ModelProfileEvent{At: now, Action: "save", By: ProfileActor{Kind: "assistant"}}
 	for _, c := range changes {
-		state.record(ModelProfileEvent{At: now, Action: "save", To: c.ID, By: by, Changed: []string{"tiers." + e.Tier}})
+		event.Changed = append(event.Changed, c.ID+".tiers."+e.Tier)
 	}
+	state.record(event)
 	ps.Revision++
 	if err := s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: ps, modelProfileStateKey: state}); err != nil {
 		return "", "", err

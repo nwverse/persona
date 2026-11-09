@@ -164,5 +164,6 @@
   "auto_review_findings_other": "{count} findings",
   "auto_review_show": "Show report",
   "auto_review_hide": "Hide report",
-  "preset": "Preset {tier}"
+  "preset": "Preset {tier}",
+  "plan_edit_model_placeholder_tier": "Leave empty for preset {tier}'s model"
 }
