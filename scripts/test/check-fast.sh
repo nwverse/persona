@@ -49,7 +49,8 @@
 #                              scripts/test/test_privacy_check.py (it runs the hooks); scripts/privacy_check.py also
 #                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
-#                              CLAUDE.md doc index), test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
+#                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
 #   server/internal/{proto,hub,extension}/**, schema/extension/manifest.schema.json
 #                              also test_doc_wire.py: the code side of those wire lists
 #   apple/**                   scripts/test/test_apple_l10n.py (String Catalogs, Chinese Swift literals); the iOS/macOS
@@ -739,7 +740,7 @@ else
     case "$f" in
       docs/*|*.md)
         script_test_add scripts/test/test_doc_paths.py; script_test_add scripts/test/test_doc_go_paths.py
-        script_test_add scripts/test/test_doc_wire.py ;;
+        script_test_add scripts/test/test_doc_sections.py; script_test_add scripts/test/test_doc_wire.py ;;
       # The code side of the wire lists test_doc_wire.py compares with the docs.
       server/internal/proto/*|server/internal/hub/*|server/internal/extension/*|schema/extension/manifest.schema.json)
         script_test_add scripts/test/test_doc_wire.py ;;

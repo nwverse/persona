@@ -23,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PASSING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n"
 FAILING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_broken(self):\n        self.fail('broken on purpose')\n"
 # The scripts/test suites that guard files outside scripts/; stubbed passing unless a test breaks one.
-GUARD_SUITES = ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_wire.py", "test_apple_l10n.py",
-                "test_docker_entrypoint.py")
+GUARD_SUITES = ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_sections.py", "test_doc_wire.py",
+                "test_apple_l10n.py", "test_docker_entrypoint.py")
 # A python3 that records each call ("<cwd>|<args>") instead of running anything.
 FAKE_PYTHON = '#!/bin/sh\nprintf "%s|%s\\n" "$PWD" "$*" >> "$FAKE_PYTHON_LOG"\n'
 
@@ -219,6 +219,7 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertEqual(1, code, out)
         self.assertIn("FAIL     scripts/test/test_doc_paths.py", out)
         self.assertIn("PASS     scripts/test/test_doc_go_paths.py", out)
+        self.assertIn("PASS     scripts/test/test_doc_sections.py", out)
         self.assertIn("PASS     scripts/test/test_doc_wire.py", out)
         self.assertNotIn("test_apple_l10n.py", out)
         self.assertNotIn("test_docker_entrypoint.py", out)
@@ -229,6 +230,7 @@ class CheckFastScriptsTests(unittest.TestCase):
         self.assertEqual(0, code, out)
         self.assertIn("PASS     scripts/test/test_doc_paths.py", out)
         self.assertIn("PASS     scripts/test/test_doc_go_paths.py", out)
+        self.assertIn("PASS     scripts/test/test_doc_sections.py", out)
         self.assertIn("PASS     scripts/test/test_doc_wire.py", out)
         self.assertNotIn("no fast check maps to", out)
 
@@ -282,26 +284,26 @@ class CheckFastScriptsTests(unittest.TestCase):
     def test_all_runs_every_scripts_suite_in_one_job(self):
         # Mirror CI's Scripts tests job: --all runs every scripts/**/test_*.py, changed or not, except the ones a
         # dedicated job already runs. That stub fails under unittest, so the suite job must not pick it up. The count
-        # is 8: test_other, test_gone, test_deep and the five guard suites stubbed in setUp.
+        # is 9: test_other, test_gone, test_deep and the six guard suites stubbed in setUp.
         self.write("scripts/test/test_external_service_refs.py", FAILING)
         self.write("scripts/deep/nested/test_deep.py", PASSING)
         code, out = self.check_fast("--all", path=self.toolchain_without_node_and_go())
         self.assertEqual(1, code, out)  # missing node and go are core failures in --all mode
-        self.assertIn("queued: scripts unittest suites (8)", out)
+        self.assertIn("queued: scripts unittest suites (9)", out)
         self.assertIn("FAIL     scripts unittest suites", out)
-        self.assertIn("8 suite(s): 1 failed, 0 timed out", out)
+        self.assertIn("9 suite(s): 1 failed, 0 timed out", out)
         self.assertIn("failed: scripts/tools/test_other.py", out)
         self.assertNotIn("failed: scripts/test/test_external_service_refs.py", out)
         self.assertNotIn("queued: scripts/tools/test_gone.py", out)  # one job, not one per suite
 
     def test_a_test_file_that_never_mentions_unittest_is_skipped_as_in_ci(self):
         # python -m unittest runs no tests in such a verification script and exits 5 ("NO TESTS RAN") from Python 3.12
-        # on, so CI's python-tests.py skips it. The --all count is the seven suites of setUp.
+        # on, so CI's python-tests.py skips it. The --all count is the eight suites of setUp.
         self.write("scripts/tools/test_verify.py", "print('a verification script that takes arguments')\n")
         code, out = self.check_fast("--all", path=self.toolchain_without_node_and_go())
         self.assertEqual(1, code, out)  # test_other.py fails, and node and go are missing
         self.assertIn("SKIP  scripts/tools/test_verify.py (not a unittest suite)", out)
-        self.assertIn("7 suite(s): 1 failed, 0 timed out", out)
+        self.assertIn("8 suite(s): 1 failed, 0 timed out", out)
         code, out = self.check_fast()
         self.assertEqual(0, code, out)
         self.assertIn("SKIP  scripts/tools/test_verify.py (not a unittest suite)", out)
@@ -396,7 +398,7 @@ class CheckFastScriptsTests(unittest.TestCase):
         code, out = self.check_fast("--all", path=self.toolchain_without_node_and_go())
         self.assertEqual(1, code, out)  # the stubbed scripts/tools/test_other.py fails, and node/go are missing
         self.assertIn("PASS     frozen migrations", out)
-        self.assertIn("queued: scripts unittest suites (7)", out)
+        self.assertIn("queued: scripts unittest suites (8)", out)
 
     def test_all_reports_a_slow_suite_as_timeout_and_runs_the_rest(self):
         self.write("scripts/tools/test_other.py", PASSING)
@@ -405,13 +407,13 @@ class CheckFastScriptsTests(unittest.TestCase):
         code, out = self.check_fast("--all", path=self.toolchain_without_node_and_go(),
                                     env={"CHECK_FAST_TIMEOUT_OTHER": "2"})
         self.assertEqual(1, code, out)
-        self.assertIn("9 suite(s): 1 failed, 1 timed out", out)
+        self.assertIn("10 suite(s): 1 failed, 1 timed out", out)
         self.assertIn("timed out: scripts/tools/test_slow.py", out)
         self.assertIn("failed: scripts/tools/test_z_after.py", out)
         self.write("scripts/tools/test_z_after.py", PASSING)
         code, out = self.check_fast("--all", path=self.toolchain_without_node_and_go(),
                                     env={"CHECK_FAST_TIMEOUT_OTHER": "2"})
-        self.assertIn("TIMEOUT  scripts unittest suites (9)", out)
+        self.assertIn("TIMEOUT  scripts unittest suites (10)", out)
         self.assertIn("1 suite(s) timed out: scripts/tools/test_slow.py", out)
 
     def toolchain_without_node_and_go(self):
