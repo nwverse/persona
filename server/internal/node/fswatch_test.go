@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -231,6 +232,54 @@ func TestFsWatchCapsTheSet(t *testing.T) {
 	defer n.fsw.mu.Unlock()
 	if len(n.fsw.dirs) != maxFsWatchDirs || len(n.fsw.git) != maxFsWatchGit {
 		t.Fatalf("watching %d folders and %d git dirs", len(n.fsw.dirs), len(n.fsw.git))
+	}
+}
+
+// A folder over the cap is watched as the tree shows it (the first maxDirEntries in treeOrder), not as os.ReadDir lists
+// it: an edit or rename of a shown entry that sorts past the cap in byte order is a change, and an edit of an entry the
+// tree leaves out is not.
+func TestFsWatchSignatureFollowsTheTreeOrderPastTheCap(t *testing.T) {
+	n, home := testNode(t)
+	dir := filepath.Join(home, "big")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxDirEntries {
+		writeEmpty(t, dir, fmt.Sprintf("B%05d", i))
+	}
+	writeEmpty(t, dir, "a-first")
+	if err := os.Mkdir(filepath.Join(dir, "zz-sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := fsWatchDir{Path: dir}
+	sig := n.dirSignature(w)
+	changed := func(what string) {
+		t.Helper()
+		now := n.dirSignature(w)
+		if now == sig {
+			t.Fatalf("%s: signature unchanged", what)
+		}
+		sig = now
+	}
+
+	// Shown second (after zz-sub) but past the 2000th name in byte order.
+	writeWhole(t, home, filepath.Join(dir, "a-first"), []byte("edited"))
+	changed("edit of a-first")
+	if err := os.Rename(filepath.Join(dir, "a-first"), filepath.Join(dir, "a-second")); err != nil {
+		t.Fatal(err)
+	}
+	changed("rename of a-first")
+	// A file added inside the subfolder changes its time, which the tree shows.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "zz-sub"), later, later); err != nil {
+		t.Fatal(err)
+	}
+	changed("new time of zz-sub")
+
+	// B01998 and B01999 are past the cap in the tree's order: the listing does not show them.
+	writeWhole(t, home, filepath.Join(dir, fmt.Sprintf("B%05d", maxDirEntries-1)), []byte("hidden"))
+	if now := n.dirSignature(w); now != sig {
+		t.Fatal("an edit of an entry the tree does not show changed the signature")
 	}
 }
 
