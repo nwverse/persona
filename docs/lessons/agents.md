@@ -629,8 +629,12 @@ Closing is not durable merely because the card vanished: persist the interaction
   `server/internal/node/hosts.go`): an ESC becomes `<ESC>` and any other becomes `<U+XXXX>`, for every host and
   caller. That covers each paste (`hostPrompt`, the fallback paste, Codex answers) and a compatible CLI's first
   message, which is shell-quoted onto a command line that may be typed into a shell: there `^U` erases the line,
-  quotes or not, and a carriage return then runs what follows. Match what the agent shows or its transcript records
-  against that inert text, not the text as sent; a runtime is sent the text itself, so the echo tie accepts either.
+  quotes or not, and a carriage return then runs what follows. A shell's line editor acts on more than controls
+  inside quotes: a tab completes the quoted word, closes the quote and leaves the rest to the shell (bash, zsh), and
+  csh ends the command at a line break. So that first message also gets its tabs as spaces, and its line breaks as
+  spaces outside the sh family (`typedArg`, `server/internal/node/start_agent.go`). Match what the agent shows or
+  its transcript records against that inert text, not the text as sent; a runtime is sent the text itself, so the
+  echo tie accepts either.
   Keys sent as keys (`session.keys`) are the one way left to press a control key, on purpose.
 
 ## Profile acceptance must include launcher defaults
