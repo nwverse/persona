@@ -35,9 +35,24 @@ struct SyncScenarioTests {
         #expect(Self.cases.count >= 24, "spec/fixtures/sync: \(Self.dir.path)")
     }
 
-    @Test func cardAnswerWaitsForInitialSnapshot() async throws {
+    @Test(arguments: [false, true])
+    func cardAnswerWaitsForInitialSnapshot(cached: Bool) async throws {
         let c = try #require(Self.cases["card_answered_on_other_device"])
-        try await SyncRun(c, initialInteractionsDelay: .seconds(1)).play()
+        try await SyncRun(c, initialInteractionsDelay: .seconds(1), cachedInitialThrough: cached ? 3 : nil).play()
+    }
+
+    @Test(arguments: ["restart_not_resumable_rereads_cards", "sent_on_other_device_once"], [1, 3])
+    func initialSubscriptionCatchesUpFromCache(_ name: String, cursor: Int) async throws {
+        let c = try #require(Self.cases[name])
+        let hub = SyncHub(chat: c["chat"] ?? .object([:]), start: c["start"]?["hub"] ?? .object([:]))
+        let backlog = hub.backlogFrame(since: cursor)
+        #expect(backlog["backlog"]?.bool == true)
+        #expect(backlog["from_seq"]?.int == cursor)
+        #expect(backlog["to_seq"]?.int == 3)
+        #expect(backlog["items"]?.array?.compactMap { $0["seq"]?.int } == (cursor == 3 ? [] : [2]))
+        #expect(backlog["has_more"] == nil)
+        #expect(backlog["more_after"]?.bool == false)
+        try await SyncRun(c, cachedInitialThrough: cursor).play()
     }
 
     @Test(arguments: names)
@@ -83,9 +98,11 @@ final class SyncRun {
     private let disks = FileManager.default.temporaryDirectory.appending(path: "sync-scenario-\(UUID().uuidString)")
     var failures: [String] = []
     private let initialInteractionsDelay: Duration
+    private let cachedInitialThrough: Int?
 
-    init(_ c: JSONValue, initialInteractionsDelay: Duration = .zero) {
+    init(_ c: JSONValue, initialInteractionsDelay: Duration = .zero, cachedInitialThrough: Int? = nil) {
         self.initialInteractionsDelay = initialInteractionsDelay
+        self.cachedInitialThrough = cachedInitialThrough
         self.c = c
         name = c["name"]?.string ?? "?"
         let chat = c["chat"] ?? .object([:])
@@ -131,10 +148,20 @@ final class SyncRun {
 
     /// The device already shows the start: connected, its lists in, the chat open and loaded.
     private func start(_ name: String) async throws {
+        if let cursor = cachedInitialThrough {
+            let lines = hub.lines.filter { ($0["seq"]?.int ?? 0) <= cursor }
+            let items = try JSON.decoder.decode([Item].self, from: JSONEncoder().encode(JSONValue.array(lines)))
+            ChatCache.save(key, items: items, hasMore: false, history: hub.history, covered: cursor)
+        }
         let d = SyncDevice(name: name, key: key, folder: disks.appending(path: name))
         d.model.clock = clock
+        if let cursor = cachedInitialThrough {
+            // Load the seeded store before background prefetch can advance the on-disk copy.
+            #expect(d.model.chat(key).covered == cursor)
+            #expect(!d.model.chat(key).backlogBuilt)
+        }
         devices[name] = d
-        d.answersSubscribe = { [hub] in hub.backlogFrame }
+        d.answersSubscribe = { [hub] since in hub.backlogFrame(since: since) }
         d.connect()
         #expect(d.model.machines.isEmpty)
         #expect(d.model.allSessions.isEmpty, "scenario setup must not retain a paired app's snapshot")
@@ -148,9 +175,16 @@ final class SyncRun {
         d.model.subscribe(key, by: d.owner)
         d.model.show(key, by: d.owner)
         let cards = Set(hub.interactions.compactMap { $0["id"]?.string })
-        try await waitUntil("\(name): initial session, transcript and cards were not loaded") {
+        try await waitUntil("\(name): initial session, transcript and cards were not loaded; "
+                            + "session=\(d.model.session(self.key) != nil), backlogBuilt=\(d.model.chat(self.key).backlogBuilt), "
+                            + "loadedOnce=\(d.model.chat(self.key).loadedOnce), covered=\(d.model.chat(self.key).covered), "
+                            + "expectedCards=\(cards.sorted()), cards=\(d.model.interactions(for: self.key).map(\.id).sorted()), "
+                            + "requests=\(d.requests)") {
             d.model.session(self.key) != nil && d.model.chat(self.key).backlogBuilt
                 && Set(d.model.interactions(for: self.key).map(\.id)) == cards
+        }
+        if let cursor = cachedInitialThrough {
+            #expect(d.requests.contains { $0["ws"]?.string == "subscribe" && $0["since_seq"]?.int == cursor })
         }
         d.answersSubscribe = nil
         d.requests = []
@@ -184,10 +218,10 @@ final class SyncRun {
     }
 
     /// Readiness is observable state, not the amount of time the runner happened to get on the main actor.
-    private func waitUntil(_ failure: String, ready: () -> Bool) async throws {
+    private func waitUntil(_ failure: @autoclosure () -> String, ready: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
         while !ready() {
-            guard ContinuousClock.now < deadline else { throw SyncUnplayable(description: failure) }
+            guard ContinuousClock.now < deadline else { throw SyncUnplayable(description: failure()) }
             try await Task.sleep(for: .milliseconds(10))
         }
     }

@@ -76,8 +76,8 @@ final class SyncDevice {
     /// Interactions as last seen here, to answer by id.
     private(set) var knownCards: [String: Interaction] = [:]
     let owner = UUID()
-    /// While the case sets the device up, a subscribe without `since_seq` gets the hub's backlog.
-    var answersSubscribe: (() -> JSONValue)?
+    /// While the case sets the device up, every subscribe gets the hub's backlog, including a cached cursor.
+    var answersSubscribe: ((Int?) -> JSONValue)?
 
     init(name: String, key: SessionKey, folder: URL) {
         self.name = name
@@ -117,7 +117,7 @@ final class SyncDevice {
         var r: [String: JSONValue] = ["ws": .string(type)]
         if let since = m["since_seq"] as? Int { r["since_seq"] = .number(Double(since)) }
         requests.append(r)
-        if type == "subscribe", m["since_seq"] == nil, let backlog = answersSubscribe?() {
+        if type == "subscribe", let backlog = answersSubscribe?(m["since_seq"] as? Int) {
             Task { @MainActor in self.socket?.send(backlog) }
         }
     }
