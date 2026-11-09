@@ -268,9 +268,10 @@ class RealInboxRepository(
 
     override suspend fun setDone(itemId: String, done: Boolean) {
         val transport = requireTransport()
-        completions.withItems(listOf("${transport.scope}:$itemId")) {
+        val shown = recordOf(itemId)?.item?.id ?: itemId
+        completions.withItems(listOf("${transport.scope}:$shown")) {
             if (!owns(transport)) throw CancellationException("Pairing changed")
-            val change = completions.begin(setOf(itemId), done)
+            val change = completions.begin(setOf(shown), done)
             val old = change.before.firstOrNull()
             try {
                 val result = completions.request { asItem(old) { transport.setDone(old?.hubItemId ?: itemId, done) } }
