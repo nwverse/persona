@@ -159,11 +159,18 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		if over && a.Reason == "" { // the note is the rework asked for, written to the agent: not the owner's question
 			conclusion.Reason, conclusion.Note = i18n.T(s.botLang(ctx), "assistant-reports.verdict_over", i18n.Args{"rounds": maxReworkRounds}), ""
 		}
-		if s.askConclusion(ctx, t, conclusion) {
+		carded := s.askConclusion(ctx, t, conclusion)
+		// A recommendation is also pushed to their phone, whose OK takes it (todo_ask.go), with the bot on or off.
+		pushed := s.pushDecision(ctx, t.ID)
+		if carded || pushed {
 			said := "a card with what they are to decide went to them in Lark, and their answer goes to the task's agent"
-			if conclusion.Recommend != "" {
+			switch {
+			case carded && conclusion.Recommend != "":
 				said = "a card with what they are to decide and your recommendation went to them in Lark; \"OK\" takes the " +
 					"recommendation, and their answer goes to the task's agent"
+			case !carded:
+				said = "a push with what they are to decide and your recommendation went to their phone; its \"OK\" takes the " +
+					"recommendation and sends it to the task's agent. If they answer something else here, pass it on with agent_send"
 			}
 			if over {
 				return fmt.Sprintf("Task %s was sent back %d times already: it now waits for the user (needs_user): %s. Don't ask them "+
