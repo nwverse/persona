@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliDecompressSync } from "node:zlib";
 import { LANG_MATCHES, LANGS, preferredLanguage } from "./i18n";
-import { brotliCopies, BROTLI_MIN_SIZE, localeDirs, preloadScript, startupNamespaceGaps } from "./startup-preload";
+import { brotliCopies, BROTLI_MIN_SIZE, localeDirs, preloadScript, sentBytes, startupNamespaceGaps } from "./startup-preload";
 
 const langs = localeDirs(join(__dirname, "i18n/locales"));
 
@@ -79,6 +79,7 @@ describe("brotli copies", () => {
     expect(st).toEqual({ files: 1, before: big.length, after: br.length });
     expect(brotliDecompressSync(br).toString()).toBe(big);
     expect(existsSync(join(dir, "assets/small-2.js.br"))).toBe(false);
+    expect(await sentBytes(dir, ["assets/App-1.js", "assets/small-2.js"])).toBe(br.length + BROTLI_MIN_SIZE - 1);
     await brotliCopies(dir, ["assets/App-1.js"]);
     expect(readFileSync(join(dir, "assets/App-1.js.br")).equals(br)).toBe(true);
     rmSync(dir, { recursive: true });

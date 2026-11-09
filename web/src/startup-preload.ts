@@ -1,9 +1,10 @@
 // The inline <head> script vite.config.ts's startup-preload plugin writes into index.html, the brotli copies it
-// writes of the files that script and the page load, and its check of the startup namespaces. It lives here, with no imports of the client code, so the config
+// writes of the files that script and the page load, and its checks of the startup namespaces and the first screen's
+// size. It lives here, with no imports of the client code, so the config
 // can load it and a test can check it against src/i18n/index.ts: the languages it has catalogs for (LANGS) and how it
 // picks one (preferredLanguage) must stay the same as the client's.
 import { readdirSync, readFileSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { brotliCompress, constants } from "node:zlib";
@@ -83,6 +84,20 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
     out.after += br.length;
   }));
   return out;
+}
+
+/**
+ * The most a cold first screen of the client page may send, in bytes, as sentBytes counts it over the page's own files,
+ * the shared and App groups and one language's startup catalog (vite.config.ts startupPreload fails the build past
+ * it): the heaviest language's at #2689 (ja, 559,565 B) plus 3%. Raise it on purpose, in the change that needs it.
+ */
+export const FIRST_SCREEN_BUDGET = 576_352;
+
+/** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
+ *  the file itself when it has none. Build time only. */
+export async function sentBytes(dir: string, files: string[]): Promise<number> {
+  const sizes = await Promise.all(files.map((file) => stat(join(dir, `${file}.br`)).catch(() => stat(join(dir, file)))));
+  return sizes.reduce((sum, s) => sum + s.size, 0);
 }
 
 /**

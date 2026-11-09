@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { brotliCopies, localeDirs, preloadScript, startupNamespaceGaps } from "./src/startup-preload";
+import { brotliCopies, FIRST_SCREEN_BUDGET, localeDirs, preloadScript, sentBytes, startupNamespaceGaps } from "./src/startup-preload";
 import { textScale } from "./src/lib/text-scale";
 import { classicWorkerProblem } from "./src/sw-entry-check";
 import { catalogFiles, i18nCatalogs, startupNamespacesFile } from "./i18n-catalogs";
@@ -79,15 +79,22 @@ const showcaseImages: Plugin = {
 // The same files, with main and everything it imports statically and the rest of the catalog, are what a cold first
 // screen fetches: once they are written, each of 1 KB or more gets a brotli copy beside it (name.br,
 // src/startup-preload.ts brotliCopies), which the hub sends as stored to a browser that takes br (docs/web/web.md
-// "Precompressed assets").
+// "Precompressed assets"). The build then fails if any language's first screen sends more than FIRST_SCREEN_BUDGET.
 function startupPreload(): Plugin {
   let startup: string[] | undefined; // the first screen's files, set by transformIndexHtml for the client page
+  let screens: [string, string[]][] = []; // each language's first screen of the App (not the live screen)
   return {
     name: "startup-preload",
     apply: "build",
     async writeBundle({ dir }) {
       if (!startup) this.error("startup-preload: index.html was not transformed, so the first screen's files are unknown");
       await brotliCopies(dir!, startup);
+      for (const [lang, files] of screens) {
+        const bytes = await sentBytes(dir!, files);
+        if (bytes > FIRST_SCREEN_BUDGET) {
+          this.error(`startup-preload: the ${lang} first screen sends ${bytes} B, over its budget of ${FIRST_SCREEN_BUDGET} B (src/startup-preload.ts FIRST_SCREEN_BUDGET)`);
+        }
+      }
     },
     transformIndexHtml: {
       order: "post",
@@ -141,6 +148,7 @@ function startupPreload(): Plugin {
           throw new Error(`startup-preload: the first screen's code names keys of ${gaps.join(", ")}, which the page reads before the rest of the catalog is in: add them to src/i18n/startup-namespaces.json`);
         }
         startup = [...new Set([...entry, ...shared, ...files.app, ...files.screen, ...Object.values(files.catalogs), ...Object.values(catalogs("client-rest"))])];
+        screens = Object.entries(files.catalogs).map(([lang, catalog]) => [lang, [...new Set([...entry, ...shared, ...files.app, catalog])]]);
         return { html, tags: [{ tag: "script", children: script, injectTo: "head" }] };
       },
     },
