@@ -106,7 +106,7 @@ type Connector struct {
 	// does not lift it.
 	pausedUntil time.Time
 	// pauseStep: the length of the last pause notePause chose itself (GitHub named no time), doubled while the limit
-	// keeps coming back right after it; zero once a request is answered after it (answered).
+	// keeps coming back right after it.
 	pauseStep time.Duration
 	// backoffUntil: the end of that pause, kept apart from pausedUntil, which pauses GitHub names (Retry-After,
 	// X-RateLimit-Reset) move too.
@@ -161,11 +161,13 @@ var (
 
 // notePause records the pause GitHub asks for with a rate limit (429, or 403 with "rate limit", Retry-After or
 // X-RateLimit-Remaining 0), as GitHub's docs say: until Retry-After (seconds or an HTTP date); else, with the hour's
-// core requests used up (X-RateLimit-Remaining 0), until X-RateLimit-Reset; else for pauseFirst, doubled while
-// requests keep failing: the last pause it chose itself ended less than its own length ago and no request was
-// answered since (answered). A pause GitHub named is none of its steps. X-RateLimit-Reset alone says nothing: every
-// answer carries the core quota's, a secondary limit's too. Another quota used up (search) is no pause: noteRate
-// keeps it apart. It only extends a pause, never shortens one; err is the request's error, h its answer's headers.
+// core requests used up (X-RateLimit-Remaining 0), until X-RateLimit-Reset; else for pauseFirst, doubled while the
+// limit keeps coming back: within one step of the end of the last pause it chose itself (backoffUntil). A pause
+// GitHub named is none of its steps, and answers in between do not end the backoff (a poll's first page is often
+// answered before its next read runs into the limit again); only a quiet step does. X-RateLimit-Reset alone says
+// nothing: every answer carries the core quota's, a secondary limit's too. Another quota used up (search) is no
+// pause: noteRate keeps it apart. It only extends a pause, never shortens one; err is the request's error, h its
+// answer's headers.
 func (c *Connector) notePause(h http.Header, err error) {
 	message := strings.ToLower(err.Error())
 	usedUp := h.Get("X-RateLimit-Remaining") == "0"
@@ -198,16 +200,6 @@ func (c *Connector) notePause(h http.Header, err error) {
 	}
 	if until.After(c.pausedUntil) {
 		c.pausedUntil = until
-	}
-}
-
-// answered notes a request GitHub answered: once no pause holds, the limit is over, and the next one pauses for
-// pauseFirst again (notePause). One answered during a pause (a read the pause does not hold back) is not.
-func (c *Connector) answered() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !time.Now().Before(c.pausedUntil) {
-		c.pauseStep = 0
 	}
 }
 
@@ -467,9 +459,6 @@ func (c *Connector) request(ctx context.Context, method, path string, hdr http.H
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, limit))
 		code := resp.StatusCode
-		if code < 300 || code == http.StatusNotModified {
-			c.answered()
-		}
 		switch {
 		case code == http.StatusUnauthorized:
 			return code, resp.Header, errUnauthorized
