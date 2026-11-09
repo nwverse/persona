@@ -3,7 +3,7 @@ import XCTest
 /// Coming back to the app lands on the conversation that was open, the space's other agent picked in its header
 /// included (2026-11-04, TestFlight on iPhone Duo open: after going to another app and back, or a relaunch, the Agents
 /// page showed another page than the one chosen). Both after a trip to the home screen and after a relaunch.
-/// Demo data, both layouts (`TEST_RUNNER_PERSONA_LAYOUT=shell`); iPad stands in for Duo open (regular width).
+/// Demo data on iPhone and iPad; iPad stands in for Duo open (regular width).
 final class ReturnToChatTests: XCTestCase {
     private struct Chat: Decodable {
         var key: String

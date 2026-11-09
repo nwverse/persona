@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -249,6 +250,7 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 	// The code goes in the environment, never on the command line: any user here can read that while it runs, and
 	// the hub trades this code from its own machine without another credential. One the program did not trade (it
 	// kept a binding that works, or stopped first) is voided after.
+	programBefore, wasActive := e.builtinProgram(), e.builtinActive(ctx)
 	out, err := e.run(ctx, []string{"PERSONA_HOME=" + e.root, managerconf.BuiltinCodeEnv + "=" + code},
 		bin, managerconf.BuiltinInstallArgs(hubLocalURL(cfg.Listen))...)
 	_ = e.voidCode(ctx, cfg.Config, code)
@@ -267,11 +269,18 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 	if e.goos == "darwin" {
 		unit = managerconf.BuiltinLabel
 	}
+	switched := ""
+	if after := e.builtinProgram(); programBefore != "" && after != "" && resolvedPath(programBefore) != resolvedPath(after) {
+		switched = "；服务改成运行 " + filepath.Base(after)
+		if wasActive {
+			switched += "，重启了它"
+		}
+	}
 	wait := e.managerWait
 	deadline := time.Now().Add(wait)
 	for {
 		if e.builtinOnline(ctx, cfg.Config) {
-			e.report("manager", true, "内置管理者是自己的常驻服务（"+unit+"），已绑定这个 hub、连上了", "")
+			e.report("manager", true, "内置管理者是自己的常驻服务（"+unit+"），已绑定这个 hub、连上了"+switched, "")
 			return nil
 		}
 		if !time.Now().Before(deadline) || ctx.Err() != nil {
@@ -282,8 +291,48 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 	// The hub runs and the phone can pair: say what is wrong and go on (its service keeps trying).
 	// (said every time: a switch an earlier run made is not known here)
 	next := e.managerLog() + "；要改回 hub 自己拉起它：personad hub manager-mode child，再重启 hub 的服务"
-	e.report("manager", false, fmt.Sprintf("内置管理者的常驻服务（%s）装好了，但 %d 秒内没连上 hub", unit, int(wait.Seconds())), next)
+	e.report("manager", false, fmt.Sprintf("内置管理者的常驻服务（%s）装好了，但 %d 秒内没连上 hub%s", unit, int(wait.Seconds()), switched), next)
 	return nil
+}
+
+// builtinProgram is the program the built-in manager's service runs, under its name or its former one: its unit as
+// the user's systemd reads it, or its launchd agent; "" for none.
+func (e *setupEnv) builtinProgram() string {
+	id := assistantwire.AssistantID
+	if e.goos == "darwin" {
+		for _, label := range []string{managerconf.BuiltinLabel, compat.LegacyManagerLabel(id)} {
+			if job, ok := readLaunchdJob(filepath.Join(e.home, "Library", "LaunchAgents", label+".plist")); ok && len(job.args) > 0 {
+				return homePath(job.args[0], e.home)
+			}
+		}
+		return ""
+	}
+	for _, unit := range []string{managerconf.BuiltinService + ".service", compat.LegacyManagerUnit(id)} {
+		if p := e.unitProgram(unit); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// builtinActive says the built-in manager's service runs, under its name or its former one (on a Mac: launchd has the
+// agent).
+func (e *setupEnv) builtinActive(ctx context.Context) bool {
+	id := assistantwire.AssistantID
+	if e.goos == "darwin" {
+		for _, label := range []string{managerconf.BuiltinLabel, compat.LegacyManagerLabel(id)} {
+			if _, err := e.run(ctx, nil, "launchctl", "print", "gui/"+strconv.Itoa(e.uid)+"/"+label); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	for _, unit := range []string{managerconf.BuiltinService + ".service", compat.LegacyManagerUnit(id)} {
+		if _, err := e.run(ctx, nil, "systemctl", "--user", "is-active", "--quiet", unit); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // builtinOnline: the hub has the built-in manager on its bus as a service of its own (GET /api/v1/managers on loopback).

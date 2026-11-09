@@ -221,6 +221,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
+	enabled := s.inboxConfig(ctx).Agent.Enabled
 	owner := s.owner(ctx)
 	b.mu.Lock()
 	if cur := b.items[it.ID]; cur != it {
@@ -230,6 +231,14 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 			b.telling.CompareAndDelete(it.ID, mu)
 		}
 		b.mu.Unlock()
+		return
+	}
+	if !enabled {
+		w := b.releaseInboxAgent(it, time.Now())
+		b.mu.Unlock()
+		if w != nil {
+			s.saveWrites(ctx, []*inboxWrite{w}, "the disabled AI twin's work")
+		}
 		return
 	}
 	a := it.Agent
@@ -317,6 +326,8 @@ type suggestIn struct {
 	Cwd      string      `json:"cwd"`
 	Related  []string    `json:"related"`
 	Changes  []DocChange `json:"changes"`
+	// Item names the event: needed from a conversation it was handed to (Hand to AI, inbox_handoff.go).
+	Item string `json:"item"`
 }
 
 var errNotProcessing = i18n.ErrEnglish("inbox-errors.not_processing")
@@ -366,31 +377,48 @@ func (in *suggestIn) check() error {
 // suggest keeps the suggestion of the conversation sessionID on its event: the item's id, or a change the item does
 // not offer (nothing kept then); errNotProcessing when no event's conversation runs there.
 func (s *Service) suggest(ctx context.Context, sessionID string, in suggestIn) (string, *DocChange, error) {
+	id, refused, _, err := s.suggestFrom(ctx, sessionID, in)
+	return id, refused, err
+}
+
+// suggestFrom is suggest, also naming the conversation the event was handed to when the suggestion came from one
+// (in.Item; nil for the event's processing conversation).
+func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestIn) (string, *DocChange, *SessionRef, error) {
 	if err := in.check(); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if s.inboxReady(ctx) != nil {
-		return "", nil, errInboxUnavailable
+		return "", nil, nil, errInboxUnavailable
 	}
 	b := &s.inbox
 	b.mu.Lock()
-	it := b.itemOfAgent(sessionID)
-	// A conversation that answers before its start returned (an agent runtime already running starts a turn at
-	// once): its item learns the conversation's id a moment later.
-	for wait := time.Now().Add(inboxDraftWait); it == nil && b.agentStarting() && time.Now().Before(wait); {
-		b.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
-		b.mu.Lock()
+	var it *InboxItem
+	var from *SessionRef
+	if item := strings.TrimSpace(in.Item); item != "" {
+		var err error
+		if it, from, err = b.handedItem(item, sessionID); err != nil {
+			b.mu.Unlock()
+			return "", nil, nil, err
+		}
+	} else {
 		it = b.itemOfAgent(sessionID)
-	}
-	if it == nil {
-		b.mu.Unlock()
-		return "", nil, errNotProcessing
+		// A conversation that answers before its start returned (an agent runtime already running starts a turn at
+		// once): its item learns the conversation's id a moment later.
+		for wait := time.Now().Add(inboxDraftWait); it == nil && b.agentStarting() && time.Now().Before(wait); {
+			b.mu.Unlock()
+			time.Sleep(100 * time.Millisecond)
+			b.mu.Lock()
+			it = b.itemOfAgent(sessionID)
+		}
+		if it == nil {
+			b.mu.Unlock()
+			return "", nil, nil, errNotProcessing
+		}
 	}
 	for _, ch := range in.Changes {
 		if it.Doc == nil || !docOffers(*it.Doc, ch) {
 			b.mu.Unlock()
-			return it.ID, &ch, nil
+			return it.ID, &ch, nil, nil
 		}
 	}
 	now := time.Now().UTC()
@@ -402,7 +430,8 @@ func (s *Service) suggest(ctx context.Context, sessionID string, in suggestIn) (
 		relate(it, b.items[strings.TrimSpace(id)])
 	}
 	var card *MessageCard
-	if in.Kind == "" && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
+	stop := false
+	if from == nil && in.Kind == "" && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
 		// Only the recap: this turn changes nothing else, the event goes back to where it was.
 		back := it.Agent.Back
 		if it.Suggestion != nil || back == "" || back == HandlingLooking || back == HandlingFailed {
@@ -417,23 +446,32 @@ func (s *Service) suggest(ctx context.Context, sessionID string, in suggestIn) (
 		}
 		it.SuggestSeq++
 		g := &InboxSuggestion{Version: it.SuggestSeq, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
-			Handback: in.Handback, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd)}
+			Handback: in.Handback, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
 		if in.Kind == SuggestAgent {
 			if m, ok := s.machineByName(ctx, strings.TrimSpace(in.Machine)); ok {
 				g.MachineID = m.ID
 			}
 		}
 		it.Suggestion = g
-		it.Agent.Wake, it.Agent.Back = false, ""
-		b.setHandling(it, HandlingDone, "", now)
+		var link *InboxChainLink
+		if from == nil {
+			it.Agent.Wake, it.Agent.Back = false, ""
+			b.setHandling(it, HandlingDone, "", now)
+			link = &InboxChainLink{Type: LinkSession, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
+		} else {
+			clearDraft(it)
+			link = &InboxChainLink{Type: LinkSession, MachineID: from.MachineID, SessionID: from.SessionID}
+		}
 		l := b.userLang()
-		link := &InboxChainLink{Type: LinkSession, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
 		switch {
 		case in.Kind == SuggestConclusion:
 			b.chainAdd(it, InboxChainEntry{Kind: ChainConcluded, At: now, Text: i18n.T(l, "assistant-inbox_chain.concluded"), Detail: in.Text})
 			if in.Outcome == "done" {
 				it.Suggestion = nil
 				b.file(it, now, doneByManager)
+				if from != nil {
+					stop = b.closeHandling(it, "read", now) // a processing conversation still on it stops
+				}
 			} else {
 				it.Tier = TierFYI
 			}
@@ -446,7 +484,7 @@ func (s *Service) suggest(ctx context.Context, sessionID string, in suggestIn) (
 			}
 			b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now, Text: i18n.T(l, "assistant-inbox_chain."+key), Detail: clip(in.Text, 600), Link: link})
 		}
-		if in.Kind == SuggestReply {
+		if in.Kind == SuggestReply && from == nil {
 			card = messageCardOf(it)
 		}
 	}
@@ -457,12 +495,15 @@ func (s *Service) suggest(ctx context.Context, sessionID string, in suggestIn) (
 	// restart would lose. Undone, the event is back where the turn found it, so handing it in again works. One that
 	// something else moved meanwhile stays (that move's save writes the row) and goes on as kept.
 	if s.saveWrites(ctx, []*inboxWrite{w}, "its suggestion"); w.undone {
-		return id, nil, errInboxNotPersisted
+		return id, nil, from, errInboxNotPersisted
 	}
 	if card != nil {
 		s.messageCard(ctx, id, *card)
 	}
-	return id, nil, nil
+	if stop {
+		s.tellSoon(ctx, it)
+	}
+	return id, nil, from, nil
 }
 
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
@@ -479,7 +520,7 @@ func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.R
 	if err := json.Unmarshal(args, &in); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
 	}
-	_, refused, err := s.suggest(ctx, self, in)
+	_, refused, from, err := s.suggestFrom(ctx, self, in)
 	if err != nil {
 		return "", err
 	}
@@ -488,6 +529,9 @@ func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.R
 	}
 	if in.Kind == "" {
 		return "The recap is updated.", nil
+	}
+	if from != nil {
+		return "The suggestion is in the user's inbox; nothing goes out until they confirm. What they do with it is told here; later messages on the item are not.", nil
 	}
 	return "The suggestion is in the user's inbox; nothing goes out until they confirm. End this turn: what comes next (their answer, new messages) is sent here.", nil
 }
@@ -498,6 +542,11 @@ func (s *Service) inboxAgentStarted(ctx context.Context, self, machine, session,
 	if self == "" || session == "" || s.inboxReady(ctx) != nil {
 		return
 	}
+	if hs, ok := ctx.Value(handoffStartKey{}).(*handoffStart); ok {
+		s.handoffAgentStarted(hs, machine, session, prompt)
+		return
+	}
+	enabled := s.inboxConfig(ctx).Agent.Enabled
 	b := &s.inbox
 	b.mu.Lock()
 	it := b.itemOfAgent(self)
@@ -508,7 +557,7 @@ func (s *Service) inboxAgentStarted(ctx context.Context, self, machine, session,
 	now := time.Now()
 	b.chainAdd(it, InboxChainEntry{Kind: ChainAgent, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.agent",
 		i18n.Args{"title": clip(oneLine(prompt), 40)}), Link: &InboxChainLink{Type: LinkSession, MachineID: machine, SessionID: session}})
-	if it.Suggestion == nil {
+	if enabled && it.Suggestion == nil {
 		t := now.UTC()
 		it.Agent.StartedAt = &t
 		b.setHandling(it, HandlingAgent, "", now)
@@ -609,6 +658,7 @@ func (s *Service) inboxSuggestionRoutes() {
 // actOnSuggestion confirms, rejects or answers the item's current suggestion, at the version the user saw. full is
 // false for an answer-only device (the watch): it may only confirm a reply or a conclusion, as text.
 func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionReq, full bool) (InboxItem, error) {
+	enabled := s.inboxConfig(ctx).Agent.Enabled
 	b := &s.inbox
 	b.mu.Lock()
 	it := b.items[id]
@@ -634,6 +684,10 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		b.mu.Unlock()
 		return InboxItem{}, errAnswerOnly
 	}
+	if g.Conversation != nil {
+		return s.actOnHandedSuggestion(ctx, it, g, in, text) // it lets b.mu go
+	}
+	w := beginWrite(it)
 	if it.Agent == nil { // an old draft's item: its conversation's bookkeeping starts here
 		it.Agent = &InboxAgent{State: AgentSkipped}
 	}
@@ -648,13 +702,12 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	execute := in.Action == suggestConfirm && !g.Handback
 	switch {
 	case in.Action == suggestReject:
-		b.chainAdd(it, InboxChainEntry{Kind: ChainRejected, At: now.UTC(), Text: i18n.T(l, "assistant-inbox_chain.rejected"), Detail: clip(g.Text, 600)})
+		b.chainAdd(it, rejectedEntry(l, g.Text, now))
 		b.setHandling(it, HandlingLooking, "", now)
 		b.tell(it, inboxNote{Name: prompts.NoteRejected, Text: g.Text}, true, now)
 	case in.Action == suggestInstruct:
 		words := strings.TrimSpace(*in.Text)
-		b.chainAdd(it, InboxChainEntry{Kind: ChainInstructed, At: now.UTC(), Text: i18n.T(l, "assistant-inbox_chain.instructed",
-			i18n.Args{"text": clip(oneLine(words), 40)}), Detail: words})
+		b.chainAdd(it, instructedEntry(l, words, now))
 		b.setHandling(it, HandlingLooking, "", now)
 		b.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: words}, true, now)
 	case !execute: // handback: the conversation does it
@@ -668,11 +721,21 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	default:
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
 	}
+	if !enabled && !execute {
+		b.releaseInboxAgent(it, now)
+		b.settle(w)
+	}
 	last := it.Last
 	b.mu.Unlock()
 	if !execute || g.Kind == SuggestConclusion {
-		s.saveInbox(ctx, []*InboxItem{it})
-		if it.Agent != nil && len(it.Agent.Pending) > 0 {
+		if !enabled && !execute {
+			if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its suggestion response"); failed[it.ID] {
+				return InboxItem{}, errInboxNotPersisted
+			}
+		} else {
+			s.saveInbox(ctx, []*InboxItem{it})
+		}
+		if enabled && it.Agent != nil && len(it.Agent.Pending) > 0 {
 			s.tellSoon(ctx, it)
 		}
 		b.mu.Lock()
@@ -692,6 +755,15 @@ func confirmedEntry(l i18n.Lang, text string, edited bool, now time.Time) InboxC
 		key = "assistant-inbox_chain.confirmed_edited"
 	}
 	return InboxChainEntry{Kind: ChainConfirmed, At: now.UTC(), Text: i18n.T(l, key), Detail: text, Edited: edited}
+}
+
+func rejectedEntry(l i18n.Lang, text string, now time.Time) InboxChainEntry {
+	return InboxChainEntry{Kind: ChainRejected, At: now.UTC(), Text: i18n.T(l, "assistant-inbox_chain.rejected"), Detail: clip(text, 600)}
+}
+
+func instructedEntry(l i18n.Lang, words string, now time.Time) InboxChainEntry {
+	return InboxChainEntry{Kind: ChainInstructed, At: now.UTC(), Text: i18n.T(l, "assistant-inbox_chain.instructed",
+		i18n.Args{"text": clip(oneLine(words), 40)}), Detail: words}
 }
 
 // confirmReply sends the confirmed reply as shown (or as the user edited it) through the same once-only path as
@@ -738,6 +810,7 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 	}
 	args, _ := json.Marshal(map[string]string{"machine": machine, "cwd": cwd, "prompt": text})
 	res, err := s.runTool(ctx, s.settings(ctx).MachineID, self, "agent_start", args)
+	enabled := s.inboxConfig(ctx).Agent.Enabled
 	now := time.Now()
 	b.mu.Lock()
 	if err != nil {
@@ -756,6 +829,9 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 		b.setHandling(it, HandlingAgent, "", now)
 		b.tell(it, inboxNote{Name: prompts.NoteAgentStarted, Text: text, Edited: edited, Machine: machine, Session: session}, false, now)
 		_ = res
+	}
+	if !enabled {
+		b.releaseInboxAgent(it, now)
 	}
 	out := it.listed()
 	b.mu.Unlock()

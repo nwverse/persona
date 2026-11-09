@@ -24,13 +24,13 @@ struct RootView: View {
     private let flipped = false
     #endif
 
-    /// The ChatGPT-style shell (docs/apple/ios.md「新外壳」): an iPhone-width screen, unless Settings › Appearance › Old Layout is on.
+    /// The iPhone-width shell; regular-width and other platforms keep their own navigation.
     private var usesShell: Bool {
         #if os(visionOS)
         // Apple Vision Pro keeps the tabs, as the system's ornament (VisionShell), whatever the window's width.
         return false
         #elseif os(iOS)
-        return !model.oldLayout && (widthClass == .compact || flipped)
+        return widthClass == .compact || flipped
         #else
         return false
         #endif
@@ -39,6 +39,20 @@ struct RootView: View {
     /// The shell is on screen, and with it its toast window (`ToastWindow`): not on the welcome page, the engine step or
     /// the checklist after pairing (the same branches as `body`).
     private var shellShown: Bool { usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
+
+    /// The tabs are on screen at regular width (iPad, iPhone Duo open), with a toast window of
+    /// their own (`ToastWindowHook`): the same branches as `body`, with no extension page in the app's place.
+    private var tabsToastWindow: Bool {
+        #if os(iOS)
+        !usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
+        #else
+        false
+        #endif
+    }
+
+    /// The toasts are drawn in this view's overlay: where no toast window is up (the welcome page, the engine step, the
+    /// checklist, an extension page in the app's place, the Mac, Apple Vision Pro).
+    private var overlayToasts: Bool { model.extensionOpen != nil || !(shellShown || tabsToastWindow) }
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -54,7 +68,7 @@ struct RootView: View {
                 #if os(visionOS)
                 RootTabs().visionShell()
                 #elseif os(iOS)
-                if usesShell { ShellView() } else { RootTabs() }
+                if usesShell { ShellView() } else { RootTabs().background { ToastWindowHook() } }
                 #else
                 RootTabs()
                 #endif
@@ -99,9 +113,10 @@ struct RootView: View {
         // List and sheet below. UIKit scroll views (MonoTextView, the terminal, web views) turn theirs off themselves.
         .scrollIndicators(.hidden)
         .markdownInlineImageProvider(MathInlineImages()).markdownImageProvider(WebMarkdownImages()) // inline formulas in every Markdown (MathMarkdown)
-        // The shell shows the toasts in a window of its own, over its sheets too (`ToastWindow`). Before the shell is on
-        // screen there is no such window: a pairing link that failed on the welcome page said nothing (#4273).
-        .overlay(alignment: .top) { if !shellShown || model.extensionOpen != nil { ToastOverlay().padding(.top, toastClearance) } }
+        // On iOS the shell and the tabs show the toasts in a window of their own (`ToastWindow`), over their covers and
+        // sheets too: drawn here, the tabs' Saved to Photos was under the image viewer and the share card (#1492). Where
+        // there is no such window they are drawn here: a pairing link that failed on the welcome page said nothing (#4273).
+        .overlay(alignment: .top) { if overlayToasts { ToastOverlay().padding(.top, toastClearance) } }
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
         .onAppear { model.colorScheme.apply() }
@@ -151,16 +166,6 @@ struct RootView: View {
     @State private var pad = PadRouter()
     #endif
 
-    /// iPad (and iPhone Duo open) without Old Layout: Inbox and Settings are in Persona's sidebar, as in the iPhone's drawer,
-    /// not tabs (docs/apple/ios.md「iPad」, 2026-11-05 user). Old Layout keeps the four tabs; Apple Vision Pro keeps them too.
-    private var padSidebar: Bool {
-        #if os(iOS)
-        !model.oldLayout
-        #else
-        false
-        #endif
-    }
-
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("RootTabs")
@@ -172,19 +177,19 @@ struct RootView: View {
             #if os(iOS) || os(visionOS)
             if LarkHomePreference.shared.shows { FeishuRootTab() }
             #endif
-            if !padSidebar {
-                InboxRootTab()
-                SettingsRootTab()
-            }
+            #if !os(iOS)
+            InboxRootTab()
+            SettingsRootTab()
+            #endif
         }
         #if os(iOS)
-        .modifier(PadRoutes(router: pad, enabled: padSidebar))
+        .modifier(PadRoutes(router: pad))
         #endif
     }
 }
 
 #if os(iOS)
-/// Where the iPad's routes to Inbox and Settings land without their tabs (`RootTabs.padSidebar`): every route in the app still
+/// Where the iPad's routes to Inbox and Settings land without their tabs: every route in the app still
 /// sets `AppModel.selectedTab` (notifications, Siri, the inbox's rows…). `.mail` opens the inbox on the Persona tab's page,
 /// beside its sidebar; `.settings` the sheet, over the tab that was in front. As the iPhone's shell does (`ShellState.route`).
 @MainActor @Observable final class PadRouter: TabRouter {
@@ -208,7 +213,6 @@ struct RootView: View {
     }
 
     func route(_ t: AppTab, in model: AppModel) {
-        guard !model.oldLayout else { return detach(from: model) }
         switch t {
         case .mail:
             show(.inbox)
@@ -227,31 +231,25 @@ struct RootView: View {
 private struct PadRoutes: ViewModifier {
     @Environment(AppModel.self) private var model
     let router: PadRouter
-    var enabled: Bool
 
     func body(content: Content) -> some View {
-        if enabled {
-            @Bindable var model = model
-            content
-                .environment(\.padRouter, router)
-                .sheet(isPresented: $model.shellSettings) {
-                    // As the shell's: the look is its identity too (the sheet outlives RootView's rebuild for a new look).
-                    SettingsView()
-                        .environment(\.settingsSheet, true)
-                        .id(model.look)
-                        // The page's height, not the form's: Settings is a long list.
-                        .presentationSizing(.page)
-                }
-                .onAppear { router.attach(to: model) }
-                .onDisappear { router.detach(from: model) }
-        } else {
-            content
-        }
+        @Bindable var model = model
+        content
+            .environment(\.padRouter, router)
+            .sheet(isPresented: $model.shellSettings) {
+                // The sheet outlives RootView's rebuild for a new look, so its identity follows the look too.
+                SettingsView()
+                    .environment(\.settingsSheet, true)
+                    .id(model.look)
+                    .presentationSizing(.page)
+            }
+            .onAppear { router.attach(to: model) }
+            .onDisappear { router.detach(from: model) }
     }
 }
 
 extension EnvironmentValues {
-    /// Set on the iPad's tabs when Inbox and Settings are in Persona's sidebar (`RootTabs.padSidebar`); nil otherwise.
+    /// Set on the iPad's tabs, where Inbox and Settings live in Persona's sidebar; nil elsewhere.
     @Entry var padRouter: PadRouter?
 }
 #endif

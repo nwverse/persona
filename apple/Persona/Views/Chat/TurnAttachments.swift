@@ -180,6 +180,10 @@ struct ViewedImagesRow: View, Equatable {
                     Text(caption).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .padding(Theme.Space.m)
+                // The preview is drawn in the context menu's own host, which the app's environment does not reach: the
+                // thumbnail's model was missing there and the app crashed on a long press (#1490).
+                .environment(model)
+                .environment(\.fileScope, scope)
             }
     }
     @Namespace private var fallbackZoom
@@ -267,7 +271,7 @@ struct ViewedImageThumb: View {
             } else if let p = image.payload, retries.attempt(p) > 0 { // asked again: the tap shows it was taken
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Image(systemName: symbol).font(Theme.Font.secondary).foregroundStyle(.tertiary)
+                ThemedIcon(symbol).font(Theme.Font.secondary).foregroundStyle(.tertiary)
             }
         }
         .scaledFrame(width: tileWidth(aspect, height: height), height: height)
@@ -276,7 +280,7 @@ struct ViewedImageThumb: View {
         .overlay(alignment: .bottomLeading) {
             // Not over the not-loaded placeholder on a small tile.
             if badge, !showsNotLoaded, image.source == .screenshot || image.source == .browser {
-                Image(systemName: symbol)
+                ThemedIcon(symbol)
                     .font(Theme.Font.labelStrong)
                     .foregroundStyle(.white)
                     .scaledFrame(width: Theme.Size.iconXS, height: Theme.Size.iconXS)

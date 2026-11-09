@@ -13,6 +13,9 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var launcher: String?
     var model: String?
     var permission: String?
+    /// Claude Code's ultracode for this task (#12): the assistant's choice; on start, true / false replaces it and left
+    /// out keeps it (PlanUltracode.swift).
+    var ultracode: Bool?
     var readonly: Bool?
     var why: String?
     /// Set once started: the todo the task is, and why its agent did not start.
@@ -20,7 +23,7 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     var error: String?
 
     enum CodingKeys: String, CodingKey {
-        case title, prompt, machine, cwd, launcher, model, permission, readonly, why, error
+        case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error
         case todoID = "todo_id"
     }
 
@@ -146,6 +149,9 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var steps: Int? { if case .object(let o)? = body { o["steps"]?.int } else { nil } }
     /// `routed`: Persona stopped the agent's turn first and then told it (agent_interrupt with then, #5112).
     var interrupted: Bool { if case .object(let o)? = body { o["interrupted"]?.bool == true } else { false } }
+    /// `routed`: Persona wrote it to the task's agent (agent_send with a task, agent_interrupt's then, a rework; #1542), so
+    /// it is drawn folded as Persona's (`AgentSentLine`), never as the user's bubble. What the user sent has no `from`.
+    var sentByPersona: Bool { kind == .routed && string("from") == "assistant" }
 
     /// `today`: the day's card (TodayBody).
     var today: TodayBody? {
@@ -157,6 +163,51 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var prLabel: String? {
         guard let pr, let n = pr.split(separator: "/").last, Int(n) != nil else { return nil }
         return "PR #\(n)"
+    }
+}
+
+/// What Persona sent to its tasks' agents in a conversation's feed (#1542, docs/assistant/unified-entry.md "Messages to agents"):
+/// a task's card lists them, the hand-off sent with the card is drawn only there, a later one is a folded line.
+nonisolated enum SentToAgents {
+    /// How long after its task's card a message of Persona's counts as the card's hand-off: agent_send with a task writes
+    /// the card and, right after it, what it sent.
+    static let handOff: TimeInterval = 60
+
+    /// The hand-offs the task cards take in (not drawn on their own): Persona's messages within `handOff` after their own
+    /// task's card in the same conversation. Only a card drawn in full (from today, `FeedLine`) has the list: from another
+    /// day it is one line (`TaskLine`), and its hand-off stays a folded line under it (#1668).
+    static func takenIn(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> Set<String> {
+        var cards: [String: [Date]] = [:]
+        for item in feed where item.kind == .task && calendar.isDate(item.at, inSameDayAs: now) {
+            if let ref = item.ref { cards[item.conversation + "/" + ref, default: []].append(item.at) }
+        }
+        guard !cards.isEmpty else { return [] }
+        var out: Set<String> = []
+        for item in feed where item.sentByPersona {
+            guard let ref = item.ref, let ats = cards[item.conversation + "/" + ref] else { continue }
+            if ats.contains(where: { $0 <= item.at && item.at.timeIntervalSince($0) <= handOff }) { out.insert(item.id) }
+        }
+        return out
+    }
+
+    /// The feed without the hand-offs the cards take in: what the chat draws among its lines.
+    static func shown(_ feed: [FeedItem], now: Date = .now, calendar: Calendar = .current) -> [FeedItem] {
+        let hidden = takenIn(feed, now: now, calendar: calendar)
+        return hidden.isEmpty ? feed : feed.filter { !hidden.contains($0.id) }
+    }
+
+    /// Persona's messages to task `todo`, oldest first: what its card lists.
+    static func sent(_ feed: [FeedItem], todo: String) -> [FeedItem] {
+        feed.filter { $0.sentByPersona && $0.ref == todo }.sorted { ($0.at, $0.id) < ($1.at, $1.id) }
+    }
+
+    /// The first line with words in it, trimmed: what a folded message shows.
+    static func firstLine(_ text: String) -> String {
+        for line in text.split(whereSeparator: \.isNewline) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty { return t }
+        }
+        return ""
     }
 }
 
@@ -263,17 +314,28 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// The main conversation supervises it (#3124, `Supervision.swift`): what done means, its reviews, its agent's
     /// latest report. Nil for a todo that is not supervised, from an older hub, or when it does not decode.
     var supervision: TaskSupervision?
+    /// When it is due (#1683, docs/assistant/todos.md "Due date, reminder, priority"): a moment, or a day ("yyyy-MM-dd",
+    /// due by its end in the user's time zone); at most one. Nil from a hub without them.
+    var dueAt: Date?
+    var dueDate: String?
+    /// When the phone is pushed about it, and when that was done (a new time is pushed again).
+    var remindAt: Date?
+    var remindedAt: Date?
+    /// "high" or "low"; nil is normal.
+    var priority: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority
         case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", planID = "plan_id", startError = "start_error",
-             doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url"
+             doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
+             remindAt = "remind_at", remindedAt = "reminded_at"
     }
 
     init(id: String, title: String, notes: String? = nil, doneAt: Date? = nil, createdAt: Date? = nil, updatedAt: Date? = nil,
          origin: String? = nil, planID: String? = nil, startError: String? = nil, doneBy: String? = nil, doneReason: String? = nil,
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
-         supervision: TaskSupervision? = nil) {
+         supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
+         remindedAt: Date? = nil, priority: String? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -291,6 +353,11 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.stage = stage
         self.prURL = prURL
         self.supervision = supervision
+        self.dueAt = dueAt
+        self.dueDate = dueDate
+        self.remindAt = remindAt
+        self.remindedAt = remindedAt
+        self.priority = priority
     }
 
     init(from decoder: Decoder) throws {
@@ -314,6 +381,12 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         prURL = try c.decodeIfPresent(String.self, forKey: .prURL)
         // Optional and new (#3124): one that does not decode is as if there were none, never the whole todo failing.
         supervision = (try? c.decodeIfPresent(TaskSupervision.self, forKey: .supervision)) ?? nil
+        // New (#1683): absent from older hubs; one that does not decode is as if there were none.
+        dueAt = (try? c.decodeIfPresent(Date.self, forKey: .dueAt)) ?? nil
+        dueDate = (try? c.decodeIfPresent(String.self, forKey: .dueDate)) ?? nil
+        remindAt = (try? c.decodeIfPresent(Date.self, forKey: .remindAt)) ?? nil
+        remindedAt = (try? c.decodeIfPresent(Date.self, forKey: .remindedAt)) ?? nil
+        priority = (try? c.decodeIfPresent(String.self, forKey: .priority)) ?? nil
     }
 
     var activeAgents: [Agent] { agents.filter(\.isActive) }
@@ -371,9 +444,10 @@ extension QuietTasks {
 /// Shaping of the cards the watch pulls itself from GET /api/v1/interactions.
 nonisolated enum WatchInteractions {
     /// A muted agent's or space's card stays off the watch entirely (#4360): no row and no buzz when it arrives,
-    /// like the phone's Agents badge and inbox. The hub stamps `muted`; an older hub leaves it false.
+    /// like the phone's Agents badge and inbox. The hub stamps `muted`; an older hub leaves it false. A question the
+    /// assistant is still looking at stays off too (#544): it buzzes once it is handed to the user.
     static func leavingMuted(_ interactions: [Interaction]) -> [Interaction] {
-        interactions.filter { !$0.muted }
+        interactions.filter { !$0.muted && !$0.isDelegating }
     }
 
     /// The cards the watch has not shown yet: only these are worth a buzz. Called after the muted ones are out, so a
@@ -565,7 +639,7 @@ nonisolated extension APIClient {
     }
 
     private struct PlanResponse: Decodable { var plan: TaskPlan }
-    private struct TodosResponse: Decodable { var todos: [TodoItem] }
+    nonisolated private struct TodosResponse: Decodable, Sendable { var todos: [TodoItem] }
     private struct ItemResponse: Decodable { var item: FeedItem }
 
     /// A conversation's feed after `since` (nil: all of it), with the plans its `plan` items name.
@@ -577,7 +651,7 @@ nonisolated extension APIClient {
     }
 
     func todos() async throws -> [TodoItem] {
-        try await get("/api/v1/todos", as: TodosResponse.self).todos
+        try await getDecodedOffMain("/api/v1/todos", as: TodosResponse.self).todos
     }
 
     /// Starts an open plan; `edits` replace the fields the user changed (by index), `remember` lets this kind start

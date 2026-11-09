@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -29,8 +30,9 @@ func (n *Node) startingSession(id string) bool {
 }
 
 // transcriptPath finds <config dir>/projects/*/<id>.jsonl. One session can have a file in two config directories
-// (resumed under another profile: the new writes go to the new copy, the old one stays): the newest is the one.
-// A path a hook reported is Claude's own word; one found here is looked for again after half a minute.
+// (resumed under another profile or copied to another project: the new writes go to the new copy, the old one stays):
+// the newest is the one. A known path, reported by a hook or found here, is looked for again after half a minute, and
+// stays a candidate: a hook may name a file outside the directories searched.
 func (n *Node) transcriptPath(id string) string {
 	p := n.findTranscriptPath(id)
 	if !n.scopedTranscriptAllows(p) {
@@ -60,17 +62,23 @@ func (n *Node) findTranscriptPath(id string) string {
 	}
 	n.mu.Lock()
 	p := n.paths[id]
-	at, guessed := n.pathsAt[id]
+	at, fresh := n.pathsAt[id]
 	n.mu.Unlock()
-	if p != "" && (!guessed || time.Since(at) < 30*time.Second) {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
+	known := p != "" && fileExists(p)
+	if known && fresh && time.Since(at) < 30*time.Second {
+		return p
 	}
 	if !validID(id) {
+		if known {
+			return p
+		}
 		return ""
 	}
-	matches := newestFirst(n.globProjects("*", id+".jsonl"))
+	matches := n.globProjects("*", id+".jsonl")
+	if known && !slices.Contains(matches, p) {
+		matches = append(matches, p)
+	}
+	matches = newestFirst(matches)
 	if len(matches) == 0 {
 		if p := n.codexPath(id); p != "" {
 			matches = []string{p}
@@ -80,11 +88,12 @@ func (n *Node) findTranscriptPath(id string) string {
 			return ""
 		}
 	}
-	n.setGuessedPath(id, matches[0])
+	n.setPath(id, matches[0])
 	return matches[0]
 }
 
-func (n *Node) setGuessedPath(id, p string) {
+// setPath remembers session id's transcript path; transcriptPath looks for a newer copy after half a minute.
+func (n *Node) setPath(id, p string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.paths[id] = p
@@ -119,12 +128,7 @@ func (n *Node) file(id string) (*transcript.File, error) {
 	}
 	n.mu.Unlock()
 	if f != nil {
-		if old := f.Where(); !fileExists(old) {
-			// Moved since it was opened (a Codex thread archived or restored): it was read from a path that is gone.
-			if p := n.transcriptPath(id); p != "" && p != old {
-				f.Relocate(p)
-			}
-		}
+		n.followCopy(id, f)
 		return f, nil
 	}
 	if _, _, sub := splitSubagent(id); sub {
@@ -179,6 +183,16 @@ func (n *Node) warmTranscripts(ctx context.Context) {
 		if f, err := n.file(id); err == nil {
 			n.refresh(id, f)
 		}
+	}
+}
+
+// followCopy points an open transcript at the file transcriptPath names now, when that is another: moved since it was
+// opened (a Codex thread archived or restored), or a newer copy took over (resumed in another project or profile, or
+// copied when its working directory moved). The session list's rev and updated_at read that file, so the items must
+// too (#1423). Relocate to another inode starts over.
+func (n *Node) followCopy(id string, f *transcript.File) {
+	if p := n.transcriptPath(id); p != "" && p != f.Where() {
+		f.Relocate(p)
 	}
 }
 

@@ -77,7 +77,7 @@ func (d *DB) ReviewDoneTodo(ctx context.Context, id, reason string, at time.Time
 	var r TodoRow
 	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, updated_at = $2
 		WHERE id = $1 AND done_at IS NULL RETURNING `+todoColumns, id, at, DoneByReview, reason).
-		Scan(&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy, &r.DoneReason, &r.ReopenedAt, &r.Quiet)
+		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if _, gerr := d.GetTodo(ctx, id); gerr != nil {
 			return nil, false, gerr

@@ -13,6 +13,7 @@
   "not_in_market": "This marketplace has no extension {id}",
   "token_and_token_from": "Give either token or token_from, not both",
   "official_name": "Official extensions",
+  "pin_rotated_pending": "The official signing key was updated. Installation stays blocked until the catalog verifies with the new key",
   "settings_load_failed": "Could not load marketplace mirror settings. Retry.",
   "settings_save_failed": "Could not save marketplace mirror settings. Retry.",
   "settings_invalid": "Invalid mirror URL. Use HTTPS without credentials, query, or fragment; the catalog needs its complete JSON URL."

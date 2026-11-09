@@ -57,7 +57,7 @@
   "err_purpose_not_found": "このモデルの用途はありません",
   "err_read_tasks": "定期タスクを読み込めません",
   "err_read_config": "モデル設定を読み込めませんでした: {error}",
-  "err_launcher_not_responses": "ランチャーはResponses APIとして使えません",
+  "err_launcher_not_responses": "ランチャーはこのAPI接続として使えません",
   "err_key_decrypt": "プロバイダーのキーを復号できませんでした",
   "err_not_callable": "このプロバイダーのAPIはハブから直接呼び出せません",
   "err_not_api": "APIプロバイダーではありません",
@@ -82,11 +82,14 @@
   "err_not_launcher": "この用途はランチャーではありません",
   "triage_in_use": "次の拡張機能は「メッセージの振り分け」で受信トレイを振り分けています：{names}。このモデルを変更する前に、設定 › 拡張機能 でオフにしてください",
   "list_separator": "、",
-  "err_api_as_launcher": "この用途はResponsesプロトコルの直接API接続を参照しているため、ランチャーとして実行できません",
+  "err_api_as_launcher": "この用途の直接API接続はランチャーとして実行できません",
   "err_runtime_invalid": "実行方式はcliまたはagentsdkにしてください",
   "err_runtime_assistant_only": "実行方式を選べるのはメインチャットだけです",
   "use_delegate": "エージェントの質問に代わりに答えるかの判断",
   "source_delegate_default": "振り分けと同じ接続（{provider}）、モデルは {model}",
   "source_delegate_connection": "振り分けと同じ接続（{provider}）",
-  "source_auto_named": "自動選択：{provider}（ハブから直接呼び出せる接続）"
+  "source_auto_named": "自動選択：{provider}（ハブから直接呼び出せる接続）",
+  "err_model_invalid": "モデル ID {model} は使えません：英字か数字（または ~ とそれに続く英字か数字）で始まり、英字・数字と . _ - / : @ [ ] だけの 256 文字以内にしてください",
+  "custom_model_description": "以前に使ったモデル ID",
+  "err_role_forget": "モデル ID を削除するにはフルアクセスが必要です。"
 }

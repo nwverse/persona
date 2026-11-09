@@ -3,6 +3,7 @@ package persona.core.domain.answer
 import persona.core.contracts.Interaction
 import persona.core.contracts.Question
 import persona.core.contracts.Resolution
+import persona.core.contracts.SecretRunRequest
 
 enum class AnswerAction(val wire: String) {
     ApproveAll("approve_all"), ApproveEdits("approve_edits"), ApproveStepwise("approve_stepwise"), Reject("reject"), Allow("allow"),
@@ -35,6 +36,8 @@ data class AnswerDraft(
     val fields: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
     // Runtime evidence only; never written to the draft journal or sent as content.
     val openedElicitationUrl: String? = null,
+    /** A password card's typed password, from its own form at the moment of Run; never written to the draft journal. */
+    val password: String = "",
 )
 
 data class AnswerResult(
@@ -63,6 +66,9 @@ object AnswerBuilder {
         fun blocked() = AnswerResult(false, draft = draft)
         fun resolved(resolution: Resolution) = AnswerResult(true, resolution, draft)
         if (context.state != "pending" || context.sending) return blocked()
+        // A password card takes only its own two answers (#1581); no other card's answer carries a typed password.
+        val passwordRulesMet = if (interaction.isSecretRun) secretRunAnswer(action, draft, context) else draft.password.isEmpty()
+        if (!passwordRulesMet) return blocked()
         if (action in setOf(AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation)) {
             if (interaction.kind != "elicitation" || context.entry != AnswerEntry.Conversation || context.locked) return blocked()
             return when (action) {
@@ -114,8 +120,10 @@ object AnswerBuilder {
         // Reasons and feedback are mutually exclusive with approval across all entries.
         if (action in listOf(AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise) &&
             (context.rejecting || draft.feedback.isNotEmpty())) return blocked()
+        // Allowing a card with fields needs their values: only a password card's Run carries one (checked above); other
+        // cards with fields have no form here (#4987).
         if (action in listOf(AnswerAction.Allow, AnswerAction.Always) &&
-            (draft.message.isNotEmpty() || interaction.needsFieldValues)) return blocked()
+            (draft.message.isNotEmpty() || (interaction.needsFieldValues && draft.password.isEmpty()))) return blocked()
         if (action == AnswerAction.Deny && draft.message.length > 4000) return blocked()
         if (context.entry == AnswerEntry.Notification && policyId == ApprovalAction.ChooseOption) {
             val validOption = when (action) {
@@ -132,7 +140,8 @@ object AnswerBuilder {
             AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise -> resolved(Resolution(approve = true, mode = policy.mode))
             AnswerAction.Reject -> resolved(Resolution(approve = false, feedback =
                 if (context.entry == AnswerEntry.Notification) draft.feedback.trim() else draft.feedback))
-            AnswerAction.Allow -> resolved(Resolution(allow = true))
+            AnswerAction.Allow -> resolved(Resolution(allow = true,
+                values = draft.password.takeIf { it.isNotEmpty() }?.let { mapOf(SecretRunRequest.PASSWORD to it) }))
             AnswerAction.Always -> resolved(Resolution(allow = true, always = true))
             AnswerAction.Deny -> {
                 if (policy.input == "none" && draft.message.isNotEmpty()) return blocked()
@@ -154,6 +163,19 @@ object AnswerBuilder {
             AnswerAction.TerminalKeys -> if (draft.keys.isEmpty()) blocked() else resolved(Resolution(keys = draft.keys))
             AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation -> blocked()
         }
+    }
+
+    /**
+     * A password card (#1137, #1581) takes two answers. Run: an Allow from the card's own form in the conversation, carrying
+     * the typed password and nothing else (sent under [SecretRunRequest.PASSWORD]). Decline: a Deny with nothing typed,
+     * from any entry. Every other answer, and a Run from a quick entry (notification, lock screen, watch, shortcut), is
+     * refused. A password of only spaces is refused too: the hub would answer the card with `refused` and run nothing.
+     */
+    private fun secretRunAnswer(action: AnswerAction, draft: AnswerDraft, context: AnswerContext): Boolean = when (action) {
+        AnswerAction.Allow -> context.entry == AnswerEntry.Conversation && draft.password.isNotBlank() &&
+            draft == AnswerDraft(password = draft.password)
+        AnswerAction.Deny -> draft.message.isEmpty() && draft.password.isEmpty()
+        else -> false
     }
 
     private fun question(questions: List<Question>, action: AnswerAction, draft: AnswerDraft): AnswerResult {

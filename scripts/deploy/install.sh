@@ -5,7 +5,8 @@
 #   curl -fsSL <site>/install.sh | sh
 #
 # Puts the binary for this system at ~/.persona/bin/personad (where the hub looks for it on every computer it reaches
-# over ssh), after checking it against the published SHA256SUMS. PERSONA_DL=<url> installs from somewhere else.
+# over ssh), after checking it against the published SHA256SUMS; on the computer that runs the hub, persona-hub and
+# persona-manager beside it too (docs/server/server.md "Programs"). PERSONA_DL=<url> installs from somewhere else.
 #
 # One hub is enough for a home (docs/archive/operations/plan-hub-center.md section 0); every other computer gets the node service: the
 # resident node and the connector persona-link, paired with the hub (docs/operations/link.md "Installing the node service"):
@@ -238,6 +239,12 @@ fetch "$DL/SHA256SUMS" "$tmp/SHA256SUMS" || fail "could not download $DL/SHA256S
 
 # get <name> <installed as>: downloads <name>.gz, checks it against SHA256SUMS and puts it in $DEST.
 get() {
+	fetch_checked "$1"
+	place "$1" "$2"
+}
+
+# fetch_checked <name>: downloads <name>.gz, checks it against SHA256SUMS and unpacks it to $tmp/<name>.
+fetch_checked() {
     source=$(artifact_name "$1") || return 1
 	archive="$source.gz"
 	fetch "$DL/$archive" "$tmp/$archive" || fail "could not download $DL/$archive"
@@ -246,6 +253,10 @@ get() {
 	[ "$(sum "$tmp/$archive")" = "$want" ] || fail "checksum mismatch for $archive: not installed"
 	gzip -dc "$tmp/$archive" > "$tmp/$1" || fail "could not unpack $archive: not installed"
 	[ -s "$tmp/$1" ] || fail "$archive contains an empty binary: not installed"
+}
+
+# place <name> <installed as>: puts $tmp/<name> (fetch_checked) in $DEST.
+place() {
 	prepare_state
 	mkdir -p "$DEST" || fail "could not create $DEST: not installed"
 	# Copied beside the old one first, then renamed over it: the temporary directory can be another file system, and a
@@ -272,14 +283,97 @@ get_node_program() {
 	echo "persona-node $("$DEST/persona-node" version 2>/dev/null || echo unknown) installed at $DEST/persona-node"
 }
 
+# The hub's and the built-in manager's own programs (docs/server/server.md "Programs"), on the computer that runs the
+# hub: the same build as personad, installed with it, so that a service that runs one never runs an older one. A
+# release without one leaves the file here as it was, unless a service runs it: then nothing is installed (the service
+# would go on starting the older one beside the new personad). Other computers do not get them.
+HUB_PROGRAMS="persona-hub persona-manager"
+in_release() { awk -v n="$1.gz" '$2 == n || $2 == "*" n { found = 1 } END { exit !found }' "$tmp/SHA256SUMS"; }
+# runs_hub: this computer runs the hub (--hub, a hub.json), or has the hub's programs from before.
+runs_hub() {
+	if [ "$ROLE" = hub ] || [ -f "$STATE/hub.json" ]; then return 0; fi
+	for p in $HUB_PROGRAMS; do
+		if [ -e "$DEST/$p" ]; then return 0; fi
+	done
+	return 1
+}
+# unit_forms <path>: the ways a systemd unit names <path>: as is, with systemd's %% and $$, and inside quotes as the
+# hub's setup and hub-systemd.sh write it (\\ and \" too). One per line.
+unit_forms() { printf '%s\n' "$1" "$1" "$1" | sed '2s/%/%%/g; 2s/\$/$$/g; 3s/[\\"]/\\&/g; 3s/%/%%/g; 3s/\$/$$/g'; }
+# service_runs <program>: prints a file here that names $DEST/<program> (in a form of unit_forms, or under %h), or fails
+# when there is none: a systemd unit or drop-in with it in an ExecStart line (any section; key and = may have spaces
+# around them), or a launchd property list with it in a <string>. Followed by a space, a quote, "<" or the line's end:
+# persona-hub.prev is not persona-hub. Wider than the hub's own check (docs/operations/hub-update.md "Programs swapped
+# together"): a unit a later drop-in took back to personad, a disabled one and a wrapper (sh -c '...') count too.
+service_runs() {
+	forms=$(unit_forms "$DEST/$1")
+	case $DEST in "$HOME"/*) forms="$forms
+$(unit_forms "${DEST#"$HOME"}/$1" | sed 's/^/%h/')" ;; esac
+	config="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user" data="${XDG_DATA_HOME:-$HOME/.local/share}/systemd/user"
+	for f in "$config"/*.service "$config"/*.service.d/*.conf /etc/systemd/user/*.service /etc/systemd/user/*.service.d/*.conf \
+		"$data"/*.service "$data"/*.service.d/*.conf /usr/lib/systemd/user/*.service /usr/lib/systemd/user/*.service.d/*.conf \
+		/etc/systemd/system/*.service /etc/systemd/system/*.service.d/*.conf /usr/lib/systemd/system/*.service \
+		/usr/lib/systemd/system/*.service.d/*.conf \
+		"$HOME"/Library/LaunchAgents/*.plist /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
+		[ -f "$f" ] || continue
+		# The paths go in through the environment: awk -v would read backslashes in them as escapes.
+		if SERVICE_FORMS="$forms" awk '
+			function names(s, p,  i, c) {
+				i = index(s, p)
+				if (p == "" || !i) return 0
+				c = substr(s, i + length(p), 1)
+				return c == "" || c == " " || c == "\t" || c == "\"" || c == "'\''" || c == "<"
+			}
+			BEGIN { n = split(ENVIRON["SERVICE_FORMS"], form, "\n") }
+			/^[ \t]*ExecStart[ \t]*=/ || /<string>/ { for (k = 1; k <= n; k++) if (names($0, form[k])) { found = 1; exit } }
+			END { exit !found }' "$f"; then
+			echo "$f"
+			return 0
+		fi
+	done
+	return 1
+}
+# hub_programs: the ones this release has, as words; fails when it lacks one that a service here runs.
+hub_programs() {
+	for p in $HUB_PROGRAMS; do
+		if in_release "$p-$os-$arch"; then
+			printf '%s ' "$p"
+		elif [ -e "$DEST/$p" ] && by=$(service_runs "$p"); then
+			fail "this release has no $p for $os-$arch, and $by runs $DEST/$p: it would stay older than personad. Not installed; install a release that has it"
+		elif [ -e "$DEST/$p" ]; then
+			echo "this release has no $p for $os-$arch: $DEST/$p stays as it was (no service runs it)" >&2
+		fi
+	done
+}
+# get_hub_programs [personad]: the hub's programs (and personad first with "personad"), each downloaded and checked
+# before any is put in place. Once only.
+get_hub_programs() {
+	[ -z "${HUB_PROGRAMS_FETCHED:-}" ] || return 0
+	programs=$(hub_programs) || exit 1
+	if [ "${1:-}" = personad ]; then fetch_checked "$name"; fi
+	for p in $programs; do fetch_checked "$p-$os-$arch"; done
+	if [ "${1:-}" = personad ]; then place "$name" personad; fi
+	for p in $programs; do
+		place "$p-$os-$arch" "$p"
+		echo "$p $("$DEST/$p" version 2>/dev/null || echo unknown) installed at $DEST/$p"
+	done
+	HUB_PROGRAMS_FETCHED=1
+}
+
 # The node service given up front (--node) on a device: persona-node and Persona Link, no personad. Everything else:
-# personad, as before (the questions below may add persona-node: node_service).
+# personad, as before (the questions below may add persona-node: node_service); with the hub's programs on the
+# computer that runs the hub.
 if [ "$ROLE" = node ] && has_node_build && ! hosts_hub_or_manager; then
 	get_node_program
 	program=persona-node
 	# A personad here from before (the node service may still run it) is brought up to date too: it is what the
 	# service goes back to when the switch to persona-node does not work out.
 	if [ -e "$DEST/personad" ]; then get "$name" personad; fi
+elif runs_hub; then
+	get_hub_programs personad
+	program=personad
+	version="$("$DEST/personad" version 2>/dev/null || echo unknown)"
+	echo "personad $version installed at $DEST/personad"
 else
 	get "$name" personad
 	program=personad
@@ -474,6 +568,7 @@ fi
 # QR code and the admin URL, docs/assistant/onboarding.md 4.1). Running it again is safe, so an upgrade with --hub runs it too.
 if [ "$ROLE" = hub ]; then
 	unswitch_node
+	get_hub_programs # the person said so at the question above, after personad was installed
 	echo ""
 	echo "接着把这台电脑设成 hub（$DEST/personad hub setup）："
 	if "$DEST/personad" hub setup; then

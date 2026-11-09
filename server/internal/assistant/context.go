@@ -109,6 +109,7 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	snap.Approvals = s.snapshotApprovals(ctx, web)
 	snap.Unaccepted, snap.UnacceptedTotal = s.snapshotUnaccepted(ctx, loc)
 	snap.Plans, snap.PlansTotal = s.snapshotPlans(ctx, loc, now)
+	snap.Asked = s.snapshotAsked(ctx)
 	if e, err := s.kbGet(ctx); err == nil {
 		snap.KB = e.Prompt(6, 8)
 	}
@@ -120,6 +121,14 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	cs.snap, cs.at, cs.snapping = &snap, time.Now(), nil
 	cs.mu.Unlock()
 	close(done)
+}
+
+// snapshotStale makes the next message take a new snapshot (what it holds just changed).
+func (s *Service) snapshotStale() {
+	cs := &s.live
+	cs.mu.Lock()
+	cs.at = time.Time{}
+	cs.mu.Unlock()
 }
 
 // ProfileChanged makes the next message take a new snapshot (the time zone changed), and the settings be read again
@@ -306,10 +315,7 @@ func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now 
 	// Runs are kept in the order they ended, At is when they started: a long run recorded late sits after a later
 	// one, so the whole history (at most maxRuns) is looked through, not cut at the first run before since.
 	var all []prompts.SnapshotMiss
-	for _, r := range sc.runs {
-		if r.At.Before(since) || r.Status != runFailed && r.Status != runSkipped {
-			continue
-		}
+	for _, r := range sc.missedRuns(since) {
 		all = append(all, prompts.SnapshotMiss{At: r.At.In(loc), Label: clip(r.Title, 30), Why: clip(oneLine(r.Error), 60),
 			Skipped: r.Status == runSkipped})
 	}

@@ -26,7 +26,7 @@ func TestEnglishOriginInboxErrors(t *testing.T) {
 
 func TestInboxTextCatalogRoundTrip(t *testing.T) {
 	for _, from := range []Lang{En, ZhHans, Ja} {
-		for key := range catalogs[from] {
+		for key := range catalogs()[from] {
 			if !strings.HasPrefix(key, "inbox-errors.") {
 				continue
 			}

@@ -17,6 +17,10 @@ on:
         required: true
 permissions:
   contents: read
+concurrency:
+  # A file-specific prefix cannot collide with the CI caller's group.
+  group: apple-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}-${{ inputs.lane || 'ios' }}
+  cancel-in-progress: true
 jobs:
   apple:
     name: ${{ inputs.lane == 'macos' && 'macOS builds and unit tests (Xcode 26.0)' || 'iOS, Watch and HTML tests (Xcode 26.0)' }}
@@ -33,6 +37,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Initialize pinned Xcode
+        run: |
+          source scripts/ci/common.sh
+          # Background platform services use the system selection, not just this shell's environment.
+          ci_run 'Select system Xcode 26.0' 60 sudo xcode-select --switch "$DEVELOPER_DIR"
+          ci_run 'Initialize Xcode 26.0 platform services' 900 sudo env DEVELOPER_DIR="$DEVELOPER_DIR" xcodebuild -runFirstLaunch
+          ci_run 'Verify system Xcode selection' 60 xcode-select --print-path
       - name: Install project generation tools
         run: brew install xcodegen
       - uses: actions/cache@v4

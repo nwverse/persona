@@ -1,5 +1,12 @@
 # CLAUDE.md
 
+## Highest-priority rules
+
+Read [the super rules](docs/SUPER_RULES.md) before acting. They take precedence over this file, `AGENTS.md`, and all
+other repository documentation. Changes to the super-rules file, including additions and deletions, require a
+GitHub issue and explicit approval from administrator `chyroc` in that issue before editing or opening a PR.
+The PR must link the approved issue. No Agent or delegated task may bypass this requirement, even to fix a failing check.
+
 Persona is a self-hosted personal SuperAgent. A Go server, `personad`, runs as the **hub** on an always-on machine and holds all state;
 the clients (iPhone, Apple Watch, Mac, Vision Pro, Android and the web) talk only to the hub. Each of your computers runs a **node**
 (connected to the hub through Persona Link), where coding Agents (Claude Code, Codex, pi, opencode and other runtimes) run in an engine
@@ -118,7 +125,8 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
   old Xcode reports errors that look like someone else's breakage.
 - Android: `scripts/app/android.sh [install|apk|test|lint|shots]` (`docs/android/android.md`).
 - Web: `cd web && npm test && npm run build`; deploy with `scripts/deploy/deploy.sh web` (`docs/web/web.md`).
-- Docs: `python3 scripts/test/test_doc_paths.py` and `python3 scripts/test/test_doc_go_paths.py`. Every change: `python3 scripts/privacy_check.py`.
+- Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py` and `python3 scripts/test/test_doc_wire.py`
+  (every WebSocket type, feature flag, extension point and manifest field has its row). Every change: `python3 scripts/privacy_check.py`.
 - Releases: `docs/operations/release.md`. After `scripts/release/release.sh` uploads, run `python3 scripts/release/asc_testflight.py wait 45 <build number>`:
   it adds the build to the internal group and to the external group with Beta App Review. Report the build number and review status only after both.
 
@@ -169,9 +177,10 @@ Tokens live in `apple/Shared/Design` (also compiled for the watch and widgets); 
 | Spacing | `Theme.Space` (4 pt grid; `page` is the side margin) |
 | Corner radius | `Theme.Radius` |
 | Size | `Theme.Size` + `.scaledFrame(…)` (scales with the font size); plain `frame` only for lines of 4 pt or less |
+| Sidebar rows | `Theme.Sidebar` (web `--sidebar-row`): HIG row height + padding, same in every language (`docs/apple/sidebar.md`) |
 | Animation | `Theme.Motion`; chat content unfolds with `.unfolding` |
 | Color | `Theme` role colors, `Theme.Fill`, `Theme.Diff`, `Theme.Hue`, `Palette`, `AgentState.tone` |
-| Icons, logos | `Theme.Icon` (one SF Symbol per meaning); `Theme.Brand` drawn through `BrandMark` / `BrandTile` / `BrandBadge` |
+| Icons, logos | `Theme.Icon` (one SF Symbol per meaning) drawn with `ThemedIcon` / `IconTile` in the style's icon language (`docs/apple/icons.md`); `Theme.Brand` drawn through `BrandMark` / `BrandTile` / `BrandBadge` |
 | Style × theme color | `StyleSpec.current` (`ComponentSpec` × `ColorSpec`), one file per style in `apple/Shared/Design/Styles/` |
 
 - **Components** live in `apple/Persona/DesignSystem`: `.surface(…)`, `.themedButton(…)`, `.themedPage()` / `.themedGroupedPage()`,
@@ -207,14 +216,15 @@ Every maintained doc under `docs/` (lessons excluded) must be listed here.
 
 | Area | Docs |
 | --- | --- |
+| Super rules | `docs/SUPER_RULES.md` highest-priority rules and prior administrator approval for changes |
 | Start | `docs/README.md` navigation · `docs/operations/getting-started.md` setup without a terminal · `docs/assistant/onboarding.md` new-user onboarding · `docs/operations/config.md` config.json and hub.json · `docs/operations/collaboration.md` claims, PRs, templates · `docs/protocol/i18n.md` localization |
 | Architecture and protocol | `docs/server/architecture.md` · `docs/protocol/protocol.md` HTTP / WebSocket API and node RPC · `docs/protocol/agent-states.md` · `docs/protocol/multi-hub.md` one device, several hubs · `docs/protocol/connector-protocol.md` · `docs/protocol/rolling-upgrade-compatibility.md` old / new name interop · `docs/operations/rename.md` naming contract · `docs/operations/persona-cutover.md` approval-gated naming cutover tool |
 | Server | `docs/server/server.md` modes and operations · `docs/server/mesh.md` linked hubs · `docs/server/machines.md` monitoring · `docs/server/usage-windows.md` subscription usage · `docs/server/launcher-health.md` · `docs/server/agent-sandbox.md` macOS agent sandbox |
-| Operations | `docs/operations/network.md` direct connection, TLS, pinning · `docs/operations/docker.md` · `docs/operations/hub-restart.md` seamless restarts · `docs/operations/hub-update.md` · `docs/operations/push-relay.md` · `docs/operations/admin.md` admin UI · `docs/operations/ports.md` port forwarding · `docs/operations/link.md` Persona Link and the node service · `docs/operations/persona-link-install.md` · `docs/operations/node-update.md` · `docs/operations/windows.md` · `docs/operations/auth-relay.md` · `docs/operations/site.md` website · `docs/operations/testing.md` tests, simulators, privacy scan · `docs/operations/runtime-cli.md` DEBUG command channel · `docs/operations/release.md` signing and TestFlight |
+| Operations | `docs/operations/network.md` direct connection, TLS, pinning · `docs/operations/docker.md` · `docs/operations/hub-restart.md` seamless restarts · `docs/operations/hub-update.md` · `docs/operations/upgrade.md` moving an install to the split hub and manager · `docs/operations/push-relay.md` · `docs/operations/admin.md` admin UI · `docs/operations/ports.md` port forwarding · `docs/operations/link.md` Persona Link and the node service · `docs/operations/persona-link-install.md` · `docs/operations/node-update.md` · `docs/operations/windows.md` · `docs/operations/auth-relay.md` · `docs/operations/site.md` website · `docs/operations/testing.md` tests, simulators, privacy scan · `docs/operations/runtime-cli.md` DEBUG command channel · `docs/operations/release.md` signing and TestFlight |
 | Agents and runtimes | `docs/integrations/engines.md` herdr / Orca / Paseo · `docs/integrations/claude-integration.md` · `docs/integrations/codex.md` · `docs/integrations/codex-app-server.md` · `docs/integrations/runtimes.md` runtime spec · `docs/integrations/daemons.md` · `docs/integrations/dsh.md` · `docs/integrations/pi.md` · `docs/integrations/opencode.md` · `docs/integrations/paseo.md` · `docs/integrations/agent-goal.md` · `docs/integrations/terminal.md` · `docs/integrations/launchers.md` model providers · `docs/integrations/script-cli.md` `personad ask` / `notify` |
 | Assistant | `docs/assistant/assistant.md` main chat · `docs/assistant/managers.md` · `docs/assistant/assistant-views.md` rich UI · `docs/assistant/unified-entry.md` · `docs/assistant/agent-work.md` work state and triage · `docs/assistant/todos.md` · `docs/assistant/voice.md` · `docs/assistant/health.md` · `docs/assistant/knowledge.md` knowledge base · `docs/assistant/inbox.md` · `docs/assistant/model-config.md` · `docs/assistant/model-profiles.md` · `docs/assistant/prompts.md` · `docs/assistant/office.md` Word / PowerPoint / Excel |
 | Extensions and sources | `docs/extensions/extensions.md` extension system · `docs/extensions/connectors.md` · `docs/extensions/channels.md` · `docs/extensions/extension-messaging.md` · `docs/extensions/computer-use.md` · `docs/extensions/mail.md` · `docs/extensions/wechat.md` · `docs/extensions/bots.md` Lark bot · `docs/extensions/feishu.md` · `docs/extensions/lark-agent.md` · `docs/extensions/lark-migration.md` · `docs/extensions/lark-attachments.md` · `docs/extensions/lark-encryption.md` |
-| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/ios-state.md` state and redraws · `docs/apple/shell.md` · `docs/apple/mac.md` · `docs/apple/mac-design.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/meta-glasses.md` |
+| Apple | `docs/apple/ios.md` iOS / watchOS, design language · `docs/apple/icons.md` icons · `docs/apple/sidebar.md` sidebar rows · `docs/apple/ios-state.md` state and redraws · `docs/apple/shell.md` · `docs/apple/mac.md` · `docs/apple/mac-design.md` · `docs/apple/vision.md` · `docs/apple/live-activity.md` · `docs/apple/intents.md` · `docs/apple/siri.md` · `docs/apple/carplay.md` · `docs/apple/persona.md` avatars · `docs/apple/phone-tools.md` · `docs/apple/recording.md` · `docs/apple/meta-glasses.md` |
 | Android and web | `docs/android/android.md` · `docs/android/android-design.md` · `docs/web/web.md` · `docs/web/workspace-board.md` · `docs/web/review.md` reviewing a session's changes · `docs/web/preview.md` dev server previews |
 | Plans (open decisions) | `docs/plans/plan-extensions.md` · `docs/plans/plan-connectors.md` · `docs/plans/plan-orca-support.md` · `docs/plans/plan-tmux-support.md` · `docs/plans/plan-lark-cli.md` · `docs/plans/plan-discord.md` · `docs/plans/plan-x.md` · `docs/plans/plan-ego-browser.md` · `docs/plans/plan-antigravity.md` |
 | Lessons and archive | `docs/lessons/` pitfalls by topic (index `docs/lessons/README.md`) · `docs/archive/` dated records, evidence only (index `docs/archive/README.md`) |

@@ -49,6 +49,17 @@ class PublisherSetupTests(unittest.TestCase):
             for sock in sockets:
                 sock.close.assert_called()
 
+    def test_connected_publisher_enables_existing_transport_keepalive(self):
+        credentials = json.dumps({'host': 'example.invalid', 'username': 'fixture',
+                                  'password': 'test-secret'}).encode()
+        client = Mock()
+        with patch.object(publisher.subprocess, 'check_output', return_value=credentials), \
+                patch.object(publisher.paramiko, 'SSHClient', return_value=client):
+            connected, sock = publisher.connect_publisher({'credentials_command': ['credentials']})
+        self.assertIs(connected, client)
+        self.assertIsNone(sock)
+        client.get_transport.return_value.set_keepalive.assert_called_once_with(30)
+
     def test_reconciliation_still_rejects_other_platforms(self):
         manifest = {'files': {'darwin-arm64': {}}, 'build': 1}
         with self.assertRaises(ValueError):

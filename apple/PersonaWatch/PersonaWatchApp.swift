@@ -9,10 +9,16 @@ struct PersonaWatchApp: App {
     var body: some Scene {
         WindowGroup {
             WatchRootView()
+                .onOpenURL { model.openExtensionSurface($0) }
                 .environment(model)
                 .tint(Theme.accent)
         }
-        .onChange(of: phase) { _, p in if p == .active { Task { await model.refresh() } } }
+        .onChange(of: phase) { _, p in
+            if p == .active {
+                Task { await model.refresh() }
+                Task { await model.refreshExtensionSurfaces() }
+            }
+        }
     }
 }
 
@@ -23,6 +29,9 @@ struct PersonaWatchApp: App {
 final class WatchModel {
     /// Each group's credential ("" = the default group); one group from a phone before several hubs.
     var configs: [String: ServerConfig] = [:]
+    @ObservationIgnored var extensionDeviceIDs: [String: String] = [:]
+    var extensionCapabilities: [String: [String]] = [:]
+    var extensionSurface: WatchExtensionDestination?
     /// What the groups are called (labels, when there are several).
     var names: [String: String] = [:]
     /// The phone's groups it could not get the watch a credential for yet (#1185); the watch says so and offers to
@@ -78,6 +87,8 @@ final class WatchModel {
         seenInteractionUids = UserDefaults.standard.stringArray(forKey: Self.seenUidsKey) ?? []
         if let data = UserDefaults.standard.data(forKey: "configs"), let all = try? JSONDecoder().decode(WatchConfigs.self, from: data) {
             (configs, names, missing) = (all.configs, all.names, all.missing ?? [])
+            extensionDeviceIDs = all.deviceIDs ?? [:]
+            extensionCapabilities = all.features ?? [:]
         } else if let data = UserDefaults.standard.data(forKey: "config"), let c = try? JSONDecoder().decode(ServerConfig.self, from: data) {
             configs = ["": c]
         }
@@ -93,19 +104,33 @@ final class WatchModel {
         }
         #endif
         WatchSync.shared.onConfig = { [weak self] c in
-            self?.configs = ["": c]
-            self?.names = [:]
-            self?.missing = []
+            guard let self else { return }
+            guard configs != ["": c] || !names.isEmpty || !missing.isEmpty ||
+                  !extensionDeviceIDs.isEmpty || !extensionCapabilities.isEmpty else { return }
+            configs = ["": c]
+            names = [:]
+            missing = []
+            extensionDeviceIDs = [:]
+            extensionCapabilities = [:]
+            syncExtensionSurfaces()
             UserDefaults.standard.set(try? JSONEncoder().encode(c), forKey: "config")
             UserDefaults.standard.removeObject(forKey: "configs")
-            Task { await self?.refresh() }
+            Task { await self.refresh() }
+            Task { await self.refreshExtensionSurfaces() }
         }
         WatchSync.shared.onConfigs = { [weak self] all in
-            self?.configs = all.configs
-            self?.names = all.names
-            self?.missing = all.missing ?? []
+            guard let self else { return }
+            guard configs != all.configs || names != all.names || missing != (all.missing ?? []) ||
+                  extensionDeviceIDs != (all.deviceIDs ?? [:]) || extensionCapabilities != (all.features ?? [:]) else { return }
+            configs = all.configs
+            names = all.names
+            missing = all.missing ?? []
+            extensionDeviceIDs = all.deviceIDs ?? [:]
+            extensionCapabilities = all.features ?? [:]
+            syncExtensionSurfaces()
             UserDefaults.standard.set(try? JSONEncoder().encode(all), forKey: "configs")
-            Task { await self?.refresh() }
+            Task { await self.refresh() }
+            Task { await self.refreshExtensionSurfaces() }
         }
         WatchSync.shared.onPersona = { [weak self] id in
             self?.persona = id
@@ -127,8 +152,10 @@ final class WatchModel {
                        at: WatchGroupRefresh.dataDate(ofSummaryAt: s.at))
             if let inbox = s.inbox { self.applyInbox(inbox) }
         }
+        syncExtensionSurfaces()
         WatchRecordingTransfer.shared.start()
         WatchSync.shared.activate()
+        Task { await refreshExtensionSurfaces() }
         Task { await poll() }
     }
 
@@ -413,10 +440,10 @@ struct WatchRootView: View {
                             NavigationLink { WatchSessionView(session: s) } label: {
                                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                                     // On the title's first line (titles wrap to two), not centered on the row.
-                                    Circle().fill(s.state.color).frame(width: 8, height: 8)
+                                    Circle().fill(s.stateTone.dot).frame(width: 8, height: 8)
                                         .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 2 }
                                     VStack(alignment: .leading, spacing: Theme.Watch.lineSpacing) {
-                                        Text(s.displayTitle).font(.headline).lineLimit(2)
+                                        WatchTitle(session: s)
                                         Text([s.spaceName, s.slotLabel].compactMap { $0 }.joined(separator: " › ").isEmpty
                                              ? (model.machine(s.machineRef)?.title ?? s.machineID)
                                              : [s.spaceName, s.slotLabel].compactMap { $0 }.joined(separator: " › "))
@@ -468,6 +495,9 @@ struct WatchRootView: View {
             }
         }
         .sheet(isPresented: $recordingOpen) { NavigationStack { WatchRecordingView() } }
+        .sheet(item: Binding(get: { model.extensionSurface }, set: { model.extensionSurface = $0 })) { destination in
+            NavigationStack { WatchExtensionSurfacePage(destination: destination) }
+        }
         #if DEBUG
         .onAppear { recordingOpen = UserDefaults.standard.bool(forKey: "openRecording") }
         #endif
@@ -501,10 +531,10 @@ extension InteractionKind {
 
     var watchSymbol: String {
         switch self {
-        case .question: "questionmark.bubble"
-        case .plan: "list.bullet.clipboard"
-        case .permission: "hand.raised"
-        case .screen: "terminal"
+        case .question: Theme.Icon.question
+        case .plan: Theme.Icon.plan
+        case .permission: Theme.Icon.askFirst
+        case .screen: Theme.Icon.terminal
         }
     }
 }
@@ -514,7 +544,10 @@ extension Interaction {
         switch kind {
         case .question: questions?.first?.question ?? ""
         case .plan: (plan ?? "").split(separator: "\n").first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "# ")) } ?? String(localized: "Plan [Interaction Text 2619dd]")
-        case .permission: [toolName, summary].compactMap { $0 }.joined(separator: String(localized: ": ", comment: "Separator between a label and its value"))
+        case .permission:
+            // The password card: its summary names the computer and every command; `secret_run` means nothing here.
+            (isSecretRun ? [summary] : [toolName, summary]).compactMap { $0 }
+                .joined(separator: String(localized: ": ", comment: "Separator between a label and its value"))
         case .screen: String(localized: "A dialog is open in the terminal")
         }
     }
@@ -590,7 +623,8 @@ struct WatchInteractionView: View {
                 case .permission:
                     Text(interaction.summary ?? "").font(.caption2.monospaced())
                     if interaction.requiresInput {
-                        Text("Fill this in on your iPhone to allow it").font(Theme.Font.caption)
+                        // The hub takes no values from the watch's answer-only credential (#1581).
+                        Text("Fill this in on your iPhone or computer to allow it").font(Theme.Font.caption)
                     } else {
                         Button { act(Resolution(allow: true)) } label: { Text("Allow [Notification Actions ce7ef2]").lineLimit(1) }
                             .buttonStyle(.borderedProminent).tint(Theme.accent)
@@ -714,8 +748,8 @@ struct WatchSessionView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Watch.blockSpacing) {
                 HStack(spacing: Theme.Space.sm) {
-                    Circle().fill(session.state.color).frame(width: 7, height: 7)
-                    Text(session.stateLabel).font(.caption2.weight(.semibold)).foregroundStyle(session.state.tone.text)
+                    Circle().fill(session.stateTone.dot).frame(width: 7, height: 7)
+                    Text(session.stateLabel).font(.caption2.weight(.semibold)).foregroundStyle(session.stateTone.text)
                 }
                 if let run = session.leadWorkflow { WatchWorkflowChip(run: run) }
                 ForEach(liveCards.lines(messages).suffix(WatchMessage.limit)) { line in
@@ -979,6 +1013,31 @@ struct WatchInboxItemView: View {
 private extension Error {
     /// The watch has no connection title (the phone's Waiting for Network / Connecting…): no network is still worth a line here.
     var watchShown: String? { isOffline ? localizedDescription : shown }
+}
+
+/// A running agent's title in the list, with Claude Code's ultracode mark after its last word while that is on (#1307; no
+/// switch on the watch). The mark is part of the text: beside the text's frame it sat after the first line of a title on
+/// two, between its halves. It comes and goes with a state change, at once with Reduce Motion.
+struct WatchTitle: View {
+    var session: Session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let mark = Ultracode.rowMark(session)
+        title(mark)
+            .font(.headline)
+            .lineLimit(2)
+            .animation(reduceMotion ? nil : Theme.Motion.state, value: mark)
+    }
+
+    /// The label is the whole text's: an image's own inside a `Text` is not read.
+    private func title(_ mark: Bool) -> Text {
+        let title = session.displayTitle
+        guard mark else { return Text(title) }
+        let icon = Text(Theme.Icon.image(Theme.Icon.workflow)).font(.footnote.weight(.semibold)).foregroundStyle(Theme.ai)
+        return (Text(title) + Text(verbatim: "\u{00A0}") + icon)
+            .accessibilityLabel(title + String(localized: ", ", comment: "List separator") + Ultracode.onWords)
+    }
 }
 
 /// A workflow its agent runs in the background (#2935), on the watch: a small chip 「workflow 169/185」, not expanded.
