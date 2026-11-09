@@ -1,4 +1,4 @@
-// Groups inside the inbox's sections (docs/assistant/inbox.md "Grouping", #2059): Needs you, FYI and Collapsed by source
+// Groups inside the inbox's sections (docs/assistant/inbox.md "Grouping and selection", #2059): Needs you, FYI and Collapsed by source
 // or by time (the switch at the top, kept on this device), Done always by time. Pure functions: tests give `now`.
 import { formatDate, t } from "../i18n";
 import type { InboxItem } from "./inbox";
