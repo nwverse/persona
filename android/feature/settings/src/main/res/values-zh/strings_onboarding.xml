@@ -27,6 +27,7 @@
     <string name="settings_onb_retest">重新测试</string>
     <string name="settings_onb_done_title">%1$s 接好了</string>
     <string name="settings_onb_done_pick_later">要让主对话或 Agent 用它，到「模型配置」里选。</string>
+    <string name="settings_onb_direct_note">主对话和 Agent 不能用它。信息处理、信息筛选等没有单独选模型的用途，现在可能会改用它；要调整，到「模型配置」里选。</string>
     <string name="settings_onb_done_no_claude">Key 存好了；还要在 %1$s 上装 Claude Code，主对话才能用它。</string>
     <string name="settings_onb_done_no_claude_any">Key 存好了；还要在电脑上装 Claude Code，主对话才能用它。</string>
     <string name="settings_onb_done_no_claude_kept">Key 存好了；要用它，还得先在 %1$s 上装 Claude Code。</string>

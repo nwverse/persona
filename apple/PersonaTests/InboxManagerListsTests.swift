@@ -175,14 +175,49 @@ struct InboxManagerListsTests {
         #expect(named == ["assistant"], "the manager it came from, named now that it isn't the default")
     }
 
-    @Test func oneManagerReadsOneListAsBefore() async throws {
+    @Test func removeAndUnmuteNameTheManagerTheyWereReadFromAfterItBecameTheDefault() async throws {
+        let hub = Self.hub("/api/v1/inbox/policies", "policies", mine: "",
+                           work: #"{"id":"p2","source":"mail","tag":"sender","value":"b@example.com","name":"乙","tier":"noise"}"#)
+        hub.on("GET", "/api/v1/inbox/mutes") { req in
+            req.headers["X-Persona-Manager"] == "m-2"
+                ? Data(#"{"mutes":[{"id":"u2","source":"github","tag":"repo","value":"example-org/two","name":"example-org/two"}]}"#.utf8)
+                : Data(#"{"mutes":[]}"#.utf8)
+        }
+        var named: [String?] = []
+        for path in ["/api/v1/inbox/policies/p2", "/api/v1/inbox/mutes/u2"] {
+            hub.on("DELETE", path) { req in
+                named.append(req.headers["X-Persona-Manager"])
+                return Data(#"{"ok":true}"#.utf8)
+            }
+        }
+        var roster = Self.roster
+        let rules = InboxRulesModel(deps: .init(api: { hub.client }, toast: { _ in }, roster: { roster }))
+        let mutes = InboxMutesModel(deps: .init(api: { hub.client }, roster: { roster }, show: { _ in }))
+        await rules.load()
+        await mutes.load()
+        roster = ManagerRoster(managers: Self.roster.managers, defaultID: "m-2") // made the default on another device
+        await rules.remove(try #require(rules.shares?[1].items.first))
+        await mutes.unmute(try #require(mutes.shares?[1].items.first))
+        #expect(named == ["m-2", "m-2"], "the manager each came from, named although it is the default now")
+    }
+
+    @Test func oneManagerReadsAndChangesOneListAsBefore() async throws {
         let hub = FakeHub()
-        hub.on("GET", "/api/v1/inbox/policies", json: #"{"policies":[]}"#)
+        hub.on("GET", "/api/v1/inbox/policies", json: #"{"policies":[{"id":"p1","source":"mail","tag":"sender","value":"a@example.com","name":"甲","tier":"action"}]}"#)
+        hub.on("GET", "/api/v1/inbox/mutes", json: #"{"mutes":[{"id":"u1","source":"github","tag":"repo","value":"example-org/one","name":"example-org/one"}]}"#)
+        hub.on("DELETE", "/api/v1/inbox/policies/p1", json: #"{"ok":true}"#)
+        hub.on("DELETE", "/api/v1/inbox/mutes/u1", json: #"{"ok":true}"#)
         let one = ManagerRoster(managers: [HubManager(id: "assistant", name: "助手", online: true, isDefault: true)], defaultID: "assistant")
-        let m = InboxRulesModel(deps: .init(api: { hub.client }, toast: { _ in }, roster: { one }))
-        await m.load()
-        #expect(m.shares == nil && m.isEmpty)
-        #expect(hub.sent("GET", "/api/v1/inbox/policies").map { $0.headers["X-Persona-Manager"] } == [nil])
+        let rules = InboxRulesModel(deps: .init(api: { hub.client }, toast: { _ in }, roster: { one }))
+        let mutes = InboxMutesModel(deps: .init(api: { hub.client }, roster: { one }, show: { _ in }))
+        await rules.load()
+        await mutes.load()
+        #expect(rules.shares == nil && mutes.shares == nil)
+        await rules.remove(try #require(rules.state.value?.first))
+        await mutes.unmute(try #require(mutes.state.value?.first))
+        let named = [("GET", "/api/v1/inbox/policies"), ("GET", "/api/v1/inbox/mutes"), ("DELETE", "/api/v1/inbox/policies/p1"),
+                     ("DELETE", "/api/v1/inbox/mutes/u1")].flatMap { hub.sent($0.0, $0.1).map { $0.headers["X-Persona-Manager"] } }
+        #expect(named == [nil, nil, nil, nil])
     }
 
     @Test func eachManagersMutesAreReadUnderItsNameAndTakenBackOnIt() async throws {
@@ -192,7 +227,7 @@ struct InboxManagerListsTests {
         var named: [String?] = []
         hub.on("DELETE", "/api/v1/inbox/mutes/m1") { req in
             named.append(req.headers["X-Persona-Manager"])
-            if req.headers["X-Persona-Manager"] == nil { throw APIError(status: 400, message: "坏了") }
+            if req.headers["X-Persona-Manager"] == "assistant" { throw APIError(status: 400, message: "坏了") }
             return Data(#"{"ok":true}"#.utf8)
         }
         var shown: [String] = []
@@ -205,7 +240,7 @@ struct InboxManagerListsTests {
         await m.unmute(try #require(m.shares?[1].items.first))
         #expect(m.shownShares?.map(\.manager.id) == ["assistant", "m-3"])
         await m.unmute(try #require(m.shares?[0].items.first))
-        #expect(named == ["m-2", nil])
+        #expect(named == ["m-2", "assistant"])
         #expect(m.shares?[0].items.map(\.name) == ["example-org/one"]) // the default's failed: back
         #expect(m.shares?[1].items.isEmpty == true && shown.count == 1)
     }

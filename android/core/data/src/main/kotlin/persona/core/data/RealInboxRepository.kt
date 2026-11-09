@@ -323,7 +323,7 @@ class RealInboxRepository(
 
     override suspend fun unmute(id: String, manager: String?) {
         val transport = requireTransport()
-        asManager(manager) { transport.unmuteInbox(id) }
+        asStamped(manager) { transport.unmuteInbox(id) }
     }
 
     override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<persona.feature.inbox.InboxPolicy> {
@@ -370,7 +370,7 @@ class RealInboxRepository(
 
     override suspend fun removePolicy(id: String, manager: String?) {
         val transport = requireTransport()
-        asManager(manager) { transport.removeInboxPolicy(id) }
+        asStamped(manager) { transport.removeInboxPolicy(id) }
     }
 
     override suspend fun setDone(items: List<InboxDoneTarget>, done: Boolean): InboxBulkResult =
@@ -1107,6 +1107,14 @@ class RealInboxRepository(
     }
 
     /**
+     * Runs a change to something a list read from each manager stamped [manager] (several managers), naming it even when it
+     * is the default: the default may have changed since the list was read. Unstamped (one manager): as [asManager].
+     */
+    private suspend fun <T> asStamped(manager: String?, block: suspend () -> T): T =
+        if (manager.isNullOrBlank()) asManager(manager, block)
+        else withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
+
+    /**
      * One item as the hub has it. An answer about one item comes from its manager alone, unstamped (only the merged
      * list stamps): it keeps the manager and the id [previous] had, so its group and its next requests stay its own.
      */
@@ -1167,15 +1175,15 @@ class RealInboxRepository(
         return fresh.copy(item = fresh.item.copy(id = previous.item.id), manager = fresh.manager ?: previous.manager)
     }
 
-    override suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost {
+    override suspend fun momentsPost(postId: String, manager: String?): persona.core.contracts.LarkMomentsPost {
         val transport = requireTransport()
-        val json = transport.momentsPost(postId)
+        val json = asManager(manager) { transport.momentsPost(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsPost.serializer(), json)
     }
 
-    override suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> {
+    override suspend fun momentsComments(postId: String, manager: String?): List<persona.core.contracts.LarkMomentsComment> {
         val transport = requireTransport()
-        val json = transport.momentsComments(postId)
+        val json = asManager(manager) { transport.momentsComments(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsCommentsResponse.serializer(), json).comments
     }
 

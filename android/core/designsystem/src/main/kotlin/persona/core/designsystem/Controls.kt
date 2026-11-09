@@ -77,7 +77,7 @@ fun JIcon(
     val vector = when {
         selected -> icon.fill
         PersonaTheme.style == AppStyle.Board -> icon.bold
-        decorative && PersonaTheme.style == AppStyle.Glass -> icon.duotone
+        decorative && PersonaTheme.style == AppStyle.Glass -> icon.regular
         else -> icon.regular
     }
     Icon(vector, contentDescription, modifier.size(size), tint = tint)
@@ -484,6 +484,15 @@ fun JChip(
 fun JBadge(count: Int, modifier: Modifier = Modifier, text: String? = null) {
     val palette = PersonaTheme.palette
     val label = text ?: if (count > 99) "99+" else "$count"
+    if (LocalHomeDrawer.current && PersonaTheme.style == AppStyle.Glass) {
+        val fill = sidebarActionFill(palette)
+        Box(modifier.heightIn(min = HomeTokens.sidebarBadgeSize).widthIn(min = HomeTokens.sidebarBadgeSize)
+            .clip(CircleShape).background(fill).padding(horizontal = Tokens.Space.xs), contentAlignment = Alignment.Center) {
+            Text(label, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+                color = ExtensionThemeColors.on(fill), maxLines = 1)
+        }
+        return
+    }
     val shape = if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(4.dp) else CircleShape
     Box(
         modifier.heightIn(min = 18.dp).widthIn(min = 18.dp).clip(shape).background(palette.needsYou.dot)
