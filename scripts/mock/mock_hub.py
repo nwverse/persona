@@ -7741,6 +7741,34 @@ if os.environ.get("MOCK_REPORT_FOLD") == "1":
     mock_report_fold()
 
 
+# MOCK_PEER_FOLD=1: messages other sessions sent an agent (#2010): a long progress report folds to the setting's lines with
+# Expand, a short one stays whole with no button. Synthetic text.
+PEERS = "a1f3c2d4-0000-4000-8000-0000000c1e0a"
+
+
+def mock_peer_fold():
+    report = ("## 搜索改版：索引重建完成\n\n今天把站内搜索从前端索引换成了服务端索引，下面是进展和还没做的事。\n\n"
+              "- 索引覆盖全部 412 篇文档，中文按词切分，英文按词干；重建一次 38 秒。\n"
+              "- 搜索结果按标题、小标题、正文三档加权，同分时新文档在前。\n"
+              "- 结果页加了高亮和所在章节的路径，点开直接跳到对应的小标题。\n"
+              "- 旧的前端索引文件已经从构建里去掉，首页的包小了 1.2 MB。\n\n"
+              "还没做：\n\n- 拼写纠错（「接口」打成「借口」时给出建议）。\n- 搜索词的统计，等隐私说明定下来再加。\n\n"
+              "有一处要你定：版本切换后，搜索只搜当前版本，还是所有版本一起搜、当前版本排前面？")
+    ITEMS[PEERS] = [
+        it("user", "text", 40, text="文档站改版拆给了两个会话，它们的进展会直接发到这里，你来汇总"),
+        it("assistant", "text", 39, text="好的，收到它们的消息后我来汇总，有要你定的事会单独列出来。"),
+        it("user", "text", 12, text=report, **{"from": "docs-search"}),
+        it("user", "text", 8, text="深色主题的对比度修好了，截图在 PR 里。", **{"from": "docs-theme"}),
+        it("assistant", "text", 6, text="两边都有进展：搜索的索引重建完了，深色主题的对比度也修好了。有一件要你定：版本切换后搜索的范围。"),
+    ]
+    SESSIONS.append(sess("macbook", PEERS, "文档站改版", "/Users/me/code/docs-site", "done", "unread", "docs-site", 18, "peers", 1, 6,
+                         "有一件要你定：版本切换后搜索的范围。"))
+
+
+if os.environ.get("MOCK_PEER_FOLD") == "1":
+    mock_peer_fold()
+
+
 # MOCK_WORK_GROUPS=1: one finished conversation with every way a work group reads (#1963, web): a short run (five steps
 # or fewer, an empty thought and one with words, a command with and without a description), a long run with an edit
 # and its diff, one that only read and searched, a delivered report between two steps (it stays out of the fold), and

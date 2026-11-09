@@ -241,6 +241,7 @@ struct PeerMessage: View {
     var from: String
     @Environment(\.rowMemoScope) private var memoScope
     @Environment(\.subagentsByCall) private var agents
+    @Environment(\.messageFold) private var fold
 
     var body: some View {
         let d = RowMemo.assistant(RowMemo.key(memoScope, item.id)) { _ in AssistantRowText(item.text ?? "") } // once per message
@@ -253,7 +254,8 @@ struct PeerMessage: View {
                 // A subagent's report that came as a message: one line until opened, as in its card.
                 FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
             } else {
-                words(d)
+                // A long one: its first lines until opened, as many as the exchanges' setting shows (#2010).
+                LineFold(shown: fold, id: pinKey) { words(d) }
             }
         }
         .padding(Theme.Space.m)

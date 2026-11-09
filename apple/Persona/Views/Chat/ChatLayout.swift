@@ -78,6 +78,17 @@ extension EnvironmentValues {
     }
 }
 
+extension ChatLayoutSettings {
+    /// The lines a long message from another session shows before Expand (`PeerMessage`, #2010): the exchanges' choice,
+    /// in every chat and on every platform, whether or not the new layout is on. nil: all of it, 0: none.
+    var messageLines: Int? { ChatLayout(on: false, fold: fold, lines: lines).shownLines }
+}
+
+extension EnvironmentValues {
+    /// `ChatLayoutSettings.messageLines`, from the chat page (rows don't watch the settings themselves).
+    @Entry var messageFold: Int? = ChatLayoutSettings.defaultLines
+}
+
 extension Injected {
     /// Persona writing to itself: the supervision digest (`system` / `supervise`) and scheduled runs, follow-ups and
     /// wake-ups (`followup`). Drawn under the Supervision identity, "Persona → @Persona", in the new layout.

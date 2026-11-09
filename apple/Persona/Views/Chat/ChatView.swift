@@ -1854,6 +1854,7 @@ struct ChatView: View {
             footerRoom.chrome = style == .dev && !sideBars ? chrome : nil
         }
         .environment(\.chatLayout, layout)
+        .environment(\.messageFold, ChatLayoutSettings.shared.messageLines)
         .environment(\.openSubagent, actions.openSubagent)
         .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
