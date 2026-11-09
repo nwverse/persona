@@ -69,7 +69,7 @@ function LiveThinking({ mid, sid }: { mid: string; sid: string }) {
 export const WorkGroup = memo(function WorkGroup({ g, p }: { g: WorkGroupNode; p: WorkProps }) {
   // an outer group whose folded steps the reader just opened: open under whatever key it has once they are in
   const style = p.lineStyle ?? "agents";
-  const turnLive = Boolean(p.turnLive) && !p.nested;
+  const turnLive = Boolean(p.turnLive ?? g.live) && g.live && !p.nested;
   const key = `${p.scope}${g.id}`;
   const [remembered, setRemembered] = useExpanded(key, p.nested ? nestedLineDefault(style) : inOpenedFold(p.scope, g.seq));
   // All conversation styles keep manual run toggles separately, then collapse on completion (#2602).

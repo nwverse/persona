@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emptyTaskIndex } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
-import type { Segment, Step } from "../../lib/turns";
+import { segments, segmentIdentity, type Segment, type Step } from "../../lib/turns";
 import type { WorkLineStyle } from "../../lib/work-groups";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { forgetExpanded, openExpanded } from "./expanded";
@@ -36,7 +36,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); });
 function draw(style: WorkLineStyle, s: Segment, live: boolean, expand: (f: Item) => Promise<void> = async () => {}, streaming?: string) {
   const ctx: ChatContextValue = { tasks: emptyTaskIndex(), subagents: [], scope: "x:", lineStyle: style };
-  act(() => root.render(<ChatContext.Provider value={ctx}><SegmentView seg={s} live={live} mid="m" sid="s" expandFold={expand} streaming={streaming} /></ChatContext.Provider>));
+  act(() => root.render(<ChatContext.Provider value={ctx}><SegmentView key={segmentIdentity(s)} seg={s} live={live} mid="m" sid="s" expandFold={expand} streaming={streaming} /></ChatContext.Provider>));
 }
 const header = () => host.querySelector<HTMLButtonElement>("[data-work-group] > button")!;
 const detail = () => host.querySelector("[data-work-detail]");
@@ -102,6 +102,17 @@ describe.each(["assistant", "agents"] as const)("%s compact execution", (style) 
     expect(detailText()).toContain("Latest progress.");
     tap();
     expect(header().getAttribute("aria-expanded")).toBe("false");
+  });
+  it("does not restore a historical expansion when a resumed untouched run completes", () => {
+    draw(style, seg(finished), false);
+    tap();
+    expect(header().getAttribute("aria-expanded")).toBe("true");
+    draw(style, seg([...finished, tool(10, false)]), true);
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    draw(style, seg([...finished, tool(10), words(12, "Resumed result.")]), false);
+    expect(header().getAttribute("aria-expanded")).toBe("false");
+    tap();
+    expect(detailText()).toContain("echo 10");
   });
   it("streaming replaces persisted narration, then commits the final text without a duplicate", () => {
     draw(style, seg(running), true);
@@ -193,10 +204,16 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     const text = words(3, "Latest text.");
     const first = tool(1) as Extract<Step, { kind: "tool" }>;
     const expanded = { ...first, id: "t1#1", use: { ...first.use, id: "t1#1" } };
-    const expand = vi.fn(async () => draw(style, seg([expanded, text]), true, expand));
-    draw(style, seg([folded, text]), true, expand);
+    const sourceSegment = (steps: Step[]) => segments(steps.flatMap((s) => s.kind === "tool" ? [s.use, ...(s.result ? [s.result] : [])] : [s.item]))[0];
+    const before = sourceSegment([folded, text]);
+    const after = sourceSegment([expanded, text]);
+    expect(before.id).not.toBe(after.id);
+    const expand = vi.fn(async () => draw(style, after, true, expand));
+    draw(style, before, true, expand);
+    const originalSlot = slot();
     tap();
     await settle();
+    expect(slot()).toBe(originalSlot);
     expect(expand).toHaveBeenCalledTimes(1);
     expect(header().getAttribute("aria-expanded")).toBe("true");
     expect(detailText()).toContain("echo 1");

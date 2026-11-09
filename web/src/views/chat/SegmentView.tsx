@@ -4,7 +4,7 @@ import { getSession, getState } from "../../lib/store";
 import { agentStatus, subagentFor } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
 import { TurnImages } from "./TurnImages";
-import { exchangeSteps, isLoopTick, isOwnMessage, type Segment, type UserMessage } from "../../lib/turns";
+import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, type Segment, type UserMessage } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import { thinkingDurations, workBlocks, type ToolStep } from "../../lib/work-groups";
 import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
@@ -227,9 +227,10 @@ export const SegmentView = memo(function SegmentView({
     const agent = (s: ToolStep) => agentStatus(s.result, subagentFor(subagents, s.use), live);
     return { mid, sid, scope, expandFold, agentStatus: agent, thinking, segment: seg.id, workflowCalls, trace, lineStyle, turnLive: live };
   }, [mid, sid, scope, expandFold, subagents, live, thinking, seg.id, workflowCalls, trace, lineStyle]);
+  const identity = segmentIdentity(seg);
   const nodes = useMemo(
-    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity: seg.id }),
-    [steps, live, turnStart, streaming !== undefined, seg.id],
+    () => workBlocks(steps, { live, turnStart, streaming: streaming !== undefined, identity }),
+    [steps, live, turnStart, streaming !== undefined, identity],
   );
   useCallSeeker(scope, nodes);
   // the pictures the agent looked at this turn, between its work and its last words

@@ -1,5 +1,4 @@
-// Which work groups, cards and thoughts the reader opened (cindy's useExpandedBlockMemory), kept for the page's life:
-// a group that goes from live to done, or remounts when a page of history lands above it, stays as the reader left it.
+// Reader-controlled expansion survives live remounts and history paging; a run's completion collapses its summary.
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 
 const opened = new Map<string, boolean>();
@@ -54,11 +53,13 @@ export function useExpanded(key: string, initial = false): [boolean, (next: bool
 /** Manual run overrides for every conversation style: dropped at completion, retained across live remounts. */
 const liveOverrides = new Map<string, boolean>();
 
-/** The run's override of a work line: undefined until the reader toggles it; dropped once `running` goes false. */
+/** A run's manual override (initially collapsed), retained across remounts and dropped on completion. */
 export function useLiveOverride(key: string, running: boolean): [boolean | undefined, (next: boolean) => void] {
   const [, bump] = useState(0);
   useLayoutEffect(() => {
     if (running) {
+      // Mark even an untouched run: a previously opened historical summary must fold again when this run ends.
+      if (!liveOverrides.has(key)) liveOverrides.set(key, false);
       // Jump-to-call and search reveal use openExpanded, not the header's own toggle.
       const listen = (keys: ReadonlySet<string>) => {
         if (!keys.has(key)) return;
