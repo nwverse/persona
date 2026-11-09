@@ -1,5 +1,24 @@
 # Lessons: hub / node and networking
 
+## Durable storage receipts do not extend authority (#1187)
+
+Check current declared keys and queue/blob flags before replay lookup, including
+queue operations inside an atomic transaction. A prior success receipt cannot
+bypass a withdrawn flag. A claim receipt describes its original lease: replay
+must reject it after expiry, retry, completion or worker replacement, rather than
+returning an old `leased` result as fresh work. Time-relative admission checks for
+a new retry belong after replay lookup so a committed retry can still recover a
+lost reply after its next-attempt deadline passes.
+
+Carry the process's captured installation epoch and grants into the transaction.
+Re-resolving a replacement after an initial memory fence can lend an old callback
+the new scope; the persisted row lock must compare the original capture. Cancel
+attempt-bound callbacks before child cleanup, not after waiting for a dead child.
+Postgres owns mutation/receipt atomicity and uninstall retention; managers own
+business validation, so the DB package must not import a manager implementation.
+A recreated pool is not a database-server restart, and a canceled precommit update
+is not an injected unknown commit. Name and report those tests accurately.
+
 ## Retained extension lists need installed managers (#1918)
 
 A relay can retain an offline manager's GET answer while the merged list drops it before the relay is called. For merged retained GET routes, enumerate installed bus identities as well as live managers; keep ordinary lists such as inbox and todos online-only. Never discover owners by scanning cache keys: a removed manager can still have cached answers. Fail closed when the installed roster cannot be read, and test the real relay warm-up followed by disconnect, missing cache, revocation, and an offline default. In external mode even the identity named `assistant` is removable: only seed it when `builtinManager` says it is built in, and return unavailable for an empty roster rather than reviving a cached default.
