@@ -386,6 +386,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 
 | Scope | Wording on the install page | Routes opened |
 | --- | --- | --- |
+| `sent.read` | Identify messages Persona sent as you in the knowledge base | No HTTP route: adds provenance to `kb.day`; also requires `kb.read` |
 | `kb.read` | Read the knowledge base | `GET /api/v1/kb/…`, `GET /api/v1/kb-search` |
 | `kb.write` | Change entries in the knowledge base | `PUT /api/v1/kb/{kind}/{id}`, not with terminal control characters (see below) |
 | `inbox.read` | Read the Inbox | `GET /api/v1/inbox`, `/inbox/{id}`, `/inbox/mutes`, `/inbox/policies` |
@@ -451,7 +452,7 @@ so the extension does not need to read the hub's or the manager's data directory
 | `kb.list` | `{kind,tag?,limit?,offset?,since?}` | `{items,tags,total,next_offset?}` | `kb.read` |
 | `kb.recent` | `{since,until?,kinds?,limit?,offset?}` | `{items,total,next_offset?}`: what came in from every source, newest first | `kb.read` |
 | `kb.get` | `{kind,id,recent_chars?}` | `{detail}` | `kb.read` |
-| `kb.day` | `{id,day}`, day is `YYYY-MM-DD` | `{day,messages,prev,next}`; `messages[].n` is the 1-based line number in the source file | `kb.read` |
+| `kb.day` | `{id,day}`, day is `YYYY-MM-DD` | `{day,messages,prev,next,sent_origin}`; `messages[].n` is the 1-based line number in the source file | `kb.read`; `sent.read` adds origin marks |
 | `kb.search` | `{query,messages?,limit?}` | `{hits}` | `kb.read` |
 | `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?}` | `kb.write` |
 | `kb.owner` | `{}` | `{name,aliases,handles:[{kind,value}]}` | `kb.read` |
@@ -467,6 +468,20 @@ Internal methods such as `kb.forget`, `kb.context`, `kb.posts_*` are not on this
 
 `since` / `until` are RFC 3339 times (an entity's update time: a chat's last message, a document's, meeting's or event's time, a recording's start). `kb.recent` defaults to chats, docs, meetings, events and recordings,
 50 a page, at most 200; list entries for chats carry `source` (lark, mail, wechat, github…), so one pass covers every source; read a chat's text with `kb.day` and the rest with `kb.get`.
+
+**Messages sent as the user** (#2814): declare `{"permissions":{"hub":["kb.read","sent.read"]}}` to distinguish matching assistant sends from other archive lines. `sent.read` is shown during install and permission upgrades in the user's language. It adds no ledger-list endpoint and does not grant archive access by itself; the legacy full `hub_api` grant includes it. The extension manager checks the actual grant and forwards the privileged read as internal `kb.extension_day`, which extensions cannot invoke directly.
+
+Every `kb.day` response includes `sent_origin`:
+
+- `available`: ledger matching completed. Only matched lines have `sent_by: "assistant"` and `sent_ledger_id`; a matched recalled send also has `recalled_at` (RFC 3339). Recall does not turn archived assistant words into the user's words.
+- `missing_scope`: `kb.read` was granted but `sent.read` was not. All per-line origin fields are absent.
+- `unavailable`: this service cannot provide the marks, including an older assistant during a rolling upgrade. Older hosts may omit `sent_origin`; treat that absence as unavailable too. A database or archive read error fails the call instead of pretending that matching found nothing.
+
+Matching is deliberately conservative. New live archive ingestion retains a receipt binding the provider's message ID, original time and owner flag to the rendered speaker/body hash. It resolves that receipt only when both the receipt and archive line are unique at that minute. Matching first uses an exact provider reference within the connector; GitHub's comment/review resource types remain distinct. Generic connectors also need an exact destination. Without a reference on one side, fallback requires the connector, an exact chat destination, the owner's archive speaker, the entire normalized text, and a timestamp within two minutes of the archived minute (ledger time in `[minute - 2m, minute + 3m)`). Normalization removes whitespace like echo matching, but keeps case and punctuation and never accepts a truncated prefix. Destination fields recognized as scalar source IDs are `chat`, `thread`, `channel`, `conversation`, `recipient`, `to` and `ref`; display names, subjects and recipient arrays are insufficient.
+
+A ledger row marks at most one archive line. Multiple possible lines or ledger rows are left unmarked; an already matched line remains an ambiguity candidate for other ledger records. Adjacent days participate in ambiguity checks, so a send near midnight cannot mark a line on both pages. Day boundaries use the archive's stored time zone, including daylight-saving changes; repeated wall-clock minutes need an original receipt timestamp. The manager queries the ledger once per connector/day with the two-minute boundary allowance using its `(connector, at)` index, then matches in memory.
+
+**An unmarked line is not proof of human authorship.** Older archives and history imports have no receipt hashes; identical text, missing IDs or targets, changed rendering, truncated ledger text, clock differences beyond the window, retained text after ledger expiry (90 days by default), and unrecorded sends can all miss. The built-in mail archive uses IMAP UIDs and formatted bodies, which do not reliably map to ledger Message-IDs and recipient targets. GitHub's legacy flattened chat IDs are not used to guess a destination; new receipts can match its exact typed references. Curation must treat unavailable and unmarked provenance as unknown where learning a false user preference would matter. Option 1 supplies the provenance needed alongside the text; a more general read-only ledger API remains future work.
 
 **Writes are the extension's** (#6100): the manager attributes `kb.update` to the calling extension (internally `kb.extension_update`; an extension cannot call that or name another). It may write fields nobody holds and fields it holds itself;
 a field the user (or another extension) holds refuses the whole update with `conflict`, data `{owners: {<field>: "user" | "ext:<id>"}}` (a linked entity's field as `<kind>/<id>.<field>`), and nothing is written: put it to the user, don't retry.
