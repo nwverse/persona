@@ -90,7 +90,7 @@ func managerMode(dir string, args []string, out io.Writer) error {
 // service to this hub. Only in service mode: while the hub starts the built-in manager itself, a second one would run
 // next to it (the hub refuses to trade such a code then, too).
 func ManagerCode(ctx context.Context, out io.Writer) error {
-	cfg, err := LoadConfig()
+	cfg, err := runningHubConfig()
 	if err != nil {
 		return err
 	}
@@ -112,4 +112,27 @@ func writeManagerCode(out io.Writer, code string, until time.Time, listen string
 		"the code in the environment, where other users of the machine cannot read it:\n"+
 		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen))
 	return err
+}
+
+// MintBuiltinCode is ManagerCode's code alone, for a program that binds the built-in manager's own service itself (a
+// container's supervisor, internal/supervise): refused unless the built-in manager is a bound service here.
+func MintBuiltinCode(ctx context.Context) (string, error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return "", err
+	}
+	if !cfg.Assistant.ServiceBound() {
+		return "", errors.New("the built-in manager is not a service of its own here (assistant.mode service, not assistant.external)")
+	}
+	code, _, err := builtinCode(ctx, cfg)
+	return code, err
+}
+
+// VoidBuiltinCode voids a code MintBuiltinCode made when it was not traded (it is still good): nothing when it was.
+func VoidBuiltinCode(ctx context.Context, code string) error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	return voidBuiltinCode(ctx, cfg, code)
 }

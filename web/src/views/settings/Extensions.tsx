@@ -142,7 +142,7 @@ function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; ma
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.redraw")} onClick={() => setN((x) => x + 1)} />
       </div>
-      <ExtensionUI key={n} extension={id} ui={ui} title={title} />
+      <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} />
     </>
   );
 }
@@ -328,6 +328,8 @@ function UpgradeGroup({ p, busy, onToggle, onUpgrade }: { p: HubExtension; busy:
   const u = p.upgrade;
   const note = !u && p.upgrade_note ? upgradeNote(p.upgrade_note) : null;
   const action = u ? upgradeAction(u) : null;
+  // Switched off, the extension is not upgraded: its own switch shows off and waits (kept by the hub) until it is on.
+  const paused = !!p.auto_upgrade_paused;
   const line = (title: string, detail: string, attention: boolean) => (
     <div className="min-w-0 flex-1">
       <div className="text-[13px] text-ink">{title}</div>
@@ -335,10 +337,10 @@ function UpgradeGroup({ p, busy, onToggle, onUpgrade }: { p: HubExtension; busy:
     </div>
   );
   return (
-    <Group title={t("settings-extensions.upgrade_title")} footer={t("settings-extensions.upgrade_footer")}>
+    <Group title={t("settings-extensions.upgrade_title")} footer={t(paused ? "settings-extensions.upgrade_paused_footer" : "settings-extensions.upgrade_footer")}>
       <div className="flex items-center gap-3 px-4 py-2.5">
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t("settings-extensions.auto_upgrade")}</span>
-        <Switch on={p.auto_upgrade ?? true} onChange={onToggle} disabled={busy} label={t("settings-extensions.auto_upgrade")} />
+        <Switch on={!paused && (p.auto_upgrade ?? true)} onChange={onToggle} disabled={busy || paused} label={t("settings-extensions.auto_upgrade")} />
       </div>
       {u &&
         (action ? (

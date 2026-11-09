@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The inbox (docs/plans/plan-connectors.md "4 · Inbox"): GitHub's unread notifications that ask something of the user —
@@ -35,6 +35,9 @@ var (
 	maxDetails   = 30                 // threads read per poll; the rest wait for the next
 	forgetAfter  = 8 * 24 * time.Hour // things kept for the hub to settle its items, like its own inboxForget
 	contextMoves = 8                  // newest comments / reviews in a thing's context
+
+	notificationsPage    = 50 // unread notifications per page
+	maxNotificationPages = 5  // pages read per poll; past them the list is incomplete and nothing is marked read elsewhere
 )
 
 type notification struct {
@@ -75,8 +78,13 @@ func (c *Connector) Watch(ctx context.Context, changed func(connector.Scope)) er
 }
 
 // poll reads the unread notifications (not at all when nothing changed: 304) and returns how long GitHub wants
-// the next poll to wait and whether a thing changed.
+// the next poll to wait and whether a thing changed. The first page decides: only it carries If-Modified-Since,
+// and its Last-Modified and X-Poll-Interval are kept. A rate limit is waited out, not returned: watchOne would
+// restart Watch long before GitHub takes another request.
 func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
+	if left := c.pauseLeft(); left > 0 {
+		return left, false, nil // GitHub asked for no requests until then (notePause)
+	}
 	st := &c.inbox
 	st.mu.Lock()
 	if st.things == nil {
@@ -90,8 +98,11 @@ func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
 	st.mu.Unlock()
 
 	var ns []notification
-	code, h, err := c.request(ctx, http.MethodGet, "/notifications?per_page=50", hdr, nil, &ns)
+	code, h, err := c.request(ctx, http.MethodGet, notificationsPath(1), hdr, nil, &ns)
 	if err != nil {
+		if left := c.pauseLeft(); left > 0 { // a rate limit (request records it: notePause)
+			return max(left, pollDefault), false, nil
+		}
 		return 0, false, err
 	}
 	wait := pollDefault
@@ -107,21 +118,46 @@ func (c *Connector) poll(ctx context.Context) (time.Duration, bool, error) {
 		st.fullAt = time.Now()
 	}
 	st.mu.Unlock()
-	moved := c.applyNotifications(ctx, ns, time.Now())
+	ns, complete := c.laterNotifications(ctx, ns)
+	moved := c.applyNotifications(ctx, ns, complete, time.Now())
 	if c.followUpCI(ctx) {
 		moved = true
 	}
 	return wait, moved, nil
 }
 
-// applyNotifications reads the threads that moved (at most maxDetails, none while requests run low) and marks
-// those no longer unread as read elsewhere.
-func (c *Connector) applyNotifications(ctx context.Context, ns []notification, now time.Time) bool {
+func notificationsPath(page int) string {
+	return fmt.Sprintf("/notifications?per_page=%d&page=%d", notificationsPage, page)
+}
+
+// laterNotifications reads the pages after the first one, ns, while they come full, up to maxNotificationPages, and
+// says whether the list is complete (it ended on a short page). A page that fails ends the list incomplete without
+// an error: what was read still counts, and the next poll reads again; a rate limit is recorded (request) and
+// holds back the threads' details too.
+func (c *Connector) laterNotifications(ctx context.Context, ns []notification) ([]notification, bool) {
+	batch := len(ns)
+	for page := 2; page <= maxNotificationPages && batch == notificationsPage; page++ {
+		var more []notification
+		if _, _, err := c.request(ctx, http.MethodGet, notificationsPath(page), nil, nil, &more); err != nil {
+			return ns, false
+		}
+		ns, batch = append(ns, more...), len(more)
+	}
+	return ns, batch < notificationsPage
+}
+
+// applyNotifications reads the threads that moved (at most maxDetails, none while requests run low or GitHub asks
+// for a pause) and marks those no longer in ns, the unread list newest first, as read elsewhere: any when ns is
+// complete, else only those that moved after its oldest notification (one still unread would have been in it).
+func (c *Connector) applyNotifications(ctx context.Context, ns []notification, complete bool, now time.Time) bool {
 	st := &c.inbox
 	me := c.Status(ctx).Account
 	budget := maxDetails
-	if c.ratesLow() {
-		budget = 0
+	var oldest time.Time
+	for _, n := range ns {
+		if oldest.IsZero() || n.UpdatedAt.Before(oldest) {
+			oldest = n.UpdatedAt
+		}
 	}
 	unread := map[string]bool{}
 	moved := false
@@ -147,8 +183,18 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, n
 		stamp := n.UpdatedAt.UTC().Format(time.RFC3339)
 		st.mu.Lock()
 		known := st.seen[n.ID] == stamp
+		// Notifications come newest first and a CI thread gathers many: one older than the thread's thing is an
+		// earlier move, and the thing keeps the newest (InboxThing.At).
+		older := !known && st.things[thread] != nil && n.UpdatedAt.Before(st.things[thread].At)
+		if older {
+			st.seen[n.ID] = stamp
+		}
 		st.mu.Unlock()
-		if known || budget == 0 {
+		if known || older || budget == 0 {
+			continue
+		}
+		if c.ratesLow() { // checked per thread: a detail read may have run into a rate limit
+			budget = 0
 			continue
 		}
 		budget--
@@ -156,11 +202,12 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, n
 		var err error
 		switch {
 		case kind == "ci_failed" && !run.failed():
-			// A run of the branch that did not fail (succeeded, cancelled): a failure item of it is over if it succeeded.
+			// A run of the branch that did not fail (succeeded, cancelled): after a success the follow-up checks in
+			// this poll whether the branch's item is over (followUpCI: every workflow's newest run).
 			st.mu.Lock()
 			st.seen[n.ID] = stamp
-			if t := st.things[thread]; t != nil && t.Done == "" && run.status == "succeeded" {
-				t.Done, t.Why, moved = connector.DoneRead, "GitHub：后来成功了", true
+			if m := st.ci[thread]; m != nil && run.status == "succeeded" {
+				m.checked = time.Time{}
 			}
 			st.mu.Unlock()
 			continue
@@ -193,7 +240,7 @@ func (c *Connector) applyNotifications(ctx context.Context, ns []notification, n
 		switch {
 		case now.Sub(t.At) > forgetAfter:
 			delete(st.things, thread)
-		case !unread[thread] && !t.Read && t.Done == "":
+		case (complete || !oldest.IsZero() && t.At.After(oldest)) && !unread[thread] && !t.Read && t.Done == "":
 			t.Read, moved = true, true
 		}
 	}
@@ -241,7 +288,7 @@ func classify(n notification) (kind, label string) {
 	return "", ""
 }
 
-var subjectURL = regexp.MustCompile(`/repos/([^/]+/[^/]+)/(?:issues|pulls)/(\d+)$`)
+var subjectURL = lazyre.New(`/repos/([^/]+/[^/]+)/(?:issues|pulls)/(\d+)$`)
 
 // threadOf is the PR / issue a notification is about ("example-org/example-repo#12"), so a review request and an @
 // on the same PR are one thing; anything else is its own notification.
@@ -422,7 +469,7 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 	return out, nil
 }
 
-var threadRef = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)$`)
+var threadRef = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)$`)
 
 // Reply comments the text on the PR / issue (the user pressed send on it).
 func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {

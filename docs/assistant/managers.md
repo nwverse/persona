@@ -121,10 +121,11 @@ A manager keeps the computers it connects in its `manager.json` (`machines`, eac
 - **A start without the hub.** A manager whose hub hasn't answered within 20 seconds of its start connects the computers of its list, as the last hand-over had them; a hub that is up answers well within that (the built-in manager is started by its hub), so then nothing connects before the hub's hand-over. Local, ssh and tailcat computers work while the hub is away; Persona Link and connector computers need the hub anyway. It waits for the hub instead when the hub was in a mesh group at the last hand-over (which computers are this hub's to connect, and when, are the group's), and when the list is another hub's (the manager joined another hub since: its `hub_id` differs).
 - **When the hub comes.** Its hand-over is the list: a computer it no longer has is let go, a new one connected, one whose entry changed connected again with it, and the hub is reported each entry as it has it. What the early connections couldn't do without the hub is done then: the computers waiting to be confirmed are read again (the managed launchers go out with the hub's part of each connection), a node on another build is offered the hub's, and tailcat makes its tunnels again with the hub's DERP map, at the next dial, when it differs from the one the list had. A computer moved away while this manager was stopped is connected until then, and so is the list of a manager that was installed again elsewhere (its old copy's token no longer works, but it connects its list before it learns that): stop the old copy's service.
 - **Its own list as the list** (`machines.own`). A manager names the capability `machines.own` in its hello. The first time the hub hands it `machines_own` in `devices`, the hand-over's `machines` is taken over as its own (over a list taken over before, which may be out of date, or another hub's), and `machines_from_hub` says so (`own`). Another hub's own list (the manager joined another hub, or the hub's id changed with its database made again) is kept beside `manager.json` first (`manager.json.machines-<time>`, 0600) and the log says where. From then on its own list is the list: later hand-overs don't change it, and the hub edits it over the bus (`devices.machines.put`, `remove`, `get`; `docs/protocol/protocol.md`), each edit written to `manager.json` and the computer connected, connected again or let go at once. A list that doesn't read is then never written over: the computers stay as they are (at the manager's start, the hub's hand-over meanwhile) and the log says so until it is fixed by hand. An edit by hand takes effect at the manager's next start, the hub's next hand-over or its next edit. A hub that hands the list again without `machines_own` (an older build switched back to) has its hand-over run, but the own list is kept, not written over, for when a hub hands `machines_own` again; meanwhile the hub's edits are refused.
-- **The hub's side** (`server/internal/hub/machines_kept.go`). The hub hands `machines_own` to every manager that names `machines.own`. Once such a manager's report says it holds its list as its own (`devices.state` `own_list`: its `manager.json` list reads, is marked its own and is the one running), the hub moves the `hub.json` machines it reports out of `hub.json`: a copy of them as `hub.json` had them goes beside it (`hub.json.machines-kept-<time>`, 0600), and from then on the hub knows each as kept by that manager (`hub.machines_kept`, beside the owners of `hub.json`'s machines) and by what it last reported of it ("What the hub keeps of each manager": the entry without its secrets). The hub's readers (Persona Link and device-token checks, a member's node streams, the admin page, pairing, trust, mesh records, the warm start) go by `hub.json` plus those.
+- **The hub's side** (`server/internal/hub/machines_kept.go`). The hub hands `machines_own` to every manager that names `machines.own`. Once such a manager's report says it holds its list as its own (`devices.state` `own_list`: its `manager.json` list reads, is marked its own and is the one running), the hub moves the `hub.json` machines it reports out of `hub.json`: a copy of them as `hub.json` had them goes beside it (`hub.json.machines-kept-<time>`, 0600), and from then on the hub knows each as kept by that manager (`hub.machines_kept`, beside the owners of `hub.json`'s machines) and by what it last reported of it ("What the hub keeps of each manager": the entry without its secrets). The hub's readers (Persona Link and device-token checks, a member's node streams, the admin page, pairing, trust, mesh records, the warm start) go by `hub.json` plus those. Its hand-over (`devices`) then carries no machines (`null`); the computers waiting to be confirmed and the rest of it, as before. Each new connection counts as holding its list only once its report says so: until then its hand-over carries what `hub.json` stages for it, and edits are staged there. A kept machine its manager's report lacks (its list doesn't read) stays known as last reported.
   - **Edits go to the manager that keeps the computer**: adding one (the admin page, a computer's code) puts it in the carrier's own list when the carrier keeps one and is connected; removing one (the admin page, a rejected computer) and a connector's new address change it there, at once and without a hub restart. With that manager away they are answered `503 assistant_offline`, and nothing changes; an add then goes to `hub.json`.
   - **`hub.json` is where the hub stages what such a manager doesn't have yet**: a computer added while it was away, one moved to it, one edited in `hub.json`, or one an older hub build added while switched back to. Each time it reports, the hub asks it for each of its `hub.json` machines (`devices.machines.get`): one it has as `hub.json` has it moves out; one it lacks, or has otherwise, is put to it as `hub.json` has it (the same entry once), and moves out at its next report. A machine its report names that is no longer its own (moved away while it couldn't let it go) is taken out of its list then. A kept machine its list no longer has (its `manager.json` lost) is said in the log: put it back from a copy beside `hub.json`, or remove it. Nothing is settled before the hub has read who owns what.
   - A kept machine's `trust` (`work`) is its manager's entry's now, as are its other settings.
+  - **`hub setup` leaves the emptied list alone.** The `"machines": []` a move-out leaves in `hub.json` is not a hub installed before Claude Code: a rerun adds this computer to `hub.json` only while `hub.machines_kept` names none that a manager on the roster keeps ([onboarding.md](onboarding.md) 6.1).
   - **Removing a manager that keeps computers is refused** (`409 keeps_machines`; `503 owners_unknown` while the hub cannot read who keeps what): their entries (their secrets) are in its `manager.json` only. Move them away first, or remove it with `?drop_machines=1`, which drops them. Removing a machine from `hub.json` forgets an old record of a manager that kept it. The hub's own default computer (a `hub.json` without `machines`) moves like any other, but is not removed (`409 default_machine`): it is in `hub.json` again at every start; set `"machines": []` there to remove it.
   - Downgrades: an older hub build doesn't know the moved-out machines (copy them back into `hub.json` from the copy beside it). A manager switched back to a build without `machines.own` is handed no list at all while it still keeps machines (the hub says so in its log): a build from before would write the hand-over over its `manager.json` and lose them. They are connected again when it is switched forward.
 - What the hub knows of each manager's computers in turn is in "What the hub keeps of each manager" below.
@@ -175,7 +176,7 @@ To remove it: `docker rm -f persona-mgr-<id> persona-mgr-<id>-pg && docker netwo
 
 The built-in manager runs on the hub's machine: its extensions call the hub there (`hub.json`'s `listen`), with a token of the scopes they were granted or, the old way (`hub_api`, the extensions in `manager.json`), the hub's own token (`docs/extensions/extensions.md`, "Permissions"). Another manager has neither: it may run on another computer and reach the hub only at its `manager.json`'s `hub`, across the internet with a pinned key the extensions don't know, and it never has the hub's token. So its extensions reach the hub through it: it is **relayed** (`extmgr` `relayed()`). Every manager but the built-in one is relayed; the built-in one becomes relayed with that one switch once it is a service of its own (step 3), and until then its extensions get exactly what they always did.
 
-- **The token** is made by the manager each time it starts the extension's program, kept in its memory only (nothing written to its directory, its database or any `hub.json`), and dropped when the extension stops for good, is switched off, upgraded, reconfigured or uninstalled. It opens what the extension was granted and no more: the scopes its manifest asks for and the user agreed to (`permissions.hub`). Only an extension that asks for no scope but for the hub's full token the old way (`hub_api`, and the extensions written in `manager.json`) gets a token of **every scope** instead of the hub's own: every route an extension may be granted (`extwire.RouteScopes`, any `extensions.call:<id>` too), none of those open to full credentials only (pairing, tokens, managers, the admin pages, `/api/v1/ws`…; `TestAllScopesOpenNoFullOnlyRoute` goes through every route the hub lists). The manager never hands out its bus token, and a token in a `hub.json` that happens to be in its directory is not read for this.
+- **The token** is made by the manager each time it starts the extension's program, kept in its memory only (nothing written to its directory or any `hub.json`; its database records the token's SHA-256 and what it was for, never the token, and nothing recorded is read back as a credential: `extension_tokens`, `docs/extensions/extensions.md` "Permissions"), and dropped when the extension stops for good, is switched off, upgraded, reconfigured or uninstalled. It opens what the extension was granted and no more: the scopes its manifest asks for and the user agreed to (`permissions.hub`). Only an extension that asks for no scope but for the hub's full token the old way (`hub_api`, and the extensions written in `manager.json`) gets a token of **every scope** instead of the hub's own: every route an extension may be granted (`extwire.RouteScopes`, any `extensions.call:<id>` too), none of those open to full credentials only (pairing, tokens, managers, the admin pages, `/api/v1/ws`…; `TestAllScopesOpenNoFullOnlyRoute` goes through every route the hub lists). The manager never hands out its bus token, and a token in a `hub.json` that happens to be in its directory is not read for this.
 - **The address** is the manager's relay to the hub (`internal/extension/hubrelay`): it listens on the loopback, on a port the system picks, once an extension needs it, and passes each request (WebSockets too) on to its `manager.json`'s `hub` with its own client, the one that pins the hub's key. It passes on only the hub's API (`/api/…`, no `.` or `..` segment) with a live token of one of its own extensions (the header, else `?token=`, as the hub reads them), as the extension sent it: no cookie, no `X-Forwarded-*`, nothing of the extension's making but the request. Anything else gets 401 or 404 from it and never reaches the hub. While the manager is off the hub's bus (a hub restart, a network blip) it answers `503 manager_offline` with `Retry-After` itself and sends nothing on: the hub could not ask it whose a token is. A hub can also lose the manager before the manager notices (it crashed and came back, the connection is half open: the manager's keepalive finds out within a minute or so). So when the hub's auth layer refuses a token the relay knows (`401`, or `503 manager_offline`), the relay holds its extensions' requests the same way until the manager's next bus connection, or for a minute at most (a refusal that was not about the connection); a refusal of a token that went meanwhile (its extension stopped), or of a request sent on an earlier connection than the manager's now (it came back after a reconnect), holds nothing. The hub's auth layer says it is its own refusal with `X-Persona-Auth-Refused` (`token` on the 401, `manager_offline` on the 503) and takes that header off every other response, a manager's or an extension's passed on included, as the response's head actually leaves (outside gzip, which may hold it back): a `401` that comes from further on (a route whose own upstream refused its token) holds nothing. The extensions get it as `PERSONA_HUB_URL` and in `initialize`'s `hub.url`; the sandbox's egress proxy points `hub.persona.internal` at it.
 - **The proof**: on each request the relay adds `X-Persona-Manager-Proof` (`extwire` `SignProof`): an HMAC-SHA256 over the method, the path with its query, the hash of the extension's token, a time and a random nonce, with the manager's id. Its key is made from the manager's bus token (`extwire.ProofKey`: an HMAC of a fixed label keyed by the token); the token itself is never sent. The hub makes the same key from the token as the manager connects and keeps it with that connection, in memory only: it is not the hash of the token the hub's database keeps, so reading the database or a backup forges no proof. An extension never sees it and cannot make one. The proof is set as each request goes out, so a bodiless `GET` or `HEAD` the hub refuses as sent before (`proof_replayed`: the transport may send a request again, nonce and all, on a connection that dropped) is sent once more with a new one.
 - **Who it is**: the extensions of a manager other than the built-in one get `PERSONA_MANAGER=<id>` and `initialize`'s `hub.manager`; the built-in manager's get neither, as before.
@@ -235,15 +236,144 @@ On an upgraded install the manager's `secret.key` began as the same bytes as the
 - **During a hub switch,** an older manager process still running cannot open what the rotation sealed again (model providers' keys, connectors' secrets): it is about to stop.
 - **A legacy `mail_accounts.json` that fails to import** keeps the old key: each start says so, and it is deleted once the file is imported.
 
+## Automatic updates for an independent manager
+
+An independent manager's executable is separate from the Hub and the node. Updating either
+of those does not update that manager. Older `manager run` processes have no update command
+or RPC. Their first update is driven externally by the existing release publisher, executing
+the **new, same-source release artifact** as `personad manager update`. It does not ask the
+old process to execute a new command, reinstall or join again.
+
+The existing `scripts/release/hub_release.py` worker accepts an explicit manager scope:
+
+```sh
+python3 scripts/release/hub_release.py --config <existing-worker-config> \
+  --scope manager --manager-id <manager-id> --commit <full-main-commit>
+```
+
+An existing service that supplies no arguments can select the same operation through its
+private worker configuration: `scope: "manager"`, `manager_id`, and `manager_commit` (the full
+source SHA). Unconfigured workers keep their existing Hub behavior. `manager_targets` maps
+that exact ID to a `publish_command` argv array invoking
+`scripts/release/publish_manager_release.py --config <private-target-config>`; add `--apply`
+only for an authorized activation window. There is no inferred default manager or new timer.
+Use `--validate-only` to build and validate without publication.
+
+This manager operation is a pinned, one-shot bootstrap. The existing release service and
+timer must stay gated outside its separately scheduled window, including after completion;
+selecting manager scope does not enable periodic manager upgrades. The old baseline hash
+and bootstrap window are not a continuing health probe. Repeating an obsolete operation
+must fail its current preconditions, rather than return a historical deployment success.
+Further activation requires a newly reviewed baseline and authorization window.
+
+The worker retains the original `state_dir/lock`, source-branch ancestry checks and full
+release validation. `--publish-managers` produces `manager-manifest.json` containing the
+same-source Linux and Darwin personad artifacts; it does not publish node packages or
+change a node pointer. Each manager has its own `state_dir/manager/<id>/last.json`.
+The target configuration's bytes enter the cache identity: a Hub-only success cannot skip
+an unfinished manager, and changing an explicit target causes a new publication check.
+Validated builds may be reused, but a historical manager success never skips the current
+publisher invocation. Validation-only statuses use `manager-release/validation`, separate
+from activation's `manager-release/worker` status.
+A checked package is not installed. Only a confirmed receipt bound to this run, manager
+and source makes that manager operation successful. Consumers must require that success
+before resuming application publication.
+
+### Transport and the first update
+
+The manager publisher reuses the original publisher's `credentials_command`, `ssh_proxy`,
+`remote_root` and `release_namespace` configuration and authenticated connection to the Hub.
+On the Hub it holds the existing `releases/hub/.publish.lock` for the whole manager operation.
+It then uses a configured SSH transport to the target Mac. The new transport is a product
+entry point, not a claim that an installation already has the required endpoint or identity.
+A Persona Link connection or a reverse SSH connection does not establish this route.
+
+The private publisher configuration adds a `target` object with these required values:
+
+| Values | Meaning |
+| --- | --- |
+| `manager_id`, `main`, `machine_id` | Exact existing manager and original assistant identity |
+| `dir`, `binary`, `uid` | Canonical manager directory, its own `bin/personad`, operating-system owner |
+| `unit`, `plist_path` | Original launchd label and existing plist; compatibility labels are accepted |
+| `previous_sha256`, `config_sha256`, `plist_sha256` | Read-only baseline hashes for the executable, manager.json and original plist |
+| `transport` | `kind: "ssh"`, explicit `host`, `port`, `user`, `identity_file`, `known_hosts_file` on the Hub |
+| `freeze`, `activation_enabled`, `bootstrap_authorized`, `bootstrap_window_until` | Explicit activation policy; frozen/disabled is the default |
+
+SSH uses only those selected identity and known-host files, strict host-key checking and
+batch mode. No default key, hostname inference, reverse route or trust-on-first-use is used.
+Missing transport configuration fails without guessing. Direct SSH (`kind: "ssh"`) and
+managed Cloudflare SSH (`kind: "cloudflare-ssh"`) are supported. Cloudflare targets use
+the same explicit SSH fields with origin port 22, plus `cloudflared_path` (canonical,
+executable absolute path on the Hub) and `cloudflared_sha256` (the installed binary's
+verified SHA256). The publisher generates only the fixed proxy command
+`cloudflared access ssh --hostname <host>`; arbitrary proxy commands, SSH aliases and
+implicit jumps are rejected. The selected managed route and any required noninteractive
+Cloudflare Access authorization must already work for the publisher identity. An account
+API token or a tunnel management certificate does not establish client authorization.
+Install the architecture-matching official client through the existing configuration lane
+and record its hash before selecting it; the publisher does not download clients or create
+tunnels, DNS records, services, Access policies or SSH authorizations.
+Other transports and platforms are rejected. The operator must
+provision the intended endpoint, trusted host key and identity reference through their normal
+configuration process before checking connectivity. The publisher never provisions them.
+
+Without `--apply`, publication only reads the service and product state and returns `checked`.
+It does not create remote staging, rewrite product configuration or operate a service.
+Applying additionally requires an unfrozen, explicit maintenance window of at most fifteen
+minutes and a fresh scoped session snapshot. Older managers do not report full background
+idleness; the window explicitly authorizes that first bootstrap and is not represented as
+proof that every background activity is idle. Working, compacting, unknown or offline
+session state refuses the operation. Idle evidence is refreshed after artifact transfer.
+
+### Confirmation and recovery
+
+The formal artifact is staged in the manager's own `.manager-updates/<run-id>` directory.
+The new CLI checks the release channel, complete clean source identity, platform, native
+checksum, size, owner, original loaded service arguments and baseline hashes. Stage/dev
+executables cannot activate a formal update. `manager update check --plan <plan>` is read-only.
+
+`manager update start` creates a separate, restartable launchd transaction guardian. It never
+rewrites the original plist or its environment, calls install/join, or changes the manager's
+configuration, database bindings, node, Hub or other manager. The guardian journals before
+replacing the independent executable and restarts only that original validated service.
+A crash during activation resumes recovery rather than retrying the candidate.
+An unfinished active transaction prevents another run from taking ownership. A recovering
+guardian may restore an image only while the active marker still belongs to its exact run
+and target; a missing or foreign marker cannot authorize rollback of a later transaction.
+
+The new manager reports readiness only after its stores opened and its authenticated Hub
+handshake completed. The guardian checks that readiness against the original service's
+actual PID, image, native checksum and unchanged configuration. It then waits for the
+publisher to verify the live manager version, scoped assistant's original main/machine and
+unchanged node inventory through existing Hub GET routes. `confirm` acknowledges these
+checks; only then is the receipt `confirmed`. Roster, machine or main-session resync may
+lag the authenticated handshake: the publisher allows at most sixty seconds from the
+`start` command's return for these temporary absences to settle. Explicit ownership or
+identity conflicts fail immediately.
+A health rejection, missing acknowledgement,
+startup timeout or interrupted activation restores the verified previous executable and
+restarts the same service. An unrelated replacement or changed service identity is never
+overwritten. Receipts distinguish `checked`, `applied`, `confirmed` and `rollback`; failures
+must not release dependent publication steps.
+A rollback receipt proves that the previous executable was restored and the original
+service's restart command succeeded; reconnect and service health still require verification.
+
+This path does not change default permissions. After the manager version is confirmed,
+permission settings and inheritance require their own explicitly scoped product acceptance.
+The presence of `config.own` or an omitted optional `default_permission_mode` field alone
+does not prove support or an active runtime approval policy. Existing main conversations and
+history remain the acceptance baseline; updating the manager does not send a new turn.
+
 ## The built-in manager as its own service
 
-By default the hub starts the built-in manager as its child (`personad assistant`) and gives it a new bus token at every start. With `assistant.mode` set to `service` in `hub.json`, the built-in manager is a service of its own instead: the hub neither starts it nor gives it a token. It is bound to the hub once with a one-time code, and hub restarts (blue-green switches) no longer restart it. It runs on the hub's machine (or in a container beside the hub): it shares the hub's data directory, `hub.json` included, as the child does.
+By default the hub starts the built-in manager as its child (`personad assistant`, or `persona-manager assistant` beside a hub run as `persona-hub`) and gives it a new bus token at every start. With `assistant.mode` set to `service` in `hub.json`, the built-in manager is a service of its own instead: the hub neither starts it nor gives it a token. It is bound to the hub once with a one-time code, and hub restarts (blue-green switches) no longer restart it. It runs on the hub's machine (or in a container beside the hub): it shares the hub's data directory, `hub.json` included, as the child does.
 
 - **Setup installs it.** `personad hub setup` (`persona-hub setup`) makes a new install's built-in manager a service of its own when it installs services: on Linux with a systemd user instance (`systemctl --user` works), or on a Mac. It doesn't with `--no-service` or in a container. The new `hub.json` gets `assistant.mode` `service`; a mode written there already stays (`--manager-service` sets `service` over a `child`). With service mode, setup makes a one-time code (as `manager-code` does) and runs `<data dir>/bin/personad manager install --builtin --join http://127.0.0.1:<port>` with the code in `PERSONA_MANAGER_CODE`, not on the command line (any user of the machine can read that while it runs, and the hub trades this code from its own machine without another credential). The manager's program does the rest, so the hub writes none of its files. Setup voids the code afterwards when the program did not trade it. Then it waits up to 90 seconds for the hub to have it on the bus.
   - A failure of the manager's program stops setup with that program's last line, and with the way back (`persona-hub manager-mode child`, then restart the hub's service). When the service does not come online, setup says so (and where its log is) and goes on to the pairing code. A rerun changes nothing that works.
-  - **Existing installs:** a `hub.json` a hub has run with keeps its mode, and setup says how to switch. `hub setup --manager-service` does the switch. First `<data dir>/bin/personad` (in an older layout, the binary under its former name; see `docs/protocol/rolling-upgrade-compatibility.md`) must say the service can be installed (`manager install --builtin --check`; an older binary can't: nothing is changed then). Then setup sets the mode, restarts the hub's service, binds and installs. When that fails, setup undoes the switch: it puts the mode back, removes the service as far as it got (`uninstall --builtin`; a binding it made stays) and restarts the hub, which starts its child again. When the service only fails to come online, setup leaves it and says how to go back (`persona-hub manager-mode child`, then restart the hub's service), as it does after every failure of this step. `--manager-service` refuses a hub whose built-in manager runs elsewhere (`assistant.external`) and changes nothing; it can't go with `--no-service`.
+  - **Existing installs:** a `hub.json` a hub has run with keeps its mode, and setup says how to switch. `hub setup --manager-service` does the switch. First `<data dir>/bin/personad` (in an older layout, the binary under its former name; see `docs/protocol/rolling-upgrade-compatibility.md`) must say the service can be installed (`manager install --builtin --check`; an older binary can't: nothing is changed then). Then setup sets the mode, restarts the hub's service, binds and installs. When that fails, setup undoes the switch: it puts the mode back, removes the service as far as it got (`uninstall --builtin`; a binding it made stays) and restarts the hub, which starts its child again. When the service only fails to come online, setup leaves it and says how to go back (`persona-hub manager-mode child`, then restart the hub's service), as it does after every failure of this step. `--manager-service` refuses a hub whose built-in manager runs elsewhere (`assistant.external`) and changes nothing; it can't go with `--no-service`. Step by step, with a check and the way back for each step and for Docker and hubs without a service manager: [upgrade.md](../operations/upgrade.md).
+  - **Docker:** the hub image runs the built-in manager (`persona-manager assistant`) beside the hub in the hub's container, under `personad supervise`, which binds it and starts each again when it stops. New installs get service mode; older ones keep the hub's child until switched. It can also run in a container of its own. See [docker.md](../operations/docker.md) ("The hub and the built-in manager in one container").
   - **Service mode without a service:** `hub setup --no-service`, or a container, on a hub in service mode installs nothing. When the built-in manager isn't on the bus, setup reports it as a problem (nothing runs it) and gives both ways out: run it yourself, or `persona-hub manager-mode child` so the hub starts it.
-- **Its service.** `persona-manager install --builtin [--join <hub address>]` (`personad manager install --builtin`) installs it on Linux as the systemd user unit `persona-manager-assistant.service`, and on a Mac as the launchd agent `com.persona.manager.assistant` (log: `managers/assistant/manager.log` in the data directory). Each runs `<data dir>/bin/personad assistant` (the binary the hub's service runs, which updates replace; else the running program) with `PERSONA_ASSISTANT_DEPLOY=service` and `PERSONA_HOME` set to the data directory. The unit restarts it on any exit but 2 (`RestartPreventExitStatus=2`: not bound, another one running). With `--join` and a code in `PERSONA_MANAGER_CODE` (which it takes out of its environment once read, so `systemctl` and `launchctl` don't get it), it keeps a binding whose token the hub still takes: it checks with a bare dial, which takes nothing over, and leaves the code to run out. Otherwise it trades the code first. Without a working binding and a code it installs nothing (exit 2). No systemd user instance, or another system, stops it before the code is spent; `install --builtin --check` checks just that, changing nothing. The unit is started when it does not run, restarted when it changed or the binding is new, and left alone otherwise. On a Mac, `bootstrap` right after `bootout` is tried up to 5 times, a second apart. `persona-manager join --builtin <hub address> [<code>] --install` (the code given, or in `PERSONA_MANAGER_CODE`) always trades the code, then installs it the same way. `persona-manager uninstall --builtin` stops and removes the service; the binding and the data stay. `persona-manager status` lists it too (`status --builtin`: only it).
+- **Its service.** `persona-manager install --builtin [--join <hub address>]` (`personad manager install --builtin`) installs it on Linux as the systemd user unit `persona-manager-assistant.service`, and on a Mac as the launchd agent `com.persona.manager.assistant` (log: `managers/assistant/manager.log` in the data directory). The unit runs `<data dir>/bin/persona-manager assistant` when that is beside `<data dir>/bin/personad` and its build (`version -v`), else `<data dir>/bin/personad assistant` (the binary updates replace; without one there, the running program); the agent runs `personad assistant` for now, and `install --builtin` says so when `persona-manager` is beside it ([server.md](../server/server.md) ("Programs")). An agent installed by a `persona-manager` run from elsewhere, with no `<data dir>/bin/personad`, runs the `personad` beside that `persona-manager` when it is the same build; with none there, or one of another build, it runs that `persona-manager`, and `install --builtin` says so and why (put a `personad` of its build in `<data dir>/bin` and install again). Each runs it with `PERSONA_ASSISTANT_DEPLOY=service` and `PERSONA_HOME` set to the data directory. The unit restarts it on any exit but 2 (`RestartPreventExitStatus=2`: not bound, another one running). With `--join` and a code in `PERSONA_MANAGER_CODE` (which it takes out of its environment once read, so `systemctl` and `launchctl` don't get it), it keeps a binding whose token the hub still takes: it checks with a bare dial, which takes nothing over, and leaves the code to run out. Otherwise it trades the code first. Without a working binding and a code it installs nothing (exit 2). No systemd user instance, or another system, stops it before the code is spent; `install --builtin --check` checks just that, changing nothing. The unit is started when it does not run, restarted when it changed or the binding is new, and left alone otherwise. A unit or agent that ran another program is moved to this one, and it says so (`it runs … now, not …`); one under the former name keeps `personad`, and `PERSONA_SPLIT_PROGRAMS=0` in its environment keeps `personad` too, written into the unit until `install --builtin` runs again without it ([server.md](../server/server.md) ("Programs")). On a Mac, `bootstrap` right after `bootout` is tried up to 5 times, a second apart. `persona-manager join --builtin <hub address> [<code>] --install` (the code given, or in `PERSONA_MANAGER_CODE`) always trades the code, then installs it the same way. `persona-manager uninstall --builtin` stops and removes the service; the binding and the data stay. `persona-manager status` lists it too (`status --builtin`: only it).
 - **A new binary.** Updates (the hub's self-update swaps `personad` and its programs together) and `install.sh` replace the file the service runs from, and nothing else restarts the service. So the service looks at that file every minute. When another file is there, or this one was written over:
   - **Check:** the new file must be an executable regular file whose `version -v` answers within 30 seconds (one that hangs is killed with what it started). One that doesn't is not used: the service goes on with the code it runs, says so in its log, and doesn't check that file again until another one is there.
   - **Idle:** with a file that runs, it waits until nothing is going on. That means no request being answered (an app's call or an extension's through the hub; an agent's tool call or a write the gate forwarded from a computer), no hub event left to handle, and no request or stream of the extensions' open (a voice call, or a live view such as an extension's log page left open, which holds it up to the 30 minutes below). None of its own conversations may be on a turn (or their machine not answering), no agent's finished turn being looked at, and no scheduled task's message or channel's answer going out. A computer's card or question waits on a person and is taken up again after a restart, so it doesn't count. Its outbox doesn't hold it back: what it keeps waits in its database. It logs what it waits for. A check of all this that doesn't answer within 10 seconds counts as busy, and its late answer is dropped. After 30 minutes it goes ahead anyway, saying so.
@@ -318,7 +448,7 @@ Moving a machine also gives both managers a new answer to their hello (`manager.
 
 - **One its manager keeps** ("Each manager's computers") moves with its entry, secrets too: the hub gets it from the manager that keeps it (`devices.machines.get`), puts it in the new one's own list (`devices.machines.put`), or into `hub.json` for a manager that keeps none, and has the old one let it go (`devices.machines.remove`). With the one that keeps it away, it doesn't move (`503 assistant_offline`). A `hub.json` machine moved away from a manager that keeps its own list is taken out of that list (retried at its next report when that fails), and put in the new one's when it keeps one, before it leaves `hub.json`. A manager that keeps machines in its own list is removed only with `?drop_machines=1` ("Each manager's computers").
 
-- The hub keeps who carries it (setting `managers.machines`, `{machine: manager}`, absent: the carrier), and from then on sends what concerns the machine to the new manager (`moveMachine` in `ownership.go`, the one place).
+- The hub keeps who carries it (setting `managers.machines`, `{machine: manager}`, absent: the carrier), and from then on sends what concerns the machine to the new manager (`moveMachine` in `ownership_moves.go`; who owns it is still decided in one place, `ownership.go`).
 - Each connected manager is handed its machines again (`devices.config`, and the hello's `devices` section now goes to every manager with only its own machines): the old one lets it go, the new one connects it. Until the new one reports it, the machine shows offline.
 - **Its sessions go with it.** From the move on, every session on the machine is the new manager's: the user's messages, renames and read state, its cards' parameters, `device.call` there. That includes the old manager's own conversations there, its main conversation too: its snapshot listing them no longer counts, and it can no longer reach them. Its pending cards on the machine are withdrawn (`interaction_resolved`), and those naming one of its sessions without the machine; its cards naming nothing of the machine stay. A manager keeps its main conversation on a machine it keeps.
 - **Its directories stay, unread.** The old manager's assistant and health directories stay on the computer as they are (its CLAUDE.md, its memory, its conversations' transcripts): the new manager uses its own (below, "Directories on a computer"), never reads the old one's, and its conversations there are no assistant conversations of the new manager's. Delete them by hand if they should go.
@@ -358,6 +488,160 @@ Every client has the same page (web: `docs/web/web.md`, Android: `docs/android/a
 - New Manager asks for a name, then opens the install code sheet: the code with Copy, an m:ss countdown, and New Install Code once it runs out. When the hub sends `commands`, the sheet adds As a Service and With Docker, each with Copy. Without them it shows the code and a short note.
 - The socket asks for feature `managers` in its URL's `?features=` (`LiveConnection.queryItems`; the Apple apps' `client_hello` only carries the locale), and each `{"type":"managers"}` push moves `AppModel.managersRevision`, which makes the open page reread the roster. A hub without the roster (404 without a code) gets a line saying to update the hub.
 - DEBUG launch arguments for screenshots: `-tab settings -openManagers YES`, `-openManagerPage <id>`, and `-showManagerCode YES` (makes a manager on the fake hub and opens its code sheet). The fake hub (`scripts/mock/mock_hub.py`) serves the roster; `MOCK_MANAGER_COMMANDS=1` adds the commands.
+
+## Automatic update idle evidence
+
+A checked release candidate is not idle evidence. The original independent
+manager settings and the live Node own different parts of the proof. A newer
+full `personad` can read both without replacing or restarting that manager:
+
+```sh
+personad manager update inventory --plan /absolute/original-plan.json \
+  --main ORIGINAL_MAIN --machine ORIGINAL_MACHINE --machine-uid ORIGINAL_UID
+```
+
+This command uses the plan only to bind the original manager directory, UID and
+config hash. It opens that manager's existing Postgres with read-only startup
+parameters and executes one fixed SELECT of the persisted main, machine, row
+version and observation time. It does not use the database migration entry point,
+write settings, create receipts or activate an update. Connection diagnostics do
+not print the DSN. A missing main or mismatched explicit identity fails closed.
+
+The optional Node capability `manager_update_inventory_v1` announces the local
+0600 `node.sock` request kind `update.inventory`. The input is an explicit
+`{manager, main, machine_id, machine_uid, authority_revision}`. Its schema-1
+response binds that identity to the process instance, source revisions, complete
+activity rows and completion time. It is a local read-only interface; it does not
+add a Hub Link transaction-update adapter or raise the Node protocol floor.
+Legacy managers and Nodes remain compatible for ordinary use, but a legacy Node
+without this producer cannot furnish this proof.
+
+The producer reads full configured host snapshots, complete loaded Codex thread
+pages including ephemeral/child threads, fresh background terminal lists, and
+owned stdio app-servers. Starting keys, warm spares, resident processes and
+pending interactions cannot be omitted. Retained background/compaction and nested
+workflow child metadata remain blockers without explicit completion. It compares
+source membership, identity, configuration and the owner's process inventory
+again after reading. A cached display row, historical `offline` status, missing
+list or old mtime never proves completion. An unloaded persisted main is covered
+only after the complete live sources have answered. Snapshot data includes no
+prompts, task commands, transcript content or credentials.
+
+An explicitly remote Codex terminal can use the configured app-server's authority.
+The supported command form is `codex resume --remote <configured-local-endpoint> <thread-id>`:
+the host must report that exact session, its foreground PID must match the owner's
+process inventory, and kernel argv must bind that PID to the same endpoint and
+thread. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
+`KERN_PROCARGS2` on macOS, never the formatted `ps` command or a title. The endpoint
+must already be a configured, connected local app-server; collection neither starts
+one nor resumes the terminal. A matching historical thread ID alone is insufficient.
+All loaded threads, ephemeral children, background terminals and pending activity
+are retained even when the host displays idle. Activity revisions and foreground
+bindings are read again before completion. Missing sessions, duplicate bindings,
+changed membership and old app-servers without background-terminal reads are refused.
+
+Other terminal forms, live Claude streams without a synchronous background-inventory
+barrier, and third-party runtimes without an authoritative inventory contract remain
+unsupported for idle attestation. This adapter does not certify existing embedded
+or unbound terminals, upgrade a runtime, or establish a new runtime capability.
+Herdr's display revision, foreground process list and session snapshot are not a
+complete background or child inventory. A future runtime producer must expose a
+read-only snapshot for the same live session/process, with an instance/generation,
+complete source membership, children, background work, pending interactions,
+compaction and revision/freshness evidence. Installing a host adapter after a
+session starts cannot manufacture missing lifetime coverage. Their display saying
+idle does not remove the blocker. An unreachable source, unresolved retained activity,
+missing capability, changing ownership, partial page or clock conflict also fails closed.
+
+#### Preparing terminal maintenance material
+
+`personad manager maintenance` is a separate, read-only preparation utility. It
+does not call session close, retire, start or resume, send slash commands or signals,
+change update scope, or produce idle evidence. Both native exit and restoration
+execution remain **unsupported**: knowing `/exit` and an exact history ID does not
+prove persistence, termination of attached background sessions, child completion,
+or safe recovery of tools and services. No force-close fallback exists.
+
+An operator can preserve an explicit private record before considering maintenance:
+
+```json
+{
+  "runtime": "claude",
+  "version": "<recorded native version>",
+  "session_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "pane": "<recorded pane>",
+  "pid": 12345,
+  "executable": "/absolute/canonical/path/to/claude",
+  "cwd": "/absolute/canonical/workspace",
+  "profile_home": "/absolute/canonical/profile",
+  "history": "/absolute/canonical/profile/projects/project/session.jsonl",
+  "environment": {
+    "HOME": "/absolute/home",
+    "CLAUDE_CONFIG_DIR": "/absolute/canonical/profile"
+  },
+  "resume_options": ["--model", "<recorded model>"],
+  "settings": ["/absolute/canonical/profile/settings.json"]
+}
+```
+
+For Codex, use `runtime: "codex"`, `CODEX_HOME` and its native rollout. All paths
+must already be canonical. Version, pane, cwd, profile, options and session-to-PID
+association are supplied observations, not verified runtime claims. Preparation
+checks the history's own ID, hashes the executable/history/selected settings, and
+brackets file reads with owner/process observations. The process key is only an
+OS observation, not a stable producer instance or proof of a session binding.
+It deliberately reads no process environments, arguments, credentials or task text
+from running terminals. Record only known non-secret settings paths, never tokens,
+credential files or message content. Output includes private paths and must stay
+local; do not attach the record to a public issue.
+
+```sh
+umask 077
+personad manager maintenance prepare --record record.json > prepared.json
+personad manager maintenance observe --prepared prepared.json --wait 10s
+personad manager maintenance recovery-recipe --prepared prepared.json
+```
+
+Input JSON must be owned by the current user, private (0600 or stricter), at most
+1 MiB and contain no unknown fields. At most 16 distinct selected settings files
+are accepted; file read budgets are 512 MiB for the executable, 128 MiB for history
+and 4 MiB per settings file. System-installed executables may belong to another
+user; private history and settings must belong to the current user. No default
+profile, guessed ID or empty-history
+fallback is accepted. Only the original ID and explicitly recorded options appear
+in the recipe, as an argument vector with no prompt or shell execution. Missing or
+conflicting history, a changed executable/settings file, history truncation or a
+changed original history prefix refuses the recipe. Same-ID history may append;
+each appended row is checked, including a final persistence flush after departure.
+
+Observation waits at most 30 seconds. Unreadable/partial process tables and changed
+PID observations return errors; timeout remains an error and never closes anything.
+`process_absent: true` is only an absence observation, not a graceful-exit receipt:
+crash, detach, PID reuse and surviving background work are not resolved by it.
+`graceful_exit_confirmed`, `background_complete`, `machine_idle`, `binding_verified`
+and `execution_supported` remain false in their respective outputs. A successful
+prepare or recipe command means only that its preservation checks passed. It is
+not authorization or technical readiness for exit, recovery or manager activation.
+The original complete inventory, main identity, transaction lock, guardian, health
+confirmation and rollback requirements remain necessary and unchanged.
+
+The native reader performs two complete runtime reads within 30 seconds, compares
+payload revisions, and rereads persisted identity after the final runtime read.
+Only a successful complete read returns `idle: true` and a SHA-256 digest. Its
+`completed_at` starts the evidence lifetime; it does not retimestamp a saved
+snapshot. Collect again immediately before the original transaction start after
+any transfer/check. The transaction's original lock, fresh plan, guardian,
+confirmation and rollback requirements remain in force. An explicit bootstrap
+window does not replace missing idle evidence.
+
+The native reader may be newer than the fixed formal manager candidate. The
+candidate retains its own source/hash checks and is not rebuilt merely to collect
+inventory. A Node-only executable lacking the manager CLI needs the same formal
+source's full `personad` reader, not a guessed executable or an installed manager
+replacement. Existing publisher HTTP collection (`manager_idle.py`) still refuses
+legacy display inventories without its complete scoped metadata; the local
+producer does not silently label those HTTP lists authoritative. Hub Link update
+transport is a separate capability and is not required for local collection.
 
 ## Clients (step 4)
 

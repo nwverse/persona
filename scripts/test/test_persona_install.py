@@ -65,9 +65,14 @@ LINK_FIXTURE = ('#!/bin/sh\nif [ "$1" = version ]; then printf "link-version\\n"
                 '  echo "persona-node did not answer: the node service runs personad again" >&2; exit 1\nfi\n')
 
 
+# The hub's own programs in a fake release: say their version, and which release they came from.
+PROGRAM_FIXTURE = '#!/bin/sh\n# {program} release {release}\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n'
+HUB_PROGRAMS = ('persona-hub', 'persona-manager')
+
+
 class PersonaInstallTests(unittest.TestCase):
     def run_install(self, home, initial='fresh', extra=None, corrupt=False, link=None,
-                    node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None):
+                    node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None, programs=(), release='1'):
         target = {'Darwin': 'darwin', 'Linux': 'linux'}[system or platform.system()] + '-' + {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
@@ -85,6 +90,10 @@ class PersonaInstallTests(unittest.TestCase):
                 node_data = gzip.compress(NODE_FIXTURE, mtime=0)
                 (downloads / ('persona-node-' + target + '.gz')).write_bytes(node_data)
                 sums += hashlib.sha256(node_data).hexdigest() + '  persona-node-' + target + '.gz\n'
+            for program in programs:  # the hub's own programs (persona-hub, persona-manager), tagged with the release
+                program_data = gzip.compress(PROGRAM_FIXTURE.format(program=program, release=release).encode(), mtime=0)
+                (downloads / (program + '-' + target + '.gz')).write_bytes(program_data)
+                sums += hashlib.sha256(program_data).hexdigest() + '  ' + program + '-' + target + '.gz\n'
             (downloads / 'SHA256SUMS').write_text(sums)
             class Handler(SimpleHTTPRequestHandler):
                 def __init__(self, *args, **kwargs):
@@ -283,6 +292,127 @@ class PersonaInstallTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('the node service stays on personad', result.stderr)
             self.assertTrue((home / '.persona/bin/persona-node').exists())
+
+    def test_hub_gets_its_own_programs_with_personad(self):
+        # The computer that runs the hub gets persona-hub and persona-manager with personad, the same release, on a new
+        # install and on every upgrade; hub setup runs after all three are in place.
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            bin_dir = home / '.persona/bin'
+            for release in ('1', '2'):
+                result = self.run_install(home, programs=HUB_PROGRAMS, release=release)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for program in HUB_PROGRAMS:
+                    self.assertIn(f'# {program} release {release}', (bin_dir / program).read_text())
+                    self.assertTrue(os.access(bin_dir / program, os.X_OK))
+                    self.assertIn(f'{program} fixture-version installed at {bin_dir / program}', result.stdout)
+                    self.assertFalse((bin_dir / (FORMER_NAME + '-' + program.split('-', 1)[1])).exists())
+            self.assertEqual((home / 'personad-calls').read_text().count('hub setup\n'), 2)
+        with tempfile.TemporaryDirectory() as directory:  # a hub without --hub (an upgrade): hub.json says it is one
+            home = Path(directory)
+            (home / '.persona').mkdir()
+            (home / '.persona/hub.json').write_text('{}')
+            result = self.run_install(home, programs=HUB_PROGRAMS, extra={'PERSONA_ROLE': ''})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for program in HUB_PROGRAMS:
+                self.assertTrue((home / '.persona/bin' / program).exists(), program)
+        with tempfile.TemporaryDirectory() as directory:  # asked at the terminal: added before hub setup
+            home = Path(directory)
+            no_role = {'PERSONA_ROLE': '', 'PERSONA_ADMIN_ACCESS': ''}
+            result = self.run_install(home, programs=HUB_PROGRAMS, extra=no_role,
+                                      answers=[('跑 hub 吗', 'y'), ('选哪个？[1-4', '')])
+            self.assertEqual(result.returncode, 0, result.stdout)
+            for program in HUB_PROGRAMS:
+                self.assertTrue((home / '.persona/bin' / program).exists(), result.stdout)
+            self.assertIn('hub setup\n', (home / 'personad-calls').read_text())
+
+    def test_a_release_without_the_hubs_programs(self):
+        # Where there are none yet: personad alone, as before. Where there are and no service runs the one the release
+        # lacks: the rest is installed and that one stays as it was.
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            bin_dir = home / '.persona/bin'
+            result = self.run_install(home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((bin_dir / 'personad').exists())
+            for program in HUB_PROGRAMS:
+                self.assertFalse((bin_dir / program).exists())
+            self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS).returncode, 0)
+            # the hub's unit runs personad; another unit names persona-hub only in passing
+            units = home / '.config/systemd/user'
+            units.mkdir(parents=True)
+            (units / 'personad.service').write_text(f'[Service]\nExecStart="{bin_dir}/personad" hub\n')
+            (units / 'notes.service').write_text(f'[Service]\nExecStart=/bin/true {bin_dir}/persona-hub.prev\n')
+            calls = (home / 'personad-calls').read_text()
+            result = self.run_install(home, programs=('persona-manager',), release='3')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'{bin_dir}/persona-hub stays as it was', result.stderr)
+            self.assertIn('# persona-hub release 1', (bin_dir / 'persona-hub').read_text())
+            self.assertIn('# persona-manager release 3', (bin_dir / 'persona-manager').read_text())
+            self.assertGreater((home / 'personad-calls').read_text().count('hub setup\n'), calls.count('hub setup\n'))
+
+    def test_a_release_without_a_program_a_service_runs(self):
+        # A service runs the program the release lacks: nothing is installed (it would stay older than personad), and
+        # hub setup does not run.
+        for name, path, content, missing in (
+                ('unit', '.config/systemd/user/personad.service', '[Service]\nExecStart="{bin}/persona-hub" run\n', 'persona-hub'),
+                ('unit under %h', '.config/systemd/user/personad.service', '[Service]\nExecStart=%h/.persona/bin/persona-hub run\n', 'persona-hub'),
+                ('spaces around =', '.config/systemd/user/personad.service', "[Service]\nExecStart = '{bin}/persona-hub' run\n", 'persona-hub'),
+                ('a unit of the machine', '.local/share/systemd/user/persona.service', '[Service]\nExecStart={bin}/persona-hub\n', 'persona-hub'),
+                ('drop-in', '.config/systemd/user/personad.service.d/90-persona-compat.conf',
+                 '[Service]\nExecStart=\nExecStart={bin}/persona-hub run\n', 'persona-hub'),
+                ('launchd agent', 'Library/LaunchAgents/com.persona.manager.assistant.plist',
+                 '<plist version="1.0"><dict>\n<key>ProgramArguments</key><array><string>{bin}/persona-manager</string>'
+                 '<string>assistant</string></array>\n</dict></plist>\n', 'persona-manager')):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                bin_dir = home / '.persona/bin'
+                self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS).returncode, 0)
+                (home / path).parent.mkdir(parents=True)
+                (home / path).write_text(content.format(bin=bin_dir))
+                before = {name: (bin_dir / name).read_bytes() for name in ('personad',) + HUB_PROGRAMS}
+                calls = (home / 'personad-calls').read_text()
+                kept = tuple(p for p in HUB_PROGRAMS if p != missing)
+                result = self.run_install(home, programs=kept, release='3')
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f'no {missing}', result.stderr)
+                self.assertIn(str(home / path), result.stderr)
+                self.assertEqual({name: (bin_dir / name).read_bytes() for name in before}, before)
+                self.assertEqual((home / 'personad-calls').read_text(), calls, 'hub setup ran')
+
+    def test_a_service_running_a_program_under_a_path_systemd_escapes(self):
+        # A data directory with %, $, a backslash and a quote, named as the hub's setup writes it (and under %h): found.
+        for name, start in (('quoted', '"{q}/persona-hub" run'), ('under %h', '"%h/{rel}/persona-hub" run')):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                state = home / 'data 50% $x \\ "q"'
+                bin_dir = state / 'bin'
+                extra = {'PERSONA_HOME': str(state)}
+                self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS, extra=extra).returncode, 0)
+                def escaped(value):
+                    return value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$')
+                unit = home / '.config/systemd/user/personad.service'
+                unit.parent.mkdir(parents=True)
+                unit.write_text('[Service]\nExecStart=' + start.format(q=escaped(str(bin_dir)), rel=escaped(str(bin_dir.relative_to(home)))) + '\n')
+                result = self.run_install(home, programs=('persona-manager',), release='3', extra=extra)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn('no persona-hub', result.stderr)
+
+    def test_other_computers_do_not_get_the_hubs_programs(self):
+        # A device's node service, a computer that runs only an app-made manager, and one asked "not the hub": as before.
+        pair = {'PERSONA_ROLE': 'node', 'PERSONA_PAIR': 'persona://link?url=https%3A%2F%2Fhub.example.com&token=jp_x'}
+        for name, kwargs, host in (('device', dict(node=True, extra=pair), None),
+                                   ('device on personad', dict(node=False, extra=pair), None),
+                                   ('manager', dict(node=True, extra=pair), 'managers/m-1/manager.json')):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                if host:
+                    (home / '.persona' / host).parent.mkdir(parents=True)
+                    (home / '.persona' / host).write_text('{}')
+                result = self.run_install(home, link=LINK_FIXTURE, programs=HUB_PROGRAMS, **kwargs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for program in HUB_PROGRAMS:
+                    self.assertFalse((home / '.persona/bin' / program).exists(), program)
 
     def test_interactive_node_answer_adds_the_devices_own_program(self):
         # Without a role personad comes first (the questions may make this the hub); answering "node" adds persona-node

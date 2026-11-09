@@ -57,6 +57,8 @@ type pending struct {
 	claimed bool
 	// graceEnded: its grace period ran out (orphanLocked) and it is being ended: a hook back now hands over.
 	graceEnded bool
+	// expired: it ended because its time ran out, unanswered (await); finished() reads it.
+	expired bool
 	// announced: a screen card that rang (announce), carried through a detach (screenGone.announced), so the card
 	// read again once the node is back rings at the window's end only if its predecessor never did (#4979).
 	announced bool
@@ -599,6 +601,9 @@ func (s *Service) show(ix proto.Interaction) {
 // nodeInteraction is a node's interaction.create: allowed right away when "Always allow in this session" already covers it, else
 // shown and waited for.
 func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	if reservedCard(ix) {
+		return proto.Resolution{}, errReservedCard
+	}
 	// Defense behind the node hook: question-text-keyed answers could not be kept apart on a duplicate card.
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
@@ -740,6 +745,7 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 		return proto.Resolution{Dismiss: true}, nil // disconnected hook; a new one can resume
 	}
 	p.claimed, p.graceEnded = true, true
+	p.expired = status == "expired"
 	s.fleet.mu.Unlock()
 	s.recordEnd(id, status, nil)
 	s.finishInteraction(id)
@@ -826,6 +832,30 @@ func (s *Service) recordEnd(id, status string, r *proto.Resolution) {
 // errNotPending: the interaction was answered, withdrawn or expired already.
 var errNotPending = errors.New("no longer pending")
 
+// answeredJustNow is errNotPending for a card another answer claimed a moment ago. That answer reaches the history
+// only after the claim (recordEnd), so whoever asks in between is told it from the claim (#1230).
+type answeredJustNow struct {
+	id     string
+	status string
+	kept   proto.Resolution // as the history keeps it
+}
+
+func (e *answeredJustNow) Error() string {
+	return fmt.Sprintf("interaction %s is %v", e.id, errNotPending)
+}
+func (e *answeredJustNow) Unwrap() error { return errNotPending }
+
+// endStatus is how an answer ends its card in the history.
+func endStatus(r proto.Resolution) string {
+	switch {
+	case r.Cancel:
+		return "cancelled"
+	case r.Dismiss:
+		return "dismissed"
+	}
+	return "resolved"
+}
+
 var errInvalidElicitation = errors.New("elicitation requires action accept, decline or cancel")
 
 // resolve answers an interaction. A screen card acts right away and its error comes back (the dialog changed:
@@ -855,6 +885,9 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 			}
 		}
 	}
+	if p != nil {
+		r.Values = declaredValues(p.ix, r.Values)
+	}
 	if p != nil && p.persisting != nil {
 		attempt := p.persisting
 		s.fleet.mu.Unlock()
@@ -864,7 +897,11 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 		}
 		return fmt.Errorf("interaction %s is %w", id, errNotPending)
 	}
+	var first *answeredJustNow
 	if p != nil && p.claimed {
+		if p.resolution != nil {
+			first = &answeredJustNow{id: id, status: endStatus(*p.resolution), kept: redacted(p.ix, *p.resolution)}
+		}
 		p = nil // answered a moment ago: the first answer is the one the hook and the history get
 	}
 	if p != nil && p.local != nil {
@@ -901,15 +938,16 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 		}
 	}
 	s.fleet.mu.Unlock()
+	if first != nil {
+		return first
+	}
 	if p == nil {
 		return fmt.Errorf("interaction %s is %w", id, errNotPending)
 	}
-	status := "resolved"
-	if r.Cancel {
-		status = "cancelled"
-	} else if r.Dismiss {
-		status = "dismissed"
-	}
+	status := endStatus(r)
+	// Everyone told of the answer (the channels, the task feeds) gets its secret fields masked, as the history keeps them;
+	// only the one waiting on the card (p.local, p.done) gets what was typed into them.
+	told := redacted(p.ix, r)
 	if p.local != nil {
 		err := p.local(r)
 		if err != nil {
@@ -918,32 +956,31 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 			back := s.fleet.interactions[id] == p
 			s.fleet.mu.Unlock()
 			if back { // a Codex card the node could not answer is open again (codexPending): it is not over
-				go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: r, Status: status})
+				go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 				return err
 			}
 		} else {
-			s.channelsEnded(p.ix, &r)
+			s.channelsEnded(p.ix, &told)
 		}
 		// What was typed into a terminal may be a password: the history keeps that something was, not what.
-		kept := redacted(p.ix, r)
+		kept := told
 		if kept.Text != "" {
-			kept.Text = "<redacted>"
+			kept.Text = redactedValue
 		}
 		s.recordEnd(id, status, &kept)
 		s.finished(p)
-		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: r, Status: status})
+		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 		return err
 	}
-	kept := redacted(p.ix, r)
 	if durableQuestion(p.ix) {
-		if err := s.persistQuestion(p, status, kept); err != nil {
+		if err := s.persistQuestion(p, status, told); err != nil {
 			return err
 		}
 	} else {
-		s.recordEnd(id, status, &kept)
+		s.recordEnd(id, status, &told)
 	}
-	s.channelsEnded(p.ix, &r)
-	go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: r, Status: status})
+	s.channelsEnded(p.ix, &told)
+	go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 	if remember {
 		s.keepAlways(p.ix, r) // kept before the hook hears: its next card may follow at once
 	}
@@ -965,24 +1002,79 @@ func (s *Service) channelsEnded(ix proto.Interaction, r *proto.Resolution) {
 	s.InteractionEnded(context.Background(), InteractionEnded{Interaction: ix, Resolution: r})
 }
 
-// redacted is the resolution as the history keeps it: secret fields say they were filled in, not what with.
+// redactedValue stands for what was typed into a secret field (or a terminal) wherever the answer is kept or told.
+const redactedValue = "<redacted>"
+
+// redacted is the resolution as the history keeps it: secret fields say they were filled in, not what with. A secret
+// card's typed text is masked here too; a terminal's other text reaches the channels as typed and only the history masks
+// it (resolveRemembered's kept).
 func redacted(ix proto.Interaction, r proto.Resolution) proto.Resolution {
-	if len(r.Values) == 0 {
-		return r
+	if ix.Secret && r.Text != "" {
+		r.Text = redactedValue
 	}
-	secret := map[string]bool{}
-	for _, f := range ix.Fields {
-		secret[f.Key] = f.Secret
-	}
-	vals := make(map[string]string, len(r.Values))
-	for k, v := range r.Values {
-		if secret[k] {
-			v = "<redacted>"
+	if len(r.Values) > 0 {
+		secret := map[string]bool{}
+		for _, f := range ix.Fields {
+			secret[f.Key] = f.Secret
 		}
-		vals[k] = v
+		vals := make(map[string]string, len(r.Values))
+		for k, v := range r.Values {
+			if secret[k] || secretName.MatchString(k) {
+				v = redactedValue
+			}
+			vals[k] = v
+		}
+		r.Values = vals
 	}
-	r.Values = vals
+	if len(r.Content) > 0 {
+		var schema struct {
+			Properties map[string]struct {
+				Format    string `json:"format"`
+				WriteOnly bool   `json:"writeOnly"`
+			} `json:"properties"`
+		}
+		if ix.Elicitation != nil {
+			_ = json.Unmarshal(ix.Elicitation.RequestedSchema, &schema)
+		}
+		content := make(map[string]any, len(r.Content))
+		for k, v := range r.Content {
+			p := schema.Properties[k]
+			if p.Format == "password" || p.WriteOnly || secretName.MatchString(k) {
+				v = redactedValue
+			}
+			content[k] = v
+		}
+		r.Content = content
+	}
 	return r
+}
+
+// declaredValues are the values of the fields ix declares; any other key is dropped as the answer comes in: nothing
+// reads one, and the history and everyone told of the answer would get it as typed.
+func declaredValues(ix proto.Interaction, values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return values
+	}
+	var out map[string]string
+	for _, f := range ix.Fields {
+		if v, ok := values[f.Key]; ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[f.Key] = v
+		}
+	}
+	return out
+}
+
+// hasSecretField: ix asks for something the history redacts (a password).
+func hasSecretField(ix proto.Interaction) bool {
+	for _, f := range ix.Fields {
+		if f.Secret {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) finishInteraction(id string) {
@@ -1005,8 +1097,12 @@ func (s *Service) finished(p *pending) {
 	if done.AnsweredBy != "" {
 		done.Reason, done.Answers = p.answeredReason, p.answeredWith
 	}
+	var how *proto.Resolution
+	if p.expired && p.ix.ToolName == "ask_user" { // the assistant's question becomes a to-do (ask_todo.go): its card says so
+		how = &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
+	}
 	s.fleet.mu.Unlock()
-	s.channelsEnded(p.ix, nil)
+	s.channelsEnded(p.ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.hub.Tell(assistantwire.EventFleetResolved, done)
 	s.publishSessions(p.ix.MachineID)
@@ -1074,9 +1170,20 @@ func (s *Service) expireLoop(ctx context.Context) {
 	}
 }
 
+// errReservedCard: a card from a node (a hook, a runtime, a daemon, a Codex list) or an extension may not pass for the
+// password card: only the assistant's secret_run tool makes one (secret_run.go), and the clients show it as that card,
+// with no Agent's name on it.
+var errReservedCard = errors.New("the tool name " + proto.SecretRunTool + " is reserved for the assistant's password card")
+
+// reservedCard: ix calls itself the password card.
+func reservedCard(ix proto.Interaction) bool { return ix.ToolName == proto.SecretRunTool }
+
 // askHub is fleet.ask: a card one of the hub's own features asks (a mail send, Cua's apps, persona_settings),
 // waited for like a hook's.
 func (s *Service) askHub(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	if reservedCard(ix) {
+		return proto.Resolution{}, errReservedCard
+	}
 	if ix.ID == "" {
 		ix.ID = "ix_" + randomHex(6)
 	}
@@ -1184,6 +1291,10 @@ func (s *Service) syncCodexInteractions(machine string, params json.RawMessage) 
 	}
 	listed := map[string]proto.Interaction{}
 	for _, ix := range p.Interactions {
+		if reservedCard(ix) {
+			s.logf("[%s] codex card %s: %v", machine, ix.ID, errReservedCard)
+			continue
+		}
 		ix.MachineID = machine
 		ix = cleanTitle(ix)
 		listed[ix.ID] = ix
@@ -1465,6 +1576,15 @@ func (s *Service) answerQuestion(machine, session, id string, answers map[string
 	return true, nil
 }
 
+// endedStatus is how a card that resolve found no longer pending (err) ended: the claim's when another answer took
+// it a moment ago (#1230), else the history's.
+func (s *Service) endedStatus(ctx context.Context, id string, err error) string {
+	if just := (*answeredJustNow)(nil); errors.As(err, &just) {
+		return just.status
+	}
+	return s.interactionOutcome(ctx, id)
+}
+
 // interactionOutcome is how an interaction that is no longer pending ended, from the history: resolved, dismissed,
 // expired, cancelled; "" when the history has none.
 func (s *Service) interactionOutcome(ctx context.Context, id string) string {
@@ -1521,12 +1641,14 @@ func (s *Service) askOnPhone(list []proto.Interaction) {
 			if r.Dismiss && ctx.Err() != nil {
 				return // withdrawn: it knows
 			}
+			if r.Dismiss && r.Reason == "" && r.AnsweredBy == "" && len(r.Answers) == 0 && s.ownQuestionExpired(ix) {
+				r.Reason = proto.DismissedExpired // its card expired unanswered: the question becomes a to-do (ask_todo.go)
+			}
 			answer, _ := json.Marshal(r)
 			act := Action{ActionID: "act_" + randomHex(6), SessionID: ix.SessionID, Op: "answer", InteractionID: ix.ID,
 				InteractionVersion: 1, Answer: answer}
-			if _, err := s.Action(context.Background(), act); err != nil && !s.keepAnswer(act, err, ix.ExpiresAt) {
-				s.logf("assistant: answer %s: %v", ix.ID, err)
-			}
+			_, err = s.Action(context.Background(), act)
+			s.settleAnswer(ix, act, err)
 		}(ix)
 	}
 	for id, q := range f.asked {
@@ -1583,6 +1705,23 @@ func (s *Service) keepAnswer(act Action, err error, until time.Time) bool {
 	}
 	u.acts[act.InteractionID] = heldAct{act: act, until: until, next: now.Add(answerRetryAfter)}
 	return true
+}
+
+// settleAnswer ends act, the answer to the assistant's card ix, once its Action had it (err: it did not take it): one it
+// did not take is kept for another try (keepAnswer). An answer to a card with a secret field goes once: it is never
+// kept (what was typed into it would wait in memory for up to a day, for a call that is gone, a restart or a cancel,
+// and that asks with a new card), and its bytes are cleared now; the Action decoded its own copy.
+func (s *Service) settleAnswer(ix proto.Interaction, act Action, err error) {
+	if hasSecretField(ix) {
+		clear(act.Answer)
+		if err != nil {
+			s.logf("assistant: answer %s: %v (not kept: the card has a secret field)", ix.ID, err)
+		}
+		return
+	}
+	if err != nil && !s.keepAnswer(act, err, ix.ExpiresAt) {
+		s.logf("assistant: answer %s: %v", ix.ID, err)
+	}
 }
 
 // answerKept: an answer to interaction id is waiting for the Action.

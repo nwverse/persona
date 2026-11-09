@@ -4,13 +4,13 @@
 package errreport
 
 import (
-	"regexp"
 	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Limits of one report (longer is cut, more is dropped), as the schema says (ErrorReport).
@@ -57,25 +57,25 @@ func NewScrubber(names ...string) *Scrubber {
 
 var (
 	// secrets with their name: token=x, "password": "x", api_key: x
-	namedSecret = regexp.MustCompile(`(?i)\b(authorization|proxy-authorization|cookie|set-cookie|token|access_token|refresh_token|id_token|api[_-]?key|apikey|secret|client_secret|password|passwd|pwd|dsn|session_?id|sid|auth|key|signature|sig)(["']?\s*[:=]\s*["']?)([^\s"'&,;]+)`)
+	namedSecret = lazyre.New(`(?i)\b(authorization|proxy-authorization|cookie|set-cookie|token|access_token|refresh_token|id_token|api[_-]?key|apikey|secret|client_secret|password|passwd|pwd|dsn|session_?id|sid|auth|key|signature|sig)(["']?\s*[:=]\s*["']?)([^\s"'&,;]+)`)
 	// an auth scheme and its credential: Bearer x, Basic x
-	schemeSecret = regexp.MustCompile(`(?i)\b(bearer|basic|token)(\s+)([A-Za-z0-9._~+/\-]{8,}=*)`)
+	schemeSecret = lazyre.New(`(?i)\b(bearer|basic|token)(\s+)([A-Za-z0-9._~+/\-]{8,}=*)`)
 	// tokens by their look: well-known prefixes, JWTs, long hex
-	tokenLike = regexp.MustCompile(`\b(pext_|sk-|sk_|ghp_|gho_|ghs_|ghu_|github_pat_|xox[abprs]-|glpat-|AKIA|ya29\.)[A-Za-z0-9._\-]{6,}|\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}(\.[A-Za-z0-9_\-]*)?|\b[0-9a-fA-F]{24,}\b`)
+	tokenLike = lazyre.New(`\b(pext_|sk-|sk_|ghp_|gho_|ghs_|ghu_|github_pat_|xox[abprs]-|glpat-|AKIA|ya29\.)[A-Za-z0-9._\-]{6,}|\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}(\.[A-Za-z0-9_\-]*)?|\b[0-9a-fA-F]{24,}\b`)
 	// base64-ish blobs: long runs with both digits and letters (an identifier of only letters is code, not a key)
-	blob  = regexp.MustCompile(`[A-Za-z0-9+_\-]{32,}={0,2}`)
-	email = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+	blob  = lazyre.New(`[A-Za-z0-9+_\-]{32,}={0,2}`)
+	email = lazyre.New(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 	// URLs keep scheme and path; the host, the user info, the query and the fragment go.
-	urlRe = regexp.MustCompile(`\b([a-zA-Z][a-zA-Z0-9+.\-]{1,15})://([^/\s"'<>]*)([^\s"'<>?#]*)(\?[^\s"'<>#]*)?(#[^\s"'<>]*)?`)
-	ipv4  = regexp.MustCompile(`\b(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}(:\d{1,5})?\b`)
+	urlRe = lazyre.New(`\b([a-zA-Z][a-zA-Z0-9+.\-]{1,15})://([^/\s"'<>]*)([^\s"'<>?#]*)(\?[^\s"'<>#]*)?(#[^\s"'<>]*)?`)
+	ipv4  = lazyre.New(`\b(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}(:\d{1,5})?\b`)
 	// IPv6: one or more groups, a ::, and any number of groups (a form ending in :: has no word boundary to end on,
 	// hence its own alternative); or at least five groups (so 12:30:45 times are not addresses). The :: forms go
 	// first: the five-group form also matches the groups before a ::, and would leave the rest behind.
-	ipv6 = regexp.MustCompile(`(?i)\[?\b([0-9a-f]{1,4}:){1,7}(:[0-9a-f]{1,4}){1,6}\b\]?|\[?\b([0-9a-f]{1,4}:){1,7}:\]?|\[?\b([0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}\b\]?|\[?::ffff:[0-9.]+\]?|\[::1\]`)
+	ipv6 = lazyre.New(`(?i)\[?\b([0-9a-f]{1,4}:){1,7}(:[0-9a-f]{1,4}){1,6}\b\]?|\[?\b([0-9a-f]{1,4}:){1,7}:\]?|\[?\b([0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}\b\]?|\[?::ffff:[0-9.]+\]?|\[::1\]`)
 	// the user's name in home directories: /Users/x/, /home/x/, /data00/home/x/, C:\Users\x\
-	homeDir = regexp.MustCompile(`(?i)(/Users/|/home/|/data\d*/home/|/var/home/|/root\b|[A-Z]:\\Users\\|[A-Z]:/Users/)([^/\\\s"'<>]*)`)
+	homeDir = lazyre.New(`(?i)(/Users/|/home/|/data\d*/home/|/var/home/|/root\b|[A-Z]:\\Users\\|[A-Z]:/Users/)([^/\\\s"'<>]*)`)
 	// quoted spans: what errors carry of the user's content most often
-	quoted = regexp.MustCompile("\"[^\"\\n]*\"|“[^”\\n]*”|「[^」\\n]*」|『[^』\\n]*』|`[^`\\n]*`|'[^'\\n]{2,}'")
+	quoted = lazyre.New("\"[^\"\\n]*\"|“[^”\\n]*”|「[^」\\n]*」|『[^』\\n]*』|`[^`\\n]*`|'[^'\\n]{2,}'")
 )
 
 // Text scrubs one string of a report.
@@ -189,7 +189,7 @@ func (s *Scrubber) Report(r *wire.ErrorReport) {
 	}
 }
 
-var tagKey = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,31}$`)
+var tagKey = lazyre.New(`^[a-z][a-z0-9_.]{0,31}$`)
 
 func mapKeys(m map[string]string) func(func(string) bool) {
 	return func(yield func(string) bool) {

@@ -76,6 +76,8 @@ nonisolated struct PairedHub: Codable, Hashable, Sendable, Identifiable {
     var deviceID: String?
     /// The watch's answer-only credential there.
     var watch: ServerConfig?
+    /// The watch's own issued token id, used only to report its complication configurations.
+    var watchDeviceID: String? = nil
     /// The hubs its last hello listed in its group (itself included).
     var mesh: [MeshHub]?
     var addedAt: Date = .now
@@ -83,6 +85,9 @@ nonisolated struct PairedHub: Codable, Hashable, Sendable, Identifiable {
     var ssh: SSHRoute?
     /// Its in-app tunnel, when the hub has one (docs/operations/network.md「经 App 内隧道连 hub」).
     var inAppTunnel: InAppTunnelRoute?
+    /// Its local SOCKS5 proxy, when the user set one up (docs/operations/network.md "Connecting to hub through a local
+    /// SOCKS5 proxy").
+    var localProxy: LocalProxyRoute?
     /// SHA-256 (hex) of the pairing token `deviceID`'s token was traded for: the same pairing link handled again (scanned
     /// twice, opened from the camera too) keeps the device's token instead of going back to one the hub drops (#2766).
     var tradedPairing: String?
@@ -332,6 +337,7 @@ nonisolated enum HubRoute {
     static let healthProbe: Probe = { config in
         var req = URLRequest(url: APIClient(config: config).url("/api/v1/health", direct: true), timeoutInterval: 3)
         req.httpMethod = "GET"
+        RequestClientMetadata.current.apply(to: &req)
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }

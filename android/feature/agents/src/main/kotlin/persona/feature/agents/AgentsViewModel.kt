@@ -670,7 +670,8 @@ internal class AgentsViewModel(
             try {
                 interactions.resolve(interaction.id, resolution)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
-                _notice.value = AgentText.receipt(persona.feature.chat.AnswerReceipt(latest, resolution))
+                // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).
+                _notice.value = AgentText.receipt(persona.feature.chat.AnswerReceipt(latest, resolution.copy(values = null)))
                 _haptics.tryEmit(Haptic.Success)
             } catch (e: CancellationException) {
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }

@@ -4,12 +4,26 @@ name: ${PERSONA_COMPOSE_PROJECT:-jarvis}
 
 services:
   hub:
-    image: ${PERSONA_IMAGE-${JARVIS_IMAGE:?set PERSONA_IMAGE in .env}}
+    # PERSONA_IMAGE in .env (or the older JARVIS_IMAGE); with neither, compose stops: the hub has "neither an image
+    # nor a build context". No `:?` inside the default: Compose before 5.0.2 evaluates a default even when its
+    # variable is set, so a check there would fail installs that set only PERSONA_IMAGE.
+    image: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
     restart: unless-stopped
     init: true
     depends_on:
       postgres:
         condition: service_healthy
+    # The image's own check (wget /api/v1/health) on a schedule from .env; each run makes dockerd rewrite and fsync
+    # the container's state, docs/operations/docker.md "Disk writes".
+    healthcheck:
+      interval: ${PERSONA_HUB_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${PERSONA_HUB_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${PERSONA_HUB_HEALTHCHECK_RETRIES:-3}
+    logging: &logging
+      driver: ${PERSONA_LOG_DRIVER:-json-file}
+      options:
+        max-size: "${PERSONA_LOG_MAX_SIZE:-10m}"
+        max-file: "${PERSONA_LOG_MAX_FILE:-3}"
     environment:
       PUID: ${PUID:-}
       PGID: ${PGID:-}
@@ -29,6 +43,11 @@ services:
       # Where node builds for the computers' other platforms come from (a release's dl/, a mirror, or off; empty: the
       # image's own, docs/operations/docker.md "Node builds").
       PERSONA_NODE_PACKAGES: ${PERSONA_NODE_PACKAGES:-}
+      # 0: the hub and the built-in manager run on personad rather than as persona-hub and persona-manager
+      # (docs/operations/docker.md "Programs").
+      PERSONA_SPLIT_PROGRAMS: ${PERSONA_SPLIT_PROGRAMS:-}
+      # With the built-in manager in a container of its own (the manager service below): this one runs the hub alone.
+      # PERSONA_BUILTIN_MANAGER: separate
     ports:
       - "${PERSONA_PORT-${JARVIS_PORT:-18660}}:18660"
       - "${PERSONA_TLS_PORT-${JARVIS_TLS_PORT:-18662}}:18662"
@@ -39,6 +58,37 @@ services:
       # Optional SSH keys must be mounted at the home used by the selected image.
       # - ~/.ssh:/home/persona/.ssh:ro
       # - ~/.ssh:/home/jarvis/.ssh:ro
+
+  # The built-in manager in a container of its own, from the same image (docs/operations/docker.md "The built-in
+  # manager in a container of its own"). By default it runs beside the hub in the hub's container. To move it here,
+  # uncomment this service and PERSONA_BUILTIN_MANAGER above. hub.json must say "assistant": {"mode": "service"}: new
+  # installs do, and docs/operations/docker.md says how to switch an older one.
+  # manager:
+  #   image: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
+  #   restart: unless-stopped
+  #   init: true
+  #   command: ["supervise", "--manager-only", "--hub", "http://hub:18660"]
+  #   depends_on:
+  #     hub:
+  #       condition: service_healthy
+  #   healthcheck:
+  #     disable: true
+  #   logging: *logging
+  #   environment:
+  #     PUID: ${PUID:-}
+  #     PGID: ${PGID:-}
+  #     TZ: ${TZ:-UTC}
+  #     PERSONA_DATABASE_URL: postgres://${PERSONA_DB_USER:-jarvis}:${PERSONA_DB_PASSWORD-${JARVIS_DB_PASSWORD:-}}@postgres:5432/${PERSONA_DB_NAME:-jarvis}?sslmode=disable
+  #     PERSONA_IMAGE: ${PERSONA_IMAGE-${JARVIS_IMAGE:-}}
+  #     PERSONA_NODE_PACKAGES: ${PERSONA_NODE_PACKAGES:-}
+  #     PERSONA_SPLIT_PROGRAMS: ${PERSONA_SPLIT_PROGRAMS:-}
+  #   volumes:
+  #     # The hub's data folder, at both paths the hub's container has it: the built-in manager keeps its files in
+  #     # it as beside the hub, and the paths it writes down are the same ones there.
+  #     - ./data:/home/persona/.persona
+  #     - ./data:/home/jarvis/.jarvis
+  #     # - ~/.ssh:/home/persona/.ssh:ro
+  #     # - ~/.ssh:/home/jarvis/.ssh:ro
 
   postgres:
     image: ${PERSONA_POSTGRES_IMAGE-${JARVIS_POSTGRES_IMAGE:-postgres:18-alpine}}
@@ -63,7 +113,19 @@ services:
         fi
         exec docker-entrypoint.sh "$$@"
       - postgres-entrypoint
-    command: ["postgres"]
+    # PostgreSQL's own defaults unless .env says otherwise (docs/operations/docker.md "Disk writes"). Settings given
+    # here win over ALTER SYSTEM and postgresql.conf.
+    command:
+      - postgres
+      - -c
+      - synchronous_commit=${PERSONA_POSTGRES_SYNCHRONOUS_COMMIT:-on}
+      - -c
+      - wal_compression=${PERSONA_POSTGRES_WAL_COMPRESSION:-off}
+      - -c
+      - checkpoint_timeout=${PERSONA_POSTGRES_CHECKPOINT_TIMEOUT:-5min}
+      - -c
+      - wal_writer_delay=${PERSONA_POSTGRES_WAL_WRITER_DELAY:-200ms}
+    logging: *logging
     environment:
       # These are persistent database identities, not product display names.
       # Installations explicitly migrated to another role/database must configure them.
@@ -76,6 +138,6 @@ services:
       - ./data/docker:/run/persona
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${PERSONA_DB_USER:-jarvis}", "-d", "${PERSONA_DB_NAME:-jarvis}"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
+      interval: ${PERSONA_POSTGRES_HEALTHCHECK_INTERVAL:-5s}
+      timeout: ${PERSONA_POSTGRES_HEALTHCHECK_TIMEOUT:-5s}
+      retries: ${PERSONA_POSTGRES_HEALTHCHECK_RETRIES:-30}

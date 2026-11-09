@@ -1,7 +1,9 @@
 package kb
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,8 +42,11 @@ func (s *Store) Rezone(to *time.Location) (int, error) {
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.lockArchive()
+	defer s.unlockArchive()
+	if err := s.recoverIngestsLocked(); err != nil {
+		return 0, err
+	}
 	s.zone = to
 	if s.settled == to.String() {
 		return 0, nil // every file is in it; what is written from now on is too
@@ -85,6 +90,9 @@ func loadZone(name string) (*time.Location, error) {
 func (s *Store) settleChatLocked(id string) (bool, error) {
 	if s.readOnly {
 		return false, nil
+	}
+	if err := s.pendingIngestLocked(id); err != nil {
+		return false, err
 	}
 	dir := s.path(KindChat, id, "messages")
 	tmp, old := dir+".rezone", dir+".old"
@@ -208,13 +216,14 @@ func logHeader(zone *time.Location) string {
 	return logTitle + " · " + zone.String() + "\n\n"
 }
 
-// settleLogLocked moves a project's timeline into the archive's zone if its header names another one.
+// settleLogLocked moves a project's timeline into the archive's zone if its header names another one. It runs before
+// every append and read, so it reads only the header; the whole timeline only when it moves it.
 func (s *Store) settleLogLocked(slug string) (bool, error) {
 	if s.readOnly {
 		return false, nil
 	}
 	p := s.path(KindProject, slug, "log.md")
-	raw, err := os.ReadFile(p)
+	head, err := firstLine(p)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
@@ -222,8 +231,6 @@ func (s *Store) settleLogLocked(slug string) (bool, error) {
 		return false, err
 	}
 	to := s.zoneLocked()
-	text := string(raw)
-	head, _, _ := strings.Cut(text, "\n")
 	name := ""
 	if z, ok := strings.CutPrefix(head, logTitle+" · "); ok {
 		name = strings.TrimSpace(z)
@@ -235,8 +242,15 @@ func (s *Store) settleLogLocked(slug string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("log.md names %q: %w", name, err)
 	}
+	raw, err := os.ReadFile(p)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
 	var lines []string
-	for _, l := range strings.Split(text, "\n") {
+	for _, l := range strings.Split(string(raw), "\n") {
 		if !strings.HasPrefix(l, "- ") {
 			continue
 		}
@@ -246,6 +260,20 @@ func (s *Store) settleLogLocked(slug string) (bool, error) {
 		lines = append(lines, l)
 	}
 	return true, s.writeLogLocked(slug, lines)
+}
+
+// firstLine is the first line of the file at p without its "\n" (the whole file when it has none), read without the rest.
+func firstLine(p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	line, err := bufio.NewReaderSize(f, 256).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return strings.TrimSuffix(line, "\n"), nil
 }
 
 // writeLogLocked replaces a project's timeline with lines (each "- 2006-01-02 15:04 · …", in the archive's zone).

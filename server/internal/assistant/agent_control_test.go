@@ -265,7 +265,7 @@ func TestInterruptOfATaskIsInTheFeed(t *testing.T) {
 			routed = string(it.Body)
 		}
 	}
-	if routed != `{"interrupted":true,"text":"先修测试"}` {
+	if routed != `{"from":"assistant","interrupted":true,"text":"先修测试"}` {
 		t.Fatalf("routed: %q (%s)", routed, feedKinds(s, "conv1"))
 	}
 	// Stopping without a new instruction adds nothing.

@@ -258,6 +258,10 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   { id: "terminal-mode", label: t("terminal-full.cmd_terminal_mode"), chord: "Mod+Alt+F", scope: "session", icon: "sidebar" },
   { id: "right-panel", label: t("lib-shortcuts.cmd_right_panel"), chord: "Mod+B", scope: "session", icon: "sidebar" },
   { id: "focus-input", label: t("lib-shortcuts.cmd_focus_input"), chord: "Mod+I", scope: "session", icon: "keyboard" },
+  // Persona's own: the first waiting card answers from the keyboard while it has focus (lib/card-keys.ts). Mod+Alt+Enter
+  // is free — Mod+Enter is the dialogs' (reserved above), Mod+Shift+Enter maximizes, and ⌘⌥⏎ / Ctrl+Alt+Enter is no
+  // browser or system key
+  { id: "focus-card", label: t("lib-shortcuts.cmd_focus_card"), chord: "Mod+Alt+Enter", scope: "session", icon: "enter" },
   { id: "prev-tab", label: t("lib-shortcuts.cmd_prev_tab"), chord: "Mod+Alt+Left", scope: "session", icon: "arrowLeft" },
   { id: "next-tab", label: t("lib-shortcuts.cmd_next_tab"), chord: "Mod+Alt+Right", scope: "session", icon: "arrowRight" },
   { id: "sidebar-grouping", label: t("lib-shortcuts.cmd_sidebar_grouping"), chord: "Mod+E", scope: "sidebar", icon: "filter" },
@@ -431,7 +435,6 @@ function commit(next: ShortcutPrefs, save = true) {
 export const getBindings = (): Bindings => snapshot;
 /** The chords as set, whether on or off: what the settings show and check conflicts against. */
 export const getConfigured = (): Bindings => configured;
-export const getOverrides = (): Overrides => prefs.overrides;
 export const getShortcutPrefs = (): ShortcutPrefs => prefs;
 
 /** Binds a command to a chord (the caller has checked it), or clears it with ""; the default chord drops the override. */
@@ -521,6 +524,9 @@ export function jumpHint(bindings: Bindings, platform: Platform = currentPlatfor
 /** Where the key was pressed: in a terminal (xterm's helper textarea), in a text field, or on the page. */
 export type FocusKind = "terminal" | "input" | "page";
 
+/** Elements that type; whoever reads them (the dispatcher's focusKind, a card's own keys) needs the same list. */
+export const EDITABLE = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
+
 interface ElementLike {
   closest?: (selector: string) => unknown;
   tagName?: string;
@@ -531,7 +537,7 @@ export function focusKind(target: unknown): FocusKind {
   const el = target as ElementLike | null;
   if (!el || typeof el.closest !== "function") return "page";
   if (el.closest(".xterm")) return "terminal";
-  if (el.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']") || el.isContentEditable) return "input";
+  if (el.closest(EDITABLE) || el.isContentEditable) return "input";
   return "page";
 }
 

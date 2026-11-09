@@ -52,9 +52,11 @@ extension AppModel {
         #if canImport(WatchConnectivity)
         if WatchSync.shared.watchAppInstalled {
             for g in registry.groups {
-                guard let primary = registry.primary(g), primary.watch?.url != primary.config.url,
-                      let t = try? await APIClient(config: primary.config).createToken(name: "Apple Watch", kind: "watch") else { continue }
-                updateHub(primary.id) { $0.watch = ServerConfig(url: primary.config.url, token: t.token) }
+                guard let primary = registry.primary(g),
+                      let t = try? await DeviceCredentialTrade.issueWatchToken(for: primary, api: APIClient(config: primary.config)),
+                      let updated = DeviceCredentialTrade.watchRegistry(registry, expected: primary, token: t) else { continue }
+                registry = updated
+                saveRegistry(updated)
             }
         }
         #endif
@@ -85,6 +87,27 @@ extension AppModel {
 
 /// Trading a pairing token for the device's own (pure, for the tests).
 nonisolated enum DeviceCredentialTrade {
+    /// Token listings expose ids, not hashes: a legacy watch token cannot safely be matched by name.
+    /// Issue an answer-only replacement; never revoke an unidentified old token or a raced new token.
+    static func issueWatchToken(for primary: PairedHub, api: APIClient) async throws -> APIClient.NewToken? {
+        guard primary.watch?.url != primary.config.url || primary.watchDeviceID == nil else { return nil }
+        let token = try await api.createToken(name: "Apple Watch", kind: "watch")
+        guard token.role == "answer", !token.id.isEmpty, !token.token.isEmpty else { throw URLError(.cannotParseResponse) }
+        return token
+    }
+
+    static func watchRegistry(_ r: HubRegistry, expected: PairedHub, token: APIClient.NewToken) -> HubRegistry? {
+        guard token.role == "answer", !token.id.isEmpty, !token.token.isEmpty,
+              r.primary(expected.group)?.id == expected.id,
+              let i = r.hubs.firstIndex(where: { $0.id == expected.id }),
+              r.hubs[i].config == expected.config, r.hubs[i].watch == expected.watch,
+              r.hubs[i].watchDeviceID == expected.watchDeviceID else { return nil }
+        var out = r
+        out.hubs[i].watch = ServerConfig(url: expected.config.url, token: token.token)
+        out.hubs[i].watchDeviceID = token.id
+        return out
+    }
+
     /// The registry once hub `id` has `token` (and `deviceID`) in place of `old`; nil when the hub is gone or no longer
     /// on `old` (paired again with another link while the trade was out).
     static func registry(_ r: HubRegistry, hub id: String, old: String, token: String, deviceID: String) -> HubRegistry? {
@@ -122,6 +145,7 @@ nonisolated enum DeviceCredentialTrade {
 /// Settings › Devices: every device with its own credential, revocable one by one.
 struct DevicesView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var tokens: [APIClient.DeviceToken] = []
     @State private var current: String?
     /// Per credential, how the hub pushes to its device (#5998); empty from an older hub.
@@ -189,25 +213,31 @@ struct DevicesView: View {
 
     private func row(_ t: APIClient.DeviceToken) -> some View {
         HStack(spacing: Theme.Space.m) {
-            Image(systemName: t.kind == "watch" ? Theme.Icon.watch : t.kind == "phone" ? Theme.Icon.phone : Theme.Icon.laptop)
+            ThemedIcon(t.kind == "watch" ? Theme.Icon.watch : t.kind == "phone" ? Theme.Icon.phone : Theme.Icon.laptop)
                 .scaledFrame(width: Theme.Size.icon)
                 .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                HStack(spacing: Theme.Space.sm) {
+                NameWithChips {
                     Text(t.name).lineLimit(1)
+                } chips: {
                     if t.id == current { Chip(text: String(localized: "This Device"), look: .outline) }
                     if t.role == "answer" { Chip(text: String(localized: "Answer Only")) }
                 }
                 Text(detail(t)).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 if t.revokedAt == nil, let route = push[t.id] { DevicePushLine(route: route) }
+                // At the accessibility text sizes under the words: beside them, a chip and Revoke made the watch's row
+                // wider than its card (#1796).
+                if t.revokedAt == nil, typeSize.isAccessibilitySize { revokeButton(t) }
             }
             Spacer(minLength: 0)
-            if t.revokedAt == nil {
-                Button(String(localized: "action.revoke", defaultValue: "Revoke"), role: .destructive) { revoking = t }
-                    .buttonStyle(.borderless)
-                    .lineLimit(1)
-            }
+            if t.revokedAt == nil, !typeSize.isAccessibilitySize { revokeButton(t) }
         }
+    }
+
+    private func revokeButton(_ t: APIClient.DeviceToken) -> some View {
+        Button(String(localized: "action.revoke", defaultValue: "Revoke"), role: .destructive) { revoking = t }
+            .buttonStyle(.borderless)
+            .lineLimit(1)
     }
 
     private func detail(_ t: APIClient.DeviceToken) -> String {

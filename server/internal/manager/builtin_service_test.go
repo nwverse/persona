@@ -28,7 +28,7 @@ func TestBuiltinServiceNames(t *testing.T) {
 	if unitName(assistantwire.AssistantID) != managerconf.BuiltinService+".service" || launchdLabel(assistantwire.AssistantID) != managerconf.BuiltinLabel {
 		t.Fatalf("%s %s", unitName(assistantwire.AssistantID), launchdLabel(assistantwire.AssistantID))
 	}
-	unit := builtinUnit("/home/someone/.persona/bin/personad", "/home/someone/.persona")
+	unit := builtinUnit("/home/someone/.persona/bin/personad", "/home/someone/.persona", false)
 	for _, line := range []string{`ExecStart="/home/someone/.persona/bin/personad" assistant`, `Environment="PERSONA_ASSISTANT_DEPLOY=service"`,
 		`Environment="PERSONA_HOME=/home/someone/.persona"`, "Restart=always", "RestartPreventExitStatus=2", "WantedBy=default.target"} {
 		if !strings.Contains(unit, line+"\n") {
@@ -722,5 +722,81 @@ func TestInstallBuiltinLaunchd(t *testing.T) {
 	}
 	if f.called("launchctl bootstrap") || f.called("launchctl kickstart") || f.called("launchctl bootout") || !strings.Contains(out.String(), "left as it was") {
 		t.Fatalf("calls %v\n%s", f.calls, out)
+	}
+}
+
+// The built-in manager's unit (or agent) is replaced in one step when its text changes, never cut short in place, and
+// left as it is (the same file) when it does not.
+func TestBuiltinServiceReplacesTheFile(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			home := isolate(t)
+			data := filepath.Join(home, ".persona")
+			f := &fakeServices{}
+			e, _ := f.env(t, goos)
+			path := e.unitPath(assistantwire.AssistantID)
+			if goos == "darwin" {
+				path = e.plistPath(assistantwire.AssistantID)
+			}
+			if err := e.builtinService(context.Background(), data, "/opt/personad", false); err != nil {
+				t.Fatal(err)
+			}
+			old, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer old.Close()
+			had, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.builtinService(context.Background(), data, "/opt/new/persona-manager", false); err != nil {
+				t.Fatal(err)
+			}
+			checkReplaced(t, path, old, had, "/opt/new/persona-manager")
+
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.builtinService(context.Background(), data, "/opt/new/persona-manager", false); err != nil {
+				t.Fatal(err)
+			}
+			if after, err := os.Stat(path); err != nil || !os.SameFile(before, after) {
+				t.Fatalf("unchanged text written again: %v", err)
+			}
+		})
+	}
+}
+
+// BindBuiltin (a container's supervisor): a binding the hub takes stays and no code is asked for; not bound, or
+// refused, a code is asked for and traded; a code that cannot be had is the error.
+func TestBindBuiltin(t *testing.T) {
+	home := isolate(t)
+	data := filepath.Join(home, ".persona")
+	srv, trades := joinCounter(t)
+	defer func(f func(context.Context, *assistant.ManagerConfig) error) { probeToken = f }(probeToken)
+	taken := true
+	probeToken = func(context.Context, *assistant.ManagerConfig) error {
+		if taken {
+			return nil
+		}
+		return bus.ErrRevoked
+	}
+	asked := 0
+	code := func(context.Context) (string, error) { asked++; return "mi_builtin", nil }
+	if traded, err := BindBuiltin(context.Background(), data, srv.URL, code); err != nil || !traded || asked != 1 || trades() != 1 {
+		t.Fatalf("not bound: traded %v, err %v, asked %d, trades %d", traded, err, asked, trades())
+	}
+	if traded, err := BindBuiltin(context.Background(), data, srv.URL, code); err != nil || traded || asked != 1 || trades() != 1 {
+		t.Fatalf("bound: traded %v, err %v, asked %d", traded, err, asked)
+	}
+	taken = false
+	if traded, err := BindBuiltin(context.Background(), data, srv.URL, code); err != nil || !traded || asked != 2 || trades() != 2 {
+		t.Fatalf("refused: traded %v, err %v, asked %d", traded, err, asked)
+	}
+	none := errors.New("no database")
+	if _, err := BindBuiltin(context.Background(), data, srv.URL, func(context.Context) (string, error) { return "", none }); !errors.Is(err, none) {
+		t.Fatalf("no code: %v", err)
 	}
 }

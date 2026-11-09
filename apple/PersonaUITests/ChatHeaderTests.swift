@@ -3,7 +3,7 @@ import XCTest
 /// An Agents chat's header, open and folded (`ChromeHeader`), opened from the list as a user would: it stays below the
 /// status bar, and the one Back VoiceOver and XCUITest find is the one on screen, which goes back. In the BeautifulUI
 /// style the folded bar once sat in the status bar's band (its place pill on the clock), and the hidden bar's Back stayed
-/// in the accessibility tree, hittable but going nowhere (2026-11-02). Both layouts here; both styles with
+/// in the accessibility tree, hittable but going nowhere (2026-11-02). Both styles with
 /// `TEST_RUNNER_PERSONA_UI_STYLE=beautiful`.
 final class ChatHeaderTests: XCTestCase {
     private var app: XCUIApplication!
@@ -15,9 +15,9 @@ final class ChatHeaderTests: XCTestCase {
     /// Opens the first agent from the list; `folded`: the header folds itself after its idle seconds, else it is held open.
     /// `sideBars`: laid out as under iPhone Duo's side bars (`-sideBars YES`): the system's bar takes the actions, Back
     /// first, and the page draws no back of its own (2026-11-04: two backs, the system's and ours, one over the other).
-    @MainActor private func openChat(oldLayout: Bool, folded: Bool, sideBars: Bool = false) {
+    @MainActor private func openChat(folded: Bool, sideBars: Bool = false) {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", oldLayout ? "YES" : "NO", "-app.tab", "chats", "-tab", "dev",
+        app.launchArguments = ["-demo.on", "YES", "-app.tab", "chats", "-tab", "dev",
                                "-dev.openChat", "", "-openAgentsFresh", "YES", "-holdChromeOpen", folded ? "NO" : "YES",
                                "-sideBars", sideBars ? "YES" : "NO"]
         app.launchPinned()
@@ -50,6 +50,7 @@ final class ChatHeaderTests: XCTestCase {
         if sideBars { // the system's own back (UIKit's "BackButton", labelled with the page before) besides ours
             let system = app.navigationBars.buttons.matching(identifier: "BackButton").allElementsBoundByIndex.filter(\.isHittable)
             XCTAssertTrue(system.isEmpty, "\(what): the system's back as well as 返回: \(system.map(\.label))")
+            checkOneTitle(what)
         }
         let backs = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).allElementsBoundByIndex
         if backs.count != 1 {
@@ -74,39 +75,34 @@ final class ChatHeaderTests: XCTestCase {
     }
 
     @MainActor func testOpenHeaderInTheShell() {
-        openChat(oldLayout: false, folded: false)
+        openChat(folded: false)
         check("shell open", folded: false)
     }
 
     @MainActor func testFoldedHeaderInTheShell() {
-        openChat(oldLayout: false, folded: true)
+        openChat(folded: true)
         check("shell folded", folded: true)
     }
 
-    @MainActor func testOpenHeaderInTheOldLayout() {
-        openChat(oldLayout: true, folded: false)
-        check("old open", folded: false)
-    }
-
-    @MainActor func testFoldedHeaderInTheOldLayout() {
-        openChat(oldLayout: true, folded: true)
-        check("old folded", folded: true)
-    }
-
     @MainActor func testSideBarsInTheShell() {
-        openChat(oldLayout: false, folded: false, sideBars: true)
+        openChat(folded: false, sideBars: true)
         checkSideBars("shell side bars")
     }
 
-    @MainActor func testSideBarsInTheOldLayout() {
-        openChat(oldLayout: true, folded: false, sideBars: true)
-        checkSideBars("old side bars")
+    /// The session's name once, in the header (`chat.title`): the system draws its bar's title over the content, not in
+    /// the side column, so it showed a second time right above the header's (2026-11-08, TestFlight).
+    @MainActor private func checkOneTitle(_ what: String) {
+        let header = app.buttons["chat.title"].firstMatch
+        XCTAssertTrue(header.exists, "\(what): no title in the header")
+        let system = app.navigationBars.staticTexts.allElementsBoundByIndex.filter { !$0.label.isEmpty && header.label.hasPrefix($0.label) }
+        XCTAssertTrue(system.isEmpty, "\(what): the system bar's title as well as the header's: \(system.map(\.label))")
     }
 
     /// One back, the chat's own: as `check` on an iPhone width; the split's first page (iPad, iPhone Duo open) has none.
     @MainActor private func checkSideBars(_ what: String) {
         guard app.windows.firstMatch.frame.width > 600 else { return check(what, folded: false, sideBars: true) }
         shot(what)
+        checkOneTitle(what)
         let backs = app.buttons.matching(NSPredicate(format: "label == %@", "返回")).allElementsBoundByIndex.filter(\.isHittable)
         let system = app.navigationBars.buttons.matching(identifier: "BackButton").allElementsBoundByIndex.filter(\.isHittable)
         XCTAssertTrue(backs.isEmpty && system.isEmpty, "\(what): a back on the split's first page: \(backs.map(\.frame)) \(system.map(\.label))")
@@ -124,7 +120,7 @@ final class ChatHeaderPresentationTests: XCTestCase {
 
     @MainActor private func openChat() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", "NO", "-app.tab", "chats", "-tab", "dev",
+        app.launchArguments = ["-demo.on", "YES", "-app.tab", "chats", "-tab", "dev",
                                "-dev.openChat", "", "-openAgentsFresh", "YES", "-holdChromeOpen", "NO"]
         app.launchPinned()
         let row = app.buttons.matching(identifier: "agents.row").firstMatch

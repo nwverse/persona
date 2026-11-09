@@ -21,7 +21,9 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/serve"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
 const schemaDir = "../../../../schema/extension"
@@ -31,57 +33,62 @@ const schemaDir = "../../../../schema/extension"
 var goTypes = map[string]any{
 	"Empty": struct{}{},
 
-	"ConnectorParams":              extension.Target{},
-	"ConnectorStatus":              connector.Status{},
-	"ConnectorManifest":            serve.Manifest{},
-	"ConnectorTools":               serve.ToolsResult{},
-	"ConnectorCallParams":          serve.CallParams{},
-	"ConnectorCallResult":          serve.CallResult{},
-	"ConnectorDescribeResult":      serve.DescribeResult{},
-	"ConnectorDoParams":            serve.DoParams{},
-	"ConnectorRecallParams":        serve.RecallParams{},
-	"ConnectorRecallResult":        serve.RecallResult{},
-	"ConnectorThreadParams":        serve.ThreadParams{},
-	"ConnectorThreadPage":          connector.ThreadPage{},
-	"ConnectorMediaParams":         serve.MediaParams{},
-	"ConnectorMedia":               connector.Media{},
-	"ConnectorCollectResult":       serve.CollectResult{},
-	"ConnectorInboxThing":          connector.InboxThing{},
-	"ConnectorInboxReply":          serve.ReplyParams{},
-	"ConnectorSettleParams":        serve.SettleParams{},
-	"ConnectorSettled":             serve.SettleResult{},
-	"ConnectorChangesParams":       serve.ChangesParams{},
-	"ConnectorChangesResult":       serve.ChangesResult{},
-	"ConnectorItems":               serve.ItemsResult{},
-	"ConnectorDocTitleParams":      serve.DocTitleParams{},
-	"ConnectorDocTitle":            serve.DocTitleResult{},
-	"ConnectorSnapshotParams":      serve.SnapshotParams{},
-	"ConnectorSnapshot":            connector.SnapshotData{},
-	"ConnectorGroupToolParams":     connector.GroupToolCall{},
-	"ConnectorGroupAppendParams":   connector.GroupAppend{},
-	"ConnectorGroupFallbackParams": connector.GroupFallback{},
-	"ConnectorGroupFallback":       connector.GroupFallbackResult{},
-	"ConnectorLoginParams":         serve.LoginParams{},
-	"ConnectorPrompt":              connector.Prompt{},
-	"ConnectorOptions":             serve.OptionsResult{},
-	"ConnectorOptionsParams":       serve.OptionsParams{},
-	"ConnectorMachineParams":       serve.MachineParams{},
-	"ConnectorAuthSource":          serve.AuthSource{},
-	"ConnectorAuth":                serve.AuthView{},
-	"ConnectorSecret":              serve.SecretData{},
-	"ConnectorSecretSaveParams":    serve.SecretData{},
-	"ConnectorPostsPutParams":      serve.PostsPutParams{},
-	"ConnectorPostsPut":            serve.PostsPutResult{},
-	"ConnectorPostsCommentsParams": serve.PostsCommentsParams{},
-	"ConnectorPostsPendingParams":  serve.PostsPendingParams{},
-	"ConnectorPostsPending":        serve.PostsPendingResult{},
-	"ConnectorArchiveChatsParams":  serve.ArchiveChatsParams{},
-	"ConnectorArchivedChats":       serve.ArchiveChatsResult{},
-	"ConnectorGhTokenParams":       serve.GhTokenParams{},
-	"ConnectorGhToken":             serve.GhTokenResult{},
-	"ConnectorChangedEvent":        serve.ChangedEvent{},
-	"ConnectorInitParams":          serve.InitParams{},
-	"ConnectorSentRecordParams":    connector.SentRecordParams{},
+	"ConnectorParams":               extension.Target{},
+	"ConnectorStatus":               connector.Status{},
+	"ConnectorManifest":             serve.Manifest{},
+	"ConnectorTools":                serve.ToolsResult{},
+	"ConnectorCallParams":           serve.CallParams{},
+	"ConnectorCallResult":           serve.CallResult{},
+	"ConnectorDescribeResult":       serve.DescribeResult{},
+	"ConnectorDoParams":             serve.DoParams{},
+	"ConnectorRecallParams":         serve.RecallParams{},
+	"ConnectorRecallResult":         serve.RecallResult{},
+	"ConnectorThreadParams":         serve.ThreadParams{},
+	"ConnectorThreadPage":           connector.ThreadPage{},
+	"ConnectorMediaParams":          serve.MediaParams{},
+	"ConnectorMedia":                connector.Media{},
+	"ConnectorCollectResult":        serve.CollectResult{},
+	"ConnectorInboxThing":           connector.InboxThing{},
+	"ConnectorInboxReply":           serve.ReplyParams{},
+	"ConnectorSettleParams":         serve.SettleParams{},
+	"ConnectorSettled":              serve.SettleResult{},
+	"ConnectorChangesParams":        serve.ChangesParams{},
+	"ConnectorChangesResult":        serve.ChangesResult{},
+	"ConnectorHistoryChats":         serve.HistoryChatsResult{},
+	"ConnectorHistoryParams":        serve.HistoryParams{},
+	"ConnectorHistoryPage":          connectorwire.HistoryPage{},
+	"ConnectorHistoryAnchorsParams": serve.HistoryAnchorsParams{},
+	"ConnectorHistoryAnchors":       connectorwire.HistoryAnchors{},
+	"ConnectorItems":                serve.ItemsResult{},
+	"ConnectorDocTitleParams":       serve.DocTitleParams{},
+	"ConnectorDocTitle":             serve.DocTitleResult{},
+	"ConnectorSnapshotParams":       serve.SnapshotParams{},
+	"ConnectorSnapshot":             connector.SnapshotData{},
+	"ConnectorGroupToolParams":      connector.GroupToolCall{},
+	"ConnectorGroupAppendParams":    connector.GroupAppend{},
+	"ConnectorGroupFallbackParams":  connector.GroupFallback{},
+	"ConnectorGroupFallback":        connector.GroupFallbackResult{},
+	"ConnectorLoginParams":          serve.LoginParams{},
+	"ConnectorPrompt":               connector.Prompt{},
+	"ConnectorOptions":              serve.OptionsResult{},
+	"ConnectorOptionsParams":        serve.OptionsParams{},
+	"ConnectorMachineParams":        serve.MachineParams{},
+	"ConnectorAuthSource":           serve.AuthSource{},
+	"ConnectorAuth":                 serve.AuthView{},
+	"ConnectorSecret":               serve.SecretData{},
+	"ConnectorSecretSaveParams":     serve.SecretData{},
+	"ConnectorPostsPutParams":       serve.PostsPutParams{},
+	"ConnectorPostsPut":             serve.PostsPutResult{},
+	"ConnectorPostsCommentsParams":  serve.PostsCommentsParams{},
+	"ConnectorPostsPendingParams":   serve.PostsPendingParams{},
+	"ConnectorPostsPending":         serve.PostsPendingResult{},
+	"ConnectorArchiveChatsParams":   serve.ArchiveChatsParams{},
+	"ConnectorArchivedChats":        serve.ArchiveChatsResult{},
+	"ConnectorGhTokenParams":        serve.GhTokenParams{},
+	"ConnectorGhToken":              serve.GhTokenResult{},
+	"ConnectorChangedEvent":         serve.ChangedEvent{},
+	"ConnectorInitParams":           serve.InitParams{},
+	"ConnectorSentRecordParams":     connector.SentRecordParams{},
 
 	"ChannelReceiveParams": channel.ReceiveParams{},
 	"ChannelStatusParams":  channel.StatusParams{},
@@ -107,6 +114,11 @@ var goTypes = map[string]any{
 	"KBChangedEvent":   assistantwire.KBChanged{},
 	"KBForgottenEvent": assistantwire.KBForgottenEvent{},
 
+	"AssistantConversationsParams": assistantwire.AssistantConversationsParams{},
+	"AssistantConversationsResult": assistantwire.AssistantConversationsResult{},
+	"AssistantMessagesParams":      assistantwire.AssistantMessagesParams{},
+	"AssistantMessagesResult":      assistantwire.AssistantMessagesResult{},
+
 	"ModelCompleteParams": assistantwire.ModelCompleteParams{},
 	"ModelCompleteResult": assistantwire.ModelCompleteResult{},
 	"ModelPause":          assistantwire.ModelPause{},
@@ -125,7 +137,8 @@ var serverCalls = []string{
 	serve.MDocTitle, serve.MArchiveMedia, serve.MSnapshot, serve.MGroupTool, serve.MGroupAppend, serve.MGroupFallback,
 	serve.MOptionsGet, serve.MOptionsSet, serve.MSettle, serve.MMachineOnline, serve.MAuthGet, serve.MAuthSet,
 	serve.MSecretsLoad, serve.MSecretsSave, serve.MSecretsDelete, serve.MPostsPut, serve.MPostsComments,
-	serve.MPostsPending, serve.MArchiveChats, serve.MGhToken, serve.EChanged,
+	serve.MPostsPending, serve.MArchiveChats, serve.MGhToken, serve.EChanged, serve.MHistoryChats, serve.MHistory,
+	serve.MHistoryAnchors,
 }
 
 // sent.record is the hub's own (extmgr answers it for a connector that declares sends_as_user), outside the
@@ -141,6 +154,9 @@ var kbCalls = []string{assistantwire.MethodKBList, assistantwire.MethodKBGet, as
 // The model call the hub forwards for extensions granted models (models.schema.json).
 var modelCalls = []string{assistantwire.MethodModelComplete}
 
+// The assistant's conversations the hub forwards for extensions granted assistant.read (assistant.schema.json).
+var assistantCalls = []string{assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages}
+
 // The to-do events the hub tells the extensions granted todos.read (todos.schema.json).
 var todoCalls = []string{"event." + assistantwire.EventTodoChanged, "event." + assistantwire.EventTodoDecision}
 
@@ -155,6 +171,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	want = append(want, kbCalls...)
 	want = append(want, todoCalls...)
 	want = append(want, modelCalls...)
+	want = append(want, assistantCalls...)
 	want = append(want, sentCalls...)
 	for _, name := range want {
 		if _, ok := wire.Calls[name]; !ok {
@@ -163,7 +180,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	}
 	for name := range wire.Calls {
 		if (strings.HasPrefix(name, serve.Namespace+".") || strings.HasPrefix(name, channel.Namespace+".") ||
-			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.")) &&
+			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "assistant.")) &&
 			!slices.Contains(want, name) {
 			t.Errorf("%s: schema/extension lists it, the server has no such call", name)
 		}
@@ -219,7 +236,10 @@ func TestConnectorFixturesHoldToTheSchemas(t *testing.T) {
 		"inbox.collect": "connector.inbox.collect", "login.step": "connector.login.step",
 		"login.step.done": "connector.login.step", "login.step.refused": "connector.login.step",
 		"status": "connector.status", "thread.page": "connector.thread.page", "tools.call": "connector.tools.call",
-		"tools.list": "connector.tools.list",
+		"tools.list": "connector.tools.list", "history.chats": "connector.history.chats",
+		"archive.history": "connector.archive.history", "archive.history.start": "connector.archive.history",
+		"archive.history.unreadable": "connector.archive.history", "archive.history.paced": "connector.archive.history",
+		"history.anchors": "connector.history.anchors",
 	}
 	dirs, _ := filepath.Glob("../../connector/testdata/wire/*")
 	if len(dirs) == 0 {
@@ -426,6 +446,23 @@ func jsonFields(g reflect.Type, out map[string]goField) {
 func asString(v any) string { s, _ := v.(string); return s }
 func asSlice(v any) []any   { s, _ := v.([]any); return s }
 
+// The hub refuses an empty list for any of its points ("contributes.<point>: empty"): the manifest schema's list for
+// each of them holds at least one item, or an empty one passes the SDK's and a catalog's validation, then fails at
+// install.
+func TestManifestSchemaContributesListsAreNotEmpty(t *testing.T) {
+	props := loadSchemas(t).def(t, "Contributes")["properties"].(map[string]any)
+	for name := range extension.Points {
+		list, ok := props[name].(map[string]any)
+		if !ok {
+			t.Errorf("contributes.%s: the hub has the point, manifest.schema.json Contributes does not list it", name)
+			continue
+		}
+		if list["minItems"] != float64(1) {
+			t.Errorf("contributes.%s: minItems %v, want 1 (the hub refuses an empty list)", name, list["minItems"])
+		}
+	}
+}
+
 // The manifest schema's events.subscribe enum is the events the hub has (extension.EventTopics): an event added to one
 // and not the other makes a manifest that the server accepts fail the schema, or the reverse.
 func TestManifestSchemaListsEveryEventTopic(t *testing.T) {
@@ -444,5 +481,63 @@ func TestManifestSchemaListsEveryEventTopic(t *testing.T) {
 	sort.Strings(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("manifest.schema.json EventsItem.subscribe enum %v, extension.EventTopics %v", got, want)
+	}
+}
+
+// The manifest schema's contributes lists exactly the hub's built-in points (extension.Points), and each point's item
+// refuses unknown fields as the hub's strict decode does: an open item lets a typo pass the SDK's and a catalog's
+// validation, then fail at install.
+func TestManifestSchemaContributesAreTheHubsPoints(t *testing.T) {
+	s := loadSchemas(t)
+	props := s.def(t, "Contributes")["properties"].(map[string]any)
+	for name := range extension.Points {
+		if _, ok := props[name]; !ok {
+			t.Errorf("%s: the hub has the point, manifest.schema.json Contributes does not list it", name)
+		}
+	}
+	names := make([]string, 0, len(props))
+	for name := range props {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := extension.Points[name]; !ok {
+			t.Errorf("%s: manifest.schema.json Contributes lists it, the hub has no such point", name)
+			continue
+		}
+		items, _ := props[name].(map[string]any)["items"].(map[string]any)
+		ref := asString(items["$ref"])
+		if ref == "" {
+			t.Errorf("contributes.%s: items is not a $ref to a definition", name)
+			continue
+		}
+		def, item := s.ref(t, ref)
+		if item["additionalProperties"] != false {
+			t.Errorf("contributes.%s: %s does not refuse unknown fields (additionalProperties: false), the hub does", name, def)
+		}
+	}
+}
+
+// The connector schema's enums for what the knowledge base's selection matches on are the hub's own lists: an item's
+// signals are kbwire.Signals (in that order) and a history chat's kinds the connectorwire.HistoryKind* ones, so a
+// value added on one side only makes the SDK and the hub's conformance disagree.
+func TestConnectorSchemaSelectionEnumsAreTheHubsLists(t *testing.T) {
+	s := loadSchemas(t)
+	enum := func(def, field string, items bool) []string {
+		node := s.def(t, def)["properties"].(map[string]any)[field].(map[string]any)
+		if items {
+			node = node["items"].(map[string]any)
+		}
+		var out []string
+		for _, v := range asSlice(node["enum"]) {
+			out = append(out, v.(string))
+		}
+		return out
+	}
+	if got := enum("ConnectorKBItem", "signals", true); !slices.Equal(got, kbwire.Signals) {
+		t.Errorf("connector.schema.json ConnectorKBItem.signals enum %v, kbwire.Signals %v", got, kbwire.Signals)
+	}
+	if got := enum("ConnectorHistoryChat", "kind", false); !slices.Equal(got, connectorwire.HistoryKinds) {
+		t.Errorf("connector.schema.json ConnectorHistoryChat.kind enum %v, connectorwire.HistoryKinds %v", got, connectorwire.HistoryKinds)
 	}
 }

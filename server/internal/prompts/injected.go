@@ -2,24 +2,27 @@ package prompts
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The hub types some messages into conversations as the user would, for the model: a quiet task's notice
-// (assistant/task_notice), a scheduled task's run (assistant/task_run), a wake-up (agents/wake), the background tasks
-// a node restart stopped (assistant/lost_tasks). The model reads them as they are; the apps show one line instead
+// (assistant/task_notice), a scheduled task's run (assistant/task_run), a wake-up (agents/wake), the continue after a
+// usage limit reset (agents/limit_continue), the background tasks
+// a node restart stopped (assistant/lost_tasks), news of an inbox item for a conversation it was handed to
+// (inbox/handoff_note). The model reads them as they are; the apps show one line instead
 // (docs/protocol/protocol.md "Messages Persona injects"). ParseInjected reads them back off the transcript's text, so old lines are
 // known too; its tests render every template and parse the result, which keeps the two in step.
 
 var (
-	noticeHeadRe   = regexp.MustCompile(`^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$`)
-	followupHeadRe = regexp.MustCompile(`^⏰ (.+)（(你之前安排的跟进|定时任务(?:，每 [^）]+)?)）$`)
-	wakeHeadRe     = regexp.MustCompile(`^⏰（Persona 叫醒你，第 \d+ 次）你上一轮停下时说在等「(.*?)」`)
-	superviseRe    = regexp.MustCompile(`^📋 督办：你派出去的任务有 (\d+) 个要你处理$`)
-	leadContextRe  = regexp.MustCompile(`^(?s)\s*<persona-context\b[^>]*>.*?</persona-context>`)
+	noticeHeadRe   = lazyre.New(`^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$`)
+	followupHeadRe = lazyre.New(`^⏰ (.+)（(你之前安排的跟进|定时任务(?:，每 [^）]+)?)）$`)
+	wakeHeadRe     = lazyre.New(`^⏰（Persona 叫醒你，第 \d+ 次）你上一轮停下时说在等「(.*?)」`)
+	superviseRe    = lazyre.New(`^📋 督办：你派出去的任务有 (\d+) 个要你处理$`)
+	inboxHeadRe    = lazyre.New(`^📥 收件箱事件「(.+)」有了下文$`)
+	leadContextRe  = lazyre.New(`^(?s)\s*<persona-context\b[^>]*>.*?</persona-context>`)
 )
 
 // noticeMarker is in every task notice (assistant/task_notice): a first line alone could be the user's.
@@ -27,6 +30,12 @@ const noticeMarker = "这是 Persona 的任务通知"
 
 // superviseMarker is in every supervise (follow-up) message (assistant/supervise, #3124).
 const superviseMarker = "这是 Persona 的督办消息"
+
+// inboxMarker is in every inbox note for a conversation an item was handed to (inbox/handoff_note, #1194).
+const inboxMarker = "这是 Persona 的收件箱通知"
+
+// limitContinueHead starts agents/limit_continue: the manager continues an agent once its usage limit reset.
+const limitContinueHead = "⏰（Persona 叫你接着做）订阅的用量额度已经重置了"
 
 // lostTasksHead starts assistant/lost_tasks.
 const lostTasksHead = "⚠️ 运行你的 node 刚重启过"
@@ -59,6 +68,9 @@ func ParseInjected(text string) *proto.Injected {
 		state := noticeStates[m[2]]
 		return &proto.Injected{Kind: proto.InjectedTaskNotice, State: state, Title: m[1], Machine: m[3],
 			Line: "任务「" + m[1] + "」" + noticeLines[state]}
+	case strings.HasPrefix(head, limitContinueHead):
+		// Only hubs that write it mark it: it is not in the shared fixtures the apps' own recognition runs.
+		return &proto.Injected{Kind: proto.InjectedFollowup, State: "limit_continue", Line: "用量额度重置了，Persona 让它接着做"}
 	case strings.HasPrefix(head, "⏰（"):
 		m := wakeHeadRe.FindStringSubmatch(head)
 		if m == nil {
@@ -86,7 +98,21 @@ func ParseInjected(text string) *proto.Injected {
 		if m == nil || !strings.Contains(rest, superviseMarker) {
 			return nil
 		}
-		return &proto.Injected{Kind: proto.InjectedSystem, State: "supervise", Line: "督办：" + m[1] + " 个派出去的任务要处理"}
+		level := "triage" // Messages from before levels were added are routine triage too.
+		for _, candidate := range []string{"info", "triage", "user"} {
+			if strings.Contains(rest, `<persona-supervision level="`+candidate+`" />`) {
+				level = candidate
+				break
+			}
+		}
+		return &proto.Injected{Kind: proto.InjectedSystem, State: "supervise", Level: level, Line: "督办：" + m[1] + " 个派出去的任务要处理"}
+	case strings.HasPrefix(head, "📥 收件箱事件「"):
+		// Only hubs that write it mark it: it is not in the shared fixtures the apps' own recognition runs.
+		m := inboxHeadRe.FindStringSubmatch(head)
+		if m == nil || !strings.Contains(rest, inboxMarker) {
+			return nil
+		}
+		return &proto.Injected{Kind: proto.InjectedSystem, State: "inbox", Title: m[1], Line: "收件箱「" + m[1] + "」有了下文"}
 	case strings.HasPrefix(head, lostTasksHead):
 		n := 0
 		for _, l := range strings.Split(rest, "\n") {

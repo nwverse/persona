@@ -553,6 +553,7 @@ func TestConcurrentQueriesAndReplacement(t *testing.T) {
 				items := make([]Item, 8)
 				for id := range items {
 					items[id] = testItem(fmt.Sprintf("%s-%d", owner, id), n+id)
+					items[id].PaneSource = []string{"terminal", "desktop", "feishu", "unknown"}[(n+id)%4]
 				}
 				i.Replace(owner, items)
 				p, err := i.Query(Options{Limit: 3, Q: "title"})
@@ -574,12 +575,12 @@ func TestConcurrentQueriesAndReplacement(t *testing.T) {
 						}
 					}
 				}
-				if _, err := i.Counts(Options{}); err != nil {
+				if _, err := i.Counts(Options{PaneSource: "terminal"}); err != nil {
 					t.Error(err)
 					return
 				}
 				baseline := i.Revision()
-				if _, err := i.Query(Options{Since: baseline}); err != nil {
+				if _, err := queryDeltaOrRefresh(&i, baseline); err != nil {
 					t.Error(err)
 					return
 				}

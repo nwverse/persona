@@ -390,10 +390,12 @@ private fun LazyListScope.upgrades(
     val upgrade = extension.upgrade
     val note = if (upgrade == null) extension.upgradeNote?.let { n -> ExtensionText.upgradeNote(res, n)?.let { it to n } } else null
     val count = 1 + (if (upgrade != null) 1 else 0) + (if (note != null) 1 else 0)
+    // Switched off, the extension is not upgraded: its switch shows off and waits (the hub keeps it) until it is on.
+    val paused = extension.autoUpgradePaused != null
     item("upgrade-title") { JSectionHeader(stringResource(R.string.settings_ext_upgrade_title)) }
     item("upgrade-auto") {
         JGroupItem(GroupPosition.of(0, count)) {
-            JSwitchRow(stringResource(R.string.settings_ext_auto_upgrade), extension.autoUpgrade ?: true, onToggle, enabled = !busy)
+            JSwitchRow(stringResource(R.string.settings_ext_auto_upgrade), ExtensionText.autoUpgradeShown(extension), onToggle, enabled = !busy && !paused)
         }
     }
     upgrade?.let { u ->
@@ -419,7 +421,7 @@ private fun LazyListScope.upgrades(
             }
         }
     }
-    item("upgrade-note-footer") { Note(stringResource(R.string.settings_ext_upgrade_footer)) }
+    item("upgrade-note-footer") { Note(stringResource(if (paused) R.string.settings_ext_upgrade_paused_footer else R.string.settings_ext_upgrade_footer)) }
 }
 
 /** Removing an extension a market installed, at the end of its page. */

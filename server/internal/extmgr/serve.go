@@ -51,7 +51,8 @@ func (h *Manager) Run(ctx context.Context) error {
 	go h.extensionLeaseLoop(ctx)
 	h.extensions = newExtensions(h.cfg.dir, h.cfg.extensionConfigs(h.logf), h.logf)
 	h.extensions.stats.redact = h.redactOwnSecrets
-	h.startConnectors(ctx) // the extensions' connectors join here (attachExtensions)
+	h.startTokenRecord(ctx) // before any extension starts with a token (extension_scopes.go)
+	h.startConnectors(ctx)  // the extensions' connectors join here (attachExtensions)
 	h.startExtensions(ctx)
 	go h.extensionUpgradeLoop(ctx)
 	go h.extensionMetricsLoop(ctx)
@@ -136,6 +137,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	api.HandleFunc("POST /api/v1/machines/{mid}/computer/clipboard", withMachine(h.computerClipboard))
 	api.HandleFunc("GET /api/v1/machines/{mid}/computer/apps", withMachine(h.getComputerApps))
 	api.HandleFunc("DELETE /api/v1/machines/{mid}/computer/apps/{bundle}", withMachine(h.deleteComputerApp))
+	api.HandleFunc("DELETE /api/v1/machines/{mid}/computer/apps/revoke/{bundle}", withMachine(h.revokeComputerApp))
 	api.HandleFunc("GET /api/v1/machines/{mid}/browser", withMachine(h.getBrowser))
 	api.HandleFunc("PUT /api/v1/machines/{mid}/browser", withMachine(h.putBrowser))
 	api.HandleFunc("POST /api/v1/machines/{mid}/browser/{action}", withMachine(h.postBrowserJob))
@@ -406,7 +408,8 @@ func (h *Manager) Event(name string, params json.RawMessage) bool {
 // authorize says whose extension token hash is and whether it opens the hub's route.
 func (h *Manager) authorize(a extwire.Authorize) extwire.Authorized {
 	e, ok := h.extTokens.lookupHash(a.Hash)
-	if !ok {
+	if !ok || h.extensions != nil && h.extensions.reg != nil && h.extensions.reg.CanonicalID(e.extension) != e.extension {
+		// Owner aliases do not grant a retired program identity any authority.
 		return extwire.Authorized{}
 	}
 	p := e.principal()

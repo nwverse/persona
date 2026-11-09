@@ -117,8 +117,8 @@ Where the business type needs fields of its own, it stays a separate type with t
 ### Starting a session
 1. App: pick a machine → pick a folder (recent projects / browse) → pick a launcher → optional first message.
 2. hub → node `session.start`: in the herdr workspace `persona` (created if missing), create a tab (cwd=folder, label=folder name),
-   `pane run "<launcher> --session-id <uuid> --mcp-config ~/.persona/mcp.json --plugin-dir ~/.persona/agent-plugin --plugin-dir ~/.persona/claude-hooks"`
-   (older Claude Code: `--settings ~/.persona/claude-settings.json` instead of the two plugins).
+   `pane run "<launcher> --session-id <uuid> --mcp-config ~/.persona/mcp.json --plugin-dir ~/.persona/agent-plugin --plugin-dir ~/.persona/claude-hooks --plugin-dir ~/.persona/claude-live-replies"`
+   (the last one, the live replies `MessageDisplay` hook, only while the machine's Settings › Claude Code › Live replies is on; older Claude Code: `--settings ~/.persona/claude-settings.json` instead of the plugins).
 3. The node waits for the agent to be ready (`agent wait`); if it is blocked (trust folder, etc.), the screen is pushed to the phone as a `screen` interaction. Once ready, the first message is sent.
 4. The node starts tailing the transcript, and events are pushed through the hub to subscribed apps.
 
@@ -130,3 +130,7 @@ Where the business type needs fields of its own, it stays a separate type with t
 ### Phone data tools
 claude calls the MCP tool `phone_calendar_events` → `personad mcp` → node.sock → hub → finds an online iPhone (WS) → the app queries with EventKit → returns the same way.
 When the app is not online, it returns the error "iPhone is not online, please open Persona".
+
+### Runtime list origin projection
+
+`internal/sessionorigin` classifies the runtime DTO's pane/host metadata using the host registry, matching the clients' desktop-first origin rule (`docs/protocol/protocol.md`, "Pane/host origins"). The hub's existing list adapter adds this scalar to bounded rows and passes it to `internal/sessionlist`; the generic index only stores and matches it. State, preferences and Agents membership remain with their existing owners.

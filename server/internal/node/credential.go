@@ -5,10 +5,10 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -16,7 +16,7 @@ import (
 // Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "4 · Credentials"). Only the hub
 // asks — it is a hub → node RPC, the node socket of hooks and MCP does not route here — and nothing is logged.
 
-var ghHost = regexp.MustCompile(`^[A-Za-z0-9.-]+(:[0-9]+)?$`)
+var ghHost = lazyre.New(`^[A-Za-z0-9.-]+(:[0-9]+)?$`)
 
 // ghToken is `gh auth token` for host on this machine, without prompting.
 func ghToken(ctx context.Context, host string) (map[string]any, error) {

@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"syscall"
 	"time"
 
@@ -22,6 +24,11 @@ var version = "next"
 
 func main() {
 	ctx := context.Background()
+	if len(os.Args) > 1 && os.Args[1] == "fixture-hold" {
+		fmt.Println("ready")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "node-update-check" {
 		_ = json.NewEncoder(os.Stdout).Encode(nodeupdate.Check{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH})
 		return
@@ -59,7 +66,9 @@ func main() {
 		os.Exit(7)
 	}
 	restart := make(chan struct{})
-	m := nodeupdate.New(version, func() { close(restart) })
+	// `--supervised` among the arguments stands for a supervisor other than systemd or launchd, as the real node's
+	// `node --attach --supervised` does.
+	m := nodeupdate.New(version, func() { close(restart) }, nodeupdate.Options{Supervised: slices.Contains(os.Args[1:], "--supervised")})
 	defer m.Close()
 	if m.RestartRequired() {
 		mustExec(m.Executable())

@@ -3,10 +3,10 @@ package transcript
 import (
 	"bytes"
 	"encoding/json"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -55,7 +55,7 @@ var (
 	// Lines worth decoding: everything else (the bulk of a rollout) is skipped on a byte search.
 	askMarks = [][]byte{[]byte("request_user_input"), []byte(`"delivery":"async"`), []byte(`"UserMessage"`), []byte("turn_aborted")}
 	// CodexReplyRe is the reply envelope Codex's clients put an answer in (the desktop app, the 0.163 TUI).
-	CodexReplyRe = regexp.MustCompile(`(?s)<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>`)
+	CodexReplyRe = lazyre.New(`(?s)<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>`)
 )
 
 // Feed reads the next rollout line.
