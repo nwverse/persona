@@ -241,7 +241,10 @@ internal data class CatalogExtensionState(
 internal class CatalogExtensionModel(
     private val api: ExtensionMarkets, private val market: String, private val id: String, private val res: Resources,
     private val now: () -> Instant = Instant::now,
+    manager: String? = null,
 ) {
+    /** The owner captured when the page opens, even if the roster's default changes later. */
+    val owner = ExtensionOwners.of(manager)
     private val mutable = MutableStateFlow(CatalogExtensionState())
     val state = mutable.asStateFlow()
     /** Says an operation ended well (set by [watch]). */
@@ -285,9 +288,9 @@ internal class CatalogExtensionModel(
         }
     }
 
-    /** This extension's, from this market, and the default manager's, whose catalog this is (another's copy: #1834). */
+    /** This extension's, from this market, and the manager whose catalog the page opened. */
     private fun mine(op: ExtensionOperation) = op.extension == id && (op.market.isNullOrEmpty() || op.market == market) &&
-        ExtensionOwners.of(op.manager) == ExtensionOwners.default
+        ExtensionOwners.of(op.manager) == owner
 
     /** Keeps op when it is this extension's and newer than what the page has; what it waits for or how it ended follows. */
     private suspend fun track(op: ExtensionOperation) {

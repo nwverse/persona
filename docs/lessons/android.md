@@ -1,5 +1,13 @@
 # Lessons: Android
 
+## Host-owned lifecycle controls need real application wiring (#2397)
+
+A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
+unsupported default. Forward both per-extension and global preferences. A manager-bound detail page must also bind catalog/global reads
+and carry its owner into upgrade consent and operation filtering; an extension-ID-only pin does not cover `extensions/-/catalog`.
+Keep a persisted preference separate from its pause reason. Finally, `HubExtension.kind` is a contribution point, not a declared runtime:
+missing runtime metadata must say **Not provided**, never infer execution details from a UI category.
+
 ## Register new native wire examples, not just generated models (#1187)
 
 A generated permission DTO can compile while `ExtensionWireTest.examplesRoundTrip` cannot select its serializer.
