@@ -47,7 +47,7 @@ class PromotionNodePackageTests(unittest.TestCase):
         self.inventory = {'machines': [{'id': 'node', 'kind': 'link', 'online': True,
                                        'node_version': 'unchanged', 'deploying': False}]}
 
-    def api(self, root, path, method='GET'):
+    def api(self, root, path, method='GET', body=None):
         self.assertEqual(root, self.root)
         self.calls.append((path, method))
         self.events.append(path)
@@ -56,7 +56,13 @@ class PromotionNodePackageTests(unittest.TestCase):
             return copy.deepcopy(self.inventory)
         if path == 'hub/update':
             return {'auto': True, 'can_update': True, 'state': 'updated', 'confirmed': True,
-                    'latest': {'build': BUILD - 1}}
+                    'latest': {'build': BUILD - 1},
+                    'auto_update_nodes': json.loads((root / 'hub.json').read_text())['auto_update_nodes']}
+        if path == 'hub/update/settings':
+            self.assertEqual(method, 'PUT')
+            self.assertEqual(body, {'auto_update_nodes': True})
+            self.assertEqual((root / 'bin/nodes').resolve().name, self.node_manifest['version'])
+            return {'auto_update_nodes': True}
         if path == 'hub/update/check':
             return {'latest': {'bad': False}}
         if path == 'health':
@@ -191,11 +197,11 @@ class PromotionNodePackageTests(unittest.TestCase):
         self.enable_automatic()
         self.inventory['machines'][0]['deploying'] = True
         original_api = self.api
-        def advancing(root, path, method='GET'):
+        def advancing(root, path, method='GET', body=None):
             if path == 'hub/update/check':
                 self.inventory['machines'][0].update(node_version=self.node_manifest['version'],
                                                      online=False)
-            return original_api(root, path, method)
+            return original_api(root, path, method, body)
         with patch.object(self, 'api', side_effect=advancing):
             self.execute()
         self.assertEqual((self.root / 'bin/nodes').resolve().name, self.node_manifest['version'])
@@ -206,6 +212,42 @@ class PromotionNodePackageTests(unittest.TestCase):
         self.execute()
         self.assertEqual(self.inventory['machines'][0]['node_version'], 'unchanged')
         self.assertEqual([path for path, method in self.calls if method == 'POST'], ['hub/update/check'])
+
+    def test_automatic_policy_rechecks_after_both_feeds_are_active(self):
+        self.enable_automatic()
+        original_api = self.api
+        def checked(root, path, method='GET', body=None):
+            if path == 'hub/update/settings':
+                self.assertTrue((root / 'releases/hub/node-packages/latest.json').exists())
+            return original_api(root, path, method, body)
+        with patch.object(self, 'api', side_effect=checked):
+            self.execute()
+        self.assertEqual(self.calls.count(('hub/update/settings', 'PUT')), 1)
+
+    def test_recheck_failure_does_not_claim_confirmed_or_delete_staging(self):
+        self.enable_automatic()
+        original_api = self.api
+        def failed(root, path, method='GET', body=None):
+            if path == 'hub/update/settings':
+                raise OSError('settings unavailable')
+            return original_api(root, path, method, body)
+        with patch.object(self, 'api', side_effect=failed):
+            with self.assertRaisesRegex(OSError, 'settings unavailable'):
+                self.execute()
+        self.assertTrue(self.staged.exists())
+        self.assertNotIn(('hub/update/history', 'GET'), self.calls)
+
+    def test_recheck_does_not_reenable_policy_disabled_during_publication(self):
+        self.enable_automatic()
+        original_api = self.api
+        def disabled(root, path, method='GET', body=None):
+            result = original_api(root, path, method, body)
+            if path == 'hub/update' and 'health' in self.events:
+                result['auto_update_nodes'] = False
+            return result
+        with patch.object(self, 'api', side_effect=disabled):
+            self.execute()
+        self.assertNotIn(('hub/update/settings', 'PUT'), self.calls)
 
     def test_automatic_policy_requires_matching_packages_before_publication(self):
         self.enable_automatic()
@@ -223,10 +265,10 @@ class PromotionNodePackageTests(unittest.TestCase):
     def assert_identity_change_rejected(self, field):
         self.enable_automatic()
         original_api = self.api
-        def changed(root, path, method='GET'):
+        def changed(root, path, method='GET', body=None):
             if path == 'hub/update/check':
                 self.inventory['machines'][0][field] = 'changed'
-            return original_api(root, path, method)
+            return original_api(root, path, method, body)
         with patch.object(self, 'api', side_effect=changed):
             with self.assertRaisesRegex(RuntimeError, 'ownership or identity'):
                 self.execute()
@@ -241,8 +283,8 @@ class PromotionNodePackageTests(unittest.TestCase):
     def test_runtime_policy_takes_precedence_over_bootstrap_configuration(self):
         self.enable_automatic()
         original_api = self.api
-        def runtime_disabled(root, path, method='GET'):
-            result = original_api(root, path, method)
+        def runtime_disabled(root, path, method='GET', body=None):
+            result = original_api(root, path, method, body)
             if path == 'hub/update':
                 result['auto_update_nodes'] = False
             return result
@@ -255,8 +297,8 @@ class PromotionNodePackageTests(unittest.TestCase):
         (self.root / 'hub.json').write_text('{"auto_update_nodes":false}')
         self.inventory['machines'][0]['deploying'] = True
         original_api = self.api
-        def runtime_enabled(root, path, method='GET'):
-            result = original_api(root, path, method)
+        def runtime_enabled(root, path, method='GET', body=None):
+            result = original_api(root, path, method, body)
             if path == 'hub/update':
                 result['auto_update_nodes'] = True
             return result
