@@ -4,7 +4,7 @@ import UIKit
 @testable import Persona
 
 /// Export as Image of a long reply with a table, a list and code (#2216; made-up text), light and dark. With
-/// PERSONA_SHOTS set the images are written there (`share-<light|dark>.png`) to look at.
+/// PERSONA_SHOTS set the images are written there (`share-<light|dark>.png`) to look at. Its width: `ShareCardWidthTests`.
 @MainActor struct ShareCardExportTests {
     static let reply = """
     ## 三个方案对比
@@ -34,13 +34,13 @@ import UIKit
     """
 
     @Test(arguments: [false, true]) func aReplyWithATableAndCode(dark: Bool) throws {
-        let message = ShareMessage(text: Self.reply, isUser: false, source: "MacBook · shop-web",
-                                   date: Date(timeIntervalSince1970: 1_793_000_000), agent: "Claude")
-        let image = try #require(MessageShareCard.render(message, dark: dark))
+        let image = try #require(MessageShareCard.render(Self.message, dark: dark))
         if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"], let png = image.pngData() {
             try png.write(to: URL(fileURLWithPath: dir).appending(path: "share-\(dark ? "dark" : "light").png"))
         }
-        // Wider than a phone for its table and code, never past the cap.
-        #expect(image.size.width > ShareCardWidth.base && image.size.width <= ShareCardWidth.cap)
+        #expect(image.size.height > 0)
     }
+
+    static let message = ShareMessage(text: reply, isUser: false, source: "MacBook · shop-web",
+                                      date: Date(timeIntervalSince1970: 1_793_000_000), agent: "Claude")
 }

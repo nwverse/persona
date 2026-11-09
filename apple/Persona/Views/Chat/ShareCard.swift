@@ -194,11 +194,11 @@ nonisolated enum ShareCardBlocks {
         return out
     }
 
-    /// `| --- | :-: |`, `---|---`: a table's second line.
+    /// `| --- | :-: |`, `---|---`: a table's second line (with a pipe: a lone `---` is a rule).
     static func isDelimiter(_ line: String) -> Bool {
         let cells = line.trimmingCharacters(in: .whitespaces).split(separator: "|", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-        guard line.contains("|") || line.contains("-"), !cells.isEmpty else { return false }
+        guard line.contains("|"), !cells.isEmpty else { return false } // a lone "---" is a rule
         return cells.allSatisfy { c in
             let core = c.drop { $0 == ":" }.reversed().drop { $0 == ":" }
             return !core.isEmpty && core.allSatisfy { $0 == "-" }

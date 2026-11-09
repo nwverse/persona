@@ -25,6 +25,16 @@ struct ShareCardWidthTests {
         #expect(ShareCardWidth.width(natural: 560, height: 20000) == 560 + ShareCardWidth.chrome)
     }
 
+    /// The sample reply with a five-column table and a long line of code: wider than a phone, within the cap, and the
+    /// same in light and dark.
+    @MainActor @Test func aReplyWithATableAndCodeIsDrawnWider() throws {
+        let light = try #require(MessageShareCard.render(ShareCardExportTests.message, dark: false))
+        let dark = try #require(MessageShareCard.render(ShareCardExportTests.message, dark: true))
+        #expect(light.size.width > ShareCardWidth.base && light.size.width <= ShareCardWidth.cap)
+        #expect(light.size.width == dark.size.width)
+        #expect(ShareCardWidth.natural(ShareCardExportTests.reply) > ShareCardWidth.base - ShareCardWidth.chrome)
+    }
+
     @Test func theWideBlocksAreTablesAndFencedCode() {
         let text = """
         Intro line | not a table
