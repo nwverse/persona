@@ -1,6 +1,8 @@
 // Package serve runs a connector in a program of its own, for the hub (connector/proc): the hub starts the program
 // and talks to it over its stdin / stdout with the hub↔node JSON-lines RPC (internal/rpc). One connector per program.
-// A connector whose dependencies would make personad much bigger lives this way (the Telegram extension, #1704).
+// Connector programs are written on the Go SDK now (sdk/go/ext, docs/protocol/connector-protocol.md): this runner (Main,
+// MainWith, Serve) serves only the connector conformance kit (connector/conformance) and tests, and connector/proc
+// speaks the method names and types here.
 //
 // The hub calls the methods below; the program calls back for its secret (secrets.*: the hub binds them to this
 // program's connector) and tells the hub what changed (the changed event). Nothing here logs what crosses the pipe.

@@ -1,6 +1,6 @@
 # Connector protocol (v2)
 
-The protocol between hub and a connector running as its own program. Used by the first-party Telegram extension (#1704); third-party connectors follow this too. Design / relationship to in-hub connectors: `docs/extensions/connectors.md` (“II · 4”). Program side `server/internal/connector/serve`, hub side `server/internal/connector/proc`, conformance tests server/internal/connector/conformance.
+The protocol between hub and a connector running as its own program. Used by the first-party Telegram extension (#1704); third-party connectors follow this too. Design / relationship to in-hub connectors: `docs/extensions/connectors.md` (“II · 4”). Program side the Go SDK (`sdk/go/ext`, below), hub side `server/internal/connector/proc`, conformance tests server/internal/connector/conformance; `server/internal/connector/serve` has the method names and types both sides use, and a runner only the conformance kit and tests start.
 
 **Now the connector namespace of the process-extension protocol** (#1101, `docs/extensions/extensions.md`, “Process-extension protocol”). Connector program is an extension contributing connectors. Hub opens via initialize; prefix every method below with `connector.` (status → `connector.status`), add contribution (connector ID) to params. All other params, results, requirements unchanged. Program-to-hub `secrets.*` and changed also prefixed with contribution. Process startup / stop / restart, config / user secrets are extension-platform responsibilities (`docs/extensions/extensions.md`).
 
@@ -12,7 +12,7 @@ and `exttest.CheckConnectors` / `exttest.Start` hold it to the protocol against 
 below hold every message both ways to the schema, and `server/internal/extension/conformance/plugin_schema_test.go`
 holds the schema to the server's Go types (schema/extension/README.md, "Plugin-side schemas and calls").
 
-`connector/serve` accepts process-extension initialize + `connector.*` (hub now uses only this), and legacy init + unprefixed methods below (standalone protocol retained one release cycle, removed at next protocol change). Go programs use `serve.MainWith`, also receiving declared user secrets (`Init.Declared`) and data directory under process protocol.
+`connector/serve` accepts process-extension initialize + `connector.*` (hub now uses only this), and legacy init + unprefixed methods below (standalone protocol retained one release cycle, removed at next protocol change; only `connector/proc`'s own opening, `Config.Path`, still uses it, from the conformance kit and tests). Go programs use the SDK (`ext.Serve` / `ext.Main` with `ext.Methods`), whose `ext.Init` carries the config, the declared user secrets and the data directory.
 
 ## Transport
 
