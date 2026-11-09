@@ -4,6 +4,7 @@
   "title": "Extensions",
   "refresh": "Refresh extensions",
   "list_footer": "Extensions are installed, upgraded and removed in the hub's admin page (/admin) or on the hub machine (personad extension). Here you can turn them on or off, change settings and enter secrets.",
+  "list_footer_market": "Extensions from a market are managed here. Others are installed, upgraded and removed in the hub's admin page (/admin) or on the hub machine (personad extension).",
   "list_error": "Couldn't load extensions: {error}",
   "retry": "Retry",
   "empty_title": "No extensions",

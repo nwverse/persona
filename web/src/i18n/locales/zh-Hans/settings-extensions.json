@@ -4,6 +4,7 @@
   "title": "扩展",
   "refresh": "刷新扩展",
   "list_footer": "扩展在 hub 的管理界面（/admin）或 hub 所在的机器上（personad extension）安装、升级和卸载，这里可以开关、改设置、填密钥。",
+  "list_footer_market": "从市场装的扩展在这里管理；其他的在 hub 的管理界面（/admin）或 hub 所在的机器上（personad extension）安装、升级和卸载。",
   "list_error": "读不到扩展：{error}",
   "retry": "重试",
   "empty_title": "没有扩展",

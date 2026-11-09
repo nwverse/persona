@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
 // Settings › Extensions keeps an extension's unsaved configuration while its page is closed (#2800): coming back from
-// another extension's page finds the edits, the save bar and the list's mark; Revert drops them.
+// another extension's page finds the edits, the save bar and the list's mark; Revert drops them. With a market, the
+// list's note does not contradict the market's.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubExtension, HubExtensionDetail } from "../../lib/extensions";
 
-const hub = vi.hoisted(() => ({ list: [] as unknown[], details: {} as Record<string, unknown> }));
+const hub = vi.hoisted(() => ({ list: [] as unknown[], details: {} as Record<string, unknown>, markets: false }));
 vi.mock("../../lib/extensions", async (original) => ({
   ...(await original<typeof import("../../lib/extensions")>()),
-  listExtensionsInfo: () => Promise.resolve({ extensions: hub.list, canInstall: false, markets: false }),
+  listExtensionsInfo: () => Promise.resolve({ extensions: hub.list, canInstall: false, markets: hub.markets }),
   extensionDetail: (id: string) => Promise.resolve(hub.details[id]),
 }));
 vi.mock("../../lib/store", async (original) => ({ ...(await original<typeof import("../../lib/store")>()), onHubEvent: () => () => {} }));
@@ -33,6 +34,7 @@ let host: HTMLDivElement;
 let root: Root;
 let login = 0;
 beforeEach(() => {
+  hub.markets = false;
   setToken(`token-${++login}`); // a new credential: nothing kept from the case before
   host = document.createElement("div");
   document.body.append(host);
@@ -80,5 +82,18 @@ describe("an extension's unsaved configuration", () => {
     await show("example-notes");
     expect(input()!.value).toBe(back);
     expect(!!button(t("settings-extensions.revert"))).toBe(unsaved);
+  });
+});
+
+describe("the list's note", () => {
+  it.each([
+    { markets: true, note: "settings-extensions.list_footer_market", other: "settings-extensions.list_footer" },
+    { markets: false, note: "settings-extensions.list_footer", other: "settings-extensions.list_footer_market" },
+  ])("with a market: $markets", async ({ markets, note, other }) => {
+    hub.markets = markets;
+    await show(null);
+    expect(!!host.querySelector('[data-settings-group="market"]')).toBe(markets);
+    expect(host.querySelector('[data-settings-group="extensions"]')!.textContent).toContain(t(note));
+    expect(host.textContent).not.toContain(t(other));
   });
 });

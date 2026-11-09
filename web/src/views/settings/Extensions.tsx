@@ -247,7 +247,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           </span>
         }
         right={<IconButton icon="retry" label={t("settings-extensions.refresh")} onClick={load} disabled={loading} size={24} iconSize={13} className="-mb-1" />}
-        footer={t("settings-extensions.list_footer")}
+        footer={markets ? t("settings-extensions.list_footer_market") : t("settings-extensions.list_footer")}
       >
         {!extensions && !error && (
           <div className="px-4 py-3">
