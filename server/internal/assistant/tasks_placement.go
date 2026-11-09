@@ -54,6 +54,13 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		t.Why = strings.TrimSpace(t.Why + " (" + note + ")")
 	}
 	if moved {
+		// Keep the machine the task was first placed on across repeated moves; each move refreshes the landing and the
+		// health-check reason. Names, not ids, go on the card/receipt (#2271).
+		if t.Reroute == nil {
+			t.Reroute = &PlanReroute{FromMachine: firstNonEmpty(m.Name, m.ID)}
+		}
+		t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
+		t.Reroute.Reason = note
 		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
 	}
 	return moved
@@ -149,6 +156,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t PlanTask) {
 	if err := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
 		pt.Machine, pt.Cwd, pt.Why = t.Machine, t.Cwd, t.Why
+		pt.Reroute = t.Reroute
 		pt.Launcher, pt.Model, pt.Effort = t.Launcher, t.Model, t.Effort
 	}); err != nil {
 		s.logf("plan %s: %v", planID, err)

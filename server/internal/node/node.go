@@ -396,16 +396,30 @@ func (n *Node) loadState(ctx context.Context) bool {
 	defer n.ultracodeStateLoaded()
 	n.state.mu.Lock()
 	n.state.persist = func(id string, v sessionState) {
-		_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		if n.peer != nil {
+			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		}
 	}
 	n.state.mu.Unlock()
 	legacyPath := filepath.Join(n.dir, "sessions.json")
-	if legacy := legacyState(legacyPath); len(legacy) > 0 {
+	if legacy := legacyState(legacyPath, n.logf); len(legacy) > 0 {
+		allOk := true
 		for id, v := range legacy {
-			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+			if n.peer == nil {
+				allOk = false
+				break
+			}
+			if err := n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v}); err != nil {
+				allOk = false
+				n.logf("legacy migration: state.put for %s failed: %v", id, err)
+			}
 		}
 		n.state.merge(legacy)
-		_ = os.Rename(legacyPath, legacyPath+".migrated")
+		if allOk {
+			_ = os.Rename(legacyPath, legacyPath+".migrated")
+		} else {
+			n.logf("legacy migration: kept %s for retry because not all entries could be notified", legacyPath)
+		}
 	}
 	return n.fetchState(ctx)
 }
@@ -428,6 +442,9 @@ func (n *Node) reloadState(ctx context.Context) bool {
 
 // fetchState is one try of state.load: what it brings is merged under what this connection already has.
 func (n *Node) fetchState(ctx context.Context) bool {
+	if n.peer == nil {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(ctx, stateLoadTimeout)
 	defer cancel()
 	var res struct {
