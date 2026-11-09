@@ -11,23 +11,27 @@ import (
 
 // quickMeta is a cheap summary of a transcript read from its head and tail only.
 type quickMeta struct {
-	size     int64
-	mtime    time.Time
-	title    string
-	first    string
-	activity time.Time // last real exchange; zero when unknown
-	queue    []string
-	loop     *proto.LoopInfo
-	goal     *proto.GoalInfo        // from backgroundTasks too: a goal is often set at the start of a long transcript
-	plan     *proto.PlanInfo        // from the same scan (bgPlan): a TodoWrite is often far back in a long turn
-	bg       []proto.BackgroundTask // from backgroundTasks: the tail alone misses tasks started earlier in a long turn
-	bgWait   bool                   // bg and loop are not known yet (a big first read is running)
-	wf       []proto.Workflow       // workflow runs, as the transcript tells them (bgWorkflows)
-	wfScript map[string]string      // their script files by run id
-	cwd      string
-	model    string
-	surface  string // the client it runs in (transcript.Meta.Surface)
-	lastText string
+	size           int64
+	mtime          time.Time
+	title          string
+	first          string
+	activity       time.Time // last real exchange; zero when unknown
+	queue          []string
+	loop           *proto.LoopInfo
+	toolLoop       transcript.LoopDetector
+	toolLoopOffset int64
+	toolLoopSize   int64
+	toolLoopMtime  time.Time
+	goal           *proto.GoalInfo        // from backgroundTasks too: a goal is often set at the start of a long transcript
+	plan           *proto.PlanInfo        // from the same scan (bgPlan): a TodoWrite is often far back in a long turn
+	bg             []proto.BackgroundTask // from backgroundTasks: the tail alone misses tasks started earlier in a long turn
+	bgWait         bool                   // bg and loop are not known yet (a big first read is running)
+	wf             []proto.Workflow       // workflow runs, as the transcript tells them (bgWorkflows)
+	wfScript       map[string]string      // their script files by run id
+	cwd            string
+	model          string
+	surface        string // the client it runs in (transcript.Meta.Surface)
+	lastText       string
 	// asks is what lastText asks the user (transcript.AskOf), when no message came in after it (#5096).
 	asks string
 	// lastTextAt is when the agent last wrote text (botmux's sentinel included: it said something, it is no probe).
@@ -122,6 +126,8 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 			m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 			m.plan = n.bgPlan(path)
 			n.mu.Lock()
+			current := n.metas[path]
+			m.toolLoop, m.toolLoopOffset, m.toolLoopSize, m.toolLoopMtime = current.toolLoop, current.toolLoopOffset, current.toolLoopSize, current.toolLoopMtime
 			n.metas[path] = m
 			n.mu.Unlock()
 		}
@@ -141,6 +147,8 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 	m.ultracode, m.ultracodeAt = n.bgUltracode(path)
 	m.plan = n.bgPlan(path)
 	n.mu.Lock()
+	current := n.metas[path]
+	m.toolLoop, m.toolLoopOffset, m.toolLoopSize, m.toolLoopMtime = current.toolLoop, current.toolLoopOffset, current.toolLoopSize, current.toolLoopMtime
 	n.metas[path] = m
 	n.mu.Unlock()
 	return m
