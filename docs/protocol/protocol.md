@@ -142,7 +142,9 @@ This shows the structure; actual parameter values are each URL-encoded, and orde
 | `hub` | hub UUID |
 | `fp` | SHA-256(SubjectPublicKeyInfo DER), base64url without padding, 43 characters; not a hash of the whole certificate |
 | `tls` | TLS listen port, decimal |
-| `alt` | Full HTTPS URL, repeatable; currently at most two, picked in candidate order, excluding `lan` |
+| `alt` | Full HTTPS URL, repeatable; at most two, excluding `lan`. When both literal address families are available, the first IPv6 and first IPv4 candidates, IPv6 first; otherwise the first two eligible candidates in candidate order |
+
+Hostnames (`name` candidates) do not count as either address family because their DNS records may not support both. They remain eligible in the fallback order when one or both literal families are absent. Reserving an explicit IPv4 candidate alongside IPv6 lets IPv4-only clients attempt pairing even when earlier candidates are IPv6 addresses or an IPv6-only hostname. This selection applies to both app and computer pairing codes.
 
 When TLS is off the QR code omits `fp` / `tls`; with no suitable candidate it omits `alt`. The API response still has the matching fields (empty string, 0 or empty array). Renewing a certificate with the same key does not change `fp`; changing the key requires restarting the hub and re-pairing devices through a trusted path. There is no `fp_next` yet.
 
@@ -1976,7 +1978,7 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
     a machine that already chose is never changed by it. `engine_sets_unsupported`: the node is online but too old for sets, and the chosen set is not one it can run
     as a single engine (herdr + Orca, say). It then runs `engine` alone, and clients say so until the node is updated.
   - **Choosing the host for a new session**: `POST /api/v1/sessions` (`session.start`) may carry `host`, one of the enabled hosts; without it, the default host.
-    A host that is not enabled, or Herdr App (which cannot start sessions from the phone), is refused with `engine_missing` and nothing starts. When the node is
+    A host that is not enabled, or one that cannot start sessions, is refused with `engine_missing` and nothing starts. When the node is
     too old (its `node.info` has no `engine_hosts`) the hub answers `node_outdated` and does not send it: an older node would ignore `host` and start in its engine.
     Session rows carry `host` (the host they live in: the pane's kind, `paseo` for Paseo's) and `also_open_in` (the other hosts the same session is live in,
     `docs/integrations/engines.md` "Host sets").
@@ -2443,7 +2445,7 @@ All belong to the manager (`docs/extensions/extensions.md` ("Who manages what"))
 | hub → manager, event | `extensions.emit {event, params}` | things extensions subscribe to: `agent.finished`, `agent.needs_you` |
 | manager → hub, event | `extensions.report {features, apis, machines, screen_keep_awake, looks, bot_identities?}` | the full set: extension features, API prefixes and receipts, each machine's `computer` / `browser`, and the avatars of enabled extensions with their files (`looks`; the hub serves them together with its own avatar packs); the hub keeps it (stored in `hub.extensions_report`). `bot_identities: [{kind, id}]` lists enabled Feishu app IDs and bound, enabled WeChat account IDs (`kind`: `feishu` / `wechat`), without secrets or tokens; used for the shared-bot warning in the managers roster |
 | | `extensions.looks_gone {ids}` | an extension carrying avatars was uninstalled: the manager first sends a report without these avatars, then this; if the selected avatar is in `ids` and no other source provides it, the hub switches the selection back to the default avatar (see [extensions.md](../extensions/extensions.md) ("Avatars")); if the saved choice cannot be read, the hub logs the error and leaves it unchanged |
-| manager → hub, `app.call` (app `hub`) | `push.localized`, `push.background`, `push.mail_targets` | pushes (cards live in the assistant's interaction queue, in-process). Model configuration's `plugins.*` and `models.*` are inside the manager process and don't go through the hub |
+| manager → hub, `app.call` (app `hub`) | `push.localized`, `push.background`, `push.mail_targets`, `extensions.token_revoked` | pushes (cards live in the assistant's interaction queue, in-process); `extensions.token_revoked` `{hash}`: an extension token the manager dropped, whose relayed connections the hub ends (`docs/extensions/extensions.md` "Permissions"). Model configuration's `plugins.*` and `models.*` are inside the manager process and don't go through the hub |
 
 ### Methods channels use (2026-11-04)
 
