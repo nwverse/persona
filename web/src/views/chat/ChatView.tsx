@@ -1,7 +1,7 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useManagerOffline } from "../ManagerParts";
 import { alsoOpenText } from "../../lib/engines";
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
 import { ago, attentionReason, backgroundWaiting, externalLink, failureReason, resumeCommand, sessionCan, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
 import { navigate, type SessionView } from "../../lib/router";
@@ -61,6 +61,8 @@ import { ChatContext, FreshWords, LiveClockContext, type ChatContextValue } from
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource } from "../../lib/nav-rail";
+import { containsInput, indexedNavTicks, userInputRevision } from "../../lib/user-input-index";
+import { useUserInputs } from "./useUserInputs";
 import { NavRail } from "./NavRail";
 import { ChatLineView, closedRecap, closeRecap, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
@@ -83,6 +85,10 @@ import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
 import { MAIN_TITLE, conversationTitle } from "../assistant/conversations";
 import { usePersona } from "../assistant/Persona";
+import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
+import { agentLabel } from "../../lib/mentions";
+import { VoiceBar } from "./voice/VoiceBar";
+import { useVoiceEntry, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -214,6 +220,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the list as pushed: its updated_at is what tells the page it fell behind (useTranscript)
   const viewed = readOnly ? (listed?.find((a) => a.session_id === sid) ?? null) : null;
   const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, cache: mainCache, assistant });
+  const trNow = useRef(tr);
+  trNow.current = tr;
+  const railChat = useRef(`${mid}/${sid}`);
+  railChat.current = `${mid}/${sid}`;
+  const railRun = useRef(0);
+  useEffect(() => () => { railRun.current++; }, [mid, sid]);
+  const fine = useFinePointer();
   // a Persona conversation's send the hub refused: a card above the composer, not a toast (docs/assistant/onboarding.md 4.4),
   // while its failed bubble (`entry`) is there
   const [sendFailure, setSendFailure] = useState<{ chat: string; failure: CodedFailure; entry: string } | null>(null);
@@ -236,6 +249,18 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   const state = session ? stateOf(session) : "unknown";
+  // Voice chat (docs/web/web.md "Voice"): the call belongs to this page (the same chat may be open twice, a page and a
+  // side panel), and ends as the page leaves the conversation. ChatView learns only whether a call is on here.
+  const voiceId = useId();
+  const voiceOwner = useMemo(() => ({ mid, sid, owner: voiceId }), [mid, sid, voiceId]);
+  useEffect(() => () => voiceCalls.leave(voiceOwner), [voiceOwner]);
+  const voiceState = useVoiceState(voiceOwner);
+  const voiceCall = useVoiceCall(voiceOwner);
+  const voiceLabel = assistant ? persona.name : session ? agentLabel(session) : "Claude";
+  const itemsNow = useRef(tr.items);
+  itemsNow.current = tr.items;
+  const readItems = useCallback(() => itemsNow.current, []);
+  const voiceEntry = useVoiceEntry({ ...voiceOwner, session, items: readItems, label: voiceLabel, off: readOnly || Boolean(offlineLine) || !sessionCan(session, "send") });
   // the message is in, the hub has not said working yet (#3654): the live row covers that wait too
   const segs = useMemo(() => segments(tr.items), [tr.items]);
   const lastSeg = segs[segs.length - 1];
@@ -712,6 +737,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [tr.items, lastLive, readOnly, outgoing],
   );
   lastLines.current = lines;
+  const linesNow = useRef(lines);
+  linesNow.current = lines;
   const limitOn = limitLine ? lines.reduce((id, line) => (line.kind === "apiError" ? line.id : id), "") : "";
   // failed messages where they were sent: before the first message written after them (lib/outbox.ts placeFailed)
   const placed = useMemo(() => (readOnly ? { before: new Map<string, OutboxEntry[]>(), rest: [] } : placeFailed(lines, outbox)), [readOnly, lines, outbox]);
@@ -722,9 +749,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
-  // The loaded-message adapter is deliberately separate from the rail's gestures. An independent-index adapter
-  // can replace its ticks and resolve missing target content in select, without fetching while hovering.
-  const railTicks = useMemo(() => navRailTicks(lines), [lines]);
+  // Only lightweight positions are fetched for navigation; older transcript bodies wait for a selection.
+  const loadedRailTicks = useMemo(() => navRailTicks(lines), [lines]);
+  const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
+  const inputIndex = useUserInputs(mid, sid, tr.history, inputRevision, fine && !tr.loading, tr.reload);
+  const railTicks = useMemo(() => inputIndex ? indexedNavTicks(inputIndex, lines, tr.items) : loadedRailTicks, [inputIndex, lines, tr.items, loadedRailTicks]);
   /** Brings a row into view in the chat's own scroller (scrollIntoView would also scroll an opening group's clipped
    *  box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
   const landRow = useCallback(
@@ -739,14 +768,51 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [follow],
   );
   const railJump = useCallback(
-    (lineId: string) => {
-      // the question lands a little under the top, its answer below it
-      const row = scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(lineId)}"]`)?.firstElementChild;
-      if (row instanceof HTMLElement) landRow(row, -12);
+    async (lineId: string) => {
+      const scope = `${mid}/${sid}`;
+      const run = ++railRun.current;
+      const deadline = Date.now() + 120_000;
+      const target = inputIndex?.inputs.find((input) => `seg:${input.id}` === lineId);
+      const cancelled = () => railChat.current !== scope || run !== railRun.current || Boolean(inputIndex?.history && trNow.current.history && inputIndex.history !== trNow.current.history);
+      follow(false);
+      if (!target || containsInput(trNow.current.items, target)) {
+        const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
+        const row = owner ? scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(owner)}"]`)?.firstElementChild : null;
+        if (row instanceof HTMLElement) { landRow(row, -12); return; }
+      }
+      if (target && !containsInput(trNow.current.items, target)) {
+        // Reuse ordinary backward pages, keeping history contiguous rather than inserting an isolated window.
+        await loadEarlierForSearch({
+          get: () => trNow.current,
+          load: async () => {
+            const sc = scroller.current;
+            if (sc) before.current = { h: sc.scrollHeight, top: sc.scrollTop };
+            try { await trNow.current.loadEarlier(); }
+            finally { requestAnimationFrame(() => (before.current = null)); }
+          },
+          frame: nextFrame,
+          stopped: () => cancelled() || Date.now() >= deadline || containsInput(trNow.current.items, target),
+          onPage: () => {},
+          pages: Number.MAX_SAFE_INTEGER,
+        });
+        if (cancelled()) return;
+        if (!containsInput(trNow.current.items, target)) { toast(t("chat-navrail.target_failed"), "error"); return; }
+      }
+      const result = await untilStill<HTMLElement>({
+        frame: nextFrame, now: () => performance.now(), cancelled, giveUpMs: GIVE_UP_MS,
+        locate: () => {
+          const owner = target ? lineOfItem(linesNow.current, trNow.current.items, target.id) : lineId;
+          const row = owner ? scroller.current?.querySelector<HTMLElement>(`[data-line="${CSS.escape(owner)}"]`)?.firstElementChild : null;
+          return row instanceof HTMLElement ? { y: row.getBoundingClientRect().top, value: row } : null;
+        },
+      });
+      if (result === "cancelled") return;
+      if (result === "missing") { toast(t("chat-navrail.target_failed"), "error"); return; }
+      landRow(result.value, -12);
     },
-    [landRow],
+    [mid, sid, inputIndex, follow, landRow],
   );
-  const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, select: railJump }), [railTicks, railJump]);
+  const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
   const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
@@ -802,10 +868,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const [search, setSearch] = useState<{ open: boolean; query: string }>({ open: false, query: "" });
   const origin = useRef<{ atEnd: boolean; line?: string; offset: number } | null>(null);
   const [picked, setPicked] = useState(false);
-  const trNow = useRef(tr);
-  trNow.current = tr;
-  const linesNow = useRef(lines);
-  linesNow.current = lines;
   const going = useRef(0);
   // the ring on the hit gone to: one timer, restarted when another (or the same) row lights
   const lit = useRef<{ el: HTMLElement; timer: number } | null>(null);
@@ -955,7 +1017,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const compactDock = narrow || (!inPage && !assistant && !readOnly);
   const short = useMedia(SHORT);
   const [typing, setTyping] = useState(false);
-  const fine = useFinePointer();
   const keyboard = typing && !fine;
   const composerBox = useRef<HTMLDivElement>(null);
   // after a switch the keyboard goes to what is now shown (not on a touch screen: that would raise the keyboard)
@@ -1140,12 +1201,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 <Loading label={starting ? t("chat-chatview.preparing") : shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : online ? t("chat-chatview.delivering") : t("chat-chatview.waiting_for_hub")} />
               </div>
             )}
+            {voiceState && <VoiceTail owner={voiceOwner} persona={persona.name} />}
           </div>
           {!readOnly && <CommentMarks scroller={scroller} />}
           </ChatActionsContext.Provider>
         </div>
         {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}
-        <NavRail ticks={railSource.ticks} scroller={scrollEl} onJump={railSource.select} reset={`${mid}/${sid}`} />
+        <NavRail ticks={railSource.ticks} total={railSource.total} scroller={scrollEl} onJump={railSource.select} reset={`${mid}/${sid}`} />
         {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
       </div>
@@ -1183,8 +1245,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {assistant && (
           <>
             <TaskQuestions conversation={sid} />
-            <TaskDock conversation={sid} />
-            <RouteChip conversation={sid} />
+            {/* a call keeps the footer to the cards and itself (docs/assistant/voice.md 1.2 A.2) */}
+            {voiceState !== "live" && <TaskDock conversation={sid} />}
+            {voiceState !== "live" && <RouteChip conversation={sid} />}
           </>
         )}
         <PendingCards
@@ -1217,8 +1280,16 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           />
         )}
         {!short && queue}
+        {voiceState === "ended" && <VoiceEnded owner={voiceOwner} />}
         </div>
-        <div ref={composerBox} className="shrink-0">
+        {voiceEntry.dialog}
+        {voiceState === "live" && voiceCall && (
+          <div className="shrink-0">
+            <VoiceBar call={voiceCall} session={session} cards={interactions} label={voiceLabel} persona={persona.name} onStopAgent={interrupt} />
+          </div>
+        )}
+        {/* kept while a call is on (its draft, attachments and quotes stay), the bar in its place */}
+        <div ref={composerBox} className="shrink-0" hidden={voiceState === "live"}>
         <Composer
           draftKey={draftKey}
           placeholder={offlineLine ? offlineLine : !sessionCan(session, "send") && session?.source_kind ? t("chat-chatview.view_only") : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
@@ -1238,6 +1309,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           onFocusChange={setTyping}
           blocked={gate.blocked}
           footer={footer}
+          voice={voiceEntry.offer}
         />
         </div>
       </div>
