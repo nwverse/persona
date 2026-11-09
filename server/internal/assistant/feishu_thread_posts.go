@@ -15,7 +15,6 @@ import (
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Posting into a todo's chat thread (#5279, docs/assistant/todos.md "Chat thread", docs/extensions/bots.md): a todo bound to a Lark topic
@@ -423,7 +422,7 @@ func (s *Service) threadAgentAsks(ix proto.Interaction) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ev := threadEvent{kind: threadAgentNeeds, agent: threadName(textfmt.FirstNonEmpty(ix.SessionTitle, ix.TaskTitle))}
+	ev := threadEvent{kind: threadAgentNeeds, agent: threadName(firstNonEmpty(ix.SessionTitle, ix.TaskTitle))}
 	switch {
 	case !s.feishuCardWanted(ctx, ix):
 		// No card anywhere: the line is the notice, and says what is asked, except for a permission: what a tool is about

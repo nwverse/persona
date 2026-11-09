@@ -10,7 +10,6 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 const (
@@ -59,9 +58,9 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		// Keep the machine the task was first placed on across repeated moves; each move refreshes the landing and the
 		// health-check reason. Names, not ids, go on the card/receipt (#2271).
 		if t.Reroute == nil {
-			t.Reroute = &PlanReroute{FromMachine: textfmt.FirstNonEmpty(m.Name, m.ID)}
+			t.Reroute = &PlanReroute{FromMachine: firstNonEmpty(m.Name, m.ID)}
 		}
-		t.Reroute.ToMachine = textfmt.FirstNonEmpty(alt.Name, alt.ID)
+		t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
 		t.Reroute.Reason = note
 		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
 	}

@@ -16,7 +16,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Places outside the app (docs/extensions/extensions.md "System-level places"): an extension's widgets (the ui slot widget: a home
@@ -272,7 +271,7 @@ func (h *Manager) shortcutCall(ctx context.Context, id, sid string, in wire.Shor
 		}
 		return out, err
 	}
-	out.Text = textfmt.Clip(out.Text, extension.StringMost)
+	out.Text = clip(out.Text, extension.StringMost)
 	if out.View != nil {
 		if _, err := extension.FitWidget(out.View, "large", params.UIVersion, h.uiFallbackLang(ctx, params.Locale)); err != nil {
 			return wire.ShortcutResult{}, i18n.Err("hub-extension_system.result_unsupported", i18n.Args{"err": err.Error()})

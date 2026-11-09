@@ -13,7 +13,6 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // One step of a chat's import: one call (and the image downloads of the page it answered), its messages written,
@@ -252,7 +251,7 @@ func (d *historyDriver) answered(ctx context.Context, e *kb.Engine, w historyWor
 // historySourceStop is the stop a source asked for (Pace.Stop), with its own words.
 func historySourceStop(p *connectorwire.Pace) *historyHalt {
 	h := halt(true, "source_stop")
-	h.why.Text = textfmt.Clip(strings.TrimSpace(p.Reason), 200)
+	h.why.Text = clip(strings.TrimSpace(p.Reason), 200)
 	return h
 }
 

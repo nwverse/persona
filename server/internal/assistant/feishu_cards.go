@@ -17,7 +17,6 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -534,7 +533,7 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		var b strings.Builder
 		fmt.Fprintf(&b, "**%s**", feishubot.EscapeMarkdown(toolDisplayName(ix.ToolName)))
 		if ix.Reason != "" {
-			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(textfmt.Clip(ix.Reason, maxPermissionReason)))
+			fmt.Fprintf(&b, "\n%s", feishubot.EscapeMarkdown(clip(ix.Reason, maxPermissionReason)))
 		}
 		c.Markdown(b.String())
 		if sum := strings.TrimSpace(ix.Summary); sum != "" {
@@ -721,9 +720,9 @@ func firstQuestion(ix proto.Interaction) string {
 func questionText(l i18n.Lang, q proto.Question) string {
 	s := ""
 	if q.Header != "" {
-		s = "**" + feishubot.EscapeMarkdown(textfmt.Clip(q.Header, 60)) + "**\n"
+		s = "**" + feishubot.EscapeMarkdown(clip(q.Header, 60)) + "**\n"
 	}
-	s += feishubot.EscapeMarkdown(textfmt.Clip(q.Question, maxQuestionRunes))
+	s += feishubot.EscapeMarkdown(clip(q.Question, maxQuestionRunes))
 	descBudget := maxOptionDescBudget
 	clippedOptions := 0
 	for i, o := range q.Options {
@@ -732,9 +731,9 @@ func questionText(l i18n.Lang, q proto.Question) string {
 			break
 		}
 		if o.Description != "" && descBudget > 0 {
-			desc := textfmt.Clip(o.Description, maxOptionDescRunes)
+			desc := clip(o.Description, maxOptionDescRunes)
 			if len([]rune(desc)) > descBudget {
-				desc = textfmt.Clip(desc, descBudget)
+				desc = clip(desc, descBudget)
 			}
 			descBudget -= len([]rune(desc))
 			s += "\n- " + feishubot.EscapeMarkdown(clip(o.Label, 40)) + "：" + feishubot.EscapeMarkdown(desc)
@@ -759,7 +758,7 @@ func (s *Service) answeredCard(ctx context.Context, ix proto.Interaction, how st
 			qs = qs[:maxAnsweredQuestions]
 		}
 		for _, q := range qs {
-			c.Markdown(feishubot.EscapeMarkdown(textfmt.Clip(q.Question, maxAnsweredQRunes)))
+			c.Markdown(feishubot.EscapeMarkdown(clip(q.Question, maxAnsweredQRunes)))
 		}
 		if more > 0 {
 			c.Note(strings.TrimSpace(i18n.T(s.botLang(ctx), "assistant-feishu_cards.clipped")))

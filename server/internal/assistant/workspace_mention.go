@@ -17,7 +17,6 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // leadingContextRe is one attributed context block at the start of what is left of a message: the clients put the
@@ -82,7 +81,7 @@ func (s *Service) workspaceBlock(ctx context.Context, attrs map[string]string) (
 	if !ok {
 		return "", false
 	}
-	w := prompts.WorkspaceMention{Title: strings.TrimSpace(attrs["title"]), Machine: d.ID, MachineName: textfmt.FirstNonEmpty(d.Name, d.ID),
+	w := prompts.WorkspaceMention{Title: strings.TrimSpace(attrs["title"]), Machine: d.ID, MachineName: firstNonEmpty(d.Name, d.ID),
 		Cwd: cwd, Branch: strings.TrimSpace(attrs["branch"]), Online: d.Online}
 	if w.Title == "" {
 		w.Title = path.Base(strings.TrimRight(cwd, `/\`))
@@ -99,7 +98,7 @@ func (s *Service) workspaceBlock(ctx context.Context, attrs map[string]string) (
 		if err == nil {
 			loc := s.location(ctx)
 			for _, ss := range workspaceSessions(list, cwd) {
-				ws := prompts.WorkspaceSession{Title: clip(oneLine(textfmt.FirstNonEmpty(ss.Title, path.Base(ss.Cwd))), 80), Agent: textfmt.FirstNonEmpty(ss.AgentLabel, ss.Agent, "claude"),
+				ws := prompts.WorkspaceSession{Title: clip(oneLine(firstNonEmpty(ss.Title, path.Base(ss.Cwd))), 80), Agent: firstNonEmpty(ss.AgentLabel, ss.Agent, "claude"),
 					Status: ss.Status, ID: ss.SessionID}
 				if !ss.UpdatedAt.IsZero() {
 					ws.When = ss.UpdatedAt.In(loc).Format("01-02 15:04")
@@ -137,7 +136,7 @@ func workspaceSessions(list []proto.Session, dir string) []proto.Session {
 
 // sessionDir is where a session works: the node-verified folder when it has one (docs/web/workspace-board.md).
 func sessionDir(ss proto.Session) string {
-	return textfmt.FirstNonEmpty(ss.WorkspaceCwd, ss.Cwd)
+	return firstNonEmpty(ss.WorkspaceCwd, ss.Cwd)
 }
 
 func sameDir(a, b string) bool {

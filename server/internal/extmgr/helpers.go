@@ -28,8 +28,9 @@ import (
 // Small helpers shared by this package's handlers.
 
 var (
-	clip    = textfmt.Clip
-	oneLine = textfmt.OneLine
+	clip          = textfmt.Clip
+	oneLine       = textfmt.OneLine
+	firstNonEmpty = textfmt.FirstNonEmpty
 )
 
 func writeJSON(w http.ResponseWriter, v any) { apierr.WriteJSON(w, v) }

@@ -14,7 +14,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The channels plugins contribute (the channel extension point, docs/extensions/channels.md "How extensions contribute channels"),
@@ -155,7 +154,7 @@ func (h *Manager) channelReceive(id string, m channel.Message) {
 				total += len(b.Data)
 				return false
 			}
-			m.Unsupported = append(m.Unsupported, kind+"「"+textfmt.FirstNonEmpty(b.Name, "未命名")+"」（太大）")
+			m.Unsupported = append(m.Unsupported, kind+"「"+firstNonEmpty(b.Name, "未命名")+"」（太大）")
 			return true
 		}
 	}

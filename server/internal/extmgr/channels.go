@@ -14,7 +14,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Channels (docs/extensions/channels.md): every way of talking to Persona in one list — the apps, the Feishu bot, /agent in
@@ -182,7 +181,7 @@ func (h *Manager) extensionChannelView(ctx context.Context, pc extensionChannel)
 	it, p := pc.item, pc.extension
 	caps := it.Capabilities.Normalized()
 	out := channel.View{ID: it.ID, Name: it.Name, Kind: it.Kind, Source: channel.SourcePlugin, Plugin: p.Record.ID, Installed: true,
-		Description: textfmt.FirstNonEmpty(it.Description, p.Manifest.Description), Capabilities: caps, Bind: channel.BindNone}
+		Description: firstNonEmpty(it.Description, p.Manifest.Description), Capabilities: caps, Bind: channel.BindNone}
 	on := p.Record.Enabled && p.Problem == ""
 	var st connector.Status
 	if it.Connector != "" {
@@ -434,7 +433,7 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 		}
 	}
 	if v.Owner != nil {
-		return connector.Prompt{Done: true, Account: textfmt.FirstNonEmpty(v.Owner.Name, i18n.T(l, "hub-channels.paired"))}, nil
+		return connector.Prompt{Done: true, Account: firstNonEmpty(v.Owner.Name, i18n.T(l, "hub-channels.paired"))}, nil
 	}
 	b := &h.bots
 	b.mu.Lock()

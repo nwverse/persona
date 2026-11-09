@@ -14,7 +14,6 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/rpc"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // What the hub asks of the knowledge base and tells it (assistantwire.MethodKB*, EventKB*; BusHub passes them here):
@@ -131,14 +130,14 @@ func (s *Service) kbChatContext(ctx context.Context, id string) *prompts.KBConte
 func kbContext(e *kb.Engine, c *kb.Chat) *prompts.KBContext {
 	out := &prompts.KBContext{ChatID: c.ID, ChatName: c.Name}
 	if sum := e.Store.Summary(kb.KindChat, c.ID); sum != "" {
-		out.Summary = textfmt.Clip(sum, 4000)
+		out.Summary = clip(sum, 4000)
 	}
 	for i, slug := range c.Projects {
 		if i >= 3 {
 			break
 		}
 		if p, ok := e.Store.Project(slug); ok {
-			out.Projects = append(out.Projects, prompts.KBProject{Name: p.Name, Summary: textfmt.Clip(e.Store.Summary(kb.KindProject, slug), 3000)})
+			out.Projects = append(out.Projects, prompts.KBProject{Name: p.Name, Summary: clip(e.Store.Summary(kb.KindProject, slug), 3000)})
 		}
 	}
 	return out
@@ -258,7 +257,7 @@ func (s *Service) kbFileTurn(e *kb.Engine, t assistantwire.KBAgentTurn) {
 	if title == "" || title == "Claude Code" {
 		title = filepath.Base(t.Cwd)
 	}
-	line := textfmt.Clip(strings.Join(strings.Fields(t.Line), " "), 160)
+	line := clip(strings.Join(strings.Fields(t.Line), " "), 160)
 	for _, p := range projects {
 		if _, err := e.Apply(kb.KindProject, p.Slug, kb.Update{Log: line, Source: "Agent · " + title + " · " + t.MachineID}); err != nil {
 			s.logf("kb: agent log %s: %v", p.Slug, err)
