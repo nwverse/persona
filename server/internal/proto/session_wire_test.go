@@ -175,7 +175,7 @@ func checkWire(t *testing.T, what string, s Session) {
 // of value it can hold (empty, nil, escapes, unicode, bad UTF-8, times in other zones and out of range), for all of
 // them at once, and for a busy machine's list. A field added to Session without its line in appendSession fails here.
 func TestSessionWireMatchesReflect(t *testing.T) {
-	if got := sessionLayout(); got != sessionWireLayout {
+	if got := typeLayout(reflect.TypeFor[Session]()); got != sessionWireLayout {
 		t.Fatalf("Session's fields changed: give each new one its line in appendSession, then set sessionWireLayout to %#x", got)
 	}
 	checkWire(t, "an empty session", Session{})
@@ -186,6 +186,37 @@ func TestSessionWireMatchesReflect(t *testing.T) {
 			var s Session
 			reflect.ValueOf(&s).Elem().Field(i).Set(v)
 			checkWire(t, f.Name+" sample "+strconv.Itoa(n), s)
+		}
+	}
+	// The nested values written by hand: every field of each, with each kind of value, in a list of them.
+	for _, c := range []struct {
+		name   string
+		ty     reflect.Type
+		layout uint64
+		set    func(*Session, reflect.Value)
+	}{
+		{"backgroundWireLayout", reflect.TypeFor[BackgroundTask](), backgroundWireLayout, func(s *Session, v reflect.Value) {
+			s.Background = []BackgroundTask{{}, v.Interface().(BackgroundTask)}
+		}},
+		{"subagentWireLayout", reflect.TypeFor[Subagent](), subagentWireLayout, func(s *Session, v reflect.Value) {
+			s.Subagents = []Subagent{v.Interface().(Subagent), {}}
+		}},
+		{"workflowToolWireLayout", reflect.TypeFor[WorkflowTool](), workflowToolWireLayout, func(s *Session, v reflect.Value) {
+			tool := v.Interface().(WorkflowTool)
+			s.Subagents = []Subagent{{LastTool: &tool}}
+		}},
+	} {
+		if got := typeLayout(c.ty); got != c.layout {
+			t.Fatalf("%s's fields changed: give each new one its line in session_wire.go, then set %s to %#x", c.ty, c.name, got)
+		}
+		for i := range c.ty.NumField() {
+			for n, v := range append([]reflect.Value{reflect.Zero(c.ty.Field(i).Type)}, wireSamples(t, c.ty.Field(i).Type)...) {
+				x := reflect.New(c.ty).Elem()
+				x.Field(i).Set(v)
+				var s Session
+				c.set(&s, x)
+				checkWire(t, c.ty.Name()+"."+c.ty.Field(i).Name+" sample "+strconv.Itoa(n), s)
+			}
 		}
 	}
 	all := wireFilled(t, ty).Interface().(Session)
