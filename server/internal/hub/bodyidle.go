@@ -126,5 +126,9 @@ func (w *idleWriter) FlushError() error {
 	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
+// Flush is for wrappers that flush through http.Flusher (codeWriter, keptRecorder in front of a ReverseProxy): without
+// it their streamed answers would wait in the buffer.
+func (w *idleWriter) Flush() { _ = w.FlushError() }
+
 // Unwrap lets http.ResponseController reach the connection beneath: deadlines and Hijack.
 func (w *idleWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

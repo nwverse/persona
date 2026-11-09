@@ -239,6 +239,35 @@ func TestBodiesThatKeepComingAreNotCut(t *testing.T) {
 	})
 }
 
+// A wrapper that flushes through http.Flusher (codeWriter in front of a ReverseProxy) still gets a streamed answer to
+// a request with a body out at once.
+func TestAWrappedFlushGoesOut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		withBodyLimits(t, time.Minute, 5*time.Second)
+		release := make(chan struct{})
+		defer close(release)
+		conn := bubbleServer(t, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cw := &codeWriter{ResponseWriter: w}
+			_, _ = io.WriteString(cw, "first")
+			_ = http.NewResponseController(cw).Flush()
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		})).dial(t)
+		conn.send("POST /x HTTP/1.1\r\nHost: hub\r\nContent-Length: 5\r\n\r\nhello")
+		_ = conn.SetReadDeadline(time.Now().Add(time.Minute))
+		resp, err := http.ReadResponse(conn.br, nil)
+		if err != nil {
+			t.Fatalf("no head within a minute: %v", err)
+		}
+		first := make([]byte, 5)
+		if _, err := io.ReadFull(resp.Body, first); err != nil || string(first) != "first" {
+			t.Fatalf("the flushed part: %q, %v", first, err)
+		}
+	})
+}
+
 // HTTP/2 bounds each stream's body by its own deadline, which runs even while no read waits: it must stop between
 // reads, or a handler that works between two reads would be cut. A read after the handler returned (a proxy's
 // transport may still hold the body) must not touch the stream's writer, which is gone by then.
