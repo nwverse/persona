@@ -711,9 +711,13 @@ func TestQuietNoticeKeptWhenRelayUnreadable(t *testing.T) {
 	if n := f.notices()[0]; !strings.Contains(n, "任务「甲」") || !strings.Contains(n, "修好了") {
 		t.Fatalf("notice:\n%s", n)
 	}
-	time.Sleep(4 * quietNoticeDelay)
-	if n := f.notices(); len(n) != 1 {
-		t.Fatalf("%d notices", len(n))
+	// Nothing is left to send it again: the notice no longer waits (a retry that fires finds nothing) and the queue
+	// is empty.
+	b.mu.Lock()
+	left := b.pending[todo.ID]
+	b.mu.Unlock()
+	if left != nil || s.queuedFor("conv1") != 0 {
+		t.Fatalf("after it went out: pending %+v, %d queued", left, s.queuedFor("conv1"))
 	}
 }
 

@@ -86,9 +86,14 @@ func TestDigestKeptWhenRelayUnreadable(t *testing.T) {
 	if n := f.notices()[0]; !strings.Contains(n, "任务「甲」") {
 		t.Fatalf("message:\n%s", n)
 	}
-	time.Sleep(3 * shortSuperviseTimings.every)
-	if n := f.notices(); len(n) != 1 {
-		t.Fatalf("%d messages", len(n))
+	// Nothing is left to send it again: the signal no longer waits, it is marked told (a later sweep skips it) and the
+	// queue is empty.
+	b.mu.Lock()
+	_, pending := b.pending[g.id()]
+	told := b.sent[g.id()] == g.Key
+	b.mu.Unlock()
+	if pending || !told || s.queuedFor("conv1") != 0 {
+		t.Fatalf("after it went out: pending %v, told %v, %d queued", pending, told, s.queuedFor("conv1"))
 	}
 }
 
