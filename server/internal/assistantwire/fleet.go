@@ -92,8 +92,13 @@ type FleetLive struct {
 
 // Clients is EventClients' params.
 type Clients struct {
-	// Elicitation: an app that takes MCP elicitations is connected (without one an elicitation is declined at once).
+	// Elicitation: an app that takes MCP elicitations is connected (without one, or ElicitationPush, an elicitation is
+	// handed back to the terminal at once).
 	Elicitation bool `json:"elicitation"`
+	// ElicitationPush: a phone that shows MCP elicitations registered for them (device feature `elicitation`) and would
+	// be pushed a card now (#2433): an elicitation waits for it as other cards do. Only Elicitation keeps meaning a
+	// connected app, so a manager from before this field hands such a request back as it did; an older hub sends none.
+	ElicitationPush bool `json:"elicitation_push"`
 }
 
 // FleetSeen is EventSeen's params.

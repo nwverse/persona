@@ -237,6 +237,23 @@ struct SettingsView: View {
                                     .textSelection(.enabled)
                             }
                         }
+                        // The last time New Chat did not bring the new-conversation page, as labels (#2189): only once there was one.
+                        if let check = UserDefaults.standard.string(forKey: NewChatCheck.defaultsKey) {
+                            if AppStyle.current.usesBeautifulUI {
+                                BUIListRow(String(localized: "Last New Chat Check"), detail: check, detailLines: 4)
+                                    .accessibilityIdentifier("settings-new-chat-check")
+                            } else {
+                                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                    Text("Last New Chat Check")
+                                    Text(check)
+                                        .font(Theme.Font.code)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("settings-new-chat-check")
+                            }
+                        }
                     }
                     .bareListRow()
                 } header: {
@@ -393,6 +410,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
+        else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
         else if let a = d.string(forKey: "openAppearance"), a != "chat" { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
                      : a == "scheme" ? SettingsPage.colorScheme : SettingsPage.persona)
@@ -457,6 +475,8 @@ enum SettingsPage: Hashable {
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
+    /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents.
+    case layout
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -518,6 +538,11 @@ private struct SettingsDestinations: ViewModifier {
         case .themeColor: ThemeColorSettingsPage()
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
+        #if os(iOS)
+        case .layout: LayoutSettingsPage()
+        #else
+        case .layout: EmptyView()
+        #endif
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
         #else
