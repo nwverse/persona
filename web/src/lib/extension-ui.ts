@@ -15,7 +15,7 @@ import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
 
-export { isHttps, readAction, readPush };
+export { isHttps };
 
 /** The UI version the web draws (context.ui_version). */
 export const UI_VERSION = 6;

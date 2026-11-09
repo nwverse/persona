@@ -1,5 +1,5 @@
 // The readers extension-ui.ts and extension-ui-v6.ts both use, in a module of their own so that neither imports the
-// other's values (extension-ui.ts re-exports them under the same names).
+// other's values (extension-ui.ts re-exports isHttps, which the views import from there).
 import type { UIAction, UIPush } from "./extension-ui";
 
 export const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
