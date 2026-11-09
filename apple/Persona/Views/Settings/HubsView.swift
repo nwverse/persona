@@ -28,12 +28,14 @@ struct HubsView: View {
                 HStack {
                     Spacer(minLength: 0)
                     Button("Add Hub…") { showPair = true }.lineLimit(1).formButton().accessibilityIdentifier("hubs.add")
+                        .disabled(model.hubSignOut != nil) // a hub paired now could go with the disconnect
                 }
                 #else
                 Button { showPair = true } label: {
                     SettingsRow(title: String(localized: "Add Hub"), symbol: Theme.Icon.add, tint: Theme.accent)
                 }
                 .modifier(SettingsButtonLook())
+                .disabled(model.hubSignOut != nil) // a hub paired now could go with the disconnect
                 .accessibilityIdentifier("hubs.add")
                 .bareListRow()
                 #endif
@@ -72,10 +74,11 @@ struct HubsView: View {
         let members = model.registry.members(g)
         let on = model.socket(g)?.currentConfig
         ForEach(members) { h in
-            hubRow(h, inUse: h.config == on && model.isLive(g))
+            hubRow(h, inUse: h.config == on && model.isLive(g), signingOut: model.hubSignOut == .hub(h.id))
                 .contextMenu {
                     if members.count > 1 {
                         Button(role: .destructive) { removingHub = h } label: { Label("Disconnect This Hub", systemImage: Theme.Icon.end) }
+                            .disabled(model.hubSignOut != nil)
                     }
                 }
         }
@@ -123,8 +126,10 @@ struct HubsView: View {
                 Button("Rename… [Hubs View 5f6ecf]") { newName = model.registry.groupNames[g] ?? ""; renaming = g }
                     .lineLimit(1).formButton()
                     .accessibilityIdentifier("hubs.rename.\(g)")
+                if model.hubSignOut == .group(g) { ProgressView().controlSize(.small) }
                 Button(model.groupIDs.count > 1 ? String(localized: "Disconnect This Group…") : String(localized: "Disconnect and Forget Server…"), role: .destructive) { removingGroup = g }
                     .lineLimit(1).formButton()
+                    .disabled(model.hubSignOut != nil)
                     .accessibilityIdentifier("hubs.remove.\(g)")
             }
             #else
@@ -141,8 +146,10 @@ struct HubsView: View {
             .accessibilityIdentifier("hubs.rename.\(g)")
             Button(role: .destructive) { removingGroup = g } label: {
                 SettingsRow(title: model.groupIDs.count > 1 ? String(localized: "Disconnect This Group") : String(localized: "Disconnect and Forget Server"), symbol: Theme.Icon.end, tint: Theme.danger)
+                    .trailingProgress(model.hubSignOut == .group(g))
             }
             .modifier(SettingsButtonLook())
+            .disabled(model.hubSignOut != nil)
             .accessibilityIdentifier("hubs.remove.\(g)")
             #endif
         }
@@ -211,7 +218,7 @@ struct HubsView: View {
         return out
     }
 
-    private func hubRow(_ h: PairedHub, inUse: Bool) -> some View {
+    private func hubRow(_ h: PairedHub, inUse: Bool, signingOut: Bool) -> some View {
         HStack(spacing: Theme.Space.m) {
             ThemedIcon(Theme.Icon.server)
                 .scaledFrame(width: Theme.Size.icon)
@@ -227,6 +234,7 @@ struct HubsView: View {
                 Text(h.config.url.absoluteString).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
+            if signingOut { ProgressView() } // Disconnect This Hub
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("hubs.hub.\(h.id)")

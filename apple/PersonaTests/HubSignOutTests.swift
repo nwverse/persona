@@ -62,6 +62,20 @@ struct HubSignOutTests {
         #expect(demo.requests.isEmpty)
     }
 
+    @Test func aPairingTokenIsNamedNotRevoked() async {
+        // The trade for the device's own token failed: the hub knows it as `pair_<hash>`, which has no row to revoke
+        // (DELETE would answer 404) and keeps the pushes registered with it.
+        let fake = FakeHub()
+        fake.on("GET", "/api/v1/auth/tokens", json: #"{"tokens":[],"current":"pair_0123abcd"}"#)
+        fake.on("DELETE", "/api/v1/auth/tokens/dev_watch", json: #"{"ok":true}"#)
+        fake.on("DELETE", "/api/v1/auth/tokens/pair_0123abcd") { _ in throw APIError(status: 404, message: "no such device") }
+
+        let missed = await signOut([hub("a", watch: "dev_watch")], ["a": fake])
+
+        #expect(missed == ["a"])
+        #expect(calls(fake) == ["GET /api/v1/auth/tokens", "DELETE /api/v1/auth/tokens/dev_watch"])
+    }
+
     @Test func aCredentialRevokedAlreadyIsSignedOut() async {
         // Revoked from another device (Settings › Devices): the hub dropped the pushes then.
         let revoked = FakeHub(), raced = FakeHub()

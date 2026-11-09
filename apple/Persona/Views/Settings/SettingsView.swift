@@ -207,13 +207,16 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings.managers")
                             Button { showPair = true } label: { SettingsRow(title: String(localized: "Pair Again"), symbol: "qrcode.viewfinder", tint: Theme.accent) }
                                 .modifier(SettingsButtonLook())
+                                .disabled(model.hubSignOut != nil) // a hub paired now would go with the disconnect
                             Button(role: .destructive) { confirmUnpair = true } label: {
                                 SettingsRow(title: model.isMultiHub ? String(localized: "Disconnect All Hubs") : String(localized: "Disconnect and Forget Server"), symbol: Theme.Icon.end, tint: Theme.danger)
                                     #if os(macOS)
                                     .foregroundStyle(Theme.danger) // a plain row on the Mac: red says what it does
                                     #endif
+                                    .trailingProgress(model.hubSignOut == .all)
                             }
                             .modifier(SettingsButtonLook())
+                            .disabled(model.hubSignOut != nil)
                         }
                         .bareListRow()
                     } header: {
@@ -1431,6 +1434,22 @@ struct SettingsHeading: View {
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUISectionHeading(text).textCase(nil) } else { Text(text) }
+    }
+}
+
+extension View {
+    /// A Settings row with a progress indicator at its trailing edge while `active` (a disconnect signing this device out,
+    /// HubSignOut.swift); laid out as before otherwise.
+    @ViewBuilder func trailingProgress(_ active: Bool) -> some View {
+        if active {
+            HStack(spacing: Theme.Space.m) {
+                self
+                Spacer(minLength: 0)
+                ProgressView()
+            }
+        } else {
+            self
+        }
     }
 }
 

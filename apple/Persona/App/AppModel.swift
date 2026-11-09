@@ -26,8 +26,8 @@ final class AppModel {
     /// Pairing tokens this launch traded for the device's own, to that token (DeviceCredentialTrade): a socket or a
     /// pairing link still on one goes on with the device's.
     @ObservationIgnored var tradedTokens: [String: String] = [:]
-    /// A Settings disconnect is signing this device out of its hubs (HubSignOut.swift).
-    @ObservationIgnored var signOutRunning = false
+    /// What a Settings disconnect is signing this device out of (HubSignOut.swift); nil when none runs.
+    var hubSignOut: HubSignOutScope?
     /// One per group, in the registry's order; the demo's alone in Demo Mode.
     private(set) var links: [HubLink] = []
     /// The group hub-level pages show (`selectHub`); the first group when it is not one of them.

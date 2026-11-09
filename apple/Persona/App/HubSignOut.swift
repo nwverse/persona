@@ -4,34 +4,45 @@ import Foundation
 // hub drop the device's push and Live Activity registrations (hub `Pusher.signedOut`); forgetting the hub here does not.
 // The local cleanup runs either way, and a toast names each hub that may still reach the device.
 
+/// What a Settings disconnect is signing this device out of (`AppModel.hubSignOut`): the row that started it shows
+/// progress, and the disconnect and pairing entries are disabled until it ends.
+nonisolated enum HubSignOutScope: Equatable, Sendable {
+    case all
+    case group(String)
+    case hub(String)
+}
+
 extension AppModel {
     /// Settings › Disconnect and Forget Server / Disconnect All Hubs: every hub.
     func disconnectAll() async {
-        await signingOut(registry.hubs) { $0.unpair() }
+        await signingOut(registry.hubs, scope: .all) { $0.unpair() }
     }
 
     /// Settings › hub › Disconnect This Group, and Settings › Devices › Revoke and Unpair: every hub of the group (the
     /// last group: `unpair`).
     func disconnectGroup(_ group: String) async {
-        await signingOut(registry.members(group)) { $0.removeGroup(group) }
+        await signingOut(registry.members(group), scope: .group(group)) { $0.removeGroup(group) }
     }
 
     /// Settings › hub › Disconnect This Hub: that hub alone. The group's push registration and the watch's credential
-    /// were made at its first hub: when that one goes, the next first hub gets them.
+    /// were made at its first hub: when that one goes, the next first hub gets them. A credential upgrade already
+    /// running may still have used the removed hub; the watch then gets its new credential at the next Sync to Apple
+    /// Watch or launch.
     func disconnectHub(_ id: String) async {
         guard let hub = registry.hubs.first(where: { $0.id == id }) else { return }
         let wasFirst = registry.primary(hub.group)?.id == id
-        await signingOut([hub]) { $0.removeHub(id) }
+        await signingOut([hub], scope: .hub(id)) { $0.removeHub(id) }
         guard wasFirst, !registry.hubs.contains(where: { $0.id == id }), link(hub.group) != nil else { return }
         PushRegistrar.shared.registerIfPossible()
         await upgradeCredentials()
     }
 
-    /// Signs out of `hubs`, then runs the local cleanup. A second tap while one runs does nothing.
-    private func signingOut(_ hubs: [PairedHub], then forget: (AppModel) -> Void) async {
-        guard !signOutRunning else { return }
-        signOutRunning = true
-        defer { signOutRunning = false }
+    /// Signs out of `hubs`, then runs the local cleanup. The entries that start one are disabled while one runs
+    /// (`hubSignOut`), so none comes in meanwhile.
+    private func signingOut(_ hubs: [PairedHub], scope: HubSignOutScope, then forget: (AppModel) -> Void) async {
+        guard hubSignOut == nil else { return }
+        hubSignOut = scope
+        defer { hubSignOut = nil }
         let traded = tradedTokens
         let missed = await Self.signOut(hubs) { hub in
             APIClient(config: DeviceCredentialTrade.current(hub.config, traded: traded), group: hub.group)
@@ -39,12 +50,12 @@ extension AppModel {
         forget(self)
         guard !missed.isEmpty else { return }
         let names = ListFormatter.localizedString(byJoining: missed.map(\.displayName))
-        toast = Toast(String(localized: "Couldn't sign out of \(names). To stop notifications, revoke this device in Settings › Devices on another device."),
+        toast = Toast(String(localized: "Couldn't sign out of \(names). Revoke this device in Settings › Devices on another device."),
                       style: .error)
     }
 
     /// Signs out of every hub at once. Returns the hubs this device may still be signed in to, in the order given: out
-    /// of reach, refusing, or paired with the hub's master token (no id, so it cannot be revoked). Demo hubs are skipped.
+    /// of reach, refusing, or on a credential that cannot be revoked by id. Demo hubs are skipped.
     nonisolated static func signOut(_ hubs: [PairedHub], client: @escaping @Sendable (PairedHub) -> APIClient,
                                     timeout: TimeInterval = 10) async -> [PairedHub] {
         let missed = await withTaskGroup(of: (Int, Bool).self) { group in
@@ -69,11 +80,13 @@ extension AppModel {
         } catch {
             return false
         }
-        guard !current.isEmpty else { return false }
         if let watch, !watch.isEmpty, watch != current {
             // Best effort: the watch registers no pushes, and the phone stops handing it this group's credential.
             try? await api.revokeToken(watch, timeout: timeout)
         }
+        // Not revocable by id: the hub's master token (no id), and a pairing token (`pair_<hash>`) whose trade for the
+        // device's own failed, which also keeps the pushes registered with it.
+        guard !current.isEmpty, !current.hasPrefix("pair_") else { return false }
         do {
             try await api.revokeToken(current, timeout: timeout)
             return true
