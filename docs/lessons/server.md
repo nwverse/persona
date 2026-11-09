@@ -1494,8 +1494,13 @@ pending count to drop, pass with the rule deleted.
   makes every update of `data` touch that index, so no update is HOT (0 of 4,800); a stored generated column whose
   value did not change leaves HOT possible (1,481 of 4,800 on the same updates; 142 to 300 of 300 per round on upserts
   shaped like `PutInboxItem`, from 0, once `updated_at` left `inbox_items_open`). An index on a column every upsert
-  changes rules out HOT as well.
+  changes rules out HOT as well; `TestDoneInboxItemsIndexed` allows only `done_at`, `id` and `source` in indexes.
 - **The generated column is also the NUL guard.** json accepts `\u0000` in a string, jsonb refused it on write.
   `data->>'source'` parses the whole document, so a write with `\u0000` anywhere still fails with 22P05, as before.
   Without the column such a row would be stored, and the done page's `data->'connector'` would fail on it later. Keep a
-  computed column (or a check) that parses the document if `source` ever goes.
+  computed column (or a check) that parses the document if `source` ever goes or becomes a column Go writes:
+  `TestInboxItemWithNULRefused` fails without one.
+- **A compatibility overload makes untyped calls ambiguous.** `jsonb_typeof(json)`, added so a pre-0471 build's done
+  page still runs, makes `jsonb_typeof('…')` or `jsonb_typeof($1)` with an unknown-typed argument fail in the whole
+  database (`function jsonb_typeof(unknown) is not unique`). Every existing call passes a typed value; new SQL casts
+  the argument (`$1::jsonb`) until a later migration drops the shim, once no pre-0471 build can run.
