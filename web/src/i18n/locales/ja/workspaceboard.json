@@ -77,6 +77,11 @@
   "view_label": "ボード表示",
   "view_manual": "手動",
   "view_auto": "自動",
+  "card_source_label": "カードのソース",
+  "card_source_workspaces": "ワークスペース",
+  "card_source_todos": "To-do",
+  "search_todos_label": "To-doを検索",
+  "search_todos_placeholder": "タイトル、メモ、エージェント、フォルダーを検索",
   "auto_lanes_label": "エージェントの状態で自動レーン",
   "auto_lane_review": "レビュー待ち",
   "auto_lane_idle": "待機",
@@ -84,5 +89,13 @@
   "auto_empty_working": "実行中のエージェントはありません。",
   "auto_empty_review": "レビュー待ちはありません。",
   "auto_empty_idle": "待機中のワークスペースはありません。",
-  "auto_open_session": "セッションを開く"
+  "auto_open_session": "セッションを開く",
+  "todo_lanes_label": "To-doの状態で自動レーン",
+  "todo_empty_needs_you": "対応が必要なTo-doはありません。",
+  "todo_empty_working": "進行中のTo-doはありません。",
+  "todo_empty_review": "レビュー待ちのTo-doはありません。",
+  "todo_empty_idle": "待機中のTo-doはありません。",
+  "todo_loading": "To-doを読み込み中",
+  "todo_open_agent": "エージェントを開く",
+  "last_activity": "最終アクティビティ {time}"
 }

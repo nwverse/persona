@@ -1,25 +1,70 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, enc, errorText } from "../lib/api";
-import { sessionTitle, stateOf } from "../lib/format";
+import { ago, sessionTitle, stateOf } from "../lib/format";
 import { stateName } from "../lib/state-labels";
 import { openNewAgent } from "../lib/new-agent";
 import { openPanel } from "../lib/panel";
 import { useAgentSessions } from "../lib/sessions";
 import { onHubEvent, useStore } from "../lib/store";
+import { answeredLookup } from "./assistant/answered-lookup";
+import { openTask } from "./assistant/Tasks";
+import { HandoverDialog } from "./Todos";
 import { BoardModel, boundCard, columnCards, selectedColumn, type BoardCard, type BoardColumn, type BoardMutation, type BoardState, type Workspace } from "../lib/workspace-board";
-import { autoFocusSession, autoLanes, type AutoLane } from "../lib/workspace-board-auto";
+import { AUTO_LANES, autoFocusSession, autoLanes, autoTodoLaneOf, type AutoLane, type AutoTodoLane } from "../lib/workspace-board-auto";
 import { machinesByID, sessionsByCard, workspacesByCard } from "../lib/workspace-board-index";
-import type { Machine, Session } from "../lib/types";
-import { Button, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, type MenuItem } from "../ui/atoms";
+import { refreshTodos } from "../lib/store";
+import { todoStatus, todoStatusLabel, updateTodo, type Todo, type TodoStatus } from "../lib/todos";
+import type { AgentState, Machine, Session } from "../lib/types";
+import { Button, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useNow, type MenuItem } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { t } from "../i18n";
 import { navigate } from "../lib/router";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
 const field = "w-full rounded-control bg-field px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent";
 const VIEW_KEY = "persona.workspace-board.view";
+export const AUTO_SOURCE_KEY = "persona.workspace-board.auto-source";
+type AutoSource = "workspaces" | "todos";
 // The lanes that are an agent state take the one canonical state name; only To review and Idle are board-only words.
 const laneTitle = (lane: AutoLane) => lane === "needs_you" || lane === "working" ? stateName(lane) : t(`workspaceboard.auto_lane_${lane}`);
 type Edit = { kind: "column" | "card"; id?: string; title: string };
+type TodoAgentRow = { agent: NonNullable<Todo["agents"]>[number]; session?: Session; state: AgentState };
+type TodoCardRow = { todo: Todo; status: TodoStatus; lane: AutoTodoLane; agents: TodoAgentRow[]; machineIDs: string[]; lastActivity?: string };
+
+function todoMachineIDs(todo: Todo): string[] {
+  return [...new Set([...(todo.agents ?? []).map((agent) => agent.machine_id), ...(todo.spaces ?? []).map((space) => space.machine_id)].filter(Boolean))];
+}
+
+function todoLastActivity(todo: Todo, agents: TodoAgentRow[]): string | undefined {
+  const candidates = [todo.updated_at, todo.created_at, ...(todo.agents ?? []).map((agent) => agent.linked_at), ...agents.flatMap(({ session }) => [session?.updated_at, session?.state_since])].filter(Boolean) as string[];
+  let latest: string | undefined;
+  let latestMs = -Infinity;
+  for (const value of candidates) {
+    const at = Date.parse(value);
+    if (Number.isFinite(at) && at > latestMs) {
+      latest = value;
+      latestMs = at;
+    }
+  }
+  return latest;
+}
+
+function todoRows(todos: readonly Todo[], lookup: (mid: string, sid: string) => Session | undefined, search: string, machine: string, machineNames: ReadonlyMap<string, string>): TodoCardRow[] {
+  const query = search.trim().toLocaleLowerCase();
+  return todos.flatMap((todo) => {
+    if (todo.done_at) return [];
+    const status = todoStatus(todo, lookup);
+    const lane = autoTodoLaneOf(todo, status);
+    if (!lane) return [];
+    const agents = (todo.agents ?? []).filter((agent) => !agent.released_at).map((agent): TodoAgentRow => {
+      const session = lookup(agent.machine_id, agent.session_id);
+      return { agent, session, state: agent.start_error ? "offline" : session ? stateOf(session) : "offline" };
+    });
+    const machineIDs = todoMachineIDs(todo);
+    const searchable = [todo.title, todo.notes ?? "", ...machineIDs, ...machineIDs.map((id) => machineNames.get(id) ?? ""), ...(todo.agents ?? []).flatMap((agent) => [agent.title ?? "", agent.cwd ?? ""]), ...(todo.spaces ?? []).map((space) => space.space)].join(" ").toLocaleLowerCase();
+    if ((machine && !machineIDs.includes(machine)) || (query && !searchable.includes(query))) return [];
+    return [{ todo, status, lane, agents, machineIDs, lastActivity: todoLastActivity(todo, agents) }];
+  });
+}
 
 /** /workspace-board: the board only while it is turned on (#2475); off, nothing about it is loaded or polled. */
 export function WorkspaceBoard({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
@@ -48,17 +93,21 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   const [model] = useState(() => new BoardModel());
   const state = useSyncExternalStore(model.subscribe, model.snapshot, model.snapshot);
   const machines = useStore((s) => s.machines), sessions = useAgentSessions();
+  const interactions = useStore((s) => s.interactions), answered = useStore((s) => s.answered);
+  const todoList = useStore((s) => s.todos), todosLoaded = useStore((s) => s.todosLoaded), todosError = useStore((s) => s.todosError);
   const [search, setSearch] = useState(""), [machine, setMachine] = useState("");
-  const [archived, setArchived] = useState(false), [selected, setSelected] = useState<string>(), [adding, setAdding] = useState<string>();
+  const [archived, setArchived] = useState(false), [selected, setSelected] = useState<string>(), [adding, setAdding] = useState<string>(), [handoverTodo, setHandoverTodo] = useState<Todo>();
   const [edit, setEdit] = useState<Edit | null>(null), [deleting, setDeleting] = useState<BoardColumn | null>(null), [moveTo, setMoveTo] = useState("");
   const [menu, setMenu] = useState<{ anchor: HTMLElement; card?: BoardCard; column?: BoardColumn } | null>(null);
   const dragging = useRef<string | null>(null);
   const refreshing = useRef(false);
   const [drop, setDrop] = useState("");
   const [columnSelection, setColumnSelection] = useState("");
-  // Manual is the default and unchanged; the auto view is a per-browser choice (#2648).
+  // Manual is the default and unchanged; the auto view and its source are per-browser choices (#2648, #2692).
   const [view, setView] = useState<"manual" | "auto">(() => (localStorage.getItem(VIEW_KEY) === "auto" ? "auto" : "manual"));
+  const [source, setSource] = useState<AutoSource>(() => (localStorage.getItem(AUTO_SOURCE_KEY) === "todos" ? "todos" : "workspaces"));
   const changeView = (v: "manual" | "auto") => { localStorage.setItem(VIEW_KEY, v); setView(v); setColumnSelection(""); };
+  const changeSource = (v: AutoSource) => { localStorage.setItem(AUTO_SOURCE_KEY, v); setSource(v); setColumnSelection(""); };
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState === "hidden" || refreshing.current) return;
@@ -77,19 +126,32 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   // Built once per change of what they index; every card then looks itself up instead of scanning all of them (#2294).
   const machineOf = useMemo(() => machinesByID(machines), [machines]);
   const sessionsOf = useMemo(() => sessionsByCard(sessions), [sessions]);
+  const todoLookup = useMemo(() => source === "todos" ? answeredLookup(sessions, interactions, answered) : () => undefined, [source, sessions, interactions, answered]);
   const workspaces = state.discovery.workspaces;
   const workspaceOf = useMemo(() => workspacesByCard(workspaces), [workspaces]);
   // Each column's cards once per filter change, for both the narrow-screen picker's counts and the columns.
   const shown = useMemo(() => new Map(board?.columns.map((c) => [c.id, columnCards(board, c.id, { search, machine, archived })])), [board, search, machine, archived]);
   // The auto view filters exactly like the manual one (search, machine, archived), then groups by live agent state.
   const auto = useMemo(() => {
-    if (view !== "auto" || !board) return [];
+    if (view !== "auto" || source !== "workspaces" || !board) return [];
     const filtered = board.columns.flatMap((c) => columnCards(board, c.id, { search, machine, archived }));
     return autoLanes(filtered, sessionsOf);
-  }, [view, board, search, machine, archived, sessionsOf]);
-  const activeLane = auto.some((l) => l.lane === columnSelection) ? columnSelection : "needs_you";
-  const machineIDs = [...new Set([...machines.map((m) => m.id), ...(board?.cards.map((c) => c.machine_id) ?? [])])];
+  }, [view, source, board, search, machine, archived, sessionsOf]);
+  const todos = useMemo(() => todoRows(todoList, todoLookup, search, machine, names), [todoList, todoLookup, search, machine, names]);
+  const todoLanes = useMemo(() => AUTO_LANES.map((lane) => ({ lane, cards: todos.filter((row) => row.lane === lane).sort((a, b) => (Date.parse(b.lastActivity ?? "") || 0) - (Date.parse(a.lastActivity ?? "") || 0) || a.todo.title.localeCompare(b.todo.title) || a.todo.id.localeCompare(b.todo.id)) })), [todos]);
+  const autoLanesForView = source === "workspaces" ? auto : todoLanes;
+  const activeLane = autoLanesForView.some((l) => l.lane === columnSelection) ? columnSelection : "needs_you";
+  const machineIDs = [...new Set([...machines.map((m) => m.id), ...(board?.cards.map((c) => c.machine_id) ?? []), ...(view === "auto" && source === "todos" ? todoList.filter((todo) => !todo.done_at).flatMap(todoMachineIDs) : [])])];
   const mutate = async (m: BoardMutation) => { const ok = await model.mutate(m); if (!ok && model.snapshot().error) toast(model.snapshot().error, "error"); return ok; };
+  const toggleTodo = async (todo: Todo) => {
+    try {
+      await updateTodo(todo.id, { done: !todo.done_at });
+      await refreshTodos();
+      toast(todo.done_at ? t("todos.reopened") : t("todos.completed"), "ok");
+    } catch (e) {
+      toast(t("todos.action_failed", { error: errorText(e) }), "error");
+    }
+  };
   const dropCard = (e: React.DragEvent, column: string, before?: string) => {
     e.preventDefault(); e.stopPropagation(); const id = dragging.current || e.dataTransfer.getData("application/x-persona-workspace"); dragging.current = null; setDrop("");
     if (!disabled && id && id !== before && board?.cards.some((c) => c.id === id)) void mutate({ action: "move_card", id, column_id: column, before_id: before });
@@ -124,22 +186,26 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
       {onToggleSidebar && <IconButton icon="sidebar" label={t("agents-agentsview.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
       <div className="min-w-0 flex-1"><h1 className="truncate text-base font-semibold text-ink">{t("workspaceboard.title")}</h1><p className="truncate text-xs text-ink-3">{t("workspaceboard.subtitle")}</p></div>
       <div className="flex shrink-0 items-center gap-1 rounded-control bg-field p-1" role="group" aria-label={t("workspaceboard.view_label")}>
-        <Button tone={view === "manual" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs" onClick={() => changeView("manual")}>{t("workspaceboard.view_manual")}</Button>
-        <Button tone={view === "auto" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs" onClick={() => changeView("auto")}>{t("workspaceboard.view_auto")}</Button>
+        <Button tone={view === "manual" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeView("manual")}>{t("workspaceboard.view_manual")}</Button>
+        <Button tone={view === "auto" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeView("auto")}>{t("workspaceboard.view_auto")}</Button>
       </div>
+      {view === "auto" && <div className="flex shrink-0 items-center gap-1 rounded-control bg-field p-1" role="group" aria-label={t("workspaceboard.card_source_label")}>
+        <Button tone={source === "workspaces" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeSource("workspaces")}>{t("workspaceboard.card_source_workspaces")}</Button>
+        <Button tone={source === "todos" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => changeSource("todos")}>{t("workspaceboard.card_source_todos")}</Button>
+      </div>}
       {view === "manual" && <Button icon="plus" disabled={!board || disabled} onClick={() => setEdit({ kind: "column", title: "" })}>{t("workspaceboard.add_column")}</Button>}
     </header>
     <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-3">
-      <label className="flex min-w-0 flex-1 items-center gap-2 rounded-control bg-field px-3 py-2"><Icon name="search" size={14} className="text-ink-3" /><input aria-label={t("workspaceboard.search_label")} placeholder={t("workspaceboard.search_placeholder")} className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
+      <label className="flex min-w-0 flex-1 items-center gap-2 rounded-control bg-field px-3 py-2"><Icon name="search" size={14} className="text-ink-3" /><input aria-label={t(view === "auto" && source === "todos" ? "workspaceboard.search_todos_label" : "workspaceboard.search_label")} placeholder={t(view === "auto" && source === "todos" ? "workspaceboard.search_todos_placeholder" : "workspaceboard.search_placeholder")} className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
       <select aria-label={t("workspaceboard.filter_machine")} className="max-w-full rounded-control bg-field px-3 py-2 text-sm text-ink" value={machine} onChange={(e) => setMachine(e.target.value)}><option value="">{t("workspaceboard.all_machines")}</option>{machineIDs.map((id) => <option key={id} value={id}>{names.get(id) || id}</option>)}</select>
-      <Button tone={archived ? "primary" : "quiet"} onClick={() => setArchived(!archived)}>{archived ? t("workspaceboard.back_to_board") : t("workspaceboard.archived")}</Button><IconButton icon="retry" label={t("workspaceboard.refresh")} onClick={() => void model.refresh()} disabled={state.busy} />
+      {!(view === "auto" && source === "todos") && <Button tone={archived ? "primary" : "quiet"} onClick={() => setArchived(!archived)}>{archived ? t("workspaceboard.back_to_board") : t("workspaceboard.archived")}</Button>}<IconButton icon="retry" label={t("workspaceboard.refresh")} onClick={() => void model.refresh()} disabled={state.busy} />
     </div>
     {board && view === "manual" && <div className="border-b border-line bg-surface px-4 pb-3 @3xl:hidden"><select aria-label={t("workspaceboard.pick_column")} className={field} value={activeColumn} onChange={(e) => setColumnSelection(e.target.value)}>{board.columns.map((c) => <option key={c.id} value={c.id}>{c.title} · {shown.get(c.id)?.length ?? 0}</option>)}</select></div>}
-    {board && view === "auto" && <div className="border-b border-line bg-surface px-4 pb-3 @3xl:hidden"><select aria-label={t("workspaceboard.pick_column")} className={field} value={activeColumn} onChange={(e) => setColumnSelection(e.target.value)}>{auto.map((l) => <option key={l.lane} value={l.lane}>{laneTitle(l.lane)} · {l.cards.length}</option>)}</select></div>}
+    {board && view === "auto" && <div className="border-b border-line bg-surface px-4 pb-3 @3xl:hidden"><select aria-label={t("workspaceboard.pick_column")} className={field} value={activeLane} onChange={(e) => setColumnSelection(e.target.value)}>{autoLanesForView.map((l) => <option key={l.lane} value={l.lane}>{laneTitle(l.lane)} · {l.cards.length}</option>)}</select></div>}
     {state.readonly && <p className="border-b border-line bg-inset px-4 py-2 text-xs text-ink-2">{t("workspaceboard.readonly")}</p>}
     {state.error && <p role="alert" className="border-b border-line bg-red-tint px-4 py-2 text-sm text-red">{state.error}</p>}
     {(state.discoveryError || state.discovery.errors?.length) ? <div role="status" className="border-b border-line bg-orange-tint px-4 py-2 text-xs text-orange">{state.discoveryError && <p>{t("workspaceboard.discovery_failed", { error: state.discoveryError })}</p>}{state.discovery.errors?.map((e, index) => <p key={`${e.machine_id}:${index}`}>{t("workspaceboard.machine_error", { machine: names.get(e.machine_id) || e.machine_id, error: e.error })}</p>)}<p>{t("workspaceboard.discovery_kept")}</p></div> : null}
-    {state.loading && !board ? <div className="p-6"><Loading label={t("workspaceboard.loading")} /></div> : board && view === "auto" ? <AutoBoard lanes={auto} activeLane={activeLane} machineOf={machineOf} workspaceOf={workspaceOf} sessionsOf={sessionsOf} disabled={disabled} onOpen={openCard} onMenu={openCardMenu} onArchive={(c, archived) => void mutate({ action: "update_card", id: c.id, archived })} /> : board ? <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto p-4" aria-label={archived ? t("workspaceboard.archived_label") : t("workspaceboard.columns_label")}>
+    {state.loading && !board ? <div className="p-6"><Loading label={t("workspaceboard.loading")} /></div> : board && view === "auto" && source === "todos" ? <TodoAutoBoard rows={todos} lanes={todoLanes} activeLane={activeLane} machines={machines} disabled={state.busy} todosLoaded={todosLoaded} todosError={todosError} onOpen={openTask} onOpenAgent={(session) => openPanel({ kind: "agent", mid: session.machine_id, sid: session.session_id })} onHandover={setHandoverTodo} onToggleDone={(todo) => void toggleTodo(todo)} /> : board && view === "auto" ? <AutoBoard lanes={auto} activeLane={activeLane} machineOf={machineOf} workspaceOf={workspaceOf} sessionsOf={sessionsOf} disabled={disabled} onOpen={openCard} onMenu={openCardMenu} onArchive={(c, archived) => void mutate({ action: "update_card", id: c.id, archived })} /> : board ? <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto p-4" aria-label={archived ? t("workspaceboard.archived_label") : t("workspaceboard.columns_label")}>
       {board.columns.map((column) => { const cards = shown.get(column.id) ?? [];
         return <section key={column.id} className={cx("w-full shrink-0 flex-col rounded-card bg-canvas @3xl:flex @3xl:w-72 @3xl:min-w-64 @3xl:flex-1", column.id === activeColumn ? "flex" : "hidden")} aria-label={column.title}>
           <div className="flex items-center gap-2 px-3 py-3"><span className="size-2 rounded-full bg-accent" /><h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-ink" title={column.title}>{column.title}</h2><span className="text-xs text-ink-3">{cards.length}</span><IconButton icon="more" label={t("workspaceboard.column_menu", { column: column.title })} disabled={disabled} onClick={(e) => setMenu({ anchor: e.currentTarget, column })} /></div>
@@ -163,6 +229,7 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
     </Dialog>
     {adding && board && <BindWorkspace column={adding} board={board} workspaces={state.discovery.workspaces} machines={machines} busy={state.busy} disabled={state.readonly} onClose={() => setAdding(undefined)} onBind={mutate} />}
     {card && <WorkspaceDetail card={card} column={board!.columns.find((c) => c.id === card.column_id)?.title ?? ""} machine={machineOf(card.machine_id)} sessions={sessionsOf(card)} readonly={state.readonly} onClose={() => setSelected(undefined)} />}
+    {handoverTodo && <HandoverDialog open todo={handoverTodo} machines={machines} onClose={() => setHandoverTodo(undefined)} />}
   </div>;
 }
 
@@ -188,6 +255,63 @@ function AutoBoard({ lanes, activeLane, machineOf, workspaceOf, sessionsOf, disa
       </div>
     </section>)}
   </div>;
+}
+
+/** Automatic to-do lanes use the same narrow-screen picker as workspace lanes, but their cards follow todo state. */
+function TodoAutoBoard({ rows, lanes, activeLane, machines, disabled, todosLoaded, todosError, onOpen, onOpenAgent, onHandover, onToggleDone }: {
+  rows: TodoCardRow[];
+  lanes: { lane: AutoLane; cards: TodoCardRow[] }[];
+  activeLane: string;
+  machines: Machine[];
+  disabled: boolean;
+  todosLoaded: boolean;
+  todosError: string | null;
+  onOpen: (id: string) => void;
+  onOpenAgent: (session: Session) => void;
+  onHandover: (todo: Todo) => void;
+  onToggleDone: (todo: Todo) => void;
+}) {
+  const names = useMemo(() => new Map(machines.map((machine) => [machine.id, machine.name || machine.id])), [machines]);
+  useNow(60_000, rows.length > 0);
+  if (!todosLoaded && !rows.length) return <div className="p-6"><Loading label={t("workspaceboard.todo_loading")} /></div>;
+  if (todosError && !rows.length) return <p role="alert" className="p-6 text-sm text-red">{todosError}</p>;
+  return <div className="flex min-h-0 flex-1 gap-4 overflow-x-auto p-4" aria-label={t("workspaceboard.todo_lanes_label")}>
+    {lanes.map(({ lane, cards }) => <section key={lane} className={cx("w-full shrink-0 flex-col rounded-card bg-canvas @3xl:flex @3xl:w-72 @3xl:min-w-64 @3xl:flex-1", lane === activeLane ? "flex" : "hidden")} aria-label={laneTitle(lane)}>
+      <div className="flex items-center gap-2 px-3 py-3"><span className="size-2 rounded-full bg-accent" /><h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{laneTitle(lane)}</h2><span className="text-xs text-ink-3">{cards.length}</span></div>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 pb-3">
+        {cards.map((row) => <TodoAutoCard key={row.todo.id} row={row} machineNames={names} disabled={disabled} onOpen={onOpen} onOpenAgent={onOpenAgent} onHandover={onHandover} onToggleDone={onToggleDone} />)}
+        {cards.length === 0 && <p className="rounded-control border border-dashed border-line-strong px-3 py-4 text-center text-xs text-ink-3">{t(`workspaceboard.todo_empty_${lane}`)}</p>}
+      </div>
+    </section>)}
+  </div>;
+}
+
+function TodoAutoCard({ row, machineNames, disabled, onOpen, onOpenAgent, onHandover, onToggleDone }: {
+  row: TodoCardRow;
+  machineNames: ReadonlyMap<string, string>;
+  disabled: boolean;
+  onOpen: (id: string) => void;
+  onOpenAgent: (session: Session) => void;
+  onHandover: (todo: Todo) => void;
+  onToggleDone: (todo: Todo) => void;
+}) {
+  const focus = row.agents.find((agent) => agent.state === "needs_you") ?? row.agents.find((agent) => agent.state === "working");
+  const location = row.agents.find((agent) => agent.agent.cwd)?.agent ?? row.agents[0]?.agent ?? row.todo.agents?.[0];
+  const machineID = location?.machine_id ?? row.todo.spaces?.[0]?.machine_id;
+  const folder = location?.cwd;
+  const activity = row.lastActivity ? ago(row.lastActivity) : "";
+  return <article className="rounded-card bg-surface p-3 shadow-card" data-todo-id={row.todo.id}>
+    <div className="flex items-start gap-2"><button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(row.todo.id)}><span className="truncate text-sm font-semibold text-ink" title={row.todo.title}>{row.todo.title}</span></button><span className="shrink-0 text-xs text-ink-3">{activity && t("workspaceboard.last_activity", { time: activity })}</span></div>
+    <div className="mt-2 flex items-center gap-2 text-xs text-ink-2"><span className="whitespace-nowrap">{todoStatusLabel(row.todo, row.status)}</span>{row.todo.notes && <span className="min-w-0 truncate text-ink-3" title={row.todo.notes}>{row.todo.notes}</span>}</div>
+    {machineID && <div className="mt-2 flex min-w-0 items-center gap-1 text-xs text-ink-3"><Icon name="machine" size={12} /><span className="truncate" title={machineID}>{machineNames.get(machineID) || machineID}</span>{folder && <><span>·</span><span className="truncate font-mono" title={folder}>{folder}</span></>}</div>}
+    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      {row.agents.length ? row.agents.map((agent) => <button type="button" key={`${agent.agent.machine_id}/${agent.agent.session_id}`} className="flex min-w-0 items-center gap-1 rounded-full text-left hover:opacity-80" disabled={!agent.session} onClick={() => agent.session && onOpenAgent(agent.session)} aria-label={agent.agent.title || agent.session?.title || agent.agent.session_id}><StatePill state={agent.state} /><span className="max-w-36 truncate text-xs text-ink-2">{agent.agent.title || agent.session?.title || agent.agent.session_id}</span></button>) : <span className="text-xs text-ink-3">{t("todos.not_handed")}</span>}
+    </div>
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {focus?.session ? <Button tone="quiet" icon="agent" className="!px-2 !py-1 text-xs whitespace-nowrap" onClick={() => onOpenAgent(focus.session!)}>{t("workspaceboard.todo_open_agent")}</Button> : !row.agents.length ? <Button tone="quiet" icon="hand" className="!px-2 !py-1 text-xs whitespace-nowrap" disabled={disabled} onClick={() => onHandover(row.todo)}>{t("todos.hand_over")}</Button> : null}
+      <Button tone="quiet" icon="check" className="!px-2 !py-1 text-xs whitespace-nowrap" disabled={disabled} onClick={() => onToggleDone(row.todo)}>{t("todos.complete")}</Button>
+    </div>
+  </article>;
 }
 
 /** A card in the auto view: the manual card plus the actions its lane calls for, without opening the detail first. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BOARD_ORDER, boardSectionOf, boardSections, type BoardSectionKey } from "./task-board";
+import { autoTodoLaneOf, BOARD_ORDER, boardSectionOf, boardSections, type BoardSectionKey } from "./task-board";
 import type { ReviewState } from "./supervision";
 import type { Session } from "./types";
 import type { Todo, TodoStatus } from "./todos";
@@ -90,5 +90,30 @@ describe("the task board (iOS TaskBoardSheet)", () => {
 
   it("has no sections when the conversation has nothing", () => {
     expect(boardSections([], [])).toEqual([]);
+  });
+});
+
+describe("the workflow board's to-do lanes", () => {
+  const open: [TodoStatus, "needs_you" | "working" | "review" | "idle"][] = [
+    ["needs_you", "needs_you"],
+    ["interrupted", "needs_you"],
+    ["usage_limit", "needs_you"],
+    ["failed", "needs_you"],
+    ["working", "working"],
+    ["not_started", "working"],
+    ["unread", "review"],
+    ["follow_up", "idle"],
+  ];
+
+  it.each(open)("puts open %s to exactly one automatic lane", (status, lane) => {
+    expect(autoTodoLaneOf(todo("t", "2026-11-06T00:00:00Z"), status)).toBe(lane);
+  });
+
+  it("uses the awaiting-review marker for a supervised finished task and excludes done tasks", () => {
+    const review = supervised("review", "pending_review");
+    expect(autoTodoLaneOf(review, "follow_up")).toBe("review");
+    expect(autoTodoLaneOf(review, "unread")).toBe("review");
+    expect(autoTodoLaneOf(review, "not_started")).toBe("review");
+    expect(autoTodoLaneOf({ ...review, done_at: "2026-11-06T01:00:00Z" }, "done")).toBeUndefined();
   });
 });

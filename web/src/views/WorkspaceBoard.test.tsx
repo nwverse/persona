@@ -23,7 +23,8 @@ import { refresh, reset } from "../lib/store";
 import { resetWorkspaceBoardSettingForTest } from "../lib/workspace-board-setting";
 import type { BoardCard } from "../lib/workspace-board";
 import type { Machine, Session } from "../lib/types";
-import { WorkspaceBoard, WorkspaceCard } from "./WorkspaceBoard";
+import type { Todo } from "../lib/todos";
+import { AUTO_SOURCE_KEY, WorkspaceBoard, WorkspaceCard } from "./WorkspaceBoard";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -41,10 +42,20 @@ const cards: BoardCard[] = Array.from({ length: CARDS }, (_, i) => ({ id: `c${i}
 const board = { revision: 1, can_write: true, columns: [0, 1, 2].map((i) => ({ id: `col${i}`, title: `Column ${i}` })), cards };
 const workspaces = cards.map((c) => ({ id: c.workspace_id, machine_id: c.machine_id, source: "directory", source_id: c.workspace_id, title: c.title, cwd: c.cwd, online: true, available: true }));
 const agents = (): Session[] => Array.from({ length: CARDS * PER_CARD }, (_, i) => ({ machine_id: `m${i % CARDS % 3}`, session_id: `s${i}`, title: `Agent ${i}`, cwd: `/projects/p${i % CARDS}${Math.floor(i / CARDS) % 2 ? "/" : ""}`, status: "idle", state: "idle" }));
+const todoFixtures: Todo[] = [
+  { id: "todo-working", title: "Working to-do", created_at: "2026-11-10T01:00:00Z", updated_at: "2026-11-10T01:00:00Z", agents: [{ machine_id: "m0", session_id: "todo-agent", linked_at: "2026-11-10T01:00:00Z", cwd: "/projects/todo" }] },
+  { id: "todo-review", title: "Review to-do", created_at: "2026-11-10T02:00:00Z", updated_at: "2026-11-10T02:00:00Z", supervision: { supervisor: "main", state: "pending_review" }, agents: [] },
+  { id: "todo-idle", title: "Idle to-do", created_at: "2026-11-10T03:00:00Z", updated_at: "2026-11-10T03:00:00Z", agents: [{ machine_id: "m1", session_id: "todo-idle-agent", linked_at: "2026-11-10T03:00:00Z", cwd: "/projects/idle" }] },
+  { id: "todo-done", title: "Closed to-do", created_at: "2026-11-10T04:00:00Z", updated_at: "2026-11-10T04:00:00Z", done_at: "2026-11-10T05:00:00Z", agents: [] },
+];
+const todoAgents = (): Session[] => [
+  { machine_id: "m0", session_id: "todo-agent", title: "Todo agent", cwd: "/projects/todo", status: "working", state: "working", updated_at: "2026-11-10T05:00:00Z" },
+  { machine_id: "m1", session_id: "todo-idle-agent", title: "Idle agent", cwd: "/projects/idle", status: "idle", state: "idle", updated_at: "2026-11-10T04:00:00Z" },
+];
 const counted = (rows: Session[]) => new Proxy(rows, { get(target, key, receiver) { if (typeof key === "string" && String(Number(key)) === key) live.reads++; return Reflect.get(target, key, receiver); } });
 const setAgents = (rows: Session[]) => act(() => { live.sessions = counted(rows); live.listeners.forEach((fn) => fn()); });
 
-const answers: Record<string, unknown> = { "/api/v1/workspace-board/settings": { enabled: true, can_write: true }, "/api/v1/workspace-board": board, "/api/v1/workspaces": { workspaces }, "/api/v1/machines": { machines } };
+const answers: Record<string, unknown> = { "/api/v1/workspace-board/settings": { enabled: true, can_write: true }, "/api/v1/workspace-board": board, "/api/v1/workspaces": { workspaces }, "/api/v1/machines": { machines }, "/api/v1/todos": { todos: todoFixtures } };
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => { for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); }); };
@@ -139,5 +150,29 @@ describe("the workflow board with many cards and Agents", () => {
     setAgents(rows);
     expect(inLane("待验收", "c0")).toBe(true);
     expect(inLane("待验收", "c1")).toBe(true);
+  });
+
+  it("switches the auto source to open to-dos, filters done to-dos, and follows a status change", async () => {
+    localStorage.setItem("persona.workspace-board.view", "auto");
+    localStorage.removeItem(AUTO_SOURCE_KEY);
+    await act(() => refresh());
+    setAgents(todoAgents());
+    act(() => root.render(<WorkspaceBoard />));
+    await flush();
+    expect(host.querySelectorAll("article[data-card-id]").length).toBe(CARDS);
+
+    const sourceButton = [...host.querySelectorAll("button")].find((button) => button.textContent === "待办") as HTMLButtonElement;
+    expect(sourceButton).toBeTruthy();
+    act(() => sourceButton.click());
+    expect(host.querySelectorAll("article[data-todo-id]").length).toBe(3);
+    expect(host.querySelector('[data-todo-id="todo-done"]')).toBeNull();
+    expect(host.querySelector('section[aria-label="工作中"] [data-todo-id="todo-working"]')).toBeTruthy();
+    expect(host.querySelector('section[aria-label="待验收"] [data-todo-id="todo-review"]')).toBeTruthy();
+    expect(host.querySelector('section[aria-label="空闲"] [data-todo-id="todo-idle"]')).toBeTruthy();
+
+    const changed = todoAgents().map((session) => session.session_id === "todo-agent" ? { ...session, state: "needs_you" as const } : session);
+    setAgents(changed);
+    expect(host.querySelector('section[aria-label="需要你"] [data-todo-id="todo-working"]')).toBeTruthy();
+    expect(host.querySelector('section[aria-label="工作中"] [data-todo-id="todo-working"]')).toBeNull();
   });
 });

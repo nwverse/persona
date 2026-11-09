@@ -5,6 +5,10 @@ import { stateOf } from "./format";
 import type { BoardCard } from "./workspace-board";
 import type { Session } from "./types";
 
+// To-do cards use the task board's status mapping so both automatic views share one classification.
+export { autoTodoLaneOf } from "./task-board";
+export type { AutoTodoLane } from "./task-board";
+
 export type AutoLane = "needs_you" | "working" | "review" | "idle";
 export const AUTO_LANES: readonly AutoLane[] = ["needs_you", "working", "review", "idle"];
 

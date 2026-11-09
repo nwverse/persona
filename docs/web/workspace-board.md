@@ -12,6 +12,14 @@ Cards can be renamed, pinned, archived, and restored. Dragging moves a card acro
 
 Click a card to see its folder and linked Agents, open that machine's Files or Git, or use **New agent** to open the existing creation flow prefilled with the machine and folder. Binding, moving to Done, pinning, and archiving only update board metadata: they do not start or stop Agents, and do not run Git, PRs, releases, or delete folders. Starting an Agent requires an explicit submit in the creation flow.
 
+## Automatic view and card sources
+
+The optional **Auto** view has a per-browser **Card source** switch. **Workspaces** is the default and keeps the workspace cards and live Agent lanes described above. **To-dos** shows every open to-do (`done_at` is empty) as a card and updates its lane from the same status used by the To-dos page and task dock; completed to-dos are not shown.
+
+To-do lanes use the task board's existing sections: **Needs you** contains Waiting and Failed to start (`needs_you`, `interrupted`, `usage_limit`, and `failed`); **Working** contains In progress and Not started (`working` and `not_started`); **To review** contains Awaiting review and Finished (`awaitsReview(...)` and `unread`); **Idle** contains Stopped (`follow_up`). A `done` to-do has no lane. This mapping is shared with `task-board.ts`, so answered questions, supervision review and task status keep the same meaning across the board, dock and To-dos page.
+
+To-do cards show the title, linked Agent state pills, the known machine and folder, and the latest activity time. Opening the title or a linked Agent uses the existing To-dos and Agent panels; cards without an active Agent use the existing **Hand to agent** flow. Completing a card uses the existing to-do update, and the card disappears from the open lanes.
+
 ## Who owns the board
 
 The board belongs to the manager (`personad assistant`) (moved from the hub on 2026-11-05; code in `server/internal/assistant/workspace_board*.go`). Cards bind folders on computers, and computers are connected by the manager ([machines.md](../server/machines.md), "Who connects computers"), so the board, the toggle, and workspace discovery are all done there. Table and settings keys are unchanged, so no migration is needed. The hub only forwards: `/api/v1/workspace-board`, `/api/v1/workspaces`, and `/api/v1/workspace-board/settings` go as-is over the bus `http.request` to the manager (`boardRoutes` in `assistantwire`), carrying the requesting device's role. The `workspace_board` and `workspace_board_settings` events are sent by the manager via `ws.broadcast` and the hub pushes them unchanged to every client; their shape is the same, so clients need no changes.

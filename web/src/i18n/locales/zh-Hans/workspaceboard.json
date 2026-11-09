@@ -77,6 +77,11 @@
   "view_label": "看板视图",
   "view_manual": "手动",
   "view_auto": "自动",
+  "card_source_label": "卡片来源",
+  "card_source_workspaces": "工作空间",
+  "card_source_todos": "待办",
+  "search_todos_label": "搜索待办",
+  "search_todos_placeholder": "搜索标题、备注、Agent、目录",
   "auto_lanes_label": "按 Agent 状态自动分列",
   "auto_lane_review": "待验收",
   "auto_lane_idle": "空闲",
@@ -84,5 +89,13 @@
   "auto_empty_working": "这里没有正在工作的 Agent。",
   "auto_empty_review": "没有待验收的工作区。",
   "auto_empty_idle": "没有空闲的工作区。",
-  "auto_open_session": "打开会话"
+  "auto_open_session": "打开会话",
+  "todo_lanes_label": "按待办状态自动分列",
+  "todo_empty_needs_you": "没有需要你处理的待办。",
+  "todo_empty_working": "没有进行中的待办。",
+  "todo_empty_review": "没有待验收的待办。",
+  "todo_empty_idle": "没有空闲待办。",
+  "todo_loading": "正在加载待办",
+  "todo_open_agent": "打开 Agent",
+  "last_activity": "最近活动 {time}"
 }

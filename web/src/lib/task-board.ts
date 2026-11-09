@@ -17,6 +17,8 @@ export interface BoardSection {
   agents: DockAgent[];
 }
 
+export type AutoTodoLane = "needs_you" | "working" | "review" | "idle";
+
 /** Which section a task is in: by its status, but a supervised one awaiting the user's review in Awaiting review, not with the
  *  stopped or finished-unseen ones (#4896). The web keeps Interrupted (interrupted) apart; it waits for the user like Needs you. */
 export function boardSectionOf({ todo, status }: BoardRow): BoardSectionKey {
@@ -37,6 +39,26 @@ export function boardSectionOf({ todo, status }: BoardRow): BoardSectionKey {
       return "done";
     case "failed":
       return "failed";
+  }
+}
+
+/** The workflow board's four automatic lanes reuse the task board's sections:
+ * waiting and failed need the user, working includes tasks that have not started yet, review includes finished-unseen
+ * and supervised awaiting-review tasks, and stopped tasks are idle. Done tasks have no automatic lane. */
+export function autoTodoLaneOf(todo: Todo, status: TodoStatus): AutoTodoLane | undefined {
+  switch (boardSectionOf({ todo, status })) {
+    case "waiting":
+    case "failed":
+      return "needs_you";
+    case "working":
+      return "working";
+    case "review":
+    case "unread":
+      return "review";
+    case "stopped":
+      return "idle";
+    case "done":
+      return undefined;
   }
 }
 

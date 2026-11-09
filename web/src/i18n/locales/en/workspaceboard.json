@@ -77,6 +77,11 @@
   "view_label": "Board view",
   "view_manual": "Manual",
   "view_auto": "Auto",
+  "card_source_label": "Card source",
+  "card_source_workspaces": "Workspaces",
+  "card_source_todos": "To-dos",
+  "search_todos_label": "Search to-dos",
+  "search_todos_placeholder": "Search titles, notes, agents, folders",
   "auto_lanes_label": "Automatic lanes by agent state",
   "auto_lane_review": "To review",
   "auto_lane_idle": "Idle",
@@ -84,5 +89,13 @@
   "auto_empty_working": "No agents working here.",
   "auto_empty_review": "Nothing waiting for review.",
   "auto_empty_idle": "No idle workspaces.",
-  "auto_open_session": "Open session"
+  "auto_open_session": "Open session",
+  "todo_lanes_label": "Automatic lanes by to-do state",
+  "todo_empty_needs_you": "Nothing needs your attention.",
+  "todo_empty_working": "No to-dos are in progress.",
+  "todo_empty_review": "Nothing is waiting for review.",
+  "todo_empty_idle": "No idle to-dos.",
+  "todo_loading": "Loading to-dos",
+  "todo_open_agent": "Open agent",
+  "last_activity": "Last activity {time}"
 }
