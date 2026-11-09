@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -64,8 +65,11 @@ type GitShow struct {
 	Truncated bool      `json:"truncated"`
 }
 
+// gitTimeout bounds each git command the panels run.
+const gitTimeout = 15 * time.Second
+
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	return gitTimed(ctx, dir, 15*time.Second, args...)
+	return gitTimed(ctx, dir, gitTimeout, args...)
 }
 
 // gitCmd is a git command in dir that never prompts and never takes a lock (the status panels poll it).
@@ -84,16 +88,66 @@ func gitTimed(ctx context.Context, dir string, timeout time.Duration, args ...st
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return out.String(), fmt.Errorf("Git 操作超时或已取消：%w", ctx.Err())
-		}
-		msg := strings.TrimSpace(errb.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return out.String(), fmt.Errorf("git %s: %s", gitSubcommand(args), msg)
+		return out.String(), gitFailed(ctx, args, errb.String(), err)
 	}
 	return out.String(), nil
+}
+
+// gitCapped runs git as git() does, but reads at most limit bytes of what it prints: past that it stops git and returns
+// the output up to its last whole line within limit, with truncated set. A huge diff then costs about limit in memory
+// and time, and a cut one never ends mid-line or mid-character.
+func gitCapped(ctx context.Context, dir string, limit int, args ...string) (out string, truncated bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	cmd := gitCmd(ctx, dir, args...)
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", false, err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", false, gitFailed(ctx, args, "", err)
+	}
+	var b strings.Builder
+	_, readErr := io.Copy(&b, io.LimitReader(stdout, int64(limit)+1))
+	out = b.String()
+	if truncated = len(out) > limit; truncated {
+		cancel() // the rest is never read: stop git instead of waiting for it, whatever it exits with then
+	}
+	waitErr := cmd.Wait()
+	if truncated {
+		return cutAtLine(out, limit), true, nil
+	}
+	if waitErr == nil {
+		waitErr = readErr
+	}
+	if waitErr != nil {
+		return out, false, gitFailed(ctx, args, errb.String(), waitErr)
+	}
+	return out, false, nil
+}
+
+// gitFailed is the error for a git command that failed: timed out or canceled, or what git said on stderr.
+func gitFailed(ctx context.Context, args []string, stderr string, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("Git 操作超时或已取消：%w", ctx.Err())
+	}
+	msg := strings.TrimSpace(stderr)
+	if msg == "" {
+		msg = err.Error()
+	}
+	return fmt.Errorf("git %s: %s", gitSubcommand(args), msg)
+}
+
+// cutAtLine is s cut to at most limit bytes, after its last newline there; with none (a first line longer than
+// limit), at the last whole character.
+func cutAtLine(s string, limit int) string {
+	s = s[:min(limit, len(s))]
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		return s[:i+1]
+	}
+	return string(trimPartialRune([]byte(s)))
 }
 
 // gitSubcommand is the command args run (after git's own options), for errors.
@@ -340,28 +394,25 @@ func (n *Node) gitDiff(ctx context.Context, cwd, path string, staged bool) (map[
 		}
 	}
 	var out string
+	var truncated bool
 	if staged {
 		args := []string{"--literal-pathspecs", "diff", "--cached", "--no-color", "--", path}
 		if from := n.stagedRenameSource(ctx, root, path); from != "" {
 			args = []string{"--literal-pathspecs", "diff", "--cached", "-M", "--no-color", "--", from, path}
 		}
-		out, err = git(ctx, root, args...)
+		out, truncated, err = gitCapped(ctx, root, maxDiffBytes, args...)
 	} else {
-		out, err = git(ctx, root, "--literal-pathspecs", "diff", "--no-color", "--", path)
+		out, truncated, err = gitCapped(ctx, root, maxDiffBytes, "--literal-pathspecs", "diff", "--no-color", "--", path)
 		if err == nil && strings.TrimSpace(out) == "" {
 			if o, _ := git(ctx, root, "--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "--", path); strings.TrimSpace(o) != "" {
 				// --no-index exits 1 when files differ; the output is still the diff.
-				out, _ = git(ctx, root, "diff", "--no-color", "--no-index", "--", "/dev/null", path)
+				out, truncated, _ = gitCapped(ctx, root, maxDiffBytes, "diff", "--no-color", "--no-index", "--", "/dev/null", path)
 				err = nil
 			}
 		}
 	}
 	if err != nil {
 		return nil, err
-	}
-	truncated := len(out) > maxDiffBytes
-	if truncated {
-		out = out[:maxDiffBytes]
 	}
 	return map[string]any{"path": path, "diff": out, "truncated": truncated}, nil
 }
@@ -490,13 +541,9 @@ func (n *Node) gitShow(ctx context.Context, cwd, hash string) (*GitShow, error) 
 			res.Files[i].Index = k
 		}
 	}
-	diff, err := git(ctx, dir, append(show("--no-color", "--format=", hash, "--"), exclude...)...)
+	diff, truncated, err := gitCapped(ctx, dir, maxDiffBytes, append(show("--no-color", "--format=", hash, "--"), exclude...)...)
 	if err == nil {
-		res.Truncated = len(diff) > maxDiffBytes
-		if res.Truncated {
-			diff = diff[:maxDiffBytes]
-		}
-		res.Diff = diff
+		res.Diff, res.Truncated = diff, truncated
 	}
 	return res, nil
 }
