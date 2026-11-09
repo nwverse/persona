@@ -40,7 +40,7 @@ func TestQualifyAndSplitID(t *testing.T) {
 }
 
 func TestValidSessionName(t *testing.T) {
-	for _, name := range []string{"build", "xwo_exec", "a.b", "S1"} {
+	for _, name := range []string{"build", "review_2", "a.b", "S1"} {
 		if !ValidSessionName(name) {
 			t.Errorf("%q should be valid", name)
 		}
