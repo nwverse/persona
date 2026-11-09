@@ -22,6 +22,8 @@ const superviseTool = "supervise"
 // dropped.
 func (s *Service) sendDigest(ctx context.Context) {
 	b := &s.supervise
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
 	b.mu.Lock()
 	b.timer, b.timerAt = nil, time.Time{}
 	list := make([]superviseSignal, 0, len(b.pending))
@@ -64,6 +66,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	for _, g := range list {
 		b.sent[g.id()] = g.Key
 	}
+	prev := b.last
 	b.last = now
 	b.mu.Unlock()
 
@@ -79,6 +82,26 @@ func (s *Service) sendDigest(ctx context.Context) {
 	if len(entries) == 0 {
 		return
 	}
+	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
+	if err != nil {
+		s.logf("supervise: deduplication unavailable; retrying: %v", err)
+		s.restoreDigest(kept, now, prev)
+		return
+	}
+	if len(entries) == 0 {
+		b.mu.Lock()
+		if b.last.Equal(now) {
+			b.last = prev
+		}
+		b.mu.Unlock()
+		return
+	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			rollback()
+		}
+	}()
 	b.mu.Lock()
 	queued := b.queued
 	b.mu.Unlock()
@@ -94,6 +117,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 		msg.Text = prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(allEntries)})
 		if s.replaceQueuedSupervise(here.Main, msg) {
+			accepted = true
 			b.mu.Lock()
 			b.queued = all
 			b.mu.Unlock()
@@ -102,16 +126,13 @@ func (s *Service) sendDigest(ctx context.Context) {
 		}
 	}
 	msg.Text = prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(entries)})
-	b.mu.Lock()
-	b.queued = nil
-	b.mu.Unlock()
 	s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	c, ok := s.session(ctx, here.MachineID, here.Main)
 	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(here.Main) > 0 {
-		s.queueRelay(here.Main, msg)
-		b.mu.Lock()
-		b.queued = kept
-		b.mu.Unlock()
+		if !s.queueDigest(here.Main, msg, kept, now, prev) {
+			return
+		}
+		accepted = true
 		s.publish(ctx)
 		if ok && c.Status != proto.StatusWorking && !c.Starting {
 			s.drainRelays(here.MachineID, []proto.Session{c})
@@ -120,12 +141,53 @@ func (s *Service) sendDigest(ctx context.Context) {
 	}
 	if err := s.deliverRelay(ctx, here.MachineID, here.Main, msg); err != nil {
 		s.logf("supervise: %v; queued", err)
-		s.queueRelay(here.Main, msg)
+		if s.queueDigest(here.Main, msg, kept, now, prev) {
+			accepted = true
+			s.publish(ctx)
+		}
+		return
+	}
+	accepted = true
+	b.mu.Lock()
+	b.queued = nil
+	b.mu.Unlock()
+}
+
+// queueDigest queues msg, the message of signals kept, behind the main conversation's turn; at is when sendDigest
+// marked it as the last message and prev the last message before. When the relay queue can't be read nothing is
+// queued (false): the signals wait again, no longer marked told (a newer one of the same task and kind keeps its
+// place), the message still queued (supervise.queued) stays as it was, the last message is prev again (nothing went
+// out), and the digest is tried again in the urgent gap, or later when the gap after prev has not passed yet.
+func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, at, prev time.Time) bool {
+	b := &s.supervise
+	if s.queueRelay(to, msg) > 0 {
 		b.mu.Lock()
 		b.queued = kept
 		b.mu.Unlock()
-		s.publish(ctx)
+		return true
 	}
+	retry := s.superviseTimings().urgent
+	s.logf("supervise: the relay queue can't be read; %d signal(s) wait, trying again in %s", len(kept), retry)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.init()
+	if b.last.Equal(at) { // no later message went out meanwhile
+		b.last = prev
+	}
+	for _, g := range kept {
+		id := g.id()
+		if b.sent[id] != g.Key {
+			continue // a newer one of its kind went out meanwhile
+		}
+		delete(b.sent, id)
+		if cur, ok := b.pending[id]; !ok {
+			b.pending[id] = g
+		} else if g.Kind == sigReport && cur.Key != g.Key {
+			b.pending[id] = joinReports(g, cur) // both reports are told, this one first
+		}
+	}
+	s.retryDigestLocked(retry)
+	return false
 }
 
 // mergeSignals is a with b's signals over its own (one per task and kind), in a's order then b's.
@@ -203,6 +265,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	if last.SessionID != "" {
 		e.Session = short(last.SessionID)
+		e.AgentID = last.SessionID
 		if m, ok := s.device(ctx, last.MachineID); ok {
 			e.Machine = m.Name
 		}
@@ -247,6 +310,7 @@ func (s *Service) holdPushes(ctx context.Context, id string) {
 	b.mu.Lock()
 	b.init()
 	b.hold[id] = time.Now()
+	delete(b.visible, id)
 	b.mu.Unlock()
 	s.publish(ctx)
 }
@@ -257,6 +321,7 @@ func (s *Service) releasePushes(ctx context.Context, id string) {
 	b.mu.Lock()
 	_, held := b.hold[id]
 	delete(b.hold, id)
+	delete(b.visible, id)
 	b.mu.Unlock()
 	if held {
 		s.publish(ctx)

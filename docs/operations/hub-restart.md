@@ -17,7 +17,7 @@ Code locations refer to the current files and functions (checked 2026-11-06; aft
   i.e. control-group), then runs `systemctl --user restart personad`. There is no health check beyond `is-active`.
 - On SIGTERM (`signal.NotifyContext` in `main` of `cmd/personad/main.go`): the hub's ctx is cancelled at once, and every machine connection is killed at the same moment (the connections started by `startDevices(ctx)` in `runHub` of `hub/hub.go`).
   The shutdown order in `serveHTTP` of `hub/public.go`: close the listener first → `stopWebSockets` sends each client 1001 "hub stopping" and force-closes after 0.5 s (`stopWebSockets` in `hub/shutdown.go`)
-  → `http.Server.Shutdown` (2 s per step, 8 s total budget, `defaultShutdownTimeout` / `shutdownStepTimeout` in `shutdown.go`) → wait for node connections → close the database. **The listener closes before draining**, so the port is closed during the drain.
+  → `http.Server.Shutdown` (2 s per step, 8 s total budget, `DefaultShutdownTimeout` / `shutdownStepTimeout` in `shutdown.go`) → wait for node connections → close the database. **The listener closes before draining**, so the port is closed during the drain.
 - The process listens itself with `net.Listen` (`serveHTTP` in `public.go`, the TLS port in `startPublic`); there is no `SO_REUSEPORT`, `LISTEN_FDS` or socket activation.
   The new process only listens after `db.Open` (migrations), extensions, the knowledge base and everything else is up (`runHub` in `hub.go`).
 - Measured (journal of the restart on this dev machine at 19:30 on 2026-11-04): stopping began at 19:30:29.88, finished at 30.93, and the new process started listening at 31.14: **the port was closed for about 1.3 s**,
@@ -33,7 +33,7 @@ Code locations refer to the current files and functions (checked 2026-11-06; aft
 | Local node | A child process of the hub (`node --stdio`), killed together with the hub by systemd's cgroup | `command` in `devices/machine.go` (the `local` branch) |
 | Extensions (the Lark extension and others) | Child processes of the hub (stdio RPC), killed with the hub's cgroup and respawned by the new hub; login state lives in each extension's own directory, so a restart only loses the hub-side session and readiness state | `spawn` in `extension/host/host.go` |
 | Connector programs (telegram, wechat) | Same, restarted with a 5 s backoff | `Conn.Run` in `connector/proc/proc.go` (`restartFirst`) |
-| persona-link (computers of kind link) | Receives 1001, reconnects with 1–60 s exponential backoff, status text "hub restarted" | `backoff`, `summary` in `link/client.go` |
+| persona-link (computers of kind link) | Receives 1001, reconnects with 1–60 s exponential backoff, status text "hub restarted" | `backoff` in `link/client.go`, `summary` in `link/client_race.go` |
 
 After the new hub comes up: the local node connects within 0.2 s; a Mac over ssh takes 2–8 s (measured: one at +2.4 s, another at +8 s). During that time the machine shows as offline and its session list is empty.
 
@@ -86,6 +86,10 @@ Why this one:
 - **Socket activation**: standard, a few lines of code, no effect on Docker / launchd / running by hand (without `LISTEN_FDS` the hub listens itself); rolling back means deleting the socket unit.
   Cost: during the ~1 s while the old process stops, connections wait and get no immediate response, which is far within the clients' grace periods.
 
+Every hub process takes the passed sockets first thing (`claimInherited` in `hub/listen.go`, at the top of `Serve`, `Run` and `RunSlot`), before anything can start another process: `LISTEN_*` are cleared and the sockets made close-on-exec, and so is anything else the process was handed past stderr (`osproc.SealInherited`).
+Until 2026-11-08 a hub without its edge took them only when it first listened, and `runHub` could start the built-in manager before that: the manager, and through it every node, extension and agent it started, then held the hub's listening socket for as long as it lived (several pids on `ss -tlnp` for the hub's port).
+The manager's and the node's run entries (`managercli.Assistant`, `manager run`, `node`, `node --attach`) seal what they were handed as well, so a socket an older hub still leaks stops there. Not in `main`: the sandbox's launcher and the source validator are the same binaries and hand descriptors on by exec on purpose.
+
 `hub-systemd.sh` writes both units: the first time (or when the address changes) it stops the service once to hand the port to the socket (only this once is there a ~1 s gap); after that it always just runs `restart personad`.
 `TimeoutStopSec=20` (headroom beyond the 8 s shutdown budget).
 
@@ -98,7 +102,7 @@ and had to wait for systemd's `Restart=always` to bring it back, needlessly burn
 Now `personad hub run` (Linux, macOS) is an **edge**:
 
 - The edge holds the hub's ports: the socket from systemd, or its own listener if there is none. It never lets go while the service runs.
-- The hub itself runs as a **slot**: `personad hub slot`, a child process of the edge, listening on `~/.persona/run/slot-<a|b>-<port>.sock`.
+- The hub itself runs as a **slot**: `personad hub slot`, a child process of the edge, listening on `~/.persona/run/slot-<a|b>-<port>.sock`. The edge runs its slots from its own program (`persona-hub hub slot` for an edge started as `persona-hub run`); a switch names the binary for the next one. `hub switch` without `--binary` names the program the active slot runs, whichever program runs the command (`persona-hub switch` or `personad hub switch`), so while a slot serves a switch never moves a hub between `personad` and `persona-hub`; a slot that went back to `<program>.prev` after a failed switch names `<program>`. With nothing serving it names `personad` (`hub.ServerBinary`), as before the hub could run as `persona-hub`. While the edge backs off a slot that keeps failing it refuses any switch, whatever binary it names, so that default only reaches a switch the edge takes once a slot is up again (the edge starting the slot again, or another switch handing over). On a hub that runs `persona-hub` it moves the hub to `personad` until its service restarts, so give `--binary` there.
 - The edge forwards every connection byte for byte, first writing a PROXY v2 header stating the origin. So the slot's `RemoteAddr` / `LocalAddr` are still the client's address and the address it connected to,
   and trust decisions by origin (loopback, LAN, VPN interface, the user's own PROXY protocol upstream) work as before.
 - TLS certificates, public-key pinning and the database belong to the slot; the edge only forwards TCP.
@@ -125,7 +129,7 @@ Why not two hubs serving at once (that gateway's parallel switch): the hub has m
 Old and new coexist only during the standby self-check, with a 1–2 second hold at handover. Measured (NAS, 2026-11-06): one switch took 0.68 seconds, with 607 requests across 4 concurrent streams during it and 0 failures.
 
 Cases that bypass the edge: Windows, Docker (image updates), `PERSONA_HUB_EDGE=0`, a data directory path that is too long (Unix socket address limit). In these the hub listens itself as before.
-The in-place exec problem on this path is fixed too: the fds from systemd are kept (close-on-exec), the flag is cleared before exec, and `LISTEN_FDS` / `LISTEN_PID` are passed along (`execListenEnv` in `listen.go`).
+The in-place exec problem on this path is fixed too: the fds from systemd are kept (close-on-exec), the flag is cleared before exec, and `LISTEN_FDS` / `LISTEN_PID` are passed along (`execKeepingListeners` in `listen.go`: it holds `syscall.ForkLock` for reading from clearing the flag to the exec, so no process started meanwhile inherits the sockets, and sets the flag again when the exec fails).
 
 ### Planned shutdown (`hub/restart.go`)
 
@@ -254,12 +258,18 @@ Unchanged: Docker deployment (`deploy/docker/`, no `LISTEN_FDS`, still listens i
 
 After blue-green switching ("Blue-green switching" above):
 
-- Before replacing the hub binary, deploy.sh saves the old one as `personad.prev`.
-- When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --prev …`:
+- Before replacing the hub binary, deploy.sh saves the old one as `personad.prev` (and `persona-hub.prev`, `persona-manager.prev` for the two programs it puts beside it).
+- When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --binary <personad> --prev …` (the program it means, not the default):
   - Exit code 0: switch complete, restart nothing;
   - Exit code 1: the new version could not take over, the old one keeps serving; the script restores `personad.prev` and deployment fails;
   - Other exit codes: no edge (the first deployment of this version, an old binary), or an older edge protocol; restart the service the old way.
-- Mac (launchd) also tries switching first, then `kickstart` if that fails.
+- The unit keeps the program it runs ([../server/server.md](../server/server.md) ("Programs")). The script reads the unit's `ExecStart` as systemd does and as the hub's self-update does (`unit_program`; one table of forms tests both): the last one in `[Service]`, the drop-ins' after the unit's, spaces around the key's `=`, the first word unquoted (double or single quotes), `%h`, `%%` and `$$` replaced, compared by real path.
+  - A unit that runs this data directory's `persona-hub` stays `persona-hub run`, and the switch is `persona-hub hub switch --binary persona-hub --prev persona-hub.prev`; when that fails, `personad`, `persona-hub` and `persona-manager` all go back to their `.prev`. Without `persona-hub.prev` (the script run outside deploy.sh) there would be nothing to go back to, so the service restarts on the build on disk instead of switching.
+  - Every other unit is written for `personad` as before.
+  - It stops with an error and leaves the unit as it is when the unit runs a `persona-hub` that is not there, or when its `ExecStart` names a `persona-hub` other than this data directory's (a wrapper such as `sh -c '…/persona-hub run'`, another copy, a bare name).
+  - A `.prev` goes back through a symlink onto the file it names (an install under the former name keeps `personad` as a link to that file), so both names run the old build. A program whose `.prev` could not be put back (a full disk, a directory left where its copy goes) is named in the error, still on the new build; the others go back all the same.
+  - The script never moves an install from one program to the other.
+- Mac (launchd) also tries switching first, then `kickstart` if that fails. It finds the agent that runs this data directory's `personad hub` or its `persona-hub` (`run`, or no arguments; the program is `Program` when the agent has one, else `ProgramArguments[0]`, as launchd runs it) and switches with that program, given with `--binary`.
 - Rollback: run `PERSONA_HUB_EDGE=0 scripts/deploy/hub-systemd.sh` on the hub machine. It writes this variable into the unit's `Environment=`, and after the service restarts the hub listens itself;
   later deployments preserve it until you run it again with `PERSONA_HUB_EDGE=1`. When running manually, set this environment variable directly.
 

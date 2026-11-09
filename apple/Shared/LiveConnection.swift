@@ -322,12 +322,19 @@ nonisolated extension ServerEvent {
     }
 }
 
-/// The Demo Mode hub's end of the socket (Persona/App/DemoHub.swift): what the app sends goes to `receive`, and it
-/// answers through `deliver` with the same JSON a hub sends.
+/// The Demo Mode hub's end of the socket (Persona/App/DemoHub.swift), and the sync scenarios' (PersonaTests/Sync): what
+/// the app sends goes to `receive`, and it answers through `deliver` with the same JSON a hub sends. `dropped`: the
+/// connection broke, as a WebSocket's failure (the app's grace and reconnect follow).
 protocol LocalSocket: AnyObject {
     func open(deliver: @escaping (Data) -> Void)
+    func open(deliver: @escaping (Data) -> Void, dropped: @escaping () -> Void)
     func receive(_ message: [String: Any])
     func close()
+}
+
+extension LocalSocket {
+    /// A socket that never breaks (Demo Mode's).
+    func open(deliver: @escaping (Data) -> Void, dropped: @escaping () -> Void) { open(deliver: deliver) }
 }
 
 /// The app's WebSocket to the hub: reconnects with backoff and replays subscriptions.
@@ -445,6 +452,11 @@ final class LiveConnection {
     /// The demo config's socket, made by `makeLocal` (DemoHub registers it at launch).
     @ObservationIgnored private var local: LocalSocket?
     @ObservationIgnored static var makeLocal: (() -> LocalSocket)?
+    #if DEBUG
+    /// Unit tests: this connection's own socket instead of `makeLocal`'s, for several models side by side, one per
+    /// device (`AppModel.linkHooksForTests`).
+    @ObservationIgnored var makeLocalForTests: (() -> LocalSocket)?
+    #endif
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var backoff: TimeInterval = 1
     /// The hub said `hub_restarting` on this socket: its close is a restart whatever the close code.
@@ -579,6 +591,7 @@ final class LiveConnection {
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
         req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
+        RequestClientMetadata.current.apply(to: &req)
         req.timeoutInterval = 15
         resumed = false // until this socket's hello says so
         let t = session.webSocketTask(with: req)
@@ -686,7 +699,11 @@ final class LiveConnection {
 
     /// Demo Mode: no network, no heartbeat; the made-up hub's messages arrive like a socket's.
     private func openLocal(_ gen: Int) {
-        guard let make = Self.makeLocal else {
+        var made = Self.makeLocal
+        #if DEBUG
+        if let mine = makeLocalForTests { made = mine }
+        #endif
+        guard let make = made else {
             state = .failed(String(localized: "Demo mode isn't available"))
             return
         }
@@ -694,19 +711,33 @@ final class LiveConnection {
         local = socket
         state = .connecting
         let prepare = prepareEvent
-        socket.open { [weak self] data in
+        // As a WebSocket's frames (`receive`): the hello's place in the hub's broadcasts and whether it resumed them,
+        // then the connection's start.
+        socket.open(deliver: { [weak self] data in
             guard let self, gen == self.generation else { return }
             let event = ServerEvent.decode(data)
+            let meta = FrameMeta.read(data)
             if let event { prepare?(event) }
+            let first = self.state != .connected
+            if first { self.endDrop() }
+            if meta.type != "extension_ui_stream" { self.note(meta) }
             if case .hello(let hello)? = event { self.personaContracts = hello.features.contains(HubNaming.feature) }
-            if self.state != .connected {
+            if first {
                 self.state = .connected
+                self.sayHello()
                 self.onConnected?()
             }
             self.lastHeard = .now
             self.extensionStreamFrame(data, event: event)
             if let event { self.onEvent?(event) }
-        }
+        }, dropped: { [weak self] in
+            guard let self, gen == self.generation else { return }
+            self.personaContracts = false
+            self.dropped(restart: self.restartNotice)
+            self.state = .failed(String(localized: "Connection lost"))
+            self.stalled = false
+            self.scheduleReconnect(gen)
+        })
     }
 
     /// What a message says about the connection: the broadcast stream's place, whether this hello resumed it, a

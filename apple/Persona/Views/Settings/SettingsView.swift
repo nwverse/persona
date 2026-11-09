@@ -276,7 +276,8 @@ struct SettingsView: View {
             // with `-openMachineDetail <id>` that machine's page), `-openDevices YES` (Devices), `-openHubUpdate YES` (hub),
             // `-openManagers YES` (Managers; `-openManagerPage <id>` one of them, `-showManagerCode YES` a new one's install code),
             // `-openSentAsYou YES` (Sent as You),
-            // `-openSkills YES` (Skills), `-openExtensions YES` (Extensions; `-openExtension <id>` one of them; the old `-openPlugin…` names too), `-openChannels YES`
+            // `-openSkills YES` (Skills), `-openExtensions YES` (Extensions; `-openExtension <id>` one of them, with `-openExtensionManager <id>`
+            // another manager's copy; the old `-openPlugin…` names too), `-openChannels YES`
             // (Channels; `-openChannel <id>` one of them).
             .onAppear(perform: openDebugPage)
             #endif
@@ -358,8 +359,10 @@ struct SettingsView: View {
         else if flag("openExtensions") || str("openExtension") != nil { // Settings › Extensions (› one (› a page of it))
             p.append(SettingsPage.plugins)
             if let id = str("openExtension") {
-                p.append(SettingsPage.plugin(id))
-                if let ui = str("openExtensionPage") { p.append(SettingsPage.pluginPage(plugin: id, ui: ui, title: "")) }
+                // `-openExtensionManager <id>`: another manager's copy of it.
+                let manager = d.string(forKey: "openExtensionManager")
+                p.append(SettingsPage.plugin(id, manager: manager))
+                if let ui = str("openExtensionPage") { p.append(SettingsPage.pluginPage(plugin: id, ui: ui, title: "", manager: manager)) }
             }
         }
         else if d.bool(forKey: "openChannels") || d.string(forKey: "openChannel") != nil { // Settings › Channels (› one)
@@ -391,9 +394,9 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
-        else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | layout | scheme
+        else if d.string(forKey: "openAppearance") == "chat" { p.append(SettingsPage.chatLayout) } // New Conversation Layout (#1666)
+        else if let a = d.string(forKey: "openAppearance") { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
-                     : a == "layout" ? SettingsPage.layout
                      : a == "scheme" ? SettingsPage.colorScheme : SettingsPage.persona)
         }
         else if d.bool(forKey: "openModelConfiguration") {
@@ -453,19 +456,24 @@ struct SettingsView: View {
 
 /// The pages of Settings that are not routes of their own elsewhere.
 enum SettingsPage: Hashable {
-    case persona, themeColor, style, layout, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
+    case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
+    /// Settings › Appearance › New Conversation Layout (#1666, `ChatLayout`).
+    case chatLayout
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
-    /// A connector of the hub's by its id (GET /api/v1/connectors): GitHub…
-    case connector(String)
-    /// Settings › Extensions, and one plugin by its id (docs/extensions/extensions.md).
+    /// A connector of the hub's by its id (GET /api/v1/connectors): GitHub…; `manager`: another manager's copy
+    /// (docs/assistant/managers.md "Grouping"), nil the default's.
+    case connector(String, manager: String? = nil)
+    /// Settings › Extensions, and one plugin by its id (docs/extensions/extensions.md) and manager (another manager's copy of
+    /// the id; nil: the default's).
     case plugins
-    case plugin(String)
-    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「声明式 UI」), titled until its View says otherwise.
-    case pluginPage(plugin: String, ui: String, title: String)
+    case plugin(String, manager: String? = nil)
+    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「声明式 UI」), titled until its View says
+    /// otherwise; `manager`: the plugin's (nil: the default's).
+    case pluginPage(plugin: String, ui: String, title: String, manager: String? = nil)
     /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「扩展市场」).
     case pluginMarket
     case marketExtension(market: String, id: String)
@@ -497,8 +505,8 @@ private struct SettingsDestinations: ViewModifier {
             .navigationDestination(for: ModelPurposeRoute.self) { r in ModelPurposeEditorView(purposeID: r.id).splitDetailPage() }
             .navigationDestination(for: ModelLauncherRoute.self) { r in ModelLauncherDetailView(name: r.name).splitDetailPage() }
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }
-            .navigationDestination(for: MessagesChatsRoute.self) { _ in MessagesChatListView().splitDetailPage() }
-            .navigationDestination(for: MessagesThreadRoute.self) { r in MessagesThreadView(id: r.id, name: r.name).splitDetailPage() }
+            .navigationDestination(for: MessagesChatsRoute.self) { r in MessagesChatListView(manager: r.manager).splitDetailPage() }
+            .navigationDestination(for: MessagesThreadRoute.self) { r in MessagesThreadView(id: r.id, name: r.name, manager: r.manager).splitDetailPage() }
             .navigationDestination(for: SessionKey.self) { key in ChatView(key: key).id(key).splitDetailPage(ownsBack: true) }
             .extensionPushDestination()
     }
@@ -509,11 +517,11 @@ private struct SettingsDestinations: ViewModifier {
         case .themeColor: ThemeColorSettingsPage()
         case .style: StyleSettingsPage()
         case .language: LanguageSettingsPage()
+        case .chatLayout: ChatLayoutSettingsPage()
         #if os(iOS) || os(visionOS)
-        case .layout: LayoutSettingsPage()
         case .colorScheme: ColorSchemeSettingsPage()
         #else
-        case .layout, .colorScheme: EmptyView()
+        case .colorScheme: EmptyView()
         #endif
         case .assistant: AssistantProfileView()
         case .claude: ClaudeSettingsView()
@@ -522,8 +530,8 @@ private struct SettingsDestinations: ViewModifier {
         case .phoneData: PhoneDataView()
         case .mail: MailAccountsView(inSheet: false)
         case .feishu: FeishuConnectorView()
-        case .connector(let id):
-            if id == "imessage" { MessagesConnectorView() } else { HubConnectorView(id: id) }
+        case .connector(let id, let manager):
+            if id == "imessage" { MessagesConnectorView(manager: manager) } else { HubConnectorView(id: id, manager: manager) }
         case .feishuBot: FeishuBotView()
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
@@ -540,8 +548,8 @@ private struct SettingsDestinations: ViewModifier {
         case .hub: HubSettingsPage()
         case .skills: SkillsPage()
         case .plugins: ExtensionsView()
-        case .plugin(let id): ExtensionDetailView(id: id)
-        case .pluginPage(let plugin, let ui, let title): ExtensionPageView(plugin: plugin, ui: ui, title: title)
+        case .plugin(let id, let manager): ExtensionDetailView(id: id, manager: manager)
+        case .pluginPage(let plugin, let ui, let title, let manager): ExtensionPageView(plugin: plugin, ui: ui, title: title, manager: manager)
         case .pluginMarket: ExtensionMarketView()
         case .marketExtension(let market, let id): MarketExtensionDetailView(market: market, id: id)
         case .pluginMarkets: ExtensionMarketsView()
@@ -688,7 +696,7 @@ private struct SourceIcon: View {
         if let icon = source.appIcon {
             BrandMark(icon, side: Theme.Size.wellS)
         } else {
-            Image(systemName: source.symbol)
+            ThemedIcon(source.symbol)
                 .font(Theme.Font.heading)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -783,14 +791,14 @@ struct WelcomeView: View {
                 .padding(.top, Theme.Space.sm)
                 .padding(.horizontal, Theme.Space.xl)
             VStack(alignment: .leading, spacing: Theme.Space.l) {
-                feature("bubble.left.and.text.bubble.right", String(localized: "Get things done by chatting"), String(localized: "It reads files and runs commands on your computer, and asks you before it acts"))
+                feature(Theme.Icon.agentChat, String(localized: "Get things done by chatting"), String(localized: "It reads files and runs commands on your computer, and asks you before it acts"))
                 feature("bolt.horizontal", String(localized: "See what it's doing, live"), String(localized: "Thinking, tool calls, and the terminal, streamed"))
                 #if os(macOS)
                 feature(Theme.Icon.click, String(localized: "Decide in one window"), String(localized: "Answer questions, approve plans, and allow tools without switching to the terminal"))
                 feature(Theme.Icon.mailAccounts, String(localized: "Bring your mail and iPhone"), String(localized: "Gmail and other mail; calendar, contacts, and photos from Persona on your iPhone"))
                 #else
-                feature("hand.tap", String(localized: "Decide on your phone"), String(localized: "Answer questions, approve plans, and allow tools, even on your watch"))
-                feature("iphone.gen3", String(localized: "Bring your phone and mail"), String(localized: "Calendar, reminders, contacts, health, photos, Gmail"))
+                feature(Theme.Icon.tap, String(localized: "Decide on your phone"), String(localized: "Answer questions, approve plans, and allow tools, even on your watch"))
+                feature(Theme.Icon.thisDevice, String(localized: "Bring your phone and mail"), String(localized: "Calendar, reminders, contacts, health, photos, Gmail"))
                 #endif
             }
             .padding(.top, 40)
@@ -853,7 +861,7 @@ struct WelcomeView: View {
 
     private func feature(_ symbol: String, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .top, spacing: Theme.Space.l) {
-            Image(systemName: symbol)
+            ThemedIcon(symbol)
                 .font(Theme.Font.title)
                 .foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.wellS)
@@ -1171,6 +1179,8 @@ struct ClaudeSettingsView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var strings: [String: String] = [:]
+    /// Live Replies of the machine shown (Claude Code only; nil before it loads, and gone on a hub without it).
+    @State private var liveReplies: LiveRepliesModel?
 
     var body: some View {
         SettingsForm {
@@ -1193,6 +1203,9 @@ struct ClaudeSettingsView: View {
                 ForEach(settings) { s in row(s) }
             }
             #endif
+            if agent == .claude, let live = liveReplies, live.ref == ref, !live.unsupported {
+                LiveRepliesSection(model: live, others: applyAll ? model.machines.filter { $0.online && $0.ref != ref }.map(\.ref) : [])
+            }
             if agent == .claude, !machineID.isEmpty { ClaudeDirsSection(ref: ref) }
         }
         .themedPage()
@@ -1200,7 +1213,19 @@ struct ClaudeSettingsView: View {
         .onAppear { if machineID.isEmpty { machineID = model.hubRef(model.hubMachineID).path } } // first visit: the hub's machine
         .overlay { if loading && settings.isEmpty { ProgressView() } }
         .task(id: machineID) { await load() }
-        .refreshable { await load() }
+        .task(id: agent == .claude ? machineID : "") { await loadLiveReplies() }
+        .refreshable {
+            await load()
+            await liveReplies?.load()
+        }
+    }
+
+    /// The machine's Live Replies switch, read again whenever another machine is picked.
+    private func loadLiveReplies() async {
+        guard agent == .claude, !machineID.isEmpty else { return }
+        let live = LiveRepliesModel(ref: ref, deps: .live(model))
+        liveReplies = live
+        await live.load()
     }
 
     @ViewBuilder private func row(_ s: APIClient.ClaudeSetting) -> some View {
@@ -1303,7 +1328,7 @@ struct SettingsRow: View {
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
             BUIListRow(title, value: value.flatMap { $0.isEmpty ? nil : $0 }) {
-                if let brand { SettingsBrandMark(asset: brand) } else { BUIIconTile(symbol, tint: tint) }
+                if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
             }
         } else if let value {
             LabeledContent {
@@ -1325,6 +1350,48 @@ struct SettingsRow: View {
             #else
             Label(title, systemImage: symbol)
             #endif
+        }
+    }
+}
+
+/// A switch row of Settings with a mark (#1650): the system's switch with its label; in the BeautifulUI style the list row
+/// `SettingsRow` draws there (the tile, the name, its description under it) with the switch at its end, so a card's switch
+/// rows and the rows that open a page start with the same mark. `tint` is the tile's, `iconColor` the bare symbol's in the
+/// other styles (nil leaves it the list's).
+struct SettingsSwitchRow: View {
+    var title: String
+    var detail: String? = nil
+    var symbol: String
+    var tint: Color = Theme.accent
+    var iconColor: Color? = nil
+    /// The name's line limit in the other styles; BeautifulUI's row wraps it.
+    var titleLines: Int? = nil
+    /// On the switch itself, where UI tests look for it (`app.switches[…]`).
+    var accessibilityID: String? = nil
+    @Binding var isOn: Bool
+
+    var body: some View {
+        if AppStyle.current.usesBeautifulUI {
+            BUIListRow(title, detail: detail, detailLines: .max) { IconTile(symbol, tint: tint) } trailing: {
+                Toggle(title, isOn: $isOn).labelsHidden().accessibilityIdentifier(accessibilityID ?? "")
+            }
+            .accessibilityElement(children: .contain)
+        } else {
+            Toggle(isOn: $isOn) {
+                Label {
+                    if let detail {
+                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                            Text(title).lineLimit(titleLines)
+                            Text(detail).font(Theme.Font.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text(title).lineLimit(titleLines)
+                    }
+                } icon: {
+                    if let iconColor { ThemedIcon(symbol).foregroundStyle(iconColor) } else { ThemedIcon(symbol) }
+                }
+            }
+            .accessibilityIdentifier(accessibilityID ?? "")
         }
     }
 }

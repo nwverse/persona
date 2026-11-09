@@ -114,6 +114,24 @@ func TestGeneratedConfigNamesTheNodesDirectory(t *testing.T) {
 		}
 	}
 
+	// The live replies hook is in exec form, with no shell to set PERSONA_HOME: it is told the directory as an argument.
+	var live struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	b, err = os.ReadFile(filepath.Join(dir, liveRepliesDir, "hooks", "hooks.json"))
+	if err != nil || json.Unmarshal(b, &live) != nil || len(live.Hooks["MessageDisplay"]) != 1 {
+		t.Fatalf("live replies plugin: %v %s", err, b)
+	}
+	if h := live.Hooks["MessageDisplay"][0].Hooks; len(h) != 1 || h[0].Command != bin ||
+		!slices.Equal(h[0].Args, []string{"hook", nodeclient.HomeFlag, dir}) {
+		t.Fatalf("live replies hook: %+v", h)
+	}
+
 	// The doctor takes them for current, and finds the program they run.
 	for _, c := range checkGenerated(DoctorOptions{Dir: dir, Bin: bin}) {
 		if c.State != "current" {

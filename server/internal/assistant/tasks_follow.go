@@ -3,12 +3,12 @@ package assistant
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -166,20 +166,18 @@ type receiptBody struct {
 }
 
 type receiptReview struct {
-	State    string `json:"state"` // awaiting
+	State    string `json:"state"` // checking: Persona follows up; awaiting: completion already judged
 	Criteria int    `json:"criteria"`
 }
 
 // interruptedSummary is an interrupted task's receipt: the error itself is no conclusion (#1516).
 const interruptedSummary = assistantwire.InterruptedSummary
 
-// silentTurnError is the interrupted receipt's detail for a turn with no output at all (silentTurn, #2349), in the
-// default language (silentTurnErrorIn: the user's).
-var silentTurnError = silentTurnErrorIn(i18n.Default)
-
+// silentTurnErrorIn is the interrupted receipt's detail for a turn with no output at all (silentTurn, #2349), in l.
+// Not kept in a package variable: that would read the catalogs whenever personad starts, a hook too (#1308).
 func silentTurnErrorIn(l i18n.Lang) string { return i18n.T(l, "assistant-tasks.silent_turn") }
 
-var prLink = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 
 // taskTurnEnded: one of the task's agents (sid on machine) ended a turn. Once none of them works or waits for the
 // user any more, the conversation gets a receipt (once per stretch of work), and the todo is closed if the judge
@@ -201,6 +199,13 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 		}
 		if w := c.Work; w != nil && w.Phase == proto.WorkBlocked && w.On == proto.WaitTransient && w.WakeAt != nil {
 			return // "Continue" goes by itself (agents_work.go): the receipt waits for how that ends
+		}
+		if now := time.Now(); limitTakenUp(c, now) {
+			// A usage limit stopped it until the reset, and its CLI or the manager goes on then (usage_limit.go): the
+			// receipt waits for how that ends. Looked at again once the wait is over, so a turn that did not go on after
+			// all (the continue cancelled) still gets its receipt.
+			s.taskTurnEndedAfter(ctx, machine, sid, limitLookAgain(c, now))
+			return
 		}
 		if c.UpdatedAt.After(last.UpdatedAt) {
 			last = c
@@ -300,7 +305,11 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	// needs_user waits on the user instead. Read the latest todo in case it changed while reading the reply.
 	if current, ok := s.todoNow(t.ID); ok && current.DoneAt == nil {
 		if v := current.Supervision; v != nil && v.state(current) != reviewNeedsUser {
-			body.Review = &receiptReview{State: "awaiting", Criteria: len(v.DoneWhen)}
+			state := "checking" // receipt stays ahead of the model; a stopped turn is not a completion verdict
+			if v.state(current) == reviewPending {
+				state = "awaiting"
+			}
+			body.Review = &receiptReview{State: state, Criteria: len(v.DoneWhen)}
 		}
 	}
 	if body.Summary == "" {
@@ -322,7 +331,34 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
 }
 
-// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation.
+// taskTurnEndedAfter has taskTurnEnded look at sid's task again at at. What happened meanwhile decides as ever: a turn
+// that went on and ended had its own receipt, one that works again has none yet. A look already set for as early is
+// enough (one still waiting then sets the next): the wait's wakes (a background task reporting, a /loop) end a turn
+// each, and each comes here.
+func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, at time.Time) {
+	ref := SessionRef{MachineID: machine, SessionID: sid}
+	s.tasks.mu.Lock()
+	if s.tasks.limitLooks == nil {
+		s.tasks.limitLooks = map[SessionRef]time.Time{}
+	}
+	if pending, ok := s.tasks.limitLooks[ref]; ok && !pending.After(at) { // one as early is set: it looks again if need be
+		s.tasks.mu.Unlock()
+		return
+	}
+	s.tasks.limitLooks[ref] = at
+	s.tasks.mu.Unlock()
+	time.AfterFunc(time.Until(at), func() {
+		s.tasks.mu.Lock()
+		if s.tasks.limitLooks[ref].Equal(at) {
+			delete(s.tasks.limitLooks, ref)
+		}
+		s.tasks.mu.Unlock()
+		s.taskTurnEnded(ctx, machine, sid)
+	})
+}
+
+// routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
+// the user's (no from: a task card's Message, or a decision the owner made in Lark).
 func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text string) (FeedItem, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return FeedItem{}, err

@@ -6,7 +6,7 @@ import XCTest
 /// 24h endpoint samples every 240 seconds (~361 points), not the production-shaped mixed-resolution
 /// history described in the original map. Larger grids and dense histories remain parent-owned fixtures.
 final class PerfMachinesTests: PerfTestCase {
-    /// Keep the inherited Settings -> Machines route in both layouts and launch through PerfTestCase.
+    /// Keep the inherited Settings -> Machines route and launch through PerfTestCase.
     @MainActor private func openMachines(_ extra: [String] = []) {
         launch(["-tab", "settings", "-dev.openChat", "", "-openMachines", "YES"] + extra)
     }

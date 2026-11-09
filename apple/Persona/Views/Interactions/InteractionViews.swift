@@ -14,9 +14,9 @@ extension InteractionKind {
 
     var symbol: String {
         switch self {
-        case .question: "questionmark.bubble.fill"
-        case .plan: "list.bullet.clipboard.fill"
-        case .permission: "hand.raised.fill"
+        case .question: Theme.Icon.questionFilled
+        case .plan: Theme.Icon.planFilled
+        case .permission: Theme.Icon.waitsForYou
         case .screen: Theme.Icon.terminalFilled
         }
     }
@@ -27,6 +27,7 @@ extension Interaction {
     /// Codex.
     var title: String {
         if toolName == "ask_user" { return String(localized: "Persona Has a Question") }
+        if isSecretRun { return secretRunTitle }
         if let name = agentName {
             switch kind {
             case .question: return String(localized: "\(name) Has a Question")
@@ -84,7 +85,7 @@ struct InteractionPreviewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: interaction.kind.symbol)
+                ThemedIcon(interaction.kind.symbol)
                     .foregroundStyle(StatusPalette.needsYou.dot)
                     .scaledFrame(width: Theme.Size.icon) // one column: the titles line up card to card
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -96,7 +97,7 @@ struct InteractionPreviewCard: View {
                 }
                 Spacer()
                 #if !os(macOS) // a phone's row says it opens; a Mac's list row does not (#2113)
-                Image(systemName: Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
                 #endif
             }
             if !summary.isEmpty {
@@ -237,6 +238,14 @@ struct RecommendedTag: View {
     var body: some View { Chip(text: String(localized: "Recommended"), look: .tint(Theme.ai)) }
 }
 
+/// Set by a card's form while a field in it has the keyboard (on a Mac, the focus) and the form ends with what the
+/// field is for (the password card's Run and Decline): the card keeps that end in sight, also as the keyboard takes
+/// the page's room (#1581).
+struct CardFormKeepsEnd: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
 /// Full interaction UI pinned above the composer in a chat. Capped in height (scrolls inside) and collapsible,
 /// so a long question never hides the conversation it is about.
 struct InteractionPanel: View {
@@ -252,6 +261,9 @@ struct InteractionPanel: View {
     @State private var headerHeight: CGFloat = 0
     /// The plan full screen. Its button sits in this header: floating over the plan it covered the last line.
     @State private var showFullPlan = false
+    /// The form asks to keep its end in sight (`CardFormKeepsEnd`), and where its scroll area is.
+    @State private var keepsEnd = false
+    @State private var formPosition = ScrollPosition(edge: .top)
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
@@ -277,6 +289,20 @@ struct InteractionPanel: View {
                     form.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formHeight = $0 }
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                // A field taking the keyboard brings the form's end into view, and while the keyboard takes the room the
+                // area gives it up at the top, so the field and its Run stay above the keyboard (#1581). An area shorter
+                // than the field and its Run shows Run whole and the field cut at the top.
+                .scrollPosition($formPosition)
+                .defaultScrollAnchor(keepsEnd ? .bottom : nil, for: .sizeChanges)
+                .onPreferenceChange(CardFormKeepsEnd.self) { keep in
+                    keepsEnd = keep
+                    if keep { withAnimation(Theme.Motion.standard) { formPosition.scrollTo(edge: .bottom) } }
+                }
+                // Folded, the form is gone with its field: unfolded again it starts at its top, its commands first.
+                .onDisappear {
+                    keepsEnd = false
+                    formPosition = ScrollPosition(edge: .top)
+                }
                 // At most a little over half of what the page has (not the screen: iPhone Duo's displays differ), and
                 // with the keyboard up no more than lets the whole card fit the cards' area.
                 .frame(height: room > 0 ? min(formHeight == 0 ? room : formHeight, room * 0.55, fitsCap) : nil)
@@ -294,7 +320,7 @@ struct InteractionPanel: View {
     /// The title, ⋯ and fold; a tap anywhere on it folds the card.
     private var header: some View {
         HStack(spacing: Theme.Space.sm) {
-            Image(systemName: interaction.kind.symbol)
+            ThemedIcon(interaction.kind.symbol)
                 .font(Theme.Font.labelStrong)
                 .foregroundStyle(StatusPalette.needsYou.dot)
             Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text).lineLimit(1)
@@ -305,7 +331,7 @@ struct InteractionPanel: View {
             Spacer(minLength: 4)
             if interaction.kind == .plan && !collapsed {
                 Button { showFullPlan = true } label: {
-                    Image(systemName: Theme.Icon.enlarge)
+                    ThemedIcon(Theme.Icon.enlarge)
                         .font(Theme.Font.captionStrong)
                         .foregroundStyle(.secondary)
                         .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
@@ -319,7 +345,7 @@ struct InteractionPanel: View {
                     Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
                 }
             } label: {
-                Image(systemName: Theme.Icon.more)
+                ThemedIcon(Theme.Icon.more)
                     .font(Theme.Font.captionStrong)
                     .foregroundStyle(.secondary)
                     .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
@@ -329,7 +355,7 @@ struct InteractionPanel: View {
             #if os(macOS)
             .help("More")
             #endif
-            Image(systemName: Theme.Icon.expand)
+            ThemedIcon(Theme.Icon.expand)
                 .font(Theme.Font.captionStrong)
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(collapsed ? 180 : 0))
@@ -436,7 +462,7 @@ struct QuestionForm: View {
                 ZStack {
                     Circle().fill(selected ? Theme.accent : Theme.Fill.chip)
                     if selected {
-                        Image(systemName: Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
+                        ThemedIcon(Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
                     } else {
                         Text("\(number)").font(Theme.Font.labelStrong.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -478,7 +504,7 @@ struct QuestionForm: View {
     @ViewBuilder private func otherRow(_ q: Question) -> some View {
         let text = Binding(get: { other[q.question] ?? "" }, set: { other[q.question] = $0 })
         HStack(alignment: .center, spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.edit)
+            ThemedIcon(Theme.Icon.edit)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -492,7 +518,7 @@ struct QuestionForm: View {
                     }
                 if !needsFooter, !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button { submit() } label: {
-                        Image(systemName: Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
+                        ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Send answer")
@@ -663,14 +689,17 @@ struct PermissionForm: View {
     var interaction: Interaction
 
     var body: some View {
-        if interaction.requiresInput { PermissionInputForm(interaction: interaction) }
+        // One view per card: another card in this place starts with an empty password field (a field still being
+        // typed in keeps its UIKit text when only the binding is cleared).
+        if interaction.isSecretRun { SecretRunForm(interaction: interaction).id(interaction.id) }
+        else if interaction.requiresInput { PermissionInputForm(interaction: interaction) }
         else if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
     }
 
     @ViewBuilder private var plain: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
+                ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
                 Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
             Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
@@ -730,7 +759,7 @@ struct AgentPermissionForm: View {
     @ViewBuilder private var plain: some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
-                Image(systemName: ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
+                ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
                 Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
             if let reason = interaction.reason, !reason.isEmpty {
@@ -786,7 +815,7 @@ struct AgentPermissionForm: View {
                         whyFocused = false
                         Task { await model.resolve(interaction, Resolution(allow: false, message: why)) }
                     } label: {
-                        Image(systemName: Theme.Icon.send)
+                        ThemedIcon(Theme.Icon.send)
                             .font(Theme.Font.labelHeavy)
                             .foregroundStyle(.white)
                             .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -969,7 +998,7 @@ struct ScreenForm: View {
                 ZStack {
                     Circle().fill(on ? Theme.accent : Theme.Fill.chip)
                     if on {
-                        Image(systemName: Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
+                        ThemedIcon(Theme.Icon.done).font(Theme.Font.labelHeavy).dynamicTypeSize(...DynamicTypeSize.xxLarge).foregroundStyle(.white)
                     } else {
                         Text(opt.key).font(Theme.Font.labelStrong.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -1000,7 +1029,7 @@ struct ScreenForm: View {
     /// The free-text field of a multi-select question: sent with the ticks, checked when it holds something.
     private func freeTextRow(_ opt: ScreenParser.Dialog.Option) -> some View {
         HStack(alignment: .center, spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.edit)
+            ThemedIcon(Theme.Icon.edit)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -1039,7 +1068,7 @@ struct ScreenForm: View {
     /// "Type something.": a quiet row that turns into a field; sending picks the option, types, presses enter.
     private func typeRow(_ opt: ScreenParser.Dialog.Option) -> some View {
         HStack(alignment: .center, spacing: Theme.Space.m) {
-            Image(systemName: Theme.Icon.edit)
+            ThemedIcon(Theme.Icon.edit)
                 .font(Theme.Font.labelStrong).dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
@@ -1056,7 +1085,7 @@ struct ScreenForm: View {
                         send(opt.key, answer(opt, text: t))
                     } label: {
                         if sending == opt.key { ProgressView().controlSize(.small) }
-                        else { Image(systemName: Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent) }
+                        else { ThemedIcon(Theme.Icon.submit).font(Theme.Font.title).foregroundStyle(Theme.accent) }
                     }
                     .buttonStyle(.plain)
                     .disabled(sending != nil)
@@ -1098,7 +1127,7 @@ struct ScreenForm: View {
                 let t = text
                 text = ""
                 Task { await model.resolve(interaction, Resolution(keys: ["enter"], text: t)) }
-            } label: { Image(systemName: Theme.Icon.enter) }
+            } label: { ThemedIcon(Theme.Icon.enter) }
                 .themedButton(prominent: true)
                 .disabled(text.isEmpty)
                 .accessibilityIdentifier("terminal.send")
@@ -1132,7 +1161,7 @@ struct ScreenSteps: View {
                 ForEach(Array(steps.enumerated()), id: \.offset) { i, s in
                     HStack(spacing: Theme.Space.xs) {
                         Group {
-                            if s.done { Image(systemName: Theme.Icon.done).font(.system(size: 8, weight: .bold)) }
+                            if s.done { ThemedIcon(Theme.Icon.done).font(.system(size: 8, weight: .bold)) }
                             else { Text("\(i + 1)").font(.system(size: 9, weight: .bold).monospacedDigit()) } // type-scale: glyph (a step number in a 16 pt circle)
                         }
                         .foregroundStyle(s.done ? .white : .secondary)
@@ -1445,7 +1474,7 @@ struct BUIPermissionForm: View {
 
     private var command: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
-            Image(systemName: ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
+            ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
             Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
                 .font(Theme.Font.code)
                 .textSelection(.enabled)
@@ -1586,7 +1615,7 @@ struct BUIScreenForm: View {
                 let t = text
                 text = ""
                 Task { await model.resolve(interaction, Resolution(keys: ["enter"], text: t)) }
-            } label: { Image(systemName: Theme.Icon.enter) }
+            } label: { ThemedIcon(Theme.Icon.enter) }
                 .themedButton(prominent: true)
                 .disabled(text.isEmpty)
                 .accessibilityIdentifier("terminal.send")

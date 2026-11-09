@@ -40,6 +40,14 @@ struct ExtensionUpgradeTests {
         #expect(ExtensionText.upgradeDetail(up("waiting_idle")) == "扩展空闲时自动升级")
         #expect(ExtensionText.upgradeDetail(up("off")) == "自动升级关着" && ExtensionText.upgradeAction(up("off")) == "去升级")
         #expect(ExtensionText.upgradeDetail(up("skipped")) == "上次升级后起不来，已回到 1.0.0，不再自动升级到这个版本")
+        // A version the user rolled back from by hand (#1826) says so, not "didn't start"; the hub sends skipped_by.
+        var byUser = up("skipped")
+        byUser.skippedBy = "user"
+        #expect(ExtensionText.upgradeDetail(byUser) == "你从这个版本回滚到了 1.0.0，不会再自动升级到它")
+        #expect(ExtensionText.upgradeAction(byUser) == "去升级")
+        let decoded = try? JSON.decoder.decode(ExtensionUpgrade.self, from: Data(
+            #"{"id":"p","market":"m1","from":"1.0.0","to":"1.1.0","state":"skipped","skipped_by":"user"}"#.utf8))
+        #expect(decoded?.skippedBy == "user")
         #expect(ExtensionText.upgradeDetail(up("failed", detail: "下载失败")) == "没装上：下载失败")
         #expect(ExtensionText.upgradeAction(up("waiting_idle")) == nil && ExtensionText.upgradeAction(up("incompatible")) == nil)
         #expect(ExtensionText.morePermissions([]) == "要的权限有变化")
@@ -48,6 +56,20 @@ struct ExtensionUpgradeTests {
         let at = Date()
         #expect(ExtensionText.upgradeNote(ExtensionUpgradeNote(kind: "upgraded", from: "0.9.0", to: "1.0.0", at: at)) == "已自动升级到 1.0.0（原来是 0.9.0）")
         #expect(ExtensionText.upgradeNote(ExtensionUpgradeNote(kind: "rolled_back", from: "1.0.0", to: "1.1.0", at: at)) == "1.1.0 起不来，已回到 1.0.0")
+    }
+
+    /// Switched off, the extension is not upgraded: its switch shows off (and greyed out) whatever its own setting, which
+    /// the hub keeps for when it is on again; a hub from before auto_upgrade_paused shows the switch as it is.
+    @Test(arguments: [
+        (#""auto_upgrade":true"#, nil, true),
+        (#""auto_upgrade":false"#, nil, false),
+        (#""auto_upgrade":true,"auto_upgrade_paused":"disabled""#, "disabled", false),
+        (#""auto_upgrade":false,"auto_upgrade_paused":"disabled""#, "disabled", false),
+    ] as [(String, String?, Bool)])
+    func theSwitchShowsOffWhilePaused(fields: String, paused: String?, shown: Bool) throws {
+        let p = try JSON.decoder.decode(HubExtension.self, from: Data(#"{"id":"x","name":"X","kind":"ui","status":"running",\#(fields)}"#.utf8))
+        #expect(p.autoUpgradePaused == paused)
+        #expect(ExtensionText.autoUpgradeShown(p) == shown)
     }
 
     @Test func theExtensionsSwitchGoesToTheHub() async throws {

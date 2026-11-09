@@ -11,6 +11,11 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+const (
+	updateInventoryPageSize   = 100
+	updateInventoryPageBudget = 1000
+)
+
 // updateCodexObservation is raw, freshly read evidence. It includes ephemeral
 // background threads and subagents that a conversation display intentionally omits.
 // It does not assert completeness for the machine or any other app-server.
@@ -126,27 +131,49 @@ func (c *codexRemote) observeUpdateThreads(ctx context.Context) (updateCodexObse
 // Both a Node-owned stdio connection and a shared app-server use this same
 // read-only RPC. A nil cache or omitted data is never an empty terminal list.
 func observeUpdateBackground(ctx context.Context, wire *codexConn, thread string) (int, string, error) {
-	var response struct {
-		Data *[]json.RawMessage `json:"data"`
-	}
-	if err := wire.call(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": thread}, &response); err != nil {
-		return 0, "", fmt.Errorf("fresh background terminal inventory unavailable: %w", err)
-	}
-	if response.Data == nil {
-		return 0, "", fmt.Errorf("explicit background terminal inventory unavailable")
-	}
-	for _, raw := range *response.Data {
-		var item map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &item); err != nil || item == nil {
-			return 0, "", fmt.Errorf("invalid background terminal inventory item")
+	items := []json.RawMessage{}
+	processes, cursors := map[string]bool{}, map[string]bool{}
+	cursor := ""
+	for page := 0; page < updateInventoryPageBudget; page++ {
+		var response struct {
+			Data       *[]json.RawMessage `json:"data"`
+			NextCursor *string            `json:"nextCursor"`
 		}
+		args := map[string]any{"threadId": thread, "limit": updateInventoryPageSize}
+		if cursor != "" {
+			args["cursor"] = cursor
+		}
+		if err := wire.call(ctx, "thread/backgroundTerminals/list", args, &response); err != nil {
+			return 0, "", fmt.Errorf("fresh background terminal inventory unavailable: %w", err)
+		}
+		if response.Data == nil {
+			return 0, "", fmt.Errorf("explicit background terminal inventory unavailable")
+		}
+		for _, raw := range *response.Data {
+			var item struct {
+				ProcessID string `json:"processId"`
+			}
+			if err := json.Unmarshal(raw, &item); err != nil || item.ProcessID == "" || processes[item.ProcessID] {
+				return 0, "", fmt.Errorf("invalid or duplicate background terminal identity")
+			}
+			processes[item.ProcessID] = true
+			items = append(items, raw)
+		}
+		if response.NextCursor == nil || *response.NextCursor == "" {
+			data, err := json.Marshal(items)
+			if err != nil {
+				return 0, "", err
+			}
+			digest := sha256.Sum256(data)
+			return len(items), hex.EncodeToString(digest[:]), nil
+		}
+		cursor = *response.NextCursor
+		if cursors[cursor] {
+			return 0, "", fmt.Errorf("background terminal page cursor repeated")
+		}
+		cursors[cursor] = true
 	}
-	data, err := json.Marshal(*response.Data)
-	if err != nil {
-		return 0, "", err
-	}
-	digest := sha256.Sum256(data)
-	return len(*response.Data), hex.EncodeToString(digest[:]), nil
+	return 0, "", fmt.Errorf("background terminal page budget exceeded")
 }
 
 // The update contract requires an explicit list on every page, including an
@@ -155,12 +182,12 @@ func (c *codexRemote) loadedForUpdate(ctx context.Context) ([]string, error) {
 	ids := []string{}
 	cursor := ""
 	seen := map[string]bool{}
-	for pageNumber := 0; pageNumber < 1000; pageNumber++ {
+	for pageNumber := 0; pageNumber < updateInventoryPageBudget; pageNumber++ {
 		var page struct {
 			Data       *[]string `json:"data"`
 			NextCursor *string   `json:"nextCursor"`
 		}
-		args := map[string]any{"limit": 100}
+		args := map[string]any{"limit": updateInventoryPageSize}
 		if cursor != "" {
 			args["cursor"] = cursor
 		}

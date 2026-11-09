@@ -121,6 +121,14 @@ type SnapshotPlan struct {
 	Tasks  int       // how many tasks it has
 }
 
+// SnapshotAsked is an ask_user question that became a to-do (#1617): what was asked, the to-do, when it was asked (in the
+// user's zone).
+type SnapshotAsked struct {
+	TodoID   string
+	Question string
+	At       time.Time
+}
+
 // SnapshotRoutine is a daily scheduled task (morning brief, evening brief…): its rule, and how its last run went (LastAt zero: it never
 // ran). LastStatus is the run's status (ok / failed / skipped), LastWhy why it failed or was skipped, in short.
 type SnapshotRoutine struct {
@@ -211,6 +219,9 @@ type Snapshot struct {
 	Tasks         []SnapshotTask    // tasks opened from assistant conversations (task_plan), newest first
 	Plans         []SnapshotPlan    // plan cards in the main conversation waiting for "Start", newest first (at most five)
 	PlansTotal    int
+	// Asked: the assistant's ask_user questions nobody answered in time, now to-dos waiting for the user's call (#1617),
+	// oldest first.
+	Asked []SnapshotAsked
 	// Unaccepted: deployed tasks the user has not passed yet (their "Please verify" ask, with a Lark card or without) (#2768), and
 	// supervised tasks' conclusions the user has not answered (#1226), oldest first; the morning briefing brings them up again.
 	Unaccepted      []SnapshotAccept
@@ -367,9 +378,32 @@ type TaskNotice struct {
 
 func RenderTaskNotice(n TaskNotice) string { return render("assistant/task_notice", n) }
 
+// AskTodoAnswer is the message to the conversation whose ask_user question became a to-do (#1617): the user's call on it
+// (Thread: said in the to-do's Lark topic), or that the to-do was closed without one (Dropped). The questions and choices
+// are escaped by the caller.
+type AskTodoAnswer struct {
+	When      string // when it was asked, MM-DD HH:MM in the user's zone
+	TodoID    string
+	Questions []string
+	Choices   []AskTodoChoice
+	Thread    bool
+	Dropped   bool
+	Several   bool // more than one question was asked
+}
+
+// AskTodoChoice is one call of the user's: the question as they wrote it ("" for a reply in the topic), the choice, why.
+type AskTodoChoice struct {
+	Question string
+	Choice   string
+	Reason   string
+}
+
+func RenderAskTodoAnswer(a AskTodoAnswer) string { return render("assistant/ask_answer", a) }
+
 // Supervise is a supervise message: the tasks the main conversation handed out that need it now (#3124), what waits on a
 // decision first.
 type Supervise struct {
+	Level   string
 	Entries []SuperviseEntry
 }
 
@@ -383,6 +417,7 @@ type SuperviseEntry struct {
 	Round           int      // reworks so far
 	Machine         string   // where its agent runs (a name)
 	Session         string   // its agent's session id (short)
+	AgentID         string   // full id for durable deduplication; not rendered
 	Last            string   // what its agent said last
 	Link            string   // the task's page ("" when the hub has no public_url)
 	Quiet           bool     // the user was not pushed about it
@@ -488,10 +523,20 @@ func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d)
 // docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got.
 func RenderTaskDelivery() string { return render("assistant/task_delivery", nil) }
 
+// SideConversation preserves the provenance of a non-owner's message to a tasked Agent.
+type SideConversation struct {
+	From, Text string
+}
+
+func RenderSideConversation(in SideConversation) string {
+	return render("assistant/side_conversation", in)
+}
+
 // TaskDoneInput is the task as it was handed out and what its agents said when they stopped (assistant/task_done_input).
 type TaskDoneInput struct {
 	Title, Prompt string
 	Replies       []TaskDoneReply
+	Criteria      []string `json:"criteria,omitempty"`
 	// Hints the hub found in the replies: a merged pull request, a TestFlight build number.
 	MergedPR, Build bool
 }
@@ -500,6 +545,8 @@ type TaskDoneInput struct {
 // own prompt (a follow-up the user sent the agent later).
 type TaskDoneReply struct {
 	Machine, Ask, Text string
+	From               string `json:"from,omitempty"`
+	Source             string `json:"source,omitempty"`
 }
 
 func RenderTaskDoneInput(in TaskDoneInput) string { return render("assistant/task_done_input", in) }

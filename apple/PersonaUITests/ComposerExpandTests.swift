@@ -242,11 +242,11 @@ final class ComposerExpandTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app = XCUIApplication()
         // Pair first on its own: a first pairing resets the route arguments (as ComposerKeyboardTests).
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-AppleLanguages", "(\(language))"]
+        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(\(language))"]
         app.launchPinned()
         XCTAssertTrue(app.buttons["Persona"].waitForExistence(timeout: 15) || field.waitForExistence(timeout: 15))
         app.terminate()
-        app.launchArguments = ["-pairURL", pair, "-ui.oldLayout", "NO", "-AppleLanguages", "(\(language))", "-holdChromeOpen", "YES", "-showSampleQuotes", quotes ? "YES" : "NO",
+        app.launchArguments = ["-pairURL", pair, "-AppleLanguages", "(\(language))", "-holdChromeOpen", "YES", "-showSampleQuotes", quotes ? "YES" : "NO",
                                "-dev.openChat", "", "-app.tab", isAssistant ? "assistant" : "chats",
                                "-tab", isAssistant ? "assistant" : "dev"]
         app.launchArguments += isAssistant ? ["-openAssistant", assistant] : ["-openSession", agent]

@@ -5,6 +5,7 @@ import { t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { dependencyText, previewBlocked } from "../../lib/extension-model";
+import { renameConsent } from "../../lib/extension-market";
 import { bytes } from "../../lib/format";
 import { Button, Collapse, cx, Dialog, toast, useNow } from "../../ui/atoms";
 import { Switch } from "../../views/settings/SettingsParts";
@@ -169,6 +170,7 @@ function ExtensionRow({
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <span className="truncate text-[13.5px] font-medium text-ink">{p.name}</span>
               {p.version && <span className="font-mono text-[11.5px] text-ink-3">{p.version}</span>}
+              {p.attached?.version && <Tag tone="red">{t("admin-logic.ext_program_version", { version: p.attached.version })}</Tag>}
               <Tag tone={p.source === "installed" ? "accent" : "gray"}>{extensionSourceLabel(p.source)}</Tag>
             </span>
             <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
@@ -465,6 +467,9 @@ export function PreviewBody({ pv }: { pv: ExtensionPreview }) {
           {m.description && <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-2">{m.description}</p>}
         </div>
       </div>
+      {pv.rename_from && <Notice tone="orange" icon="alert" title={t("lib-extension-market.rename_title")}>
+        <p className="break-words" data-rename-consent>{renameConsent(pv)}</p>
+      </Notice>}
       {pv.upgrade && pv.more_permissions && (
         <Notice tone="orange" icon="alert" title={t("admin-pages-extensions.more_permissions_title")}>
           {t("admin-pages-extensions.more_permissions_detail")}

@@ -1,7 +1,7 @@
 import XCTest
 
 /// Going into a chat from the Agents list and back, by Back and by the edge swipe, with the search field folded and
-/// pulled out, in the shell and in the old layout (both styles with `TEST_RUNNER_PERSONA_UI_STYLE=beautiful`): on every
+/// pulled out, in the shell (both styles with `TEST_RUNNER_PERSONA_UI_STYLE=beautiful`): on every
 /// frame of the way back the list is where it was left. The first row and the navigation bar do not move, the search
 /// field stays as it was, and the navigation container keeps its frame and safe area. The shell's room for its top bar
 /// was padding around the navigation container, taken away for the chat and given back on the way back: the list came
@@ -36,17 +36,15 @@ final class AgentsReturnTests: XCTestCase {
         continueAfterFailure = true
     }
 
-    @MainActor func testTheListStaysPutOnTheWayBackInTheShell() { walk(oldLayout: false) }
+    @MainActor func testTheListStaysPutOnTheWayBackInTheShell() { walk() }
 
-    @MainActor func testTheListStaysPutOnTheWayBackInTheOldLayout() { walk(oldLayout: true) }
-
-    @MainActor private func walk(oldLayout: Bool) {
+    @MainActor private func walk() {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-ui.oldLayout", oldLayout ? "YES" : "NO", "-app.tab", "chats", "-tab", "dev",
+        app.launchArguments = ["-demo.on", "YES", "-app.tab", "chats", "-tab", "dev",
                                "-dev.openChat", "", "-openAgentsFresh", "YES", "-probes", "YES"]
         app.launchPinned()
-        page = oldLayout ? nil : "agents"
-        let layout = oldLayout ? "old" : "shell"
+        page = "agents"
+        let layout = "shell"
         XCTAssertTrue(app.buttons.matching(identifier: "agents.row").firstMatch.waitForExistence(timeout: 15), "no agent in the list")
         sleep(2) // the search field folds itself away once
         var trips = 0
