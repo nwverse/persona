@@ -7,6 +7,8 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
 - The relay writes the outer `aps` itself, `"sound":"default"` included, so the "New message" fallback rings. The notification service extension starts from `request.content.mutableCopy()`, which keeps that sound: replacing the texts, category and interruption level from the sealed payload is not enough. `PushCrypto.apply` sets the sound from the sealed `aps` and clears it when there is none; a silent notification that rings through the relay but not with direct APNs points here.
 - `apple/Shared` compiles for watchOS 10 too, and some UserNotifications APIs don't exist there: `UNNotificationSound(named:)` builds for iOS and the Mac and fails only in the watch build (hosted "iOS and Watch" job). A Mac unit test of shared code does not catch it.
 
+- A nested settings page must keep its parent in programmatic paths too (#2522). Apple Connectors was an inline section, not a page: moving the sent ledger required a real Connectors destination and `[.connectors, .sent]` for legacy launches. A generic `connectors/<id>` parser otherwise mistakes `connectors/sent` for a connector; reserve the ledger aliases explicitly, keep unrelated URL/security rules unchanged, and test Back in compact and Mac split layouts.
+
 ## Idle-energy profiling and caller attribution (#1634)
 
 - Use an isolated mock hub and keep the build, simulator profile, data and visible-page history identical. Frame-count probes and frozen animations change the workload. A runtime-CLI root rebuild can pin `scenePhase`; use a cold launch and real tab actions instead. Home is asynchronous: verify the background transition before starting its window.

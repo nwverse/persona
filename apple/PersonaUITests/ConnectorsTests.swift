@@ -9,7 +9,7 @@ final class ConnectorsTests: XCTestCase {
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-dev.openChat", ""]
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openConnectors", "YES", "-dev.openChat", ""]
         app.launchPinned()
         func row(_ label: String) -> XCUIElement {
             let r = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
