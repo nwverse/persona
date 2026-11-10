@@ -6,6 +6,9 @@ A task-progress reply card has its own feed id; its Inbox reference can be share
 Don't handle on the card, not by marking the Inbox item done or hiding every card with that reference. Send and
 Dismiss need one synchronous admission guard, and only a successful send may show a sent receipt. Undo sends the
 dismissal receipt back to the same manager and applies the full returned body so omitted dismissal fields really clear.
+A feed read started before the write must not roll it back, and a late write response must not erase newer sent/filed
+pushes. Capture a live card's manager on arrival and name even the default explicitly: API auto-routing otherwise
+substitutes a later assistant selection on card-id-only routes.
 Check a reload and a new same-reference draft in the actual tray, not only the historical card renderer.
 
 ## Same-state list updates can change background progress (#3588)

@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => vi.fn());
 const toast = vi.hoisted(() => vi.fn());
+const events = vi.hoisted(() => ({} as Record<string, ((event: Record<string, unknown>) => void)[]>));
+vi.mock("../../lib/store", async (orig) => ({ ...(await orig<typeof import("../../lib/store")>()), onHubEvent: (type: string, fn: (event: Record<string, unknown>) => void) => {
+  (events[type] ??= []).push(fn);
+  return () => { events[type] = events[type].filter((cb) => cb !== fn); };
+} }));
 vi.mock("../../lib/api", async (orig) => ({ ...(await orig<typeof import("../../lib/api")>()), api }));
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast }));
 import { ApiError } from "../../lib/api";
@@ -17,8 +22,10 @@ import { FeedLineView } from "./Tasks";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
 let host: HTMLDivElement;
-const draft: FeedItem = { id: "demo-draft", conversation: "demo-main", at: "2026-11-10T08:00:00Z", kind: "message", ref: "demo-inbox", body: { draft: "The synthetic checks are ready.", text: "Are the checks ready?" } };
-const dismissed: FeedItem = { ...draft, body: { ...draft.body, dismissed_at: "2026-11-10T08:01:00Z", dismissal_id: "demo-receipt" } };
+const BASE_DRAFT: FeedItem = { id: "demo-draft", conversation: "demo-main", at: "2026-11-10T08:00:00Z", kind: "message", ref: "demo-inbox", body: { draft: "The synthetic checks are ready.", text: "Are the checks ready?" } };
+let draft: FeedItem;
+let dismissed: FeedItem;
+const push = (item: FeedItem, manager = "assistant") => events.assistant_feed.forEach((fn) => fn({ item, manager }));
 const needs = () => assistantEntries({ conversation: draft.conversation, todos: [], sessions: [], interactions: [], plans: {}, feed: getFeedState().feeds[draft.conversation] ?? [], deferred: getFeedState().later }).needsYou;
 const button = (name: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === name)!;
 function Pending() {
@@ -27,6 +34,8 @@ function Pending() {
 }
 
 beforeEach(() => {
+  draft = { ...BASE_DRAFT, body: { ...BASE_DRAFT.body } };
+  dismissed = { ...draft, body: { ...draft.body, dismissed_at: "2026-11-10T08:01:00Z", dismissal_id: "demo-receipt" } };
   api.mockReset();
   toast.mockReset();
   reset();
@@ -41,6 +50,7 @@ afterEach(() => {
   host.remove();
   resetManagerChoice();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("dismiss a task-progress reply draft", () => {
@@ -51,14 +61,14 @@ describe("dismiss a task-progress reply draft", () => {
     expect(button("稍后").className).not.toContain("bg-accent");
     expect(button("不处理").className).not.toContain("bg-accent");
     await act(async () => button("不处理").click());
-    expect(api.mock.calls).toEqual([["/assistant/feed/demo-draft/dismiss", { method: "POST", json: { draft: draft.body!.draft }, headers: undefined }]]);
+    expect(api.mock.calls).toEqual([["/assistant/feed/demo-draft/dismiss", { method: "POST", json: { draft: draft.body!.draft }, headers: { "X-Persona-Manager": "assistant" } }]]);
     expect(needs()).toHaveLength(0);
     expect(host.querySelector("textarea")).toBeNull();
     expect(toast).toHaveBeenCalledWith("已选择不处理，草稿没有发送", "ok", expect.objectContaining({ label: "撤销" }));
     const undo = toast.mock.calls[0][2];
     api.mockResolvedValueOnce({ item: draft });
     await act(async () => undo.run());
-    expect(api.mock.calls[1]).toEqual(["/assistant/feed/demo-draft/undo-dismiss", { method: "POST", json: { dismissal_id: "demo-receipt" }, headers: undefined }]);
+    expect(api.mock.calls[1]).toEqual(["/assistant/feed/demo-draft/undo-dismiss", { method: "POST", json: { dismissal_id: "demo-receipt" }, headers: { "X-Persona-Manager": "assistant" } }]);
     expect(host.querySelector("textarea")).not.toBeNull();
     expect(needs()).toHaveLength(1);
     expect(cardDismissed(getFeedState().feeds[draft.conversation][0])).toBeUndefined();
@@ -138,6 +148,68 @@ describe("dismiss a task-progress reply draft", () => {
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector("button")).toBeNull();
     expect(messageWaits(dismissed)).toBe(false);
+  });
+
+  it.each([false, true])("a delayed feed read cannot roll back an accepted decision (Undo=%s)", async (undo) => {
+    let finish!: (value: unknown) => void;
+    const initial = undo ? dismissed : draft;
+    Object.assign(getFeedState(), { feeds: { [draft.conversation]: [initial] } });
+    api.mockImplementation((path: string) => path.includes("/feed?") ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(undo ? { item: draft } : { item: dismissed, dismissal_id: "demo-receipt" }));
+    const reading = loadFeed(draft.conversation);
+    await Promise.resolve();
+    if (undo) await undoDismissMessage(initial, "demo-receipt");
+    else await dismissMessage(initial);
+    finish({ items: [initial] });
+    await reading;
+    expect(needs()).toHaveLength(undo ? 1 : 0);
+    expect(Boolean(cardDismissed(getFeedState().feeds[draft.conversation][0]))).toBe(!undo);
+  });
+
+  it("a late Undo response cannot erase a newer sent receipt", async () => {
+    Object.assign(getFeedState(), { feeds: { [draft.conversation]: [dismissed] } });
+    let finish!: (value: unknown) => void;
+    api.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const restoring = undoDismissMessage(dismissed, "demo-receipt");
+    const sent = { ...draft, body: { ...draft.body, sent_at: "2026-11-10T08:03:00Z", sent: "Sent from another client" } };
+    push(sent);
+    finish({ item: draft });
+    expect(await restoring).toBe(false);
+    expect(getFeedState().feeds[draft.conversation][0]).toEqual(sent);
+    expect(needs()).toHaveLength(0);
+  });
+
+  it("a late Dismiss response cannot erase a newer filed receipt", async () => {
+    let finish!: (value: unknown) => void;
+    api.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const hiding = dismissMessage(draft);
+    const filed = { ...draft, body: { ...draft.body, filed_at: "2026-11-10T08:03:00Z" } };
+    push(filed);
+    finish({ item: dismissed, dismissal_id: "demo-receipt" });
+    await hiding;
+    expect(getFeedState().feeds[draft.conversation][0]).toEqual(filed);
+    expect(needs()).toHaveLength(0);
+  });
+
+  it("names the default owner explicitly through the real REST transport after a manager switch", async () => {
+    noteConversation(draft.conversation, "assistant");
+    chooseManager("demo-other");
+    api.mockImplementation(async (path: string) => path.endsWith("/dismiss") ? { item: dismissed, dismissal_id: "demo-receipt" } : {});
+    await dismissMessage(draft);
+    const [path, opts] = api.mock.calls.find(([path]) => path.endsWith("/dismiss"))!;
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, headers: new Headers(), text: async () => JSON.stringify({ item: dismissed, dismissal_id: "demo-receipt" }) }));
+    vi.stubGlobal("fetch", fetcher);
+    const real = await vi.importActual<typeof import("../../lib/api")>("../../lib/api");
+    await real.api(path, opts);
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get("X-Persona-Manager")).toBe("assistant");
+  });
+
+  it("captures a WebSocket-only card's manager before selection changes", async () => {
+    push(draft, "demo-realtime-owner");
+    chooseManager("demo-other");
+    api.mockImplementation(async (path: string) => path.endsWith("/undo-dismiss") ? { item: draft } : path.endsWith("/dismiss") ? { item: dismissed, dismissal_id: "demo-receipt" } : {});
+    await dismissMessage(draft);
+    await undoDismissMessage(draft, "demo-receipt");
+    expect(api.mock.calls.filter(([path]) => path.startsWith("/assistant/feed/")).map(([, opts]) => opts.headers)).toEqual([{ "X-Persona-Manager": "demo-realtime-owner" }, { "X-Persona-Manager": "demo-realtime-owner" }]);
   });
 
   it("keeps a newer pending card when Undo is refused; no optimistic resurrection", async () => {
