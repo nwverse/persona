@@ -265,8 +265,11 @@ Durations are capped at 10 seconds.
 
 ### `terminate_app`
 
-`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true }`, `false` when it was not running. Through the instruments service
-(its process list and kill), which needs the developer disk image; only an app process is ever killed.
+`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true, "pid": 412 }`, or `{ "terminated": false }` when it was not running.
+Through the instruments service, which needs the developer disk image: its process list finds the app's main executable (never an
+extension inside the bundle, never a process that isn't an app), then `killPid:`, and if the process is still listed after about
+1.5 seconds, `sendSignal:toPid:` with SIGKILL. `true` only once the phone no longer lists the process; if it survives both,
+`unsupported` ("the phone accepted the request but process … is still running").
 
 ### `list_apps`
 
@@ -401,9 +404,10 @@ phone has run against one only where the table says so:
 | RemotePairing verify, tunnel, userspace TCP, service directory | checked on a real iPhone (iPhone13,4, iOS 18.7.3) over its USB network interface |
 | Default port 49152; reaching the phone over Tailscale | not verified on a real device |
 | `device_info` fields (lockdown keys for screen size, Developer Mode, battery) | checked on that iPhone: build, battery, 428 × 926 points, scale 3, Developer Mode |
-| `screenshot` | PNG checked on that iPhone (about 1 s); JPEG was refused by the phone, so it now always asks for PNG and converts: not yet rechecked. Landscape rotation not verified |
+| `screenshot` | checked on that iPhone: PNG about 1 s; JPEG (the phone refuses it, so the bridge converts) about 4 s in `call`. Landscape rotation not verified |
 | `launch_app` | checked on that iPhone |
-| `list_apps`, `terminate_app` | CoreDevice's lists never answered on that iPhone (iOS 18.7.3); moved to the installation and instruments services: not yet rechecked |
+| `list_apps` | checked on that iPhone through the installation service: 121 user apps, 329 in all, under a second (CoreDevice's list never answered there) |
+| `terminate_app` | on that iPhone `killPid:` with the pid as a plain integer was accepted but ended nothing, and the bridge reported success. Now the pid goes as an archived number, `sendSignal:toPid:` follows, and success needs the process gone from the list: not yet rechecked |
 | Input gate (display stream), touch coordinates and rotation, keys, buttons | **not available below iOS 27**: on that iPhone (iOS 18.7.3) the phone refused the display stream with CoreDevice error 9021; now `unsupported` up front. Not verified on iOS 27 |
 | `usb-list` | checked on a real iPhone (iPhone13,4, iOS 18.7.3, trusting the computer): it lists the phone with its name |
 | `pair` over USB (consent prompt, `altIRK`) | not verified on a real device yet. First try on that iPhone: it already trusted the computer and answered the pairing request with pairing data straight away instead of asking its user, so the library asked the bridge for the PIN, got an empty one and panicked (exit code 101). The bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error |

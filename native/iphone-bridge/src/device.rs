@@ -15,7 +15,7 @@ use idevice::core_device::{
     build_start_video_parameters,
 };
 use idevice::dvt::device_info::DeviceInfoClient;
-use idevice::dvt::process_control::ProcessControlClient;
+use idevice::dvt::message::AuxValue;
 use idevice::dvt::remote_server::RemoteServerClient;
 use idevice::installation_proxy::InstallationProxyClient;
 use idevice::lockdown::LockdownClient;
@@ -796,37 +796,145 @@ impl Device {
             return Err(self.missing_service("terminate app").await);
         }
         let work = async {
-            let fail = |e| from_idevice(e, Phase::Operation, "terminate app");
-            let mut server = RemoteServerClient::connect_rsd(&mut self.adapter, &mut self.rsd)
+            let server = RemoteServerClient::connect_rsd(&mut self.adapter, &mut self.rsd)
                 .await
-                .map_err(fail)?;
-            let processes = DeviceInfoClient::new(&mut server)
-                .await
-                .map_err(fail)?
-                .running_processes()
-                .await
-                .map_err(fail)?;
-            let pid = processes
-                .iter()
-                .filter(|p| p.is_application)
-                .find(|p| match (&target, &bundle_path) {
-                    (AppTarget::Pid(pid), _) => p.pid == *pid,
-                    (_, Some(path)) => !path.is_empty() && runs_from(&p.real_app_name, path),
-                    _ => false,
-                })
-                .map(|p| p.pid);
-            let Some(pid) = pid else {
-                return Ok(json!({"terminated": false}));
-            };
-            ProcessControlClient::new(&mut server)
-                .await
-                .map_err(fail)?
-                .kill_app(u64::from(pid))
-                .await
-                .map_err(fail)?;
-            Ok(json!({"terminated": true}))
+                .map_err(|e| from_idevice(e, Phase::Operation, "terminate app"))?;
+            let mut procs = Instruments { server };
+            terminate(&mut procs, &target, bundle_path.as_deref()).await
         };
         answer_within(work, "terminate app").await?
+    }
+}
+
+/// A running process as the instruments service lists it.
+#[derive(Debug, Clone, PartialEq)]
+struct Process {
+    pid: u32,
+    executable: String,
+    is_app: bool,
+}
+
+/// Two ways the instruments service is asked to end a process.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Kill {
+    /// `killPid:` with the pid as an archived number.
+    KillPid,
+    /// `sendSignal:toPid:` with SIGKILL.
+    Signal,
+}
+
+/// The phone's processes, for `terminate`; the instruments service on a phone, a stand-in in tests.
+#[allow(async_fn_in_trait)]
+trait Processes {
+    async fn list(&mut self) -> Result<Vec<Process>, BridgeError>;
+    async fn kill(&mut self, pid: u32, how: Kill) -> Result<(), BridgeError>;
+    async fn pause(&mut self, d: Duration);
+}
+
+/// How long a killed process gets to disappear from the list before the next try.
+const KILL_SETTLE: Duration = Duration::from_millis(400);
+const KILL_CHECKS: u32 = 4;
+
+/// Ends the app process `target` names (by pid, or the main executable of the bundle at `bundle_path`), and
+/// says it ended only once the phone no longer lists it.
+async fn terminate<P: Processes>(
+    p: &mut P,
+    target: &AppTarget,
+    bundle_path: Option<&str>,
+) -> Result<Value, BridgeError> {
+    let find = |list: &[Process]| {
+        list.iter()
+            .filter(|p| p.is_app)
+            .find(|p| match (target, bundle_path) {
+                (AppTarget::Pid(pid), _) => p.pid == *pid,
+                (_, Some(path)) => main_executable_of(&p.executable, path),
+                _ => false,
+            })
+            .map(|p| p.pid)
+    };
+    let Some(pid) = find(&p.list().await?) else {
+        return Ok(json!({"terminated": false}));
+    };
+    for how in [Kill::KillPid, Kill::Signal] {
+        p.kill(pid, how).await?;
+        for _ in 0..KILL_CHECKS {
+            p.pause(KILL_SETTLE).await;
+            if !p.list().await?.iter().any(|x| x.pid == pid) {
+                return Ok(json!({"terminated": true, "pid": pid}));
+            }
+        }
+    }
+    Err(BridgeError::new(
+        Code::Unsupported,
+        format!(
+            "terminate app: the phone accepted the request but process {pid} is still running; ending apps doesn't work on this phone"
+        ),
+    ))
+}
+
+/// Whether `executable` is the bundle's own executable, directly inside it (not an extension nested deeper).
+fn main_executable_of(executable: &str, bundle_path: &str) -> bool {
+    if bundle_path.is_empty() || !runs_from(executable, bundle_path) {
+        return false;
+    }
+    let exe = executable.strip_prefix("file://").unwrap_or(executable);
+    let exe = percent_decode(exe);
+    let parent = exe.trim_end_matches('/').rsplit_once('/').map_or("", |(dir, _)| dir);
+    let canon = |p: &str| {
+        let p = p.trim_end_matches('/');
+        p.strip_prefix("/private").unwrap_or(p).to_owned()
+    };
+    canon(parent) == canon(bundle_path)
+}
+
+struct Instruments {
+    server: RemoteServerClient<Box<dyn ReadWrite>>,
+}
+
+impl Processes for Instruments {
+    async fn list(&mut self) -> Result<Vec<Process>, BridgeError> {
+        let fail = |e| from_idevice(e, Phase::Operation, "list processes");
+        let list = DeviceInfoClient::new(&mut self.server)
+            .await
+            .map_err(fail)?
+            .running_processes()
+            .await
+            .map_err(fail)?;
+        Ok(list
+            .into_iter()
+            .map(|p| Process {
+                pid: p.pid,
+                executable: p.real_app_name,
+                is_app: p.is_application,
+            })
+            .collect())
+    }
+
+    async fn kill(&mut self, pid: u32, how: Kill) -> Result<(), BridgeError> {
+        let fail = |e| from_idevice(e, Phase::Operation, "terminate app");
+        let mut channel = self
+            .server
+            .make_channel("com.apple.instruments.server.services.processcontrol")
+            .await
+            .map_err(fail)?;
+        let (selector, args) = match how {
+            Kill::KillPid => ("killPid:", vec![AuxValue::archived_value(i64::from(pid))]),
+            Kill::Signal => (
+                "sendSignal:toPid:",
+                vec![AuxValue::archived_value(9i64), AuxValue::archived_value(i64::from(pid))],
+            ),
+        };
+        channel
+            .call_method(Some(plist::Value::String(selector.into())), Some(args), true)
+            .await
+            .map_err(fail)?;
+        // The answer, if the phone sends one, says nothing reliable; the process list does.
+        let _ = tokio::time::timeout(Duration::from_secs(2), channel.read_message()).await;
+        Ok(())
+    }
+
+    async fn pause(&mut self, d: Duration) {
+        tokio::time::sleep(d).await;
     }
 }
 
@@ -1143,6 +1251,112 @@ mod tests {
             Code::Unreachable
         );
         assert_eq!(socket_addr("zz::1%1", 1).await.unwrap_err().code, Code::Unreachable);
+    }
+
+    /// A stand-in process list: `dies_on` says which kill (if any) actually ends the process.
+    struct Procs {
+        list: Vec<Process>,
+        dies_on: Option<Kill>,
+        kills: Vec<(u32, Kill)>,
+    }
+
+    impl Processes for Procs {
+        async fn list(&mut self) -> Result<Vec<Process>, BridgeError> {
+            Ok(self.list.clone())
+        }
+        async fn kill(&mut self, pid: u32, how: Kill) -> Result<(), BridgeError> {
+            self.kills.push((pid, how));
+            if self.dies_on == Some(how) {
+                self.list.retain(|p| p.pid != pid);
+            }
+            Ok(())
+        }
+        async fn pause(&mut self, _: Duration) {}
+    }
+
+    const SETTINGS: &str = "/Applications/Preferences.app";
+
+    fn procs(dies_on: Option<Kill>) -> Procs {
+        let p = |pid, exe: &str, is_app| Process {
+            pid,
+            executable: exe.into(),
+            is_app,
+        };
+        Procs {
+            list: vec![
+                p(10, "/Applications/Preferences.app/PlugIns/Widget.appex/Widget", true),
+                p(12411, "/Applications/Preferences.app/Preferences", true),
+                p(7, "/usr/libexec/somed", false),
+            ],
+            dies_on,
+            kills: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn terminate_says_true_only_when_the_process_is_gone() {
+        let by_bundle = AppTarget::BundleId("com.apple.Preferences".into());
+        let mut p = procs(Some(Kill::KillPid));
+        assert_eq!(
+            terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap(),
+            json!({"terminated": true, "pid": 12411})
+        );
+        assert_eq!(
+            p.kills,
+            [(12411, Kill::KillPid)],
+            "the main executable, not its extension"
+        );
+
+        let mut p = procs(Some(Kill::Signal));
+        assert_eq!(
+            terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap()["terminated"],
+            true
+        );
+        assert_eq!(p.kills, [(12411, Kill::KillPid), (12411, Kill::Signal)]);
+
+        let mut p = procs(None);
+        let err = terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap_err();
+        assert_eq!(err.code, Code::Unsupported);
+        assert!(err.message.contains("still running"));
+    }
+
+    #[tokio::test]
+    async fn terminate_leaves_what_isnt_running_or_isnt_an_app() {
+        let mut p = procs(Some(Kill::KillPid));
+        let gone = terminate(
+            &mut p,
+            &AppTarget::BundleId("com.example.x".into()),
+            Some("/var/containers/Bundle/Application/1/X.app"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(gone, json!({"terminated": false}));
+        assert_eq!(
+            terminate(&mut p, &AppTarget::Pid(7), None).await.unwrap(),
+            json!({"terminated": false})
+        );
+        assert_eq!(
+            terminate(&mut p, &AppTarget::Pid(999), None).await.unwrap(),
+            json!({"terminated": false})
+        );
+        assert!(p.kills.is_empty());
+        assert_eq!(
+            terminate(&mut p, &AppTarget::Pid(10), None).await.unwrap()["terminated"],
+            true
+        );
+    }
+
+    #[test]
+    fn finds_the_main_executable() {
+        assert!(main_executable_of(
+            "/private/var/containers/Bundle/Application/1/My App.app/My App",
+            "/var/containers/Bundle/Application/1/My App.app"
+        ));
+        assert!(!main_executable_of(
+            "/Applications/Preferences.app/PlugIns/W.appex/W",
+            SETTINGS
+        ));
+        assert!(!main_executable_of("/Applications/Preferences.app/Preferences", ""));
     }
 
     #[test]
