@@ -16,9 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/github"
-	larkcliconnector "github.com/nwverse/persona/server/internal/connector/larkcli"
 	"github.com/nwverse/persona/server/internal/i18n"
-	larkcliadapter "github.com/nwverse/persona/server/internal/larkcli"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -603,17 +601,10 @@ func (h *Manager) registerConnectors() {
 	// lark-cli is a separate source from the optional Lark gateway extension. It
 	// is deliberately absent when lark.cli is unset, preserving existing hubs.
 	if h.cfg.Lark.CLI != nil {
-		lcfg := larkcliadapter.Config{Bin: h.cfg.Lark.CLI.Bin, Profile: h.cfg.Lark.CLI.Profile,
-			InboxPoll: h.cfg.Lark.CLI.InboxPoll(), InboxPageLimit: h.cfg.Lark.CLI.InboxPageLimit}
-		lc := larkcliconnector.New(lcfg)
-		lc.SetStateStore(h.store)
-		lc.SetInboxSource(h.cfg.Lark.Prefer, func(ctx context.Context) bool {
-			gateway := h.connectors.Get(connector.Lark)
-			if gateway == nil {
-				return false
-			}
-			return connector.StatusOf(ctx, gateway).State == connector.StateOK
-		})
+		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+			h.logf("larkcli profile sync: %v", err)
+		}
+		lc := h.newLarkCLIConnector(h.effectiveLarkCLIProfile(context.Background()))
 		if err := h.addConnector(lc); err != nil {
 			h.logf("larkcli connector: %v", err)
 		}

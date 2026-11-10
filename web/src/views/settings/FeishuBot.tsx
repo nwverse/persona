@@ -5,7 +5,7 @@
 import { ChannelLink } from "./Channels";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { connectorSummary, connectorTone, listConnectors, type HubConnector } from "../../lib/connectors";
+import { connectorState, connectorSummary, signsInHere, connectorTone, listConnectors, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
 import { ago } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -17,10 +17,41 @@ import { Button, copyText, cx, Dialog, IconButton, Spinner, toast } from "../../
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { Group, Pill, Row, Switch } from "./SettingsParts";
+import { SignInSteps } from "./HubConnector";
 
 const controlClass = "h-8 rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
 const dotClass = { green: "bg-green", red: "bg-red", orange: "bg-orange" } as const;
 const connectorDotClass = { green: "bg-green", orange: "bg-orange", red: "bg-red", idle: "bg-line-strong" } as const;
+
+function shortAppID(id: string): string {
+  return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
+
+function botWorks(st: FeishuBotStatus | null): boolean {
+  return !!st?.enabled && st.has_secret && st.connected;
+}
+
+function readTone(c: HubConnector): ConnectorTone {
+  // Missing authorization is actionable and should read as a warning in the combined row; a connector error remains red.
+  if (c.status === "no_permission" || c.status === "not_signed_in" || c.status === "rate_limited") return "orange";
+  return connectorTone(c);
+}
+
+function missingScopes(c: HubConnector): string[] {
+  return c.missing_scopes ?? [];
+}
+
+/** The open-platform page for the missing permissions: the hub's guide_url, or a permission_url. */
+function permissionLink(c: HubConnector): string {
+  return c.guide_url || c.permission_url || "";
+}
+
+function combinedLarkState(bot: FeishuBotStatus | null, loading: boolean, c: HubConnector): { label: string; tone?: ConnectorTone } {
+  if (!bot) return { label: loading ? t("lib-feishu-bot.state_checking") : t("lib-feishu-bot.state_unreadable") };
+  if (!bot.has_secret && c.status === "not_configured") return { label: t("settings-feishubot.read_not_connected") };
+  if (botWorks(bot) && c.status !== "ok") return { label: t("settings-feishubot.read_status_prefix", { status: connectorState(c) }), tone: readTone(c) };
+  return { label: botSummary(bot), tone: botTone(bot) };
+}
 
 const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail: string }[] = [
   { key: "main", icon: "spark", title: t("settings-feishubot.feature_main_title"), detail: t("settings-feishubot.feature_main_detail") },
@@ -65,43 +96,47 @@ export function FeishuBot({ onChannel, larkcli, onOpen }: { onChannel?: (id: str
   const tone = botTone(bot.status);
   return (
     <>
-      <Group title={t("settings-feishubot.title")} footer={larkcli ? <>{t("settings-feishubot.footer")} {t("settings-feishubot.larkcli_footer")}</> : t("settings-feishubot.footer")}>
-        <button type="button" onClick={() => setOpen(true)} className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left transition-colors hover:bg-hover">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent-ink">
-            <Icon name="send" size={16} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13.5px] font-medium text-ink">{bot.status?.bot_name || t("settings-feishubot.title")}</span>
-            <span className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-ink-3">
-              <span className={cx("size-1.5 shrink-0 rounded-full", tone ? dotClass[tone] : "bg-line-strong")} />
-              <span className="truncate">{bot.error ? t("settings-feishubot.status_unreadable") : botStateText(bot.status, bot.loading)}</span>
+      {larkcli ? (
+        <Group title={t("settings-feishubot.title")} footer={t("settings-feishubot.combined_footer")}>
+          <CombinedLarkRow bot={bot} connector={larkcli} onOpen={() => setOpen(true)} />
+        </Group>
+      ) : (
+        <Group title={t("settings-feishubot.title")} footer={t("settings-feishubot.footer")}>
+          <button type="button" onClick={() => setOpen(true)} className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left transition-colors hover:bg-hover">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent-ink">
+              <Icon name="send" size={16} />
             </span>
-          </span>
-          {bot.status && <Pill tone={tone}>{botSummary(bot.status)}</Pill>}
-          <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
-        </button>
-        {larkcli && <LarkCliRow connector={larkcli} onOpen={onOpen} />}
-      </Group>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13.5px] font-medium text-ink">{bot.status?.bot_name || t("settings-feishubot.title")}</span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-ink-3">
+                <span className={cx("size-1.5 shrink-0 rounded-full", tone ? dotClass[tone] : "bg-line-strong")} />
+                <span className="truncate">{bot.error ? t("settings-feishubot.status_unreadable") : botStateText(bot.status, bot.loading)}</span>
+              </span>
+            </span>
+            {bot.status && <Pill tone={tone}>{botSummary(bot.status)}</Pill>}
+            <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+          </button>
+        </Group>
+      )}
       {onChannel && <ChannelLink id="feishu" onOpen={onChannel} />}
       {open && <FeishuBotDialog bot={bot} larkcli={larkcli} onClose={() => setOpen(false)} onOpen={onOpen} />}
     </>
   );
 }
 
-function LarkCliRow({ connector, onOpen }: { connector: HubConnector; onOpen?: (id: string) => void }) {
-  const tone = connectorTone(connector);
+function CombinedLarkRow({ bot, connector, onOpen }: { bot: ReturnType<typeof useBot>; connector: HubConnector; onOpen: () => void }) {
+  const state = combinedLarkState(bot.status, bot.loading, connector);
+  const appID = bot.status?.app_id ? shortAppID(bot.status.app_id) : "";
   return (
-    <button type="button" onClick={() => onOpen?.("larkcli")} className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-2.5 text-left transition-colors hover:bg-hover">
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-surface shadow-hairline">
-        <BrandMark brand="lark" size={32} fit="tile" />
+    <button type="button" onClick={onOpen} className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left transition-colors hover:bg-hover">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-surface shadow-hairline">
+        <BrandMark brand="lark" size={36} fit="tile" />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] text-ink">{t("settings-feishubot.larkcli_row")}</span>
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-2">
-          <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", connectorDotClass[tone])} />
-          <span className="truncate">{connectorSummary(connector)}</span>
-        </span>
+      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-ink">
+        {bot.status?.bot_name || t("settings-feishubot.lark_name")}
+        {appID && <span className="font-normal text-ink-3"> · {appID}</span>}
       </span>
+      <Pill tone={state.tone === "idle" ? undefined : state.tone}>{state.label}</Pill>
       <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
     </button>
   );
@@ -129,6 +164,13 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
     setForm(next);
   };
 
+  const fetchLarkcli = useCallback(async () => {
+    const all = await listConnectors();
+    const found = all.find((connector) => connector.id === "larkcli");
+    // A re-read that no longer lists it keeps what the page showed; only a first read may conclude "none".
+    setDialogLarkcli((prev) => found ?? (prev === undefined ? null : prev));
+  }, []);
+
   useEffect(() => {
     if (larkcli !== undefined) {
       setDialogLarkcli(larkcli);
@@ -136,17 +178,15 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
     }
     setDialogLarkcli(undefined);
     let active = true;
-    void listConnectors()
-      .then((all) => {
-        if (active) setDialogLarkcli(all.find((connector) => connector.id === "larkcli") ?? null);
-      })
+    void fetchLarkcli()
+      .then(() => {})
       .catch(() => {
         if (active) setDialogLarkcli(null);
       });
     return () => {
       active = false;
     };
-  }, [larkcli]);
+  }, [fetchLarkcli, larkcli]);
 
   // A newer status: fill the form unless something is being typed (replace: the answer to saving the credentials).
   const adopt = (s: FeishuBotStatus, replace = false) => {
@@ -206,29 +246,16 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   const agents = status?.agents ?? [];
 
   return (
-    <Dialog open onClose={onClose} title={t("settings-feishubot.title")} width={560}>
-      <Group footer={t("settings-feishubot.footer")}>
-        <div className="flex items-center gap-3 px-4 py-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent-ink">
-            <Icon name="send" size={16} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[13.5px] font-medium text-ink">{status?.bot_name || t("settings-feishubot.title")}</div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-ink-3">
-              <span className={cx("size-1.5 shrink-0 rounded-full", tone ? dotClass[tone] : "bg-line-strong")} />
-              <span className="truncate" title={botStateText(status, loading)}>{botStateText(status, loading)}</span>
-            </div>
-          </div>
-          {loading || saving ? <Spinner /> : <IconButton icon="retry" label={t("settings-feishubot.recheck")} onClick={() => void load()} />}
-        </div>
-        <Row label={t("settings-feishubot.enable")}>
-          <Switch on={status?.enabled ?? false} disabled={!status || saving} label={t("settings-feishubot.enable")} onChange={(on) => void run(on ? t("settings-feishubot.enable_failed") : t("settings-feishubot.disable_failed"), () => updateBot({ enabled: on }))} />
-        </Row>
-        {!!status?.last_event_at && <Row label={t("settings-feishubot.last_event")}>{ago(new Date(status.last_event_at * 1000).toISOString())}</Row>}
-        {error && <p role="alert" className="px-4 py-2.5 text-[12px] break-words text-red">{error}</p>}
-      </Group>
-
-      <Group title={t("settings-feishubot.credentials")} footer={status?.from_config ? t("settings-feishubot.credentials_from_config") : t("settings-feishubot.credentials_secret_note")}>
+    <Dialog open onClose={onClose} title={dialogLarkcli ? t("settings-feishubot.lark_name") : t("settings-feishubot.title")} width={560}>
+      <Group
+        title={dialogLarkcli ? t("settings-feishubot.credentials") : undefined}
+        footer={
+          <>
+            {status?.from_config ? t("settings-feishubot.credentials_from_config") : t("settings-feishubot.credentials_secret_note")}
+            {dialogLarkcli && <><br />{t("settings-feishubot.credentials_shared_note")}</>}
+          </>
+        }
+      >
         <Row label="App ID">
           <input value={form.appID} onChange={(e) => edit({ ...form, appID: e.target.value })} placeholder={t("settings-feishubot.required")} aria-label="App ID" autoComplete="off" spellCheck={false} className={cx(controlClass, "w-[240px] font-mono")} />
         </Row>
@@ -257,11 +284,26 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
         </div>
       </Group>
 
-      {dialogLarkcli && (
-        <Group title={t("settings-feishubot.larkcli_row")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
-          <LarkCliRow connector={dialogLarkcli} onOpen={(id) => { onClose(); onOpen?.(id); }} />
-        </Group>
-      )}
+      <Group title={dialogLarkcli ? t("settings-feishubot.bot_section") : undefined} footer={t("settings-feishubot.footer")}>
+        <div className="flex items-center gap-3 px-4 py-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent-ink">
+            <Icon name="send" size={16} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13.5px] font-medium text-ink">{status?.bot_name || t("settings-feishubot.title")}</div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-ink-3">
+              <span className={cx("size-1.5 shrink-0 rounded-full", tone ? dotClass[tone] : "bg-line-strong")} />
+              <span className="truncate" title={botStateText(status, loading)}>{botStateText(status, loading)}</span>
+            </div>
+          </div>
+          {loading || saving ? <Spinner /> : <IconButton icon="retry" label={t("settings-feishubot.recheck")} onClick={() => void load()} />}
+        </div>
+        <Row label={t("settings-feishubot.enable")}>
+          <Switch on={status?.enabled ?? false} disabled={!status || saving} label={t("settings-feishubot.enable")} onChange={(on) => void run(on ? t("settings-feishubot.enable_failed") : t("settings-feishubot.disable_failed"), () => updateBot({ enabled: on }))} />
+        </Row>
+        {!!status?.last_event_at && <Row label={t("settings-feishubot.last_event")}>{ago(new Date(status.last_event_at * 1000).toISOString())}</Row>}
+        {error && <p role="alert" className="px-4 py-2.5 text-[12px] break-words text-red">{error}</p>}
+      </Group>
 
       {status?.has_secret && (
         <>
@@ -375,6 +417,67 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
         ))}
       </Group>
 
+      {dialogLarkcli && (
+        <LarkReadSection
+          connector={dialogLarkcli}
+          reload={fetchLarkcli}
+          onOpen={() => {
+            onClose();
+            onOpen?.("larkcli");
+          }}
+        />
+      )}
+
     </Dialog>
+  );
+}
+
+function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnector; reload: () => Promise<void>; onOpen: () => void }) {
+  const [rechecking, setRechecking] = useState(false);
+  const scopes = missingScopes(connector);
+  const link = permissionLink(connector);
+  const lacksPermission = connector.status === "no_permission" || scopes.length > 0;
+  const tone = readTone(connector);
+  const check = async () => {
+    setRechecking(true);
+    try {
+      await reload();
+    } finally {
+      setRechecking(false);
+    }
+  };
+  return (
+    <Group title={t("settings-feishubot.read_section")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-surface shadow-hairline">
+          <BrandMark brand="lark" size={36} fit="tile" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13.5px] font-medium text-ink">{connector.account || t("settings-feishubot.read_account_unknown")}</div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
+            <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", connectorDotClass[tone])} />
+            <span className="truncate">{connectorState(connector)}{connector.status === "ok" && connector.account ? ` · ${connectorSummary(connector)}` : ""}</span>
+          </div>
+        </div>
+      </div>
+      {lacksPermission && (
+        <div className="flex flex-col gap-2 border-t border-line px-4 py-2.5">
+          <div className="text-[12.5px] font-medium text-orange">{t("settings-feishubot.read_missing_title")}</div>
+          {scopes.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {scopes.map((scope) => <span key={scope} className="rounded-control bg-orange-tint px-1.5 py-0.5 font-mono text-[11.5px] text-orange">{scope}</span>)}
+            </div>
+          ) : connector.error ? (
+            <p className="text-[12.5px] break-words text-ink-2 select-text">{connector.error}</p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            {link && <Button tone="secondary" onClick={() => window.open(link, "_blank", "noopener,noreferrer")}>{t("settings-feishubot.read_open_platform")}</Button>}
+            <Button tone="quiet" icon="retry" busy={rechecking} onClick={() => void check()}>{t("settings-feishubot.recheck")}</Button>
+          </div>
+        </div>
+      )}
+      {signsInHere(connector) && <SignInSteps c={connector} reload={reload} startLabel={t("settings-feishubot.read_authorize")} bare />}
+      <Row label={t("settings-feishubot.read_more")} hint={t("settings-feishubot.read_more_hint")} onClick={onOpen} />
+    </Group>
   );
 }

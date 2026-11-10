@@ -53,6 +53,85 @@ func TestManifestAndTools(t *testing.T) {
 	}
 }
 
+func TestLoginDeviceFlow(t *testing.T) {
+	c := testConnector(t, "success")
+	p, err := c.LoginStep(context.Background(), "", nil)
+	if err != nil || p.Kind != connector.PromptDeviceCode || p.Step != "device" || p.UserCode != "ABCD-1234" ||
+		!strings.Contains(p.URL, "accounts.feishu.cn") {
+		t.Fatalf("start prompt = %+v, err = %v", p, err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		p, err = c.LoginStep(context.Background(), "device", nil)
+		if err != nil {
+			t.Fatalf("done poll error = %v", err)
+		}
+		if p.Done {
+			if p.Account != "Example User" {
+				t.Fatalf("done account = %+v", p)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("done prompt = %+v", p)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestLoginPendingFailureAndRestartCancel(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "release")
+	t.Setenv("LARKCLI_FAKE_LOGIN_RELEASE", release)
+	c := testConnector(t, "login_wait")
+	first, err := c.LoginStep(context.Background(), "", nil)
+	if err != nil || first.UserCode != "ABCD-1234" {
+		t.Fatalf("first login = %+v, err = %v", first, err)
+	}
+	second, err := c.LoginStep(context.Background(), "", nil)
+	if err != nil || second.UserCode != "ABCD-1234" {
+		t.Fatalf("restart login = %+v, err = %v", second, err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		p, err := c.LoginStep(context.Background(), "device", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("restarted login did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	c = testConnector(t, "login_failure")
+	if _, err := c.LoginStep(context.Background(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		p, err := c.LoginStep(context.Background(), "device", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Error != "" || p.Done {
+			if p.Error == "" || p.Done {
+				t.Fatalf("failure prompt = %+v", p)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failure prompt = %+v", p)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestStatusSuccessAndExpiryReminder(t *testing.T) {
 	c := testConnector(t, "rolling")
 	st := c.Status(context.Background())
@@ -151,7 +230,9 @@ func TestStatusCategories(t *testing.T) {
 	c = testConnector(t, "auth_missing_scope")
 	st := c.Status(context.Background())
 	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
-		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --domain all") {
+		len(st.MissingScopes) == 0 || st.MissingScopes[0] != "search:message" ||
+		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --domain all") ||
+		st.GuideURL != "https://open.larksuite.com/app/cli_example/auth" {
 		t.Fatalf("missing scope status = %+v", st)
 	}
 }

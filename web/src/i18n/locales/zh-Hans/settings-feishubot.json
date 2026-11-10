@@ -28,8 +28,6 @@
   "status_error": "读不到机器人的状态：{error}",
   "title": "飞书机器人",
   "footer": "在飞书里私聊这个机器人，就是在和 Persona 说话。机器人只回应配对过的你，群里不回应。",
-  "larkcli_row": "以我的身份读取（lark-cli）",
-  "larkcli_footer": "以我的身份读取（lark-cli）会收集提到你的消息和你的单聊。",
   "larkcli_dialog_footer": "用你自己的飞书登录，读取提到你的消息和你的单聊；机器人是你和 Persona 对话的入口。",
   "status_unreadable": "读不到状态",
   "error_with": "{what}：{error}",
@@ -72,5 +70,18 @@
   "howto": "怎么建机器人",
   "howto_footer": "长连接由 hub 主动连出去，hub 不需要公网地址。",
   "nudge_title": "提醒未回答的卡片",
-  "nudge_detail": "卡片等这么久还没回答，就在它下面回复提醒一次（话题群里会 @ 你），免打扰时段内顺延到结束后"
+  "nudge_detail": "卡片等这么久还没回答，就在它下面回复提醒一次（话题群里会 @ 你），免打扰时段内顺延到结束后",
+  "combined_footer": "一个飞书应用：通过机器人和 Persona 对话，把提到你的消息收进收件箱。",
+  "lark_name": "飞书",
+  "credentials_shared_note": "机器人和以我的身份读取共用这个应用。",
+  "bot_section": "机器人 · 和 Persona 对话",
+  "read_section": "以我的身份读取 · 收进收件箱",
+  "read_account_unknown": "未登录",
+  "read_not_connected": "未连接",
+  "read_status_prefix": "读取：{status}",
+  "read_authorize": "扫码授权",
+  "read_missing_title": "缺少权限",
+  "read_open_platform": "去开放平台开通",
+  "read_more": "更多设置",
+  "read_more_hint": "选择哪些内容收进收件箱"
 }

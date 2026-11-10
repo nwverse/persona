@@ -4,12 +4,13 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HubConnector } from "../../lib/connectors";
+import { connectorState, type HubConnector } from "../../lib/connectors";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 
 type Call = { resolve: (s: FeishuBotStatus) => void };
 const calls = vi.hoisted(() => ({ status: [] as Call[], update: [] as (Call & { body: unknown })[] }));
 const connectorList = vi.hoisted(() => ({ value: [] as HubConnector[], calls: 0 }));
+const connectorLogin = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/feishu-bot", async (original) => ({
   ...(await original<typeof import("../../lib/feishu-bot")>()),
   botStatus: () => new Promise<FeishuBotStatus>((resolve) => calls.status.push({ resolve })),
@@ -22,6 +23,7 @@ vi.mock("../../lib/connectors", async (original) => ({
     connectorList.calls++;
     return Promise.resolve(connectorList.value);
   },
+  connectorLogin: (...args: unknown[]) => connectorLogin(...args),
 }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: () => {} }));
 import { t } from "../../i18n";
@@ -71,6 +73,7 @@ beforeEach(() => {
   calls.update.length = 0;
   connectorList.value = [];
   connectorList.calls = 0;
+  connectorLogin.mockReset();
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   host = document.createElement("div");
@@ -86,18 +89,17 @@ afterEach(() => {
 });
 
 describe("Feishu bot dialog", () => {
-  it("puts lark-cli in the Lark group and opens its connector page", async () => {
+  it("combines the bot and lark-cli into one Lark row", async () => {
     const onOpen = vi.fn();
     const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
     act(() => root.render(<FeishuBot larkcli={larkcli} onOpen={onOpen} />));
     await act(async () => calls.status[0].resolve(saved()));
 
-    const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.larkcli_row")));
+    const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.lark_name")));
     expect(row).toBeDefined();
-    expect(row?.closest("section")?.textContent).toContain(t("settings-feishubot.larkcli_footer"));
+    expect(row?.textContent).toContain("cli_saved");
+    expect(row?.closest("section")?.textContent).toContain(t("settings-feishubot.combined_footer"));
     expect(row?.querySelector("img")?.getAttribute("alt")).toBe("");
-    await act(async () => row!.click());
-    expect(onOpen).toHaveBeenCalledWith("larkcli");
   });
 
   it("keeps the original group when lark-cli is absent", async () => {
@@ -105,28 +107,23 @@ describe("Feishu bot dialog", () => {
     await act(async () => calls.status[0].resolve(saved()));
 
     expect(host.textContent).toContain(t("settings-feishubot.footer"));
-    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_row"));
-    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_footer"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.read_section"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.combined_footer"));
     expect(host.querySelectorAll("button")).toHaveLength(1);
   });
 
-  it("shows lark-cli in the bot dialog and opens its connector page", async () => {
+  it("shows lark-cli in the bot dialog and opens its connector page from More settings", async () => {
     const onOpen = vi.fn();
     const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
     act(() => root.render(<FeishuBot larkcli={larkcli} onOpen={onOpen} />));
     await act(async () => calls.status[0].resolve(saved()));
     await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
 
-    const rows = () => [...document.body.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent?.includes(t("settings-feishubot.larkcli_row")));
-    expect(rows()).toHaveLength(2);
-    const dialogRow = rows()[1];
-    expect(dialogRow.textContent).toContain("me");
-    expect([...dialogRow.querySelectorAll<HTMLElement>("*")].some((element) => element.classList.contains("bg-green"))).toBe(true);
-    expect(dialogRow.querySelector("img")?.getAttribute("alt")).toBe("");
-    await act(async () => dialogRow.click());
+    expect(document.body.textContent).toContain(t("settings-feishubot.read_section"));
+    const more = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_more")));
+    await act(async () => more!.click());
 
     expect(onOpen).toHaveBeenCalledWith("larkcli");
-    expect(rows()).toHaveLength(1);
   });
 
   it("loads lark-cli for a URL-opened dialog when the page has not passed it yet", async () => {
@@ -137,8 +134,75 @@ describe("Feishu bot dialog", () => {
     await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
     await act(async () => {});
 
-    const row = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.larkcli_row")));
+    const row = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.lark_name")));
     expect(row).toBeDefined();
+    expect(connectorList.calls).toBe(1);
+  });
+
+  it("uses the lark-cli warning as the combined row's status", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "no_permission", account: "me", missing_scopes: ["im:chat:read"] };
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+
+    const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.lark_name")))!;
+    expect(row.textContent).toContain(t("settings-feishubot.read_status_prefix", { status: connectorState(larkcli) }));
+    expect([...row.querySelectorAll<HTMLElement>("*")].some((element) => element.classList.contains("bg-orange-tint"))).toBe(true);
+  });
+
+  it("orders credentials, bot controls and read-as-me sections", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const headings = [...document.querySelectorAll<HTMLElement>("[role=dialog] section h2")].map((x) => x.textContent);
+    expect(headings.indexOf(t("settings-feishubot.credentials"))).toBeLessThan(headings.indexOf(t("settings-feishubot.bot_section")));
+    expect(headings.indexOf(t("settings-feishubot.bot_section"))).toBeLessThan(headings.indexOf(t("settings-feishubot.read_section")));
+  });
+
+  it("starts lark-cli authorization inline and renders a device-code step", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "not_signed_in", capabilities: ["login"] };
+    connectorLogin.mockResolvedValue({ step: "device", kind: "device_code", user_code: "ABC123", url: "https://example.test/authorize" });
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const authorize = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_authorize")))!;
+    await act(async () => authorize.click());
+    expect(connectorLogin).toHaveBeenCalledWith("larkcli", "", {});
+    expect(document.body.textContent).toContain("ABC123");
+  });
+
+  it("opens the permission URL when lark-cli scopes are missing", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const larkcli: HubConnector = {
+      id: "larkcli",
+      name: "Lark via lark-cli",
+      status: "no_permission",
+      missing_scopes: ["im:chat:read"],
+      guide_url: "https://open.feishu.cn/permissions",
+    };
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const permission = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))!;
+    await act(async () => permission.click());
+    expect(open).toHaveBeenCalledWith("https://open.feishu.cn/permissions", "_blank", "noopener,noreferrer");
+    open.mockRestore();
+  });
+
+  it("hides the permission button without a link and re-reads the connector on recheck", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "no_permission", missing_scopes: ["im:chat:read"] };
+    connectorList.value = [{ ...larkcli, status: "ok" }];
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const buttons = () => [...document.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons().some((button) => button.textContent?.includes(t("settings-feishubot.read_open_platform")))).toBe(false);
+    const recheck = buttons().find((button) => button.textContent?.includes(t("settings-feishubot.recheck")) && !button.getAttribute("aria-label"))!;
+    await act(async () => recheck.click());
     expect(connectorList.calls).toBe(1);
   });
 
@@ -148,7 +212,7 @@ describe("Feishu bot dialog", () => {
     await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
 
     expect(host.textContent).toContain(t("settings-feishubot.footer"));
-    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_row"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.read_section"));
     expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_dialog_footer"));
   });
 

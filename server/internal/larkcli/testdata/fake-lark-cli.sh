@@ -24,6 +24,30 @@ case "${1:-}" in
     exit 0
     ;;
   auth)
+    if [ "${2:-}" = "login" ]; then
+      if [ -n "${LARKCLI_FAKE_LOGIN_PID:-}" ]; then
+        printf '%s\n' "$$" > "$LARKCLI_FAKE_LOGIN_PID"
+      fi
+      if [ "${LARKCLI_FAKE_LOGIN_DOMAIN:-feishu}" = "lark" ]; then
+        printf '%s\n' 'Open https://accounts.larksuite.com/oauth/v1/device/verify?user_code=ABCD-1234&state=example'
+      else
+        printf '%s\n' 'Open https://accounts.feishu.cn/oauth/v1/device/verify?user_code=ABCD-1234&state=example'
+      fi
+      case "$scenario" in
+        login_failure) printf '%s\n' 'login failed' >&2; exit 17 ;;
+        login_wait)
+          if [ -n "${LARKCLI_FAKE_LOGIN_RELEASE:-}" ]; then
+            while [ ! -e "$LARKCLI_FAKE_LOGIN_RELEASE" ]; do sleep 0.05; done
+          else
+            sleep 30
+          fi
+          ;;
+      esac
+      exit 0
+    fi
+    if [ "${2:-}" = "logout" ]; then
+      exit 0
+    fi
     case "$scenario" in
       not_logged_in) cat "$base/auth_not_logged_in.json" ;;
       expired) cat "$base/auth_expired.json" ;;
@@ -36,6 +60,27 @@ case "${1:-}" in
       *) cat "$base/auth_status.json" ;;
     esac
     exit 0
+    ;;
+  config)
+    case "${2:-}" in
+      show)
+        case "$scenario" in
+          config_missing) printf '%s\n' '{}';;
+          config_different) printf '%s\n' '{"appId":"cli_old","brand":"feishu"}';;
+          config_same) printf '%s\n' '{"appId":"cli_bot","brand":"feishu"}';;
+          *) printf '%s\n' '{"appId":"cli_example","brand":"feishu"}';;
+        esac
+        exit 0
+        ;;
+      init)
+        secret=''
+        IFS= read -r secret || true
+        if [ -n "${LARKCLI_FAKE_INIT_LOG:-}" ]; then
+          printf '%s|stdin=%s\n' "$*" "$secret" >> "$LARKCLI_FAKE_INIT_LOG"
+        fi
+        exit 0
+        ;;
+    esac
     ;;
   im)
     case "$scenario" in

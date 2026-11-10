@@ -206,13 +206,15 @@ A card the bot sent (a question, a plan, a permission, a terminal dialog or an M
 "bots": { "feishu": { "app_id": "cli_…", "app_secret": "…", "domain": "feishu" } }
 ```
 
+The Lark app is one app used in two ways. The built-in bot uses its sealed App ID and secret for the long connection and bot messages. When `lark.cli` is configured without an explicit profile, the manager binds lark-cli's managed `persona` profile to that same App ID and keeps it synchronized when bot credentials change; lark-cli then provides the “read as me” user identity. An explicit `lark.cli.profile` remains an advanced compatibility override. The bot secret is passed to `lark-cli config init` on stdin and is never exposed in arguments, logs or status.
+
 `domain`: `feishu` (default), `lark`, or the Open Platform address of a private deployment. Switches, features and pairing are configured in the App and stored in settings `bots.feishu` (read / written by the hub); chat state (current target, thread bindings, processed messages, and which message each still-open question / approval card is in: only ids and the conversation it belongs to, never the card's content, at most 100 cards for 7 days, #4358) is stored in `bots.feishu.state` (read / written by the assistant), and pending answers in `channels.state`.
 
 These routes belong to the hub; `target` and `agents` in the response are queried from the assistant on demand (`feishu.view`). When the assistant isn't connected, these two fields are absent; everything else works as usual.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/bots/feishu` | `{enabled, app_id, domain, has_secret, from_config, features{main,cards,all_cards,pushes,sync,agents,reports,board,only_conclusions,report_steps}, connected, error, last_event_at, bot_name, owner{name,paired_at}, pairing{code,expires_at}, topic_chats[{chat_id,name,added_at}], nudge_after, target, agents[{title,machine_id,session_id}]}` |
+| GET | `/api/v1/bots/feishu` | `{enabled, app_id, domain, has_secret, from_config, features{main,cards,all_cards,pushes,sync,agents,reports,board,only_conclusions,report_steps}, connected, error, last_event_at, bot_name, owner{name,paired_at}, pairing{code,expires_at}, topic_chats[{chat_id,name,added_at}], nudge_after, target, agents[{title,machine_id,session_id}], larkcli?:{profile,app_id?,same_app}}` |
 | PUT | `/api/v1/bots/feishu` | Changes only supplied fields: `enabled`, `app_id` + `app_secret` (validated first) + `domain`, `features` (merged over the current ones), `topic_chats` (the opted-in group chats, replaced as a whole, "Topic group chats"), `nudge_after` (minutes before the one nudge under an unanswered card, 0 off, "Nudging a card nobody answered"); `app_id: ""` clears the credentials saved in the App (falls back to manager.json) |
 | POST | `/api/v1/bots/feishu/pair` | Generate a pairing code |
 | DELETE | `/api/v1/bots/feishu/owner` | Unpair (also clears chat state and the opted-in group chats) |

@@ -2,7 +2,9 @@ package extmgr
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/lark"
@@ -40,5 +42,129 @@ func TestLarkCLIConnectorOnlyRegistersWhenConfigured(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("larkcli missing from settings connector list")
+	}
+}
+
+func TestLarkCLIEffectiveProfileUsesBotAppAndStdinSecret(t *testing.T) {
+	h := newTestManager(t)
+	h.connectors = h.newConnectors(nil)
+	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initLog := filepath.Join(t.TempDir(), "init.log")
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "config_different")
+	t.Setenv("LARKCLI_FAKE_INIT_LOG", initLog)
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: bin}}
+	h.cfg.Bots.Feishu = FeishuBotConfig{AppID: "cli_bot", AppSecret: "bot-secret", Domain: "feishu"}
+	if got := h.effectiveLarkCLIProfile(context.Background()); got != managedLarkCLIProfile {
+		t.Fatalf("profile = %q", got)
+	}
+	if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(initLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(first); !strings.Contains(got, "--app-id cli_bot") || !strings.Contains(got, "stdin=bot-secret") || strings.Contains(strings.SplitN(got, "|", 2)[0], "bot-secret") {
+		t.Fatalf("init record = %q", got)
+	}
+	// Once the managed profile reports the same app id, another manager start
+	// or credentials refresh must not re-run init.
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "config_same")
+	if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	same, _ := os.ReadFile(initLog)
+	if string(same) != string(first) {
+		t.Fatalf("same app reinitialized: %q", same)
+	}
+	// A changed app id is the one case that rebinds the managed profile.
+	h.cfg.Bots.Feishu.AppID = "cli_new"
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "config_different")
+	if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	changed, _ := os.ReadFile(initLog)
+	if strings.Count(string(changed), "config init") != 2 || !strings.Contains(string(changed), "--app-id cli_new") {
+		t.Fatalf("changed app did not reinitialize: %q", changed)
+	}
+}
+
+func TestLarkCLIEffectiveProfilePrecedenceAndDefault(t *testing.T) {
+	h := newTestManager(t)
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: "/bin/false", Profile: "explicit"}}
+	h.cfg.Bots.Feishu = FeishuBotConfig{AppID: "cli_bot", AppSecret: "bot-secret"}
+	if got := h.effectiveLarkCLIProfile(context.Background()); got != "explicit" {
+		t.Fatalf("explicit profile = %q", got)
+	}
+	h.cfg.Lark.CLI.Profile = ""
+	if got := h.effectiveLarkCLIProfile(context.Background()); got != managedLarkCLIProfile {
+		t.Fatalf("bot profile = %q", got)
+	}
+	h.cfg.Bots.Feishu = FeishuBotConfig{}
+	if got := h.effectiveLarkCLIProfile(context.Background()); got != "" {
+		t.Fatalf("default profile = %q", got)
+	}
+}
+
+func TestLarkCLIExplicitProfileSkipsBotBinding(t *testing.T) {
+	h := newTestManager(t)
+	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initLog := filepath.Join(t.TempDir(), "init.log")
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "config_different")
+	t.Setenv("LARKCLI_FAKE_INIT_LOG", initLog)
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: bin, Profile: "advanced"}}
+	h.cfg.Bots.Feishu = FeishuBotConfig{AppID: "cli_bot", AppSecret: "bot-secret"}
+	if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.effectiveLarkCLIProfile(context.Background()); got != "advanced" {
+		t.Fatalf("profile = %q", got)
+	}
+	if _, err := os.Stat(initLog); err == nil {
+		t.Fatal("explicit profile unexpectedly initialized managed profile")
+	}
+}
+
+func TestAssistantLarkUsesManagedProfile(t *testing.T) {
+	h := newTestManager(t)
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: "/opt/lark/bin/lark-cli"}}
+	h.cfg.Bots.Feishu = FeishuBotConfig{AppID: "cli_bot", AppSecret: "bot-secret"}
+	got, err := h.AssistantLark(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CLI == nil || got.CLI.Profile != managedLarkCLIProfile {
+		t.Fatalf("assistant profile = %+v", got.CLI)
+	}
+}
+
+func TestLarkCLIBrand(t *testing.T) {
+	for _, tc := range []struct{ domain, want string }{
+		{"", "feishu"}, {"feishu", "feishu"}, {"lark", "lark"}, {"larksuite", "lark"}, {"https://open.larksuite.com", "lark"},
+	} {
+		if got := larkCLIBrand(tc.domain); got != tc.want {
+			t.Errorf("domain %q = %q, want %q", tc.domain, got, tc.want)
+		}
+	}
+}
+
+func TestBotViewExposesLarkCLIBinding(t *testing.T) {
+	h := newTestManager(t)
+	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "success")
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: bin}}
+	h.cfg.Bots.Feishu = FeishuBotConfig{AppID: "cli_example", AppSecret: "bot-secret"}
+	view := h.botView(context.Background())
+	if view.LarkCLI == nil || view.LarkCLI.Profile != managedLarkCLIProfile || view.LarkCLI.AppID != "cli_example" || !view.LarkCLI.SameApp {
+		t.Fatalf("larkcli view = %+v", view.LarkCLI)
 	}
 }
