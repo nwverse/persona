@@ -1403,7 +1403,9 @@ Once the client sees that the server supports `client_hello`, it may send:
 
 `locale` is the resolved UI language (`zh-Hans` / `en` / `ja`, [i18n.md](i18n.md)), not "Match System". The hub uses it for the text of `notify`, `error` and the like on this connection; the value reported by a `full`-role connection is also recorded as the **user language** (Postgres `settings.user_locale`), used for assistant answers, injected messages, task notifications, bot replies, and pushes to devices without their own `locale`. If no client has ever reported one, it's `zh-Hans`. Omitting `locale` changes neither. When the user changes the language (or the system language changes under Match System), send `client_hello` again right away (with the other fields as before; omitting `features` clears the capability set).
 
-This metadata is only recorded on the current connection and doesn't change the authenticated device identity or permissions. `build` currently accepts any JSON. Each `client_hello` replaces the client's capability set, and omitting `features` clears it; don't substitute the server's capability list for the capabilities the client itself supports.
+This metadata is only recorded on the current connection and doesn't change the authenticated device identity or permissions. `build` currently accepts any JSON.
+
+**App version.** The hub also keeps, per device credential, the app version each client last reported, so the assistant can say which build is installed while the app is in the background or offline (Postgres hub setting `hub.client_apps`; `devices.list` gives the manager `apps`, `assistantwire.ClientApp`; `server/internal/hub/client_apps.go`). It reads the fields above: the Apple apps send the two halves of their `X-Persona-Client` header (`"platform":"ios-app"`, `"version":"1.4.0+52"`: the version, then the build after `+`) and `os` (`{"name":"iOS"|"iPadOS"|"watchOS"|"macOS"|"visionOS","version":"26.1"}`); Android sends `"platform":"android"`, its `versionName` and its `versionCode` in `build`. Only `ios`, `macos`, `watchos`, `visionos` and `android` (an Apple `-app` suffix is dropped) with a short version-like `version` are kept; the web is not (the hub serves it, so its version is the hub's), nor a pairing token or the hub's main token (no credential: a simulator on it could never be marked as one). A credential that registers as a simulator (`register_phone`'s `simulator`) is marked so, and the assistant prefers a real device over it. Entries unseen for 180 days are dropped, and at most 32 are kept; an unchanged report is saved again at most hourly. Another client reports its version by sending these fields; nothing else is needed. Each `client_hello` replaces the client's capability set, and omitting `features` clears it; don't substitute the server's capability list for the capabilities the client itself supports.
 
 The seconds below are all negotiation bounds and timer settings in the code; **network latency, actual packet frequency, battery use and carrier idle timeouts have not been measured**.
 
@@ -2828,8 +2830,10 @@ Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified
 
 **Stable task rows (#2878).** The feed endpoint additionally returns `task_cards`, a derived projection, without changing or
 removing its original `items` and `plans`. Android and web render a task only as its single row in **In progress**, or in
-**Needs you** while it waits on the user (#3387); the chat shows a small "Dispatched N tasks · See In progress" entry instead
-of plan/task/receipt/review/report cards. Plans awaiting Start and acceptance decisions are handled in **Needs you**. Task details and the original audit records remain accessible.
+**Needs you** while it waits on the user (#3387); the chat shows a small dispatched line instead of plan/task/receipt/review/report cards: one task reads
+"Dispatched: <title> · Open", several list their titles, and each opens that task's own details, never the whole tray (#3700).
+Clients take the dispatched to-dos from data they already have: a `task` item's `ref`, or a started plan's `tasks[].todo_id`
+in plan order (a task without `todo_id` did not start and has no link); no extra field is sent. Plans awaiting Start and acceptance decisions are handled in **Needs you**. Task details and the original audit records remain accessible.
 
 `TaskCard` is `{id,todo_id?,plan_id?,index?,at,updated_at,state,receipt_id?,report_id?}`:
 
