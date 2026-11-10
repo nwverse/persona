@@ -990,6 +990,7 @@ func (s *Service) todoRoutes() {
 			todoErr(w, err)
 			return
 		}
+		s.superviseLinkedTodo(r.Context(), todoID) // the user's own todo gets a supervisor (agent_tasks.go)
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 
@@ -1779,6 +1780,7 @@ func (s *Service) TodoLink(ctx context.Context, p TodoLinkParams) (TodoLinkResul
 	if err := s.linkTodoAgent(ctx, p.TodoID, p.MachineID, p.SessionID, title, p.Cwd, p.Agent); err != nil {
 		return TodoLinkResult{}, err
 	}
+	s.superviseLinkedTodo(ctx, p.TodoID) // the user's own todo gets a supervisor (agent_tasks.go)
 	res := TodoLinkResult{Title: title}
 	if t, ok, err := s.todo(ctx, p.TodoID); err == nil && ok {
 		res.Title = t.Title
