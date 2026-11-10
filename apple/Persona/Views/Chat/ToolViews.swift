@@ -486,6 +486,7 @@ struct ToolCallRow: View {
     var headerID = "chat.tool-call"
     @State private var expanded: Bool?
     @Environment(\.openTools) private var openTools
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var isOpen: Bool {
         openTools?.isOpen(call.id) ?? expanded ?? (autoExpand || (ResultBlock.debugFull && call.result?.fullSize != nil)
@@ -576,17 +577,26 @@ struct ToolCallRow: View {
                             .foregroundStyle(tint)
                     }
                 }
-                // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
-                Text(ToolPresentation.verb(call)).font(onTimeline ? Theme.Font.secondaryMedium : Theme.Font.secondaryStrong)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                Text(ToolPresentation.subject(call))
-                    .font(Theme.Font.secondary)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(ToolPresentation.truncation(call.name))
-                Spacer(minLength: 4)
-                taskBadge
+                if typeSize.isAccessibilitySize {
+                    // At the accessibility sizes the subject and a background task's badge each get a line under the
+                    // verb (as `NameWithChips` stacks a row's chips): side by side, the badge, which keeps its width,
+                    // left the verb nothing and ran off the screen, and the subject was cut to a sliver of a letter.
+                    let subject = ToolPresentation.subject(call)
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        verbText.lineLimit(2)
+                        if !subject.isEmpty { subjectText(subject) }
+                        taskBadge
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
+                    verbText
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    subjectText(ToolPresentation.subject(call))
+                    Spacer(minLength: 4)
+                    taskBadge
+                }
                 if call.isError { ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(Theme.danger).font(Theme.Font.label) }
                 ThemedIcon(Theme.Icon.disclosure)
                     .font(Theme.Font.labelStrong)
@@ -599,6 +609,18 @@ struct ToolCallRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(headerID)
+    }
+
+    private var verbText: Text {
+        Text(ToolPresentation.verb(call)).font(onTimeline ? Theme.Font.secondaryMedium : Theme.Font.secondaryStrong)
+    }
+
+    private func subjectText(_ subject: String) -> some View {
+        Text(subject)
+            .font(Theme.Font.secondary)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(ToolPresentation.truncation(call.name))
     }
 
     /// The row's head: BeautifulUI's tool row — kind icon (a chevron once open), the verb, the subject in a chip. A call
@@ -619,15 +641,27 @@ struct ToolCallRow: View {
         if let id = call.use.toolUseID, tasks.started.contains(id) || tasks.notes[id] != nil,
            !SubagentCard.isAgent(call) || tasks.started.contains(id) || call.input["run_in_background"]?.bool == true {
             let b = TaskNoteText.badge(tasks.notes[id] ?? [])
+            let text = Text(b.text).font(Theme.Font.label).foregroundStyle(b.failed ? Theme.danger : Color.secondary)
             if AppStyle.current.usesBeautifulUI {
                 BUIPill(b.text, tone: b.failed ? .red : .neutral)
+            } else if typeSize.isAccessibilitySize {
+                // On a line of its own it can still be wider than the screen: then it wraps, in a box rather than a pill.
+                ViewThatFits(in: .horizontal) {
+                    badgePill(text)
+                    text.fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xxs)
+                        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                }
             } else {
-                Text(b.text).font(Theme.Font.label).foregroundStyle(b.failed ? Theme.danger : Color.secondary)
-                    .lineLimit(1).fixedSize()
-                    .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xxs)
-                    .background(Theme.Fill.well, in: .capsule)
+                badgePill(text)
             }
         }
+    }
+
+    private func badgePill(_ text: some View) -> some View {
+        text.lineLimit(1).fixedSize()
+            .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xxs)
+            .background(Theme.Fill.well, in: .capsule)
     }
 
     private func chip(_ subject: String) -> BeautifulUI.ToolCall {

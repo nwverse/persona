@@ -208,6 +208,20 @@ struct ToolNamingTests {
         #expect(ToolNaming.arguments(.string("x")).isEmpty)
     }
 
+    /// A value's few lines go to its words: blank lines between paragraphs (and lines of only spaces) close up to one
+    /// break, so a three-line value is not cut on an empty line with no "…". A line's own indent stays.
+    @Test func blankLinesInAValueCloseUp() {
+        let body = "Exporting takes 41 s.\n\n\n   \nSteps: Settings > Export.\r\n\r\nLast year."
+        let args = ToolNaming.arguments(.object(["body": .string(body), "code": .string("def f():\n\n    return 1\n")]))
+        let byID = Dictionary(uniqueKeysWithValues: args.map { ($0.id, $0) })
+        #expect(byID["body"]?.value == "Exporting takes 41 s.\nSteps: Settings > Export.\nLast year.")
+        #expect(byID["body"]?.lines == 3)
+        #expect(byID["code"]?.value == "def f():\n    return 1")
+        // Blank lines around one line of text leave one line.
+        let one = ToolNaming.arguments(.object(["note": .string("\n\n  Only this\n\n")])).first
+        #expect(one?.value == "Only this" && one?.lines == 1)
+    }
+
     /// Any number a tool sends lists without trapping: past Int's range it prints as a Double (`JSONValue.string`).
     @Test func hugeNumbersListWithoutTrapping() {
         #expect(JSONValue.number(3).string == "3")

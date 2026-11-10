@@ -196,7 +196,10 @@ nonisolated enum ToolNaming {
     private static func argument(_ value: JSONValue) -> (value: String, code: Bool, lines: Int)? {
         switch value {
         case .string(let s):
-            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Paragraphs keep one break between them: a blank line would spend one of the few lines a value gets, and a
+            // cut there shows no "…". Raw Input keeps the text as sent.
+            let t = s.split(whereSeparator: \.isNewline).filter { !$0.allSatisfy(\.isWhitespace) }.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !t.isEmpty else { return nil }
             let multiline = t.contains(where: \.isNewline)
             // A token (a path, an id, a pattern) in the code face; a sentence someone wrote in the text face.
