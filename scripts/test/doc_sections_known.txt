@@ -15,6 +15,7 @@ apple/Persona/Views/Shell/ShellPager.swift	docs/apple/ios.md	只在前台做的�
 apple/PersonaUITests/ExtensionMarketTests.swift	docs/extensions/extensions.md	自动升级
 apple/Shared/APIClient.swift	docs/protocol/protocol.md	发消息
 apple/Shared/APIClient.swift	docs/protocol/protocol.md	操作回执
+apple/project.yml	docs/apple/mac.md	验收清单
 docs/apple/ios.md	docs/integrations/codex.md	Effort
 docs/apple/phone-tools.md	docs/android/android.md	App shell and direct page navigation,
 docs/apple/recording.md	protocol.md	Recording synchronization
@@ -41,12 +42,15 @@ docs/protocol/protocol.md	docs/assistant/todos.md	Close the Agent of a finished 
 docs/protocol/protocol.md	docs/assistant/todos.md	Record the conclusion when done
 docs/protocol/protocol.md	docs/extensions/extensions.md	Programs that run on computers
 docs/protocol/protocol.md	docs/extensions/extensions.md	Shared Inbox rules
+docs/protocol/protocol.md	docs/integrations/codex.md	Creating from the phone
 docs/protocol/protocol.md	docs/operations/hub-update.md	No going backwards
 docs/protocol/protocol.md	docs/operations/runtime-cli.md	Connecting to a real device via the hub
 docs/protocol/protocol.md	docs/server/machines.md	Self-check
 docs/protocol/protocol.md	engines.md	When herdr isn't running
 docs/protocol/protocol.md	launcher-health.md	Endpoints for the board
+docs/protocol/protocol.md	todos.md	Auto-complete
 docs/web/web.md	docs/assistant/inbox.md	Mute
+docs/web/web.md	docs/protocol/protocol.md	Messages Persona injects
 server/internal/assistant/inbox_connectors.go	docs/plans/plan-connectors.md	1 · 5. Inbox
 server/internal/extension/registry.go	docs/extensions/extensions.md	Contribution switches
 server/internal/extmgr/extension_routes.go	docs/extensions/extensions.md	Contribution switches

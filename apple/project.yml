@@ -728,7 +728,7 @@ targets:
     platform: macOS
     sources:
       - path: PersonaMacTests
-      # Shared logic the Mac runs as is: the same tests, run against the Mac build (docs/apple/mac.md「Acceptance checklist」).
+      # Shared logic the Mac runs as is: the same tests, run against the Mac build (docs/apple/mac.md「验收清单」).
       - path: PersonaTests/HeadingMenuTests.swift
       - path: PersonaTests/CalmAttentionTests.swift
       - path: PersonaTests/IntentsTests.swift
