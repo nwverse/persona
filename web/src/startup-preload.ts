@@ -92,7 +92,8 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * it): the heaviest language's at #2689 (ja, 559,565 B) plus 3%, and 2,560 B for the sidebar's assistant switcher
  * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws, and 512 B for the
  * launcher chips' stale-pick check and its toast (views/assistant/AssistantChat.tsx, #3895), and 1,024 B for the
- * interrupted receipts' text and handling (#3903 added 883 B, #3917), and 1,024 B for the address's manager that conversation requests fall back on (lib/manager-choice.ts routedConversationManager, #3670) and what main grew since. Raise it on purpose, in the change that needs it.
+ * interrupted receipts' text and handling (#3903 added 883 B, #3917), and 512 B for adding a computer to the current
+ * assistant (views/machines/AddComputer.tsx's words and its add.manager handling, #3508), and 512 B for the address's manager that conversation requests fall back on (lib/manager-choice.ts routedConversationManager, #3670). Raise it on purpose, in the change that needs it.
  */
 export const FIRST_SCREEN_BUDGET = 581_472;
 

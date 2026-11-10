@@ -10,6 +10,9 @@ machines checks need; MOCK_MANAGER_OUTDATED=1 marks 工作 needs_update, for --o
 and for one manager (MOCK_MANAGERS=1 MOCK_EXTENSIONS=1 on another mock): web_managers_e2e.py <its web address> --single.
 Another assistant's conversation reopened by its address (a reload, a new page) on a hub with the paged sessions list:
 a mock with MOCK_SESSIONS_LIST=1 MOCK_MANAGER_NAS=1 and web_managers_e2e.py <web address> --reload.
+Adding a computer to the current assistant: a mock with MOCK_ADD_COMPUTER=1 MOCK_ADD_COMPUTER_JOIN=2 and
+web_managers_e2e.py <web address> --add-computer; with MOCK_ADD_COMPUTER_NO_MANAGER=1 too (a hub from before add.manager),
+--add-computer --old-hub.
 A mock with MOCK_MANAGER_NEEDS_YOU=0 as well (a hub whose roster has no inbox counts) runs the same: the counts are then
 the agents waiting only.
 It moves the NAS to 工作 and back to 家里, so every round (390 / 1200, light / dark) starts alike.
@@ -595,6 +598,66 @@ def check_reload(browser, base, width, theme):
         context.close()
 
 
+def check_add_computer(browser, base, width, theme, shots, old):
+    """Add computer with 工作 current: the code names it (add.manager), and the computer joins 工作's list with nothing
+    said on the waiting screen; a hub from before add.manager (old) puts it under its own assistant, which the waiting
+    screen says. With 家里 (offline) current nothing can be added and the dialog says why."""
+    context = browser.new_context(viewport={"width": width, "height": 900}, color_scheme=theme, locale="zh-CN")
+    context.add_init_script("localStorage.setItem('persona.theme', " + repr(theme) + ")")
+    # the pick as the switcher keeps it (lib/manager-choice.ts)
+    context.add_init_script("if (!localStorage.getItem('persona.currentManager')) localStorage.setItem('persona.currentManager', 'm-3fa21c')")
+    page = context.new_page()
+    page.set_default_timeout(20000)
+    errors, asked = [], []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("request", lambda r: r.method == "POST" and r.url.split("?")[0].endswith("/api/v1/auth/pair-codes") and asked.append(r.post_data_json))
+    name = lambda what: os.path.join(shots, f"managers-{what}-{width}-{theme}.png")
+    try:
+        page.goto(base + "/machines?token=mock")
+        main = page.locator("main")
+        expect(page.locator("[data-assistant-switcher]")).to_have_attribute("data-assistant-switcher", "m-3fa21c")
+        main.get_by_role("button", name="添加电脑", exact=True).first.click()
+        dialog = page.get_by_role("dialog").filter(has_text="添加电脑")
+        computer = f"e2e 电脑 {width} {theme}"
+        dialog.locator("input").fill(computer)
+        dialog.get_by_role("button", name="下一步", exact=True).click()
+        expect(dialog.locator('[data-stage="waiting"]')).to_be_visible()
+        assert asked and asked[-1]["add"].get("manager") == "m-3fa21c", asked
+        under = dialog.locator("[data-added-under]")
+        if old:
+            expect(under).to_have_text("这台电脑加到了「助手」名下。")
+        else:
+            expect(under).to_have_count(0)
+        if shots:
+            page.wait_for_timeout(400)
+            page.screenshot(path=name("add-under" if old else "add-waiting"))
+        # it joins (MOCK_ADD_COMPUTER_JOIN): It's mine, then the list
+        dialog.get_by_role("button", name="是我的电脑", exact=True).click(timeout=30000)
+        dialog.get_by_role("button", name="完成", exact=True).click()
+        expect(dialog).to_have_count(0)
+        listed = main.get_by_text(computer, exact=True)
+        if old:
+            expect(listed).to_have_count(0)  # the hub's own assistant's, not 工作's
+        else:
+            expect(listed.first).to_be_visible()
+        # 家里, offline: nothing is added to it
+        page.evaluate("localStorage.setItem('persona.currentManager', 'm-8b04d2')")
+        page.reload()
+        expect(page.locator("[data-assistant-switcher]")).to_have_attribute("data-assistant-switcher", "m-8b04d2")
+        before = len(asked)
+        main.get_by_role("button", name="添加电脑", exact=True).first.click()
+        dialog = page.get_by_role("dialog").filter(has_text="添加电脑")
+        expect(dialog.locator('[data-stage="assistant-offline"]')).to_have_text("「家里」离线，暂时不能给它添加电脑。")
+        expect(dialog.get_by_role("button", name="下一步", exact=True)).to_have_count(0)
+        if shots and not old:
+            page.wait_for_timeout(400)
+            page.screenshot(path=name("add-offline"))
+        assert len(asked) == before, asked
+        assert not errors, errors
+    finally:
+        context.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -602,6 +665,8 @@ def main():
     ap.add_argument("--single", action="store_true")
     ap.add_argument("--outdated", action="store_true")
     ap.add_argument("--reload", action="store_true")
+    ap.add_argument("--add-computer", action="store_true")
+    ap.add_argument("--old-hub", action="store_true")
     a = ap.parse_args()
     if a.shots:
         os.makedirs(a.shots, exist_ok=True)
@@ -612,6 +677,12 @@ def main():
                 for width in (390, 1200):
                     check_reload(browser, a.base.rstrip("/"), width, "light")
                 print("web managers e2e (reload): ok")
+                return
+            if a.add_computer:
+                for width in (390, 1200):
+                    for theme in ("light", "dark"):
+                        check_add_computer(browser, a.base.rstrip("/"), width, theme, a.shots, a.old_hub)
+                print("web managers e2e (add computer%s): ok" % (", old hub" if a.old_hub else ""))
                 return
             for width in (390, 1200):
                 for theme in ("light", "dark"):
