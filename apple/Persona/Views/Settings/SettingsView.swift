@@ -700,6 +700,9 @@ struct PhoneDataView: View {
     @State private var enabled: [PhoneDataSource: Bool] = [:]
     @State private var asking: PhoneDataSource?
     @StoredValue(ClipboardOffer.enabledKey) private var offerClipboard = false
+    #if os(iOS)
+    @State private var iphoneConsent = IPhoneConsentModel()
+    #endif
 
     var body: some View {
         List {
@@ -725,6 +728,9 @@ struct PhoneDataView: View {
                 Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
             }
             #if os(iOS)
+            // Being operated by the assistant through a paired Mac (docs/extensions/iphone.md): only while the hub's
+            // extension iphone is on.
+            IPhoneConsentSection(consent: iphoneConsent)
             // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
             Section {
                 Toggle(isOn: $offerClipboard) {
@@ -742,6 +748,9 @@ struct PhoneDataView: View {
         .navigationTitle(ConnectorText.device)
         .navigationBarTitleDisplayMode(.inline) // like the other connectors' pages
         .task { refresh() }
+        #if os(iOS)
+        .task(id: model.config) { await iphoneConsent.load() } // again once the app has its hub (pairing, switching)
+        #endif
         // Back from the system's Settings, where a permission may have been given or taken away.
         .onChange(of: phase) { _, p in if p == .active { refresh() } }
     }

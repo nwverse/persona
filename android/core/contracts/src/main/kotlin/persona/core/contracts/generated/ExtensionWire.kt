@@ -373,6 +373,7 @@ data class ExtensionContributes(
     val voice: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
@@ -403,6 +404,7 @@ private data class ExtensionContributesKnown(
     val voice: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
@@ -427,7 +429,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -440,6 +442,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             voice = fields.voice,
             computer = fields.computer,
             browser = fields.browser,
+            iphone = fields.iphone,
             quota = fields.quota,
             providers = fields.providers,
             api = fields.api,
@@ -471,6 +474,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             voice = value.voice,
             computer = value.computer,
             browser = value.browser,
+            iphone = value.iphone,
             quota = value.quota,
             providers = value.providers,
             api = value.api,

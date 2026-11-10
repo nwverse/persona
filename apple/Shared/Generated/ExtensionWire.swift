@@ -753,6 +753,7 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     var voice: [ExtensionNamedItem]?
     var computer: [ExtensionNamedItem]?
     var browser: [ExtensionNamedItem]?
+    var iphone: [ExtensionNamedItem]?
     var quota: [ExtensionQuotaItem]?
     var providers: [ExtensionProviderItem]?
     var api: [ExtensionAPIItem]?
@@ -776,11 +777,12 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     /// Extra keys stay at this object's level on the wire; declared fields always win.
     var additionalProperties: [String: JSONValue]
 
-    init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
+    init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
         self.connectors = connectors
         self.voice = voice
         self.computer = computer
         self.browser = browser
+        self.iphone = iphone
         self.quota = quota
         self.providers = providers
         self.api = api
@@ -809,6 +811,7 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         case voice
         case computer
         case browser
+        case iphone
         case quota
         case providers
         case api
@@ -837,6 +840,7 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.voice = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["voice"])
         self.computer = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["computer"])
         self.browser = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["browser"])
+        self.iphone = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["iphone"])
         self.quota = ExtensionWireJSON.decode([ExtensionQuotaItem].self, from: raw["quota"])
         self.providers = ExtensionWireJSON.decode([ExtensionProviderItem].self, from: raw["providers"])
         self.api = ExtensionWireJSON.decode([ExtensionAPIItem].self, from: raw["api"])
@@ -857,17 +861,18 @@ nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.errorReports = ExtensionWireJSON.decode([ExtensionErrorReportsItem].self, from: raw["error_reports"])
         self.authRelay = ExtensionWireJSON.decode([ExtensionAuthRelayItem].self, from: raw["auth_relay"])
         self.messaging = ExtensionWireJSON.decode([ExtensionMessagingItem].self, from: raw["messaging"])
-        let known: Set<String> = ["connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"]
         additionalProperties = raw.filter { !known.contains($0.key) }
     }
 
     func encode(to encoder: Encoder) throws {
-        let known: Set<String> = ["connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"]
         var fields = additionalProperties.filter { !known.contains($0.key) }
         if let value = connectors { fields["connectors"] = try ExtensionWireJSON.encode(value) }
         if let value = voice { fields["voice"] = try ExtensionWireJSON.encode(value) }
         if let value = computer { fields["computer"] = try ExtensionWireJSON.encode(value) }
         if let value = browser { fields["browser"] = try ExtensionWireJSON.encode(value) }
+        if let value = iphone { fields["iphone"] = try ExtensionWireJSON.encode(value) }
         if let value = quota { fields["quota"] = try ExtensionWireJSON.encode(value) }
         if let value = providers { fields["providers"] = try ExtensionWireJSON.encode(value) }
         if let value = api { fields["api"] = try ExtensionWireJSON.encode(value) }

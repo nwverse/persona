@@ -130,6 +130,7 @@ so layout is arbitrary (short arrays can be one line) and does not affect transm
 | `mcp/github/` | `github_search`, `github_read`, `github_diff`, `github_checks` (read-only); `github_comment`, `github_review` (writes, gated) | Assistant, when GitHub connector status is `ok` (`connector/github/tools.go`; golden `mcp_tools.assistant_with_github`) |
 | `mcp/browser/` | `browser_run`, `browser_look` | Assistant, when the ego browser extension is on for some machine (`browserTools` in `extmgr/browser.go`) |
 | `mcp/computer/` | `computer_state`, `computer_run` | Assistant, when the Cua computer-use extension is on for some machine (`computerTools` in `extmgr/computer.go`) |
+| `mcp/iphone/` | `iphone_status`, `iphone_look`, `iphone_do` | Assistant, when the iphone extension is on for some Mac and a paired iPhone consented (`iphoneTools` in `extmgr/iphone.go`) |
 | `mcp/imessage/` | `imessage_chats`, `imessage_read`, `imessage_search` (read-only) | Assistant, when the iMessage connector status is `ok` and its AI switch is on (`readTools` in `connector/imessage/persona.go`) |
 | `mcp/voice/` | `search_knowledge`, `list_agents`, `send_to_agent`, `ask_persona`, `delegate_task` | Upstream of the built-in voice plugin with `tools` enabled (`voice/tools.go`, declared as GPT-Live function tools in `session.start`; full devices declare the first four, calls from other extensions only `ask_persona`, protocol 2 bound chats the two read-only tools plus `delegate_task`; `ask_persona` and `delegate_task` calls remain open until the turn's answer) |
 

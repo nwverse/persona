@@ -697,6 +697,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "tool_input":{...}, "summary":"rm -rf build",                   // permission
  "screen":"visible terminal text",                                // screen (TUI dialogs hooks can't cover)
  "always_keys":["tool:Bash"],  // node → hub: what "Always Allow" on an assistant chat's permission card lets through; the hub records it and answers the same card itself (docs/assistant/assistant.md "Always allow in this session"); not used by clients
+ "always_honored":false,       // manager → clients: whether answering Always is kept; see "Always allow" below
+ "tool_title":"iPhone control", // manager → clients: its own tool's name for people, in the user's language; see "Always allow" below
  "agent":"codex", "reason":"…", "always_label":"本会话不再问这个命令"} // a card the node read from the Codex / compatible forks TUI ("Codex questions and approvals"); always_label is emitted in Chinese: "don't ask about this command again this session"
 
 // Resolution (by kind)
@@ -710,6 +712,34 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 {"cancel":true}                                                             // question with can_cancel:true: discard without an answer
 {"answers":{"…":"…"},"answered_by":"assistant"}                               // answered by the assistant (#1602): question only; App replies don't carry answered_by
 ```
+
+### Always allow
+
+A permission card offers **Always allow** only where the answer is kept (#3590). The manager says so in
+`always_honored`, a tri-state:
+
+- `true`: it is kept. The manager sets it on a node's card in an assistant chat whose `always_keys` it remembers
+  (a store, at most 32 keys, no `fields`), and on a card of its own that says in `always_label` what it keeps (the apps
+  a computer may use, LCU's own scopes).
+- `false`: nothing would keep it. The manager sets it on every other card it asks itself: the extensions' tools
+  (`computer_*`, `browser_run`, `iphone_do`, connector writes, `extension.ui`), `persona_settings`, its to-do, agent
+  and health confirmations; and on a node's card in an assistant chat it will not remember (keys but no store, more
+  than 32 keys, `fields`, or a health conversation's card, confirmed each time). Clients show only Allow and Deny, and
+  no scope line. An `always` answered on such a card anyway (an older client) is dropped: the card is allowed once.
+- absent: clients keep their own rule, as before: on iOS a card with a session, on the web and in Lark a card from
+  Claude (no `agent`, or `claude`) or one with an `always_label`. Agents sessions' cards never carry the field: their
+  agent keeps Always itself (Claude Code's session rule).
+
+The field is a tri-state rather than a plain "kept" flag because absence cannot mean "not kept": an Agents session's
+Claude card and a manager card look the same otherwise (a session, no `agent`, no `always_keys`), and an older
+manager sends neither. So a new client hides the choice only on an explicit `false`, and keeps Always on every card
+an older manager sends. An older client ignores the field and keeps offering Always on manager cards; answering it
+allows once, as before, and is no longer recorded as an Always. The value is the manager's: whatever a node sends in
+the field (or in `tool_title`) is dropped.
+
+`tool_title` is the tool's name for people in the user's language (`assistant-tool_titles` in the hub's catalog,
+"iPhone control" for `iphone_do`), set by the manager on its own tools' cards only. Clients title the card with it,
+and otherwise with `tool_name` as before; Agents sessions' cards never carry it.
 
 ### Subagent deliveries as tool results
 
@@ -1101,6 +1131,10 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET / PUT | `/api/v1/machines/{mid}/clipboard/settings` | The machine's clipboard sharing switch, off by default, kept per machine in settings (works while offline): PUT `{"enabled":bool}` → 200 `MachineClipboard`; GET → the same. Missing `enabled` 400 |
 | GET / PUT | `/api/v1/machines/{mid}/browser` | This Mac's ego lite (plugin `ego`, [plan-ego-browser.md](../plans/plan-ego-browser.md)): GET asks the node's `browser.status` on the spot → `Browser` (`{enabled, installed, version?, set_up, imported, analytics?, ready, note?, screen_sharing, displays?, job?}`); PUT `{"enabled": bool}` is the machine page's switch (the plugin's `machines`). Plugin not enabled or not a Mac → 404 |
 | POST | `/api/v1/machines/{mid}/browser/{install\|open\|cancel}` | The machine page's **Install ego lite**, **Open ego lite**, **Cancel**: the node runs it in the background, progress is in `job`. Plugin not enabled for this machine 404; offline, a job already running, or node too old 409 |
+| GET / PUT | `/api/v1/machines/{mid}/iphone` | The iPhones this Mac reaches for the assistant (extension `iphone`, [iphone.md](../extensions/iphone.md)): GET asks the node's `iphone.status` on the spot → `IPhone` (`{enabled, installed, version?, devices: [{id, name, product_type?, ios?, paired, usb?, state?, transport?, connected, locked, capabilities?, ready, note?, allowed}], note?, job?}`); PUT `{"enabled": bool}` is the machine page's switch (the extension's `machines`). Extension not enabled, or a computer the bridge doesn't run on (Mac and Linux only) → 404 |
+| POST | `/api/v1/machines/{mid}/iphone/{pair\|forget\|cancel}` | `{"device"?}` (forget needs it): the machine page's **Pair**, **Forget**, **Cancel**, the node's `iphone.pair` / `iphone.forget` / `iphone.cancel` → 200 `IPhone`, a pairing's progress in its `job`. Pairing needs the computer on (404), forget and cancel only the extension; pair and forget need a device (400); offline or node too old 409 |
+| GET | `/api/v1/iphone` | Every iPhone the Macs reach, each once, for an iPhone's app to find itself: `{on, devices: [{…device, machines: [{id, name, enabled}], consented}]}` (`on` false and no devices while the extension is off) |
+| PUT | `/api/v1/iphone/consent` | `{"device", "allowed", "app"?: {"bundle_id", "name"}}` (`app`: the Persona app itself, kept in `self_apps` / `self_names` so the core never operates it): an iPhone's own **Allow the Assistant to Operate This iPhone**, kept in the extension's `phones` → that device as in `GET /api/v1/iphone`. Only the user's own signed-in app (403 otherwise); extension off 404; no device 400 |
 | GET | `/api/v1/machines/{mid}/launchers?purpose=` | `{"launchers":[Launcher], "default":{provider, model, effort, runtime?}}`: `default` is the effective value for this purpose in **Model Settings** (`purpose` defaults to `agent.new`; the main chat's picker passes `assistant`), `provider` is the launcher name, and only `assistant` has `runtime`; the client shows "Default: …". For purposes that are not launcher-based, `default` is null. For `agent.new` only, `tiers` `[{name, launcher, model?, effort?, description?}]` and `tiers_profile` `{id, name}`: the Agent presets, the tiers of the model profile in use whose launcher this computer has (its `launchers`), by name; absent with no profile in use or none to offer ([model-profiles.md](../assistant/model-profiles.md) ("Agent presets (tiers)")) |
 | GET | `/api/v1/machines/{mid}/launchers/{name}/models?refresh=1` | The models this launcher's CLI lists in `/model` (choosing a model for a new Agent, `docs/assistant/model-config.md` ("Choosing a model for a new Agent")): `{"agent","models":[{"id","name","description"?,"resolved"?,"default"?,"efforts"?,"default_effort"?,"custom"?}],"locked"?}`. `id` is the value to put in `model` when starting a session; `default` is the one that runs when no model is given (picking it is the same as not picking); `resolved` is what an alias (opus…) maps to under this launcher's settings; `efforts` are the reasoning efforts it supports, weakest to strongest; `locked` is the reason the launcher hard-codes its own `--model`, so picking has no effect. Agents with no list to ask (compatible Codex forks, runtime ones) return `models: []`. The node starts the CLI once to ask (a few seconds) and caches for 10 minutes; `refresh=1` asks again; if it can't list them, 502 `{"error"}`; if this computer's node doesn't have the feature yet, 404 `{"error","code":"node_outdated"}` (same as an old hub; the App hides the model row). After the CLI's own entries come the model IDs the user typed for this launcher on this computer before and that ran (`custom: true`, most recent first, at most 8, without the ones the list already has; no `efforts`: they aren't known; none for a `locked` launcher or an agent other than Claude Code / Codex), see `docs/assistant/model-config.md` ("Typing a model ID", #1644) |
 | DELETE | `/api/v1/machines/{mid}/launchers/{name}/models/custom?model=<id>` | Forget one typed model ID of this launcher on this computer (the list row's "Forget", #1644) → `{"ok":true}`; forgetting one that isn't remembered is also 200; a `model` that isn't a model ID (`proto.ValidModelID`) 400; full-access devices only (403 for a read-only role, extensions can't call it) |
@@ -2231,7 +2265,7 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   the ids as opaque, as before (`docs/integrations/engines.md` "Named herdr sessions").
 - `herdr_running` / `herdr_running_known` in `node.info`: whether the classic herdr server answers right now, and whether the node can tell (a machine using herdr-core
   has no such socket and sends neither). Old nodes send neither; the hub uses this to tell "not running" from "unknown" (`docs/integrations/engines.md`).
-- `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;
+- `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage", "iphone"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`; iphone, #3450, answers only `plugin.node.call`: `status`, `call`, `pair`, `forget`, `cancel`; `call` takes `IPhoneCall {device?, session?, op: status|look|do, args?, approved?, confirm?, self_apps?, self_names?, timeout_ms?}` and answers `IPhoneResult {output?, text?, image?, needs_approval?, approval_summary?, approval_id?}`, `approval_summary` being the core's approval as an object (`proto.IPhoneApproval`); a failed call is an RPC error with `data: {"sent": "no" | "unknown"}`; see `docs/extensions/iphone-pairing.md` ("The node program `iphone` (#3450)")). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;
   old nodes don't send it, and the hub keeps using `computer.*`, `browser.*` (new nodes still answer those). See `docs/extensions/extensions.md` ("Built-in node programs").
 - `herdr.server.start` (hub → node, no params, returns `{running}`): the user tapped "Start" in the Agents list. Not bound by `herdr_autostart`;
   if it can't start, the reason is returned the same way as `engine_missing`. Old nodes don't have this method, and the hub returns 502 rather than claiming herdr can't start.
