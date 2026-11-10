@@ -1,0 +1,8 @@
+{
+  "title": "Knowledge points",
+  "empty": "No knowledge points under this topic yet.",
+  "reason": "Why: {text}",
+  "cause": "Cause: {text}",
+  "source_title": "Open {name}",
+  "when": "Confirmed {day}"
+}

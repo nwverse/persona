@@ -6,10 +6,10 @@ import { formatDate, t } from "../i18n";
 import { contextBody } from "./context-body";
 import type { Session } from "./types";
 
-export const KB_KINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
+export const KB_KINDS = ["projects", "topics", "chats", "people", "docs", "meetings", "events", "recordings"] as const;
 export type KBKind = (typeof KB_KINDS)[number];
 
-export const KIND_TITLE: Record<KBKind, string> = { projects: t("lib-kb.kind_projects"), chats: t("lib-kb.kind_chats"), people: t("lib-kb.kind_people"), docs: t("lib-kb.kind_docs"), meetings: t("lib-kb.kind_meetings"), events: t("lib-kb.kind_events"), recordings: t("lib-kb.kind_recordings") };
+export const KIND_TITLE: Record<KBKind, string> = { projects: t("lib-kb.kind_projects"), topics: t("lib-kb.kind_topics"), chats: t("lib-kb.kind_chats"), people: t("lib-kb.kind_people"), docs: t("lib-kb.kind_docs"), meetings: t("lib-kb.kind_meetings"), events: t("lib-kb.kind_events"), recordings: t("lib-kb.kind_recordings") };
 
 export function isKind(k: unknown): k is KBKind {
   return typeof k === "string" && (KB_KINDS as readonly string[]).includes(k);
@@ -35,7 +35,7 @@ export interface KBEntry {
   relevance: number;
   tags?: string[] | null;
   updated?: string;
-  /** projects: "short · active" (kind · status); chats: dm / group… */
+  /** projects: "short · active" (kind · status); chats: dm / group…; topics: how many knowledge points, in decimal */
   extra?: string;
 }
 
@@ -74,6 +74,99 @@ export interface KBDetail {
   segments?: KBSegment[] | null;
   /** Recordings may retain older minutes while a newer revision is pending or failed. */
   minutes?: RecordingMinutes | null;
+  /** topics: the knowledge points (docs/assistant/knowledge.md "Knowledge points"). */
+  points?: TopicPoint[] | null;
+}
+
+// ── knowledge points (topics) ───────────────────────────
+
+/** What a knowledge point is. The hub may add kinds; an unknown one shows as a plain point. */
+export const POINT_KINDS = ["concept", "decision", "practice", "pitfall", "fact", "question"] as const;
+export type PointKind = (typeof POINT_KINDS)[number];
+
+export function isPointKind(k: unknown): k is PointKind {
+  return typeof k === "string" && (POINT_KINDS as readonly string[]).includes(k);
+}
+
+/** A point's kind as a word; an unknown kind as "Point". */
+export function pointKindLabel(k: string): string {
+  return isPointKind(k) ? t(`lib-kb.point_${k}`) : t("lib-kb.point_plain");
+}
+
+/** Pitfalls and open questions are what to watch out for: they get the warning tone. */
+export function pointWarns(k: string): boolean {
+  return k === "pitfall" || k === "question";
+}
+
+export interface TopicSource {
+  kind: string;
+  id: string;
+  /** The day the source said it, YYYY-MM-DD. */
+  day?: string;
+}
+
+export interface TopicPoint {
+  id: string;
+  /** Subtopics below the topic, outermost first (0–2). */
+  path?: string[] | null;
+  kind: string;
+  text: string;
+  /** decisions: the reason; pitfalls: the cause. */
+  why?: string;
+  sources?: TopicSource[] | null;
+  /** When it was last confirmed, YYYY-MM-DD. */
+  when?: string;
+}
+
+export interface PointGroup {
+  /** The subtopic path this group is under ([] for the points directly under the topic). */
+  path: string[];
+  points: TopicPoint[];
+  groups: PointGroup[];
+}
+
+/**
+ * A topic's points as the page shows them: the ones directly under the topic first, then one group per subtopic in the
+ * order the subtopics first appear, each with its own points and its subtopics' groups. Blank path parts are dropped.
+ */
+export function groupPoints(points?: TopicPoint[] | null): PointGroup {
+  const root: PointGroup = { path: [], points: [], groups: [] };
+  for (const p of points ?? []) {
+    if (!p?.text) continue;
+    let g = root;
+    for (const raw of p.path ?? []) {
+      const name = typeof raw === "string" ? raw.trim() : "";
+      if (!name) continue;
+      let next = g.groups.find((x) => x.path[x.path.length - 1] === name);
+      if (!next) g.groups.push((next = { path: [...g.path, name], points: [], groups: [] }));
+      g = next;
+    }
+    g.points.push(p);
+  }
+  return root;
+}
+
+/** A point's sources that the detail names, with their names (unknown ones are left out: no raw ids on the page). */
+export function pointSources(p: TopicPoint, links?: KBEntry[] | null): KBEntry[] {
+  const seen = new Set<string>();
+  const out: KBEntry[] = [];
+  for (const s of p.sources ?? []) {
+    const e = (links ?? []).find((l) => l.kind === s.kind && l.id === s.id);
+    const key = `${s.kind}/${s.id}`;
+    if (e && !seen.has(key)) {
+      seen.add(key);
+      out.push(e);
+    }
+  }
+  return out;
+}
+
+/** A topic's point count from its list entry (extra) or its metadata (points). */
+export function topicPointCount(e: Pick<KBEntry, "kind" | "extra">, meta?: Record<string, unknown> | null): number | null {
+  if (e.kind !== "topics") return null;
+  if (typeof meta?.points === "number") return meta.points;
+  const n = Number.parseInt(e.extra ?? "", 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 export interface MinutesPoint {
@@ -288,6 +381,11 @@ export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): Entr
         footer: t("lib-kb.ignored_footer"),
       },
     ];
+  } else if (kind === "topics") {
+    // Topics are curated as a whole: one list, the ones with the most knowledge first after any importance set by hand.
+    const n = (e: KBEntry) => topicPointCount(e) ?? 0;
+    const sorted = [...items].sort((a, b) => importanceRank(a.importance) - importanceRank(b.importance) || n(b) - n(a) || a.name.localeCompare(b.name));
+    out = [{ key: "all", title: tag ? `#${tag}` : t("lib-kb.section_all"), items: sorted }];
   } else if (tag) {
     out = [{ key: "tag", title: `#${tag}`, items: list }];
   } else {
@@ -526,6 +624,7 @@ export function entryFromDetail(base: KBEntry | undefined, d: KBDetail): KBEntry
   const line = str(m.one_line) || str(m.note);
   if (line) e.one_line = line;
   if (e.kind === "projects" && str(m.kind)) e.extra = `${str(m.kind)} · ${str(m.status) || "active"}`;
+  if (e.kind === "topics" && typeof m.points === "number") e.extra = String(m.points);
   return e;
 }
 
@@ -801,4 +900,12 @@ export function tagUpdate(kind: string, f: TagForm): KBUpdate {
     u.project_kind = f.projectKind;
   }
   return u;
+}
+
+/** A point's day (YYYY-MM-DD) as a short date: month and day this year, with the year otherwise. */
+export function pointDay(day: string, now = new Date()): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return day;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return d.getFullYear() === now.getFullYear() ? monthDay(d) : yearMonthDay(d);
 }

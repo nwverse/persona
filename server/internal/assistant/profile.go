@@ -67,6 +67,8 @@ type Settings struct {
 	StartRequestedTasks *bool `json:"start_requested_tasks,omitempty"`
 	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
 	RecordingDays *int `json:"recording_days,omitempty"`
+	// KBTopics: the knowledge base organizes knowledge points by topic (#3783, kb/topics.go). nil is on (the default).
+	KBTopics *bool `json:"kb_topics,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -282,6 +284,18 @@ func (s *Service) recordingDaysNow() int {
 	return *v.RecordingDays
 }
 
+// kbTopics: the knowledge base organizes knowledge points by topic (kb_topics, on by default).
+func (s *Service) kbTopics(ctx context.Context) bool { return quietOn(s.settings(ctx).KBTopics) }
+
+// kbTopicsNow is kbTopics for the knowledge base loop, from the last settings read well: a database that does not
+// answer neither starts nor stops the curation.
+func (s *Service) kbTopicsNow() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	v, ok := s.settingsLastGood(ctx)
+	return !ok || quietOn(v.KBTopics)
+}
+
 // launcherNow is the launcher new conversations start with: Model configuration › Main chat's, else the assistant's own.
 func (s *Service) launcherNow(ctx context.Context) string {
 	if rec, err := s.modelRecord(ctx, "assistant"); err == nil && rec.Binding.Provider != "" {
@@ -370,6 +384,8 @@ type assistantView struct {
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
+	// KBTopics is in effect, like MainTasksQuiet.
+	KBTopics bool `json:"kb_topics"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault string `json:"meeting_attendance_default"`
 	// IdleCloseHours is in effect (0: off).
@@ -396,6 +412,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx), MeetingAttendanceDefault: s.meetingAttendanceDefault(ctx),
+		KBTopics:          quietOn(v.KBTopics),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),

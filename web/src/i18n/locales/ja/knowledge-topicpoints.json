@@ -1,0 +1,8 @@
+{
+  "title": "ナレッジポイント",
+  "empty": "このトピックにはまだナレッジポイントがありません。",
+  "reason": "理由：{text}",
+  "cause": "原因：{text}",
+  "source_title": "{name} を開く",
+  "when": "{day} に確認"
+}

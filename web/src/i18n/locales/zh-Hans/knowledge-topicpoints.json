@@ -1,0 +1,8 @@
+{
+  "title": "知识点",
+  "empty": "这个主题下还没有知识点。",
+  "reason": "理由：{text}",
+  "cause": "原因：{text}",
+  "source_title": "打开「{name}」",
+  "when": "{day} 确认"
+}

@@ -134,6 +134,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
 		}
+		if in.KBTopics != nil {
+			v.KBTopics = in.KBTopics
+		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
 		}
