@@ -139,11 +139,11 @@ func liveHeap() uint64 {
 
 // Once a long line is through, Serve keeps only its first buffer, also while it waits for the rest of the next line:
 // a bufio.Scanner kept what the line grew for the connection's life (512 KiB per computer after one 256 KiB session
-// list, 32 MiB after a 21 MB body). That first buffer is small: an idle connection keeps 18 KiB (68 KiB with a
+// list, 32 MiB after a 21 MB body). That first buffer is small: an idle connection keeps 17.7 KiB (66.5 KiB with a
 // 64 KiB start).
 func TestServeKeepsNoLongLine(t *testing.T) {
 	for _, c := range []struct{ conns, line, each int }{{1, 21 << 20, lineStart}, {16, 256 << 10, lineStart},
-		{256, 100, 20 << 10}} {
+		{256, 100, 18 << 10}} {
 		t.Run(fmt.Sprintf("%dx%d", c.conns, c.line), func(t *testing.T) {
 			before := liveHeap()
 			ctx, cancel := context.WithCancel(context.Background())

@@ -16,9 +16,9 @@ import (
 )
 
 // streamKeptLimit is what one idle stream pair (both ends) may keep after carrying node traffic both ways. Each message
-// compressed on its own, a pair keeps 36-41 KiB; with context takeover each end keeps its flate writer and window,
-// 1,690 KiB a pair.
-const streamKeptLimit = 64 << 10
+// compressed on its own, a pair keeps 36-42 KiB (64-76 KiB built with -race); with context takeover each end keeps its
+// flate writer and window, 1,690 KiB a pair.
+const streamKeptLimit = 128 << 10
 
 // nodeLines is node traffic as a stream carries it: JSON lines, a session list longer than one 32 KiB write among
 // short answers below the compression threshold.
