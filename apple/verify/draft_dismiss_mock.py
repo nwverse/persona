@@ -64,7 +64,7 @@ class Handler(mock.H):
                                                    if not i["body"].get("dismissed_at")]})
         if path.endswith("/feed") and path.startswith("/api/v1/assistant/conversations/"):
             with lock:
-                return self.send_json({"items": copy.deepcopy(mock.TASK_FEED[mock.ASK1]), "plans": {}})
+                return self.send_json({"items": copy.deepcopy(mock.TASK_FEED[mock.ASK1]), "plans": {}, "next_cursor": ""})
         return super().do_GET()
 
     def do_POST(self):
