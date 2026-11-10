@@ -2,6 +2,28 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Pages that move sideways under iPhone Duo's side bars (#2752)
+
+- Under iPhone Duo's vertical bars (the outer display, the inner one on its side), a view that hosts a `UINavigationController` and moves sideways makes the controller run its deferred transition on every layout pass and lay its top view controller out twice (`transitionConductor:didStartDeferredTransition:context:` → `_layoutTopViewControllerLookForNested:`, then `_computeAndApplyScrollContentInsetDeltaForViewController:` → `_updateTopViewFramesToMatchScrollOffsetInViewController:…`). The shell's slide between Assistant and Agents spent 28 ms a frame (p95), 140 ms of hitches a second. An `offset`, a render-only `transformEffect` and a page under a mask all cost the same; only not moving helps (`ShellPageSlide` cross-fades there). An ordinary iPhone runs the same passes cheaply, so measure on the Duo simulator.
+- Measuring with the runtime CLI (`scripts/app/personactl.py launch`), install the build first (`xcrun simctl install`): the launcher runs whatever is installed, and a round of experiments once measured an older build.
+
+## A relay push keeps the fallback's sound unless the service extension sets it (#1862)
+
+- The relay writes the outer `aps` itself, `"sound":"default"` included, so the "New message" fallback rings. The notification service extension starts from `request.content.mutableCopy()`, which keeps that sound: replacing the texts, category and interruption level from the sealed payload is not enough. `PushCrypto.apply` sets the sound from the sealed `aps` and clears it when there is none; a silent notification that rings through the relay but not with direct APNs points here.
+- `apple/Shared` compiles for watchOS 10 too, and some UserNotifications APIs don't exist there: `UNNotificationSound(named:)` builds for iOS and the Mac and fails only in the watch build (hosted "iOS and Watch" job). A Mac unit test of shared code does not catch it.
+
+## Nested settings navigation (#2522)
+
+- A nested settings page must keep its parent in programmatic paths too. Apple Connectors was an inline section, not a page: moving the sent ledger required a real Connectors destination and `[.connectors, .sent]` for legacy launches. A generic `connectors/<id>` parser needs a distinct ledger sentinel: use `connectors/-sent` as the web does, retain a connector whose ID is `sent`, keep unrelated URL/security rules unchanged, and test Back in compact and Mac split layouts.
+
+- When refreshing a disposable Apple build snapshot, mirror removed Swift inputs as well as additions (#2522). A file-list `rsync` leaves a deleted settings page behind; XcodeGen still compiles that stale file against the new immutable preference type. Remove only the stale files in the owned snapshot, retain the failure evidence, and rerun against the actual checkout before blaming a merged product change.
+
+## Retiring a conversation preference (#2477)
+
+- Removing an Appearance row also requires removing its destination case, DEBUG deep link and localized strings. Ignore the retired `openAppearance chat` value rather than falling through to the Avatar page. The Appearance section is on the settings root, not a separate overview page.
+- Fixed defaults must not read legacy UserDefaults values, including the argument domain used by UI launches. Test stored disabled/folded/expanded modes and old line counts; keep other platforms' presentation branches when they still serve Mac, Vision Pro or Agent conversations. Per-message Expand / Collapse remains independent of the retired preference.
+- A text truncated by `lineLimit` retains its full accessibility label. Combine a three-line policy unit assertion with real folded screenshots and Expand controls; an accessibility assertion about the hidden last line alone is not evidence of folding.
+
 ## Idle-energy profiling and caller attribution (#1634)
 
 - Use an isolated mock hub and keep the build, simulator profile, data and visible-page history identical. Frame-count probes and frozen animations change the workload. A runtime-CLI root rebuild can pin `scenePhase`; use a cold launch and real tab actions instead. Home is asynchronous: verify the background transition before starting its window.
@@ -244,7 +266,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   Real hub pushes a machine's sessions every 2 seconds with new `updated_at`; state + last-update sorting reordered spaces on 36% of pushes and jumped the screen.
   - Sort by a time independent of each output: working sessions by work start (`Session.sortDate`, `SpaceGroup.sortDate`).
   - Hold pushes during touch, inertia, covered pages or another tab; land together 0.5 seconds after stopping, at most 5 seconds even with continuous scrolling;
-    never hold needs-you, questions, offline or errors (`docs/apple/ios-state.md` ("Timeliness")). The list reads only an intermediary (`AgentsFeed`,
+    never hold needs-you, questions, offline or errors (`docs/apple/ios-state.md` ("Timely (bounded)")). The list reads only an intermediary (`AgentsFeed`,
     `withObservationTracking` following the model), with an unobserved hold switch. A list `@State` snapshot would redraw at scroll start.
   - Holding must actually block pushes. These leaks still reevaluate each push:
     - Reading the model in `onChange` / `onScrollPhaseChange` counts as body observation.
@@ -349,6 +371,9 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Within one NavigationStack, pushing view-based `NavigationLink { destination }` then value-based `NavigationLink(value:)` inserts the new page **underneath**:
   taps look ineffective until Back (Settings › Machines › card, machine detail › session; Knowledge search entries also reveal a yellow warning on return, 2026-10-31). Use an entirely value-based chain (`MachineListRoute`,
   `MachineDetailRoute` + `navigationDestination(for:)`) or entirely view-based. `navigationDestination(isPresented:)` is view-based too.
+- Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
+  Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
+  (`splitPush`), or give each link its own row.
 - If `x` in `NavigationPath([x])` is `AnyHashable`, the recorded type is `AnyHashable` and a concrete `navigationDestination(for:)` cannot match,
   producing a yellow warning. Append concrete types (`SettingsView.openDebugPage`).
 - `NavigationSplitView` detail pages use destinations registered in the sidebar and are built in its environment. Put detail environment values
@@ -371,6 +396,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 
 - Under iPhone Duo's vertical bars the system draws the navigation bar's title as a row over the content, not in the side column with the buttons: a page that draws its own title shows the name twice. Remove the system's with `.toolbar(removing: .title)` while yours is on screen (`ChatView`, 2026-11-08).
 - A `GeometryReader` that ignores the safe area on an edge reports no inset of its own there (`safeAreaInsets.trailing` was 0 on iPhone Duo's outer display, where the system's bars take the right-hand column): a rail meant for that column came out 59 pt wide against the screen edge, half off it. Measure the column as a reader inside the safe area less one that ignores it (`ShellSideRail`, 2026-11-07).
+- Every page on the shell's strip draws its own bar, so each one has to switch to `ShellSideRail` on `\.shellRailEdge`; the moving bar only stands in while the strip slides. The optional Messages page was missed and put its bar back across the top whenever it was in front (#2318); `ShellSideRailTests` checks the pages' rails on an iPhone Duo.
 - When capping chips in horizontal scrolling, do not put `frame(maxWidth:)` / `scaledFrame(maxWidth:)` outside the background (2026-11-05, #3010): `ScrollView(.horizontal)` proposes no width,
   and flexible frames pass that unlimited proposal through. The chip and background measure the entire title while only the frame's occupied space is capped;
   background and space diverge: shorter chips leave larger gaps, large text does not truncate and capsules overlap neighbors.
@@ -660,6 +686,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   (`Tab.workbench` collided with `-workbench`, renamed `-openWorkbench`). Use `open…` / `show…` names unlike type members and register in `release.sh`.
   Stored properties also collide (2026-10-31, `AgentsListMenu.Actions`.openMonitor vs `-openMonitor` stopped TestFlight 50). For new properties,
   first build locally `xcodebuild build -configuration Release -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO` and run `release.sh` `strings` checks on `Release-iphoneos/Persona.app/Persona`.
+  It happened again with `WorkspaceSidebarCard.openAgent` vs `-openAgent` (2026-11-09, #1675 stopped TestFlight 214, renamed `selectAgent` in #2179):
+  name closure properties `select…` / `on…`, not `open…` / `show…`. `@State` / `@Binding` / `@Environment` properties are stored as `_name` and never collide.
+  A quick check against the source: the list in `release.sh` into a file, then
+  `git grep -hoE '(var|let|case)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' -- 'apple/*.swift' ':!apple/PersonaTests' ':!apple/PersonaUITests' ':!apple/Persona/Debug' | awk '{print $2}' | sort -u | grep -xF -f <list>`
+  (each hit that is not a property wrapper or a Mac-only case is a collision).
 - Launch-argument defaults are `strings` (`-dev.compact YES` is "YES"). Read booleans / numbers with `bool(forKey:)` / `integer(forKey:)` / `double(forKey:)` like AppStorage,
   not `object(forKey:) as? Bool`, which silently falls back (#1473 `StoredValue` broke `-dev.compact YES`; `CompactListShots` showed cards instead of compact rows, #2147).
 - Live Activities (`docs/apple/live-activity.md`): ActivityKit uses default JSONDecoder for `content-state`; `Date` values start 2001; pass Unix-second numbers.
@@ -669,11 +700,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   Island numbers (TPM, tokens, load) consume push budget: hub sends only displayed fields, two significant figures, at most once per minute per device.
   Sharing with another app on 18 Pro gives two width-limited 28 pt compact activities (second clipped);17 Pro and others use minimal.
   Only iOS 27 `isDynamicIslandLimitedInWidth` reports width limitation; app cannot know presentation or other apps. Compact / minimal provide no width, making `ViewThatFits` useless.
-  Screenshot both models (`scripts/app/island_peer.sh` + `LiveActivityShots`, `docs/apple/live-activity.md` ("Sharing Dynamic Island with other apps")).
+  Screenshot both models (`scripts/app/island_peer.sh` + `LiveActivityShots`, `docs/apple/live-activity.md` ("Sharing the Dynamic Island with other apps")).
 - Missing shared keychain groups (push-relay `.push` private key; avatar `.look` also used builds 92–103) silently fall back, while simulator always works:
   build 92 extension signatures had no groups (unsigned archive + ad-hoc signing without entitlements, empty `$(AppIdentifierPrefix)`), always default avatar / system blue.
   Use `$(DEVELOPMENT_TEAM).` prefix in plist; after entitlement / signing changes run `scripts/release/entitlements.py check` on exported ipa (`docs/operations/release.md` ("entitlements")).
-- Simulator Live Activity rendering is insufficient (2026-11-02, build 98 signing fixed but device still default, even built-in avatar; `docs/apple/live-activity.md` ("Why build 98 still failed")):
+- Simulator Live Activity rendering is insufficient (2026-11-02, build 98 signing fixed but device still default, even built-in avatar; `docs/apple/live-activity.md` ("Why build 98 was still wrong")):
   - Put rendered data in ContentState and oversized images in App Group files. **Live Activity extensions cannot read / write keychain on device**:
     build 103 app shared-group write / read succeeded, extension never wrote one diagnostic (simulator both work; Apple only documents its separate sandbox).
     Unchanged-content updates may not redraw; content must really change.
@@ -896,6 +927,19 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
   - Initially ignored, pre-appearance rows never redrew or attached gestures, failing 2–3/10.
   - Recognizer logs showed no touches in failures; observing the switch gave 10/10.
 
+## An edge gesture the list waits for needs a hold (2026-11-09, #2615)
+
+- **What happened**: the chat list's scroll pan waits for the right-edge navigator to fail (`shouldBeRequiredToFailBy`). The navigator began after 8 pt of vertical movement in the 16 pt band at the list's right edge, which is where a right thumb often lands for an ordinary scroll.
+  - The list stopped following the finger, and letting go jumped to the user message under the finger's last position.
+  - In the flipped list, a push up from low on the screen ends over an older message, so it looked like a jump back toward the top.
+- **Direction is not enough**: a recognizer that the list's scrolling waits for must begin on something a scroll never does. If it begins on vertical movement, it takes ordinary scrolls in the same direction.
+  - Begin only after a hold without movement (`Theme.Motion.edgeScrubHold`), and fail at once on any movement past the slop during the hold. The list then scrolls as anywhere else, and the pager and drawer still get sideways swipes.
+  - Cancel the hold's timer in `reset()`, and check that the recognizer is still `.possible` when the timer fires.
+- **A release commits only a choice**: opening on the tick under the finger is not a pick. `EdgeScrubState.moved` is set only when the finger goes past the slop to another tick than the one it opened on, and a release without it only closes the navigator.
+  - A tick change alone is not enough: a finger held still trembles by a point or two, and with many messages the ticks are `Theme.Size.edgeTickGapMin` (5 pt) apart, so a tremble over the line between two ticks would count as a pick.
+- **Tests**: UI tests that drive the navigator hold first (`press(forDuration: 0.5, thenDragTo:…)`). `testEdgeSwipeScrollsTheList` swipes quickly in the band and checks that nothing jumps and the list follows the finger.
+  - `thenHoldForDuration` after a fast synthesized drag does not stop the list from coasting once the finger lifts: the list was where the finger left it, then moved on by more than the drag itself. Measure a lower bound in the finger's direction, and tap to stop the coasting before reading frames.
+
 ## Context compaction as a divider (2026-11-04, #1064)
 
 Claude Code writes three things: `system/compact_boundary` (`compactMetadata.trigger` `manual` / `auto`; idle compaction also `auto`), a following `isCompactSummary` user line,
@@ -929,6 +973,18 @@ which calls `access(keyPath:)` before mutation, registering a body dependency; m
 (runtime CLI ping fails, XCUITest query timeout). `sample <pid>` shows the chain.
 For write-only records (trace / counts), mark storage `@ObservationIgnored`, manually `access` in computed reads and `withMutation` around writes,
 so calling bodies do not observe. `@State` initializer expressions must have no side effects; they run more than once.
+
+## A page drawn while `@Observable` tells its observers reads the old value (2026-11-09, #2189)
+
+New Chat in a long main conversation sometimes left the conversation on screen (TestFlight 213, about one tap in five in the
+simulator); #1749's "the current conversation changed but the page did not redraw" was the same. Observation tells observers in
+`willSet`, before the new value is stored. SwiftUI's `ObservationCenter.invalidate` can flush at that moment
+(`GraphHost.asyncTransaction` → `flushTransactions()`, seen when a button action's `withAnimation` change meets a pending update),
+so the page's body ran inside the setter, read the old conversation and watched it again; the store that followed told nobody.
+A page that chooses what to show from a model property set in actions: store the value first, then call `withMutation(keyPath:) {}`
+(`AppModel.assistantCurrent`), so a body drawn while observers are told reads the new value. Keep `@Observable`'s own rules: an
+equal value notifies no one, and what the property's `didSet` did runs whether or not it notified. Finding it: a DEBUG note in the
+body that comes between the action's note and the setter's, with the old value, and `Thread.callStackSymbols` from that body.
 
 ## Gray outside sidebar card corners: overlay after mask is not masked (2026-11-04, #1247)
 

@@ -100,3 +100,55 @@ func TestTypedErrorAndNestedErrorArgs(t *testing.T) {
 		t.Fatal("nested error not localized")
 	}
 }
+
+// The hub localizes an inbox list item by item (hub/inbox_forms.go): each item alone reads as it does within the whole
+// answer, InboxJSON's if it changes, else InboxReencoded's once anything in the answer changed; so does the rest of the
+// answer. Not when the answer is itself an item: then InboxJSON visits none of its list.
+func TestInboxJSONItemByItem(t *testing.T) {
+	zh := func(key string) string { b, _ := json.Marshal(T(ZhHans, key)); return string(b) }
+	raw := []byte(`{"items":[` +
+		`{"id":"a","source":"mail","kind":"mail","agent":{"error":` + zh("inbox-errors.no_item") + `},"mail":{"uid":9007199254740993}},` +
+		`{"id":"b","source":"mail","kind":"mail","title":"<b>no such inbox item</b>","z":1.50,"a":[]},` +
+		`{"error":` + zh("inbox-errors.no_item") + `},3],` +
+		`"triage":{"reason":` + zh("assistant-inbox_triage.busy") + `},"as_of":"t"}`)
+	for _, l := range []Lang{En, Ja} {
+		var whole struct {
+			Items  []json.RawMessage          `json:"items"`
+			Triage json.RawMessage            `json:"triage"`
+			Rest   map[string]json.RawMessage `json:"-"`
+		}
+		out := InboxJSON(l, raw)
+		if err := json.Unmarshal(out, &whole); err != nil || len(whole.Items) != 4 {
+			t.Fatalf("%s: %v %s", l, err, out)
+		}
+		var items []json.RawMessage
+		var top map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &top)
+		_ = json.Unmarshal(top["items"], &items)
+		changed := 0
+		for i, it := range items {
+			form := InboxJSON(l, it)
+			if string(form) != string(it) {
+				changed++
+			} else {
+				form = InboxReencoded(it)
+			}
+			if string(form) != string(whole.Items[i]) {
+				t.Errorf("%s item %d: %s, within the answer %s", l, i, form, whole.Items[i])
+			}
+		}
+		delete(top, "items")
+		rest, _ := json.Marshal(top)
+		var restForm map[string]json.RawMessage
+		_ = json.Unmarshal(InboxJSON(l, rest), &restForm)
+		if string(restForm["triage"]) != string(whole.Triage) || changed != 2 {
+			t.Errorf("%s: triage %s, within the answer %s; %d items changed, want 2", l, restForm["triage"], whole.Triage, changed)
+		}
+	}
+	if !InboxIsItem([]byte(`{"id":"a","source":"mail","kind":"mail"}`)) || InboxIsItem([]byte(`{"id":"","source":"mail","kind":"mail"}`)) || InboxIsItem(raw) || InboxIsItem([]byte(`null`)) {
+		t.Fatal("InboxIsItem")
+	}
+	if string(InboxReencoded([]byte(`{"b":"<","a":9007199254740993}`))) != `{"a":9007199254740993,"b":"\u003c"}` || string(InboxReencoded([]byte(`{`))) != `{` {
+		t.Fatal("InboxReencoded")
+	}
+}

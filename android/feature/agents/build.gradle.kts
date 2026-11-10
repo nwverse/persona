@@ -6,7 +6,13 @@ plugins {
 
 android {
     namespace = "persona.feature.agents"
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            // RecentSetupsFixtureTest reads spec/fixtures/recents.
+            all { it.systemProperty("persona.repo.root", rootProject.projectDir.parentFile.absolutePath) }
+        }
+    }
 }
 
 dependencies {
@@ -15,7 +21,6 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:navigation"))
-    implementation(libs.compose.icons)
     implementation(libs.androidx.lifecycle.compose)
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${libs.versions.lifecycle.get()}")
     implementation(libs.androidx.activity)

@@ -45,8 +45,10 @@ Sources:
   **Not blocked**: Bash can build the path in any number of ways (`cd .. && cat he*`), so matching command text cannot catch all of them; blocking it fully needs Claude Code's sandbox or OS-level isolation. When the main chat runs on Codex, this rule does not exist yet either.
   The memory API with `?space=health` reads and writes exactly this memory.
 - **node**: node recognizes the Claude project directory that corresponds to the health directory (`isAssistantProject` in `server/internal/node/sessions_offline.go`), and treats health chat transcripts as assistant chats, same as the assistant's.
-- **Which space**: in the session list the hub sends, every health chat carries `space: "health"` (`proto.Session.Space`, filled from cwd in `server/internal/hub/hub.go` and `server/internal/hub/assistant_link.go`);
+  A health chat is listed in the health directory however its model `cd`s (into `reports/`, `/tmp`, anywhere), running and at rest (#2368): Claude Code writes the shell's directory after a `cd` into every transcript line, so the node goes by where the chat started (its start record, else the transcript's first `cwd`, else its project directory's name; `readQuickMetaSince`, `assistantHome`).
+- **Which space**: a chat's space comes from the directory it started in; a `cd` into a subfolder or anywhere else does not move it. In the session list the hub sends, every health chat carries `space: "health"` (`proto.Session.Space`, filled from cwd in `server/internal/assistant/fleet_sessions.go`, `server/internal/assistant/fleet_routes.go` and `server/internal/hub/assistant_link.go`);
   the assistant's own chats do not have this field. To decide which space a chat belongs to, the assistant looks at `space` first and falls back to the directory (`spaceOf` in `server/internal/assistant/health.go`).
+  These classify, so they take the directory itself only (`identity.SpaceOf`, exact). What hides or confirms (below) also counts a directory inside a health space (`identity.InHealthSpace`): there, when in doubt, health is the safe side.
 
 ## API
 
@@ -87,7 +89,7 @@ The decision always depends on the chat's space (the trusted session directory),
 | --- | --- | --- |
 | Push: turn ended, `notify_user`, plan waiting for you to start, scheduled task failed | Only says "New in your health space. Open Persona to see it.", without the body, chat title or task name | `hub/machine.go` `doneAlert`, `assistant/tools.go`, `tasks.go`, `schedule.go` |
 | Phone local notification: `phone_notify` | The hub replaces the title and body with the same localized notice as `notify_user` before forwarding to the phone; no health content reaches the notification | `assistant/fleet_tools.go` `mcpCall`, `assistant/health.go` `healthNotice` |
-| Push for question / authorization cards | The lock screen likewise only says **Health**; the card content is viewed in the App | `hub/push_payload.go` `interactionPayloadIn` (looks at `ix.Cwd`) |
+| Push for question / authorization cards | The lock screen likewise only says **Health**; the card content is viewed in the App. A card is judged by its chat's directory: the node and then the manager place a card of an assistant chat in the chat's directory, not the hook's after a `cd` (`identity.CardCwd`, the manager's `placeCard` covers older nodes), and any directory inside a health space counts as health (`identity.InHealthSpace`, #2368) | `hub/push_payload.go` `interactionPayloadIn` (looks at `ix.Cwd`), `assistant/fleet_machines.go` `placeCard` |
 | Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/feishu_cards.go`, `feishu_push.go`, `channels_plugin.go` |
 | `agent_send` / `agent_start` | Confirmed on the phone every time; the card states that once handed over, the record on the other side is not deleted with the Health space | `assistant/health.go` `confirmOutbound` |
 | `task_plan` | Never starts automatically; always waits for the user to tap start on the plan card | `assistant/tasks.go` |
@@ -198,3 +200,22 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/feishubot -run PersonaCards`.
 - Web: `cd web && npm test && npm run build`.
 - iOS / Mac: `PersonaTests/HealthModelTests` (lists and memory carry `space`, merging pushes, sidebar does not list health chats, new chats carry `space`); build `Persona` and `PersonaMac`.
+
+## Automatic workout reports (iOS)
+
+Settings → Health → Automatic workout reports is off by default. Enabling it requests
+HealthKit workout and heart-rate read access and records a consent timestamp. Opening
+or foregrounding the app uploads completed workouts lasting at least ten minutes
+whose start is after that timestamp. This version does not provide background
+HealthKit delivery. The device must reconnect to the same paired hub.
+
+Reports appear in the Health space using existing persona-card measurement cards,
+a minute-average heart-rate chart when available, and a brief interpretation. Missing
+measurements are omitted; route coordinates are not uploaded. Pace charts require
+measured splits and are not generated from the aggregate-only payload.
+
+The device atomically stores its HealthKit cursor with a bounded upload outbox.
+Failed uploads are retried on the next foreground visit. The assistant stores a
+workout UUID receipt in PostgreSQL so retries, restarts, and deletion of an old task
+do not recreate it. Turning the switch off clears the local pending uploads; already
+accepted reports may still complete. Re-enabling starts a new consent window.

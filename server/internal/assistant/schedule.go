@@ -42,10 +42,11 @@ import (
 // on an approval. loadSchedule moves the old lists over once, ids and times kept.
 
 type Task struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Prompt string `json:"prompt"`
-	Repeat string `json:"repeat"` // once / daily / interval
+	WorkoutID string `json:"workout_id,omitempty"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Prompt    string `json:"prompt"`
+	Repeat    string `json:"repeat"` // once / daily / interval
 	// once: when; interval: the next run (the hub moves it on after each run).
 	At           time.Time `json:"at,omitempty"`
 	Time         string    `json:"time,omitempty"`     // daily: "HH:MM" in the user's time zone
@@ -838,6 +839,10 @@ func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
 	}
 	i := sc.indexLocked(id)
 	if i >= 0 {
+		if err := s.keepWorkoutReceipt(ctx, sc.tasks[i]); err != nil {
+			sc.mu.Unlock()
+			return false, err
+		}
 		tasks := slices.Delete(slices.Clone(sc.tasks), i, i+1)
 		if err := s.saveLocked(sc, tasks); err != nil {
 			sc.mu.Unlock()
@@ -1111,6 +1116,7 @@ func weekdayText(ds []int) string {
 // Run runs what the assistant does on its own until ctx ends: the scheduled tasks, closing finished tasks' agents, the
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
+	s.running.Store(&ctx)
 	go s.taskCloseLoop(ctx)    // the agents of finished tasks (tasks_close.go)
 	go s.superviseLoop(ctx)    // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
@@ -1120,6 +1126,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.remindLoop(ctx)       // the todos' reminders (todo_plan.go)
 	go s.channelLoop(ctx)      // the channels' runs that lost their watcher (channels.go)
 	go s.kbLoop(ctx)           // the knowledge base (kb.go)
+	go s.kbHistoryLoop(ctx)    // importing chats' older history into it, off by default (kb_history.go)
 	go s.viewActionLoop(ctx)   // durable card reply outbox
 	go s.acceptLoop(ctx)       // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
@@ -1264,7 +1271,7 @@ func (s *Service) runDue(ctx context.Context, now time.Time) {
 	// A one-off that ran a day ago is only history now.
 	kept := tasks[:0:0]
 	for _, t := range tasks {
-		if t.done() && now.Sub(t.LastRun) > doneKeep {
+		if t.done() && now.Sub(t.LastRun) > doneKeep && s.keepWorkoutReceipt(ctx, t) == nil {
 			changed = true
 			continue
 		}
@@ -1641,10 +1648,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		return
 	}
 	text := s.lastTurnAPIError(ctx, m.ID, run.SessionID)
-	if text == "" {
-		if c, ok := s.session(ctx, m.ID, run.SessionID); ok {
-			text = c.TurnError
-		}
+	failedSession, hasSession := s.session(ctx, m.ID, run.SessionID)
+	if text == "" && hasSession {
+		text = failedSession.TurnError
 	}
 	if text == "" {
 		// The model service answered 200 with nothing in it: no reply, no tool call, no error. The run stayed "ok"
@@ -1672,6 +1678,14 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	}
 	if run.Retried {
 		return
+	}
+	if hasSession {
+		if failedSession.TurnError == "" {
+			failedSession.TurnError = full
+		}
+		if sessionTurnErrorCode(failedSession) == proto.TurnErrorModelFallbackUnavailable {
+			return // the unavailable refusal fallback needs the user's recovery, never an automatic replay
+		}
 	}
 	var limitTurn time.Time // the turn a usage limit stopped, when one did: the retry goes only while it is still the last
 	if reset, turn, resumes, limited := s.runLimit(ctx, m.ID, run.SessionID, full); limited {

@@ -12,12 +12,6 @@ import (
 // node runs in a dedicated directory on one machine; the hub tells them apart from the agents by that directory, and
 // relays the assistant's routes to it (assistant_link.go).
 
-// assistantCwd is the machine's manager's assistant directory on it, or "" while the machine has not reported its
-// home.
-func (m *Machine) assistantCwd() string {
-	return m.assistantCwdOf(m.hub.machineOwner(m.cfg.ID))
-}
-
 // assistantCwdOf is manager id's assistant directory on m (identity.AssistantDirName: the built-in's "assistant",
 // another's "assistant-<id>"), or "" while m has not reported its home.
 func (m *Machine) assistantCwdOf(id string) string {
@@ -63,5 +57,6 @@ func assistantSpace(cwd string) string { return identity.SpaceOf(cwd) }
 
 // inHealth: an assistant conversation working in cwd is in the health space. What it says leaves the space only with
 // the user knowing (docs/assistant/health.md "Outbound"): its pushes say there is news, not the news, and its writes are confirmed
-// on the phone each time, whatever the gate rules allow.
-func inHealth(cwd string) bool { return cwd != "" && assistantSpace(cwd) == identity.SpaceHealth }
+// on the phone each time, whatever the gate rules allow. A directory inside the space counts too (a card's cwd can be
+// where a `cd` left the model's shell, #2368): this only hides, it never classifies (assistantSpace stays exact).
+func inHealth(cwd string) bool { return cwd != "" && identity.InHealthSpace(cwd) }

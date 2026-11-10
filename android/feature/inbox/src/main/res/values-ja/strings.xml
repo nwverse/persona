@@ -147,6 +147,7 @@
     <string name="inbox_triage_timeout">振り分けモデルの応答が遅すぎます</string>
     <string name="inbox_triage_behind">新しいメッセージが多いため順番待ち</string>
     <string name="inbox_triage_configure">設定する</string>
+    <string name="inbox_read_failed">今回は読み取れませんでした。一覧が不完全な可能性があります</string>
     <string name="inbox_translating">%1$sに翻訳中…</string>
     <string name="inbox_translation_original">原文</string>
     <string name="inbox_translated_into">%1$sに翻訳済み</string>
@@ -167,11 +168,42 @@
     <string name="inbox_mute_tag_sender">送信者</string>
     <string name="inbox_mutes_title">ミュート中</string>
     <string name="inbox_mutes_failed">ミュート一覧を読み取れません</string>
+    <string name="inbox_mutes_offline">オフラインです。戻るとここにミュートが表示されます。</string>
     <string name="inbox_mutes_empty_title">ミュートはありません</string>
     <string name="inbox_mutes_empty_text">受信トレイで項目を長押しすると、そのリポジトリ・会話・送信者をミュートできます。</string>
     <string name="inbox_unmute">ミュート解除</string>
     <string name="inbox_unmute_failed">ミュートを解除できませんでした。元に戻しました</string>
     <string name="inbox_muted_notice">「%1$s」をミュートしました。今後は受信トレイに入りません</string>
+
+    <!-- Rules: where an item's chat, sender or repository goes, and the AI twin (InboxPolicies.kt). -->
+    <string name="inbox_policy_repo">このリポジトリのルール</string>
+    <string name="inbox_policy_chat">この会話のルール</string>
+    <string name="inbox_policy_sender">この送信者のルール</string>
+    <string name="inbox_policy_title">%1$s のルール</string>
+    <string name="inbox_policy_intro">%1$s。ハブは AI の仕分けのあと、ここから届くものにこのルールを適用します。ミュートが優先されます。</string>
+    <string name="inbox_policy_tier">振り分け先</string>
+    <string name="inbox_policy_tier_none">仕分けに任せる</string>
+    <string name="inbox_policy_tier_action">常に要対応</string>
+    <string name="inbox_policy_tier_fyi">参考</string>
+    <string name="inbox_policy_tier_noise">折りたたみ</string>
+    <string name="inbox_policy_twin">AI 分身</string>
+    <string name="inbox_policy_twin_none">設定どおり</string>
+    <string name="inbox_policy_twin_first">分身を優先</string>
+    <string name="inbox_policy_twin_never">分身は触れない</string>
+    <string name="inbox_policy_twin_note">分身を優先：要対応でなくても AI 分身に渡し、ほかより先に始めます。分身は触れない：常にあなたが対応します。AI 分身をオンにしておく必要があります。</string>
+    <string name="inbox_policy_save">保存</string>
+    <string name="inbox_policy_cancel">キャンセル</string>
+    <string name="inbox_policy_remove">削除</string>
+    <string name="inbox_policy_edit">編集</string>
+    <string name="inbox_policy_saved">「%1$s」のルールを保存しました</string>
+    <string name="inbox_policy_removed">「%1$s」のルールを削除しました</string>
+    <string name="inbox_policy_failed">ルールを保存できませんでした：%1$s</string>
+    <string name="inbox_rules_title">ルール</string>
+    <string name="inbox_rules_failed">ルールを読み込めませんでした：%1$s</string>
+    <string name="inbox_rules_offline">オフラインです。戻るとここにルールが表示されます。</string>
+    <string name="inbox_rules_empty_title">ルールはありません</string>
+    <string name="inbox_rules_empty_text">受信トレイで項目を長押しして、その会話・送信者・リポジトリのルールを設定します。</string>
+    <string name="inbox_rules_remove_failed">ルールを削除できませんでした：%1$s</string>
 
     <!-- Inbox phase 1: events, suggestions, the Handling chain (InboxEvents.kt). -->
     <string name="inbox_section_working">進行中</string>

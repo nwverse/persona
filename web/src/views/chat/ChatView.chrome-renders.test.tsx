@@ -2,7 +2,7 @@
 // Each item pushed to the open conversation renders ChatView again (its transcript changed). The header and the composer
 // around it did not change, so they stay put: counted through a leaf each one draws (the header's "Session info" dialog,
 // the composer's context chips, the composer footer's mode chips).
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => {
@@ -35,6 +35,19 @@ vi.mock("../../lib/store", async (load) => ({
     return () => live.listeners.delete(l);
   },
 }));
+// every render of the agent's persisted words (Answer draws them through Markdown with `fade` given, set or not): counted
+const words = vi.hoisted(() => [] as { text: string; fade?: boolean }[]);
+vi.mock("../../ui/Markdown", async (load) => {
+  const real = await load<typeof import("../../ui/Markdown")>();
+  const { createElement } = await import("react");
+  return { ...real, Markdown: (p: ComponentProps<typeof real.Markdown>) => ("fade" in p && words.push({ text: p.text, fade: p.fade }), createElement(real.Markdown, p)) };
+});
+// every message's actions ask for the chat's actions each time they render: counted
+const asks = vi.hoisted(() => ({ n: 0 }));
+vi.mock("./chat-actions", async (load) => {
+  const real = await load<typeof import("./chat-actions")>();
+  return { ...real, useChatActions: () => (asks.n++, real.useChatActions()) };
+});
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
@@ -101,6 +114,44 @@ it("an agent's page: pushed items leave its header and composer alone, a session
   expect(renders.modes).toBeGreaterThan(0);
 });
 
+it("a pushed reply renders its own words once, mounting them fading, and no other words", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  for (let seq = 1; seq <= 3; seq++) await push(seq);
+  words.length = 0;
+  await push(4);
+  expect(words).toEqual([{ text: "row 4", fade: true }]);
+});
+
+// the first page: this many exchanges, a question and its reply each
+const serve = (exchanges: number) => {
+  const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
+  fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+};
+
+it("a turn starting or ending renders the message actions of its own exchange only", async () => {
+  const flip = async (sid: string, exchanges: number) => {
+    serve(exchanges);
+    await open(<ChatView mid="mac" sid={sid} inPage />, row({ session_id: sid }));
+    asks.n = 0;
+    for (const state of ["idle", "working"] as const) {
+      act(() => applyCompleteSessions([row({ session_id: sid, status: state, state })]));
+      await settle();
+    }
+    return asks.n;
+  };
+  const one = await flip("s1", 1);
+  expect(one).toBeGreaterThan(0); // the exchange that ended, and started again
+  expect(await flip("s2", 6)).toBe(one);
+});
+
+it("finished exchanges before the last two skip drawing while off screen, from a guessed height", async () => {
+  serve(5);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const sections = [...host.querySelectorAll<HTMLElement>("section[data-segment]")];
+  expect(sections.map((s) => s.classList.contains("seg-cv"))).toEqual([true, true, true, false, false]);
+  expect(sections[0].style.getPropertyValue("--seg-est")).toMatch(/^[1-9]\d*px$/);
+});
+
 it("the assistant: the header draws again only when what its face reads changes", async () => {
   await open(<ChatView mid="mac" sid="s1" assistant />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);
@@ -144,4 +195,26 @@ it("after the pushes, sending and stopping still go out", async () => {
     await new Promise((r) => setTimeout(r, 0));
   });
   expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+  expect(new Headers((posted("/sessions/mac/s1/interrupt")[0][1] as RequestInit).headers).get("X-Persona-Op-Id")).toBeTruthy();
+
+  // still working: the button says it is stopping and takes no second press, until the turn is over
+  const pressed = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.stopping")}"]`);
+  expect(pressed()?.disabled).toBe(true);
+  act(() => dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  await settle();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+  act(() => applyCompleteSessions([row({ status: "idle", state: "idle" })]));
+  await settle();
+  expect(pressed()).toBeNull();
+});
+
+it("a stop the hub lost track of is not reported as done, and can be pressed again", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  fetcher.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify({ state: "unknown" }), { status: 202 })));
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.interrupt")}"]`)!.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+  expect(host.querySelector(`button[aria-label="${t("chat-composer.interrupt")}"]`)).toBeTruthy();
 });

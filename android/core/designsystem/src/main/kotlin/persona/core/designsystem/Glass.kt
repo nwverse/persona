@@ -73,7 +73,10 @@ fun Modifier.floatingSurface(shape: RoundedCornerShape, accentEdge: Color? = nul
     if (PersonaTheme.style != AppStyle.Glass) {
         return this.clip(shape).background(palette.surfaceOpaque).border(1.dp, accentEdge ?: palette.line, shape)
     }
-    val tint = if (palette.dark) Color(0xB80A1020) else Color(0xCCFFFFFF)
+    val homeChrome = LocalHomeChrome.current != null || LocalHomeDrawer.current || LocalFlatPageSurface.current
+    val tint = if (homeChrome) {
+        if (palette.dark) HomeTokens.chromeDark else HomeTokens.chromeLight
+    } else if (palette.dark) Color(0xB80A1020) else Color(0xCCFFFFFF)
     return when {
         state == null || PersonaTheme.glass == GlassLevel.Solid ->
             this.clip(shape).background(palette.surfaceOpaque.copy(alpha = 0.97f)).border(1.dp, edge, shape)
@@ -254,6 +257,6 @@ fun AmbientLight(ambience: Ambience, modifier: Modifier = Modifier, inWindow: Bo
  */
 @Composable
 fun PageBackdrop(modifier: Modifier = Modifier, ambience: Ambience = LocalAmbience.current) {
-    if (PersonaTheme.style == AppStyle.Glass) AmbientLight(ambience, modifier, inWindow = true)
+    if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current == null && !LocalFlatPageSurface.current) AmbientLight(ambience, modifier, inWindow = true)
     else Box(modifier.fillMaxSize().background(PersonaTheme.palette.background))
 }

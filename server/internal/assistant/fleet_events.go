@@ -59,7 +59,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			s.finishInteraction(p.ID)
 		}
 		return false
-	case "codex.interactions": // the Codex questions and approvals open on this machine (fleet_ix.go)
+	case "codex.interactions": // the Codex questions and approvals open on this machine (fleet_ix_codex.go)
 		s.syncCodexInteractions(machine, params)
 		return false
 	case "hook.event":
@@ -104,6 +104,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, err
 		}
 		p.Interaction.MachineID = machine
+		s.placeCard(&p.Interaction)
 		// A write through a skill's gated command (node/larkgate.go): its plugin names what the ids are.
 		if sum, ok := s.assistantSummary(ctx, p.Interaction.ToolName, p.Interaction.Summary); ok {
 			p.Interaction.Summary = sum

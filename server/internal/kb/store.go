@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -68,6 +69,9 @@ type Chat struct {
 	// HistoryMode: how its older history was imported (WriteHistory): HistoryFull, every message; HistoryAnchor, only
 	// windows around the owner's messages, the gaps marked by an omission line. "": none imported.
 	HistoryMode string `json:"history_mode,omitempty"`
+	// Rule is the selection rule that decides a plain message of the chat (Selection.UsualRule), as last written; the
+	// retention ledger records only lines another rule decided (retention.go). "": none yet, or outside the selection.
+	Rule string `json:"rule,omitempty"`
 	// Oldest and BackfillDone were an earlier backfill's progress; kept so files that have them still read the same.
 	// History imports keep theirs under history/state/ (HistoryState).
 	Oldest       string `json:"oldest,omitempty"`
@@ -225,7 +229,7 @@ func NewStore(dir string) (*Store, error) {
 	if err := s.recoverIngests(); err != nil {
 		return nil, err
 	}
-	_ = writeIfMissing(filepath.Join(dir, "README.md"), prompts.RenderKBReadme())
+	_ = writeIfMissing(filepath.Join(dir, "README.md"), prompts.RenderKBReadme)
 	return s, nil
 }
 
@@ -280,11 +284,13 @@ func writeFile(p string, data []byte) error {
 	return os.Rename(tmp, p)
 }
 
-func writeIfMissing(p, content string) error {
+// writeIfMissing writes what content returns to p unless p exists. content runs only then: the README renders a prompt
+// template, which a store opened on an existing directory (every manager start) need not parse (#2475).
+func writeIfMissing(p string, content func() string) error {
 	if _, err := os.Stat(p); err == nil {
 		return nil
 	}
-	return writeFile(p, []byte(content))
+	return writeFile(p, []byte(content()))
 }
 
 func (s *Store) Chat(id string) (*Chat, bool) {
@@ -430,34 +436,79 @@ func (s *Store) AppendLog(slug string, at time.Time, source, line string) (err e
 		fmt.Sprintf("- %s · %s · %s\n", at.In(zone).Format("2006-01-02 15:04"), source, oneLine(line)))
 }
 
-// Log returns the last n lines of a project's timeline.
+// Log returns the last n lines of a project's timeline, oldest first: nil when it has none; empty when n <= 0 and it
+// has one.
 func (s *Store) Log(slug string, n int) []string {
+	var lines []string
+	s.scanLog(slug, func(l []byte) bool {
+		if n <= 0 {
+			lines = []string{}
+			return false
+		}
+		lines = append(lines, string(l))
+		return len(lines) < n
+	})
+	slices.Reverse(lines)
+	return lines
+}
+
+// logChunk is how much of a timeline its readers take from the end at a time.
+const logChunk = 64 << 10
+
+// scanLog moves a project's timeline into the archive's zone if it must (settleLogLocked), then hands f its "- " lines,
+// newest first, until f returns false. Only as much of the file is read as those lines take; a line f is handed is
+// valid only until f returns. A missing or unreadable timeline has no lines.
+func (s *Store) scanLog(slug string, f func(line []byte) bool) {
 	s.mu.Lock()
 	_, _ = s.settleLogLocked(slug)
 	s.mu.Unlock()
-	raw, _ := os.ReadFile(s.path(KindProject, slug, "log.md"))
-	return lastLogLines(raw, n)
+	file, err := os.Open(s.path(KindProject, slug, "log.md"))
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return
+	}
+	_ = linesBack(file, info.Size(), logChunk, func(l []byte) bool {
+		return !bytes.HasPrefix(l, []byte("- ")) || f(l)
+	})
 }
 
-// lastLogLines are the last n "- " lines of a timeline, oldest first, taken from its end so that the lines before them
-// are never collected. nil when it has none; empty when n <= 0 and it has one.
-func lastLogLines(raw []byte, n int) []string {
-	var lines []string
-	for end := len(raw); end >= 0; {
-		start := bytes.LastIndexByte(raw[:end], '\n') + 1
-		if l := raw[start:end]; bytes.HasPrefix(l, []byte("- ")) {
-			if n <= 0 {
-				return []string{}
+// linesBack hands f the lines of the first size bytes of r from the last one back, chunk bytes read at a time, until f
+// returns false: the same lines as splitting it all on '\n' (a trailing newline ends with an empty line), in reverse.
+// Splitting on the byte is safe in UTF-8, which never has it inside a character. It holds a chunk, or the longest line.
+func linesBack(r io.ReaderAt, size int64, chunk int, f func(line []byte) bool) error {
+	// buf is the file from pos up to the lines already handed to f and the newline before them: it ends with the next
+	// line to hand, whose start may lie before pos.
+	var buf []byte
+	for pos := size; ; {
+		for i := bytes.LastIndexByte(buf, '\n'); i >= 0; i = bytes.LastIndexByte(buf, '\n') {
+			if !f(buf[i+1:]) {
+				return nil
 			}
-			lines = append(lines, string(l))
-			if len(lines) == n {
-				break
-			}
+			buf = buf[:i]
 		}
-		end = start - 1
+		if pos == 0 {
+			f(buf)
+			return nil
+		}
+		k := int(min(pos, int64(chunk)))
+		pos -= int64(k)
+		if need := k + len(buf); need > cap(buf) {
+			// With room for the part of a line a chunk leaves over (most lines are short), the next chunks fit in it too.
+			grown := make([]byte, need, max(need+chunk/16, 2*cap(buf)))
+			copy(grown[k:], buf)
+			buf = grown
+		} else {
+			buf = buf[:need]
+			copy(buf[k:], buf[:need-k])
+		}
+		if _, err := r.ReadAt(buf[:k], pos); err != nil {
+			return err
+		}
 	}
-	slices.Reverse(lines)
-	return lines
 }
 
 func appendFile(p, header, text string) error {

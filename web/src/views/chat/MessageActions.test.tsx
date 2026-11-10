@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ChatActionsContext, type ChatActions } from "./chat-actions";
+import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
 import { MessageActions, moreActions, rewindActions } from "./MessageActions";
 
 const base: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Persona", title: "Persona", isAgent: false, images: () => [] };
@@ -86,11 +86,11 @@ describe("MessageActions on your own message", () => {
       </ChatActionsContext.Provider>,
     );
   it("has ⋯ for 回退到这里 when the chat can rewind, even while it is off", () => {
-    expect(mine({ ...base, rewind: { block: "", run: async () => {} } }, "u1#0")).toContain('aria-label="更多"');
-    expect(mine({ ...base, rewind: { block: "工作中", run: async () => {} } }, "u1#0")).toContain('aria-label="更多"');
+    expect(mine({ ...base, rewind: { block: liveValue(""), run: async () => {} } }, "u1#0")).toContain('aria-label="更多"');
+    expect(mine({ ...base, rewind: { block: liveValue("工作中"), run: async () => {} } }, "u1#0")).toContain('aria-label="更多"');
   });
   it("has none for a chat that cannot, or a message without an id", () => {
     expect(mine(base, "u1#0")).not.toContain('aria-label="更多"');
-    expect(mine({ ...base, rewind: { block: "", run: async () => {} } })).not.toContain('aria-label="更多"');
+    expect(mine({ ...base, rewind: { block: liveValue(""), run: async () => {} } })).not.toContain('aria-label="更多"');
   });
 });

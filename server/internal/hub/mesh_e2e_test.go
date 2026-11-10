@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/streams"
@@ -352,7 +353,7 @@ func startTestHubOpts(t *testing.T, id, name string, st *meshStore, dir string, 
 	if o.plain {
 		h.public.endpoints = []Endpoint{{URL: srv.URL, Kind: "lan", Port: port, Scheme: "http"}}
 	} else {
-		h.public.port, h.public.fp = port, spkiPin(srv.Certificate())
+		h.public.port, h.public.fp = port, link.Pin(srv.Certificate())
 		h.public.endpoints = []Endpoint{{URL: srv.URL, Kind: "lan", Port: port, Scheme: "https"}}
 	}
 	h.public.mu.Unlock()

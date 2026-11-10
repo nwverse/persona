@@ -5,11 +5,14 @@ import Testing
 /// By Repository (`RepoPlace`, `RepoTree`): the repository and working tree a working directory names, and the machines →
 /// repositories → working trees the Agents list draws. The path rules are the web's (`web/src/lib/agent-repos.test.ts`).
 struct AgentRepoTreeTests {
-    private func session(_ id: String, _ cwd: String, machine: String = "machine-a", group: String = "", repoRoot: String? = nil) -> Session {
+    private func session(_ id: String, _ cwd: String, machine: String = "machine-a", group: String = "", repoRoot: String? = nil,
+                         worktree: String? = nil, branch: String? = nil) -> Session {
         let hub = group.isEmpty ? "" : #","app_hub_group":"\#(group)""#
         let repo = repoRoot.map { #","repo_root":"\#($0)""# } ?? ""
+        let tree = worktree.map { #","worktree":"\#($0)""# } ?? ""
+        let head = branch.map { #","branch":"\#($0)""# } ?? ""
         let json = """
-        {"machine_id":"\(machine)","session_id":"\(id)","title":"\(id)","cwd":"\(cwd)","status":"idle","state":"idle"\(hub)\(repo)}
+        {"machine_id":"\(machine)","session_id":"\(id)","title":"\(id)","cwd":"\(cwd)","status":"idle","state":"idle"\(hub)\(repo)\(tree)\(head)}
         """
         do { return try JSON.decoder.decode(Session.self, from: Data(json.utf8)) }
         catch { fatalError("bad fixture: \(error)") }
@@ -19,26 +22,26 @@ struct AgentRepoTreeTests {
 
     // MARK: Where a working directory sits
 
-    @Test func aMainCheckoutIsTheRepositoryItself() {
-        #expect(RepoPlace(cwd: "/code/app") == RepoPlace(repo: "/code/app", name: "app", worktree: "/code/app", main: true))
-        #expect(RepoPlace(cwd: "/code/app/") == RepoPlace(cwd: "/code/app"), "a trailing slash is the same directory")
-    }
-
-    @Test func theUsualWorkingTreeFoldersBelongToTheRepositoryAboveThem() {
-        for cwd in ["/code/app/.worktrees/fix-login", "/code/app/.claude/worktrees/fix-login", "/code/app/.herdr/worktrees/fix-login"] {
-            #expect(RepoPlace(cwd: cwd) == RepoPlace(repo: "/code/app", name: "app", worktree: cwd, main: false), "\(cwd)")
-        }
-    }
-
-    @Test func aHomeLevelCollectionNamesTheRepositoryAfterTheFolder() {
-        #expect(RepoPlace(cwd: "/home/me/.worktrees/persona/fix-login")
-            == RepoPlace(repo: "/home/me/.worktrees/persona", name: "persona", worktree: "/home/me/.worktrees/persona/fix-login", main: false))
-    }
-
-    @Test func withoutAWorkingTreeFolderTheDirectoryIsItsOwnRepository() {
-        #expect(RepoPlace(cwd: "/code/app/server/internal")
-            == RepoPlace(repo: "/code/app/server/internal", name: "internal", worktree: "/code/app/server/internal", main: true))
-        #expect(RepoPlace(cwd: "") == RepoPlace(repo: "", name: "", worktree: "", main: true))
+    /// A main checkout is the repository itself (a trailing slash is the same directory); the usual working-tree folders belong
+    /// to the repository above them; a home-level collection names the repository after the folder; without a working-tree
+    /// folder the directory is its own repository.
+    @Test(arguments: [
+        (cwd: "/code/app", expected: RepoPlace(repo: "/code/app", name: "app", worktree: "/code/app", main: true)),
+        (cwd: "/code/app/", expected: RepoPlace(repo: "/code/app", name: "app", worktree: "/code/app", main: true)),
+        (cwd: "/code/app/.worktrees/fix-login",
+         expected: RepoPlace(repo: "/code/app", name: "app", worktree: "/code/app/.worktrees/fix-login", main: false)),
+        (cwd: "/code/app/.claude/worktrees/fix-login",
+         expected: RepoPlace(repo: "/code/app", name: "app", worktree: "/code/app/.claude/worktrees/fix-login", main: false)),
+        (cwd: "/code/app/.herdr/worktrees/fix-login",
+         expected: RepoPlace(repo: "/code/app", name: "app", worktree: "/code/app/.herdr/worktrees/fix-login", main: false)),
+        (cwd: "/home/me/.worktrees/persona/fix-login",
+         expected: RepoPlace(repo: "/home/me/.worktrees/persona", name: "persona", worktree: "/home/me/.worktrees/persona/fix-login", main: false)),
+        (cwd: "/code/app/server/internal",
+         expected: RepoPlace(repo: "/code/app/server/internal", name: "internal", worktree: "/code/app/server/internal", main: true)),
+        (cwd: "", expected: RepoPlace(repo: "", name: "", worktree: "", main: true)),
+    ])
+    func aWorkingDirectoryNamesItsRepositoryAndWorkingTree(cwd: String, expected: RepoPlace) {
+        #expect(RepoPlace(cwd: cwd) == expected, "\(cwd)")
     }
 
     /// Paseo keeps its worktrees under its own folder, whose paths name no repository: its host names it (#2840).
@@ -186,6 +189,49 @@ struct AgentRepoTreeTests {
         #expect(DevGrouping.resolved(.standard, supportsTodos: false) == .repo)
         #expect(DevGrouping.offered(supportsTodos: false).first == .repo)
     }
+
+    // MARK: The node's git place (#1805): machine → project → branch → agents
+
+    @Test func linkedWorktreesGoUnderTheirMainRepositoryByBranch() {
+        let root = "/home/u/Code/app", fix = "/home/u/orca/workspaces/app/fix-login"
+        let tree = RepoTree.build([session("fix", fix, repoRoot: root, worktree: fix, branch: "fix/login"),
+                                   session("main", root, repoRoot: root, worktree: root, branch: "main"),
+                                   session("sub", fix + "/web", repoRoot: root, worktree: fix, branch: "fix/login"),
+                                   session("notes", "/home/u/Code/notes", repoRoot: "/home/u/Code/notes",
+                                           worktree: "/home/u/Code/notes", branch: "trunk")], machines: machines)
+        #expect(tree.count == 1)
+        let repos = tree[0].repos
+        #expect(repos.map(\.name) == ["app", "notes"])
+        #expect(repos[0].worktrees.map(\.name) == ["main", "fix/login"])
+        #expect(repos[0].worktrees.map(\.main) == [true, false])
+        #expect(Set(repos[0].worktrees[1].sessions.map(\.sessionID)) == ["fix", "sub"])
+    }
+
+    @Test func aNamedBranchKeepsItsLevelUnderALoneMainCheckout() {
+        let named = RepoTree.build([session("main", "/code/app", repoRoot: "/code/app", worktree: "/code/app", branch: "main")],
+                                   machines: machines)
+        #expect(named[0].repos[0].flat == false)
+        #expect(named[0].repos[0].worktrees.map(\.name) == ["main"])
+        let older = RepoTree.build([session("main", "/code/app")], machines: machines)
+        #expect(older[0].repos[0].flat, "an older node's lone main checkout stays flat")
+    }
+
+    @Test func projectsSortByNameInsideEachMachineInTheHubsOrder() {
+        let tree = RepoTree.build([session("a", "/code/zeta", repoRoot: "/code/zeta", worktree: "/code/zeta", branch: "main"),
+                                   session("b", "/code/alpha", machine: "machine-b", repoRoot: "/code/alpha", worktree: "/code/alpha", branch: "main"),
+                                   session("c", "/code/beta", repoRoot: "/code/beta", worktree: "/code/beta", branch: "main")],
+                                  machines: machines)
+        #expect(tree.map(\.ref.id) == ["machine-b", "machine-a"])
+        #expect(tree.map { $0.repos.map(\.name) } == [["alpha"], ["beta", "zeta"]])
+    }
+
+    @Test func theNodesPlaceWinsOverPathInference() {
+        let s = session("w", "/home/u/orca/workspaces/app/fix/web", repoRoot: "/home/u/Code/app",
+                        worktree: "/home/u/orca/workspaces/app/fix/", branch: "fix")
+        #expect(RepoPlace.of(s) == RepoPlace(repo: "/home/u/Code/app", name: "app", worktree: "/home/u/orca/workspaces/app/fix", main: false))
+        #expect(RepoPlace.git(session("old", "/code/app")) == nil)
+    }
+
     private func workspace(_ id: String, parent: String? = nil, machine: String = "machine-a", group: String = "",
                            path: String? = nil) -> HostWorkspace {
         HostWorkspace(machineID: machine, source: "orca", sourceID: id, title: id, cwd: path ?? "/work/" + id,

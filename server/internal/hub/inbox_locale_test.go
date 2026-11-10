@@ -76,3 +76,42 @@ func TestSavedInboxReceiptUsesCurrentLocale(t *testing.T) {
 		t.Fatal("stored receipt changed")
 	}
 }
+
+// The inbox's lists reach the app as they did when relayHTTP localized each answer whole before the merge: the same
+// bytes in every language, the second time from the kept forms too.
+func TestInboxListsLocalizedAsWhole(t *testing.T) {
+	h := newTestHub(t)
+	manager, _ := connectInboxManager(t, h)
+	bodies := map[string][]byte{
+		"/api/v1/inbox":      inboxBody(t, 40),
+		"/api/v1/inbox/done": []byte(`{"items":[{"id":"mail:1","source":"mail","kind":"mail","done_at":"t","agent":{"error":"no such inbox item"}}],"next":"c1"}` + "\n"),
+	}
+	manager.mu.Lock()
+	manager.http = func(_ context.Context, r assistantwire.HTTPRequest) (any, error) {
+		return assistantwire.HTTPResponse{Status: 200, Header: http.Header{"Content-Type": {"application/json; charset=utf-8"}}, Body: bodies[r.Path]}, nil
+	}
+	manager.mu.Unlock()
+	routes := h.routes()
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		for path, body := range bodies {
+			want := legacyInboxMerge(lang, "items", []listAnswer{{id: assistantwire.AssistantID, status: 200, header: http.Header{}, body: body}})
+			for range 2 {
+				req := localRequest("GET", path+"?sources=all")
+				req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+				req.Header.Set("Accept-Language", string(lang))
+				rec := httptest.NewRecorder()
+				routes.ServeHTTP(rec, req)
+				if rec.Code != 200 || rec.Header().Get("Content-Type") != "application/json" || rec.Body.String() != want.Body.String() {
+					t.Fatalf("%s %s: %d %v\n got %.300s\nwant %.300s", lang, path, rec.Code, rec.Header(), rec.Body, want.Body)
+				}
+			}
+		}
+	}
+	// Equal bytes do not show the items were localized one by one: the whole answer gives them too.
+	h.inboxForms.mu.Lock()
+	slots := len(h.inboxForms.slots)
+	h.inboxForms.mu.Unlock()
+	if slots != 6 {
+		t.Fatalf("%d slots kept, want 6 (2 lists x 3 languages)", slots)
+	}
+}

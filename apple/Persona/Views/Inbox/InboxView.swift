@@ -49,12 +49,14 @@ struct InboxPage: View {
         get { accountState.accounts }
         nonmutating set { accountState.accounts = newValue }
     }
-    /// Sections shown open: tiers (action, working, fyi, noise) and "done". Collapsed and Done start closed.
-    @State private var expanded: Set<String> = ["action", "working", "fyi"]
+    /// Sections shown open: tiers (action, working, fyi, noise) and "done", in each manager's group. Collapsed and Done start closed.
+    @State private var folds = InboxFolds()
     @State private var composing: ComposeDraft?
     @State private var editingDraft: InboxItem? // Edit on the AI Twin's draft
     @State private var answering: Interaction? // a card on no session, open by itself (#4059)
     @State private var showingMutes = false     // Muted
+    @State private var showingRules = false     // Rules
+    @State private var ruling: InboxPolicyTarget? // a row's Rule for This Chat / Sender / Repository…
     @State private var confirming = false // Clear All over many items asks first
     private var store: InboxStore { .shared }
 
@@ -109,6 +111,7 @@ struct InboxPage: View {
                             Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "") } label: { Label("New Email", systemImage: Theme.Icon.compose) }
                                 .disabled(accounts.isEmpty)
                             Button { showingMutes = true } label: { Label("Muted [Inbox Mutes View e5e468]", systemImage: Theme.Icon.mute) }
+                            Button { showingRules = true } label: { Label("Rules [Inbox Policy]", systemImage: Theme.Icon.inboxRule) }
                         } label: { ThemedIcon(Theme.Icon.moreMenu) }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("inbox.more")
@@ -118,6 +121,8 @@ struct InboxPage: View {
                 .sheet(item: $editingDraft) { InboxDraftSheet(item: $0, accounts: accounts) }
                 .sheet(item: $answering) { SessionlessCardSheet(interaction: $0) }
                 .sheet(isPresented: $showingMutes) { InboxMutesView() }
+                .sheet(isPresented: $showingRules) { InboxRulesView() }
+                .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
                 .confirmationDialog(InboxBulk.confirmTitle, isPresented: $confirming, titleVisibility: .visible) {
                     Button(InboxBulk.confirmButton(count: cleanScope.count)) { clean(confirmed: true) }
                         .accessibilityIdentifier("inbox.cleanConfirm")
@@ -133,6 +138,16 @@ struct InboxPage: View {
                     #if DEBUG
                     // `-showInboxMutes YES`: the Muted list (screenshots).
                     if UserDefaults.standard.bool(forKey: "showInboxMutes") { showingMutes = true }
+                    // `-showInboxRules YES`: the Rules list. `-openInboxRule chat|sender|repo`: the rule sheet of the first open
+                    // item with one, as its menu opens it; `edit`: Rules, then Edit on the newest rule (screenshots).
+                    if UserDefaults.standard.bool(forKey: "showInboxRules") || UserDefaults.standard.string(forKey: "openInboxRule") == "edit" {
+                        showingRules = true
+                    } else if let tag = UserDefaults.standard.string(forKey: "openInboxRule") {
+                        for _ in 0..<20 where store.open.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                        for it in openItems {
+                            if let m = it.mutes?.first(where: { $0.tag == tag }) { ruling = InboxPolicyTarget(item: it, option: m); break }
+                        }
+                    }
                     // `-openInboxFirst YES`: open the first open item (detail screenshots).
                     if UserDefaults.standard.bool(forKey: "openInboxFirst") {
                         for _ in 0..<20 where store.open.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
@@ -198,10 +213,11 @@ struct InboxPage: View {
     private var list: some View {
         let projection = itemProjection
         let openItems = projection.openItems
-        let byTier = projection.byTier
-        let doneItems = projection.doneItems
-        let shownDone = expanded.contains("done") ? projection.sortedDoneItems : []
         let waitingAgents = waitingAgents
+        let roster = model.managerRoster
+        // Under each manager's name when the hub has several (#1850); one group with no name otherwise.
+        let shares = InboxShare.make(byTier: kind == "agent" ? [:] : projection.byTier, done: projection.doneItems,
+                                     agents: waitingAgents, roster: roster)
         return List {
             filters
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
@@ -224,27 +240,40 @@ struct InboxPage: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
-            // The AI's triage: Needs You (and what it has not looked at yet), FYI, Collapsed (noise).
-            ForEach(InboxItem.Tier.allCases, id: \.self) { tier in
-                let items = kind == "agent" ? [] : byTier[tier] ?? []
-                let agents = tier == .action ? waitingAgents : []
-                if !items.isEmpty || !agents.isEmpty {
+            ForEach(shares) { share in
+                let manager = share.manager?.id
+                if let m = share.manager {
                     Section {
-                        if expanded.contains(tier.rawValue) || !tier.folds {
-                            ForEach(agents) { agentRow($0) }
-                            ForEach(items) { row($0) }
-                        }
-                    } header: {
-                        sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue,
-                                      clear: InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) })
+                        ManagerHeading(manager: m, count: share.openCount)
+                            .listRowInsets(EdgeInsets(top: Theme.Space.l, leading: Theme.Space.page, bottom: Theme.Space.xs, trailing: Theme.Space.page))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                     }
                 }
-            }
-            if !doneItems.isEmpty {
-                Section {
-                    if expanded.contains("done") { ForEach(shownDone) { row($0) } }
-                } header: {
-                    sectionHeader(String(localized: "Done [Inbox View 59f6c8]"), count: doneItems.count, key: "done", clear: nil)
+                // The AI's triage: Needs You (and what it has not looked at yet), FYI, Collapsed (noise).
+                ForEach(InboxItem.Tier.allCases, id: \.self) { tier in
+                    let items = share.byTier[tier] ?? []
+                    let agents = tier == .action ? share.agents : []
+                    if !items.isEmpty || !agents.isEmpty {
+                        Section {
+                            if folds.isOpen(tier.rawValue, manager: manager) {
+                                ForEach(agents) { agentRow($0) }
+                                ForEach(items, id: \.key) { row($0) }
+                            }
+                        } header: {
+                            sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue, manager: manager,
+                                          clear: InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) })
+                        }
+                    }
+                }
+                if !share.done.isEmpty {
+                    Section {
+                        if folds.isOpen("done", manager: manager) {
+                            ForEach(share.mine(projection.sortedDoneItems, roster), id: \.key) { row($0) }
+                        }
+                    } header: {
+                        sectionHeader(String(localized: "Done [Inbox View 59f6c8]"), count: share.done.count, key: "done", manager: manager, clear: nil)
+                    }
                 }
             }
         }
@@ -256,7 +285,7 @@ struct InboxPage: View {
 
     /// A section title that opens / closes the section, with an optional action on the right (List headers take no
     /// context menu, so it is a visible button).
-    private func sectionHeader(_ title: String, count: Int, key: String, clear: (String, () -> Void)?) -> some View {
+    private func sectionHeader(_ title: String, count: Int, key: String, manager: String?, clear: (String, () -> Void)?) -> some View {
         HStack(spacing: Theme.Space.sm) {
             if InboxItem.Tier(rawValue: key)?.folds == false {
                 // In Progress: always open, a plain title (inbox phase 1).
@@ -264,12 +293,12 @@ struct InboxPage: View {
                 Spacer(minLength: 0)
             } else {
             Button {
-                withAnimation(Theme.Motion.standard) { if expanded.contains(key) { expanded.remove(key) } else { expanded.insert(key) } }
+                withAnimation(Theme.Motion.standard) { folds.toggle(key, manager: manager) }
             } label: {
                 HStack(spacing: Theme.Space.sm) {
                     Text("\(title) · \(count)").font(Theme.Font.sectionHeader).foregroundStyle(key == "action" ? Color.primary : .secondary)
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(expanded.contains(key) ? 90 : 0))
+                        .rotationEffect(.degrees(folds.isOpen(key, manager: manager) ? 90 : 0))
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
@@ -305,7 +334,7 @@ struct InboxPage: View {
     }
 
     private func row(_ it: InboxItem) -> some View {
-        InboxRow(item: it, showAccount: accounts.count > 1, sending: store.sending.contains(it.id),
+        InboxRow(item: it, showAccount: accounts.count > 1, sending: store.sending.contains(it.key),
                  send: { text in Task { await store.send(it, text: text, changes: it.agent?.changes ?? []) } }, edit: { editingDraft = it })
             .background { NavigationLink(value: it) { EmptyView() }.opacity(0) }
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -320,7 +349,7 @@ struct InboxPage: View {
     }
 
     /// A row's long-press menu: Done (or Move Back), then what the item can be muted by — its repository, chat or sender,
-    /// the name under each (docs/assistant/inbox.md「静音」).
+    /// the name under each (docs/assistant/inbox.md「静音」) — then a rule for each of those ("Policies").
     @ViewBuilder private func rowMenu(_ it: InboxItem) -> some View {
         if it.isDone {
             Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
@@ -336,6 +365,7 @@ struct InboxPage: View {
                     }
                 }
             }
+            Section { InboxRuleButtons(item: it) { ruling = $0 } }
         }
     }
 
@@ -674,7 +704,7 @@ struct InboxAgentRow: View {
         let asks = ix.askLine(includeToolName: false) ?? ix.summary ?? ix.questions?.first?.question
         HStack(alignment: .top, spacing: Theme.Space.m) {
             // The rounded square of the Agents rows (SessionAvatar), with what kind of request it is.
-            SessionAvatar(machine: machine, state: .needsYou, size: 40, symbol: ix.kind.symbol, dot: false)
+            SessionAvatar(machine: machine, state: .needsYou, size: 40, symbol: ix.symbol, dot: false)
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(spacing: Theme.Space.sm) {
                     Text(ix.sessionTitle?.isEmpty == false ? ix.sessionTitle! : (ix.cwd.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Agent"))
@@ -706,9 +736,11 @@ struct InboxAgentRow: View {
 struct InboxDetailView: View {
     var item: InboxItem
     var accounts: [MailAccount]
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var drafting = false
     @State private var handingOff = false
+    @State private var ruling: InboxPolicyTarget?
     @State private var slot: InboxItemSlotModel
 
     init(item: InboxItem, accounts: [MailAccount]) {
@@ -717,7 +749,7 @@ struct InboxDetailView: View {
         _slot = State(initialValue: InboxItemSlotModel(item: item))
     }
 
-    private var current: InboxItem { InboxStore.shared.items.first { $0.id == item.id } ?? item }
+    private var current: InboxItem { InboxStore.shared.items.first { $0.key == item.key } ?? item }
 
     var body: some View {
         page
@@ -725,6 +757,7 @@ struct InboxDetailView: View {
                 InboxDraftSheet(item: current, accounts: accounts, onSent: { dismiss() })
             }
             .sheet(isPresented: $handingOff) { InboxHandOffSheet(item: current) }
+            .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -736,6 +769,13 @@ struct InboxDetailView: View {
             }
             #endif
             .pageToolbar {
+                if let mutes = current.mutes, !mutes.isEmpty {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu { InboxRuleButtons(item: current) { ruling = $0 } } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                            .accessibilityLabel("More")
+                            .accessibilityIdentifier("inbox.detail.more")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     if current.isDone {
                         Button { InboxStore.shared.setDone(current, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
@@ -770,9 +810,9 @@ struct InboxDetailView: View {
         } else if current.connector != nil {
             InboxConnectorDetailView(item: current)
         } else if let m = current.moment {
-            LarkMomentsPostView(postID: m.postID, pushed: true) // the post and its comments, as a shared Moments card opens
+            LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(current.manager)) // the post and its comments, as a shared Moments card opens
         } else if let c = item.larkConversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: model.linkManager(current.manager))
         } else if let m = item.mailSummary {
             MailDetailView(summary: m, accounts: accounts)
         } else {
@@ -784,22 +824,28 @@ struct InboxDetailView: View {
 /// The pages the inbox opens, in either layout (`SplitNavigation`).
 struct InboxDestinations: ViewModifier {
     var accounts: [MailAccount]
+    @Environment(AppModel.self) private var model
     @Environment(\.feishuOpen) private var feishuOpen
 
     // Links on these pages open in the app (feishuHandlesLinks) wherever the stack is: the shell pushes them onto its
-    // own stack, where the inbox page's handler does not reach.
+    // own stack, where the inbox page's handler does not reach. Those on an item's pages, and on a document or post
+    // opened from one, read through the item's manager.
     func body(content: Content) -> some View {
         content
             // Keyed by the item, as on the Mac: in the split the list's links replace the detail column's page, and an
             // unkeyed one is updated in place with the last item's state — a Feishu chat kept the chat before's messages
             // and draft under the new chat's title (#885).
             .navigationDestination(for: InboxItem.self) {
-                InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage().feishuHandlesLinks(feishuOpen)
+                InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage()
+                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.manager))
             }
-            .navigationDestination(for: FeishuRoute.self) { FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(feishuOpen) }
+            .navigationDestination(for: FeishuRoute.self) {
+                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(feishuOpen, manager: $0.manager)
+            }
             // view original and the chain's links of an event (inbox phase 1).
             .navigationDestination(for: InboxSourceRoute.self) {
-                InboxSourcePage(route: $0, accounts: accounts).splitDetailPage().feishuHandlesLinks(feishuOpen)
+                InboxSourcePage(route: $0, accounts: accounts).splitDetailPage()
+                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.item.manager))
             }
             .extensionPushDestination()
     }
