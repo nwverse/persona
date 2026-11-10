@@ -127,6 +127,7 @@ func orcaNode(t *testing.T) (*Node, *fakeHerdr, *orcarttest.Fake, *fakeProcs, st
 	h.scan = procs.scan
 	n.hosts = host.NewRegistry(h)
 	n.eng.name = proto.EngineOrca
+	t.Cleanup(n.starts.close) // before the fake Orca runtime closes
 	return n, f, o, procs, home
 }
 
