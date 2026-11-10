@@ -86,6 +86,21 @@ struct IPhoneControlTests {
         if case .this(let me, _) = several.match { #expect(me.consented) } else { Issue.record("picked") }
     }
 
+    /// The consent carries this app's own bundle id and name, read from the bundle, so the hub keeps the assistant
+    /// off Persona itself on the phone.
+    @Test func consentSaysWhichAppItIs() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/iphone/consent"
+        hub.on("PUT", path, json: #"{"id":"dev-1","name":"A","machines":[],"consented":true}"#)
+        _ = try await hub.client.setIPhoneConsent(device: "dev-1", allowed: true)
+        let body = try #require(hub.sent("PUT", path).first?.body)
+        let sent = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let app = sent?["app"] as? [String: Any]
+        #expect(sent?["device"] as? String == "dev-1" && sent?["allowed"] as? Bool == true)
+        #expect(app?["bundle_id"] as? String == Bundle.main.bundleIdentifier)
+        #expect((app?["name"] as? String)?.isEmpty == false)
+    }
+
     @Test func hiddenWithoutTheExtension() async {
         let off = IPhoneConsentModel(deps: .init(list: { IPhoneList(on: false) }, consent: { _, _ in throw APIError(status: 404, message: "") },
                                                  model: "iPhone18,1", ios: "26.1", picked: { nil }, pick: { _ in }))
