@@ -14,7 +14,7 @@ final class ExtensionSettingsReviewTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
     private var looks: [String] { (env["PERSONA_LOOKS"] ?? "light dark").split(separator: " ").map(String.init) }
 
-    @MainActor private func launch(_ hub: String, look: String) -> XCUIApplication {
+    @MainActor private func launch(_ hub: String, look: String, extra: [String] = []) -> XCUIApplication {
         _ = try? Data(contentsOf: URL(string: hub + "/mock/reset")!)
         addUIInterruptionMonitor(withDescription: "notifications") { alert in
             for label in ["允许", "Allow"] where alert.buttons[label].exists { alert.buttons[label].tap(); return true }
@@ -22,7 +22,7 @@ final class ExtensionSettingsReviewTests: XCTestCase {
         }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openExtension", "example-gateway", "-ui.scheme", look]
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openExtension", "example-gateway", "-ui.scheme", look] + extra
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["允许", "Allow"] where springboard.buttons[label].waitForExistence(timeout: 3) { springboard.buttons[label].tap() }
@@ -34,8 +34,8 @@ final class ExtensionSettingsReviewTests: XCTestCase {
         try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir).appending(path: "ext-review-\(name)-\(UITestStyle.name)-\(look).png"))
     }
 
-    @MainActor private func scrollTo(_ el: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<10 where !(el.exists && el.isHittable) { app.swipeUp() }
+    @MainActor private func scrollTo(_ el: XCUIElement, in app: XCUIApplication, swipes: Int = 10) {
+        for _ in 0..<swipes where !(el.exists && el.isHittable) { app.swipeUp() }
     }
 
     /// The Review button, scrolled to, on the extension's page.
@@ -106,6 +106,30 @@ final class ExtensionSettingsReviewTests: XCTestCase {
             shot(app, "updated", look: look)
             app.terminate()
         }
+    }
+
+    /// The card at the largest text size: the download going, then why it stopped and Retry, in reach (the flow itself
+    /// is checked above; this one is for the look).
+    @MainActor func testTheCardAtTheLargestText() throws {
+        guard let hub = env["PERSONA_EXTENSIONS_REVIEW_HUB"] else {
+            throw XCTSkip("needs mock_hub.py with MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=stall (PERSONA_EXTENSIONS_REVIEW_HUB)")
+        }
+        let app = launch(hub, look: "light", extra: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        XCTAssertTrue(app.switches["plugin-enabled"].firstMatch.waitForExistence(timeout: 15), "no extension page:\n\(app.debugDescription)")
+        let review = app.buttons["plugin-upgrade"].firstMatch
+        scrollTo(review, in: app, swipes: 30)
+        XCTAssertTrue(review.isHittable, "no Review button:\n\(app.debugDescription)")
+        review.tap()
+        let card = app.descendants(matching: .any)["extension-operation"]
+        scrollTo(card, in: app)
+        XCTAssertTrue(card.exists, "no operation on the page:\n\(app.debugDescription)")
+        shot(app, "downloading-large", look: "light")
+        XCTAssertTrue(waitFor(card, value: "failed", timeout: 30), "no failure:\n\(app.debugDescription)")
+        let retry = app.buttons["extension-operation-retry"]
+        scrollTo(retry, in: app)
+        XCTAssertTrue(retry.isHittable, "Retry out of reach:\n\(app.debugDescription)")
+        shot(app, "failed-large", look: "light")
+        app.terminate()
     }
 
     /// A hub without operations answers the preview when it has the package: the page waits with a spinner as before
