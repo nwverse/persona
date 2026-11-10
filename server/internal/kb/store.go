@@ -623,7 +623,8 @@ func (s *Store) Days(chatID string) []string {
 
 // Since returns the message lines written at or after t (minute precision, as stored), at most max bytes after a
 // leading "…\n" when it has to cut, the newest kept. It reads the days newest first and stops once it has more than
-// max, so a long backlog costs the days it keeps, not all of them; the cut lands on a line start (cutTail).
+// max, so a long backlog costs the days it keeps, not all of them; the cut lands on a message or line start, inside a
+// long line on a whole character (cutTail).
 func (s *Store) Since(chatID string, t time.Time, max int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -675,7 +676,7 @@ func sinceDay(raw, day string, zone *time.Location, t time.Time) string {
 
 // cutTail keeps at most the last limit bytes of s, after "…\n" when it cuts. The kept part starts where a message
 // ("- ") or a day ("## ") starts, so a reader gets whole messages; when that would drop more than half of what fits
-// (one long message ends the text), at the next line start; failing that at the next character, never inside one.
+// (a long message), at the next line start; when that would too (a long line), at the next character, never inside one.
 func cutTail(s string, limit int) string {
 	limit = max(limit, 0)
 	if len(s) <= limit {
@@ -702,7 +703,7 @@ func cutTail(s string, limit int) string {
 	switch {
 	case msg >= 0 && msg-at <= limit/2:
 		at = msg
-	case line >= 0:
+	case line >= 0 && line-at <= limit/2:
 		at = line
 	default:
 		for at < len(s) && !utf8.RuneStart(s[at]) {

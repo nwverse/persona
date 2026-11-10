@@ -113,3 +113,42 @@ func TestApplyPersonKeepsAChatNotedMeanwhile(t *testing.T) {
 		t.Fatalf("person after edit: chats %v projects %v note %q", p.Chats, p.Projects, p.Note)
 	}
 }
+
+// Archiving (without chatMu) and a history import (under chatMu) add a sender's hints for one person at once: the
+// handles are reread and written under personMu with the person, so neither writes back a list missing the other's.
+func TestPersonHandlesKeepEachOthersHints(t *testing.T) {
+	e := testEngine(t, nil)
+	st := e.Store
+	e.HandleKey = []byte("0123456789abcdef0123456789abcdef")
+	at := time.Now().Add(-time.Hour)
+	if err := st.PutPerson(&Person{ID: "lark-u1", Source: "lark", SourceID: "u1", Name: "A", Chats: []string{"lark-c"}, LastSeen: at}); err != nil {
+		t.Fatal(err)
+	}
+	const n = 100
+	note := func(hint string) {
+		e.notePerson(&Chat{ID: "lark-c"}, "lark", SourceMessage{SenderID: "u1", SenderName: "A", At: at,
+			SenderHandles: []Handle{{Kind: HandleEmail, Value: hint}}})
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(2)
+		go func() { // history import
+			defer wg.Done()
+			<-start
+			st.chatMu.Lock()
+			defer st.chatMu.Unlock()
+			note(fmt.Sprintf("history-%d@example.com", i))
+		}()
+		go func() { // archive
+			defer wg.Done()
+			<-start
+			note(fmt.Sprintf("archive-%d@example.com", i))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := len(st.PersonHandles("lark-u1")); got != 2*n {
+		t.Fatalf("kept %d handles, want %d", got, 2*n)
+	}
+}

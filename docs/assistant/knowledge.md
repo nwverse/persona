@@ -163,7 +163,7 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
    - **GitHub**: only PRs / issues involving me (`involves:@me`, last 30 days initially), not entire repositories.
    - One PR / issue per chat, `github-<owner>-<repo>-<number>` (`kind` is `pr` / `issue`), in this order: description (starts with `【标题】`, "[Title]"); comments; reviews (`（review）批准了`, "(review) approved"); inline comments ("(file:line)…").
    - Bots are marked `(bot)`. Each entry is at most 4000 characters. Skip the round when the request quota is low.
-2. **Compress**: once a chat has 50 new messages or has been quiet for 10 minutes, send the old `summary.md` + new messages (up to 24,000 bytes, keeping the latest and cut at a message or line start) to a small model,
+2. **Compress**: once a chat has 50 new messages or has been quiet for 10 minutes, send the old `summary.md` + new messages (up to 24,000 bytes, keeping the latest and cut at a message or line start, or inside a long line at a whole character when the next start would drop more than half of them) to a small model,
    producing a new summary (fixed sections: what this is / progress / to-dos and unresolved issues / about me), one line, tags, mentioned projects and people; write `summary.md` and `meta.json`.
    At most 8 chats per round, most relevant first. Direct-chat / email tags propagate to the other person; a person's `summary.md` is assembled from metadata and direct-chat context without a model call.
    When the model declines the batch (a `refusal` stop reason, e.g. a safety classifier), it would decline it again: the batch is marked covered without a new summary and the chat continues with later messages.

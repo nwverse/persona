@@ -25,6 +25,10 @@ func TestSinceCutTail(t *testing.T) {
 		{"## d\n- abc\n## e\n- d\n", 10, "…\n## e\n- d\n"},
 		// The next message start would drop more than half of what fits: the next line instead.
 		{"- a\n  1234567890\n  12\n- b\n", 14, "…\n  12\n- b\n"},
+		// The next line start is the next message and too far as well: the next character, so the long message's tail
+		// fills what fits instead of being dropped with it.
+		{"- 09:00 A: " + strings.Repeat("x", 120) + "\n- 09:01 B: last\n", 64, "…\n" + strings.Repeat("x", 47) + "\n- 09:01 B: last\n"},
+		{"- a\n  " + strings.Repeat("x", 40) + "\n  y\n- b\n", 20, "…\n" + strings.Repeat("x", 11) + "\n  y\n- b\n"}, // the next line too
 		// No line starts inside: the next character, never half of one.
 		{"- 我们今天\n", 7, "…\n今天\n"},
 		{"- 我们今天\n", 6, "…\n天\n"},
@@ -62,6 +66,28 @@ func TestSinceKeepsWholeCharacters(t *testing.T) {
 		} else if !cut && out != full {
 			t.Fatalf("max %d: %q, want the whole %q", max, out, full)
 		}
+	}
+}
+
+// A long last-but-one message is cut inside, not dropped whole: through Since, which compression summarizes and then
+// marks covered, a dropped tail would never reach a summary.
+func TestSinceKeepsTheTailOfALongMessage(t *testing.T) {
+	st, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Chat{ID: "lark-long", Name: "Long"}
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, st.Zone())
+	if err := st.AppendMessages(c, []Line{{At: at, Sender: "A", Text: strings.Repeat("x", 120)},
+		{At: at.Add(time.Minute), Sender: "B", Text: "last"}}); err != nil {
+		t.Fatal(err)
+	}
+	full := st.Since(c.ID, at.Add(-time.Hour), 1<<20)
+	const max = 64
+	out := st.Since(c.ID, at.Add(-time.Hour), max)
+	kept, cut := strings.CutPrefix(out, "…\n")
+	if !cut || len(kept) != max || !strings.HasSuffix(full, kept) || !strings.HasPrefix(kept, "xxx") {
+		t.Fatalf("Since(%d) = %q, want the last %d bytes of %q", max, out, max, full)
 	}
 }
 
