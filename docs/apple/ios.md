@@ -1310,7 +1310,7 @@ When a device cannot reach the hub address, connect through an SSH server. For t
 - **Code**: the tunnel itself is in the shared package `apple/Packages/PersonaSSH` (swift-nio-ssh + Network.framework, shared by iOS and Mac, not linked into the watch);
   App-side `Persona/App/SSHTunnels.swift` (one tunnel per hub, `SSHKeys`, routing `AppModel.sshRoute`),
   `Shared/HubTransport.swift` (maps hub addresses to tunnel loopback addresses, `SSHRoute` configuration), `Persona/Views/Settings/SSHTunnelView.swift`.
-- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets and port-forwarding address construction pass through `HubTransport.resolve`;
+- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets, port-forwarding address construction and the Feishu video and voice player's stream URL (`LarkMedia.streamURL`) pass through `HubTransport.resolve`;
   `ServerConfig`, the pairing registry, `currentConfig` and all comparisons still use the hub's own address, so multi-hub grouping, routing and credential upgrades need no tunnel awareness.
   `HubRoute.healthProbe` uses `direct: true`, always probing the direct route.
 - **Routing**: with usable SSH settings in a group (host, user, confirmed fingerprint), `routePicker` always has a value: before every connection, `HubRoute.answering` probes direct routes (even a single address),
