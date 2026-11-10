@@ -291,8 +291,18 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 		}
 		return s.gateDelivery(ctx, t, d, pr)
 	}
+	// What it is judged against is its brief (#3822): the owner's words and the criteria as scope changes left them, not
+	// the latest hand-over prompt's.
+	if brief, ok := s.briefOfTodo(t.ID); ok {
+		in.Brief = &brief
+	}
+	if in.Brief != nil && len(in.Brief.Criteria) > 0 {
+		in.Criteria = in.Brief.Criteria
+	}
 	if t.Supervision != nil {
-		in.Criteria = t.Supervision.DoneWhen
+		if len(in.Criteria) == 0 {
+			in.Criteria = t.Supervision.DoneWhen
+		}
 		// Spot-checking on: the judge checks each criterion too, so a task that passes can close without task_review.
 		in.Checks = len(in.Criteria) > 0 && s.reviewSamplePercent(ctx) < 100
 	}
@@ -316,6 +326,7 @@ type taskDoneInput struct {
 	Criteria []string                // a supervised task's done_when
 	Replies  []prompts.TaskDoneReply // its agents' last replies
 	Checks   bool                    // also check each criterion and the delivery (supervise_sample.go)
+	Brief    *TaskBrief              // what was asked when the work was handed out (task_brief.go); nil: none
 	// Deployed checks a delivery said live against the running hub (gateDelivery); nil: as judged.
 	Deployed func(TodoDelivery) TodoDelivery
 }
@@ -347,8 +358,17 @@ func taskDoneWithoutModel(replies []prompts.TaskDoneReply, sideTurnBlocked bool)
 func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (taskDoneCheck, error) {
 	c := taskDoneCheck{Replies: len(in.Replies), Signals: doneSignals(in.Replies)}
 	system := prompts.RenderTaskDone(prompts.TaskDone{Owner: in.Owner, Delivery: in.Delivery, Checks: in.Checks, Language: in.Language})
-	input := prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: in.Title, Prompt: clipMiddle(strings.TrimSpace(in.Notes), 1500),
-		Criteria: in.Criteria, Replies: in.Replies, MergedPR: c.Signals.MergedPR, Build: c.Signals.Build})
+	din := prompts.TaskDoneInput{Title: in.Title, Prompt: clipMiddle(strings.TrimSpace(in.Notes), 1500),
+		Criteria: in.Criteria, Replies: in.Replies, MergedPR: c.Signals.MergedPR, Build: c.Signals.Build}
+	if b := in.Brief; b != nil { // held to what was asked, not to the latest hand-over prompt (task_brief.go)
+		if b.Request != nil {
+			din.Asked, din.AskedAt = clipMiddle(b.Request.Text, 600), b.Request.At.UTC().Format("2006-01-02")
+		}
+		for _, d := range (&taskBrief{rec: b.briefRecord, st: briefState{Log: b.Log}}).dropped() {
+			din.Dropped = append(din.Dropped, d.Criterion)
+		}
+	}
+	input := prompts.RenderTaskDoneInput(din)
 	var out struct {
 		Verdict  string          `json:"verdict"`
 		Reason   string          `json:"reason"`

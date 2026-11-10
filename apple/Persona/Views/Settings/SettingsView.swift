@@ -102,6 +102,18 @@ struct SettingsView: View {
                         }
                         .settingsListRow(SettingsPage.assistant)
                         .accessibilityIdentifier("settings-assistant")
+                        #if os(iOS)
+                        // Persona's part in recorded meetings (#2981): the hub's default role, Off until changed. Only from
+                        // a hub that offers attending.
+                        if MeetingAttendees.offered(model) {
+                            NavigationLink(value: SettingsPage.meetings) {
+                                SettingsRow(title: String(localized: "Meetings"), symbol: Theme.Icon.meeting, tint: Theme.ai,
+                                            value: MeetingAttendees.defaultRole(model).title, look: .oneLine)
+                            }
+                            .settingsListRow(SettingsPage.meetings)
+                            .accessibilityIdentifier("settings-meetings")
+                        }
+                        #endif
                         NavigationLink(value: SettingsPage.triage) {
                             SettingsRow(title: String(localized: "Session Triage"), symbol: Theme.Icon.triage, tint: Theme.ai)
                         }
@@ -426,6 +438,11 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorBot") { p.append(SettingsPage.feishuBot) }
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
+        else if d.bool(forKey: "openMeetingSettings") { // Settings › Meetings (#2981)
+            #if os(iOS)
+            p.append(SettingsPage.meetings)
+            #endif
+        }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
         else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
@@ -495,6 +512,8 @@ struct SettingsView: View {
 enum SettingsPage: Hashable {
     #if os(iOS)
     case health
+    /// Settings › Meetings (#2981): Persona's default role in a recorded meeting.
+    case meetings
     #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
@@ -590,6 +609,7 @@ private struct SettingsDestinations: ViewModifier {
         case .feishuBot: FeishuBotView()
         #if os(iOS)
         case .health: WorkoutReportSettingsView()
+        case .meetings: MeetingSettingsView()
         #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()

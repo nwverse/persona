@@ -1,0 +1,257 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/i18n"
+)
+
+// ---- the suggestion tool (inbox_suggest; inbox_draft is its older name for a reply) ----
+
+type suggestIn struct {
+	Kind     string      `json:"kind"`
+	Text     string      `json:"text"`
+	Note     string      `json:"note"`
+	Handback bool        `json:"handback"`
+	Outcome  string      `json:"outcome"`
+	Recap    string      `json:"recap"`
+	Machine  string      `json:"machine"`
+	Cwd      string      `json:"cwd"`
+	Related  []string    `json:"related"`
+	Changes  []DocChange `json:"changes"`
+	// Item names the event: needed from a conversation it was handed to (Hand to AI, inbox_handoff.go).
+	Item string `json:"item"`
+}
+
+var errNotProcessing = i18n.ErrEnglish("inbox-errors.not_processing")
+
+// errSuggestion is a suggestion the tool refuses, said so the model can hand in a better one.
+type errSuggestion struct{ msg string }
+
+func (e errSuggestion) Error() string { return e.msg }
+
+// check holds a suggestion to the rules before anything is kept.
+func (in *suggestIn) check() error {
+	in.Kind, in.Text, in.Outcome = strings.TrimSpace(in.Kind), strings.TrimSpace(in.Text), strings.TrimSpace(in.Outcome)
+	switch in.Kind {
+	case "":
+		if strings.TrimSpace(in.Recap) == "" {
+			return errSuggestion{"give kind (reply, agent or conclusion) with text, or at least recap"}
+		}
+		return nil
+	case SuggestReply, SuggestAgent, SuggestConclusion:
+	default:
+		return errSuggestion{fmt.Sprintf("kind %q: one of reply, agent, conclusion", in.Kind)}
+	}
+	if in.Text == "" {
+		return errSuggestion{"text is required"}
+	}
+	if in.Kind == SuggestReply && !in.Handback {
+		// The user sends it with one tap: a blank left to fill in (<expected completion time>) would go out as it is.
+		if p := draftPlaceholder(in.Text); p != "" {
+			return errSuggestion{fmt.Sprintf("the reply leaves %s to fill in, and it goes out as it is: leave out what you could not find (say so in note) and submit again", p)}
+		}
+	}
+	if in.Kind != SuggestReply && len(in.Changes) > 0 {
+		return errSuggestion{"changes go with a reply only"}
+	}
+	if in.Kind == SuggestConclusion {
+		switch in.Outcome {
+		case "":
+			in.Outcome = TierFYI
+		case TierFYI, "done":
+		default:
+			return errSuggestion{fmt.Sprintf("outcome %q: fyi or done", in.Outcome)}
+		}
+	}
+	return nil
+}
+
+// suggest keeps the suggestion of the conversation sessionID on its event: the item's id, or a change the item does
+// not offer (nothing kept then); errNotProcessing when no event's conversation runs there.
+func (s *Service) suggest(ctx context.Context, sessionID string, in suggestIn) (string, *DocChange, error) {
+	id, refused, _, err := s.suggestFrom(ctx, sessionID, in)
+	return id, refused, err
+}
+
+// suggestFrom is suggest, also naming the conversation the event was handed to when the suggestion came from one
+// (in.Item; nil for the event's processing conversation).
+func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestIn) (string, *DocChange, *SessionRef, error) {
+	if err := in.check(); err != nil {
+		return "", nil, nil, err
+	}
+	if s.inboxReady(ctx) != nil {
+		return "", nil, nil, errInboxUnavailable
+	}
+	b := &s.inbox
+	b.mu.Lock()
+	var it *InboxItem
+	var from *SessionRef
+	if item := strings.TrimSpace(in.Item); item != "" {
+		var err error
+		if it, from, err = b.handedItem(item, sessionID); err != nil {
+			b.mu.Unlock()
+			return "", nil, nil, err
+		}
+	} else {
+		it = b.itemOfAgent(sessionID)
+		// A conversation that answers before its start returned (an agent runtime already running starts a turn at
+		// once): its item learns the conversation's id a moment later.
+		for wait := time.Now().Add(inboxDraftWait); it == nil && b.agentStarting() && time.Now().Before(wait); {
+			b.mu.Unlock()
+			time.Sleep(100 * time.Millisecond)
+			b.mu.Lock()
+			it = b.itemOfAgent(sessionID)
+		}
+		if it == nil {
+			b.mu.Unlock()
+			return "", nil, nil, errNotProcessing
+		}
+	}
+	for _, ch := range in.Changes {
+		if it.Doc == nil || !docOffers(*it.Doc, ch) {
+			b.mu.Unlock()
+			return it.ID, &ch, nil, nil
+		}
+	}
+	now := time.Now().UTC()
+	w := beginWrite(it)
+	if r := strings.TrimSpace(in.Recap); r != "" {
+		it.Recap = clip(r, recapMax)
+	}
+	for _, id := range in.Related {
+		relate(it, b.items[strings.TrimSpace(id)])
+	}
+	var card *MessageCard
+	stop := false
+	if from == nil && in.Kind == "" && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
+		// Only the recap: this turn changes nothing else, the event goes back to where it was.
+		back := it.Agent.Back
+		if it.Suggestion != nil || back == "" || back == HandlingLooking || back == HandlingFailed {
+			back = HandlingDone
+		}
+		it.Agent.Wake = false
+		b.setHandling(it, back, "", now)
+	}
+	if in.Kind != "" && it.open() {
+		if legacySuggestion(it) != nil {
+			it.SuggestSeq = max(it.SuggestSeq, 1)
+		}
+		it.SuggestSeq++
+		g := &InboxSuggestion{Version: it.SuggestSeq, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
+			Handback: in.Handback, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
+		if in.Kind == SuggestAgent {
+			if m, ok := s.machineByName(ctx, strings.TrimSpace(in.Machine)); ok {
+				g.MachineID = m.ID
+			}
+		}
+		it.Suggestion = g
+		var link *InboxChainLink
+		if from == nil {
+			it.Agent.Wake, it.Agent.Back = false, ""
+			b.setHandling(it, HandlingDone, "", now)
+			link = &InboxChainLink{Type: LinkSession, MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
+		} else {
+			clearDraft(it)
+			link = &InboxChainLink{Type: LinkSession, MachineID: from.MachineID, SessionID: from.SessionID}
+		}
+		l := b.userLang()
+		switch {
+		case in.Kind == SuggestConclusion:
+			b.chainAdd(it, InboxChainEntry{Kind: ChainConcluded, At: now, Text: i18n.T(l, "assistant-inbox_chain.concluded"), Detail: in.Text})
+			if in.Outcome == "done" {
+				it.Suggestion = nil
+				b.file(it, now, doneByManager)
+				if from != nil {
+					stop = b.closeHandling(it, "read", now) // a processing conversation still on it stops
+				}
+			} else {
+				it.Tier = TierFYI
+			}
+		default:
+			key := "suggested_reply"
+			if in.Handback {
+				key = "suggested_handback"
+			} else if in.Kind == SuggestAgent {
+				key = "suggested_agent"
+			}
+			b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now, Text: i18n.T(l, "assistant-inbox_chain."+key), Detail: clip(in.Text, 600), Link: link})
+		}
+		if in.Kind == SuggestReply && from == nil {
+			card = messageCardOf(it)
+		}
+	}
+	id := it.ID
+	b.settle(w)
+	b.mu.Unlock()
+	// An undone suggestion gets no card, and the conversation hears it failed: the inbox must not promise what a
+	// restart would lose. Undone, the event is back where the turn found it, so handing it in again works. One that
+	// something else moved meanwhile stays (that move's save writes the row) and goes on as kept.
+	if s.saveWrites(ctx, []*inboxWrite{w}, "its suggestion"); w.undone {
+		return id, nil, from, errInboxNotPersisted
+	}
+	if card != nil {
+		s.messageCard(ctx, id, *card)
+	}
+	if stop {
+		s.tellSoon(ctx, it)
+	}
+	return id, nil, from, nil
+}
+
+// inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
+func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange) (string, *DocChange, error) {
+	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed})
+	if err != nil && !errors.Is(err, errInboxNotPersisted) {
+		return "", nil, nil
+	}
+	return id, refused, err
+}
+
+func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.RawMessage) (string, error) {
+	var in suggestIn
+	if err := json.Unmarshal(args, &in); err != nil {
+		return "", fmt.Errorf("arguments: %v", err)
+	}
+	_, refused, from, err := s.suggestFrom(ctx, self, in)
+	if err != nil {
+		return "", err
+	}
+	if refused != nil {
+		return "", fmt.Errorf("change %+v is not one the item lists (ref, field and one of its values)", *refused)
+	}
+	if in.Kind == "" {
+		return "The recap is updated.", nil
+	}
+	if from != nil {
+		return "The suggestion is in the user's inbox; nothing goes out until they confirm. What they do with it is told here; later messages on the item are not.", nil
+	}
+	return "The suggestion is in the user's inbox; nothing goes out until they confirm. End this turn: what comes next (their answer, new messages) is sent here.", nil
+}
+
+// legacySuggestion is an AI twin draft stored before suggestions, as a reply suggestion (version 1); nil for none.
+func legacySuggestion(it *InboxItem) *InboxSuggestion {
+	a := it.Agent
+	if it.Suggestion != nil || it.Handling != nil || a == nil || a.State != AgentDrafted || strings.TrimSpace(a.Draft) == "" {
+		return nil
+	}
+	g := &InboxSuggestion{Version: 1, Kind: SuggestReply, Text: a.Draft, Note: a.Note, Changes: a.Changes}
+	g.At = it.UpdatedAt.UTC()
+	if a.DraftedAt != nil {
+		g.At = a.DraftedAt.UTC()
+	}
+	return g
+}
+
+// currentSuggestion is the item's suggestion as listed (an old draft's too).
+func currentSuggestion(it *InboxItem) *InboxSuggestion {
+	if it.Suggestion != nil {
+		return it.Suggestion
+	}
+	return legacySuggestion(it)
+}

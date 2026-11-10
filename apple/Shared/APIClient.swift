@@ -76,8 +76,10 @@ nonisolated struct APIError: LocalizedError, Sendable {
     var details: JSONValue?
     /// Route context for the one pre-code knowledge refusal; never match diagnostics from unrelated endpoints.
     var requestPath: String?
+    /// A node-menu action relays the computer's actionable refusal as 502 internal; keep those words, not a generic service error.
+    var showsNodeReason = false
     var errorDescription: String? {
-        let text = businessMessage ?? (code == "internal" && status >= 500
+        let text = businessMessage ?? (code == "internal" && status >= 500 && !showsNodeReason
             ? String(localized: "The service couldn't complete this request. Try again later. (HTTP \(status))") : message)
         guard status >= 500, let requestID else { return text }
         return String(localized: "\(text) (request \(requestID))")
@@ -1098,9 +1100,13 @@ nonisolated struct APIClient: Sendable {
         /// Notify Main-Chat Tasks Only in the Main Chat (#1731): tasks the main conversation starts are quiet (`TodoItem.quiet`). The
         /// value in effect (on by default); nil from a hub without the setting, which hides the switch.
         var mainTasksQuiet: Bool?
+        /// The role a meeting recording starts with (#2981, docs/assistant/meeting-minutes.md「Attendance fields」): `off`,
+        /// `listener` or `participant`; nil from a hub without attending.
+        var meetingAttendanceDefault: String?
         enum CodingKeys: String, CodingKey {
             case launcher, cwd, conversations, timezone, main
             case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
+            case meetingAttendanceDefault = "meeting_attendance_default"
         }
     }
     func assistant() async throws -> AssistantState { owned(try await get("/api/v1/assistant")) }
@@ -1134,15 +1140,17 @@ nonisolated struct APIClient: Sendable {
         var timezone: String?
         var notes: String?
         var mainTasksQuiet: Bool?
+        var meetingAttendanceDefault: String?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
-            case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet"
+            case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
         }
     }
     func setAssistant(machine: String? = nil, launcher: String? = nil, timezone: String? = nil, notes: String? = nil,
-                      mainTasksQuiet: Bool? = nil) async throws -> AssistantState {
+                      mainTasksQuiet: Bool? = nil, meetingAttendanceDefault: String? = nil) async throws -> AssistantState {
         owned(try JSON.decoder.decode(AssistantState.self, from: try await request("PUT", "/api/v1/assistant",
-            body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet))))
+            body: AssistantConfigBody(machineID: machine, launcher: launcher, timezone: timezone, notes: notes, mainTasksQuiet: mainTasksQuiet,
+                                      meetingAttendanceDefault: meetingAttendanceDefault))))
     }
     /// The Chat tab is open: the hub gets a claude process ready so the first message starts at once. With no launcher
     /// chosen the field is omitted and the hub warms its own default (#4200: the client never sends a made-up name).

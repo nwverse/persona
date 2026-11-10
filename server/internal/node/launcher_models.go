@@ -61,7 +61,7 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		return n.liveRuntimeModels(ctx, name, refresh, res)
 	}
 	if m, ok := n.managedLauncher(name); ok && m.AgentType() == "agy" {
-		if res, ok := n.runtimeLauncherModels("agy"); ok {
+		if res, ok := n.agyRuntimeModels(); ok {
 			return n.liveRuntimeModels(ctx, "agy", refresh, res)
 		}
 		return proto.LauncherModels{Agent: "agy", Models: []proto.AgentModel{}}, nil

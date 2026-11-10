@@ -4,6 +4,7 @@ import { ago, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, s
 import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
+import { interactionKicker } from "../lib/row-line";
 import { answerLines, type Resolution } from "../lib/answered";
 import { quickAnswers, withHeld, type HeldRow, type QuickChoice } from "../lib/quick-answers";
 import { optionDisplay, permissionDetail } from "../lib/tool-detail";
@@ -21,7 +22,7 @@ import { useScopedAgentSessions, useScopedCounts, useScopedInteractions, useScop
 import { getSession, useStore, withTaskRows } from "../lib/store";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
-import { heldDelivery, makeSessionLookup, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
+import { heldDelivery, makeSessionLookup, orphanedLine, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
 import { Button, Collapse, cx, EASE, IconButton, Loading, useNow } from "../ui/atoms";
@@ -35,8 +36,6 @@ import { OverviewCards } from "./extensions/ExtensionSlots";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
-
-const KIND: Record<Interaction["kind"], string> = { question: t("home.kind_question"), plan: t("home.kind_plan"), permission: t("home.kind_permission"), screen: t("home.kind_screen"), elicitation: t("home.kind_elicitation") };
 
 function greeting() {
   const h = new Date().getHours();
@@ -146,7 +145,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                         title={title}
                         tags={rowTags(title, [name(ix.machine_id), s?.space_name, s && tabLabel(s)])}
                         detail={(tool && ask && ask !== tool ? t("home.permission_detail", { tool, what: ask }) : ask) || undefined}
-                        pill={!done && <Pill>{KIND[ix.kind]}</Pill>}
+                        pill={!done && <Pill>{interactionKicker(ix)}</Pill>}
                         entry={cardState(ix.id)}
                         actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
                       />
@@ -285,6 +284,7 @@ function Group({ title, count, children, right, hint, grid }: { title: string; c
 function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
   const to: Route = { name: "todos", id: todo.id };
   const held = heldDelivery(todo);
+  const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
   const line = [held && t(`todos.delivery_${held.state}`), agents > 0 && t("todos.agent_count", { count: agents })].filter(Boolean).join(" · ");
   return (
     <div className="flex flex-col gap-2 rounded-card bg-surface px-3 py-2.5 shadow-card" data-task={todo.id}>
@@ -296,6 +296,13 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
       </div>
       <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
       {line && <p className={cx("truncate text-[11.5px]", held ? "text-orange" : "text-ink-3")}>{line}</p>}
+      {/* nobody is working on it (#3618): the hub's finding and why; a card that waits for the user says that instead */}
+      {orphan && (
+        <p data-orphaned-line className="truncate text-[11.5px] text-ink-3">
+          <span className="font-medium text-orange">{orphan.lead}</span>
+          {orphan.reason && <> · {orphan.reason}</>}
+        </p>
+      )}
     </div>
   );
 }

@@ -178,16 +178,8 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 		if !update {
 			return t, false, nil
 		}
-		v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			v.Supervisor = self
-			if len(doneWhen) > 0 {
-				v.DoneWhen = doneWhen
-			}
-			if expect > 0 {
-				v.ExpectMinutes = expect
-			}
-			return true
-		})
+		// Its criteria change only through the brief's log (task_brief_scope.go): the same rules as task_scope.
+		v, err := s.rescope(ctx, t, self, "agent_supervise", doneWhen, expect)
 		if err != nil {
 			return Todo{}, false, err
 		}
@@ -213,6 +205,7 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 	}
 	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
 	todo.Supervision = &v
+	s.briefFor(ctx, s.callerOrigin(ctx, self), todo, doneWhen, expect) // before its agent is linked (task_brief.go)
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("link the agent: %w", err)
@@ -346,22 +339,15 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	if h == nil {
 		return ""
 	}
+	refused := ""
 	if h.made {
 		s.taskCard(ctx, h.self, h.todo.ID)
 	} else {
 		doneWhen, expect := cleanDoneWhen(h.task.DoneWhen), max(0, min(h.task.ExpectMinutes, 24*60))
-		v, _, err := s.updateSupervision(ctx, h.todo.ID, func(v *Supervision) bool {
-			v.Supervisor = h.self
-			if len(doneWhen) > 0 {
-				v.DoneWhen = doneWhen
-			}
-			if expect > 0 {
-				v.ExpectMinutes = expect
-			}
-			return true
-		})
+		v, err := s.rescope(ctx, h.todo, h.self, "agent_send", doneWhen, expect) // through the brief's log, as task_scope
 		if err != nil {
 			s.logf("task %s: supervision: %v", h.todo.ID, err)
+			refused = " Its done_when was NOT changed: " + err.Error()
 		} else {
 			h.todo.Supervision = &v
 		}
@@ -371,7 +357,7 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	}
 	if !h.made {
 		return fmt.Sprintf(" It already works for your task %s (%q): no new task was made, done_when %s.", h.todo.ID, h.todo.Title,
-			criteriaWords(nil, h.todo.Supervision))
+			criteriaWords(nil, h.todo.Supervision)) + refused
 	}
 	return fmt.Sprintf(" It is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
 		"and close it with task_review. done_when %s.", h.todo.ID, h.todo.Title, criteriaWords(nil, h.todo.Supervision))
@@ -430,7 +416,7 @@ func criteriaWords(list []string, v *Supervision) string {
 		list = v.DoneWhen
 	}
 	if len(list) == 0 {
-		return "not set (judge by what the task is for; set it with agent_supervise)"
+		return "not set (judge by what the task is for; set it with task_scope)"
 	}
 	return strconv.Quote(strings.Join(list, "; "))
 }
