@@ -34,6 +34,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		// needs_user's deadline and whether its recommendation can be undone (#3127, decision_deadline.go).
 		Deadline   string `json:"deadline"`
 		Reversible *bool  `json:"reversible"`
+		// accepted: the owner is still to look at the result themselves (a UI change someone has to see); without it the
+		// supervisor's acceptance passes the task's "Please verify" (#3240).
+		UserCheck bool `json:"user_check"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -88,6 +91,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 	}
 	verdict, note := a.Verdict, clip(a.Note, 2000)
+	if a.UserCheck && verdict != reviewAccepted {
+		return "", fmt.Errorf("user_check applies to accepted only")
+	}
 	// Only the main conversation supervises (task_plan, quietAgentTask): another conversation's task without a ledger
 	// gets none here either, or its signals would go into the main conversation's supervision messages (#4262). It can still
 	// be closed; rework and needs_user are what supervision is for.
@@ -107,7 +113,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			if verdict == reviewRework && v.Round >= maxReworkRounds {
 				verdict, over = reviewNeedsUser, true
 			}
-			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note}
+			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note, UserCheck: a.UserCheck}
 			if verdict == reviewRework {
 				v.Round++
 				r.Round = v.Round
@@ -148,10 +154,19 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				return "", err
 			}
 			switch {
+			case closed && ledger && verdict == reviewAccepted && a.UserCheck:
+				// The owner is to look themselves: a "Please verify" asks them (one still waiting stays; one the assistant
+				// passed when the work was deployed gives way to a new one).
+				s.dropTaskReport(t.ID)
+				if cur, ok := s.todoNow(t.ID); ok {
+					ag := lastAgent(cur)
+					s.askAcceptanceRound(cur, ag.MachineID, ag.SessionID, reviewReply(note, checks), true)
+				}
 			case closed && ledger && verdict == reviewAccepted:
 				// The conclusion is the one push about it: its card, not a line in the task report (#1226).
 				s.dropTaskReport(t.ID)
 				if cur, ok := s.todoNow(t.ID); ok {
+					conclusion.Verified = supervisorVerified(cur)
 					carded = s.askConclusion(ctx, cur, conclusion)
 				}
 			case closed:
@@ -163,9 +178,23 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return fmt.Sprintf("Task %s is cancelled and closed; its agents are being closed and archived (archived, not deleted: "+
 				"agent_unarchive brings one back), and the cards they had waiting end. Tell the user only if they need to know.", t.ID), nil
 		}
+		if ledger && verdict == reviewAccepted && a.UserCheck {
+			return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. A \"Please verify\" card asks the "+
+				"user to look at it themselves (user_check), and it waits for their \"Pass\": don't ask them again.", t.ID), nil
+		}
+		if ledger && verdict == reviewAccepted {
+			// Checked by the supervisor: its "Please verify" is passed, not left for the owner to press (#3240).
+			if ok, err := s.verifyBySupervisor(ctx, t.ID); err != nil {
+				s.logf("task %s: supervisor verify: %v", t.ID, err)
+			} else if ok {
+				return fmt.Sprintf("Task %s is accepted, closed and marked verified by you: its \"Please verify\" card now says so and the "+
+					"user is not asked to pass it. Its agent is closed once it stays still. Tell the user the result in a line only if "+
+					"they are waiting for it, and hand out or schedule anything that follows (TestFlight, closing an issue).", t.ID), nil
+			}
+		}
 		if carded {
 			return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Its conclusion card (the verdict, "+
-				"why in a sentence, the link) went to the user in Lark: don't push the result again. Hand out or schedule anything that "+
+				"why in a sentence, the link) went to the user in Lark, marked checked by you (nothing waits for them): don't push the result again. Hand out or schedule anything that "+
 				"follows (deploy, TestFlight, closing an issue).", t.ID), nil
 		}
 		return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Tell the user the result in a line or two "+
@@ -228,6 +257,15 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	return fmt.Sprintf("Rework round %d of %d is %s. When the agent stops again you get a 督办 message to review it again.", v.Round,
 		maxReworkRounds, sent), nil
+}
+
+// reviewReply is what a review says of the work, as the reply a "Please verify" card's three lines are read from.
+func reviewReply(note string, checks []ReviewCheck) string {
+	lines := []string{note}
+	for _, c := range checks {
+		lines = append(lines, c.Criterion+": "+c.Evidence)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func reworkChecks(list []ReviewCheck) []prompts.SuperviseCheck {
