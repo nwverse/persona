@@ -532,12 +532,36 @@ which users saw as one action: clear this batch they do not need to handle now. 
   `hub/devicetokens_test.go` `TestAnswerRoleOnlyWhatTheWatchDoes` (Watch blocked), `hub/testdata/route_scopes.txt` (`inbox.write` required); web `inbox.test.ts`; Android `InboxBulkTest`, `InboxRepositoryTest`, `InboxAssistantTransportTest`;
   Apple `InboxBulkTests` (responses / `undo`, old-hub fallback, failure rollback, confirmation threshold), UI `InboxMarkAllTests` (Clean up all + returned Undo; confirmation with `MOCK_INBOX_EXTRA`); hub `TestInboxBulkOldClientsDoneAndDismiss` guards old clients' `done` / `dismiss`.
 
+## Grouping and selection (2026-11-10, #2059)
+
+The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Persona/Views/Inbox/InboxGroups.swift`); Android follows in #2576. The native Mac app is frozen (`docs/apple/mac.md`), so its inbox keeps its list.
+
+- **Groups**: Needs you, FYI and Collapsed group by source (default) or by time, switched at the top of the list and kept on this device
+  (web `localStorage` `inbox.grouping`, Apple `@StoredValue("inbox.grouping")`). Done always groups by when it was done. Working is never grouped.
+  A section that would have one group shows no group titles. Waiting Agents get their own group first in Needs you ("Agents waiting on you"); they are counted but can't be picked.
+- **Time groups** are calendar days in local time, not 24-hour windows: Just now (within the hour, Done only, so a slip is easy to find and undo), Today, Yesterday,
+  each of the 2 to 6 days before by its date (the last week, not the calendar week), 7+ days ago (7 to 29 days) and 1+ month ago (30 days or more, or no time).
+  A moment in the future counts as today. Open items use their last activity (`updated_at`), Done items `done_at`; newest group first.
+- **Source groups** follow the filter chips' order: Lark, each mail account, each connector (by its account), then sources the chips don't name in the order they first show up.
+- **Folding**: every group folds to its title and count; folds are kept on this device per manager, section and group (web `inbox.folds`, Apple `@StoredValue("inbox.folds")`).
+  Open at first: every group of Needs you, FYI and Collapsed; in Done only Just now and Today. Group titles stick to the top while their rows scroll by.
+  Done's title has Jump To (its groups with counts; picking one unfolds it and scrolls to its first row, since an iOS `List` can't scroll to a header) and Fold all / Unfold all.
+- **Done's history**: past the list's 3 days, the apps page each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page): the first page when the list is shown,
+  the next from Show Older at the end of Done. Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them.
+  The last group's count reads "n+" while older pages remain. Old hubs (404 / 405) quietly have no history. Done from history reopens through the item's own manager.
+- **Selection** (web, iOS / iPad): Select in the header (iPhone hides the tab bar meanwhile; Esc ends it on the web); rows get a tick. Select All picks only rows in sight;
+  a folded group is picked through its title's tick (none / some / all of it), which picks or unpicks the whole group, folded or not, and its title says how many are picked.
+  The web's bar also says how many picked rows are folded away. The one action is Mark as Done: `POST /api/v1/inbox/bulk` `action: done` per manager, with Undo ("Clean up all").
+  There is no Mark as Read: Done stays Persona-only.
+- DEBUG (iOS): `-showInboxPicked <n>`, `-showInboxPickedDone YES`, `-showInboxDone YES` (Done and its newest group open), `-showInboxPickGroups YES`.
+- Tests: web `lib/inbox-groups.test.ts`, `views/inbox/Inbox.groups.test.tsx`, `views/inbox/Inbox.select.test.tsx`; Apple `InboxGroupsTests`, `InboxBulkTests`.
+
 ## App
 
 - `InboxStore` (`Persona/App/InboxStore.swift`): list cached locally (`inbox-items`), shown before refresh on cold start; fetch on Inbox events, reconnect, page entry.
   Mark done locally before request; restore on failure. A mark the hub may not have yet is laid over every list that comes in (`InboxMarks`, #2201): while its request is out, over every list; once the hub took it, over the lists that started before then. So a reload taken before the hub had it (the push after another item's Done) can't bring a swiped-away item back; the web does the same (`withPending`). Tab badge = unhandled Needs you count.
 - Page (`Persona/Views/Inbox/InboxView.swift`): top filters (All / Lark / each mail account | Mentions / Private / Groups / Mail); search titles, senders,
-  body, summary. Sections: Needs you (expanded), Working (always expanded, non-tappable heading, Inbox phase 1; present only with hub `status`, absent on older hubs using `tier`; excluded from badges and Watch Needs you, while urgent `status: action` still counts), FYI (expanded, Mark All Seen to the heading's right), Collapsed (collapsed, Clear All), then Done (collapsed).
+  body, summary. Sections: Needs you (expanded), Working (always expanded, non-tappable heading, Inbox phase 1; present only with hub `status`, absent on older hubs using `tier`; excluded from badges and Watch Needs you, while urgent `status: action` still counts), FYI (expanded, Mark All Seen to the heading's right), Collapsed (collapsed, Clear All), then Done (collapsed); groups and selection in "Grouping and selection".
   Tap headings to expand / collapse. Row: 40-point avatar (18pt source badge at bottom right: Lark blue, mail neutral gray), title (headline) + type `Chip` (mentions red), time;
   with summary, second line ✦ summary, third small "sender: content" (secondary gray, not tertiary); before triage, just "sender: content." Count badge (normally gray fill, primary-color fill for mentions).
   Separator starts at text column (16 + 40 + 12). Lark avatar palette avoids red / orange that imply Needs you. Full left swipe = done. More contains Clean up all (see "Clean up all" above).

@@ -2251,7 +2251,7 @@ def stamp_managers(path, obj):
     """The merged lists' `manager` on each item, as the hub adds it; the default manager's items too."""
     if not _stamps() or not isinstance(obj, dict): return obj
     dflt = MANAGERS["default"]
-    if path == "/api/v1/inbox" and isinstance(obj.get("items"), list):
+    if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
     for key in ("extensions", "plugins", "connectors"):
         if path == "/api/v1/" + key and isinstance(obj.get(key), list):
@@ -5205,6 +5205,44 @@ def set_policy(body, pid=None, manager=None):
 def inbox_version(x):
     """What the item holds now (the hub's inboxVersion): it moves when something new comes in."""
     return hashlib.sha256((x["id"] + "\0" + str(x.get("updated_at")) + str(x.get("count"))).encode()).hexdigest()[:16]
+
+
+# Done items older than the list's days, for GET /api/v1/inbox/done (#2200, the inbox's Done by time #2059): made-up
+# Lark chats, mail and GitHub notifications done 4 to 60 days ago, a few a day. MOCK_INBOX_HISTORY=none: a hub without
+# the history (404), as before #2200.
+def _history():
+    out = []
+    kinds = [("lark", "dm", "飞书", "示例同事", "周报我交啦"), ("mail", "mail", "个人邮箱", "示例商城", "订单已签收"),
+             ("lark", "group", "飞书", "项目群", "版本号改好了"), ("github", "review_requested", "GitHub", "Alex", "依赖升级已合并")]
+    for day in list(range(4, 8)) + [9, 12, 16, 21, 27, 33, 41, 52, 60]:
+        for i in range(2 if day > 8 else 3):
+            src, kind, name, sender, preview = kinds[(day + i) % len(kinds)]
+            x = {"id": f"hist:{day}:{i}", "source": src, "kind": kind, "account": "acc1" if src == "mail" else src, "account_name": name,
+                 "title": f"{sender} · {preview}", "sender": sender, "preview": preview, "count": 1, "started_at": ago(days=day, hours=3 + i),
+                 "updated_at": ago(days=day, hours=2 + i), "tier": "fyi", "summary": preview, "done_at": ago(days=day, hours=1 + i), "done_by": "user"}
+            if src == "github":
+                x["connector"] = {"thread": f"example-org/example-repo#{day}", "label": "PR", "url": "https://example.com/pr", "can_reply": False}
+            out.append(x)
+    return out
+
+
+INBOX_HISTORY = [] if os.environ.get("MOCK_INBOX_HISTORY") == "none" else _history()
+
+
+def inbox_done(query):
+    """GET /api/v1/inbox/done: done items newest first, keyset-paged on (done_at, id), the list's and the history's."""
+    all_sources = (query.get("sources") or [""])[0] == "all"
+    before, before_id = (query.get("before") or [""])[0], (query.get("before_id") or [""])[0]
+    limit = max(1, min(200, int((query.get("limit") or ["50"])[0] or 50)))
+    done = [x for x in INBOX + INBOX_HISTORY if x.get("done_at") and (all_sources or "connector" not in x)]
+    done.sort(key=lambda x: (x["done_at"], x["id"]), reverse=True)
+    if before:
+        done = [x for x in done if (x["done_at"], x["id"]) < (before, before_id)]
+    page = done[:limit]
+    body = {"items": [{k: v for k, v in x.items() if k != "context"} for x in page]}
+    if len(page) == limit and len(done) > limit:
+        body["next"] = {"before": page[-1]["done_at"], "before_id": page[-1]["id"]}
+    return body
 
 
 def inbox_for(query):
@@ -10183,9 +10221,21 @@ def mock_size(v):
 GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # MOCK_PERSONAL_AGENTS=1 (#138): a few personal agent conversations, and Remove from list (POST …/hide, …/unhide,
 # GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
-# back. Off: none, as on a hub without the Lark extension.
+# back. Off: none, as on a hub without the Lark extension. =unconfigured (#2613): no conversations, and the only source
+# reports why, as an extension still waiting for its settings does.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
+PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" else "configured" if PERSONAL_AGENTS else "none", "delay": 0.0}
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
+
+def personal_sources():
+    state = PERSONAL_STATE["state"]
+    if state == "none": return []
+    source = {"source": "lark-bridge", "enabled": state not in ("missing", "disabled"),
+              "accounts": [{"accountId": "example", "provider": "muse"}] if state in ("configured", "empty") else []}
+    if state in ("missing", "disabled", "no_accounts"): source["setup"] = state
+    if state == "unconfigured": source["error"] = "Example extension isn't set up yet: fill in its address in the extension's settings."
+    return [source]
+
 # #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
 # (POST /api/v1/assistant/conversations) answer 502 with that code (default assistant_in_doubt, delivered unknown), and
 # every start, failed or not, first takes `delay` seconds (to see a retry spin). n=0&delay=0 puts it back.
@@ -10194,11 +10244,12 @@ def personal_rows():
     now = int(time.time() * 1000)
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
             ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
+    if os.environ.get("MOCK_PERSONAL_UPGRADE"): rows[0] = ("muse", "Upgrade preference fixture", 0.1, 2)
     return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
              "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
             for i, (prov, title, hours, unread) in enumerate(rows)]
 def personal_listed(hidden):
-    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] == "configured" else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files;
 # git_stash_conflicted also leaves them unmerged in the status, as a stash apply that stopped on conflicts does);
@@ -11913,9 +11964,9 @@ def mock_usage_windows():
         week = (2 * 24 + 3) * 3600
         scoped = {**win("7d", 10080, 100, week), "model": "Fable"}
         return {"accounts": [
-            {"id": "claude-1", "provider": "claude", "name": "work-claude", "plan": "Max", "sampled_at": iso(now - 12), "local": True, "sources": ["Relay"],
+            {"id": "claude-1", "provider": "claude", "name": "work-claude", "plan": "Max", "sampled_at": iso(now - 12), "local": True, "machines": ["MacBook"], "sources": ["Relay"],
              "windows": [win("5h", 300, 86, 55 * 60), win("7d", 10080, 41, week), scoped]},
-            {"id": "codex-1", "provider": "codex", "name": "Codex Pro", "plan": "pro", "sampled_at": iso(now - 190), "local": True,
+            {"id": "codex-1", "provider": "codex", "name": "Codex Pro", "plan": "pro", "sampled_at": iso(now - 190), "local": True, "machines": ["MacBook", "Studio"],
              "windows": [win("5h", 300, 22, 4 * 3600), win("7d", 10080, 63, (3 * 24 + 5) * 3600)]},
             {"id": "codex-3", "provider": "codex", "name": "team-seat-2", "plan": "ChatGPT Plus", "sampled_at": iso(now - 40 * 60), "sources": ["Relay"],
              "windows": [win("5h", 300, 8, 2 * 3600), win("7d", 10080, 31, 4 * 24 * 3600)]},
@@ -14295,19 +14346,33 @@ class H(BaseHTTPRequestHandler):
             f = file_read(q.get("path", [""])[0], q.get("cwd", [""])[0], int(q.get("offset", ["0"])[0] or 0), q.get("stream", [""])[0] == "1")
             if not f: return self.send_json({"error": "stat %s: no such file or directory" % q.get("path", [""])[0]}, 404)
             return self.send_json(file_streamed(f, q))
-        # The Lark extension's personal agents (hub agents.go): none here, as on a hub without the Lark extension; the web's sidebar hid
-        # the section only after these answered, and showed "Failed to load personal agents" on the 404 instead.
-        if p == "/api/v1/agents": return self.send_json({"sources": []})
-        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
+        # Personal Agent entry fixtures expose setup and sessions consistently, with live availability changes.
+        if p == "/api/v1/agents":
+            time.sleep(PERSONAL_STATE["delay"])
+            return self.send_json({"sources": personal_sources()})
+        if p == "/api/v1/agents/sessions":
+            time.sleep(PERSONAL_STATE["delay"])
+            return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
         if p == "/mock/start-fail":
             START_FAIL.update(n=int(q.get("n", ["1"])[0]), code=q.get("code", ["assistant_in_doubt"])[0],
                               delay=float(q.get("delay", ["0"])[0]))
             return self.send_json(START_FAIL)
         if p == "/mock/personal-agents":
-            if q.get("reset"): PERSONAL_HIDDEN.clear()
-            return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
-        if p == "/api/v1/agents/prefs": return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
+            if q.get("reset"):
+                PERSONAL_HIDDEN.clear()
+                PERSONAL_STATE.update(state="configured" if PERSONAL_AGENTS else "none", delay=0.0)
+            state = q.get("state", [PERSONAL_STATE["state"]])[0]
+            if state not in ("configured", "empty", "missing", "disabled", "no_accounts", "none"):
+                return self.send_json({"error": "invalid personal agent fixture state"}, 400)
+            PERSONAL_STATE.update(state=state, delay=min(10.0, max(0.0, float(q.get("delay", [PERSONAL_STATE["delay"]])[0]))))
+            for client in list(CLIENTS.values()):
+                try: client["send"]({"type": "agents", "session_ids": []})
+                except Exception: pass
+            return self.send_json(dict(PERSONAL_STATE, hidden=sorted(PERSONAL_HIDDEN)))
+        if p == "/api/v1/agents/prefs":
+            if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
+            return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
@@ -14350,6 +14415,11 @@ class H(BaseHTTPRequestHandler):
             # MOCK_INBOX_DELAY_MS=<ms>: a slow hub, for the inbox refreshing in the background (#1947, docs/operations/testing.md)
             time.sleep(int(os.environ.get("MOCK_INBOX_DELAY_MS", "0")) / 1000)
             return self.send_json(inbox_list(q))
+        if p == "/api/v1/inbox/done":
+            if os.environ.get("MOCK_INBOX_HISTORY") == "none": return self.send_json({"error": "not found"}, 404)
+            other = other_manager(self)  # the history is each manager's own: the others have none here
+            if other: return self.send_json(*other[1]) if other[1] else self.send_json({"items": []})
+            return self.send_json(inbox_done(q))
         if p == "/api/v1/inbox/mutes":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -14367,7 +14437,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(t) if t else self.send_json({"error": "no such inbox item"}, 404)
         if p.startswith("/api/v1/inbox/"):
             iid = p[len("/api/v1/inbox/"):]
-            for x in INBOX:
+            for x in INBOX + INBOX_HISTORY:  # an item done long ago: the history's (#2200)
                 if x["id"] == iid: return self.send_json(dict(x, context=x.get("context") or x["preview"]))
         if mail_area(self, "GET", p, q): return
         if p == "/api/v1/mail/accounts": return self.send_json({"accounts": MAIL_ACCOUNTS})

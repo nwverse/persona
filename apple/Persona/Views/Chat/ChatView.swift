@@ -132,8 +132,6 @@ struct ChatView: View {
     @State private var renaming: Session?
     @State private var closing: Session?
     @State private var deleting: Session?
-    /// The turn whose "Background Task Done" drawer is open.
-    @State private var wakeDrawer: String?
     /// The plan sheet (`PlanSheet`), and whether the newest plan's line is on screen (if not, its pill shows).
     @State private var planOpen = Self.debugPlanSheet
     @State private var planLineShown = false
@@ -1341,49 +1339,11 @@ struct ChatView: View {
                 .accessibilityIdentifier("work-fold-bottom")
                 .unfolding(stepUnfolding(group))
             }
-        case .wakes(let t, let live):
-            WakeChip(notices: t.wakes, live: live) {
-                Haptics.tap()
-                wakeDrawer = t.id
-            }
         case .recaps(_, let items):
             RecapCard(items: items)
         case .viewed(_, let images):
             ViewedImagesRow(images: images).equatable()
         }
-    }
-
-    /// The drawer's content: the results — each task's notice and what the agent answered it — in order; the steps in
-    /// between (tools, thoughts, its narration) fold into one line at the end, closed. Opening the drawer's work used
-    /// to unfold every task's steps at once, results and process mixed.
-    /// The drawer's lines: each wake (its task reports, then what the agent answered to them), **newest wake first**
-    /// (2026-10-31: with many reports the latest one sat at the bottom of a long drawer), then the folded work.
-    private func wakeLines(_ t: Turn, live: Bool) -> [ChatLine] {
-        var groups: [[ChatLine]] = []
-        var process: [ChatRow] = []
-        var chunk: [ChatRow] = []
-        func flush() {
-            let answer = chunk.lastIndex { if case .assistant = $0 { true } else { false } }
-            var group: [ChatLine] = []
-            for (i, r) in chunk.enumerated() where i != answer {
-                if case .notice(let n) = r, n.task != nil || n.wake == true { group.append(.row(r)) } else { process.append(r) }
-            }
-            if let answer { group.append(.row(chunk[answer])) }
-            if !group.isEmpty { groups.append(group) }
-            chunk = []
-        }
-        for r in t.afterWake {
-            if case .notice(let n) = r, n.wake == true { flush() } // each wake starts its own answer
-            chunk.append(r)
-        }
-        flush()
-        var results = Array(groups.reversed().joined())
-        let items = ChatLines.workItems(process)
-        if !items.isEmpty || live {
-            results.append(.work(id: ChatLines.drawerWork + t.id, items: items, live: live,
-                                 start: process.first?.firstTS, end: process.last?.lastTS))
-        }
-        return results
     }
 
     static let bottomID = "chat-bottom"
@@ -1763,20 +1723,6 @@ struct ChatView: View {
         ChatAwaitingTurn.deadline(pending: store.arriving + store.pending, last: store.blocks.last)
     }
 
-    /// The wake notices' drawer. Looked up live: it follows the work while the agent is still on it. Its own property:
-    /// inline in the chat's modifier chain it was too much for visionOS's type checker.
-    private var wakeDrawerSheet: some View {
-        let t: Turn? = store.blocks.lazy.compactMap { (b: ChatBlock) -> Turn? in if case .turn(let t) = b, t.id == wakeDrawer { t } else { nil } }.first
-        return WakeDrawer(notices: t?.wakes ?? []) {
-            if let t { ForEach(unfoldWork(wakeLines(t, live: t.id == liveTurnID && !t.tail.isEmpty))) { lineView($0) } }
-        }
-        .environment(\.chatPin, nil) // the drawer has a list of its own; the chat's must not scroll for it
-        .environment(menu)
-        .environment(\.openFold, actions.openFold)
-        .environment(\.taskIndex, store.tasks)
-        .environment(\.jumpToCall, actions.jumpToCall)
-    }
-
     private var lastPromptID: String? { store.items.last { $0.role == "user" && $0.kind == .text }?.id }
 
     /// A swipe to the right goes from files or Git back to the chat. To the left there is none: on the chat a drag to
@@ -1979,7 +1925,6 @@ struct ChatView: View {
     /// Brings a line of the loaded chat to the middle of the list and lights it up, as a quote's does; the list stops
     /// following the newest.
     private func jumpToLine(_ id: String) {
-        wakeDrawer = nil
         userScrolled = true
         entry = nil
         setFollow { $0.read() }
@@ -2017,7 +1962,6 @@ struct ChatView: View {
             if target != nil { break }
         }
         guard let target else { return false }
-        wakeDrawer = nil
         userScrolled = true
         setFollow { $0.read() }
         Task { @MainActor in
@@ -2062,7 +2006,6 @@ struct ChatView: View {
             Haptics.attention()
             return
         }
-        wakeDrawer = nil
         userScrolled = true
         setFollow { $0.read() }
         Haptics.tap()
@@ -2560,7 +2503,6 @@ struct ChatView: View {
             }
         }
         .rewindDialogs(menu: menu)
-        .sheet(isPresented: Binding(get: { wakeDrawer != nil }, set: { if !$0 { wakeDrawer = nil } })) { wakeDrawerSheet }
         return presented
         // New content while following: back to offset 0 (exact; nothing to estimate).
         .onChange(of: store.resets) { _, _ in frozen = nil } // the snapshot's items are gone
@@ -3457,14 +3399,6 @@ struct ChatView: View {
             }
             if UserDefaults.standard.bool(forKey: "showCompactChrome") { // folded, once the header has its height
                 Task { try? await Task.sleep(for: .seconds(3)); withAnimation(.smooth) { chrome.collapse = chrome.maxCollapse } }
-            }
-            if UserDefaults.standard.bool(forKey: "showWakeDrawer") { // the newest "Background Task Done" drawer
-                Task {
-                    try? await Task.sleep(for: .seconds(UserDefaults.standard.bool(forKey: "loadAll") ? 30 : 6))
-                    wakeDrawer = Self.debugTrim(model.chat(key).blocks).reversed().lazy.compactMap { b -> String? in
-                        if case .turn(let t) = b, !t.wakes.isEmpty { t.id } else { nil }
-                    }.first
-                }
             }
             if UserDefaults.standard.bool(forKey: "showShareCard") { // the share card of the latest answer
                 Task {
@@ -5403,7 +5337,6 @@ struct ChatLine: Identifiable {
         case row(ChatRow)
         case work(id: String, items: [WorkItem], live: Bool, start: Date?, end: Date?)
         case userImages(id: String, items: [Item])
-        case wakes(Turn, live: Bool)
         /// Two or more "while you were away" recaps in a row, as one line (they open in one drawer, newest first).
         case recaps(id: String, items: [Item])
         case workStep(group: String, item: WorkItem, first: Bool)
@@ -5440,7 +5373,6 @@ struct ChatLine: Identifiable {
             case .workEnd(let group, _, _): group + "-end"
             case .toolRun(let id, _, _, _): id
             case .userImages(let id, _): id
-            case .wakes(let t, _): "wk-" + t.id
             case .recaps(let id, _): id
             case .apiError(let item, _, _): item.id
             case .feed(let f): "feed-" + f.id
@@ -5463,7 +5395,6 @@ struct ChatLine: Identifiable {
         Self(.work(id: id, items: items, live: live, start: start, end: end))
     }
     static func userImages(id: String, items: [Item]) -> Self { Self(.userImages(id: id, items: items)) }
-    static func wakes(_ turn: Turn, live: Bool) -> Self { Self(.wakes(turn, live: live)) }
     static func recaps(id: String, items: [Item]) -> Self { Self(.recaps(id: id, items: items)) }
     static func workStep(group: String, item: WorkItem, first: Bool) -> Self {
         Self(.workStep(group: group, item: item, first: first))
