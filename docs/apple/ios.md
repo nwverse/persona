@@ -706,7 +706,7 @@ Two small labels above the chat input: permission mode (Manual approval / Auto-e
 like Claude Code's terminal bottom bar; tap to change (`SessionModeBar`, wording and icons in `SessionModes`). The new shell moves these into the input's bottom-right
 "Model · Effort" button (#1091, see the input under "New shell" above). New Agent forms and the assistant home page above its input
 also offer selection (unset means "Follow launcher"). Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
-show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")).
+show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")). When the row carries `capabilities.modes`, that Boolean decides instead: `false` hides the controls for Claude outside Persona's terminals, and `true` enables them for a compatible runtime such as Orca or agy. An older hub that omits the field keeps the agent-based behavior (`Session.canChangeModes`; `docs/protocol/protocol.md` "Codex sources and capabilities").
 For Claude Code sessions in herdr, the effort menu also has a Model section (#3119, matching web #2434; `SessionModes.switchesModel`):
 Default / Opus / Sonnet / Haiku; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
 While working, waiting for your answer or not running, this section is disabled and its title explains why; the title notes that the model also becomes the default for new sessions (Claude Code behavior).

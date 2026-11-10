@@ -1084,8 +1084,12 @@ CODEX_HISTORY = "c0de9a1f-2222-4000-8000-000000000002"
 DSH_SESSION = "session-3f2a9c4e-0000-4000-8000-000000000003"
 CLAUDE_DESKTOP = "c1a0de00-1111-4000-8000-000000000004"
 CLAUDE_TERMINAL = "c1a0de00-2222-4000-8000-000000000005"
+AGY_SESSION = "a6700000-1111-4000-8000-000000000006"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
+_desktop_caps = {"read": True, "send": True}
+if os.environ.get("MOCK_MODE_CAPS"):
+    _desktop_caps["modes"] = False
 if os.environ.get("MOCK_SOURCES"):
     SESSIONS += [
         sess("server", CODEX_LIVE, "整理部署脚本", "/home/me/code/deploy", "working", "working", "", 0, "", 0, 1,
@@ -1108,12 +1112,20 @@ if os.environ.get("MOCK_SOURCES"):
         # messages through its peer inbox, one in another terminal whose inbox the node cannot use.
         sess("server", CLAUDE_DESKTOP, "整理发布说明", "/home/me/code/release", "working", "working", "", 0, "", 0, 1,
              "把这周合并的 PR 按模块分好了，正在写摘要。", agent="claude", source_kind="claude_desktop",
-             capabilities={"read": True, "send": True}, **NO_SPACE),
+             capabilities=_desktop_caps, **NO_SPACE),
         sess("server", CLAUDE_TERMINAL, "排查构建缓存", "/home/me/code/build", "idle", "idle", "", 0, "", 0, 12,
              "缓存键里少了 Go 版本，已经补上。", agent="claude", source_kind="claude_cli",
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
              capabilities={"read": True}, **NO_SPACE),
     ]
+if os.environ.get("MOCK_MODE_CAPS"):
+    # A runtime that explicitly takes Claude-style modes, and a desktop Claude that explicitly cannot (#1843).
+    SESSIONS.append(
+        sess("server", AGY_SESSION, "检查运行时的模式切换", "/home/me/code/modes", "working", "working", "", 0, "", 0, 1,
+             "运行时支持切换权限模式和思考强度。", agent="agy", agent_label="Antigravity", agent_name="agy-runtime",
+             source_kind="runtime", source_instance_id="agy", permission_mode="plan", effort="high",
+             capabilities={"read": True, "send": True, "interrupt": True, "approve": True,
+                           "terminal": False, "attach": False, "modes": True}, **NO_SPACE))
 
 # MOCK_OVERVIEW_DENSE=1: the overview on a wide screen with many finished rows: agents run through a runtime (a source
 # tag), tabs named after the agent's first words (the title must not be said twice), long titles and one with none.
