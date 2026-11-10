@@ -178,6 +178,32 @@ struct ExtensionMarketModelTests {
         #expect(upgraded == .object(["preview_id": .string("pv2"), "permissions_digest": .string("d2")]))
     }
 
+    /// A rename (#2511): the upgrade row says the ID changes, and a market page opened under the old ID (a link from
+    /// before the rename) still finds the extension and upgrades the installed one.
+    @Test func aRenamedExtensionIsFoundUnderEitherID() async throws {
+        let upgrade = try JSON.decoder.decode(ExtensionUpgrade.self, from: Data(
+            #"{"id":"old-gateway","market":"m1","from":"1.0.0","to":"1.1.0","state":"needs_permission","rename_from":"old-gateway","rename_to":"example-gateway","detail":"ID 从 old-gateway 改为 example-gateway"}"#.utf8))
+        #expect(upgrade.id == "old-gateway" && upgrade.renameTo == "example-gateway")
+        #expect(ExtensionText.upgradeDetail(upgrade) == "ID 从 old-gateway 改为 example-gateway", "the hub's words for the ID change, not a permissions change")
+
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/plugins/-/catalog", json: Self.catalog(#"""
+        {"market":"m1","id":"example-gateway","name":"Example 网关面板","version":"1.1.0","installed":"1.0.0","installed_source":"installed",
+         "from_this_market":true,"upgradable":true,"replaces":"old-gateway","rename_from":"old-gateway"}
+        """#))
+        hub.on("POST", "/api/v1/plugins/-/catalog/preview", json: #"""
+        {"preview_id":"pv3","manifest":{"id":"example-gateway","version":"1.1.0"},"permissions":[],"permissions_digest":"d3","upgrade":true,"from":"1.0.0",
+         "rename_from":"old-gateway"}
+        """#)
+        hub.on("POST", "/api/v1/plugins/old-gateway/-/upgrade", json: #"{"id":"example-gateway","name":"Example 网关面板","kind":"ui","status":"running"}"#)
+        let page = MarketExtensionModel(market: "m1", id: "old-gateway", deps: .init(api: { hub.client }))
+        await page.load()
+        #expect(page.error == nil && page.item?.pluginID == "example-gateway" && page.step == .upgrade)
+        await page.prepare()
+        #expect(await page.confirm())
+        #expect(hub.sent("POST", "/api/v1/plugins/old-gateway/-/upgrade").count == 1)
+    }
+
     @Test func aRefusedPreviewIsSaid() async {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins/-/catalog", json: Self.catalog(Self.windows))

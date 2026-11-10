@@ -268,7 +268,7 @@ func TestRuntimeListSubscriberOnlyReceivesRevision(t *testing.T) {
 	m.sessions = []proto.Session{{MachineID: "demo", SessionID: "s", State: "idle", Title: "Old"}}
 	h.sessionListIndex()
 	c := &client{hub: h, listMode: true, delta: true, out: make(chan []byte, 4), role: roleFull}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	h.sessionListNotice(c)
 	assertNotice := func() {
 		t.Helper()
@@ -302,7 +302,7 @@ func TestRuntimeListFollowsRevs(t *testing.T) {
 	m.sessions = []proto.Session{{MachineID: "demo", SessionID: "a", Rev: 1}, {MachineID: "demo", SessionID: "b", Rev: 1}}
 	first := runtimePage(t, h, "summary=1")
 	c := &client{hub: h, listMode: true, delta: true, out: make(chan []byte, 4), role: roleFull}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	m.onEvent("sessions.revs", json.RawMessage(`{"revs":{"a":7}}`))
 	var notified bool
 	for len(c.out) > 0 {

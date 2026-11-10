@@ -172,6 +172,10 @@ data class CatalogExtension(
     @SerialName("installed_source") val installedSource: String? = null,
     @SerialName("from_this_market") val fromThisMarket: Boolean = false,
     val upgradable: Boolean = false,
+    /** The ID this one takes over in its market (a rename, docs/extensions/extensions.md "Declared identity changes"). */
+    val replaces: String? = null,
+    /** The installed extension this one upgrades under a new ID, once the hub checked it came from this market. */
+    @SerialName("rename_from") val renameFrom: String? = null,
 ) {
     val label: String get() = name.ifBlank { id }
 }

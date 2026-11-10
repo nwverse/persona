@@ -2,6 +2,7 @@ package hub
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 // A manager's card push replaces only that manager's push of the same card: a card id that is another push's collapse
 // id (the hub's update notice, a decision's, a notify API alert's, an extension's) gets an apns-collapse-id of its own,
 // as does the same id from another manager, a 70-byte one fits APNs' 64 bytes, and the payload still names the card.
-// The assistant the hub starts pushes its cards under their ids, as before.
+// The assistant the hub starts pushes a card of its own under its id (TestTheAssistantsCardKeepsItsIDUnlessTooLong).
 func TestCardCollapseIDIsTheManagers(t *testing.T) {
 	h, f, attempts := localizedHub(t)
 	if err := h.push.setPrefs("phone", NotifyPrefs{Input: true}); err != nil {
@@ -65,6 +66,52 @@ func TestCardCollapseIDIsTheManagers(t *testing.T) {
 	}
 	if cardCollapseID("", "ix_x") != "ix_x" {
 		t.Fatal("a card of no manager changed its apns-collapse-id")
+	}
+}
+
+// The assistant the hub starts pushes its card under the card id, except an id APNs refuses (a Codex ask's codex- and
+// 64 hex is 70 bytes): that one gets card: and a hash, as another manager's card does, so APNs takes the push. A card
+// of no manager is the assistant's.
+func TestTheAssistantsCardKeepsItsIDUnlessTooLong(t *testing.T) {
+	h, f, attempts := localizedHub(t)
+	if err := h.push.setPrefs("phone", NotifyPrefs{Input: true}); err != nil {
+		t.Fatal(err)
+	}
+	kept := []string{"ix_yours", "cxq_1", strings.Repeat("a", 64)}
+	hashed := []string{"codex-" + strings.Repeat("ab", 32), strings.Repeat("a", 65)}
+	var cards []proto.Interaction
+	for _, id := range slices.Concat(kept, hashed) {
+		cards = append(cards, proto.Interaction{ID: id, Kind: proto.IxPermission, Summary: "x"})
+	}
+	h.takeFleetInteractions(cards)
+	sent := 0
+	push := func(id string) string {
+		t.Helper()
+		if err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
+			t.Fatalf("card %q: %v", id, err)
+		}
+		sent++
+		got := sentPushes(t, f, attempts, sent)[sent-1]
+		var p map[string]any
+		if err := json.Unmarshal(got.Body, &p); err != nil || p["interaction_id"] != id {
+			t.Fatalf("card %q: payload names %v (%v)", id, p["interaction_id"], err)
+		}
+		return got.Collapse
+	}
+	for _, id := range kept {
+		if got := push(id); got != id {
+			t.Fatalf("the assistant's card %q: apns-collapse-id %q, want its id", id, got)
+		}
+	}
+	for _, id := range hashed {
+		got := push(id)
+		if !strings.HasPrefix(got, "card:") || len(got) > 64 || got != cardCollapseID(assistantwire.AssistantID, id) ||
+			got == cardCollapseID("m-0b0b0b", id) {
+			t.Fatalf("the assistant's card %q: apns-collapse-id %q", id, got)
+		}
+	}
+	if long := hashed[0]; cardCollapseID("", long) != cardCollapseID(assistantwire.AssistantID, long) {
+		t.Fatal("a card of no manager is not the assistant's")
 	}
 }
 
