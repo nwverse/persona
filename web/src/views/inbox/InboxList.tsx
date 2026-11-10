@@ -26,6 +26,7 @@ import type { MenuAt } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { openPolicyDialog, RulesDialog } from "./PolicyDialog";
 import { isNoHover } from "../../ui/media-query";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
@@ -537,7 +538,7 @@ function scrollListTo(el: Element | null) {
   let box = el?.parentElement;
   while (box && !/auto|scroll/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
   if (!el || !box) return;
-  box.scrollTo?.({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: "smooth" });
+  box.scrollTo?.({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: scrollBehavior() });
 }
 
 /** How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page. */
