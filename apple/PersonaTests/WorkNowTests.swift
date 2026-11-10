@@ -76,6 +76,11 @@ struct WorkNowTests {
         #expect(thinking.tail)
         #expect(WorkNow.of([thought("t", "**Inspecting the fold**\n\nbody", at: 1)])?.text == "Inspecting the fold")
         #expect(WorkNow.of([thought("t", "  ", at: 1)])?.text == String(localized: "Thinking [Work Line]"))
+        // The agent's words after its calls (a reply being written) still name the latest call.
+        let words = try #require(WorkNow.of([call("a", "Edit", ["file_path": "/repo/ChatView.swift"], at: 1),
+                                             .text(item("w", .text, at: 3, text: "Done editing"))]))
+        #expect(words.id == "a")
+        #expect(words.more == 0)
     }
 
     /// An agent goes on only once its calls are answered: an older call that never got a result is not running.
@@ -91,6 +96,12 @@ struct WorkNowTests {
                                                     call("b", "Read", ["file_path": "/x.swift"], at: 2),
                                                     call("c", "Edit", ["file_path": "/x.swift"], at: 4, running: true)]))
         #expect(afterCalls.running.map(\.id) == ["c"])
+        // The agent's words end a batch too: a call before them without a result is not counted beside the newest.
+        let afterWords = try #require(WorkNow.of([call("a", "Bash", ["command": "sleep 1"], at: 1, running: true),
+                                                  .text(item("w", .text, at: 2, text: "Now the edit")),
+                                                  call("b", "Edit", ["file_path": "/x.swift"], at: 3, running: true)]))
+        #expect(afterWords.id == "b")
+        #expect(afterWords.more == 0)
     }
 
     @Test func noticesAndBookkeepingAreNotSteps() throws {
@@ -129,6 +140,23 @@ struct WorkNowTests {
         #expect(WorkNow(id: "a", text: "x").trailer(took: "") == "")
         #expect(WorkNow(id: "a", text: "x").trailer(took: "5 s") == " · 5 s")
         #expect(WorkNow(id: "a", text: "x", more: 2).trailer(took: "5 s") == " " + String(localized: "+\(2)") + " · 5 s")
+    }
+
+    /// The line follows its step at most about twice a second, and a step coming back after none (subagents done, the
+    /// fold passed) is named at once, never the counts first (`WorkLine.follow`).
+    @Test func theLineFollowsItsStepAtMostTwiceASecond() {
+        let x = WorkNow(id: "x", text: "Reading a.swift"), y = WorkNow(id: "y", text: "Editing a.swift")
+        let t = Date(timeIntervalSinceReferenceDate: 1000)
+        // Between two steps the one shown stays until half a second has passed.
+        #expect(WorkNow.named(doing: y, shown: x) == x)
+        #expect(WorkNow.hold(y, shown: x, shownAt: t, now: t.addingTimeInterval(0.25)) == WorkNow.repaint - 0.25)
+        #expect(WorkNow.hold(y, shown: x, shownAt: t, now: t.addingTimeInterval(2)) == 0)
+        // No step known now: the counts (or the subagents' words) at once, whatever was shown.
+        #expect(WorkNow.named(doing: nil, shown: x) == nil)
+        #expect(WorkNow.hold(nil, shown: x, shownAt: t, now: t) == 0)
+        // A step coming back after none: named at once.
+        #expect(WorkNow.named(doing: y, shown: nil) == y)
+        #expect(WorkNow.hold(y, shown: nil, shownAt: t, now: t) == 0)
     }
 
     /// The running line redraws when its step changes; a finished one keeps today's words and ignores steps.

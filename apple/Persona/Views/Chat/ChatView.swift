@@ -5872,11 +5872,11 @@ struct WorkLine: View, Equatable {
             .task(id: doing) { await follow(doing) }
     }
 
-    /// Shows `next` once half a second has passed since the last step shown; a newer step in the meantime replaces
-    /// this wait (`task(id:)`), so a run of quick calls shows the newest, not each name in turn.
+    /// Lets `next` through once half a second has passed since the last step shown (`WorkNow.hold`); a newer step in
+    /// the meantime replaces this wait (`task(id:)`), so a run of quick calls shows the newest, not each name in turn.
     private func follow(_ next: WorkNow?) async {
         guard next != shown else { return }
-        let wait = Self.repaint - Date.now.timeIntervalSince(shownAt)
+        let wait = WorkNow.hold(next, shown: shown, shownAt: shownAt, now: .now)
         if wait > 0 {
             try? await Task.sleep(for: .seconds(wait))
             guard !Task.isCancelled else { return }
@@ -5885,11 +5885,8 @@ struct WorkLine: View, Equatable {
         shownAt = .now
     }
 
-    /// The least time between two steps the running line names.
-    private static let repaint: TimeInterval = 0.5
-
-    /// The step the line names now, when it names one.
-    private var step: WorkNow? { live && agents == nil ? shown : nil }
+    /// The step the line names now, when it names one (`doing` is already nil on a finished line and under subagents).
+    private var step: WorkNow? { WorkNow.named(doing: doing, shown: shown) }
 
     /// BeautifulUI's tool run header: ⌄, the counts and the time; working, a spinner and a shimmer.
     private var beautiful: some View {

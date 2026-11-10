@@ -23,6 +23,24 @@ nonisolated struct WorkNow: Equatable, Sendable {
         return s
     }
 
+    /// The least time between two steps the running line names (`WorkLine.follow`).
+    static let repaint: TimeInterval = 0.5
+
+    /// What the line names: nothing while no step is known (it says its counts, or its subagents' words); else the step
+    /// last let through, or the known one when none has been since the line last named nothing, so a step coming back
+    /// (subagents done, the fold passed) never shows the counts first.
+    static func named(doing: WorkNow?, shown: WorkNow?) -> WorkNow? {
+        guard let doing else { return nil }
+        return shown ?? doing
+    }
+
+    /// How long `next` waits before the line names it: until `repaint` has passed since `shown` was let through at
+    /// `shownAt`. Only a change between two steps waits; to or from no step is at once (`named` already shows it).
+    static func hold(_ next: WorkNow?, shown: WorkNow?, shownAt: Date, now: Date) -> TimeInterval {
+        guard next != nil, shown != nil else { return 0 }
+        return max(0, repaint - now.timeIntervalSince(shownAt))
+    }
+
     /// Tools that keep the books rather than do the work: never what the line names.
     private static let quiet: Set<String> = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch"]
 
