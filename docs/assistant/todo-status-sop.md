@@ -115,4 +115,4 @@ A task the user reopens by hand also keeps the accepted verdict until the next r
 ## Clients
 
 The web follows this document. iOS, Mac and Android still show the earlier list (`docs/assistant/todos.md`,
-"Interaction design across clients"); bringing them to the same sections is a follow-up.
+"Interaction design across clients"); bringing them to the same sections is #3206.
