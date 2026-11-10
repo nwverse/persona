@@ -359,6 +359,8 @@ data class Session(
     @SerialName("loop") val loop: LoopInfo? = null,
     /** The goal it works toward, when one is set (docs/integrations/agent-goal.md); older hubs never send it. */
     val goal: GoalInfo? = null,
+    /** The agent's counted task list, as reported by the node. */
+    val plan: PlanInfo? = null,
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("last_text") val lastText: String? = null,
     /** What its last reply asks the user, when its closing words put a question or a decision to them (#5096). */

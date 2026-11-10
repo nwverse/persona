@@ -47,6 +47,23 @@ const noon = (n: number, m = 0) => {
 };
 
 describe("the assistant's feed among the chat's lines (docs/assistant/unified-entry.md)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("retains task-card upserts across partial and empty HTTP pages", async () => {
+    const at = "2026-11-10T08:00:00Z";
+    const conversation = "c-card-upserts";
+    const card = { id: "plan:metadata:0", plan_id: "metadata", index: 0, at, updated_at: at, state: "not_started" };
+    const pages = [
+      { items: [], task_cards: [card] },
+      { items: [], task_cards: [{ ...card, todo_id: "metadata-todo", state: "working", updated_at: "2026-11-10T08:02:00Z" }] },
+      { items: [], task_cards: [] },
+      { items: [], task_cards: null },
+      { items: [] },
+    ];
+    vi.stubGlobal("localStorage", { getItem: () => "jd_test" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(pages.shift()), { headers: { "Content-Type": "application/json" } })));
+    for (let i = 0; i < 5; i++) await loadFeed(conversation);
+    expect(getFeedState().taskCards[conversation]).toEqual([{ ...card, todo_id: "metadata-todo", state: "working", updated_at: "2026-11-10T08:02:00Z" }]);
+  });
   it("keeps one copy of each item, oldest first", () => {
     const a = feed("a", 5), b = feed("b", 10);
     expect(mergeInto([a], [b, a]).map((i) => i.id)).toEqual(["b", "a"]);

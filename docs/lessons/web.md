@@ -1,5 +1,10 @@
 # Lessons: web UI and interactions
 
+## Stable task rows need lifecycle evidence, not stale progress (#2878)
+
+A completed or accepted task can still retain its last blocked progress report. Completion labels/checkmarks must use the current review or receipt summary, not keep a stale “stuck” subtitle underneath. Reused tasks also retain old plan and card upserts: deduplicate by to-do id, prefer its current durable plan, and scope completion evidence to that run's creation time. Test delayed upserts and owner acceptance changes while a previous `asked_at` request is in flight. The palette guard reads the first `:root` block; add shared geometry tokens there instead of introducing another block that hides the palettes from the guard.
+
+
 ## A collapsed execution default is more than an open-state flag (#2602)
 
 The old Agent work line was called folded, but still previewed five tool/thinking steps and left every intermediate text visible. The assistant-only default-open change then exposed the full trace. Removing just that default does not implement a single replace-in-place text segment: grouping, stream-to-item handoff, preview rendering and manual history loading must agree. Keep a stable text-slot identity, put every tool kind and older text inside the same summary, and do not use text length or Markdown shape to exempt intermediate narration. Retain all plan updates for manual inspection even when the composer selects only the latest plan.

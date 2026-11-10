@@ -12,6 +12,29 @@ select the icon set's `chevron` (`--select-chevron`, drawn in `--ink-3`) 10 px i
 unlayered so its padding wins over the `px-*` utilities; a select that draws its own arrow adds `appearance-none` and is left alone. `src/ui/select-chevron.test.tsx`
 keeps the token equal to the icon and `--ink-3`.
 
+## Assistant task rows (#2878)
+
+An Assistant task's only card is its **Progress** tray row. Plan, execution, blocked progress, PR and acceptance update
+that stable row; tapping opens existing task details. The conversation, including historical task events, shows only a
+small **Dispatched N · View in Progress** entry instead of plan/task/receipt/review/report cards. The hint opens Progress.
+
+The dock groups actions as **Pending / Progress / Agents**, with one bounded, scrollable tray open at a time. Pending
+retains planning, permission/question and owner-acceptance flows; `Todo.ask` uses the existing Accept action and the captured
+`asked_at`, so an in-flight old round cannot answer a newer one. Replies sent on the user's behalf remain separate,
+individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
+TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
+
+The feed's additive `task_cards` upserts retain a stable plan/index identity before and after to-do binding, without
+replacing or deleting audit events. Old/null/empty projections keep cached or legacy data. Current to-dos/sessions update
+the row independently; reusing a to-do under another plan deduplicates by its current `plan_id`, and completion text never
+keeps an earlier blocked report. Numeric meters use actual report steps or Agent plan counts, not estimates. Fields and
+compatibility are in [the shared protocol](../protocol/protocol.md#tasks-and-the-chat-feed).
+
+This change aligns task-row placement; existing web tool folding and turn-source presentation remain unchanged.
+`python3 web/e2e/assistant-task-trays.py <preview URL> --shots <output directory>` runs the production-built client against
+synthetic HTTP/WebSocket data in wide and phone widths, light/dark, including live same-row completion, owner decisions and
+proof that no draft was sent by approval. Its captures are browser screenshots, not a deployed-hub check.
+
 ## Color hierarchy and quiet surfaces
 
 Approvals, plan decisions, permissions and **Needs you** are routine work, not errors. This rule is shared with the Apple and Android clients:
