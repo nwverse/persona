@@ -4093,9 +4093,9 @@ struct SpaceMenuItems: View {
 }
 
 extension View {
-    /// The rename prompt for a space (herdr workspace): one name.
+    /// The rename prompt for a space (a herdr workspace, a Tern session): one name.
     func renameSpaceAlert(_ group: Binding<SpaceGroup?>) -> some View { modifier(RenameSpaceAlert(group: group)) }
-    /// The rename prompt for an agent: its herdr tab and its Claude session name.
+    /// The rename prompt for an agent: its herdr or Tern tab and its Claude session name.
     func renameSessionAlert(_ session: Binding<Session?>) -> some View { modifier(RenameSessionAlert(session: session)) }
 }
 
@@ -4113,7 +4113,7 @@ private struct RenameSpaceAlert: ViewModifier {
                     if let g = group { Task { await model.renameSpace(g, to: name) } }
                 }
             } message: {
-                Text("Also renames this workspace in herdr.")
+                Text(SpaceRenameForm.note(group))
             }
             .onChange(of: group?.id) { _, _ in name = group?.name ?? "" }
     }
@@ -4128,7 +4128,7 @@ private struct RenameSessionAlert: ViewModifier {
     func body(content: Content) -> some View {
         content
             .alert("Rename [Chats View 0d0cba]", isPresented: Binding(get: { session != nil }, set: { if !$0 { session = nil } })) {
-                if let session, SessionRenameForm.showsTab(session) { TextField(String(localized: "Tab name (herdr tab)"), text: $tab) }
+                if let session, SessionRenameForm.showsTab(session) { TextField(SessionRenameForm.tabField(session), text: $tab) }
                 TextField(String(localized: "Session name"), text: $title)
                 Button("Cancel", role: .cancel) {}
                 Button("Save") {
@@ -4139,7 +4139,7 @@ private struct RenameSessionAlert: ViewModifier {
                 }
             } message: {
                 if let session, SessionRenameForm.showsTab(session) {
-                    Text("The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.")
+                    Text(SessionRenameForm.tabNote(session))
                 }
             }
             .onChange(of: session?.id) { _, _ in

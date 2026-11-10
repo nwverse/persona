@@ -75,12 +75,28 @@ func init() {
 	})
 	onAssistantEvent(assistantwire.EventLeaderReport, func(h *Manager, raw json.RawMessage) {
 		var p assistantwire.LeaderReportEvent
-		if json.Unmarshal(raw, &p) != nil || p.ID == "" || p.Leader == "" || p.Todo == "" ||
-			!slices.Contains([]string{assistantwire.LeaderReached, assistantwire.LeaderDecision, assistantwire.LeaderStuck}, p.Kind) {
+		if json.Unmarshal(raw, &p) != nil || !validLeaderReport(p) {
 			return
 		}
 		if h.extensions.todoWanted(assistantwire.EventLeaderReport) {
 			h.extensions.queueOn(&h.extensions.todoEvents, extensionNotice{topic: assistantwire.EventLeaderReport, payload: fieldsOf(p)})
 		}
 	})
+}
+
+// validLeaderReport: a report has the fields the schema requires: an id, a leader and a known kind, and a to-do, except a
+// decision about a plan (plan instead, #3608) and the leader's own progress (#3679), which are about no single to-do.
+func validLeaderReport(p assistantwire.LeaderReportEvent) bool {
+	if p.ID == "" || p.Leader == "" {
+		return false
+	}
+	switch p.Kind {
+	case assistantwire.LeaderReached, assistantwire.LeaderStuck:
+		return p.Todo != ""
+	case assistantwire.LeaderDecision:
+		return p.Todo != "" || p.Plan != ""
+	case assistantwire.LeaderProgress:
+		return true
+	}
+	return false
 }

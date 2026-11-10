@@ -23,8 +23,21 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		s.ackViewErrors(ctx, p)
 		return ContextResult{}
 	}
-	text := prompts.RenderAssistantContext(prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
-		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)})
+	c := prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
+		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)}
+	switch {
+	case c.Main:
+		cfg := s.settings(ctx)
+		names := s.leaderNames(ctx, cfg.Leaders)
+		for _, id := range cfg.Leaders {
+			if id != "" && id != cfg.Main {
+				c.Directions = append(c.Directions, prompts.ContextDirection{ID: id, Name: names[id]})
+			}
+		}
+	case c.Leader:
+		c.LeaderName = s.leaderNames(ctx, []string{p.SessionID})[p.SessionID]
+	}
+	text := prompts.RenderAssistantContext(c)
 	errs, receipts := s.viewErrors(ctx, p)
 	return ContextResult{Text: text, ViewErrors: errs, Receipts: receipts}
 }
@@ -150,14 +163,11 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	devices, phone := s.devicesAndPhone(ctx)
 	snap := prompts.Snapshot{Now: now, Zone: loc.String(), PhoneOnline: phone}
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
+	wg.Add(1)
+	go func() { // one ask for both sections: each connector builds its chats and meetings in one answer
 		defer wg.Done()
-		snap.Chats = s.snapshotChats(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		snap.Calendar = s.snapshotCalendar(ctx, now)
+		live := s.connectorSnapshots(ctx)
+		snap.Chats, snap.Calendar = snapshotChats(live), snapshotCalendar(live, now)
 	}()
 	for _, m := range devices {
 		snap.Machines = append(snap.Machines, prompts.SnapshotMachine{Name: m.Name, ID: m.ID, Online: m.Online})
@@ -293,10 +303,10 @@ func (s *Service) connectorSnapshots(ctx context.Context) []connector.SnapshotDa
 	return res.Snapshots
 }
 
-// snapshotChats is the unread chats the connectors know of, nil when none answers.
-func (s *Service) snapshotChats(ctx context.Context) *prompts.SnapshotChats {
+// snapshotChats is the unread chats in the connectors' live states, nil when none answered.
+func snapshotChats(live []connector.SnapshotData) *prompts.SnapshotChats {
 	var out *prompts.SnapshotChats
-	for _, d := range s.connectorSnapshots(ctx) {
+	for _, d := range live {
 		if d.Chats == nil {
 			continue
 		}
@@ -313,10 +323,10 @@ func (s *Service) snapshotChats(ctx context.Context) *prompts.SnapshotChats {
 	return out
 }
 
-// snapshotCalendar is the rest of today's meetings the connectors know of, nil when none answers.
-func (s *Service) snapshotCalendar(ctx context.Context, now time.Time) *prompts.SnapshotCalendar {
+// snapshotCalendar is the rest of today's meetings in the connectors' live states, nil when none answered.
+func snapshotCalendar(live []connector.SnapshotData, now time.Time) *prompts.SnapshotCalendar {
 	var out *prompts.SnapshotCalendar
-	for _, d := range s.connectorSnapshots(ctx) {
+	for _, d := range live {
 		if d.Meetings == nil {
 			continue
 		}
