@@ -157,6 +157,13 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 // made, that todo is closed (no empty task stays).
 func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update bool) (Todo, bool, error) {
+	return s.adoptAgentAs(ctx, self, am, c, title, prompt, notes, doneWhen, expect, update, false)
+}
+
+// adoptAgentAs is adoptAgent; with quiet the todo it makes is quiet whatever self's own tasks are (an agent that became
+// a task by itself, agent_tasks.go).
+func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
+	expect int, update, quiet bool) (Todo, bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
@@ -189,7 +196,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 		return t, false, nil
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
-	todo, err := s.createTodo(ctx, title, notes, self, "")
+	todo, err := s.newTodo(ctx, title, notes, self, "", quiet || s.quietTask(ctx, self))
 	if err != nil {
 		return Todo{}, false, err
 	}
@@ -571,6 +578,10 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	}
 	t, ok := s.taskOf(ctx, machine, session)
 	if !ok || t.Supervision == nil || t.Supervision.Supervisor == "" {
+		// Any open todo's agent has a receiver while agent tasks are on (#3617, agent_tasks.go).
+		t, ok = s.superviseOpenTodoOf(ctx, machine, session)
+	}
+	if !ok {
 		return "Nobody receives this: your work is not a task Persona supervises. Ask the user what you need the usual way.", errNoSupervisor
 	}
 	if !s.upReports.allow(machine, session, now) {
@@ -632,7 +643,13 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
-	s.noteProgress(ctx, t.ID, TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()})
+	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
+	if text != progress.Text {
+		progress.Detail = text
+	}
+	if s.noteProgress(ctx, t.ID, progress) {
+		s.goReportLine(t, progress.At, kind, text) // off the tool call: it answers right away
+	}
 	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
 	// the handoff; progress reports only update the card (the stream stays quiet).

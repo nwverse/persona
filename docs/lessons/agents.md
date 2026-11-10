@@ -42,6 +42,10 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   Keep Windows CLI JSON in a unique 0600 file per process in `privateCacheDir` (Windows privacy relies on the user cache directory's ACL), retain it until exit,
   and remove it on preparation/start failure or exit. This includes guests and SDK-to-CLI fallback; macOS/Linux keep inline JSON, and the SDK's stdin transport
   needs no file. Do not fix this by rewriting JSON backslashes or logging its contents, which may contain extension credentials.
+- Fixing MCP argv does not prove a Windows assistant can receive its first prompt (#3577). The generated shell-form hook can still fail during
+  `UserPromptSubmit` with an unmatched quote around Windows paths. Use Claude Code's native hook `command` plus `args` on Windows, with the existing
+  `--persona-home` flag instead of a shell environment assignment. Keep every event, matcher and timeout unchanged: never disable hooks to pass a smoke test.
+  A real Windows `SessionStart` native-argv probe returned its marker successfully; full acceptance must also deliver a user prompt and observe a reply.
 - Plugin (`--plugin-dir`) hooks behave like those in `--settings` (measured 2026-11-04 on 2.1.318: SessionStart, UserPromptSubmit, Stop fire; PreToolUse `deny` and PermissionRequest `allow`
   work, in both interactive and `-p` modes), and load alongside the launcher's other `--plugin-dir` entries. Disabling hooks (`disableAllHooks`) still needs
   `--settings`: `--bare` also skips hooks, but accepts only `ANTHROPIC_API_KEY` / `apiKeyHelper`; launchers using login or `ANTHROPIC_AUTH_TOKEN` fail.
@@ -724,8 +728,8 @@ either one.
 
 A text-only `PLANNER_RESPONSE` with `status: DONE` can precede more reasoning and tools. It closes that message, not the
 conversation turn. Read `conversation_summaries.db` in read-only mode. `CASCADE_RUN_STATUS_RUNNING` or `not_fully_idle`
-keeps the conversation working; an idle summary must cover the latest meaningful transcript step before its reply counts as
-done. Missing or unavailable summaries leave text-only replies unknown. Test the gap after narration and before the next tool
+keeps the conversation working. An idle summary must cover the latest meaningful transcript step before its reply counts as
+done. Missing or unavailable summaries leave unfinished history unknown. Test the gap after narration and before the next tool
 step, plus stale idle summaries, actual completion and unavailable stores, through the normal runtime inventory protocol.
 
 ## Runtime close is independent of terminal access (#3507)
@@ -734,3 +738,11 @@ A runtime can implement `session.close` while exposing no terminal controls. Car
 session row and use it in the web menu and confirmation. Antigravity must cancel its active prompt and withdraw permissions
 before closing. A queued prompt or late permission request must respect closure. Test through the runtime protocol, including
 a native agent that rejects `session/close`, and republish the closed inventory after a node reconnect.
+
+## Antigravity history freshness does not establish live execution (#3678)
+
+A completed user-input or tool step can remain the transcript's last entry after a stopped or failed attempt. A 24-hour
+freshness window kept such history working for hours. Working requires an owned ACP turn or explicit native running state.
+Apply that native activity before internal-metadata filtering and history limits, and discover running native summaries even
+before a brain directory or transcript is exported. Read titles, workspaces and update times from the native summary when
+the legacy JSON cache is incomplete. Cover these cases through the runtime inventory protocol.

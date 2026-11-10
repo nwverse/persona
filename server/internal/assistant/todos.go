@@ -84,6 +84,10 @@ type Todo struct {
 	// Delivery: how far its finished work went out, and while short of live where it is held and who can unhold it
 	// (delivery.go, #3306); nil until judged.
 	Delivery *TodoDelivery `json:"delivery,omitempty"`
+	// Check: the hub's latest automatic completion judgment of its work, while still current (task_check.go, #3180); nil
+	// until judged, and again once it is reopened or one of its agents starts a new turn. Clients that do not know it
+	// show the todo as ever.
+	Check *TodoCheck `json:"check,omitempty"`
 	// Thread: the chat thread the todo is bound to (#5279, todo_thread.go); nil while it has none.
 	Thread *TodoThread `json:"thread,omitempty"`
 	// Source: where the todo was asked for when that is another chat (#6146, todo_source.go): the outcome is told
@@ -352,7 +356,7 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	}
 	for id, st := range s.todoStages(ctx) {
 		if t, ok := tmap[id]; ok {
-			t.Stage, t.PRURL, t.StageKind, t.Delivery, t.stageVerified = st.Stage, st.PR, st.Kind, st.Delivery, st.Verified
+			t.Stage, t.PRURL, t.StageKind, t.Delivery, t.stageVerified, t.Check = st.Stage, st.PR, st.Kind, st.Delivery, st.Verified, st.Check
 		}
 	}
 
@@ -727,7 +731,7 @@ func (s *Service) todoRoutes() {
 	s.todoThreadRoutes()
 	s.todoRetitleRoute()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
-	// waiting for the owner carries its ask (todo_ask.go)
+	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -743,6 +747,9 @@ func (s *Service) todoRoutes() {
 		for i := range list {
 			if a, ok := asks[list[i].ID]; ok {
 				list[i].Ask = &a
+			}
+			if o, ok := s.orphanOf(list[i].ID); ok && list[i].DoneAt == nil {
+				list[i].Orphaned = &o
 			}
 		}
 
@@ -986,6 +993,7 @@ func (s *Service) todoRoutes() {
 			todoErr(w, err)
 			return
 		}
+		s.superviseLinkedTodo(r.Context(), todoID) // the user's own todo gets a supervisor (agent_tasks.go)
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 
@@ -1193,6 +1201,9 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	t.DoneAt = row.DoneAt
 	t.StartError = row.StartError
 	t.DoneBy, t.DoneReason, t.ReopenedAt = row.DoneBy, row.DoneReason, row.ReopenedAt
+	if reopened {
+		t.Check = nil // the work it judged is over (task_check.go)
+	}
 	t.setPlan(row)
 	t.UpdatedAt = row.UpdatedAt
 	var doneKeys [][2]string
@@ -1214,6 +1225,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	s.todos.mu.Unlock()
 	if reopened {
 		s.dropSourcePlan(id) // what was planned to be told may not be what it comes to now (todo_source.go)
+		s.dropReopenedCheck(id)
 	}
 	if closing != nil {
 		s.threadPost(id, *closing) // after the lock: it looks the todo up again
@@ -1771,6 +1783,7 @@ func (s *Service) TodoLink(ctx context.Context, p TodoLinkParams) (TodoLinkResul
 	if err := s.linkTodoAgent(ctx, p.TodoID, p.MachineID, p.SessionID, title, p.Cwd, p.Agent); err != nil {
 		return TodoLinkResult{}, err
 	}
+	s.superviseLinkedTodo(ctx, p.TodoID) // the user's own todo gets a supervisor (agent_tasks.go)
 	res := TodoLinkResult{Title: title}
 	if t, ok, err := s.todo(ctx, p.TodoID); err == nil && ok {
 		res.Title = t.Title

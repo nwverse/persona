@@ -149,6 +149,7 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
+	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
 	s.setTaskStage(ctx, t.ID, "develop", "")
 	s.taskPlanApproval()
 	if t.Supervision != nil {
@@ -212,9 +213,15 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 
 // taskTurnSettled is taskTurnEnded once the turn stayed still: after its sleep, or afterSettle's timer.
 func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
+	if s.meetingTurnNow(machine, sid) {
+		return // a meeting's batch: never the task's progress, report or completion (meeting_turns.go)
+	}
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
-		return
+		// An agent Persona started that is on no todo becomes a task once a turn of it did work (#3617, agent_tasks.go).
+		if t, ok = s.agentTaskAtTurnEnd(ctx, machine, sid); !ok {
+			return
+		}
 	}
 	if current, ok := s.todoNow(t.ID); ok && (current.Cancelled() || current.AgentAborted(machine, sid)) {
 		s.logf("task %s: cancelled or agent %s/%s aborted: skipping turn end", t.ID, machine, sid)

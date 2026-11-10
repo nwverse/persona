@@ -69,6 +69,32 @@ const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assi
 const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
 
 describe("Assistant Needs you / In progress trays", () => {
+  it("uses the Working mark and live subtitle for background work, with a clock only after all work ends", () => {
+    act(() => entry("running").click());
+    const row = host.querySelector("[data-task-slot]")!;
+    const session: Session = { machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", status: "working", state: "working", updated_at: at,
+      waiting: true, background_working: true, background_count: 2, background_tasks_count: 2 };
+    act(() => upsertSession(session));
+    expect(host.querySelector("[data-task-slot]")).toBe(row);
+    expect(row.querySelector('[data-task-mark="working"]')).not.toBeNull();
+    expect(row.querySelector('[data-task-mark="waiting"]')).toBeNull();
+    expect(row.textContent).toContain(t("assistant-tasks.background_tasks_running", { count: 2 }));
+    const workflow = { task_id: "wf", status: "running", running: true, phase: "Adversarial review", agents_done: 5, agents_started: 6 };
+    act(() => upsertSession({ ...session, background_tasks_count: 0, background_count: 1, running_workflows: 1, workflow_progress: workflow }));
+    expect(row.textContent).toContain("Adversarial review · 5/6+");
+    expect(row.querySelector('[data-task-mark="working"]')).not.toBeNull();
+    act(() => upsertSession({ ...session, background_tasks_count: 0, background_count: 0, running_subagents: 3 }));
+    expect(row.textContent).toContain(t("assistant-tasks.subagents_count_running", { count: 3 }));
+    expect(row.textContent).not.toContain("Adversarial review");
+    act(() => upsertSession({ ...session, state: "idle", status: "idle", background_working: false, background_count: 0,
+      background_tasks_count: 0, work: { phase: "blocked", on: "external", wait: "Wait for deployment", line: "Wait for deployment" } }));
+    expect(row.querySelector('[data-task-mark="waiting"]')).not.toBeNull();
+    expect(row.querySelector('[data-task-mark="working"]')).toBeNull();
+    expect(row.textContent).toContain("Wait for deployment");
+    expect(row.textContent).not.toContain(t("assistant-tasks.background_tasks_running", { count: 2 }));
+    expect(writes).toEqual([]);
+  });
+
   it("keeps two entries in order, collapses by default and replaces conversation cards with one hint", () => {
     expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
     expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
@@ -90,6 +116,11 @@ describe("Assistant Needs you / In progress trays", () => {
     const row = host.querySelector("[data-task-slot]");
     act(() => putTodo({ ...todo, supervision: { ...todo.supervision!, progress: { kind: "blocked", step: 3, steps: 5, text: "Waiting for a decision" } } }));
     expect(host.querySelector("[data-task-slot]")).toBe(row);
+    expect(row?.textContent).toContain("Waiting for a decision");
+    // the hub's paraphrase in the user's language replaces the agent's words in the row (#3181)
+    act(() => putTodo({ ...todo, supervision: { ...todo.supervision!, progress: { kind: "blocked", step: 3, steps: 5, text: "Waiting for a decision", line: "Needs a call on the rollout" } } }));
+    expect(row?.textContent).toContain("Needs a call on the rollout");
+    expect(row?.textContent).not.toContain("Waiting for a decision");
     expect(host.querySelector('[role="progressbar"] .bg-orange')).not.toBeNull();
     act(() => (host.querySelector("[data-task-slot]") as HTMLButtonElement).click());
     expect(getPanel()?.kind).toBe("task");
@@ -269,6 +300,31 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.textContent).not.toContain("Needs a decision");
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="task:open-asks"]')?.textContent).toContain("Needs a decision");
+  });
+
+  it("says why a stopped task is not done, from the hub's completion check (#3180)", async () => {
+    const stoppedTodo: Todo = { id: "open-checked", title: "Waiting on CI", origin: conversation, created_at: at, updated_at: at,
+      agents: [{ machine_id: "demo", session_id: "idle-worker", linked_at: at }], check: { verdict: "waiting", reason: "Waiting for CI to finish", at, work_since: at } };
+    moreTodos = [stoppedTodo];
+    await act(async () => {
+      await refreshTodos();
+      upsertSession({ machine_id: "demo", session_id: "idle-worker", title: "Idle", cwd: "/demo", state: "idle", status: "idle", updated_at: at, last_text: "The checks are queued" });
+    });
+    act(() => entry("running").click());
+    const row = () => [...host.querySelectorAll("[data-task-slot]")].find((r) => r.querySelector(".font-semibold")?.textContent === "Waiting on CI");
+    expect(row()?.textContent).toContain(t("assistant-tasks.progress_stopped_reason", { reason: "Waiting for CI to finish" }));
+    expect(row()?.textContent).not.toContain("The checks are queued");
+    // no reason: the line alone; done or unsure: the row as before
+    act(() => putTodo({ ...stoppedTodo, check: { verdict: "not_done", at } }));
+    expect(row()?.textContent).toContain(t("assistant-tasks.progress_stopped"));
+    expect(row()?.textContent).not.toContain(" · ");
+    act(() => putTodo({ ...stoppedTodo, check: { verdict: "unsure", reason: "Can't tell", at } }));
+    expect(row()?.textContent).not.toContain(t("assistant-tasks.progress_stopped"));
+    expect(row()?.textContent).toContain("The checks are queued");
+    // working again: the agent's words, not the old check
+    act(() => putTodo(stoppedTodo));
+    await act(async () => upsertSession({ machine_id: "demo", session_id: "idle-worker", title: "Idle", cwd: "/demo", state: "working", status: "working", updated_at: at, last_text: "Rerunning the checks" }));
+    expect(row()?.textContent).not.toContain(t("assistant-tasks.progress_stopped"));
   });
 
   it("counts a plan waiting for Start as one Needs you row, where Start is one click away", () => {
