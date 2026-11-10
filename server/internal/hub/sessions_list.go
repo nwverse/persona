@@ -244,6 +244,9 @@ type runtimeRowSummary struct {
 	BackgroundCount  int    `json:"background_count,omitempty"`
 	RunningSubagents int    `json:"running_subagents,omitempty"`
 	RunningWorkflows int    `json:"running_workflows,omitempty"`
+	// Independent count: background_count is the legacy raw count and can include workflows.
+	BackgroundTasksCount int             `json:"background_tasks_count"`
+	WorkflowProgress     *proto.Workflow `json:"workflow_progress,omitempty"`
 }
 
 // runtimeListFields joins two encoded objects. Embedding proto.Session in a
@@ -264,12 +267,14 @@ func (s runtimeRowSummary) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	return runtimeListFields(raw, struct {
-		PaneSource       string `json:"pane_source"`
-		Waiting          bool   `json:"waiting"`
-		BackgroundCount  int    `json:"background_count,omitempty"`
-		RunningSubagents int    `json:"running_subagents,omitempty"`
-		RunningWorkflows int    `json:"running_workflows,omitempty"`
-	}{s.PaneSource, s.Waiting, s.BackgroundCount, s.RunningSubagents, s.RunningWorkflows}), nil
+		PaneSource           string          `json:"pane_source"`
+		Waiting              bool            `json:"waiting"`
+		BackgroundCount      int             `json:"background_count,omitempty"`
+		RunningSubagents     int             `json:"running_subagents,omitempty"`
+		RunningWorkflows     int             `json:"running_workflows,omitempty"`
+		BackgroundTasksCount int             `json:"background_tasks_count"`
+		WorkflowProgress     *proto.Workflow `json:"workflow_progress,omitempty"`
+	}{s.PaneSource, s.Waiting, s.BackgroundCount, s.RunningSubagents, s.RunningWorkflows, s.BackgroundTasksCount, s.WorkflowProgress}), nil
 }
 
 // MarshalJSONTo shadows the promoted (*proto.Session).MarshalJSONTo, which encoding/json prefers for an addressable
@@ -341,9 +346,42 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 			row.RunningSubagents++
 		}
 	}
+	for _, task := range s.Background {
+		if task.Kind != "workflow" && task.Kind != "agent" {
+			row.BackgroundTasksCount++
+		}
+	}
 	for _, flow := range s.Workflows {
 		if flow.Running {
 			row.RunningWorkflows++
+			if row.WorkflowProgress == nil {
+				// A single bounded projection, newest running run first: no agent, phase or tool arrays.
+				row.WorkflowProgress = &proto.Workflow{
+					TaskID: flow.TaskID, Name: rowText(flow.Name, 256), Summary: rowText(flow.Summary, 180),
+					Status: flow.Status, Running: true, Phase: rowText(flow.Phase, 120),
+					PhaseIndex: flow.PhaseIndex, PhaseCount: flow.PhaseCount,
+					AgentsStarted: flow.AgentsStarted, AgentsDone: flow.AgentsDone, AgentsRunning: flow.AgentsRunning,
+					StartedAt: flow.StartedAt,
+				}
+				if row.WorkflowProgress.PhaseCount == 0 {
+					row.WorkflowProgress.PhaseCount = len(flow.Phases)
+				}
+			}
+		}
+	}
+	// Legacy runtimes can report only a background entry for a workflow or subagent.
+	if len(s.Workflows) == 0 {
+		for _, task := range s.Background {
+			if task.Kind == "workflow" {
+				row.RunningWorkflows++
+			}
+		}
+	}
+	if len(s.Subagents) == 0 {
+		for _, task := range s.Background {
+			if task.Kind == "agent" {
+				row.RunningSubagents++
+			}
 		}
 	}
 	row.Waiting = s.Loop != nil || row.BackgroundCount > 0 || row.RunningSubagents > 0 || row.RunningWorkflows > 0 ||

@@ -44,7 +44,7 @@ func TestGoldenSessionTitle(t *testing.T) {
 	f.replies = []string{"改个名字", "修复 | 搜索框和顶栏重叠"}
 	s := newTestService(t, f)
 	started := time.Date(2026, 11, 1, 2, 0, 0, 0, time.UTC)
-	if got, _ := s.makeTitle(context.Background(), started, "搜索的时候搜索框和顶栏叠在一起了", "是两个组件一起用导致的。"); got != "1101 | 修复 | 搜索框和顶栏重叠" {
+	if got, _ := s.makeTitle(context.Background(), started, "搜索的时候搜索框和顶栏叠在一起了", "是两个组件一起用导致的。", ""); got != "1101 | 修复 | 搜索框和顶栏重叠" {
 		t.Fatalf("%q", got)
 	}
 	c := f.modelCalls()
@@ -54,6 +54,19 @@ func TestGoldenSessionTitle(t *testing.T) {
 	golden(t, "session_title.system", c[0].System)
 	golden(t, "session_title.user", c[0].User)
 	golden(t, "session_title.retry", c[1].User)
+}
+
+// A conversation an extension opened and named: the model reads its name as a hint (#3758).
+func TestGoldenSessionTitleHinted(t *testing.T) {
+	f := newFakeHub()
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	f.replies = []string{"探索 | 连通性测试"}
+	s := newTestService(t, f)
+	started := time.Date(2026, 11, 1, 2, 0, 0, 0, time.UTC)
+	if got, _ := s.makeTitle(context.Background(), started, "ping", "连通正常，已经在群里回复了。", "/agent · 示例群 · ping"); got != "1101 | 探索 | 连通性测试" {
+		t.Fatalf("%q", got)
+	}
+	golden(t, "session_title.user_hinted", f.modelCalls()[0].User)
 }
 
 func TestGoldenRelay(t *testing.T) {

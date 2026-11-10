@@ -17,6 +17,14 @@ import { STATE_LABEL, stateName } from "../lib/state-labels";
 
 export const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
 
+/** One sidebar group's content and chevron take the same direction-specific timing from the web motion tokens. */
+export function sidebarFoldMotion(open: boolean) {
+  return {
+    transitionDuration: open ? "var(--sidebar-fold-open)" : "var(--sidebar-fold-close)",
+    transitionTimingFunction: open ? "var(--sidebar-fold-open-ease)" : "var(--sidebar-fold-close-ease)",
+  } as const;
+}
+
 /** Spread on a field holding a secret that is not this site's password (a key, a computer's password): no spell check,
  *  and the 1Password, LastPass and Bitwarden extensions leave it alone. The field sets its own `autoComplete`. */
 export const SECRET_INPUT = { spellCheck: false, "data-1p-ignore": true, "data-lpignore": "true", "data-bwignore": true } as const;
@@ -253,7 +261,7 @@ export function Kbd({ children }: { children: React.ReactNode }) {
  *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed.
  *  `min-w-0`: the grid's implicit column's `auto` minimum is the item's content-based minimum, so one child that cannot
  *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262). */
-export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean }) {
+export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing. */ sidebarFold?: boolean }) {
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
@@ -282,15 +290,21 @@ export function Collapse({ open, children, className = "", clipClassName = "", l
     return () => cancelAnimationFrame(f);
   }, [open, laidOut]);
   const shown = open && laidOut;
+  const unclippedNow = unclipped && shown && !moving;
   return (
     <div
-      className={`grid transition-[grid-template-rows,opacity] duration-300 ${className}`}
-      style={{ gridTemplateRows: shown ? "1fr" : "0fr", opacity: shown ? 1 : 0, transitionTimingFunction: EASE, willChange: moving ? "opacity" : undefined }}
+      className={`grid ${sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${sidebarFold ? "transition-[grid-template-rows]" : "transition-[grid-template-rows,opacity] duration-300"} ${className}`}
+      style={{
+        gridTemplateRows: shown ? "1fr" : "0fr",
+        opacity: sidebarFold || shown ? 1 : 0,
+        ...(sidebarFold ? sidebarFoldMotion(open) : { transitionTimingFunction: EASE }),
+        willChange: moving ? (sidebarFold ? "grid-template-rows" : "opacity") : undefined,
+      }}
       onTransitionEnd={(e) => e.target === e.currentTarget && e.propertyName === "grid-template-rows" && settle()}
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className={`min-h-0 min-w-0 ${unclipped && shown && !moving ? "" : "overflow-hidden [contain:layout_paint]"} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
     </div>
   );
 }

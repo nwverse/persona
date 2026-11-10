@@ -81,6 +81,7 @@ func (rh *RuntimeHost) attach(n *Node) {
 	rh.node = n
 	rh.mu.Unlock()
 	n.runtimes = rh.reg
+	rh.reg.setHostOff(n.engineHostOff)
 	n.runtimeHost = rh
 	rh.reg.resetWatches()
 	rh.notifyHub(true)
