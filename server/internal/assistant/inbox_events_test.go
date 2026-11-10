@@ -292,3 +292,28 @@ func TestInboxChainKeepsTheNewest(t *testing.T) {
 		t.Fatal("en plural")
 	}
 }
+
+// A context line ends in the notes the plugin gives the AI ("(id=…)", with the message it replies to and its topic):
+// the chain's messages are for people and leave them out; text in parentheses of its own stays.
+func TestContextMessagesDropTheIDNote(t *testing.T) {
+	ctx := "飞书群「Team」里的一件事：\n" +
+		"[11-05 10:00] Alice：[Sticker] (id=om_1)\n" +
+		"[11-05 10:01] Bob（@了我）：can you check this (today) (id=om_2, 回复 om_1)\n" +
+		"[11-05 10:02] Alice：thread reply (id=om_3, 回复 om_2, 话题 om_0)\n" +
+		"[11-05 10:03] Bob：no notes here (just text)"
+	got := contextMessages(ctx, 4)
+	want := []InboxChainMessage{
+		{Sender: "Alice", Text: "[Sticker]"},
+		{Sender: "Bob", Text: "can you check this (today)"},
+		{Sender: "Alice", Text: "thread reply"},
+		{Sender: "Bob", Text: "no notes here (just text)"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("messages: %+v", got)
+	}
+	for i := range want {
+		if got[i].Sender != want[i].Sender || got[i].Text != want[i].Text {
+			t.Fatalf("message %d: %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

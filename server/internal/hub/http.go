@@ -75,6 +75,7 @@ func (h *Hub) routes() http.Handler {
 	h.lookUploadRoutes(api)
 	// usage windows (#2432): the manager's (devices_routes.go)
 	h.usageRoutesRelayed(api)
+	h.transferRoutesRelayed(api) // computer to computer file transfers, the manager's (devices_routes.go)
 	h.inboxRoutesRelayed(api)
 	// the extensions', connectors', bots', mail's, Cua's and ego's: the manager's (extensions_link.go)
 	h.extensionRoutesRelayed(api)

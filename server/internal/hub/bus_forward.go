@@ -197,3 +197,15 @@ func localizedOnce(forms map[i18n.Lang][]byte, l i18n.Lang, b []byte, localize f
 	forms[l] = form
 	return form
 }
+
+// toFullWanting is toWanting for the full devices only: a computer to computer transfer's progress (file_transfer,
+// docs/protocol/file-transfer.md) names files, which an answer-only device (the watch) has no business with.
+func (h *Hub) toFullWanting(feature string, b []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.role == roleFull && c.wants(feature) {
+			c.queue(b)
+		}
+	}
+}

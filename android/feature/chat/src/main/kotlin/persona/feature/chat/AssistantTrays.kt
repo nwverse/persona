@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -25,6 +26,9 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.*
 import persona.core.domain.tasks.TaskState
+import persona.core.domain.tasks.TodoBucket
+import persona.core.domain.tasks.bucket
+import kotlinx.coroutines.delay
 import persona.core.domain.sort.canApprove
 
 internal enum class AssistantTray { Pending, Progress, Agents }
@@ -52,12 +56,14 @@ internal data class TrayProgress(val id: String, val title: String, val todo: To
 
 /** Prefer an explicit supervisor report, then the agent's counted plan; do not estimate progress from status. */
 internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: AssistantTaskHost,
-    feed: List<FeedItem> = emptyList(), projected: List<AssistantTaskCard> = emptyList()): List<TrayProgress> {
+    feed: List<FeedItem> = emptyList(), projected: List<AssistantTaskCard> = emptyList(), everyTodo: Boolean = false): List<TrayProgress> {
+    // the main conversation watches every task (docs/assistant/unified-entry.md): a row for each to-do, whatever its origin (#3331)
+    val own = { todo: Todo -> everyTodo || todo.origin == host.conversation }
     val bound = plans.flatMap { plan -> plan.tasks.mapIndexedNotNull { index, task ->
         task.todoId?.takeIf { id -> todos.firstOrNull { it.id == id }?.planId?.let { it == plan.id } != false }
             ?.let { it to "plan:${plan.id}:$index" }
     } }.toMap()
-    val rows = todos.filter { it.origin == host.conversation }.map { todo ->
+    val rows = todos.filter(own).map { todo ->
         val lead = host.tasks.lead(todo, host.sessions)
         val state = host.tasks.stateOf(todo, host.sessions)
         val report = todo.supervision?.progress
@@ -90,7 +96,7 @@ internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: Assist
     val fallback = (pending + rows).distinctBy { it.id }
     val merged = persona.core.domain.tasks.AssistantTaskCards.merge(feed,
         plans.filter { it.conversation == host.conversation }.associateBy { it.id },
-        todos.filter { it.origin == host.conversation }, projected)
+        todos.filter(own), projected)
     val byTodo = rows.associateBy { it.todo?.id }
     val byId = fallback.associateBy { it.id }
     val authoritative = merged.filter { card ->
@@ -120,6 +126,18 @@ internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: Assist
     val identities = authoritative.map { it.id }.toSet()
     return (authoritative + fallback.filter { it.id !in identities && (it.todo == null || it.todo.id !in known) })
         .distinctBy { it.id }.sortedBy { it.done || it.cancelled }
+}
+
+/**
+ * The Progress tray by the To-dos page's rule (#3331, `Todo.bucket`): its rows without the shelved tasks (the To-dos
+ * page folds them), and the count its entry shows, the open tasks only, which is the To-dos page's "Not done" in the
+ * main conversation. Plan tasks with no to-do yet are listed but not counted: no to-do, nothing on the To-dos page.
+ */
+internal data class ProgressView(val rows: List<TrayProgress>, val open: Int)
+
+internal fun progressView(rows: List<TrayProgress>, lookup: (SessionKey) -> Session?, now: Long, restored: Map<String, Long> = emptyMap()): ProgressView {
+    val bucket = rows.associate { row -> row.id to row.todo?.bucket(lookup, now, restored[row.todo.id] ?: 0L) }
+    return ProgressView(rows.filter { bucket[it.id] != TodoBucket.Shelved }, rows.count { bucket[it.id] == TodoBucket.Open })
 }
 
 internal sealed interface TrayDraft {
@@ -158,8 +176,15 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     val taskBusy by host.tasks.busy.collectAsStateWithLifecycle()
     val taskCards by host.tasks.taskCards.collectAsStateWithLifecycle()
     val drafts = trayDrafts(inbox, feeds[host.conversation].orEmpty())
-    val progress = trayProgress(todos, plans.values.toList(), host, feeds[host.conversation].orEmpty(), taskCards[host.conversation].orEmpty())
+    val progress = trayProgress(todos, plans.values.toList(), host, feeds[host.conversation].orEmpty(), taskCards[host.conversation].orEmpty(),
+        everyTodo = main != null && main == host.conversation)
     val bySession = host.sessions.associateBy { it.key }
+    val context = LocalContext.current
+    val restores = remember(context) { TodoRestores(context) }
+    // a minute's tick moves tasks across the 48 h shelving line while nothing else changes, as on the To-dos page
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { delay(60_000); nowMs = System.currentTimeMillis() } }
+    val shown = progressView(progress, { key -> bySession[key] }, maxOf(nowMs, System.currentTimeMillis()), restores.read())
     val ownedTaskAgents = todos.filter { it.origin == host.conversation }.flatMap { it.activeAgents.map { a -> a.key } }.toSet()
     val standalone = persona.core.domain.tasks.dockAgents(host.conversation, main, host.sessions, todos)
     val agents = (standalone + host.sessions.filter { it.key in ownedTaskAgents })
@@ -188,7 +213,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             AssistantTray.Agents -> R.string.chat_tray_agents
                         }), trailing = stringResource(R.string.chat_tray_items, when (tray) {
                             AssistantTray.Pending -> pendingCount
-                            AssistantTray.Progress -> progress.size
+                            AssistantTray.Progress -> shown.rows.size
                             AssistantTray.Agents -> agents.size
                         }), action = if (tray == AssistantTray.Pending && approvals.isNotEmpty()) ({
                             JTextButton(stringResource(R.string.chat_tray_approve_all), { onApprove(approvals) },
@@ -227,7 +252,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             }
                         }
                         AssistantTray.Progress -> {
-                            items(progress, key = { it.id }) { row ->
+                            items(shown.rows, key = { it.id }) { row ->
                                 TrayProgressRow(row, onClick = { row.todo?.let { openTask(host, it) } ?: row.plan?.let(onPlan) })
                             }
                             if (schedules.isNotEmpty() || backgroundRecords) item { JSectionHeader(stringResource(R.string.chat_tray_quiet)) }
@@ -246,7 +271,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (backgroundRecords && onBackground != null) item {
                                 JRow(stringResource(R.string.chat_tray_background), onClick = onBackground, leadingIcon = PhIcons.Clock)
                             }
-                            if (progress.isEmpty() && schedules.isEmpty() && !backgroundRecords) item {
+                            if (shown.rows.isEmpty() && schedules.isEmpty() && !backgroundRecords) item {
                                 JEmptyState(stringResource(R.string.chat_tray_no_progress), "", icon = PhIcons.ListChecks)
                             }
                         }
@@ -288,7 +313,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                 AssistantTray.Agents -> R.string.chat_tray_agents
             }), when (tray) {
                 AssistantTray.Pending -> pendingCount
-                AssistantTray.Progress -> progress.count { !it.done && !it.cancelled }
+                AssistantTray.Progress -> shown.open
                 AssistantTray.Agents -> agents.size
             }, when (tray) {
                 AssistantTray.Pending -> AssistantTrayTone.Pending

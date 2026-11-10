@@ -7975,6 +7975,15 @@ if os.environ.get("MOCK_WAKES") == "1":
     _k += tool("Bash", {"command": "git commit -am 'lint'"}, "[main 1a2b3c] lint", 7)
     _k.append(it("assistant", "text", 6, text="lint 有两处要改，已经改好提交了。"))
     ITEMS[WAKES] = _k
+    # A wake whose continuation has tools but no new answer yet: the previous answer stays visible until it streams.
+    if os.environ.get("MOCK_WAKE_PENDING") == "1":
+        _pending = [it("user", "text", 40, text="发版前把测试跑一下，好了告诉我")]
+        _pending += tool("Bash", {"command": "xcodebuild test", "description": "跑测试", "run_in_background": True},
+                         "Command running in background with ID: bkt. Output is being written to: /tmp/claude/bkt.output", 39)
+        _pending.append(it("assistant", "text", 38, text="测试已经在后台跑了，结束后我告诉你。"))
+        _pending.append(wake(30, "completed", "跑测试", "bkt", "后台命令完成 · 跑测试"))
+        _pending += tool("Read", {"file_path": "/tmp/claude/bkt.output"}, "Test Suite 'All tests' passed", 29)
+        ITEMS[WAKES] = _pending
     # Alignment regression: short and overflowing Monitor events, each followed by a short answer.
     if os.environ.get("MOCK_WAKE_ALIGNMENT") == "1":
         _k = [it("user", "text", 40, text="检查后台上传的进展"),
