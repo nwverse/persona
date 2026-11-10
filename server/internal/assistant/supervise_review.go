@@ -31,6 +31,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		Reason    string `json:"reason"`
 		Link      string `json:"link"`
 		Recommend string `json:"recommend"`
+		// needs_user's deadline and whether its recommendation can be undone (#3127, decision_deadline.go).
+		Deadline   string `json:"deadline"`
+		Reversible *bool  `json:"reversible"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -48,6 +51,18 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	if a.Verdict == reviewRework && a.Note == "" && !slices.ContainsFunc(a.Checks, func(c ReviewCheck) bool { return !c.Met }) {
 		return "", fmt.Errorf("rework: say what is missing (a check that is not met, or note)")
+	}
+	deadline, err := parseDeadline(a.Deadline, time.Now())
+	switch {
+	case err != nil:
+		return "", err
+	case deadline.IsZero():
+	case a.Verdict != reviewNeedsUser:
+		return "", fmt.Errorf("deadline applies to needs_user only")
+	case strings.TrimSpace(a.Recommend) == "":
+		return "", fmt.Errorf("deadline: give recommend, the option taken by default when it passes")
+	case a.Reversible == nil:
+		return "", fmt.Errorf("deadline: say whether the recommendation can be undone (reversible); deleting, sending to other people, spending money and production changes cannot")
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return "", err
@@ -82,7 +97,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	over := false
 	var v Supervision
-	var err error
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 			if isMain {
@@ -156,6 +170,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			"if they are waiting for it, and hand out or schedule anything that follows (deploy, TestFlight, closing an issue).", t.ID), nil
 	case reviewNeedsUser:
 		conclusion.Outcome, conclusion.Recommend = outcomeDecide, a.Recommend
+		if !deadline.IsZero() {
+			conclusion.Deadline, conclusion.Reversible = deadline, *a.Reversible
+		}
 		if over && a.Reason == "" { // the note is the rework asked for, written to the agent: not the owner's question
 			conclusion.Reason, conclusion.Note = i18n.T(s.botLang(ctx), "assistant-reports.verdict_over", i18n.Args{"rounds": maxReworkRounds}), ""
 		}
@@ -164,8 +181,17 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		// taking the push does not say a device got it, nor that the app shows its OK: without a card the supervisor still
 		// asks, and is told OK may come first.
 		pushed := ""
+		switch {
+		case deadline.IsZero():
+		case *a.Reversible:
+			pushed = fmt.Sprintf(" If the user has not answered by %s, the hub takes the recommendation by default (it goes to the agent and is "+
+				"recorded on the to-do as taken at the deadline).", deadline.In(s.location(ctx)).Format(toolTimeLayout))
+		default:
+			pushed = fmt.Sprintf(" It cannot be undone: at the deadline (%s) the user is only reminded again, nothing is taken.",
+				deadline.In(s.location(ctx)).Format(toolTimeLayout))
+		}
 		if s.pushDecision(ctx, t.ID) {
-			pushed = " A push with your recommendation also went to their phone; its \"OK\" takes the recommendation and sends it " +
+			pushed += " A push with your recommendation also went to their phone; its \"OK\" takes the recommendation and sends it " +
 				"to the task's agent, which ends the decision too (drop a question of yours about it then)."
 		}
 		if carded {
