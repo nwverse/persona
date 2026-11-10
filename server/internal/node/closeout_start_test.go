@@ -43,7 +43,7 @@ func startHook(sid string) hookInput {
 }
 
 // A starting session in a pane gets the manager's text as its additional context; the manager is asked once per
-// session, whatever it said, and a start after a compaction is told again without another ask.
+// session that it gave a text, and a start after a compaction is told again without another ask.
 func TestCloseoutStartTellsOncePerSession(t *testing.T) {
 	text := "the form"
 	n, asked := closeoutStartNode(t, func() (string, error) { return text, nil })
@@ -58,14 +58,14 @@ func TestCloseoutStartTellsOncePerSession(t *testing.T) {
 	if asked.Load() != 1 {
 		t.Fatalf("the manager was asked %d times for one session", asked.Load())
 	}
-	text = "" // the switch is off: nothing is told, and that is remembered too
+	text = "" // the switch is off: nothing is told, and it is asked again next time (the switch may be turned on)
 	for range 2 {
 		if out := n.closeoutStart(t.Context(), pane, startHook("s2")); out != nil {
 			t.Fatalf("told with nothing to tell: %v", out)
 		}
 	}
-	if asked.Load() != 2 {
-		t.Fatalf("asked %d times, want 2", asked.Load())
+	if asked.Load() != 3 {
+		t.Fatalf("asked %d times, want 3", asked.Load())
 	}
 }
 

@@ -44,7 +44,7 @@ func (b *closeoutBriefs) put(id, text string) {
 // (docs/assistant/agent-work.md "Closeout"): the manager's text as the session's additional context, or nil. Only
 // for an agent in a pane with Persona's own hooks: never a session that only reports (its hook is async and prints
 // nothing), a subagent, or an assistant conversation (headless, or in an assistant directory). The manager decides
-// by its switch and is asked once per session; no answer in closeoutStartWait is no context, and is asked again at
+// by its switch and is asked until it gives a text, then no more for that session; no answer in closeoutStartWait is no context, and is asked again at
 // the session's next start.
 func (n *Node) closeoutStart(parent context.Context, req sockRequest, in hookInput) any {
 	if req.ReportOnly || in.HookEventName != "SessionStart" || in.AgentID != "" || in.SessionID == "" || req.Pane == "" || n.peer == nil {
@@ -62,7 +62,9 @@ func (n *Node) closeoutStart(parent context.Context, req sockRequest, in hookInp
 			return nil
 		}
 		text = result.Context
-		n.closeoutBriefs.put(in.SessionID, text)
+		if text != "" { // "none" is not kept: the switch may be turned on while the session lives
+			n.closeoutBriefs.put(in.SessionID, text)
+		}
 	}
 	if text == "" {
 		return nil
