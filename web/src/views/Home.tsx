@@ -293,7 +293,7 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
         </a>
         <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[TODO_STATUS_INFO[status].tone])}>{todoStatusLabel(todo, status)}</span>
       </div>
-      <TodoStageBar stage={todo.stage} prURL={todo.pr_url} />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
       {line && <p className={cx("truncate text-[11.5px]", held ? "text-orange" : "text-ink-3")}>{line}</p>}
     </div>
   );
