@@ -129,12 +129,6 @@ object AssistantManagerChoice {
     // web keeps the same registry (manager-choice.ts).
     private val items = java.util.concurrent.ConcurrentHashMap<Pair<String?, List<String>>, String>()
 
-    // Pins: while a page about one manager's thing is open (an extension's, an inbox item's chat, mail or thread), the
-    // requests under its prefixes name that manager; the latest pin of a prefix wins, and it goes with the page.
-    private val pins = java.util.concurrent.ConcurrentHashMap<Pair<String?, List<String>>, List<Pin>>()
-
-    private class Pin(val manager: String)
-
     /** A merged list of [hubId]'s hub (the one shown now) showed the thing at [path] (segments under /api/v1) as [manager]'s. */
     fun noteItem(path: List<String>, manager: String?, hubId: String? = state.value.hubId) {
         if (path.isEmpty() || path.any { it.isEmpty() }) return
@@ -142,24 +136,14 @@ object AssistantManagerChoice {
         if (id == null) items.remove(hubId to path) else items[hubId to path] = id
     }
 
-    /** Requests under each of [prefixes] (segments under /api/v1) go to [manager] until the returned function is called. */
-    fun pin(prefixes: List<List<String>>, manager: String?, hubId: String? = state.value.hubId): () -> Unit {
-        val id = manager?.takeIf { it.isNotBlank() } ?: return {}
-        val keys = prefixes.filter { it.isNotEmpty() }.map { hubId to it }
-        val mine = Pin(id)
-        keys.forEach { key -> pins.compute(key) { _, list -> (list ?: emptyList()) + mine } }
-        return { keys.forEach { key -> pins.computeIfPresent(key) { _, list -> (list - mine).ifEmpty { null } } } }
-    }
-
     /**
-     * The manager a request to [path] (segments under /api/v1) of [hubId]'s hub is for, from a pin or a list that showed
-     * it (or the thing it is under); null: send none (none known, or the default).
+     * The manager a request to [path] (segments under /api/v1) of [hubId]'s hub is for, from a list that showed it (or
+     * the thing it is under); null: send none (none known, or the default). A page's own pins are [ManagerPins].
      */
     fun itemHeader(path: List<String>, hubId: String? = state.value.hubId): String? {
         val default = state.value.defaultId
         for (n in path.size downTo 1) {
-            val key = hubId to path.subList(0, n)
-            val owner = pins[key]?.lastOrNull()?.manager ?: items[key] ?: continue
+            val owner = items[hubId to path.subList(0, n)] ?: continue
             return owner.takeIf { it != default }
         }
         return null
@@ -221,4 +205,35 @@ data class ManagerCommands(val service: String? = null, val docker: String? = nu
  */
 class RequestManager(val id: String) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
     companion object Key : kotlin.coroutines.CoroutineContext.Key<RequestManager>
+}
+
+/**
+ * A page's pins (an extension's page, an inbox item's chat, mail or thread): the requests made inside it to a path under
+ * one of its prefixes (segments under /api/v1) of [hubId]'s hub name its manager, as [RequestManager] does; the longest
+ * prefix wins, and a [RequestManager] wins over it. It goes only with the page's own requests (the APIs it hands its
+ * children carry it), so another page, a background refresh or the page under it on the stack is not pinned.
+ */
+class ManagerPins private constructor(private val prefixes: Map<List<String>, String>, val hubId: String?) :
+    kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+
+    /** The manager pinned for [path], the default's id included; null: not pinned. */
+    private fun owner(path: List<String>): String? = (path.size downTo 1).firstNotNullOfOrNull { prefixes[path.subList(0, it)] }
+
+    /** What a request to [path] of [hubId]'s hub names: "" for the default (none, and no stamp); null: not pinned. */
+    fun manager(path: List<String>, hubId: String? = AssistantManagerChoice.current.value.hubId): String? {
+        if (hubId != this.hubId) return null
+        val owner = owner(path) ?: return null
+        return owner.takeIf { it != AssistantManagerChoice.current.value.defaultId } ?: ""
+    }
+
+    override fun equals(other: Any?) = other is ManagerPins && other.prefixes == prefixes && other.hubId == hubId
+    override fun hashCode() = prefixes.hashCode() * 31 + hubId.hashCode()
+
+    companion object Key : kotlin.coroutines.CoroutineContext.Key<ManagerPins> {
+        /** Requests under each of [prefixes] name [manager]; null (nothing pinned) for no manager. */
+        fun of(prefixes: List<List<String>>, manager: String?, hubId: String? = AssistantManagerChoice.current.value.hubId): ManagerPins? {
+            val id = manager?.takeIf { it.isNotBlank() } ?: return null
+            return ManagerPins(prefixes.filter { it.isNotEmpty() }.associateWith { id }, hubId)
+        }
+    }
 }

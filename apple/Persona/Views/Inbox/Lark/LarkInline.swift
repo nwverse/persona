@@ -162,7 +162,7 @@ struct LarkInlineText: View {
             case .text(let s, let style):
                 pending += attributed(s, style: style, base: base)
             case .emoji(let key, let fallback):
-                if let img = LarkMedia.shared.emojiImage(key, points: emojiPoints) {
+                if let img = LarkMedia.shared.emojiImage(key, points: emojiPoints, manager: manager) {
                     flush()
                     append(Text(Image(uiImage: img)).baselineOffset(-emojiPoints * 0.2))
                 } else {
