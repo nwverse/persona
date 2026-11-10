@@ -20,10 +20,6 @@ type agentLauncher struct {
 	AgentType string `json:"agent_type,omitempty"`
 }
 
-// ompAgent is Oh My Pi, a pi fork. It takes its own flags only, never Claude Code's, so it starts through
-// startOtherAgent.
-const ompAgent = "omp"
-
 // ompOptionsRefusal: omp's model and thinking level come from its own config.yml, not from a start's arguments.
 const ompOptionsRefusal = "omp 的模型和思考强度由 omp 自己的配置决定，这次没有启动。"
 
