@@ -12,7 +12,8 @@ import { useExtensionSlot } from "../lib/extension-slots";
 import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, navigate, type Route } from "../lib/router";
-import { useAgentSessions, useCounts } from "../lib/sessions";
+import { useAgentSessions } from "../lib/sessions";
+import { useScopedCounts, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { triageTodos } from "../lib/todo-triage";
 import { makeSessionLookup } from "../lib/todos";
 import { useRestoredTodos } from "../lib/todo-restore";
@@ -65,19 +66,22 @@ export type NavPage = { k: string; to: Route; icon: IconName; label: string; sho
 /** The sidebar's pages ("Overview" … "Settings", the extensions' pages) and the connection, shared by the sidebar and its rail. */
 export function useNavPages() {
   const phase = connPhase(useStore((s) => s.conn), useStore((s) => s.link));
-  const online = useStore((s) => s.machines.filter((m) => m.online).length);
-  const total = useStore((s) => s.machines.length);
+  // the counts on the pages are the current assistant's (docs/assistant/managers.md "Clients"); the other assistants' are in
+  // the switcher at the sidebar's head
+  const machines = useScopedMachines();
+  const online = machines.filter((m) => m.online).length;
+  const total = machines.length;
   // "Terminal" (docs/integrations/terminal.md "Standalone terminal") is there where the hub can list panes
   const terminalPanes = useStore((s) => s.features.includes("terminal_panes"));
   const assistant = useStore((s) => s.assistant);
-  const todos = useStore((s) => s.todos);
+  const todos = useScopedTodos();
   const todosSupported = useStore((s) => s.todosSupported);
   // The To-dos page's open count (#3156): not shelved, not finished; quiet tasks (#1731) are told about in the main
   // conversation, not counted here.
   const agentSessions = useAgentSessions();
   const [restored] = useRestoredTodos();
   const uncompletedTodosCount = useMemo(() => triageTodos(todos, makeSessionLookup(agentSessions), Date.now(), restored, { quiet: false }).open, [todos, agentSessions, restored]);
-  const counts = useCounts();
+  const counts = useScopedCounts();
   const inbox = useInboxBadge();
   const larkSwitch = useLarkHome();
   const lark = useLarkOn();

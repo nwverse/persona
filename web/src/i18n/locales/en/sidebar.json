@@ -145,5 +145,11 @@
   "arrange_pages": "Arrange sidebar…",
   "draft": "Draft",
   "resize_label": "Drag to resize the sidebar",
-  "resize_title": "Drag to resize, double-click to reset"
+  "resize_title": "Drag to resize, double-click to reset",
+  "assistants": "Assistants",
+  "new_assistant": "New assistant",
+  "manage_assistants": "Manage assistants…",
+  "switched_to": "Switched to {name}",
+  "switcher_label": "{name}, switch assistant",
+  "switcher_label_waiting": "{name}, switch assistant. Another assistant has something waiting for you"
 }

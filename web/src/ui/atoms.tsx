@@ -731,6 +731,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
   const detailId = `${useId()}-detail`;
   const label = rowLabel(it, asking ? it.key : null);
   const detail = asking && it.confirmDetail ? it.confirmDetail : it.detail;
+  const tag = it.tag && <span className="ml-1.5 inline-block rounded-[5px] bg-ai-tint px-1.5 align-[1px] text-[10.5px] leading-[1.5] font-medium whitespace-nowrap text-ai">{it.tag}</span>;
   return (
     <button
       ref={refCb}
@@ -752,17 +753,19 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       )}
     >
       {it.state && <StatusMark state={it.state} />}
+      {it.lead}
       {it.icon && <Icon name={it.icon} size={14} className={it.danger ? "" : "text-ink-3"} />}
       {detail ? (
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
-          <span className="block break-words">{label}</span>
+          <span className="block break-words">{label}{tag}</span>
           <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{detail}</span>
         </span>
       ) : (
-        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}</span>
+        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
       )}
       {it.state && <StatePill state={it.state} />}
+      {!working && !!it.badge && <span data-menu-badge className="flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold whitespace-nowrap text-attention tabular-nums">{it.badge > 99 ? "99+" : it.badge}</span>}
       {working ? <Spinner size={12} /> : it.hint && <span className="shrink-0 text-[11px] text-ink-3">{it.hint}</span>}
       {it.checked !== undefined && <Icon name="check" size={13} stroke={2.5} className={cx("shrink-0", it.checked ? "text-ink" : "invisible")} />}
       {accel && !working && <span aria-hidden className={cx("w-3.5 shrink-0 text-center text-[11px]", it.danger ? "" : "text-ink-3")}>{accel}</span>}

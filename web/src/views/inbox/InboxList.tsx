@@ -13,9 +13,9 @@ import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick } from "../../lib/router";
 import { useInboxSources } from "../../lib/inbox-sources";
-import { managerOrder, multiManager, ownerIn, useRoster, type Manager } from "../../lib/managers";
+import { type Manager } from "../../lib/managers";
+import { scoped, useScope, useScoped } from "../../lib/current-assistant";
 import { useStore } from "../../lib/store";
-import { ManagerHeading } from "../ManagerParts";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
 import { requestRoute } from "../../lib/card-focus";
@@ -70,7 +70,9 @@ type Picked = Set<string> | null;
 
 /** `selected`: the item opened (its id and manager). `picked` / `onPicked`: selecting, from the page's "Select". */
 export function InboxList({ selected, picked = null, onPicked }: { selected?: { id: string; manager?: string }; picked?: Picked; onPicked?: Dispatch<SetStateAction<Picked>> }) {
-  const items = useInbox((s) => s.items);
+  // with several assistants the list is the current one's (docs/assistant/managers.md "Clients"); one: every item
+  const mine = useScope();
+  const items = useScoped(useInbox((s) => s.items));
   const loaded = useInbox((s) => s.loaded);
   const loading = useInbox((s) => s.loading);
   const error = useInbox((s) => s.error);
@@ -100,7 +102,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   // The agents waiting, picked in the store: the list holds the store's own interaction objects, so a sessions or
   // machines push that leaves them as they were keeps the same array (useStore compares it item by item) and the list,
   // with every row in it, does not render again.
-  const agents = useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query, folder }));
+  const agents = useScoped(useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query, folder })));
   // the sections opened or closed by hand, by "<manager group>:<section>" (each manager's group keeps its own; one
   // manager: the group ""), the others as they are at first
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
@@ -126,20 +128,12 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const s = useMemo(() => sections(items, { source, kind, query, folder }), [items, source, kind, query, folder]);
   // what the folder bar counts: the items the other filters leave
   const inFilters = useMemo(() => (foldersShown ? items.filter((it) => matches(it, { source, kind, query })) : []), [foldersShown, items, source, kind, query]);
-  // with several managers, each one's items and waiting agents under its name, sectioned as before (docs/assistant/managers.md
-  // "Clients"); one: the list as it was
-  const roster = useRoster();
-  const byManager = useMemo(() => {
-    if (!multiManager(roster)) return null;
-    return managerOrder(roster)
-      .map((m) => ({
-        manager: m,
-        sec: sections(items.filter((it) => ownerIn(roster, it.manager) === m.id), { source, kind, query, folder }),
-        ags: agents.filter((ix) => ownerIn(roster, ix.manager) === m.id),
-      }))
-      .filter((g) => g.ags.length || g.sec.done.length || TIERS.some((tier) => g.sec.tiers[tier.key].length));
-  }, [roster, items, agents, source, kind, query, folder]);
-  const chips = mailAccounts(accounts, items);
+  // several assistants: the list's one group is the current assistant's (its Done history and day counts are asked of
+  // it by name); one: the group "" as before
+  const byManager = useMemo(() => (mine.manager ? [{ manager: mine.manager, sec: s, ags: agents }] : null), [mine.manager, s, agents]);
+  // the hub's list of mail accounts is the default assistant's: with several, the chips are the accounts the current
+  // one's items name
+  const chips = mailAccounts(mine.several ? [] : accounts, items);
   const connectors = useMemo(() => connectorSources(items), [items]);
   const failed = Boolean(error) && !items.length;
   const empty = !s.tiers.action.length && !s.tiers.working.length && !s.tiers.fyi.length && !s.tiers.noise.length && !agents.length;
@@ -194,7 +188,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
       const groups: InboxGroup[] = tier.key === "working" ? [] : grouping === "time" ? groupByTime(list, now, (it) => it.updated_at) : groupBySource(list, order, mailName);
       return { tier, list, waiting, groups, titled: tier.key !== "working" && (groups.length > 1 || (waiting.length > 0 && list.length > 0)) };
     });
-    const done = doneWithHistory(sec.done, manager && roster ? history.filter((it) => ownerIn(roster, it.manager) === manager.id) : history, { source, kind, query, folder });
+    const done = doneWithHistory(sec.done, scoped(history, mine), { source, kind, query, folder });
     const group = manager?.id ?? "";
     const { groups: dg, next } = doneGroupsOf(group, done);
     return { manager, group, tiers, done, doneGroups: dg, doneNext: next };
@@ -226,7 +220,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
       if (without.length && !history.length) void loadOlderDone(without);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+  }, [ready, mine.manager?.id]);
   // A Done group shown open whose items haven't all come loads its first page by itself, once while the list is up;
   // the next pages come on its "Show older", so opening 1+ month doesn't stream in every item of it
   const autoLoaded = useRef(new Set<string>());
@@ -412,7 +406,6 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           };
           return (
             <Fragment key={group}>
-              {manager && <ManagerHeading manager={manager} className="mt-5 px-1" />}
               {ready && tiers.map(({ tier, list, waiting, groups, titled }) => {
                 if (!list.length && !waiting.length) return null;
                 const clear = tier.key === "fyi" ? t("inbox-inboxlist.clear_fyi") : tier.key === "noise" ? t("inbox-inboxlist.clear_noise") : undefined;
@@ -731,10 +724,11 @@ async function mutesByManager(managers: Manager[]): Promise<MuteGroup[]> {
 }
 
 /** "Muted" (the ⋯ menu; iOS InboxMutesView): every source's muted repositories, chats and senders, newest first, each
- *  with "Unmute". Only what comes in later comes back. With several managers, each one's under its name. */
+ *  with "Unmute". Only what comes in later comes back. With several assistants, the current one's. */
 function MutesDialog({ onClose }: { onClose: () => void }) {
-  const roster = useRoster();
-  const managers = multiManager(roster) ? managerOrder(roster) : null;
+  // several assistants: the current one's mutes, asked of it by name
+  const mine = useScope().manager;
+  const managers = useMemo(() => (mine ? [mine] : null), [mine]);
   const [list, setList] = useState<InboxMute[] | null>(null);
   const [groups, setGroups] = useState<MuteGroup[] | null>(null);
   const [failed, setFailed] = useState("");
@@ -775,7 +769,7 @@ function MutesDialog({ onClose }: { onClose: () => void }) {
       </li>
     );
   };
-  // several managers: the groups with something to say (mutes, or why they could not be read)
+  // several assistants: the current one's group when it has something to say (mutes, or why they could not be read)
   const shownGroups = groups?.filter((g) => g.error || g.mutes?.length) ?? null;
   const empty = managers ? shownGroups?.length === 0 : list?.length === 0;
   return (
@@ -800,7 +794,6 @@ function MutesDialog({ onClose }: { onClose: () => void }) {
           {shownGroups ? (
             shownGroups.map((g) => (
               <section key={g.manager.id} data-mutes-manager={g.manager.id} className="mb-2">
-                <ManagerHeading manager={g.manager} className="px-1 pt-1 pb-0.5" />
                 {g.error ? (
                   <p className="px-1 py-1.5 text-[12px] break-words text-ink-3">{g.manager.online ? t("inbox-inboxlist.mutes_load_failed", { error: g.error }) : t("inbox-inboxlist.mutes_offline")}</p>
                 ) : (

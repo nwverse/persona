@@ -23,9 +23,9 @@ import { PersonaAvatar, usePersona } from "./assistant/Persona";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate } from "./assistant/Readiness";
 import { DayLine } from "./assistant/Tasks";
 import { ShellHeaderSlots, ShellSwitch } from "./ShellSwitch";
-import { MAIN_TITLE, conversationTitle } from "./assistant/conversations";
+import { conversationTitle } from "./assistant/conversations";
 import { formatList, t } from "../i18n";
-import { ManagerSwitcher, useShownOffline } from "./ManagerParts";
+import { useAssistantTitle, useShownOffline } from "./ManagerParts";
 import { chosenManager, noteConversation, ownerHeaders, shownManager } from "../lib/manager-choice";
 
 /** The example questions of a hub without readiness (its `suggestions` replace them, docs/assistant/onboarding.md 4.7). */
@@ -81,7 +81,6 @@ export function PersonaAssistant({ sid, fresh, onToggleSidebar }: { sid?: string
         starting={starting.has(id)}
         onToggleSidebar={onToggleSidebar}
         topCenter={topCenter}
-        banner={id === main ? <ManagerSwitcher className="border-b border-line" /> : undefined}
         mainCache={id === main && scope ? { scope, manager } : undefined}
         refreshError={id === main ? assistantError ?? undefined : undefined}
         onRefresh={id === main ? () => void refreshAssistant().catch(() => {}) : undefined}
@@ -113,8 +112,6 @@ function AssistantLoadFailed({ error, onToggleSidebar }: { error: string; onTogg
       <header className="flex h-14 shrink-0 items-center gap-2 px-3 sm:px-4">
         <ShellHeaderSlots page="assistant" onToggleSidebar={onToggleSidebar} end={<IconButton icon="info" label={t("personaassistant.profile")} onClick={() => navigate({ name: "profile" })} />} />
       </header>
-      {/* another manager can still be picked when this one's page didn't load */}
-      <ManagerSwitcher />
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-5 text-center">
         <p className="text-[13px] text-ink-2">{t("personaassistant.load_failed", { error })}</p>
         <Button onClick={retry} busy={retrying} icon="retry">
@@ -138,6 +135,7 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
   const gate = useReadinessGate();
   const [failure, setFailure] = useState<CodedFailure | null>(null);
   const offline = useShownOffline();
+  const mainTitle = useAssistantTitle();
   // the first message while its start is on its way (#1697): the page is the conversation's already, the message at its
   // top and "Preparing" under it, the box at the bottom, so nothing moves when the conversation itself takes over
   const [sending, setSending] = useState<{ out: Outgoing; launcher: string; at: number } | null>(null);
@@ -228,7 +226,7 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
       {sending ? (
         // the conversation page's own header, as it will read once the conversation is there
         <Header
-          title={main ? MAIN_TITLE : conversationTitle({ title: "" })}
+          title={main ? mainTitle : conversationTitle({ title: "" })}
           subtitle={main ? undefined : [sending.launcher, ago(new Date(sending.at).toISOString())].join(" · ")}
           machineName=""
           assistant
@@ -253,7 +251,6 @@ function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: (
         </button>
       </header>
       )}
-      {main && <ManagerSwitcher className={sending ? "border-b border-line" : undefined} />}
       <div className={sending ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5 pb-[10vh]"}>
         <div className={sending ? "contents" : "w-full max-w-[640px]"} style={sending ? undefined : { animation: `fade-up 450ms ${EASE} both` }}>
           {sending ? (

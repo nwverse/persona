@@ -30,6 +30,9 @@ export interface Manager {
   installing?: string;
   /** Online on a build that reads no settings of its own (no `config.own`): it runs on built-in defaults until updated. */
   needs_update?: boolean;
+  /** Its open inbox items that need the user (the inbox page's badge). Absent: not known (offline, installing, an
+   *  older hub), counted as none. The hub pushes `managers` when it changes. */
+  inbox_needs_you?: number;
 }
 
 export interface ManagerList {
@@ -190,6 +193,8 @@ export function loadRoster(): Promise<void> {
  *  put right without waiting for the next hello (what was routed or cached under the hub's own is evaluated again
  *  when the default moves: onDefaultManager). */
 function rosterFailed(e: unknown) {
+  // a hub without a roster has one assistant: a pick kept from a newer hub at this address names nobody
+  if (unsupported(e)) chooseManager(null);
   settleRosterDefault();
   const status = (e as { status?: unknown } | null)?.status;
   if (status === 404 || rosterRetries >= ROSTER_RETRIES) {
@@ -217,7 +222,8 @@ export function resetRoster() {
   roster = null;
 }
 
-/** Puts a roster in place (tests set one directly); the shown manager follows a default that moved or one that went. */
+/** Puts a roster in place (tests set one directly); the current assistant follows a default that moved, and goes back
+ *  to the default when the one picked left the roster (or is not installed). */
 export function setRoster(next: ManagerList | null) {
   roster = next;
   if (next) {
@@ -310,4 +316,35 @@ export function offlineManagerOf(list: ManagerList | null, m: { online: boolean;
 /** Which of the shown groups a thing with manager `id` goes in: its own, else (unknown, or none) the default's. */
 export function ownerIn(list: ManagerList, id: string | undefined): string {
   return id && installedManagers(list).some((m) => m.id === id) ? id : list.default;
+}
+
+// ── the switcher (the sidebar's head): each assistant's avatar, line and count ──
+
+/** An assistant's avatar color (the same rule on every client): the default one is the AI purple, any other the hue
+ *  its id's UTF-8 bytes add up to, of five. A CSS color: a token of the stylesheet, light and dark. */
+export const AVATAR_HUES = ["blue", "green", "orange", "pink", "indigo"] as const;
+
+export function avatarColor(id: string, isDefault: boolean): string {
+  if (isDefault) return "var(--ai)";
+  let sum = 0;
+  for (const b of new TextEncoder().encode(id)) sum += b;
+  return `var(--hue-${AVATAR_HUES[sum % AVATAR_HUES.length]})`;
+}
+
+/** The letter on an assistant's avatar: its name's first character (a whole emoji or accented letter), upper case. */
+export function avatarInitial(name: string): string {
+  const first = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(name.trim())][0]?.segment ?? "";
+  return first.toLocaleUpperCase();
+}
+
+/** The line under an assistant's name in the switcher: "Online · <computer>", "Offline · last synced …", or
+ *  "Installing · code expires in n minutes". */
+export function switcherLine(m: Manager, now = Date.now()): string {
+  const status = statusLine(m, now).text;
+  return m.online && !m.installing && m.host ? `${status} · ${m.host}` : status;
+}
+
+/** The current assistant's record: the one picked, else the default's; null without a roster. */
+export function managerOf(list: ManagerList | null, id: string): Manager | null {
+  return list?.managers.find((m) => m.id === id) ?? null;
 }
