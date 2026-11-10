@@ -219,10 +219,14 @@ fun StatusLine(
     onClick: ((StatusLineKind) -> Unit)? = null,
     chips: List<String> = emptyList(),
     trailing: (@Composable RowScope.() -> Unit)? = null,
-    /** False where the page's header already says the state (an Agent's chat, #3957): the line keeps its words, not a second state mark. */
-    stateMark: Boolean = true,
+    /**
+     * False where the page's header already says the state (an Agent's chat, #3957, as iOS, which shows none above its
+     * composer): the line leaves the state out and keeps what the header does not say, the [chips] (queued, loop,
+     * background) and a message whose delivery is not confirmed (it asks for a check); with neither it is not drawn.
+     */
+    sayState: Boolean = true,
 ) {
-    val line = resolveStatusLine(state)
+    val line = resolveStatusLine(state)?.takeIf { sayState || it.kind == StatusLineKind.Unconfirmed }
     if (line == null && chips.isEmpty()) return
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -249,7 +253,6 @@ fun StatusLine(
         if (line != null) {
             when {
                 caution -> JIcon(PhIcons.HourglassMedium, null, size = 16.dp, tint = color)
-                !stateMark -> Unit
                 style == AppStyle.Brief && line.kind == StatusLineKind.NeedsYou -> Box(Modifier.size(10.dp).clip(CircleShape).background(palette.marker).border(1.5.dp, palette.ink, CircleShape))
                 style == AppStyle.Brief && (line.kind == StatusLineKind.Working || line.kind == StatusLineKind.Stopping) -> JSpinner(Modifier.size(14.dp), stroke = 1.8.dp)
                 style == AppStyle.Board -> JStatusMark(status, animated = line.kind == StatusLineKind.Working)
@@ -258,7 +261,7 @@ fun StatusLine(
             Text(line.localizedText, color = color, style = PersonaTheme.type.caption, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         }
         if (chips.isNotEmpty()) {
-            Spacer(Modifier.weight(1f))
+            if (line != null) Spacer(Modifier.weight(1f))
             chips.forEach { Text(it, style = PersonaTheme.type.micro, color = palette.ink2, maxLines = 1) }
         }
         trailing?.invoke(this)

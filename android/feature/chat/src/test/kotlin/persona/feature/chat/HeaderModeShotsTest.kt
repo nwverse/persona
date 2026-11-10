@@ -50,6 +50,7 @@ import java.io.File
  * The Agent chat's header with its permission mode (#3957, iOS #3719): a working Claude agent's header, status line and
  * composer button ("after", to set beside the same scene on main, "before"); the header in every mode, unknown and Codex;
  * the mode menu without and with Allow Everything on offer; going into Allow Everything, and leaving it with no way back.
+ * The line above the composer no longer says the state: gone without facts, only the queued count with them ("after-facts").
  * Every style, light and dark. PNGs `chat-mode-*` in `build/i18n-shots/`.
  */
 @RunWith(AndroidJUnit4::class)
@@ -108,8 +109,9 @@ class HeaderModeShotsTest {
     private fun shot(scene: String, style: AppStyle, dark: Boolean) {
         when (scene) {
             // The page's top and bottom: the header says the state once; the line above the composer keeps its words
-            "after", "after-bypass" -> {
-                val s = agent(if (scene == "after") "acceptEdits" else "bypassPermissions")
+            "after", "after-bypass", "after-facts" -> {
+                val s = agent(if (scene == "after-bypass") "bypassPermissions" else "acceptEdits")
+                    .let { if (scene == "after-facts") it.copy(queued = listOf("Also update the changelog", "Then run the tests")) else it }
                 show(style, dark, 420) { chrome ->
                     Column(Modifier.fillMaxWidth()) {
                         ChatHeader(s, machine, listOf(s), chrome, null, false, onBack = {}, onOpenSession = {}, onConnectionDetails = {},
@@ -119,7 +121,11 @@ class HeaderModeShotsTest {
                         Row { ChatModeBar(s, chrome, online = true) }
                     }
                 }
-                assertTrue("$scene: mode button", described(if (scene == "after") "权限模式：自动改文件" else "权限模式：全部放行"))
+                assertTrue("$scene: mode button", described(if (scene == "after-bypass") "权限模式：全部放行" else "权限模式：自动改文件"))
+                // the state is said once, in the header's title line; the line above the composer keeps only its facts
+                assertTrue(has("工作中"))
+                assertFalse("$scene: state said twice", has("正在工作"))
+                assertEquals(scene == "after-facts", has("排队 2"))
                 save(scene, style, dark)
             }
             // Every mode, not reported yet, and Codex (none)
@@ -182,6 +188,12 @@ class HeaderModeShotsTest {
     @Test fun afterBypassBriefDark() = shot("after-bypass", AppStyle.Brief, true)
     @Test fun afterBypassBoard() = shot("after-bypass", AppStyle.Board, false)
     @Test fun afterBypassBoardDark() = shot("after-bypass", AppStyle.Board, true)
+    @Test fun afterFactsGlass() = shot("after-facts", AppStyle.Glass, false)
+    @Test fun afterFactsGlassDark() = shot("after-facts", AppStyle.Glass, true)
+    @Test fun afterFactsBrief() = shot("after-facts", AppStyle.Brief, false)
+    @Test fun afterFactsBriefDark() = shot("after-facts", AppStyle.Brief, true)
+    @Test fun afterFactsBoard() = shot("after-facts", AppStyle.Board, false)
+    @Test fun afterFactsBoardDark() = shot("after-facts", AppStyle.Board, true)
     @Test fun modesGlass() = shot("modes", AppStyle.Glass, false)
     @Test fun modesGlassDark() = shot("modes", AppStyle.Glass, true)
     @Test fun modesBrief() = shot("modes", AppStyle.Brief, false)
