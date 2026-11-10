@@ -2649,25 +2649,35 @@ def meeting_live(rid):
                                          "asks": [], "sent": {}, "due": {}})
 
 
+def recording_kind(body):
+    """An upload's kind as the hub's clean() reads it (kb/recordings.go): trimmed and lowercased, absent or "" a note;
+    None when it is neither (a 400)."""
+    kind = body.get("kind")
+    if kind is None: return "note"
+    if not isinstance(kind, str): return None
+    kind = kind.strip().lower() or "note"
+    return kind if kind in ("note", "meeting") else None
+
+
 def meeting_attendance(body):
-    """The role an upload puts in effect, the session it names (None: the main chat) and why the role is off when another
-    was asked for. A problem with these two fields never fails the upload (meeting-minutes.md "On PUT")."""
+    """The role an upload puts in effect, the session it names (None: the main chat, and always when the role is off) and
+    why the role is off when another was asked for, as the hub's normalizeAttendance (kb/live.go) in its order: a role off
+    or absent says nothing whatever the session; then the role, the kind and the session are checked. A problem with these
+    two fields never fails the upload (meeting-minutes.md "On PUT"). A watch recording is not refused: the phone never
+    gives it a role."""
     role, raw = body.get("attendance"), body.get("attending_session")
-    role = "off" if role is None else role
-    session, bad = None, False
-    if isinstance(raw, dict):
-        mid, sid = raw.get("machine_id") or "", raw.get("session_id") or ""
-        if not isinstance(mid, str) or not isinstance(sid, str) or bool(mid) != bool(sid) or len(mid) > 200 or len(sid) > 200:
-            bad = True
-        elif mid:
-            session = {"machine_id": mid, "session_id": sid}
-    elif raw is not None:
-        bad = True
-    if role not in MEETING_ROLES: return "off", session, "unknown_role"
-    if role != "off" and body.get("kind") != "meeting": return "off", session, "not_meeting"
-    if bad: return "off", None, "bad_session"
-    if body.get("device") == "watch": return "off", session, None  # a watch recording never carries a role
-    return role, session, None
+    if role is not None and not isinstance(role, str): return "off", None, "unknown_role"
+    role = (role or "").strip().lower()
+    if role in ("", "off"): return "off", None, None
+    if role not in MEETING_ROLES: return "off", None, "unknown_role"
+    if recording_kind(body) != "meeting": return "off", None, "not_meeting"
+    if raw is None: return role, None, None
+    if not isinstance(raw, dict): return "off", None, "bad_session"
+    ids = [raw.get("machine_id"), raw.get("session_id")]
+    if any(x is not None and not isinstance(x, str) for x in ids): return "off", None, "bad_session"
+    mid, sid = ((x or "").strip() for x in ids)
+    if bool(mid) != bool(sid) or len(mid) > 200 or len(sid) > 200: return "off", None, "bad_session"
+    return role, ({"machine_id": mid, "session_id": sid} if mid else None), None
 
 
 def meeting_session(st):
@@ -2709,7 +2719,7 @@ def meeting_answer(st, a):
         a.update(state="failed", answer="", sources=[], error="model_unavailable")
         return
     zh = a["lang"].lower().startswith("zh")
-    earlier = next((k for k, v in reversed(list(RECORDINGS.items())) if v.get("kind") == "meeting" and k != st["id"]), None)
+    earlier = next((k for k, v in reversed(list(RECORDINGS.items())) if recording_kind(v) == "meeting" and k != st["id"]), None)
     sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10"}]
                if earlier else []) + [{"kind": "projects", "id": "weather-app", "name": "天气 App"}]
     a.update(state="answered", sources=sources, answered_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -2851,24 +2861,29 @@ def recordings_route(h, method, p):
     RECORDING_PUTS[0] += 1
     if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
     body = json.loads(h.last_body or b"{}")
+    kind = recording_kind(body)  # unknown is a 400, as the hub's clean()
     if not isinstance(body.get("revision"), int) or body["revision"] <= 0 or not body.get("started_at") \
-            or body.get("device") not in ("phone", "watch"):
+            or body.get("device") not in ("phone", "watch") or kind is None:
         return h.send_json({"error": "参数不对"}, 400) or True
     have = RECORDINGS.get(rid)
     if have and have["revision"] > body["revision"]:
-        # On a hub that attends, every 200 says the role in effect (here the stored one: nothing was written).
-        role = {"attendance": meeting_live(rid)["role"]} if MEETING_ATTENDANCE else {}
-        return h.send_json({"id": rid, "revision": have["revision"], "status": "stale", **role}) or True
+        # Nothing written. As the hub answers: the upload's revision and, on a hub that attends, the role in effect (the
+        # stored one) and what was wrong with this upload's attendance fields, whatever the status.
+        out = {"id": rid, "revision": body["revision"], "status": "stale"}
+        if MEETING_ATTENDANCE:
+            out["attendance"] = meeting_live(rid)["role"]
+            if problem := meeting_attendance(body)[2]: out["attendance_problem"] = problem
+        return h.send_json(out) or True
     RECORDINGS[rid] = body
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
-    detail = {"meta": {k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "kind", "calendar")},
+    detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind},
               "summary": text, "segments": body.get("segments", [])}
     # A meeting that completes with no text gets no minutes (attending uploads it first with none).
     silent = MEETING_ATTENDANCE and body.get("complete") and not any((x.get("text") or "").strip() for x in body.get("segments", []))
-    if body.get("kind") == "meeting" and not silent:
+    if kind == "meeting" and not silent:
         ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
         detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
         if ready: detail["minutes"] = recording_minutes(body)

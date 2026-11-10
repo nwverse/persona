@@ -127,6 +127,7 @@ func (s *Service) attendeeCheck(ctx context.Context, ref kb.SessionRef, now time
 		}
 	}
 	if found {
+		s.meetingTurnStopped(machine, ref.SessionID, sess, false) // stopped since its batch: whatever its end looked like
 		running, err := s.meetingTurnRunning(ctx, machine, ref.SessionID)
 		f.running = running || err != nil
 		f.settling = s.turnSettling(machine, ref.SessionID, now)

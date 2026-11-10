@@ -68,6 +68,10 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 			ref := SessionRef{MachineID: machine, SessionID: sess.SessionID}
 			s.inOrder(func() { s.afterSettle(context.Background(), s.taskTurnSettled, ref.MachineID, ref.SessionID) })
 		}
+		if sess.Status != prev && sess.Status != proto.StatusWorking && !(prev == proto.StatusWorking && (sess.Status == proto.StatusDone || sess.Status == proto.StatusIdle)) {
+			// Stopped with no end seen (a restart, an interrupt, a card): a meeting turn there is over (meeting_turns.go).
+			s.meetingTurnStopped(machine, sess.SessionID, sess, prev == "")
+		}
 		if sess.Status == proto.StatusWorking && backgroundRunning(sess) && !s.meetingTurnNow(machine, sess.SessionID) {
 			s.turnsBook().sawBackground(key, now)
 		}

@@ -83,6 +83,7 @@
   "live_catching_up": "Catching up · {fed} of {next} lines passed on",
   "live_attended_one": "Attended · {count} line passed on",
   "live_attended_other": "Attended · {count} lines passed on",
+  "live_attended_partial": "Attended · {fed} of {next} lines passed on",
   "live_off": "Persona isn’t attending right now. Earlier questions stay here.",
   "live_problem_attendee_unavailable": "The attending session can’t take messages right now. Lines are kept and passed on once it can.",
   "live_problem_attendee_not_allowed": "This session can’t be given other people’s words. Questions still work.",

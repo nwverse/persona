@@ -103,10 +103,63 @@ class MeetingAttendanceMockTests(Hub, unittest.TestCase):
         self.assertNotIn("attending_session", self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["meta"])
         latest = self.upload(rid)[1]  # omitted: attending turns off
         self.assertEqual(latest["attendance"], "off")
-        self.assertEqual(self.upload(rid, revision=1, attendance="listener")[1],
-                         {"id": rid, "revision": latest["revision"], "status": "stale", "attendance": "off"})
+        # Stale, as the hub answers: the upload's own revision, the stored role.
+        self.assertEqual(self.upload(rid, revision=1, attendance="listener")[1], {"id": rid, "revision": 1, "status": "stale", "attendance": "off"})
         self.upload(rid, complete=True, ended_at="2026-11-10T15:00:00+08:00")
         self.assertNotIn("minutes_state", self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["meta"])
+
+    def test_upload_attendance_is_settled_as_the_hub_does(self):
+        """The hub's normalizeAttendance (server/internal/kb/live.go) after clean() (kb/recordings.go), case by case."""
+        session = {"machine_id": "macbook", "session_id": "a1f3c2d4-0000-4000-8000-000000000006"}
+        for fields, role, problem, stored in [
+            # Off or absent says nothing, whatever the session, and stores none.
+            ({"attendance": "off", "attending_session": session}, "off", None, None),
+            ({"attendance": "off", "attending_session": {"machine_id": "macbook"}}, "off", None, None),
+            ({"attending_session": {"machine_id": "macbook"}}, "off", None, None),
+            ({"attendance": None, "attending_session": "macbook"}, "off", None, None),
+            ({"attendance": " OFF ", "attending_session": session, "kind": "note"}, "off", None, None),
+            # A role it cannot take keeps no session either.
+            ({"attendance": "loud", "attending_session": session}, "off", "unknown_role", None),
+            ({"attendance": 5, "attending_session": session}, "off", "unknown_role", None),
+            ({"attendance": "listener", "attending_session": session, "kind": "note"}, "off", "not_meeting", None),
+            ({"attendance": "listener", "attending_session": session, "kind": None}, "off", "not_meeting", None),
+            ({"attendance": "listener", "attending_session": ["macbook", "s1"]}, "off", "bad_session", None),
+            ({"attendance": "listener", "attending_session": {"machine_id": 5, "session_id": "s1"}}, "off", "bad_session", None),
+            ({"attendance": "listener", "attending_session": {"machine_id": "  ", "session_id": "s1"}}, "off", "bad_session", None),
+            # Roles, kinds and ids are trimmed (and the role and kind lowercased) as the hub does.
+            ({"attendance": " Listener ", "kind": " Meeting ", "attending_session": {"machine_id": " macbook ", "session_id": " s1 "}},
+             "listener", None, {"machine_id": "macbook", "session_id": "s1"}),
+            ({"attendance": "PARTICIPANT", "attending_session": {"machine_id": None, "session_id": None}}, "participant", None, None),
+            # A watch recording is stored as the hub stores it (the phone never gives one a role).
+            ({"attendance": "listener", "device": "watch", "attending_session": session}, "listener", None, session),
+        ]:
+            with self.subTest(fields=fields):
+                rid = str(uuid.uuid4())
+                status, out = self.upload(rid, **fields)
+                self.assertEqual((status, out["status"], out["attendance"], out.get("attendance_problem")), (200, "stored", role, problem))
+                meta = self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["meta"]
+                self.assertEqual((meta.get("attendance"), meta.get("attending_session")), (None if role == "off" else role, stored))
+                self.assertEqual(self.call("GET", f"/api/v1/recordings/{rid}/live")[1]["attendance"], role)
+        rid = str(uuid.uuid4())
+        self.upload(rid, kind=" Meeting ", attendance="listener")
+        meta = self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["meta"]
+        self.assertEqual((meta["kind"], meta["minutes_state"]), ("meeting", "pending"))
+        self.assertEqual(self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 0})[0], 200)
+        for kind in ["lecture", 5]:  # clean() refuses an unknown kind before anything else
+            self.assertEqual(self.upload(str(uuid.uuid4()), kind=kind)[0], 400, kind)
+            self.assertEqual(self.upload(rid, revision=1, kind=kind)[0], 400, kind)
+
+    def test_a_stale_upload_still_says_what_was_wrong(self):
+        rid = str(uuid.uuid4())
+        self.upload(rid, attendance="listener")
+        # Nothing is written; the role in effect is the stored one, and the problem is this upload's, as on a stored one.
+        for fields, problem in [({"attendance": "loud"}, "unknown_role"), ({"attendance": "listener", "kind": "note"}, "not_meeting"),
+                                ({"attendance": "participant", "attending_session": {"machine_id": "macbook"}}, "bad_session"),
+                                ({"attendance": "off", "attending_session": {"machine_id": "macbook"}}, None), ({"attendance": "participant"}, None)]:
+            with self.subTest(fields=fields):
+                want = {"id": rid, "revision": 1, "status": "stale", "attendance": "listener", **({"attendance_problem": problem} if problem else {})}
+                self.assertEqual(self.upload(rid, revision=1, **fields), (200, want))
+        self.assertEqual(self.call("GET", f"/api/v1/kb/recordings/{rid}")[1]["detail"]["meta"]["attendance"], "listener")
 
     def test_live_log_is_append_only_and_checked_in_order(self):
         rid = str(uuid.uuid4())

@@ -80,6 +80,21 @@ type meetingAsks struct {
 	running map[string]map[string]chan struct{}
 }
 
+// finished: the attempt at question askID of recording id that done belongs to stored its outcome. Its slot is
+// dropped only while it still holds done: a failed question asked again meanwhile (after the outcome was stored, before
+// this) holds the retry's channel there, which must stay or the retry would read as interrupted.
+func (b *meetingAsks) finished(id, askID string, done chan struct{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.running[id][askID] != done {
+		return
+	}
+	delete(b.running[id], askID)
+	if len(b.running[id]) == 0 {
+		delete(b.running, id)
+	}
+}
+
 // askView is a question as the routes answer it: kb.LiveAsk without the hub's own fields.
 type askView struct {
 	ID             string         `json:"id"`
@@ -383,13 +398,7 @@ func sameAt(a, b *float64) bool {
 // interrupted after the restart.
 func (s *Service) answerAsk(e *kb.Engine, id string, a kb.LiveAsk, done chan struct{}) {
 	defer func() {
-		b := &s.asks
-		b.mu.Lock()
-		delete(b.running[id], a.ID)
-		if len(b.running[id]) == 0 {
-			delete(b.running, id)
-		}
-		b.mu.Unlock()
+		s.asks.finished(id, a.ID, done)
 		close(done)
 	}()
 	ctx, cancel := context.WithTimeout(s.runCtx(), askTimeout)
@@ -508,11 +517,12 @@ func awaitLive(ctx context.Context, e *kb.Engine, id string, next *int) (kb.Live
 	return l, nil
 }
 
-// heardLines are the live sentences with text that ended in the heardSeconds up to at.
+// heardLines are the live sentences with text said in the heardSeconds up to at: any that overlaps them, so a
+// sentence still being said at the tap (its end can fall a little past at once the phone cuts its audio) is kept.
 func heardLines(segs []kb.LiveSegment, at float64) []kb.LiveSegment {
 	var out []kb.LiveSegment
 	for _, sg := range segs {
-		if sg.Text != "" && sg.End >= at-heardSeconds && sg.End <= at {
+		if sg.Text != "" && sg.Start <= at && sg.End >= at-heardSeconds {
 			out = append(out, sg)
 		}
 	}

@@ -76,6 +76,7 @@
   "live_waiting": "正在实时跟会 · 等待第一句",
   "live_catching_up": "正在追赶 · 已转给会话 {fed}/{next} 句",
   "live_attended_other": "已参会 · 转给会话 {count} 句",
+  "live_attended_partial": "已参会 · 转给会话 {fed}/{next} 句",
   "live_off": "Persona 现在没有参会，之前的提问仍保留在这里。",
   "live_problem_attendee_unavailable": "参会会话暂时收不了消息。会上的话会先存着，能收时再转过去。",
   "live_problem_attendee_not_allowed": "这个会话不能接收别人说的话，提问仍可使用。",

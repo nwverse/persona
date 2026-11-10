@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -236,8 +237,12 @@ func TestMeetingAskHeard(t *testing.T) {
 		`{"start":50,"end":55,"text":"Persona, what did we decide about the cap?"}]}`, http.StatusOK)
 	m.model.reply = `{"question":"What did we decide about the cap?","answer":"There are no earlier minutes about the cap.","sources":[]}`
 	e := m.engine()
-	go func() { // the phone's lines up to the tap, sent while the question waits for them
-		time.Sleep(100 * time.Millisecond)
+	go func() { // the phone's lines up to the tap, sent once the question is stored and waits for them
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); runtime.Gosched() {
+			if l, _, err := e.LiveRead(meetingRec); err == nil && len(l.Asks) > 0 {
+				break
+			}
+		}
 		_, _, _ = e.LiveAppend(meetingRec, 2, []kb.LiveSegment{{Start: 56, End: 59.5, Text: "Anyone?"}})
 	}()
 	ask := meetingAskOf(t, m.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "at": 60, "live_next": 3}, http.StatusOK))
@@ -261,6 +266,68 @@ func TestMeetingAskHeard(t *testing.T) {
 	// Asked again it is tried again (and fails again: still nothing said then).
 	if again := meetingAskOf(t, m.do("POST", askPath(meetingRec), "", map[string]any{"id": askTwo, "at": 5}, http.StatusOK)); again["error"] != askNothingHeard {
 		t.Fatalf("again: %v", again)
+	}
+}
+
+// A heard question is what was said in the 45 seconds before the tap: any sentence that overlaps them, so the question
+// still being finished at the tap (its end a little past at, as the phone's cut lands after the tap) is the one asked,
+// while one that ended before the window or started after the tap is not (the mock hub reads the same window).
+func TestMeetingAskHeardStraddlesTap(t *testing.T) {
+	m := newMeetingFixture(t)
+	m.upload(meetingRec, 1, map[string]any{"attendance": "participant"})
+	m.do("POST", livePath(meetingRec), "", `{"from":0,"segments":[{"start":1780,"end":1789,"text":"Long before the tap"},`+
+		`{"start":1786,"end":1790,"text":"Ada keeps the cap."},`+
+		`{"start":1830.1,"end":1834.6,"text":"Persona, what did we decide about the export cap last time?"},`+
+		`{"start":1834.3,"end":1836,"text":"After the tap"}]}`, http.StatusOK)
+	m.model.reply = `{"question":"What did we decide about the export cap last time?","answer":"Ada keeps the cap.","sources":[]}`
+	ask := meetingAskOf(t, m.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "at": 1834.2, "live_next": 4}, http.StatusOK))
+	if ask["state"] != "answered" || ask["question"] != "What did we decide about the export cap last time?" {
+		t.Fatalf("a question still being said at the tap: %v", ask)
+	}
+	calls := m.model.called()
+	if len(calls) != 1 {
+		t.Fatalf("%d calls", len(calls))
+	}
+	_, heard, _ := strings.Cut(calls[0].User, "<heard>")
+	heard, _, _ = strings.Cut(heard, "</heard>")
+	if !strings.Contains(heard, "what did we decide about the export cap last time?") || !strings.Contains(heard, "Ada keeps the cap.") ||
+		strings.Contains(heard, "Long before the tap") || strings.Contains(heard, "After the tap") {
+		t.Fatalf("heard:\n%s", heard)
+	}
+}
+
+// A failed question asked again before the failed attempt let go of its slot (it stored its failure, then waits for
+// the lock the retry took first): the old attempt's cleanup leaves the retry's slot alone, so the retry is not taken for
+// an interrupted one and its answer is stored.
+func TestMeetingAskRetryKeepsItsSlot(t *testing.T) {
+	m := newMeetingFixture(t)
+	m.upload(meetingRec, 1, map[string]any{"attendance": "participant"})
+	e := m.engine()
+	if _, err := e.LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
+		l.Asks = append(l.Asks, failAsk(kb.LiveAsk{ID: askOne, QuestionSent: "Who owns the test?", Question: "Who owns the test?",
+			QuestionSource: askTyped, State: askPending, Sources: []kb.AskSource{}, AskedAt: time.Now().UTC().Truncate(time.Second)}, askModelUnavailable))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	m.model.gate = gate
+	first := make(chan struct{}) // the failed attempt's own channel
+	m.s.asks.mu.Lock()
+	m.s.asks.running = map[string]map[string]chan struct{}{meetingRec: {askOne: first}}
+	m.s.asks.mu.Unlock()
+	_, retry, err := m.s.askStart(context.Background(), e, meetingRec, askRequest{ID: askOne, Question: "Who owns the test?"}, "en")
+	if err != nil || retry == nil {
+		t.Fatalf("retry: %v", err)
+	}
+	m.s.asks.finished(meetingRec, askOne, first) // the failed attempt's deferred cleanup, after the retry took its slot
+	if asks := m.asksOf(meetingRec); len(asks) != 1 || asks[0]["state"] != "pending" {
+		t.Fatalf("the retry read as %v", asks)
+	}
+	close(gate)
+	<-retry
+	if asks := m.asksOf(meetingRec); asks[0]["state"] != "answered" || asks[0]["answer"] != "We kept the cap." {
+		t.Fatalf("the retry's answer: %v", asks)
 	}
 }
 

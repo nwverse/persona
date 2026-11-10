@@ -76,6 +76,7 @@
   "live_waiting": "リアルタイムで参加中 · 最初の発言を待っています",
   "live_catching_up": "追いつき中 · {next} 文中 {fed} 文を渡しました",
   "live_attended_other": "参加済み · {count} 文を渡しました",
+  "live_attended_partial": "参加済み · {next} 文中 {fed} 文を渡しました",
   "live_off": "Persona は今は参加していません。これまでの質問はここに残ります。",
   "live_problem_attendee_unavailable": "参加するセッションが今はメッセージを受け取れません。発言は保存され、受け取れるようになったら渡されます。",
   "live_problem_attendee_not_allowed": "このセッションには他の人の発言を渡せません。質問は引き続き使えます。",

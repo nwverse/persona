@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
 import { setToken } from "../../lib/api";
@@ -8,6 +9,7 @@ import { type KBDetailResponse, type RecordingAsk, type RecordingLive } from "..
 import { setRosterDefault } from "../../lib/manager-choice";
 import { getState } from "../../lib/store";
 import type { AssistantInfo, Session } from "../../lib/types";
+import { Icon, type IconName } from "../../ui/icons";
 import { EntryDetail } from "./KBDetail";
 
 vi.mock("../../ui/atoms", async (original) => ({ ...await original<typeof import("../../ui/atoms")>(), toast: vi.fn() }));
@@ -44,6 +46,13 @@ const reply = async (request: Request, body: unknown, status = 200) => act(async
 const pending = (path: string) => requests.filter((r) => r.url === path);
 const load = async (detail = fixture()) => { render(); await reply(pending(detailPath).at(-1)!, detail); };
 const section = () => host.querySelector<HTMLElement>("[data-recording-asks]");
+/** The drawing of an icon, to tell which one the status line shows. */
+const iconDrawing = (name: IconName) => {
+  const box = document.createElement("div");
+  box.innerHTML = renderToStaticMarkup(<Icon name={name} />);
+  return box.querySelector("svg")!.innerHTML;
+};
+const statusIcon = () => section()!.querySelector("[role=status] svg")!.innerHTML;
 const factRow = (label: string) => [...host.querySelectorAll("div")].find((row) => row.firstElementChild?.textContent === label && row.children.length === 2);
 
 beforeEach(async () => {
@@ -138,6 +147,28 @@ describe("an attended meeting in Knowledge detail", () => {
     await load();
     await reply(pending(livePath)[0], liveFixture(over));
     expect(section()!.querySelector("[role=status]")!.textContent).toBe(text);
+  });
+
+  // Once complete: what the session was given (`fed`), not what the hub holds (`next`), and no problem said in the present.
+  it.each([
+    [{}, "Attended · 13 lines passed on"],
+    [{ next: 1, fed: 1 }, "Attended · 1 line passed on"],
+    [{ next: 57, fed: 40 }, "Attended · 40 of 57 lines passed on"],
+    [{ problem: "attendee_not_allowed", fed: 0 }, "Attended · 0 of 13 lines passed on"],
+    [{ problem: "attendee_unavailable", fed: 2 }, "Attended · 2 of 13 lines passed on"],
+    [{ problem: "live_full" }, "Attended · 13 lines passed on"],
+    [{ problem: "something_new", fed: 9 }, "Attended · 9 of 13 lines passed on"],
+  ])("shows a finished meeting's state %j", async (over, text) => {
+    await load(fixture({ complete: true, minutes_state: "ready" }));
+    await reply(pending(livePath)[0], liveFixture(over));
+    expect(section()!.querySelector("[role=status]")!.textContent).toBe(text);
+    expect(statusIcon()).toBe(iconDrawing("mic"));
+  });
+
+  it("marks a problem with a warning only while recording", async () => {
+    await load();
+    await reply(pending(livePath)[0], liveFixture({ problem: "attendee_unavailable" }));
+    expect(statusIcon()).toBe(iconDrawing("warning"));
   });
 
   it("says no questions yet while attending without any", async () => {

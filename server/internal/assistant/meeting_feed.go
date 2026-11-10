@@ -388,7 +388,7 @@ func (s *Service) feedSend(ctx context.Context, t attendeeTarget, r kb.Recording
 	loc := s.location(ctx)
 	text := feedText(r, b, string(s.lang(ctx)), loc)
 	source := &proto.MessageSource{Kind: proto.SourceMeeting, Title: feedMeetingName(r, loc)}
-	marked, err := s.meetingTurnSent(t.ref.MachineID, t.ref.SessionID, r.ID)
+	marked, err := s.meetingTurnSent(t.ref.MachineID, t.ref.SessionID, r.ID, t.persona)
 	if err != nil {
 		return time.Time{}, err
 	}

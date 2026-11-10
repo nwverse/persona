@@ -69,7 +69,7 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	if res, refused := s.meetingRefuses(ctx, call.MachineID, call.SessionID, call.Name); refused {
+	if res, refused := s.meetingRefuses(ctx, call.MachineID, call.SessionID, call.Name, true); refused {
 		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
 	}
 	switch call.Name {

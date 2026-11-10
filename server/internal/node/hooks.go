@@ -596,7 +596,23 @@ func hookEventParams(in hookInput, stopSig string, reportOnly bool) map[string]a
 	if reportOnly {
 		p["report_only"] = true
 	}
+	if in.HookEventName == "UserPromptSubmit" {
+		p["prompt_source"] = promptSource(in.Prompt) // never the prompt itself: the apps see the event too
+	}
 	return p
+}
+
+// promptSource says who a UserPromptSubmit's prompt is from, for the manager (a meeting's batch is not the user's own
+// message: docs/assistant/meeting-minutes.md "Feeding the attending session"): the kind of message source it carries
+// (meeting, conversation, task…), "notification" for a background task reporting back, else "user".
+func promptSource(prompt string) string {
+	if src := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: prompt}); src != nil && src.Kind != "" {
+		return src.Kind
+	}
+	if strings.Contains(prompt, "<task-notification>") {
+		return "notification"
+	}
+	return "user"
 }
 
 // reportedEvent: what a global report-only hook (globalhooks.go) may tell the hub; the tools are the cards.

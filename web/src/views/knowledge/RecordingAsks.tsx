@@ -60,6 +60,8 @@ export function RecordingAsks({ detail, rec, auth, current }: Props) {
   if (!wanted || gone || (!rec.attendance && !asks.length)) return null;
   if (!live && !error) return null;
   const status = live ? liveStatus(live, rec.partial) : "";
+  // A problem is said in the present: it shows only while the recording is still being made.
+  const problem = rec.partial && !!live?.problem;
 
   return (
     <section aria-labelledby={heading} data-recording-asks>
@@ -67,7 +69,7 @@ export function RecordingAsks({ detail, rec, auth, current }: Props) {
       <Card>
         {status && (
           <p role="status" className="flex items-start gap-2 px-4 py-2.5 text-[12.5px] leading-relaxed text-ink-2">
-            <Icon name={live?.problem ? "warning" : "mic"} size={13} className="mt-0.5 shrink-0 text-ink-3" />
+            <Icon name={problem ? "warning" : "mic"} size={13} className="mt-0.5 shrink-0 text-ink-3" />
             <span className="min-w-0 flex-1 break-words">{status}</span>
           </p>
         )}
@@ -83,14 +85,21 @@ export function RecordingAsks({ detail, rec, auth, current }: Props) {
   );
 }
 
-/** One line on how the attending session follows: a problem first (an unknown one generically), else how far it is fed. */
+/** One line on how the attending session follows. While recording: a problem first (an unknown one generically), else how far
+ * it is fed. Once complete, what the session was given (`fed`, and of how many when short of them); the problems, said in the
+ * present, no longer apply then. */
 function liveStatus(live: RecordingLive, recording: boolean): string {
+  if (!recording) {
+    if (live.attendance === "off") return "";
+    return live.fed < live.next
+      ? t("knowledge-kbdetail.live_attended_partial", { fed: live.fed, next: live.next })
+      : t("knowledge-kbdetail.live_attended", { count: live.fed });
+  }
   if (live.problem) {
     const known = ["attendee_unavailable", "attendee_not_allowed", "live_full"].includes(live.problem);
     return t(known ? `knowledge-kbdetail.live_problem_${live.problem}` : "knowledge-kbdetail.live_problem_other");
   }
-  if (live.attendance === "off") return recording ? t("knowledge-kbdetail.live_off") : "";
-  if (!recording) return t("knowledge-kbdetail.live_attended", { count: live.next });
+  if (live.attendance === "off") return t("knowledge-kbdetail.live_off");
   if (live.fed < live.next) return t("knowledge-kbdetail.live_catching_up", { fed: live.fed, next: live.next });
   return live.next ? t("knowledge-kbdetail.live_following", { count: live.next }) : t("knowledge-kbdetail.live_waiting");
 }

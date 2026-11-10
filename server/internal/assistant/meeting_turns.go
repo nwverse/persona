@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +26,12 @@ import (
 // when the user speaks during the turn or the next turn starts. The post-turn hooks run after the end, some of them a
 // minute later, and still find the ended mark. A mark whose turn was never seen starting is the batch's for
 // meetingTurnStartWithin; a turn that starts on a mark the hub could not follow (it restarted meanwhile) is taken for
-// the meeting turn, as the contract asks of a turn the hub cannot tell.
+// the meeting turn, as the contract asks of a turn the hub cannot tell. A turn that ended where the hub could not see
+// the end (during a restart, on an interrupt, after a card) is ended once a list shows the session stopped
+// (meetingTurnStopped), and none runs longer than meetingTurnRunMax.
+//
+// The user speaking: the hub says so (UserSpoke) only for assistant conversations; an Agent's own hooks say it
+// (meetingTurnPrompt: a UserPromptSubmit whose prompt carries no message source).
 
 const meetingTurnsKey = "assistant.meeting_turns"
 
@@ -34,6 +40,9 @@ const (
 	meetingTurnStartWithin = 10 * time.Minute
 	// meetingTurnKeep is how long an ended mark stays when no turn follows it: the post-turn hooks ran long before.
 	meetingTurnKeep = 24 * time.Hour
+	// meetingTurnRunMax: a meeting turn not seen ending this long after its batch was sent is taken to have ended (a
+	// batch's turn takes minutes); a mark stuck running would keep the attendee busy for the rest of the meeting.
+	meetingTurnRunMax = 3 * time.Hour
 )
 
 // meetingTurnTools are the hub's tools a meeting turn may call: they only read.
@@ -48,6 +57,9 @@ type meetingTurn struct {
 	SentAt    time.Time `json:"sent_at"`
 	Started   bool      `json:"started,omitempty"`
 	EndedAt   time.Time `json:"ended_at,omitzero"`
+	// Persona: the session is an assistant conversation (a Persona chat), whose MCP calls always name it. Absent
+	// (false) for an Agent, and on a mark written before it was kept: either may call with no session of its own.
+	Persona bool `json:"persona,omitempty"`
 }
 
 type meetingTurnBook struct {
@@ -93,6 +105,8 @@ func (s *Service) meetingTurnsLocked(ctx context.Context) error {
 	for k, t := range b.m {
 		if !t.Started && now.Sub(t.SentAt) > meetingTurnStartWithin || !t.EndedAt.IsZero() && now.Sub(t.EndedAt) > meetingTurnKeep {
 			delete(b.m, k)
+		} else if t.EndedAt.IsZero() && now.Sub(t.SentAt) > meetingTurnRunMax {
+			t.EndedAt = now // its end went unseen; written with the book's next change
 		}
 	}
 	return nil
@@ -112,9 +126,10 @@ func (s *Service) saveMeetingTurnsLocked() {
 }
 
 // meetingTurnSent marks the turn a batch of recording is about to start in machine's session (before the send: a
-// fast tool call can come before it returns); the time it is marked with. An error while the book cannot be read: the
-// batch waits, since its turn could not be told from the user's.
-func (s *Service) meetingTurnSent(machine, session, recording string) (time.Time, error) {
+// fast tool call can come before it returns), persona when the session is an assistant conversation; the time it is
+// marked with. An error while the book cannot be read: the batch waits, since its turn could not be told from the
+// user's.
+func (s *Service) meetingTurnSent(machine, session, recording string, persona bool) (time.Time, error) {
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -122,7 +137,8 @@ func (s *Service) meetingTurnSent(machine, session, recording string) (time.Time
 		return time.Time{}, err
 	}
 	now := b.clock()
-	b.m[s.meetingTurnKey(machine, session)] = &meetingTurn{MachineID: machine, SessionID: session, Recording: recording, SentAt: now}
+	b.m[s.meetingTurnKey(machine, session)] = &meetingTurn{MachineID: machine, SessionID: session, Recording: recording, SentAt: now,
+		Persona: persona}
 	s.saveMeetingTurnsLocked()
 	return now, nil
 }
@@ -186,6 +202,68 @@ func (s *Service) meetingTurnEnded(machine, session string) bool {
 	return true
 }
 
+// meetingTurnStopped: a list shows machine's session as row, stopped where the end of a turn was not seen (a turn
+// that ended while the hub was away, so restarted: the session was not in the list before; an interrupt; a card
+// answered by stopping). A meeting turn seen starting ends there when the row is from after its batch was sent (or
+// after a restart, whenever it stopped): it is not running any more, and the attendee must not wait on it for the rest
+// of the meeting. Whether it ended a meeting turn.
+func (s *Service) meetingTurnStopped(machine, session string, row proto.Session, restarted bool) bool {
+	switch row.Status {
+	case proto.StatusDone, proto.StatusIdle, proto.StatusInterrupted, proto.StatusOffline:
+	default:
+		return false
+	}
+	b := &s.attend.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if s.meetingTurnsLocked(context.Background()) != nil {
+		return false
+	}
+	t := b.m[s.meetingTurnKey(machine, session)]
+	if t == nil || !t.Started || !t.EndedAt.IsZero() || !restarted && !row.UpdatedAt.After(t.SentAt) {
+		return false
+	}
+	t.EndedAt = b.clock()
+	s.saveMeetingTurnsLocked()
+	return true
+}
+
+// meetingTurnPrompt takes an Agent's hook event (hook.event): a UserPromptSubmit whose prompt the node says is the
+// user's own (prompt_source user: no message source, no task's report) while a meeting turn of an Agent runs or is
+// about to is the user speaking (meetingTurnUserSpoke); the hub says so only for assistant conversations (UserSpoke),
+// and an Agent takes a message sent while it works into the running turn, so no turn start ends the mark. A replayed
+// event from before the batch was sent, a node too old to say, or any other prompt (the batch itself, a relay, a task)
+// leaves the mark.
+func (s *Service) meetingTurnPrompt(machine, session string, p map[string]any) {
+	if event, _ := p["event"].(string); event != "UserPromptSubmit" {
+		return
+	}
+	if src, _ := p["prompt_source"].(string); src != promptSourceUser {
+		return
+	}
+	b := &s.attend.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if s.meetingTurnsLocked(context.Background()) != nil {
+		return
+	}
+	k := s.meetingTurnKey(machine, session)
+	t := b.m[k]
+	if t == nil || t.Persona || !t.EndedAt.IsZero() {
+		return
+	}
+	if at, ok := p["spooled_at"].(string); ok {
+		if when, err := time.Parse(time.RFC3339Nano, at); err != nil || !when.After(t.SentAt) {
+			return
+		}
+	}
+	delete(b.m, k)
+	s.saveMeetingTurnsLocked()
+}
+
+// promptSourceUser is a hook event's prompt_source for the user's own words (node/hooks.go promptSource).
+const promptSourceUser = "user"
+
 // meetingTurnUserSpoke: the user sent machine's session a message of their own: a meeting turn under way is theirs
 // from here on. An ended one stays for the hooks of its end, until the user's turn starts.
 func (s *Service) meetingTurnUserSpoke(machine, session string) {
@@ -232,11 +310,37 @@ func (s *Service) meetingTurnRunning(ctx context.Context, machine, session strin
 	return t != nil && t.EndedAt.IsZero(), nil
 }
 
+// meetingTurnAgentRunning: a meeting turn of an Agent (not an assistant conversation) may be running on machine now;
+// an error when the book cannot be read.
+func (s *Service) meetingTurnAgentRunning(ctx context.Context, machine string) (bool, error) {
+	b := &s.attend.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := s.meetingTurnsLocked(ctx); err != nil {
+		return false, err
+	}
+	prefix := s.meetingTurnKey(machine, "")
+	for k, t := range b.m {
+		if strings.HasPrefix(k, prefix) && !t.Persona && t.EndedAt.IsZero() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // meetingRefuses refuses a hub tool other than the reading ones during a meeting turn of the calling session (and any
 // call while the hub cannot tell, as guestRefuses does): other people's words started the turn, and only the user's
-// own message may have Persona act.
-func (s *Service) meetingRefuses(ctx context.Context, machine, session, name string) (proto.ToolResult, bool) {
-	running, err := s.meetingTurnRunning(ctx, machine, session)
+// own message may have Persona act. An Agent's MCP server has no session of its own (the node names it only for the
+// tools that need their caller), so a call that names none and is not an assistant conversation's (assistant) is
+// refused while a meeting turn of any Agent on that machine runs: it may be that Agent's.
+func (s *Service) meetingRefuses(ctx context.Context, machine, session, name string, assistant bool) (proto.ToolResult, bool) {
+	var running bool
+	var err error
+	if session == "" && !assistant {
+		running, err = s.meetingTurnAgentRunning(ctx, machine)
+	} else {
+		running, err = s.meetingTurnRunning(ctx, machine, session)
+	}
 	switch {
 	case err != nil:
 		s.logf("mcp call %s: %v", name, err)
