@@ -9,7 +9,7 @@ On a computer, use the web app, in the browser or installed as an app ([web.md](
 Persona Link adds what a browser cannot do ([link.md](../operations/link.md), "On computers: the web app and Persona Link").
 A desktop need goes into the web app first, and into Persona Link only when the browser cannot meet it.
 
-The native macOS version of Persona (the `PersonaMac` target in `apple/`, also used by the old `PersonaMac` scheme) shares the iOS App's logic layer (`Shared/`, `Persona/App`) and content views,
+The native macOS version of Persona (the `PersonaMac` target and scheme in `apple/`) shares the iOS App's logic layer (`Shared/`, `Persona/App`) and content views,
 inside a Mac-specific shell (`apple/Mac/`): windows, sidebar, toolbar, menus, shortcuts and menu bar. It uses native macOS interaction. Fixes must not drop scrolling and animation below 60 fps
 (120 fps on ProMotion displays). The rest of this page describes the app as it is.
 

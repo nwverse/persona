@@ -15,12 +15,13 @@ struct InboxManagerListsTests {
         HubManager(id: "m-3", name: "家里", online: false),
     ], defaultID: "assistant")
 
-    /// A hub whose managers each answer `path` with their own `key` list: none named is the default's; m-3 is offline.
+    /// A hub whose managers each answer `path` with their own `key` list, each read naming its manager (the default too);
+    /// m-3 is offline.
     private static func hub(_ path: String, _ key: String, mine: String, work: String) -> FakeHub {
         let hub = FakeHub()
         hub.on("GET", path) { req in
             switch req.headers["X-Persona-Manager"] {
-            case nil: return Data(#"{"\#(key)":[\#(mine)]}"#.utf8)
+            case "assistant": return Data(#"{"\#(key)":[\#(mine)]}"#.utf8)
             case "m-2": return Data(#"{"\#(key)":[\#(work)]}"#.utf8)
             default: throw APIError(status: 503, message: "assistant offline")
             }
@@ -199,6 +200,25 @@ struct InboxManagerListsTests {
         await rules.remove(try #require(rules.shares?[1].items.first))
         await mutes.unmute(try #require(mutes.shares?[1].items.first))
         #expect(named == ["m-2", "m-2"], "the manager each came from, named although it is the default now")
+    }
+
+    @Test func theDefaultsListsAreReadWithItsNameWhileTheHubsDefaultHasMovedOn() async throws {
+        // m-2 was made the default on another device and this roster hasn't heard yet: a read naming none gets m-2's.
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/inbox/policies") { req in
+            let id = req.headers["X-Persona-Manager"] ?? "m-2"
+            return Data(#"{"policies":[{"id":"p-\#(id)","source":"mail","tag":"sender","value":"a@example.com","name":"\#(id)"}]}"#.utf8)
+        }
+        hub.on("GET", "/api/v1/inbox/mutes") { req in
+            let id = req.headers["X-Persona-Manager"] ?? "m-2"
+            return Data(#"{"mutes":[{"id":"u-\#(id)","source":"github","tag":"repo","value":"example-org/one","name":"\#(id)"}]}"#.utf8)
+        }
+        let rules = InboxRulesModel(deps: .init(api: { hub.client }, toast: { _ in }, roster: { Self.roster }))
+        let mutes = InboxMutesModel(deps: .init(api: { hub.client }, roster: { Self.roster }, show: { _ in }))
+        await rules.load()
+        await mutes.load()
+        #expect(rules.shares?.map { $0.items.map(\.id) } == [["p-assistant"], ["p-m-2"], ["p-m-3"]])
+        #expect(mutes.shares?.map { $0.items.map(\.id) } == [["u-assistant"], ["u-m-2"], ["u-m-3"]])
     }
 
     @Test func oneManagerReadsAndChangesOneListAsBefore() async throws {

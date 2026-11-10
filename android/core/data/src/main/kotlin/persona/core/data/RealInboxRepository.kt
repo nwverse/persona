@@ -300,7 +300,7 @@ class RealInboxRepository(
 
     override suspend fun inboxMutes(manager: String?): List<persona.feature.inbox.InboxMute> {
         val transport = requireTransport()
-        return persona.feature.inbox.inboxMutes(asManager(manager) { transport.inboxMutes() })
+        return persona.feature.inbox.inboxMutes(asStamped(manager) { transport.inboxMutes() })
     }
 
     // "Mute this repository / chat / sender": the items it covers are done at once (the hub files them too), back if it fails.
@@ -328,7 +328,8 @@ class RealInboxRepository(
 
     override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<persona.feature.inbox.InboxPolicy> {
         val transport = requireTransport()
-        return persona.feature.inbox.inboxPolicies(asManager(record?.let { it.manager.orEmpty() } ?: manager) { transport.inboxPolicies() })
+        val read = suspend { transport.inboxPolicies() }
+        return persona.feature.inbox.inboxPolicies(if (record != null) asItem(record, read) else asStamped(manager, read))
     }
 
     // A rule's tier reaches the open, triaged items it covers at once (the hub moves them too), back if it fails.
@@ -350,11 +351,14 @@ class RealInboxRepository(
             current.update { it.copy(records = after) }
             before.zip(after).filter { (old, new) -> old !== new }
         }
+        val removing = tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None
+        val send = suspend {
+            if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
+            else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
+        }
         val result = try {
-            asManager(target.manager) {
-                if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
-                else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
-            }
+            // Opened from "Rules" (no item): removing names the manager the list read it from, even when that is the default now.
+            if (record == null && removing) asStamped(target.manager, send) else asManager(target.manager, send)
         } catch (e: Exception) {
             // Back only the ones still as this left them: a refresh meanwhile has the hub's.
             if (owns(transport)) refreshLock.withLock {
@@ -364,7 +368,7 @@ class RealInboxRepository(
             throw e
         }
         quietly { refresh() }
-        if (tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None) return null
+        if (removing) return null
         return result.obj("policy")?.let { persona.feature.inbox.inboxPolicy(it) }
     }
 
@@ -1107,8 +1111,8 @@ class RealInboxRepository(
     }
 
     /**
-     * Runs a change to something a list read from each manager stamped [manager] (several managers), naming it even when it
-     * is the default: the default may have changed since the list was read. Unstamped (one manager): as [asManager].
+     * Runs a list's read from each manager, or a change to what it read stamped [manager] (several managers), naming it even
+     * when it is the default: the default may change between the read and the change. Unstamped (one manager): as [asManager].
      */
     private suspend fun <T> asStamped(manager: String?, block: suspend () -> T): T =
         if (manager.isNullOrBlank()) asManager(manager, block)
