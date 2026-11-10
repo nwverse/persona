@@ -11,13 +11,20 @@ import persona.core.designsystem.GlassThrottle
 
 /**
  * Lowers the glass style one step (refraction → blur → opaque) when drawing it keeps missing frames.
- * Frames only arrive while something moves, so the window is mostly scrolling and animation. The thresholds
- * are deliberately loose: a few slow frames while a page opens must not cost the user the effect.
+ * Frames only arrive while something moves, so the window is mostly scrolling and animation. Severe sustained jank
+ * lowers after 120 frames; the looser 240-frame threshold keeps a few slow frames while a page opens from costing the effect.
  */
 object GlassFrameMonitor {
     private const val WINDOW = 240
-    private const val MIN_FRAMES = 120
+    private const val EARLY_WINDOW = 120
+    private const val EARLY_JANK_SHARE = 0.60
     private const val JANK_SHARE = 0.30
+
+    internal fun shouldLower(frames: Int, janky: Int): Boolean {
+        if (frames < EARLY_WINDOW) return false
+        val share = janky.toDouble() / frames
+        return share > EARLY_JANK_SHARE || (frames >= WINDOW && share > JANK_SHARE)
+    }
 
     fun attach(activity: Activity, enabled: () -> Boolean) {
         val thread = HandlerThread("glass-frames").apply { start() }
@@ -29,11 +36,12 @@ object GlassFrameMonitor {
             if (metrics.getMetric(FrameMetrics.FIRST_DRAW_FRAME) == 1L) return@OnFrameMetricsAvailableListener
             frames++
             if (metrics.getMetric(FrameMetrics.TOTAL_DURATION) > budget * 3 / 2) janky++
-            if (frames >= WINDOW) {
-                if (frames >= MIN_FRAMES && janky.toDouble() / frames > JANK_SHARE) {
-                    activity.runOnUiThread { GlassThrottle.lower() }
-                    Log.i("PersonaGlass", "glass lowered after $janky slow frames of $frames")
-                }
+            val lower = shouldLower(frames, janky)
+            if (lower) {
+                activity.runOnUiThread { GlassThrottle.lower() }
+                Log.i("PersonaGlass", "glass lowered after $janky slow frames of $frames")
+            }
+            if (lower || frames >= WINDOW) {
                 frames = 0
                 janky = 0
             }

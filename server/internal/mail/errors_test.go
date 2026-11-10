@@ -41,7 +41,7 @@ func (w mailLanguageWriter) Lang() i18n.Lang { return w.language }
 
 func TestHTTPUnknownAccountLocalized(t *testing.T) {
 	s := &Service{}
-	const english = `The mail account "none" isn't connected to this manager any more.`
+	const english = `The mail account "none" isn't connected to this assistant any more.`
 	for _, c := range []struct {
 		lang         i18n.Lang
 		method, path string
@@ -49,9 +49,9 @@ func TestHTTPUnknownAccountLocalized(t *testing.T) {
 	}{
 		{"", http.MethodGet, "/api/v1/mail/messages/none/1", english},
 		{i18n.En, http.MethodGet, "/api/v1/mail/messages/none/1", english},
-		{i18n.ZhHans, http.MethodGet, "/api/v1/mail/messages/none/1", "邮箱账号“none”已不在这个管理者上了。"},
-		{i18n.Ja, http.MethodGet, "/api/v1/mail/messages/none/1", "メールアカウント「none」はこのマネージャーに接続されていません。"},
-		{i18n.Ja, http.MethodDelete, "/api/v1/mail/accounts/none", "メールアカウント「none」はこのマネージャーに接続されていません。"},
+		{i18n.ZhHans, http.MethodGet, "/api/v1/mail/messages/none/1", "邮箱账号“none”已不在这个助手上了。"},
+		{i18n.Ja, http.MethodGet, "/api/v1/mail/messages/none/1", "メールアカウント「none」はこのアシスタントに接続されていません。"},
+		{i18n.Ja, http.MethodDelete, "/api/v1/mail/accounts/none", "メールアカウント「none」はこのアシスタントに接続されていません。"},
 	} {
 		t.Run(string(c.lang)+"/"+c.method+c.path, func(t *testing.T) {
 			w := httptest.NewRecorder()

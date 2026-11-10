@@ -3,7 +3,8 @@
 // a task, quick results, the dock above the composer, the tasks' questions, the route chip, and a task's detail in the
 // side panel.
 import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { openTaskCard, taskCardSlots, taskMeter, tasksToStart, type TaskCardMetadata } from "../../lib/task-cards";
+import { cardBucket, taskCardSlots, taskMeter, tasksToStart, type TaskCardMetadata } from "../../lib/task-cards";
+import { useRestoredTodos } from "../../lib/todo-restore";
 import {
   answeredItems,
   cardFiled,
@@ -1166,24 +1167,25 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
 type AssistantTray = "pending" | "start" | "progress" | "agents";
 /** Each tray entry's mark: Pending and To start wait on you, Progress is work under way, Agents are the sessions themselves. */
 const TRAY_DOT: Record<AssistantTray, string> = { pending: "bg-attention", start: "bg-attention", progress: "bg-accent", agents: "bg-green" };
-/** Where a plan task still waiting for Start sorts among the open rows: after what needs the user (rank 0–2), before
- *  failed starts and work under way (lib/todos todoRank). */
-const TO_START_RANK = 2.5;
-
-/** The Progress tray's rows: the open ones, what needs the user first (todoRank, a plan waiting for Start right after),
- *  then the newest; and the closed ones, newest first, folded under one line. */
-export function progressRows(cards: TaskCardMetadata[], todos: Todo[], plans: Record<string, TaskPlan>, lookup: SessionLookup): { open: TaskCardMetadata[]; closed: TaskCardMetadata[] } {
+/** The Progress tray's rows, by the To-dos page's rule (cardBucket, #3331): the open ones, what needs the user first
+ *  (todoRank), then the newest; the shelved ones and the closed ones, newest first, each folded under one line. Plan tasks
+ *  waiting for Start are the To start entry's, not here. `open.length` is the entry's count. */
+export function progressRows(cards: TaskCardMetadata[], todos: Todo[], plans: Record<string, TaskPlan>, lookup: SessionLookup, now = Date.now(), restored: ReadonlyMap<string, number> = new Map()): { open: TaskCardMetadata[]; shelved: TaskCardMetadata[]; closed: TaskCardMetadata[] } {
   const byId = new Map(todos.map((todo) => [todo.id, todo]));
   const open: { card: TaskCardMetadata; rank: number }[] = [];
+  const shelved: TaskCardMetadata[] = [];
   const closed: TaskCardMetadata[] = [];
   for (const card of cards) {
     const todo = card.todo_id ? byId.get(card.todo_id) : undefined;
-    if (!openTaskCard(card, todo, plans)) closed.push(card);
-    else open.push({ card, rank: todo ? todoRank(todo, statusOf(todo, lookup, plans)) : TO_START_RANK });
+    const bucket = cardBucket(card, todo, plans, lookup, now, todo ? restored.get(todo.id) ?? 0 : 0);
+    if (bucket === "open" && todo) open.push({ card, rank: todoRank(todo, statusOf(todo, lookup, plans)) });
+    else if (bucket === "shelved") shelved.push(card);
+    else if (bucket === "closed") closed.push(card);
   }
   const newest = (a: TaskCardMetadata, b: TaskCardMetadata) => byTime(b.at, a.at) || a.id.localeCompare(b.id);
   return {
     open: open.sort((a, b) => a.rank - b.rank || newest(a.card, b.card)).map((row) => row.card),
+    shelved: shelved.sort(newest),
     closed: closed.sort(newest),
   };
 }
@@ -1258,6 +1260,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const [tray, setTray] = useState<AssistantTray | null>(null);
   const [board, setBoard] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
+  const [showShelved, setShowShelved] = useState(false);
   const [filter, setFilter] = useState<AgentState | "all">("all");
   const trayId = useId();
   const plans = useFeed((s) => s.plans);
@@ -1267,7 +1270,15 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const lookup = useTaskLookup();
   const manual = useStoreRows<DockAgent>((s) => dockAgents(answeredSessions(Object.values(s.sessions).flat(), s.interactions, s.answered), s.todos, conversation, s.assistant?.main));
   const mine = todos.filter((todo) => todo.origin === conversation);
-  const cards = taskCardSlots(conversation, metadata, feed, plans, todos);
+  const isMain = useStore((s) => !!s.assistant?.main && s.assistant.main === conversation);
+  const [restored] = useRestoredTodos();
+  // a minute's tick moves tasks across the 48 h shelving line while nothing else changes, as on the To-dos page
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const cards = taskCardSlots(conversation, metadata, feed, plans, todos, isMain);
   const openPlans = Object.values(plans).filter((plan) => plan.conversation === conversation && plan.state === "open");
   const review = mine.filter((todo) => todo.ask || (!todo.done_at && (todo.supervision?.state === "pending_review" || todo.supervision?.state === "needs_user")));
   const deferred = useFeed((s) => s.later);
@@ -1283,7 +1294,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const manualAsks = useStoreRows((s) => s.interactions.filter((ix) => manual.some(({ session }) => session.machine_id === ix.machine_id && session.session_id === ix.session_id)));
   // Plans waiting for Start have their own entry (To start), so they are neither drowned in the chat nor counted twice.
   const startCount = tasksToStart(conversation, plans);
-  const progress = progressRows(cards, todos, plans, lookup);
+  const progress = progressRows(cards, todos, plans, lookup, Date.now(), restored);
   const pendingCount = ownCount + asks.length + manualAsks.length + review.length + messages.length;
   useEffect(() => {
     const progress = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("progress"); };
@@ -1313,6 +1324,13 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
           {shown === "progress" && <div className="divide-y divide-line">
             {progress.open.map((card) => <ProgressTaskRow key={card.id} card={card} conversation={conversation} />)}
             {!progress.open.length && <p className="px-3 py-3 text-sm text-ink-2">{t(cards.length ? "assistant-tasks.tray_empty_progress" : "assistant-tasks.board_empty_title")}</p>}
+            {progress.shelved.length > 0 && (
+              <button type="button" data-progress-shelved aria-expanded={showShelved} onClick={() => setShowShelved((v) => !v)} title={t("assistant-tasks.tray_shelved_hint")} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-hover">
+                <Icon name={showShelved ? "chevron" : "chevronRight"} size={12} className="shrink-0" />
+                <span className="whitespace-nowrap">{t("assistant-tasks.tray_shelved", { count: progress.shelved.length })}</span>
+              </button>
+            )}
+            {showShelved && progress.shelved.map((card) => <ProgressTaskRow key={card.id} card={card} conversation={conversation} />)}
             {progress.closed.length > 0 && (
               <button type="button" data-progress-closed aria-expanded={showClosed} onClick={() => setShowClosed((v) => !v)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-hover">
                 <Icon name={showClosed ? "chevron" : "chevronRight"} size={12} className="shrink-0" />

@@ -141,6 +141,24 @@ class TodoTriageTest {
         assertEquals(TriageSection.Other, at(todo("t", updated = 100, agents = listOf(agent("idle")))).section)
     }
 
+    /** #3331: the assistant's Progress entry counts by the same bucket as the To-dos page's "Not done". */
+    @Test
+    fun bucketIsTheHeaderCountShelvedAndAcceptedAreNotOpen() {
+        val stale = todo("stale", updated = 100, agents = listOf(agent("old")))
+        val accepted = todo("accepted", agents = listOf(agent("idle")), reopenedAt = hoursAgo(4), supervision = acceptedReopened())
+        val open = todo("open", agents = listOf(agent("idle")))
+        val done = todo("done", doneAt = hoursAgo(3))
+        assertEquals(TodoBucket.Shelved, stale.bucket(lookup, now))
+        assertEquals(TodoBucket.Open, stale.bucket(lookup, now, restoredAt = now - 3_600_000L))
+        assertEquals(TodoBucket.Closed, accepted.bucket(lookup, now))
+        assertEquals(TodoBucket.Open, open.bucket(lookup, now))
+        assertEquals(TodoBucket.Closed, done.bucket(lookup, now))
+        val all = listOf(stale, accepted, open, done)
+        val header = triageTodos(all, lookup, now, zone = zone)
+        assertEquals(header.open, all.count { it.bucket(lookup, now) == TodoBucket.Open })
+        assertEquals(header.shelved, all.count { it.bucket(lookup, now) == TodoBucket.Shelved })
+    }
+
     @Test
     fun theUsersOwnTodoWithoutAgentsNeverShelvesNorOneDueAhead() {
         assertEquals(TriageSection.Other, at(todo("t", updated = 100, origin = null)).section)

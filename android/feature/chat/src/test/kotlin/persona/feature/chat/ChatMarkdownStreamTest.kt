@@ -7,6 +7,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.util.Collections
+import java.util.IdentityHashMap
 import kotlin.random.Random
 import com.mikepenz.markdown.model.State as MarkdownResult
 
@@ -35,7 +37,7 @@ class ChatMarkdownStreamTest {
     @Test fun aStreamCutAnywhereGoesOnToTheWholeText() {
         for ((name, text) in corpus) {
             val whole = parseMarkdown(text)
-            for (end in 0..text.length) {
+            for (end in cuts(text)) {
                 val stream = ChatMarkdownStream { parseMarkdown(it) }
                 stream.start("s")
                 stream.parse("s", text.substring(0, end))
@@ -49,8 +51,18 @@ class ChatMarkdownStreamTest {
         val stream = ChatMarkdownStream { whole++; parseMarkdown(it) }
         stream.start("s")
         val text = reply(16_000)
-        for (end in 40..text.length step 40) stream.parse("s", text.substring(0, end))
+        // What each step parsed: the text from its first top-level node that is not one the step before kept.
+        var parsed = 0L
+        var kept: Set<ASTNode> = emptySet()
+        for (end in 40..text.length step 40) {
+            val nodes = (stream.parse("s", text.substring(0, end)).first as MarkdownResult.Success).node.children
+            parsed += end - (nodes.firstOrNull { it !in kept }?.startOffset ?: end)
+            kept = Collections.newSetFromMap(IdentityHashMap<ASTNode, Boolean>()).apply { addAll(nodes) }
+        }
         assertEquals(1, whole) // the first step, which has nothing to go on from
+        // About a section and the delta each step: 29,693 characters in all. A boundary that stopped moving would make
+        // each step parse nearly all of the text again, about 3.2 million.
+        assertTrue("$parsed characters parsed", parsed < 30_600)
     }
 
     @Test fun anEditOrALinkDefinitionParsesTheWholeText() {
@@ -108,6 +120,11 @@ class ChatMarkdownStreamTest {
             assertEquals(where, links(expected), links(actual))
             if (expected.referenceLinkHandler.javaClass != actual.referenceLinkHandler.javaClass) fail(where)
         }
+
+        /** Where [aStreamCutAnywhereGoesOnToTheWholeText] cuts [text] (a whole parse at every cut of every text is O(n²)):
+         * at each line's end and its first six places, which hold the indent and the marker that decide its block
+         * (`10. `, a fence, `<!--`, `[r1]:`), and at every fifth character between. */
+        fun cuts(text: String) = (0..text.length).filter { it % 5 == 0 || it - text.lastIndexOf('\n', it - 1) <= 6 || text.getOrNull(it) == '\n' }
 
         /** The bench's reply (ChatMarkdownBench): headings, a paragraph with links and code, a list and a fence, again. */
         fun reply(size: Int) = buildString {
@@ -167,6 +184,10 @@ class ChatMarkdownStreamTest {
             "receipt quote" to "> 见 [PR](https://github.com/o/r/pull/7) 和 <https://example.com>，~~旧的~~ *新的*\n```go\nx := 1\n```\n---\n| a | b |\n| - | - |\n| 1 | 2 |",
             "math" to "前\n```math\na^2 + b^2 = c^2\n```\n后\n\n面积是 ![\\pi r^2](persona-math:%5Cpi%20r%5E2)，周长。\n\n用 `\$x\$` 写公式\n```\n$$\nnot math\n$$\n```\n    \$y$ 缩进的代码",
             "reply" to reply(2_400),
+            // A list goes on after a blank line: "10" is a paragraph until its "." makes it the list's third item.
+            "list goes on" to "1. one\n2. two\n\n10. ten\n\nafter",
+            // Only a blank line settles a paragraph: "***" under it is a rule until a letter makes it emphasis in it.
+            "one line feed" to "Done.\n***Note*** this line goes on the paragraph.\n\nafter",
         ) + (1..4).map { "sample $it" to sample(it, 2_000 + 500 * it, definitions = false) } +
             (5..6).map { "sample $it" to sample(it, 2_000, definitions = true) }
     }

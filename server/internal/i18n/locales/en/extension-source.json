@@ -7,8 +7,8 @@
   "development_validator_resources": "WARNING: Development-only native validator controls are active. Go memory, stack and thread settings are cooperative; sampled RSS and process CPU/wall deadlines are not hard kernel memory, CPU quota or task limits. Do not deploy this build.",
   "development_unavailable": "The development resource opt-in is unavailable in this build.",
   "development_resources": "WARNING: Development-only resource fallback active. Process CPU time, V8 old heap, sampled RSS and wall-clock termination are not hard kernel memory limits or CPU quotas. Do not deploy this build.",
-  "runtime_required": "Configure a pinned source runtime on the manager before enabling this extension.",
+  "runtime_required": "Configure a pinned source runtime on the assistant before enabling this extension.",
   "isolation_required": "Isolation cannot be turned off for source extensions.",
-  "package_check_only": "Source package checks passed. Runtime verification requires the manager's enforced sandbox; a bare engine launch does not qualify.",
+  "package_check_only": "Source package checks passed. Runtime verification requires the assistant's enforced sandbox; a bare engine launch does not qualify.",
   "created": "Source extension created. Package it with personad extension pack; enabling it requires a pinned runtime and enforced Linux isolation."
 }

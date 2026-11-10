@@ -35,6 +35,9 @@ const (
 	deployUnmerged   = "unmerged"   // the PR is not merged
 	deployUnknown    = "unknown"    // could not tell (network, rate limit): not deployed
 	deployUnverified = "unverified" // nothing to check it against: the agent's word stands
+	// deployNotIn: the deployed-commits file of the running hub does not name the PR and GitHub cannot say more: not
+	// in the running hub as far as the hub knows (merged and not deployed, or not merged).
+	deployNotIn = "not_in"
 )
 
 type deployResult struct {
@@ -46,7 +49,7 @@ type deployResult struct {
 
 // held: the result keeps the work short of deployed.
 func (r deployResult) held() bool {
-	return r.State == deployOut || r.State == deployUnmerged || r.State == deployUnknown
+	return r.State == deployOut || r.State == deployUnmerged || r.State == deployUnknown || r.State == deployNotIn
 }
 
 // prForge answers what a deploy check asks of where the PR lives.
@@ -70,6 +73,13 @@ type deployProbe struct {
 	mu    sync.Mutex
 	cache map[string]deployCached // by PR URL + hub commit
 	seen  map[string]prSeen       // by todo id: when sweepPRs last checked an open to-do's PR (memory only)
+	// githubDown: GitHub failed to answer until then (a hub that cannot reach it waits on no timeouts meanwhile).
+	githubDown time.Time
+
+	// listPaths are where the deployed-commits file is looked for (nil: deployedFiles; tests set their own), files
+	// the ones read (deployed_commits.go).
+	listPaths []string
+	files     deployedFileCache
 }
 
 // prSeen is sweepPRs' last look at a to-do's PR: against which hub commit, what it said, when.
@@ -167,7 +177,45 @@ func (s *Service) checkDeployed(ctx context.Context, pr string) deployResult {
 	return r
 }
 
+// githubPause is how long GitHub is not asked after it failed to answer.
+const githubPause = 10 * time.Minute
+
+// compareDeploy answers with the running hub's deployed-commits file first (no network: deployed_commits.go), and
+// GitHub when the file cannot say (none, another repository, or the PR not named in it).
 func (s *Service) compareDeploy(ctx context.Context, repo string, number int, hub string) deployResult {
+	l := s.deployedListFor(hub)
+	if l == nil || !strings.EqualFold(l.repo, repo) {
+		return s.compareGitHub(ctx, repo, number, hub)
+	}
+	if sha, ok := l.prs[number]; ok {
+		return deployResult{State: deployIn, Hub: hub, Merge: sha}
+	}
+	r := s.compareGitHub(ctx, repo, number, hub)
+	if r.State == deployUnknown || r.State == deployUnverified {
+		return deployResult{State: deployNotIn, Hub: hub, Err: r.Err} // as far as the file goes, not deployed
+	}
+	return r
+}
+
+// compareGitHub asks GitHub whether hub contains PR number's merge commit.
+func (s *Service) compareGitHub(ctx context.Context, repo string, number int, hub string) deployResult {
+	p := &s.deploy
+	p.mu.Lock()
+	down := time.Now().Before(p.githubDown)
+	p.mu.Unlock()
+	if down {
+		return deployResult{State: deployUnknown, Hub: hub, Err: errors.New("GitHub did not answer a moment ago")}
+	}
+	r := s.compareGitHubNow(ctx, repo, number, hub)
+	if r.State == deployUnknown {
+		p.mu.Lock()
+		p.githubDown = time.Now().Add(githubPause)
+		p.mu.Unlock()
+	}
+	return r
+}
+
+func (s *Service) compareGitHubNow(ctx context.Context, repo string, number int, hub string) deployResult {
 	f := s.forge()
 	r := deployResult{Hub: hub}
 	merged, sha, err := f.PRMerge(ctx, repo, number)
@@ -202,6 +250,8 @@ func (s *Service) deployGateText(ctx context.Context, r deployResult) string {
 		return i18n.T(l, "assistant-reports.deploy_gate_out", i18n.Args{"hub": shortSHA(r.Hub), "merge": shortSHA(r.Merge)})
 	case deployUnmerged:
 		return i18n.T(l, "assistant-reports.deploy_gate_unmerged")
+	case deployNotIn:
+		return i18n.T(l, "assistant-reports.deploy_gate_not_in", i18n.Args{"hub": shortSHA(r.Hub)})
 	}
 	return i18n.T(l, "assistant-reports.deploy_gate_unknown")
 }
@@ -344,7 +394,7 @@ func (s *Service) sweepDeploys(now time.Time) {
 			s.unwatchDeploy(ctx, id, w.Since)
 			continue
 		}
-		if hub == w.Hub && w.State == deployOut || hub == w.Hub && now.Sub(w.CheckedAt) < deployRecheck {
+		if hub == w.Hub && (w.State == deployOut || w.State == deployNotIn) || hub == w.Hub && now.Sub(w.CheckedAt) < deployRecheck {
 			continue // the same hub said no: only a deploy changes that
 		}
 		r := s.checkDeployed(ctx, w.PR)

@@ -130,6 +130,17 @@ export function countsAsOpen(todo: Todo, t: Triage): boolean {
   return t.rule !== "accepted" && t.rule !== "deployed";
 }
 
+/** Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the conversation's
+ *  Progress entry read this one rule, so the two numbers agree. `open` counts, `shelved` folds (no activity for 48 h,
+ *  nothing running), `closed` is finished (done, accepted, deployed, an old failed start). */
+export type TodoBucket = "open" | "shelved" | "closed";
+
+export function todoBucket(todo: Todo, lookup: SessionLookup | undefined, now: number, restoredAt = 0): TodoBucket {
+  const t = triage(todo, lookup, now, restoredAt);
+  if (countsAsOpen(todo, t)) return "open";
+  return t.section === "shelved" ? "shelved" : "closed";
+}
+
 // ── Related to-dos ────────────────────────────────────────────
 
 const ISSUE_REF = /#(\d{2,7})\b/;
