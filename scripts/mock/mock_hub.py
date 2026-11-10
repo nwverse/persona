@@ -10630,7 +10630,7 @@ GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
 # back. Off: none, as on a hub without the Lark extension. =unconfigured (#2613): no conversations, and the only source
 # reports why, as an extension still waiting for its settings does. GET /mock/personal-agents?state=partial (#3216): the
-# conversations still listed, plus a second source that fails.
+# conversations still listed, plus a second source that fails; =partial_setup: the second one isn't set up instead.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
 PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" else "configured" if PERSONAL_AGENTS else "none", "delay": 0.0}
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
@@ -10642,9 +10642,10 @@ def personal_sources():
               "accounts": [{"accountId": "example", "provider": "muse"}] if state in ("configured", "empty") else []}
     if state in ("missing", "disabled", "no_accounts"): source["setup"] = state
     if state == "unconfigured": source["error"] = "Example extension isn't set up yet: fill in its address in the extension's settings."
-    if state == "partial":  # #3216: this source lists its conversations while a second one fails
+    if state in ("partial", "partial_setup"):  # #3216: this source lists its conversations while a second one fails / isn't set up
+        second = {"error": "Example source can't be reached right now."} if state == "partial" else {"setup": "disabled"}
         return [dict(source, accounts=[{"accountId": "example", "provider": "muse"}]),
-                {"source": "example-source", "enabled": True, "accounts": [], "error": "Example source can't be reached right now."}]
+                dict({"source": "example-source", "enabled": True, "accounts": []}, **second)]
     return [source]
 
 # #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
@@ -10660,7 +10661,7 @@ def personal_rows():
              "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
             for i, (prov, title, hours, unread) in enumerate(rows)]
 def personal_listed(hidden):
-    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] in ("configured", "partial") else []
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] in ("configured", "partial", "partial_setup") else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files;
 # git_stash_conflicted also leaves them unmerged in the status, as a stash apply that stopped on conflicts does);
@@ -14899,7 +14900,7 @@ class H(BaseHTTPRequestHandler):
                 PERSONAL_HIDDEN.clear()
                 PERSONAL_STATE.update(state="configured" if PERSONAL_AGENTS else "none", delay=0.0)
             state = q.get("state", [PERSONAL_STATE["state"]])[0]
-            if state not in ("configured", "partial", "empty", "missing", "disabled", "no_accounts", "none"):
+            if state not in ("configured", "partial", "partial_setup", "empty", "missing", "disabled", "no_accounts", "none"):
                 return self.send_json({"error": "invalid personal agent fixture state"}, 400)
             PERSONAL_STATE.update(state=state, delay=min(10.0, max(0.0, float(q.get("delay", [PERSONAL_STATE["delay"]])[0]))))
             for client in list(CLIENTS.values()):
