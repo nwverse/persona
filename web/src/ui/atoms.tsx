@@ -12,7 +12,7 @@ import { composing } from "../lib/send-history";
 import { keyboardFrame } from "../lib/viewport";
 import { prefersReducedMotion } from "./stream/motion";
 import { accelLabel, activation, edge, enabled, keyIntent, renameCommit, rowLabel, type MenuItem } from "./menu-model";
-import { NARROW_QUERY, placeMenu, placeSubmenu, SHEET_QUERY, useEscapeClose, useMedia, useModalFocus, type MenuPlace } from "./overlay";
+import { focusables, NARROW_QUERY, placeMenu, placeSubmenu, SHEET_QUERY, useEscapeClose, useMedia, useModalFocus, type MenuPlace } from "./overlay";
 import { STATE_LABEL, stateName } from "../lib/state-labels";
 
 export const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
@@ -246,8 +246,9 @@ export function Kbd({ children }: { children: React.ReactNode }) {
 /** Folds its children up and down: the grid's row runs between 0fr and 1fr in CSS (no heights measured in JS), with
  *  a fade. `lazy`: the children mount when it opens and stay while it closes, so they go down with the height instead of
  *  vanishing, then unmount (a long trace costs nothing while folded). Once closed, the content is inert. A chat list holds
- *  the clicked row still while the height runs (`anchoredScroll`, #1124). */
-export function Collapse({ open, children, className = "", lazy = false }: { open: boolean; children: React.ReactNode; className?: string; lazy?: boolean }) {
+ *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
+ *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed. */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean }) {
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
@@ -284,7 +285,7 @@ export function Collapse({ open, children, className = "", lazy = false }: { ope
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className="min-h-0 overflow-hidden [contain:layout_paint]">{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 ${unclipped && shown && !moving ? "" : "overflow-hidden [contain:layout_paint]"} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
     </div>
   );
 }
@@ -308,9 +309,10 @@ interface Sub {
 }
 
 /** A menu next to its anchor (a button, or a row's ⋯), or at the pointer (`point`, a right click). ↑ ↓ move, → opens a
- *  submenu and ← goes back, Enter chooses, Esc closes, a row's letter chooses it, ⌫ chooses the close action. A row
- *  can ask again before it runs (`confirm`), turn into an input (`rename`), open a submenu (`children`) or show its
- *  work and failure inside the menu (`inline`). A menu without those keys is the plain one it always was. */
+ *  submenu and ← goes back, Enter chooses, Esc closes, Tab closes it and moves on, a row's letter chooses it, ⌫
+ *  chooses the close action. A row can ask again before it runs (`confirm`), turn into an input (`rename`), open a
+ *  submenu (`children`) or show its work and failure inside the menu (`inline`). A menu without those keys is the
+ *  plain one it always was. */
 export function Menu({
   items,
   anchor,
@@ -342,6 +344,11 @@ export function Menu({
   const asking = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loads = useRef(0);
   const rows = useRef<(HTMLElement | null)[][]>([]);
+  // What had the focus as the menu opened (its button, a row's ⋯), read on the first render, before a row can take it.
+  const [opener] = useState(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return el && el !== document.body ? el : null;
+  });
   // On a narrow screen Back closes the menu first, like the drawer and the sheets, instead of leaving the page (#5132).
   // A row that opens a sheet or a panel takes the menu's entry over (back-close reuses an entry closed a tick before).
   useCloseOnBack(true, onClose, useMedia(NARROW_QUERY));
@@ -393,9 +400,25 @@ export function Menu({
     (it.children as () => Promise<MenuItem[]>)().then((list) => settle({ items: list }), (e) => settle({ error: errMessage(e) }));
   };
 
+  // A click on a row focuses that row, and the row is gone once the menu closes: a Dialog the row opens notes it as
+  // where the focus goes back, and closing it left the focus on body. From the keyboard the focus never left the
+  // menu's button (the highlight is drawn), so give it back there first: to the opener, else the anchor, else the
+  // anchor's first control (a sidebar row whose ⋯ shows only under the pointer). Only when the focus is still ours:
+  // in this menu, or lost to body.
+  const handBack = () => {
+    const active = document.activeElement;
+    const ours = !active || active === document.body || active.closest("[data-menu]")?.getAttribute("data-menu") === id;
+    if (!ours) return;
+    for (const el of [opener, anchor, ...(anchor ? focusables(anchor) : [])]) {
+      if (!el?.isConnected) continue;
+      el.focus({ preventScroll: true });
+      if (document.activeElement === el) return;
+    }
+  };
   const run = async (depth: number, it: MenuItem) => {
     setConfirming(null);
     setFailure(null);
+    handBack();
     if (!it.inline) {
       void it.onSelect();
       if (!it.submenu && !it.keepOpen) onClose();
@@ -435,6 +458,7 @@ export function Menu({
     setFailure(null);
     try {
       await it.rename!.commit(name);
+      handBack(); // the input had it
       onClose();
     } catch (e) {
       setFailure({ depth, text: errMessage(e) });
@@ -475,10 +499,18 @@ export function Menu({
       const depth = open.length;
       const intent = keyIntent(e, ls[depth], act[depth] ?? -1, depth);
       if (intent.type === "none") return;
+      if (intent.type === "leave") {
+        // the focus is on the menu's button (the highlight is drawn), so the browser's Tab goes on from there; not
+        // stopped either, so a Dialog the menu sits in still keeps Tab inside
+        handBack();
+        return onClose();
+      }
       e.preventDefault();
       e.stopPropagation();
-      if (intent.type === "close") onClose();
-      else if (intent.type === "back") closeSubsTo(depth - 1);
+      if (intent.type === "close") {
+        handBack(); // a row the pointer chose to confirm may have it
+        onClose();
+      } else if (intent.type === "back") closeSubsTo(depth - 1);
       else if (intent.type === "move") setActive(depth, intent.index);
       else choose(depth, intent.index, true);
     };
@@ -698,6 +730,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
   const accel = accelLabel(it);
   const detailId = `${useId()}-detail`;
   const label = rowLabel(it, asking ? it.key : null);
+  const detail = asking && it.confirmDetail ? it.confirmDetail : it.detail;
   return (
     <button
       ref={refCb}
@@ -708,23 +741,23 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       aria-haspopup={it.children ? "menu" : undefined}
       aria-keyshortcuts={it.accel}
       aria-checked={it.radio ? Boolean(it.checked) : undefined}
-      aria-describedby={it.detail ? detailId : undefined}
+      aria-describedby={detail ? detailId : undefined}
       onMouseEnter={onHover}
       onClick={onChoose}
       className={cx(
         "relative z-10 flex w-full items-center gap-2 rounded-[6px] px-2 pointer-coarse:min-h-11 text-left text-[12.5px] disabled:opacity-40",
-        it.wrap || it.detail ? "min-h-8 py-1.5" : "h-8",
+        it.wrap || detail ? "min-h-8 py-1.5" : "h-8",
         it.danger ? "text-red" : "text-ink",
         asking && "bg-red-tint font-medium",
       )}
     >
       {it.state && <StatusMark state={it.state} />}
       {it.icon && <Icon name={it.icon} size={14} className={it.danger ? "" : "text-ink-3"} />}
-      {it.detail ? (
+      {detail ? (
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
           <span className="block break-words">{label}</span>
-          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{it.detail}</span>
+          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{detail}</span>
         </span>
       ) : (
         <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}</span>

@@ -1,4 +1,11 @@
 {
+  "tray_pending": "待处理",
+  "tray_progress": "进度",
+  "tray_agents": "Agents",
+  "tray_empty_pending": "没有等你处理的事",
+  "dispatch_hint": "派出 {count} 件 · 在「进度」里看",
+  "progress_count": "{value}/{total}",
+  "progress_pr": "PR #{number}",
   "receipt_review_followup": "由 Persona 跟进",
   "report_progress": "进度更新 · {title}",
   "removed": "已移除「{title}」",

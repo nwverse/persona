@@ -800,7 +800,7 @@ func TestEditHubJSONKeepsWhatItDoesNotKnow(t *testing.T) {
 	}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".hub.json.") {
+		if strings.HasPrefix(e.Name(), "hub.json.tmp-") || strings.HasPrefix(e.Name(), ".hub.json.") {
 			t.Fatalf("temporary file left: %s", e.Name())
 		}
 	}

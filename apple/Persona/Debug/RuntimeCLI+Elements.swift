@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 
-/// Reading the app (docs/operations/runtime-cli.md「读状态」): the accessibility tree XCUITest sees (`tree`, `find`, `wait`), the
+/// Reading the app (docs/operations/runtime-cli.md「Reading state」): the accessibility tree XCUITest sees (`tree`, `find`, `wait`), the
 /// view-body counts (`perf`), a pull from the hub (`refresh`), a chat's history in (`wait-loaded`).
 extension RuntimeCLI {
     static let elementCommands: [String: Command] = [

@@ -41,6 +41,27 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - Read-only tasks always retain `permission: plan`, including after card edits and on retries. Health-space plans still wait for Start. Runtime support and the current card labels are described in [To-dos](todos.md#read-only-planned-tasks).
 - `task_plan` **does not block**: once the plan is handed to you, the turn ends immediately and you can continue talking about something else. When you tap Start, hub starts the Agents directly; Persona sees the result in the next message's live snapshot.
 
+### Progress tray: one task, one row (#2878)
+
+The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
+Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
+the existing task details. The dispatch answer has only "Dispatched N tasks · See Progress", which expands the tray above
+the composer. Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat.
+
+**Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
+on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
+answer to a question. **Progress** also has a separate quiet supervision/scheduled-task group, with inspectable background
+records. System housekeeping notices are not conversation messages. Tools and intermediate narration stay manually
+inspectable under a single collapsed summary; source metadata, not title/emoji guesses, identifies background turns.
+
+The shared feed API adds stable `task_cards` upserts (fields and compatibility rules in
+[the protocol](../protocol/protocol.md#tasks-and-the-chat-feed)). The original event log remains unchanged. Live task/session
+state still updates the row even when no new feed event is written. Android implements the conversation projection and
+all three trays in #2878; web implements the unique Progress row, dispatch hint and relocated planning/acceptance actions,
+retaining its existing turn-source presentation. Apple's independent client work can consume the same additive contract.
+The older card-oriented descriptions below document
+the legacy presentation and the retained detail actions; they do not require duplicate cards in the simplified chat.
+
 ### Task cards
 
 - Once a plan starts, its card collapses to "Started N tasks," followed by N task cards. Task cards **update in place**: state (spinner / orange dot / green check), title,
@@ -122,7 +143,10 @@ lines, and in the user's own color and alignment they read as something the user
 - Older entries: migration `0441_feed_routed_from.sql` marks those Persona wrote before the field existed (see "Chat activity").
   Older apps ignore `from` and keep drawing the bubble.
 - Apple: `AgentSentLine`, `TaskSentList` (`apple/Persona/Views/Assistant/Tasks/SentViews.swift`), the pure rules in
-  `SentToAgents` (`apple/Shared/Tasks.swift`); web: `web/src/views/assistant/Sent.tsx`, `takenIn` / `sentTo` in `web/src/lib/feed.ts`.
+  `SentToAgents` (`apple/Shared/Tasks.swift`); web: `web/src/views/assistant/Sent.tsx`, `takenIn` / `sentTo` in `web/src/lib/feed.ts`;
+  Android (#1623): `SentLine`, `TaskSentList` in `android/feature/chat/.../AssistantTasks.kt`, the pure rules in `SentToAgents`
+  (`android/core/domain/.../tasks/SentToAgents.kt`), the chat page filtering the feed with `SentToAgents.shown`; checked by
+  `SentToAgentsTest` and `SentToAgentsShotsTest` (every style, light and dark, folded and opened).
   Mock: `MOCK_TASKS=1 MOCK_TASKS_SENT=1 MOCK_TASKS_NO_ASKS=1` (a hand-off after its card, a rework to an older task, the
   user's own word); UI test `SentToAgentTests`.
 
@@ -165,7 +189,7 @@ When enabled, tasks dispatched from the main chat (`task_plan`; also `agent_star
   Agents page, main-chat task cards, dock, question cards, and live snapshots remain normal.
 - **The main chat speaks instead**: on completion / interruption (`taskTurnEnded`), failed start (`startPlanTask`), or waiting for the user (hub emits `interaction.raised`), the assistant injects a notice into the main chat
   (`prompts/assistant/task_notice.md`: "🔔 任务「xx」做完了（电脑）"—task "xx" finished (computer)—plus the Agent's last text or question, and an explanation that this is a task notice and the assistant decides how to tell the user).
-  The main chat replies accordingly, with its reply pushed to the phone normally. This notice is not rendered as a user bubble: hub adds `injected` when delivering it; clients show only a line such as "Task ‘xx’ finished" (`docs/protocol/protocol.md`, "Persona-injected messages").
+  The main chat replies accordingly, with its reply pushed to the phone normally. This notice is not rendered as a user bubble: hub adds `injected` when delivering it; clients show only a line such as "Task ‘xx’ finished" (`docs/protocol/protocol.md`, "Messages injected by Persona").
 - **Coalescing**: wait 15 seconds after a task's first change (`quietNoticeDelay`), retaining only the latest change in that interval and noting "It also waited for the user during this period."
   If the user has answered before a waiting notice is sent, skip it. While the main chat is running, queue the notice between chat turns (the same queue as `conversation_send`, showing "Notice for task ‘xx’" above the input), then inject it after the current turn ends.
   If the queue already has a notice for this task, replace it in place instead of adding another. Implementation: `server/internal/assistant/quiet.go`.
@@ -206,7 +230,7 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
   - **The reviewer session** is linked to the to-do in `todo_agents` with `source: "review"`, `via` the run's id, released from the start: it is never one of the task's agents (judge, rework, closing). It is left out of the session lists the apps get, kept quiet (no pushes, badges or Live Activity), and its turns are not triaged.
 - **Assignment deduplication**: `task_plan` compares new tasks with ongoing to-dos and working / waiting Agents. The same issue / PR number, or the same computer and directory (including nested directories) with similar titles, or very similar titles, yields "Possible duplicate" in the result. The assistant is told to inspect before deciding whether to merge or cancel; dispatch is not blocked.
 - **Snapshot**: supervised tasks under "Tasks started from this chat" include "Supervision: normal / stalled N minutes / waiting for an answer N minutes / pending review / rework round N / awaiting your decision / accepted" and a criteria count. Items needing action come first.
-- **Assistant workflow** is in its CLAUDE.md (`prompts/assistant/claude_md.md`, "How to work"): always provide `done_when` when assigning; make decisions independently when possible, nudge or change approach when stalled, sequence resource contention, cancel duplicates; verify PR / CI / screenshots / live status personally before acceptance; tell the user only about decisions they must make and accepted results; split downstream follow-through (deployment, issue closure, TestFlight) into subsequent tasks or follow-ups.
+- **Assistant workflow** is in its CLAUDE.md (`prompts/assistant/claude_md.md`, "做事方式"): always provide `done_when` when assigning; make decisions independently when possible, nudge or change approach when stalled, sequence resource contention, cancel duplicates; verify PR / CI / screenshots / live status personally before acceptance; tell the user only about decisions they must make and accepted results; split downstream follow-through (deployment, issue closure, TestFlight) into subsequent tasks or follow-ups.
 - **In charge of any agent** (#5112, `assistant/agent_control.go`):
   - **Levels of interruption**: `agent_send` queues behind the agent's turn; `agent_interrupt` stops the turn at once (`session.interrupt`: Esc in a herdr pane, the runtime's or Codex's own cancel) and keeps the session; with `then` it sends the new instruction right after (steering). Work already done is not undone. Not for assistant conversations or read-only sources (`capabilities.interrupt` false). An agent that is not working (including one still starting) is not stopped; `then` is still sent (queued if it is busy). Closing an agent is not offered to the model (accepted / cancelled tasks are retired as before).
   - **Adoption**: `agent_supervise`, main conversation only. An agent on no todo becomes a task of the conversation: a new todo (titled after the session by default), the agent linked, the supervisor set, a task card in the feed; from then on it is like a `task_plan` task (signals, pending review, `task_review`). On one of its own tasks it sets `done_when` / `expect_minutes`. Another conversation's task or the user's own todo is refused and stays theirs. If the todo is made but the agent cannot be linked, the todo is closed at once (no empty task is left); one adoption runs at a time. The agent is not told: the answer reminds the assistant to tell it with `agent_send` if it should work to the criteria or report.
@@ -214,6 +238,7 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
   - **Agents report to their supervisor**: agents get the MCP tool `report_to_supervisor {kind: progress|question|blocked|done, text, evidence?, step?, steps?, urgent?}`. Only an agent of a supervised task has someone to receive it; any other gets "nobody receives this" (not an error). A question with `urgent: false` is no signal: it waits in the queue for the next morning or evening briefing (`docs/extensions/bots.md` ("Questions that can wait")). A report becomes the supervisor signal `report`: `question` / `blocked` / `done` are triage (the 2-minute cadence), while `progress` is info and never creates a main-chat wake; reports of the same kind waiting for the same message are joined (both questions kept, evidence merged) instead of replacing each other; the message lists the kind, the step, what it said and its evidence. `done` does not mark the task pending review (the hub's judge still decides). At most 10 reports per session in 10 minutes. Only Claude Code agents with the Persona MCP have the tool (Codex does not), so task prompts do not mention it.
   - **Progress and the feed** (step 2): the latest report is the task's progress, `supervision.progress {kind, step?, steps?, text, at}` on the todo the apps get. It is a live reading kept in memory only (the next report brings it back after a restart) and written apart from the ledger: no database write, and `updated_at`, which names the review a task waits for, does not move. The snapshot's task line says "它最近向你汇报（N 分钟前）：…，第 3/5 步：…". `question` / `blocked` / `done` reports also go into the supervisor's conversation as a feed item of kind `report` (body: `kind`, `text`, `evidence`, `step`, `steps`), so the user can follow the handoff; progress reports only update the card. An `agent_interrupt` with `then` on an agent of one of the conversation's tasks adds a `routed` line with `interrupted: true` (a bare stop adds nothing). Clients that don't know the `report` kind skip it (web, iOS and Android all draw nothing for an unknown kind); those that don't know `interrupted` show the line as an ordinary message to the task. The web draws the progress under the task card's current step (`progressLine`), the report as "「任务」向 Persona 汇报" with the text and evidence, and the interrupting line with a stop icon. Mock: `MOCK_TASKS=1 MOCK_TASKS_REPORTS=1`. Without a report, the agent's own task list is the default progress (#5302, `Session.plan`, docs/integrations/agent-goal.md "Plan"): the snapshot's task line says "计划 3/5：<current>" and the card has a "3/5 · current" line; a report newer than the plan stands alone.
   - **Whose call it is**: an agent's MCP server has no session id of its own. `personad mcp` passes its pane (`HookPane`) to the node, and **only for the agents' own tools** (`report_to_supervisor`, `todo_decisions`, `todo_decision_add`, `todo_bind_thread`: `callerTools`) the node resolves the session from it (`node/hooks.go` `paneCaller`: the agent the host shows in the pane now, else the hooks' binding). Other tools still call without a session (a connector's approval card is not attached to the agent). An agent run by a runtime without a pane gets "nobody receives this".
+- **Attachments** (#2437, `assistant/attachments.go`): pictures and files the user gave the assistant reach the agent through `attachments` on a `task_plan` task, `agent_start` or `agent_send`: absolute paths on the computer the conversation runs on. Only paths the user gave in that conversation are accepted: the directory where Claude Code saved the conversation's pictures (`…/<conversation id>/images/`), the node's `uploads` directory, or a path one of the user's messages carries (the app puts a file sent with Files there). Anything else is refused, so the tool cannot move arbitrary files between computers. On the same computer the paths go as they are. On another one the manager copies each file there first (`file.chunk` from the assistant's node, `file.upload.*` with `dest=terminal` on the agent's: `uploads/terminal/<date>/`, swept after 7 days), at most 8 and 50 MB each, also to computers marked `work`. A `task_plan` task's are checked when the plan is made (`PlanTask.Attachments`, from `AttachFrom`, the conversation's computer) and copied when it starts. A model does not always use the parameter, so a path the prompt or text names counts too when it is where the user's files land (the conversation's pictures, the node's `uploads`, or a file the app uploaded, `<name>-YYYYMMDD-HHMMSS`, that a message of the user's carries; never any other path the user wrote, which may be a repository's file the agent should open where it is). The text then names the copies. The agent's first message (or the sent text) ends with the files, the named ones that could not come and why, and the pictures in an `<attached_images>` block, as a picture sent straight to an agent ends. A copy that fails never stops the hand-off; the tool's answer says what was handed.
 - **Clients**: web and Android task cards / to-do details show acceptance criteria and review state; iOS / Mac are separate work (sub-issues of #3124). Clients unaware of `supervision` continue normally, showing pending-review tasks as "Stopped / Unread."
 
 ## Data and APIs (hub)
@@ -286,9 +311,19 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
+| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
+- **Action bar on iPhone and iPad (#2879)**: the dock's row becomes three entries, **Pending** (tasks that ask, then the
+  main chat's own waiting Agents), **Progress** (tasks going on, waiting first, then finished ones; the count is the ones
+  going on) and **Agents** (the chat's own Agents and its tasks' Agents, waiting first). One tray at a time rises above
+  the bar; its row opens task details or the Agent's page as a pill did, and Progress' All opens the board. The entries
+  are the dock's capsule (`DockCapsule`, shared with the Mac dock's All): caption medium (13 pt at the default text
+  size, Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind
+  secondary text, 28 pt tall at the default size (16 pt line + 2 × 6 pt; radius 14 pt), 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
+  semibold); Pending with something waiting uses the waiting pill's tint. The Mac keeps the dock.
+  Tests: `AssistantActionBarTests`, UI `AssistantActionBarUITests` (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`).
 - Task details have one header layer: the embedded Agent page takes over the task name, Close, and task ⋯ (#3255; see "Task details" above).
 - Screenshots: `MOCK_TASKS=1`, `MOCK_TASKS_AT`, `-showTaskDetail`, `-showTaskBoard` (`docs/operations/testing.md`).
 
@@ -337,7 +372,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
 | 2 ✅ | hub: migrations (`todos.origin` / `plan_id`, `task_plans`, `assistant_feed`), `task_plan` tool and prompts, start / dismiss plan APIs, feed APIs and pushes, completion / answer / routing hooks, tasks in snapshots |
 | 3 ✅ | iOS: models and `FakeHub`, feed merging, plan cards, task cards, dock, question cards, receipts, `@` and routing, task-details sheet, task board |
 | 4 ✅ | Instant result cards, main-chat Today card, day sections and collapsing, `tasks.trust` Settings page (message-card task links are separate work) |
-| 5 | Web ✅ (`docs/web/web.md`, "Unified main-chat entry point"); Watch ✅ (questions carry `task_title`, displaying "Task · xx" in Needs you; working / waiting counts already exist in Live Activities and Watch and include task Agents); Android ✅ (`docs/android/android.md`, "Unified main-chat entry point") |
+| 5 | Web ✅ (`docs/web/web.md`, "Unified main-chat entry (#930)"); Watch ✅ (questions carry `task_title`, displaying "Task · xx" in Needs you; working / waiting counts already exist in Live Activities and Watch and include task Agents); Android ✅ (`docs/android/android.md`, "Unified main-chat entry (#930)") |
 
 ## Decisions (2026-11-03)
 

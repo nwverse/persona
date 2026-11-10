@@ -55,6 +55,13 @@ type Node struct {
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
 	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
 	claudeStart, claudeReady time.Duration
+	// shellSettle, shellQuiet, shellAsk: when set, how long a start waits at most for a new tab's shell to settle, how
+	// long its screen must stay the same, and how long a startup question may stay on screen, in place of
+	// shellSettleWait, shellQuietFor and shellQuestionWait (tests; shellsettle.go).
+	shellSettle, shellQuiet, shellAsk time.Duration
+	// shellPause: when set, a start pauses this long instead of watching the new tab's shell, the fixed pause before
+	// #2570 (tests whose herdr call traces have no room for the settle wait's reads; shellsettle.go).
+	shellPause time.Duration
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
@@ -93,6 +100,8 @@ type Node struct {
 	paths   map[string]string           // session id -> transcript path
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
+	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
+	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
 	agents  map[string]host.Agent // session id -> live agent
@@ -111,6 +120,8 @@ type Node struct {
 	spare     *assistantProc             // warm process waiting for the next new conversation
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
+	sent      sentList                   // the last sessions.changed as written, not written twice (sessions_sent.go)
+	listRows  atomic.Int32               // rows the last sessionList gathered before its keep pass: the next one's size
 	lastRevs  map[string]int64           // session id -> rev as last pushed (sessions.changed or sessions.revs)
 	metas     map[string]quickMeta       // transcript path -> cached meta; deleted ones leave it (meta_prune.go)
 	goneDirs  map[string]time.Time       // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
@@ -175,6 +186,10 @@ type Node struct {
 
 	// codexStarting: panes a Codex start is opening (codex_start.go): no thread is guessed for them meanwhile.
 	codexStarting map[string]bool
+	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
+	codexAbandoned map[string][]codexAbandonedStart
+	// keptStarts: the tabs of failed starts kept open for a while, by pane (shellsettle.go keepStartTab); n.mu.
+	keptStarts map[string]keptStart
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -810,6 +825,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "sessions.list":
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
+		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
 	case "session.start":
 		if !wantsUltracode(p.Ultracode) {
@@ -1322,7 +1338,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"commits": list}, err
 	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
-	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Moving skills out of the binary")
+	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Skills move out of the binary")
 		cwd := p.Cwd
 		if cwd == "" {
 			cwd = n.assistantDirOf(".persona/assistant")
@@ -1451,12 +1467,33 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			mode = tuiMode(screen) // shift+tab in the terminal shows up in the transcript only with the next prompt
 		}
 	}
+	cwd := m.Cwd // an agent's latest directory
+	if n.isAssistantSession(id) {
+		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
+	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": m.Cwd, "model": m.Model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": m.Model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
 	}, nil
+}
+
+// assistantCwd is the directory assistant conversation id runs in: its running process's, else where it started as
+// its record or its transcript at path says it (assistantHome over the quick meta), else latest, its transcript's
+// latest directory. Not where the model's last `cd` left the shell (#2368).
+func (n *Node) assistantCwd(id, path, latest string) string {
+	n.mu.Lock()
+	p := n.procs[id]
+	n.mu.Unlock()
+	if p != nil && p.cwd != "" {
+		return p.cwd
+	}
+	cwd := latest
+	if fi, err := os.Stat(path); err == nil {
+		cwd = firstNonEmpty(n.meta(path, fi).cwd, latest)
+	}
+	return n.assistantHome(id, cwd)
 }
 
 func withSpan(m map[string]any, sp transcript.Span, continues bool) map[string]any {
@@ -1594,14 +1631,24 @@ func writeAtomic(path string, r io.Reader) error {
 	return err
 }
 
+// shellQuote makes s one word that reads back as s in the shells a node runs commands in or types them into: the sh
+// family and fish. Safe characters stay bare; anything else is single-quoted, with each quote and each backslash put
+// outside the quotes, backslash-escaped. Inside single quotes fish still takes \' and \\ as escapes, so a backslash
+// before a quote used to keep the quotes open there and run the rest of a first message as commands (#2867); outside
+// quotes every one of these shells reads \' and \\ alike.
 func shellQuote(s string) string {
 	if s != "" && strings.IndexFunc(s, func(r rune) bool {
 		return !(r == '/' || r == '.' || r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
 	}) < 0 {
 		return s
 	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return "'" + shellQuoteEscapes.Replace(s) + "'"
 }
+
+// shellQuoteEscapes closes shellQuote's quotes around each quote and backslash in the text (one pass, so the
+// replacements are not escaped again): anyShellQuote's scheme (devices/deploy.go) for the sh family and fish, with
+// csh's `!` left as it is.
+var shellQuoteEscapes = strings.NewReplacer(`'`, `'\''`, `\`, `'\\'`)
 
 // herdrVersion is the herdr host's version ("" without one): node.info's herdr_version.
 func (n *Node) herdrVersion(ctx context.Context) string {

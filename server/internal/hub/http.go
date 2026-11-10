@@ -61,6 +61,7 @@ func (h *Hub) routes() http.Handler {
 	})
 	api.HandleFunc("GET /api/v1/ops/{id}", h.getClientOp)
 	h.fleetRoutesRelayed(api) // resolve, history, seen: the manager's (fleet_link.go)
+	h.phoneWriteRoutes(api)
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
 	h.live.routes(api)
@@ -71,6 +72,7 @@ func (h *Hub) routes() http.Handler {
 	h.notifyRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
+	h.lookUploadRoutes(api)
 	// usage windows (#2432): the manager's (devices_routes.go)
 	h.usageRoutesRelayed(api)
 	h.inboxRoutesRelayed(api)
@@ -261,6 +263,10 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 				}
 			}
 			if ok, scope := p.extOpens, p.extScope; !ok {
+				if scope == extwire.ScopeAgentsPermissionMode { // audited like every refused mode (extension_modes.go)
+					h.refuseModeScope(w, r, p)
+					return
+				}
 				body := errorBody(http.StatusForbidden, "permission_denied", errors.New("this extension was not granted this part of the hub's API"))
 				if scope != "" {
 					body["scope"] = scope
@@ -725,6 +731,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeErrCode(w, http.StatusForbidden, codeOtherManager, err)
 		return
 	}
+	// Resuming with a permission mode changes that session's mode: an extension's token, only of a conversation its
+	// extension opened (extension_modes.go).
+	if pr := principalOf(r.Context()); pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
+		if why := h.extensionModeRefused(pr, p.MachineID, p.ResumeSessionID, map[string]any{"permission_mode": p.PermissionMode}); why != "" {
+			h.refuseExtensionMode(w, r, pr, p.MachineID, p.ResumeSessionID, p.PermissionMode, why)
+			return
+		}
+	}
 	m := h.localMachine(p.MachineID)
 	if m == nil {
 		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
@@ -893,6 +907,7 @@ func startBudget(async bool) time.Duration {
 type client struct {
 	canonicalContracts atomic.Bool
 	cancel             context.CancelFunc
+	done               <-chan struct{} // the phone connection ended; pending writes become uncertain
 	stopping           atomic.Bool
 	dropped            atomic.Bool // closed for falling behind (dropSlow): the close runs once, not once per send that finds it full
 
@@ -1101,6 +1116,11 @@ func (h *Hub) phoneClient(tool ...string) *client {
 	// Only connected providers of the requested tool are eligible; prefer real devices, then recent activity.
 	var best *client
 	for c := range h.clients {
+		select {
+		case <-c.done:
+			continue
+		default:
+		}
 		if !c.phone || (len(tool) > 0 && !c.phoneToolNames[tool[0]]) {
 			continue
 		}
@@ -1130,7 +1150,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(64 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	who := principalOf(r.Context())
-	c := &client{cancel: cancel, hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
+	c := &client{cancel: cancel, done: ctx.Done(), hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
 		device: who.ID, role: who.Role, delta: wantsFeature(r, featureSessionsDelta), listMode: wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
 		urlFeatures: urlFeatures(r), acceptLang: i18n.FromRequest(r), meta: clientMeta{updates: make(chan heartbeatConfig, 512), done: ctx.Done()}}
 	c.traffic = h.requestTrafficAttribution(r, who)

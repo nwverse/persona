@@ -17,6 +17,9 @@ import persona.core.contracts.PlanTask
 import kotlinx.serialization.builtins.ListSerializer
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
+import persona.core.contracts.TodoDecision
+import persona.core.contracts.TodoDecisionResponse
+import persona.core.contracts.TodoDecisionsResponse
 import persona.core.contracts.TodosResponse
 import persona.core.contracts.api.AssistantViewAnswer
 import persona.core.contracts.api.TasksApi
@@ -26,7 +29,7 @@ import persona.core.contracts.generated.ExtensionViewAction
 import persona.core.contracts.generated.ExtensionViewActionInput
 import persona.core.contracts.generated.ExtensionViewChangedError
 
-/** The unified entry's routes on the active pairing (docs/protocol/protocol.md "Tasks and conversation activity"). */
+/** The unified entry's routes on the active pairing (docs/protocol/protocol.md "Tasks and the chat feed"). */
 class HttpTasksApi internal constructor(
     private val request: suspend (path: String, method: String, body: JsonElement?) -> Response,
     override val features: kotlinx.coroutines.flow.StateFlow<Set<String>>? = null,
@@ -79,6 +82,18 @@ class HttpTasksApi internal constructor(
         call(path("todos", id), "DELETE")
     }
 
+    override suspend fun todoDecisions(todoId: String): List<TodoDecision> =
+        JsonCodec.decodeFromJsonElement<TodoDecisionsResponse>(call(path("todos", todoId, "decisions", query = mapOf("all" to "1"))))
+            .decisions.orEmpty()
+
+    override suspend fun addTodoDecision(todoId: String, question: String, choice: String, reason: String, supersedesId: String): TodoDecision =
+        JsonCodec.decodeFromJsonElement<TodoDecisionResponse>(call(path("todos", todoId, "decisions"), "POST", buildJsonObject {
+            put("question", question.trim())
+            put("choice", choice.trim())
+            reason.trim().takeIf { it.isNotEmpty() }?.let { put("reason", it) }
+            supersedesId.takeIf { it.isNotEmpty() }?.let { put("supersedes_id", it) }
+        })).decision
+
     override suspend fun linkTodoAgent(todoId: String, machineId: String, sessionId: String) {
         call(path("todos", todoId, "agents", machineId, sessionId), "PUT", JsonObject(emptyMap()))
     }
@@ -112,6 +127,10 @@ class HttpTasksApi internal constructor(
     override suspend fun retryTask(todoId: String): Todo =
         JsonCodec.decodeFromJsonElement(call(path("todos", todoId, "retry"), "POST", JsonObject(emptyMap()))["todo"]
             ?: error("no todo in the answer"))
+
+    override suspend fun acceptTask(todoId: String, askedAt: String) {
+        call(path("todos", todoId, "accept"), "POST", buildJsonObject { put("asked_at", askedAt) })
+    }
 
     override suspend fun removeTask(todoId: String) {
         call(path("todos", todoId), "DELETE")

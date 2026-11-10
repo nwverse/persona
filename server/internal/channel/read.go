@@ -11,7 +11,7 @@ import (
 
 // Reading a run's answer out of the conversation is the same wherever the transcript comes from: the assistant reads it
 // over the hub's bus (session.items), the voice extension over the hub's HTTP API (…/items?after_seq=, …/full). An
-// ItemSource is that transcript; ReadTurn and RunAnswer are the one copy of the rules (docs/extensions/channels.md "Following this turn").
+// ItemSource is that transcript; ReadTurn and RunAnswer are the one copy of the rules (docs/extensions/channels.md "Message flow").
 
 // ItemSource is one conversation's transcript, read a page at a time.
 type ItemSource interface {

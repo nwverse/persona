@@ -5,7 +5,7 @@ import (
 	"slices"
 )
 
-// The inbox's common rules for a plugin (docs/extensions/extensions.md "Common inbox rules"): a connector with an inbox comes with the
+// The inbox's common rules for a plugin (docs/extensions/extensions.md "General rules for the Inbox"): a connector with an inbox comes with the
 // user's own triage rules (a top-level string setting triage_rules, sent as its things' rules), and either brings
 // its own fallback tier (capability fallback) or needs the hub's triage model.
 

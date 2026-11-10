@@ -1,6 +1,6 @@
 import XCTest
 
-/// The code-hosting page (#2961, docs/extensions/extensions.md「UI 版本 4」) on the schema's shared snapshots
+/// The code-hosting page (#2961, docs/extensions/extensions.md「UI version 4: code hosting」) on the schema's shared snapshots
 /// (schema/extension/examples/showcase/code-*.json), through the mock's showcase extension: iPad side by side (the file
 /// tree beside the diffs, landscape and portrait), the phone a directory at a time with the diffs pushed; a line
 /// number opens the inline comment box. Against scripts/mock/mock_hub.py with MOCK_EXTENSIONS=1:

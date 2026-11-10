@@ -4,6 +4,7 @@
 // Thinking with three dots and a clock.
 import { useState } from "react";
 import type { Item, SessionLive } from "../../lib/types";
+import { useStore } from "../../lib/store";
 import { workDuration } from "../../lib/work-groups";
 import { Collapse, cx, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -49,25 +50,10 @@ export function ThinkingCard({ item, durationMs, live, scope = "" }: { item?: It
   );
 }
 
-/** A thought's opening as one row of a live group's preview (cindy's ThinkingActivityRow). */
-export function ThinkingLine({ item }: { item: Item }) {
-  const text = (item.text ?? "").trim().replace(/\s+/g, " ");
-  return (
-    <div className="flex w-full min-w-0 items-center gap-1.5 px-2 py-[3px]" data-thinking-line>
-      <span className={STATUS_SLOT}>
-        <Icon name="spark" size={13} />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-[length:var(--chat-secondary)] text-thinking-ink italic" title={text}>
-        {text}
-      </span>
-    </div>
-  );
-}
-
 function LiveThinking() {
   // the clock runs from when this card saw the thinking start
   const [since] = useState(Date.now);
-  const now = useNow(500);
+  const now = useNow(500, useStore((s) => s.conn === "online"));
   return (
     <div className={HEAD} data-thinking="live" aria-live="polite">
       <span className={STATUS_SLOT}>

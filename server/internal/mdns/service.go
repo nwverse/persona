@@ -224,19 +224,19 @@ func (s *served) response(addrs []netip.Addr, ttl uint32) ([]byte, error) {
 	})
 }
 
-// buildResponse packs the announcement of svc with addrs (ttl 0: the goodbye).
-func buildResponse(svc Service, addrs []netip.Addr, ttl uint32) ([]byte, error) {
-	s, err := newServed(svc)
-	if err != nil {
-		return nil, err
-	}
-	return s.response(addrs, ttl)
+// asked is the set of the service's records a query asks for.
+type asked struct {
+	ptr, meta, srv, txt, a4, a6 bool
 }
 
-// answer picks the records that answer qs: the asked-for records as answers, the ones a querier will want next
-// (SRV / TXT / addresses after a PTR, addresses after an SRV, the other address family) as additional records.
-func (s *served) answer(qs []question, addrs []netip.Addr, ttl uint32) (ans, add []record) {
-	var ptr, meta, srv, txt, a4, a6 bool
+// needsAddrs reports whether the answer carries the host's addresses: as the answer to an A / AAAA question or as
+// additional records after a PTR or SRV answer.
+func (w asked) needsAddrs() bool { return w.ptr || w.srv || w.a4 || w.a6 }
+
+// match tells which of the service's records qs ask for. It needs no addresses, so a query for something else
+// costs no address lookup.
+func (s *served) match(qs []question) asked {
+	var w asked
 	for _, q := range qs {
 		if c := q.class &^ topBit; c != classIN && c != classANY {
 			continue
@@ -244,43 +244,50 @@ func (s *served) answer(qs []question, addrs []netip.Addr, ttl uint32) (ans, add
 		all := q.typ == typeANY
 		switch {
 		case q.name.equal(s.typ):
-			ptr = ptr || q.typ == typePTR || all
+			w.ptr = w.ptr || q.typ == typePTR || all
 		case q.name.equal(metaName):
-			meta = meta || q.typ == typePTR || all
+			w.meta = w.meta || q.typ == typePTR || all
 		case q.name.equal(s.inst):
-			srv = srv || q.typ == typeSRV || all
-			txt = txt || q.typ == typeTXT || all
+			w.srv = w.srv || q.typ == typeSRV || all
+			w.txt = w.txt || q.typ == typeTXT || all
 		case q.name.equal(s.host):
-			a4 = a4 || q.typ == typeA || all
-			a6 = a6 || q.typ == typeAAAA || all
+			w.a4 = w.a4 || q.typ == typeA || all
+			w.a6 = w.a6 || q.typ == typeAAAA || all
 		}
 	}
-	if ptr {
+	return w
+}
+
+// build makes the answer to w: the asked-for records as answers, the ones a querier will want next (SRV / TXT /
+// addresses after a PTR, addresses after an SRV, the other address family) as additional records. The result depends
+// on addrs only when w.needsAddrs().
+func (s *served) build(w asked, addrs []netip.Addr, ttl uint32) (ans, add []record) {
+	if w.ptr {
 		ans = append(ans, s.ptr(ttl))
 	}
-	if meta {
+	if w.meta {
 		ans = append(ans, s.meta(ttl))
 	}
-	if srv {
+	if w.srv {
 		ans = append(ans, s.srv(ttl))
 	}
-	if txt {
+	if w.txt {
 		ans = append(ans, s.txtRecord(ttl))
 	}
-	ans = append(ans, s.addrRecords(addrs, ttl, a4, a6)...)
+	ans = append(ans, s.addrRecords(addrs, ttl, w.a4, w.a6)...)
 	if len(ans) == 0 {
 		return nil, nil
 	}
-	if ptr && !srv {
+	if w.ptr && !w.srv {
 		add = append(add, s.srv(ttl))
 	}
-	if ptr && !txt {
+	if w.ptr && !w.txt {
 		add = append(add, s.txtRecord(ttl))
 	}
-	if ptr || srv {
-		add = append(add, s.addrRecords(addrs, ttl, !a4, !a6)...)
-	} else if a4 != a6 {
-		add = append(add, s.addrRecords(addrs, ttl, !a4, !a6)...)
+	if w.ptr || w.srv {
+		add = append(add, s.addrRecords(addrs, ttl, !w.a4, !w.a6)...)
+	} else if w.a4 != w.a6 {
+		add = append(add, s.addrRecords(addrs, ttl, !w.a4, !w.a6)...)
 	}
 	return ans, add
 }

@@ -683,19 +683,6 @@ func (m *Machine) unavailableWhy() string {
 	return ""
 }
 
-// connect makes one connection through the machine's own hub.json entry and serves it until it ends (tests drive a
-// machine this way, without the run loop).
-func (m *Machine) connect(ctx context.Context) error {
-	c, err := m.establish(ctx, cfgPath(m))
-	if err != nil {
-		return err
-	}
-	err = m.serve(ctx, c)
-	c.close()
-	m.detach(err, false)
-	return err
-}
-
 // claudeVersionRetry is how long the hub waits before asking a node again for its Claude version while node.info came
 // back without one; the last wait repeats until the connection ends.
 var claudeVersionRetry = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 30 * time.Minute, time.Hour}

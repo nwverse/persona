@@ -52,7 +52,7 @@ func TestRuntimeStaysAcrossHubConnections(t *testing.T) {
 		t.Fatalf("features %s", f)
 	}
 	_ = rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "session-1", "status": "done"}}})
-	waitFor(t, "the list kept without a hub", func() bool { return len(rh.reg.sessions()) == 1 })
+	waitFor(t, "the list kept without a hub", func() bool { return len(rh.reg.appendSessions(nil)) == 1 })
 
 	a, _ := runtimeNodeOn(t, rh)
 	if _, ok := listed(t, a)["session-1"]; !ok {

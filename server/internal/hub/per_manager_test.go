@@ -41,8 +41,10 @@ func TestAssistantDirectoriesAreTheMachinesManagers(t *testing.T) {
 	b.report(t, devicewire.State{Machine: proto.Machine{ID: "mb", Name: "mb"}, Info: info})
 	eventually(t, 5*time.Second, "ma, mb", func() bool { return h.localMachine("ma") != nil && h.localMachine("mb") != nil })
 	ma, mb := h.localMachine("ma"), h.localMachine("mb")
-	if ma.assistantCwd() != "/home/me/.persona/assistant" || mb.assistantCwd() != "/home/me/.persona/assistant-m-0b0b0b" {
-		t.Fatalf("directories: %q %q", ma.assistantCwd(), mb.assistantCwd())
+	// Each machine's manager's directory on it.
+	cwdA, cwdB := ma.assistantCwdOf(h.machineOwner("ma")), mb.assistantCwdOf(h.machineOwner("mb"))
+	if cwdA != "/home/me/.persona/assistant" || cwdB != "/home/me/.persona/assistant-m-0b0b0b" {
+		t.Fatalf("directories: %q %q", cwdA, cwdB)
 	}
 	for _, c := range []struct {
 		m    *Machine

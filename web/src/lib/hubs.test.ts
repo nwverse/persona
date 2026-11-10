@@ -8,7 +8,7 @@ describe("normalizeHubURL", () => {
     expect(normalizeHubURL("http://192.0.2.10:18660")).toEqual({ url: "http://192.0.2.10:18660" });
     expect(normalizeHubURL("HTTPS://Hub.Example.COM:8443")).toEqual({ url: "https://hub.example.com:8443" });
     expect(normalizeHubURL("http://[2001:db8::10]:18660")).toEqual({ url: "http://[2001:db8::10]:18660" });
-    // the sub-path a reverse proxy serves the hub under (docs/web/web.md "Sub-path")
+    // the sub-path a reverse proxy serves the hub under (docs/web/web.md "Subpaths")
     expect(normalizeHubURL("https://hub.example.com/persona-hub/")).toEqual({ url: "https://hub.example.com/persona-hub" });
     expect(normalizeHubURL("https://hub.example.com/persona")).toEqual({ url: "https://hub.example.com/persona" });
     expect(normalizeHubURL("https://hub.example.com/x/../hub")).toEqual({ url: "https://hub.example.com/hub" });

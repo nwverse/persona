@@ -37,6 +37,19 @@ final class InboxHandOffModel {
         }
     }
 
+    /// The terminal outcome of one Agent hand-off. A waiting message is still being tracked, not a result yet.
+    struct AgentSendResult: Equatable {
+        let delivered: Bool
+        let error: String?
+        /// The outbox already initiated this item's Done write; the caller must not file it again.
+        let filed: Bool
+
+        static let sent = AgentSendResult(delivered: true, error: nil, filed: false)
+        static func failed(_ error: String? = nil) -> AgentSendResult {
+            AgentSendResult(delivered: false, error: error ?? String(localized: "The message couldn't be sent to the agent"), filed: false)
+        }
+    }
+
     /// The user default holding the last target chosen in the detail page's bar.
     static let lastTargetKey = "inbox.handOffTarget"
     /// How long a queued send waits for Undo: as long as a toast with a button stays (`ToastCapsule.shown`).
@@ -54,8 +67,9 @@ final class InboxHandOffModel {
         var plainToMain: (String) async throws -> SessionKey
         /// Starts a new Persona conversation with the text: the conversation.
         var startNew: (String) async throws -> SessionKey
-        /// Sends the text to an Agent.
-        var sendToAgent: (SessionKey, String) -> Void
+        /// Sends the text to an Agent and waits for its pending message's terminal outcome, with the refusal's reason.
+        /// The bool is the user's Also Mark as Done choice; the result says whether the outbox already filed it.
+        var sendToAgent: (SessionKey, String, Bool) async -> InboxHandOffModel.AgentSendResult
         /// Opens a conversation it went to: Persona's (the first two targets) or an Agent's.
         var open: (Target, SessionKey) -> Void
         /// Files the item.
@@ -106,18 +120,19 @@ final class InboxHandOffModel {
         self.deps = deps
     }
 
-    /// The app's own: the hub of the moment, its Persona and the inbox store.
+    /// The app's own: the hub of the moment, its Persona and the inbox store. The item and its hand-off are its
+    /// manager's (its list's stamp), and so is a new conversation it starts.
     static func live(_ item: InboxItem, model: AppModel) -> InboxHandOffModel {
         // Without a hub nothing happens and nothing is said.
         func api() throws -> APIClient {
-            guard let api = model.api else { throw CancellationError() }
+            guard let api = model.api?.manager(model.itemManager(item.manager)) else { throw CancellationError() }
             return api
         }
         return InboxHandOffModel(itemID: item.id, deps: Deps(
             load: { try await api().inboxItem($0) },
             handOff: { id, text, clientID in
                 let answer = try await api().inboxHandoff(id, text: text, clientID: clientID)
-                if let it = answer.item { InboxStore.shared.put(it) }
+                if let it = answer.item { InboxStore.shared.put(it, manager: item.manager) }
                 return answer.session
             },
             showMain: { key, text, clientID in
@@ -126,14 +141,23 @@ final class InboxHandOffModel {
             },
             plainToMain: { text in
                 let key: SessionKey
-                if let main = model.assistantMain, model.session(main)?.canSend == true {
+                let client = try api()
+                // The item's manager's main conversation: the Persona page's when it shows that manager and has read its
+                // settings, else read from them (with none known, a start would replace the main conversation).
+                let main: SessionKey?
+                if model.assistantShows(item.manager), model.assistantConfig != nil {
+                    main = model.assistantMain
+                } else {
+                    let st = try await client.assistant()
+                    main = st.main.flatMap { $0.isEmpty ? nil : SessionKey(group: client.group, machineID: st.machineID, sessionID: $0) }
+                }
+                if let main, model.session(main)?.canSend == true {
                     model.sendNow(main, text: text) // a failure shows in the conversation, with Retry
                     key = main
-                } else if let main = model.assistantMain { // sendNow does nothing for a conversation not listed
-                    try await api().send(main, text: text)
+                } else if let main { // sendNow does nothing for a conversation not listed
+                    try await client.send(main, text: text)
                     key = main
                 } else {
-                    let client = try api()
                     let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature)) { op in
                         try await client.startConversation(prompt: text, main: true, opID: op)
                     }
@@ -151,19 +175,37 @@ final class InboxHandOffModel {
                 model.began(s, text: text)
                 return s.key
             },
-            sendToAgent: { key, text in model.sendNow(key, text: text) },
+            sendToAgent: { key, text, file in await model.sendForHandOff(key, text: text, item: item, file: file) },
             open: { target, key in
                 if case .agent = target {
                     model.openChat = key
                     model.selectedTab = .chats
                 } else {
-                    model.openAssistantConversation(key)
+                    // On the item's manager's page, which the conversation may not be listed on yet.
+                    model.openAssistantConversation(key, manager: item.manager)
                 }
             },
             markDone: { InboxStore.shared.setDone(item, true, haptic: false) }))
     }
 
     static func marksDone(_ target: Target) -> Bool { target != .main }
+
+    /// Whether a hand-off can go to this Agent now: one that takes messages, still live, on a computer that is online.
+    static func takes(_ session: Session, online: (MachineRef) -> Bool) -> Bool {
+        !session.assistant && session.canSend && session.state.isLive && online(session.machineRef)
+    }
+
+    /// The same for a remembered target's session (#2121): an Agent that can't take it now counts as gone.
+    static func takes(_ key: SessionKey, model: AppModel) -> Bool {
+        model.session(key).map { takes($0) { model.machine($0)?.online == true } } ?? false
+    }
+
+    /// The Agents a hand-off may target, latest first. Shared by the sheet and the event page's bar.
+    static func agents(_ sessions: [Session], limit: Int, online: (MachineRef) -> Bool) -> [Session] {
+        sessions.filter { takes($0, online: online) }
+            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+            .prefix(limit).map { $0 }
+    }
 
     func setMarkDone(_ on: Bool) {
         markDone = on
@@ -231,6 +273,7 @@ final class InboxHandOffModel {
                 return false
             }
         }
+        var filed = false
         do {
             switch target {
             case .main:
@@ -239,10 +282,15 @@ final class InboxHandOffModel {
             case .newChat:
                 sent = (target, try await deps.startNew(text))
             case .agent(let key):
-                deps.sendToAgent(key, text)
+                let result = await deps.sendToAgent(key, text, markDone)
+                guard result.delivered else {
+                    self.error = result.error
+                    return false
+                }
+                filed = result.filed
                 sent = (target, key)
             }
-            if markDone { deps.markDone() }
+            if markDone && !filed { deps.markDone() }
             return true
         } catch {
             self.error = Self.words(for: error)
@@ -331,5 +379,43 @@ final class InboxHandOffModel {
         var kept = tried
         kept.inDoubt = true
         attempt = kept
+    }
+}
+
+extension AppModel {
+    /// Keeps one hand-off pending message and its id through the outbox's retries. Only a terminal sent / failed state
+    /// answers the sheet, so another Send cannot type a second copy while the first waits for a connection (#1846).
+    func sendForHandOff(_ key: SessionKey, text: String, item: InboxItem? = nil, file: Bool = false) async -> InboxHandOffModel.AgentSendResult {
+        guard allowSend(key) else { return .failed(session(key)?.sourceSubtitle) }
+        var msg = PendingMessage(text: text, images: [])
+        if file, let item { msg.inboxHandOff = .init(itemID: item.id, manager: item.manager) }
+        chat(key).pending.append(msg)
+        saveOutbox()
+        let outcome = await sendPending(key, msg)
+        settleSend(key, msg.id, outcome)
+        if outcome == .sent { return handOffSent(key, msg) }
+        if outcome == .failed { return .failed(chat(key).pending.first { $0.id == msg.id }?.failure) }
+
+        // The outbox owns every retry. Waiting for a link is not failure: follow this message until a retry delivers it
+        // or refuses it. A transcript copy can consume the pending bubble before this loop sees its sent state.
+        while !Task.isCancelled {
+            if let current = chat(key).pending.first(where: { $0.id == msg.id }) {
+                switch current.state {
+                case .sent: return handOffSent(key, current)
+                case .failed: return .failed(current.failure)
+                case .sending, .waiting: break
+                }
+            } else if chat(key).items.contains(where: { PendingMessage.arrived(msg, as: $0) }) {
+                return handOffSent(key, msg)
+            } else {
+                return .failed() // discarded by the user or reset with its hub
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return .failed()
+    }
+
+    private func handOffSent(_ key: SessionKey, _ msg: PendingMessage) -> InboxHandOffModel.AgentSendResult {
+        InboxHandOffModel.AgentSendResult(delivered: true, error: nil, filed: completeInboxHandOff(key, msg))
     }
 }

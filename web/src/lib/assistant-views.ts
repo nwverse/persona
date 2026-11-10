@@ -1,4 +1,4 @@
-// What the web knows about the assistant's cards in a conversation (docs/assistant/assistant-views.md "Persisted submits" and "Live cards"):
+// What the web knows about the assistant's cards in a conversation (docs/assistant/assistant-views.md "Persistent submission" and "Live cards"):
 // the live cards (view_show / view_update, by version), the answers given from any card on any device (by revision),
 // and which text blocks the hub has registered (only those take an answer). It comes from the feed's snapshot (views,
 // view_actions, view_blocks) and the events assistant_view, assistant_view_action and assistant_view_block, each kept

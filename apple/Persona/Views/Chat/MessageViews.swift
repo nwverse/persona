@@ -40,11 +40,11 @@ extension MarkdownUI.Theme {
             .listItem { config in config.label.markdownMargin(top: .em(0.2)) }
             .codeBlock { config in
                 // A card the assistant drew (persona-view, or the older persona-card, #886), drawn with the extensions'
-                // components (docs/extensions/extensions.md「助手的卡片」); one the app cannot read stays a code block.
+                // components (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」); one the app cannot read stays a code block.
                 if AssistantCardBlock.handles(config.language), let view = AssistantCardBlock.parse(language: config.language, config.content) {
                     AssistantViewCard(view: view).markdownMargin(top: 4, bottom: 12)
                 } else if let kind = RenderedFence.kind(config.language) {
-                    // A formula or a diagram (docs/apple/ios.md「公式和图」); the code block when it cannot be drawn.
+                    // A formula or a diagram (docs/apple/ios.md「Math and diagrams」); the code block when it cannot be drawn.
                     RenderedBlock(kind: kind, source: config.content.trimmingCharacters(in: .whitespacesAndNewlines)) { plainCodeBlock(config) }
                         .markdownMargin(top: 4, bottom: 12)
                 } else {
@@ -262,7 +262,8 @@ struct PeerMessage: View {
                 // A subagent's report that came as a message: one line until opened, as in its card.
                 FoldedReport(id: pinKey, text: item.text ?? "", font: Theme.Font.secondary) { words(d) }
             } else {
-                words(d)
+                // A long one: its first lines until opened, as many as an exchange shows (#2010).
+                LineFold(lines: ChatLayoutSettings.defaultLines, id: pinKey) { words(d) }
             }
         }
         .padding(Theme.Space.m)
@@ -524,6 +525,8 @@ struct AssistantText: View, Equatable {
             }
             PortChips(text: item.text ?? "")
         }
+        // A single line break is one, as in the terminal and Claude's web chat (#2088): not a space.
+        .markdownSoftBreakMode(.lineBreak)
         .lookUpFiles(d.asked)
         .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
         #if os(macOS)
@@ -811,7 +814,7 @@ struct NoticeRow: View {
     private var wake: some View {
         let w = Self.wakeSummary(item)
         return HStack(spacing: Theme.Space.sm) {
-            ThemedIcon(w.failed ? Theme.Icon.errorFilled : "bell.fill")
+            ThemedIcon(w.failed ? Theme.Icon.errorFilled : Theme.Icon.notification)
                 .foregroundStyle(w.failed ? Theme.danger : Theme.accent)
             Text(w.text).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
         }
@@ -855,66 +858,6 @@ struct NoticeRow: View {
             String(localized: "\(kind) updated · \(what)")
         }
         return (text, failed)
-    }
-}
-
-/// Under an answer: background tasks reported back after it. Short and quiet; tap for what the agent did next.
-struct WakeChip: View {
-    var notices: [Item]
-    var live: Bool
-    var open: () -> Void
-
-    var body: some View {
-        let summary = notices.count == 1 ? NoticeRow.wakeSummary(notices[0]) : nil
-        let failed = notices.contains { NoticeRow.wakeSummary($0).failed }
-        Button(action: open) {
-            HStack(spacing: Theme.Space.sm) {
-                if live {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    ThemedIcon(failed ? Theme.Icon.errorFilled : "bell.fill")
-                        .foregroundStyle(failed ? Theme.danger : Theme.accent)
-                }
-                Text(live ? String(localized: "Background task done · Processing") : summary?.text ?? String(localized: "\(notices.count) background tasks done"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong)
-            }
-            .font(Theme.Font.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.sm)
-            .background(Theme.Fill.well, in: .capsule)
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.plain)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("Background task done, view the messages after it")
-    }
-}
-
-/// The drawer behind a WakeChip: which tasks reported back, then what the agent did and said after.
-struct WakeDrawer<Content: View>: View {
-    @Environment(\.dismiss) private var dismiss
-    var notices: [Item]
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Space.l) {
-                    content()
-                }
-                .padding(Theme.Space.l)
-            }
-            .closesMessageBar()
-            .background(Theme.pageBackground)
-            .navigationTitle(notices.count > 1 ? String(localized: "\(notices.count) background tasks done") : String(localized: "Background Task Done"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 }
 
@@ -1029,8 +972,9 @@ struct RecapDrawer: View {
                                 Text(Self.written(ts, latest: n == 0 && items.count > 1))
                                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                             }
-                            Markdown(Links.markdown(MathMarkdown.rewrite(item.text ?? "")))
+                            Markdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(item.text ?? ""))))
                                 .markdownTheme(.persona)
+                                .markdownSoftBreakMode(.lineBreak)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -1069,6 +1013,7 @@ struct StreamingText: View {
                 .markdownTheme(.persona)
                 .padding(.top, parts.done.last.map { StreamChunks.gap(after: $0, before: parts.tail) } ?? 0)
         }
+        .markdownSoftBreakMode(.lineBreak) // as the finished reply (`AssistantText`)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -1099,14 +1044,14 @@ nonisolated enum WebLinks {
 /// Parsed Markdown per text: MarkdownUI parses (cmark) in `Markdown.init`, on every redraw of the row.
 nonisolated enum MarkdownMemo {
     private static let memo = TextMemo<MarkdownContent>(limit: 128)
-    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite($0))) } }
+    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
 
     private static let pathsMemo = TextMemo<PathMarkdown>(limit: 128)
     /// Where the paths are in the same Markdown (`content`).
-    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite($0))) } }
+    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
 }
 
-/// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「文件查看器」), the code
+/// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「File viewer」), the code
 /// spans that are a whole path too; tapping one opens it in the file viewer at its line (`PathLinkURL`, the chat's
 /// `openURL`). Until the machine answers, and outside a chat, the plain Markdown: the same words in the same place, only
 /// their color changes when the answer comes (a link is the text's size, so the row does not grow).
@@ -1181,7 +1126,9 @@ nonisolated struct AssistantRowText {
     /// limit) and its pictures, videos and sounds; documents aside (their cards).
     let chips: [String]
     init(_ text: String) {
-        let source = Links.markdown(MathMarkdown.rewrite(text)) // links end where `Links` says, not at the next space; formulas as pictures
+        // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); links end where `Links` says,
+        // not at the next space; formulas as pictures.
+        let source = Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(text)))
         markdown = MarkdownContent(source)
         let paths = PathMarkdown(source)
         self.paths = paths

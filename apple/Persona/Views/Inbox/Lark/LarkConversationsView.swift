@@ -12,7 +12,7 @@ struct LarkConversationsView: View {
     }
 }
 
-/// The Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md「多账号」): with more than one signed in, chips over the
+/// The Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md「Multiple accounts」): with more than one signed in, chips over the
 /// list pick whose chats it shows; each account keeps its own list and cache.
 private struct LarkAccountsPage: View {
     @State private var choice: LarkAccountChoice
