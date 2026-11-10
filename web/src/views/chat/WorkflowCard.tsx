@@ -1,4 +1,4 @@
-// A Claude Code workflow run (#2935, #3434; docs/protocol/agent-states.md "Background workflow, Monitor") as a card: in the chat,
+// A Claude Code workflow run (#2935, #3434; docs/protocol/agent-states.md "Background workflows and Monitor") as a card: in the chat,
 // where the Workflow call that launched it was (WorkflowCallCard), and in the chat's background dialog (WorkflowCard).
 // Both draw the same parts:
 // - a head: the mark, its name, its status, "169/185+" agents done of those started (the "+" while it runs: the script

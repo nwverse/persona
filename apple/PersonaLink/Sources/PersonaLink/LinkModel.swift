@@ -39,7 +39,7 @@ struct LinkStatus: Decodable, Equatable {
     var from: String?
     var codeExpires: Date?
     /// "system": the hub sits behind an HTTPS reverse proxy and is checked with the system's CAs and its host name, not
-    /// a pin (docs/operations/link.md「hub 在反向代理后面」); nil when pinned or with older helpers.
+    /// a pin (docs/operations/link.md「Hub behind a reverse proxy」); nil when pinned or with older helpers.
     var trust: String?
     /// The hub still waits for someone to confirm this computer in the phone App or on the web (「是我的电脑」,
     /// docs/assistant/onboarding.md 4.2). Helpers and hubs that do not say yet send nothing: shown as connected.

@@ -8,7 +8,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -22,7 +24,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.api.AssistantManagerChoice
+import persona.core.contracts.api.ExtensionCatalog
 import persona.core.contracts.api.ExtensionOperation
+import persona.core.contracts.api.ManagerPins
 import persona.core.contracts.api.ManagerRoster
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
@@ -109,43 +113,38 @@ class CatalogExtensionManagerTest {
         assertEquals("m1", model.state.value.operation?.manager)
     }
 
-    @Test fun catalogPinsBothApiNamesAndReleasesOnlyItsOwnPins() {
+    @Test fun catalogNamesItsOwnerOnBothApiNamesForItsOwnRequestsOnly() {
         AssistantManagerChoice.choose(null, null, "assistant")
-        val catalog = listOf("extensions", "-", "catalog")
-        val previous = AssistantManagerChoice.pin(listOf(catalog), "previous-manager")
-        var shown by mutableStateOf(true)
         var manager by mutableStateOf<String?>("m2")
-        val api = FakeOperations(stepped = false)
+        val seen = mutableListOf<ManagerPins?>()
+        val api = object : FakeOperations(stepped = false) {
+            override suspend fun catalog(query: String, market: String?, refresh: Boolean): ExtensionCatalog {
+                seen += currentCoroutineContext()[ManagerPins]
+                return super.catalog(query, market, refresh)
+            }
+        }
         val paths = listOf("extensions", "plugins").flatMap { base ->
             listOf(listOf(base, "example-notes", "-", "upgrade"), listOf(base, "example-notes", "-", "auth"),
                 listOf(base, "-", "catalog"), listOf(base, "-", "catalog", "preview"),
                 listOf(base, "-", "install"), listOf(base, "-", "operations"),
                 listOf(base, "-", "operations", "op1", "retry"))
         }
-        try {
-            rule.setContent {
-                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
-                    if (shown) ExtensionCatalogPage(api, "m1", "example-notes", onBack = {}, onInstalled = {}, manager = manager)
-                }
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                ExtensionCatalogPage(api, "m1", "example-notes", onBack = {}, onInstalled = {}, manager = manager)
             }
-            rule.runOnIdle {
-                paths.forEach { assertEquals("m2", AssistantManagerChoice.itemHeader(it)) }
-                assertNull(AssistantManagerChoice.itemHeader(listOf("extensions", "-", "markets")))
-                assertNull(AssistantManagerChoice.itemHeader(listOf("extensions", "another-extension")))
-                manager = "m3"
-            }
-            rule.runOnIdle {
-                paths.forEach { assertEquals("m3", AssistantManagerChoice.itemHeader(it)) }
-                shown = false
-            }
-            rule.runOnIdle {
-                assertEquals("previous-manager", AssistantManagerChoice.itemHeader(catalog))
-                paths.filter { it.take(3) != catalog }.forEach { assertNull(AssistantManagerChoice.itemHeader(it)) }
-            }
-        } finally {
-            rule.runOnIdle { shown = false }
-            rule.waitForIdle()
-            previous()
         }
+        rule.runOnIdle {
+            val page = seen.last()
+            paths.forEach { assertEquals("m2", page?.manager(it)) }
+            assertNull(page?.manager(listOf("extensions", "-", "markets")))
+            assertNull(page?.manager(listOf("extensions", "another-extension")))
+            // The same API used elsewhere while the page is open names nothing.
+            runBlocking { api.catalog("", null, false) }
+            assertNull(seen.last())
+            paths.forEach { assertNull(AssistantManagerChoice.itemHeader(it)) }
+            manager = "m3"
+        }
+        rule.runOnIdle { paths.forEach { assertEquals("m3", seen.last()?.manager(it)) } }
     }
 }

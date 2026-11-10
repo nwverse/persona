@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Sending into a terminal safely (docs/protocol/protocol.md「发消息」): the node refuses a message — nothing typed — when the
+// Sending into a terminal safely (docs/protocol/protocol.md「Sending messages」): the node refuses a message — nothing typed — when the
 // computer's Claude input box holds a draft or a dialog has the keyboard. Each pending message carries its id as
 // client_msg_id, so a retry after a lost response is not typed twice. A refused one goes again under a new id: the
 // hub answers an id it refused with that refusal, without asking the computer again (#6425).
@@ -39,7 +39,7 @@ extension AppModel {
         }
         let socket = socket(key.group)
         do {
-            // The message's id is its op id too (docs/protocol/protocol.md「操作回执」): however often it arrives, the hub
+            // The message's id is its op id too (docs/protocol/protocol.md「Operation receipts」): however often it arrives, the hub
             // types it once. Through a short drop (a hub restart) it keeps trying with that id instead of going to
             // the outbox's clock; once the drop's grace is over the outbox takes it (flushOutbox).
             let launcher = assistantLaunchers[key], model = assistantModels[key]

@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
     override fun attachBaseContext(base: android.content.Context) = super.attachBaseContext(persona.core.designsystem.AppLanguages.wrap(base))
 
     @Inject lateinit var settingsServices: SettingsServices
-    /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source marks"). */
+    /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source markers"). */
     @Inject lateinit var channelDirectory: persona.core.contracts.api.ChannelDirectory
     @Inject lateinit var connection: HubConnection
     @Inject lateinit var shell: AppServices

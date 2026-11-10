@@ -76,13 +76,13 @@ var UISlots = []UISlot{
 	// inbox_item draws the body of an inbox item from the plugin's connector (its own header stays the app's): the
 	// same items a plugin's connector brought in, with the hub's triage on them. Drawn with UI version 2's items.
 	{Name: "inbox_item", Size: SizeFull, Context: "item", Shown: true, Since: 2},
-	// widget is drawn outside the app (docs/extensions/extensions.md "System-level places"): a home screen widget, a Lock Screen or watch
+	// widget is drawn outside the app (docs/extensions/extensions.md "System-level placements"): a home screen widget, a Lock Screen or watch
 	// face complication. The size it is asked for is the family (FitWidget holds the view to it); the apps list
 	// widgets on their own (GET /api/v1/extensions/-/widgets), not with the slots drawn in the app.
 	{Name: "widget", Size: WidgetFamilySmall, Shown: true, Since: 3},
 }
 
-// Widgets: the families a widget is drawn at and how often it is drawn again (docs/extensions/extensions.md "System-level places").
+// Widgets: the families a widget is drawn at and how often it is drawn again (docs/extensions/extensions.md "System-level placements").
 const (
 	WidgetFamilySmall    = wire.WidgetFamilySmall
 	WidgetRefreshDefault = 30 // minutes

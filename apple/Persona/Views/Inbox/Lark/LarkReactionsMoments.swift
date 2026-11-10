@@ -11,10 +11,11 @@ extension EnvironmentValues {
 struct LarkEmojiImage: View {
     var key: String
     var size: CGFloat
+    @Environment(\.larkManager) private var manager
 
     var body: some View {
         let media = LarkMedia.shared
-        if let url = media.emoji(key)?.url {
+        if let url = media.emoji(key, manager: manager)?.url {
             LarkRemoteImage(url: url, maxPixel: size * 3, contentMode: .fit).frame(width: size, height: size)
         } else {
             Text(LarkMedia.labelFallback(key, text: nil)).font(.system(size: size * 0.45)).lineLimit(1).minimumScaleFactor(0.5)
@@ -46,19 +47,21 @@ struct LarkReactionPicker: View {
     var message: LarkMessage
     var pick: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.larkManager) private var manager
+    @Environment(\.larkGroup) private var group
 
     var body: some View {
-        let media = LarkMedia.shared
+        let catalog = LarkMedia.shared.catalog(manager)
         let mine = Set((message.reactions ?? []).filter { $0.mine == true }.map { $0.key.lowercased() })
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.l) {
                     HStack(spacing: 0) {
-                        ForEach(Array(media.quickReactions.prefix(7)), id: \.self) { key in
+                        ForEach(Array(catalog.quickReactions.prefix(7)), id: \.self) { key in
                             cell(key, size: 34, selected: mine.contains(key.lowercased()))
                         }
                     }
-                    ForEach(media.emojiGroups, id: \.title) { g in
+                    ForEach(catalog.groups, id: \.title) { g in
                         VStack(alignment: .leading, spacing: Theme.Space.s) {
                             Text(g.title).font(Theme.Font.captionStrong).foregroundStyle(.secondary)
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 8) {
@@ -66,14 +69,14 @@ struct LarkReactionPicker: View {
                             }
                         }
                     }
-                    if media.emojiGroups.isEmpty { ProgressView().frame(maxWidth: .infinity) }
+                    if catalog.groups.isEmpty { ProgressView().frame(maxWidth: .infinity) }
                 }
                 .padding(Theme.Space.l)
             }
             .navigationTitle("Add Reaction")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-            .onAppear { media.loadEmojiCatalog() }
+            .onAppear { LarkMedia.shared.loadEmojiCatalog(manager: manager, using: AppModel.shared.larkAPI(group: group)) }
         }
         .presentationDetents([.medium, .large])
     }
@@ -88,7 +91,7 @@ struct LarkReactionPicker: View {
                 .background(selected ? LarkColor.blue.opacity(0.15) : .clear, in: .rect(cornerRadius: Theme.Radius.control))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(LarkMedia.shared.emoji(key)?.label ?? key)
+        .accessibilityLabel(LarkMedia.shared.emoji(key, manager: manager)?.label ?? key)
     }
 }
 
@@ -109,6 +112,7 @@ struct LarkMomentsCard: View {
     @Environment(\.larkContext) private var context
     @Environment(\.larkAccount) private var larkAccount
     @Environment(\.larkManager) private var larkManager
+    @Environment(\.larkGroup) private var larkGroup
     @State private var preview: LarkURLPreview?
     @State private var reading = false
 
@@ -144,7 +148,7 @@ struct LarkMomentsCard: View {
         }
         .buttonStyle(.plain)
         .task(id: part.url) {
-            guard let mid = context.messageID, let url = part.url, let api = AppModel.shared.api?.manager(larkManager).lark(larkAccount) else { return }
+            guard let mid = context.messageID, let url = part.url, let api = AppModel.shared.larkAPI(group: larkGroup, manager: larkManager, account: larkAccount) else { return }
             preview = try? await api.larkURLPreview(message: mid, url: url)
         }
         .sheet(isPresented: $reading) { if let id = LarkMoments.postID(part.url) { LarkMomentsPostView(postID: id, link: part.url, manager: larkManager) } }
@@ -157,6 +161,7 @@ struct LarkMomentsPostView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.larkAccount) private var larkAccount
+    @Environment(\.larkGroup) private var larkGroup
     var postID: String
     var link: String?
     /// Pushed as a page (the inbox's Moments item) instead of presented as a sheet: no stack of its own, no Done.
@@ -225,8 +230,9 @@ struct LarkMomentsPostView: View {
                 }
             }
             .task {
-                guard let api = model.api?.manager(manager).lark(larkAccount) else { return }
-                LarkMedia.shared.loadEmojiCatalog()
+                await model.readMessagingSource(group: larkGroup, manager: manager)
+                guard let api = model.larkAPI(group: larkGroup, manager: manager, account: larkAccount) else { return }
+                LarkMedia.shared.loadEmojiCatalog(manager: manager, using: model.larkAPI(group: larkGroup))
                 async let c = api.larkMomentsComments(postID)
                 do { post = try await api.larkMomentsPost(postID) } catch { self.error = error.localizedDescription }
                 comments = (try? await c) ?? []
@@ -235,6 +241,9 @@ struct LarkMomentsPostView: View {
                 ImageViewer(urls: (post?.images ?? []).compactMap(\.url).map(media), index: g.index)
             }
             .sheet(item: $person) { LarkProfileView(person: $0) }
+            // A pushed page does not inherit the inbox's environment: its emoji, reactions and the author's profile are
+            // read through the post's manager.
+            .environment(\.larkManager, manager)
     }
 
     private struct GalleryIndex: Identifiable { var index: Int; var id: Int { index } }

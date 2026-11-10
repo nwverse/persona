@@ -325,7 +325,7 @@ struct GitDiffSheet: View {
     @State private var diff: GitDiff?
     @State private var error: String?
 
-    /// A picture or a document the hub can give the versions of: compared instead of a text diff (docs/apple/ios.md「对比」).
+    /// A picture or a document the hub can give the versions of: compared instead of a text diff (docs/apple/ios.md「Compare」).
     private var compares: DocumentText.Kind? {
         guard model.features(group).contains("git_blob"), root != nil else { return nil }
         return DocumentText.kind(target.file.name)

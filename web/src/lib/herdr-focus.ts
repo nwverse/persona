@@ -1,5 +1,5 @@
 import { focusSource } from "./compatibility";
-// Focus sync between herdr's own client (the full surface) and the page (docs/integrations/terminal.md "Focus sync"). herdr's focus is
+// Focus sync between herdr's own client (the full surface) and the page (docs/integrations/terminal.md "Focus synchronization"). herdr's focus is
 // one state shared by all its clients, and it does not say who moved it, so the node attributes each change and the hub
 // tells every view whether the change is its own (server/internal/hub/herdrclient.go). Pure logic here, tested without
 // a DOM: what to do with a change (follow it, ignore its echo, only note it) and the guard that keeps the two

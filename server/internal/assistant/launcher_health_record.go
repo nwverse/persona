@@ -318,7 +318,7 @@ var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launche
 // node/codex_start.go, node/openelsewhere.go…). Codes about the machine's state (engine_missing, runtime_away,
 // not_running, orca_not_registered) are not here: the launcher cannot run there now, and a task may go elsewhere.
 var startRefusalCodes = []string{"codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
-	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeNodeOutdated}
+	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated}
 
 // startRefused: the start failed on the request, not the launcher: the node checked it and said no before running
 // anything (one of startRefusalCodes, or of startRequestErr).
@@ -333,9 +333,12 @@ func startRefused(err error) bool {
 	return startRequestErr.MatchString(re.Message)
 }
 
-// startStalled is a node's coded timeout after opening the agent. Text from older nodes deliberately keeps the
-// previous failure handling; guessing from translated messages could suppress genuine launcher failures.
+// startStalled is a node's coded timeout after opening the agent, or a start that ended in the new tab's shell before
+// the launcher ran (a startup question, a start line the shell did not take; node/shellsettle.go, #2570): none says
+// anything of the launcher. Text from older nodes deliberately keeps the previous failure handling; guessing from
+// translated messages could suppress genuine launcher failures.
 func startStalled(err error) bool {
 	var re *rpc.Error
-	return errors.As(err, &re) && re.Code == proto.CodeAgentStartStalled
+	return errors.As(err, &re) && (re.Code == proto.CodeAgentStartStalled || re.Code == proto.CodeShellWaiting ||
+		re.Code == proto.CodeStartLineRejected)
 }

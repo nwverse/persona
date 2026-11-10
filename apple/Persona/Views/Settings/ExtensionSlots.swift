@@ -2,7 +2,7 @@ import BeautifulUI
 import Observation
 import SwiftUI
 
-// The UI slots (docs/extensions/extensions.md「UI 插槽」): where plugins put their declarative UI beyond their own settings.
+// The UI slots (docs/extensions/extensions.md「UI slots」): where plugins put their declarative UI beyond their own settings.
 //
 // | placement        | iPhone / iPad                                             | Mac                                   |
 // | ---------------- | --------------------------------------------------------- | ------------------------------------- |
@@ -421,6 +421,6 @@ private struct ExtensionRefresh: ViewModifier {
 }
 
 extension View {
-    /// Draws `model`'s View again after its `refresh_after` while on screen (docs/extensions/extensions.md「UI 插槽」, refreshing).
+    /// Draws `model`'s View again after its `refresh_after` while on screen (docs/extensions/extensions.md「UI slots」, refreshing).
     func pluginRefresh(_ model: ExtensionViewModel) -> some View { modifier(ExtensionRefresh(model: model)) }
 }

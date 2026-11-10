@@ -25,7 +25,7 @@ struct PersonaWatchApp: App {
 }
 
 /// Watch state: seeded by the phone over WatchConnectivity, refreshed from the hubs directly while open. With several
-/// groups of hubs on the phone (docs/protocol/multi-hub.md「手表」) the watch gets each group's credential and shows them merged;
+/// groups of hubs on the phone (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」) the watch gets each group's credential and shows them merged;
 /// what it does goes to the group of what it acts on.
 @Observable
 final class WatchModel {
@@ -801,7 +801,7 @@ struct WatchSessionView: View {
                         WatchSourceMessage(message: it, source: source)
                     } else if let n = it.injected {
                         // Persona's message for the model (a task's notice, a scheduled run…): its line, centered, never
-                        // its words (docs/protocol/protocol.md「Persona 注入的消息」).
+                        // its words (docs/protocol/protocol.md「Messages injected by Persona」).
                         Label { Text(n.line) } icon: { Image(systemName: InjectedLook.icon(n)).foregroundStyle(InjectedLook.tint(n)) }
                             .font(Theme.Font.caption)
                             .foregroundStyle(.secondary)

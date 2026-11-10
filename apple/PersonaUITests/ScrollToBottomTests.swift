@@ -1,6 +1,6 @@
 import XCTest
 
-/// ↓ Jump to Latest and following the newest in the chat, case by case (docs/apple/ios-state.md「回到最新」, #1046): each case records
+/// ↓ Jump to Latest and following the newest in the chat, case by case (docs/apple/ios-state.md「Back to latest」, #1046): each case records
 /// the chat's state over time (`probe.chat-rows`: the arrow, the follow mode, held back, near the newest, the gap to
 /// it, a finger on the list) and asserts what the user should see. Each case saves a few screenshots along its
 /// timeline (`/tmp/persona-follow-<case>-<n><suffix>.png`) for the review.

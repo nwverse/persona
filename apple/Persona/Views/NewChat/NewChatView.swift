@@ -410,7 +410,7 @@ struct NewChatView: View {
                     }
                 }
                 #if os(macOS)
-                // A Mac sheet's primary button sits beside Cancel and answers ⏎ (docs/apple/mac.md「和 iOS 的对应」).
+                // A Mac sheet's primary button sits beside Cancel and answers ⏎ (docs/apple/mac.md「Mapping from iOS」).
                 ToolbarItem(placement: .confirmationAction) {
                     Button(starting ? startingLabel : String(localized: "Start Chat")) { Task { await start() } }
                         .lineLimit(1)

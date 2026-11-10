@@ -334,7 +334,7 @@ var (
 
 // callNode is dialNode for a tool call, tried again only while no node listens (nothing was sent): a resident node's
 // socket belongs to the Node serving the hub's connection, so it is gone for a moment while a hub restart replaces
-// that connection (docs/operations/hub-restart.md "Conversations are not interrupted"). A call that reached the node is never sent twice.
+// that connection (docs/operations/hub-restart.md "Chats not interrupted: hosting by the resident node"). A call that reached the node is never sent twice.
 func callNode(ctx context.Context, req any) ([]byte, error) {
 	deadline := time.Now().Add(callRedialFor)
 	for {

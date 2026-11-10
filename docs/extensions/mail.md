@@ -14,7 +14,7 @@ Gmail uses "Sign In with Google" (OAuth2 + XOAUTH2) and additionally supports se
 | Search | Gmail uses `X-GM-RAW` (supports `from:`, `subject:`, `has:attachment`, `newer_than:7d`, etc.); other providers use `SEARCH TEXT`. When the server returns 0 results or refuses (NO / BAD), fall back to matching headers locally (`headers_only`): from `before_uid` backwards, fetch ENVELOPEs 100 at a time; every space-separated word must appear in the subject, or in the name or address of the sender or a To / Cc recipient (case-insensitive, body not checked). One page looks at most at 2000 messages and 6 s (counted from the start of this IMAP operation, including connecting, SELECT, and the server's empty search; retries after connection errors don't restart the clock; when time is up, finish the current batch and stop; at least one batch per page). If not done, `has_more`, and `next_before_uid` is where to continue (`messages` may be empty then). 163's server does no keyword search, so it relies entirely on this step |
 | Summary | Fetch only a 2048-byte body snippet instead of the whole message; the summary is the first 160 characters of the body |
 | Unified inbox | Without `account_id`, fetch every account's INBOX concurrently and merge by date descending |
-| Reading | Fetch the full text with `BODY.PEEK`; go-message parses plain text / HTML / attachment metadata; it does **not** mark the message as read |
+| Reading | Fetch the full text with `BODY.PEEK`; go-message parses plain text / HTML / attachment metadata; it does **not** mark the message as read. A part marked `attachment` is an attachment even when its parameters don't parse, and so is a named file marked `inline` that is neither text nor an image (Apple Mail and iOS Mail send files that way); inline text and images stay part of the body, and the list's paperclip follows the same rule |
 | Attachment download | A stable ID tied to MIME order, metadata, and decoded content; reads are authorized by account, mailbox, and UID; a plain `BODY.PEEK` is decoded as a stream into a temp file, with HTTP Range support; doesn't mark as read and needs no extra IMAP extensions |
 | Read / starred | Only changes the two flags `\Seen` and `\Flagged` |
 | Sending | go-message builds the MIME, UTF-8, with Chinese subjects and names encoded per RFC 2047; supports `in_reply_to` / `references` for threading |
@@ -276,8 +276,10 @@ download route takes.
   files 0600. `dir` must be a plain relative subfolder (`bills/2026-10`): no absolute path, `~`, `..`, hidden folders,
   backslashes, colons or control characters; it is checked before anything is fetched. Folders are created one by one and
   each must resolve inside the root, so a symlink pointing out of it is refused.
-- **File names**: the sender's name is cleaned to one plain name (path parts dropped, control characters and `:` replaced,
-  leading dots removed, cut to 200 bytes on a character boundary keeping the extension; empty becomes `attachment`).
+- **File names**: the sender's name is decoded (RFC 2047 words, RFC 2231 values in any charset, also from headers with
+  unquoted or malformed parameters that Go's MIME parser rejects), then cleaned to one plain name (path parts dropped,
+  control characters and `:` replaced, leading dots removed, cut to 200 bytes on a character boundary keeping the
+  extension; empty becomes `attachment`).
   Files are created with `O_EXCL`, so an existing file (or a symlink at that name) is never written through:
   the next free `name (2).ext` … `name (99).ext` is used instead.
 - The node writes into its own data directory, which the agent sandbox leaves readable (only its secrets are closed).

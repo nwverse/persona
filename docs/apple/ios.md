@@ -140,7 +140,7 @@ Chat page:
   DEBUG `-tab dev -openMachinePage <machine id>`.
 - Machines (`docs/server/machines.md` ("App")): all machines in one page, each card online/system/Agent counts (Needs you / Working / Idle), current CPU/memory/network,
   1-hour mini charts, alerts, Redeploy on version mismatch, urgent first. Details show Agents above (open chats), then charts
-  (1 / 6 / 24 hours, press to scrub), system info, launchers. Below Engine: What this computer can do (#3018, node self-check by capability, expandable checks; stale generated files offer confirmed Repair, `docs/server/machines.md` ("Self-check")); entries drawer Machines, Settings › Machines, Agents menu Machines (old Machine monitoring merged).
+  (1 / 6 / 24 hours, press to scrub), system info, launchers. Below Engine: What this computer can do (#3018, node self-check by capability, expandable checks; stale generated files offer confirmed Repair, `docs/server/machines.md` ("Doctor: what this computer can do")); entries drawer Machines, Settings › Machines, Agents menu Machines (old Machine monitoring merged).
   Subscription Usage below cards (#2889, `docs/server/usage-windows.md` ("UI (iOS / Mac)")): Codex / Claude / gateway accounts, one row per window, hidden with no data.
   DEBUG `-tab dev -openMonitor all|<machine id> [-openMonitorRange 6h|24h] [-openMonitorScrub 0.55]`.
 - Away recap: Claude Code away_summary becomes Away recap card, removing "(disable recaps in /config)"; disable in Settings › Claude Code Settings.
@@ -164,11 +164,11 @@ Chat page:
     Mac `NSClipView` clamps beyond-latest offsets on layout, so glide manually sets each frame and restores any displacement in the same layout (`ChatPin+Mac.swift`).
     Tapping thinking/tools/BeautifulUI tool-pill groups within open work keeps both title and tapped row still (no borrowing remaining title rise or replacing persistent hold with normal 1.5 s).
     Reduce Motion disables rise/glide and content fades (`Theme.Motion.reduced`, #1123).
-  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. Wake-ups divide it into segments ending with Agent text;
-    the answer is the latest segment's text, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783; it used to be the longest, and a short reply after a wake showed while streaming, then went into the drawer once its item landed: Summary → Build uploaded now ends on Build uploaded, Summary in the work row).
-    Everything before the answer (transitional text, wake itself counted as a tool) folds into one work row; after it a small "🔔 Background command finished · <description> ›" strip, not inline expansion,
-    opens bottom `WakeDrawer` showing only results: each task notice and Agent reply in order, intermediate tools/thinking/text folded into one final work row by default (requested 2026-10-31: expanding should not unfold N process segments). While still handling a wake, strip says Background task finished · Processing.
-    Tasks completing during work (not waking) remain a work step.
+  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. The latest Agent text after a
+    wake is the answer, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783). Before new
+    words arrive, the previous answer stays in place while the new work joins its execution summary instead of opening
+    a second segment (#2796). Everything before the answer, including wake notices and intermediate narration, stays
+    inspectable by opening that ordinary work row. Tasks completing during work (not waking) remain a work step.
     Pitfall: Claude Code's idle-session away recap closes the turn; a later wake must reopen and merge into it,
     keeping recap in place, or post-wake replies show directly (`ChatBlock.build` `lastRaw` / `reopenedAt`).
   - Away recaps resemble background tasks: small "↺ Away recap · 21 min ago ›" strip opens `RecapCard` / `RecapDrawer` with full text. Consecutive recaps with nothing between merge into "↺ Away recap · 3 times · 3 min ago ›", newest first in drawer (`ChatLines.foldRecaps`, requested 2026-10-31); mock `MOCK_RECAPS=1`.
@@ -370,7 +370,7 @@ Chat page:
     ⋯ › Select turns the list into checkmarks with a bar under it: the count, Move, and the trash button; Done ends it. A trash toast has Undo (puts it back through `files/restore`); there is no permanent delete.
     A move to a taken name asks Replace (the one there goes to the trash) / Keep Both. These show only when hello's `features` has `file_edit` (or the hub sends none).
     On an iPad, files dragged in from another app (Files, Photos) upload into the folder shown, with an accent outline while they are over it.
-  - **Auto-refresh** (#3089, web #2439, `App/FsLive.swift`, `Views/Session/FsLiveModifier.swift`, `docs/protocol/protocol.md` ("Automatic file refresh")):
+  - **Auto-refresh** (#3089, web #2439, `App/FsLive.swift`, `Views/Session/FsLiveModifier.swift`, `docs/protocol/protocol.md` ("File auto-refresh")):
     foreground Files/Git sends WebSocket `fs_watch` (current directory/Git marks, Git state; same cwd combined),
     `fs_changed` debounced 200 ms then reread in place without loading animation (retain older loaded commits if latest unchanged); unsubscribe off foreground (`.onTabVisibility`),
     reread on return and re-send/reread on socket reconnect. Old hubs/nodes lacking `fs_watch` keep pull-to-refresh / ⌘R. Open diffs/file viewers do not refresh yet. Mac shares panels.
@@ -438,7 +438,7 @@ Chat page:
   (`Answered.answerLines`) say declined, canceled or opened, or list the values with secrets hidden. Siri / Shortcuts never accept one (`ApproveFirstIntent`), and the
   watch summary leaves them out (`Interaction.showsOnWatch`: an older watch build would fail to decode the whole summary). Not pushed while the app is closed (#2433).
   `ElicitationCardTests` mock `MOCK_ELICITATION=1` / `=unsupported`.
-- Input: above (at most 4 photos, resized 1600px; library videos uploaded as files to computer, message file card, protocol.md ("Sending video"); / shortcuts; Send becomes red Interrupt while working).
+- Input: above (at most 4 photos, resized 1600px; library videos uploaded as files to computer, message file card, protocol.md ("Sending videos"); / shortcuts; Send becomes red Interrupt while working).
 - Navigation subtitle: Machine · Model · State.
 
 ## New shell (ChatGPT-style, 2026-11-01)
@@ -462,6 +462,8 @@ Only at iPhone compact width; iPad, open iPhone Duo, Mac and watch remain unchan
 | Settings | Full-screen sheet (`model.shellSettings`, in the model because style changes rebuild the tree and the sheet must return to the same page), top-right × |
 | Empty chat | Shared welcome (`AssistantWelcome`: greeting, explanation of new / main chat, online computers and iPhone, six suggestions; Liquid Glass two-column cards, BeautifulUI "You can ask me" list card). The first 2026-11-01 version showed only the input and was blank without to-dos; user restored the old design 2026-11-02. Above input: Agents waiting for you, then Inbox Needs you, at most 3 rows + "N more in Inbox" (`ShellNeedsYou`), hidden if empty; page background beneath this and the input, with welcome scrolling underneath and fading at the top rather than clipping. Rows adapt to space (2026-11-02, #283; 3 rows + input occupied half Duo's outer screen and cut suggestion cards): never cover the first suggestion (`NeedsRoom`: measures its lower edge, page height excluding keyboard, resting input height), reduce rows when needed, minimum 1; ordinary iPhone Liquid Glass 3, 17e BeautifulUI 2, Duo outer / SE 1. If hidden items include Agents, say "N more need you"; if only Agents remain, tap goes to Agents (they are not in Inbox). `AssistantWelcomeTests` guards both layouts and drawer New chat: greeting, explanation and first suggestion visible above input; Needs you does not cover the first suggestion and focusing input does not change row count (also run on Duo outer screen) A first message whose start failed (#1368, as the web decided in #1122) stays where it was sent as the chat's failed bubble (`PendingBubble`): its red mark's menu has Resend and Delete, the reason sits over the input (with the readiness card for a refusal), the input stays empty and takes no new first message until it is resent or deleted, Health waits too. Kept across launches (`FailedStart`). Resend goes with the old op id only when the hub says that start is done or still running (`GET /api/v1/ops/{id}`), as a chat's Resend. `FirstMessageFailedTests` |
 | Input | One row: [+] Ask Persona [microphone]; focused or nonempty it grows into a card, text above, then [+] … [Model · Effort] [microphone] [Send] (`ShellComposerBar`, shared with Agent chats, #1091). iOS 长消息（#5685）：行数上限为输入框底边以上、扣除窗口顶部安全区的可用高度 × `Theme.Shell.composerHeightFraction`（22%）÷ 当前字体行高，向下取整并限制在 3–8 行，与 Android 和网页统一；键盘、横屏和窗口尺寸变化都会重新计算。达到上限前只撑高；达到上限后保持高度、内部滚动，文字区右上角出现展开图标，并为其保留右侧空间，底部工具栏不增加按钮。删到上限以下时图标消失、文字右边距恢复。展开页右上角收起、底部发送；收起保留文字和光标。Mac / Vision 的原有高度不变。 Always the same view, preserving focus and Pinyin marked text while morphing. Model / effort is compact text like ChatGPT "6.1 Sol Medium" ("Opus 5.5 High", #1117): no icon or red, model in bold primary text (`secondaryStrong`), effort in secondary text with a small space; truncate long model names at the tail, never effort. Right-side space matches the circular Send / Stop button margins, making Model ↔ microphone and microphone ↔ Send / Stop gaps equal (`SessionModes.composerTitle` / `modelName`). GPT display names drop `gpt-` and word-format suffixes (`gpt-6.1-sol` → `6.1 Sol`), preserving version and variant; directly related model choices use the same format, custom display names take priority, raw model IDs, saved values and requests unchanged (#2200). No App-added Hide keyboard icon or spacer row; system buttons and chat keyboard-dismiss gestures stay. The menu opens upward, nearest the button first: red Allow everything warning (`BypassWarning`, no input label), model, effort, then nested permission mode (`SessionModesMenu`; new chat `StarterModesMenu`, model is launcher). Model selection only for Claude Code in herdr panes (`/model`) and new assistant chats (launcher); existing assistant chats and Codex only show the current model. Codex / the internal Codex fork have no permission mode; app-server Codex has effort (`efforts`), others do not |
+| Input motion | Timings and thresholds taken from Telegram iOS's input panel (behavior and numbers only, no code; it is GPL). The card opening on focus moves with the keyboard's iOS 26 spring (`Theme.Motion.keyboard`); a line more or less eases over 0.1 s (`composerGrow`, Telegram's main chat); Send comes into the round button's place from a point by the right edge (scale 0.001 → 1 on a 0.4 s curve, fade 0.2 s, blur 4 → 0) while Stop / Voice shrink to 0.2 and fade (`composerSwap…`), and Send shrinks to 0.75 while pressed. Quotes over the field slide in by their own height from under the card's clipped top edge, fading in 0.15 s and out 0.2 s, as the card grows on the 0.4 s curve (`composerAccessory…`). The mic, tapped, turns dictation on or off as before; held 0.19 s (`Theme.Hold`) it dictates while held (`ComposerHoldMic`, `DictationHold`): a strip over the card shows a blinking red dot, the time, what is heard so far and "‹ Slide to cancel" following the finger at half its pace; a circle follows the finger and a lock pill sits above the mic. Letting go puts what was heard after the draft; sliding left 150 pt (100 pt or a 400 pt/s flick on release) drops it; sliding up 110 pt (60 pt or a flick on release) locks it on, and it carries on into the draft as a tapped mic does; the system taking the touch away locks too. The heard words stay out of the field while held so the card does not change shape under the finger. Not taken: voice messages (Persona sends no audio), the interactive keyboard drag (the flipped list blocks it, #1823), an edit bar (Edit only replaces the draft), long-press send options. `DictationHoldTests`; `-showDictationSample "<words>"` hears those words instead of the microphone (simulators) |
+| Attach panel | On the iPhone the input's + opens a panel (`AttachSheet`, `AttachSheetPhysics`, tokens `Theme.Attach` and `Theme.Motion.attach…`), Telegram's attachment menu (behavior and numbers only; GPL). The keyboard goes down first and the panel follows 0.15 s later. It grows out of the + button (spring mass 5 / stiffness 900 / damping 110, corners 0.2 s, content fading in 0.2 s) over the chat dimmed to 25 % black (0.3 s linear), and rests ⌊0.2488 × the screen's longer side⌋ down (217 pt on a 874 pt phone), 10 pt narrower than the screen. A finger moves it one to one: up it opens to fill the screen under the status bar, down past rest it drops; let go, more than 60 pt down (or down faster than 300 pt/s, or a 1800 pt/s fling from an open grid's top) closes it, up or down past half the way or faster than 300 pt/s opens it or rests it (damping 124, carrying the finger's speed), otherwise it eases back (0.3 s). It is pulled by its header, anywhere while at rest, and from the grid only when the grid is at its top (a UIKit pan that stops the grid's scroll as it takes over). Tapping the dimmed chat, ×, or pulling it down shrinks it back into +. Tabs float in a pill 22 pt above the bottom (62 pt tall; 160 / 240 / 300 pt for 2 / 3 / 4 tabs): Photos (recent photos and videos, three square columns 1 pt apart, the camera first, a column wide and two rows tall, where there is one; a mark in each cell's corner bounces as it fills with the pick's number; up to 4 photos and 4 videos as the composer takes), Files (Browse Files: the system's picker, uploaded as before) and More (the menu's other items: Glasses Photo, Voice Chat, extension prompts, quick commands). Switching tabs, the old page fades out over the new (0.23 s) and the sheet dips 10 pt and springs back; the highlight slides under the tab (0.4 s); tapping the tab shown opens the sheet all the way. Photos picked, the pill shrinks to 0.85, blurs and fades while a caption field (the draft itself) and Send come in; Send sends the photos with the draft, closing keeps them in the composer (Telegram discards them; the composer's own are kept so nothing picked is lost). Limited access shows a line with Manage (the system's limited picker); no access shows Open Settings and Choose Photos (the system's picker, which needs none); All Photos in the header always opens the system's picker. Not taken: the live camera preview (the cell opens the system camera), albums under the title, the preview on tapping a photo (a tap picks it), swipe to pick several, pinch to change the columns, the liquid-glass lens and Lottie icons, Location / Poll / Contact tabs. iPad, the Mac and a new chat's composer (`StarterComposer`) keep the menu. A video picked in the panel is copied off the main thread into a directory of its own and deleted however its upload ends; a slow-motion one goes as its original. `AttachSheetPhysicsTests` |
 | Chat | User bubbles share Agents-chat colors (`Theme.userBubble` from the interface style, #2647; previously shell-specific neutral gray) |
 | Slow network | Small pill below the top bar (Waiting for network / Connecting…), shared by both pages; the page switch occupies the original title area |
 
@@ -506,7 +508,7 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
   (Pinned: Unpin all; Recent: New chat, View all). Each row has one circular marker (pale chat bubble color chosen by session id, adjacent rows different) + one-line title,
   with a right-side status dot only for Needs you / Unread / Working; the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
   (tap for profile), Settings on the right (drawer only; split mode has the tab bar beside it). Search lists only results (N chats). Long-press also copies session ID or ends the chat.
-  **Automatic chats** (#3264, `AutoConversations`): when the hub reports origins (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Assistant chat origins")),
+  **Automatic chats** (#3264, `AutoConversations`): when the hub reports origins (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Origin of assistant chats")),
   Recent lists only the user's own (`user` / `channel` / absent); Inbox AI twin, scheduled tasks, Lark /agent, derived chats and extension-created chats fold into the first row below Recent, "Automatic chats N",
   collapsed by default, local `assistant.autoOpen`; collapsed still shows waiting count / Working / Unread. Expanded shows small rows per origin (count, status) and All chats,
   opening `AutoConversationsView` (All · Mine · source filters, prefiltered by source); Recent's ⋯ also includes All chats. Same view in iPhone drawer, iPad split and Mac sidebar.
@@ -727,7 +729,7 @@ and what this device asked are `AppModel.setUltracode` / `dismissUltracodeLost`,
 In `LauncherPicker` a blocked row is gray with the line (`LauncherBlockLine`) and an info mark; a tap opens `LauncherBlockedHelp` (why, How to Fix, the record under Details, Add Provider → `ProviderWizard`, Try Anyway picks it once the sheet has closed),
 never picks it. The form says the line under the launcher row when the launcher that will run is blocked (Model Settings' default, or picked anyway); Start stays enabled. Run Agent Here picks a usable launcher first, lists blocked ones last in its menu under a section titled with the line (a picker menu drops an option's second line), and says it in its footer once picked.
 Both read the list with `AppModel.launchersForStart` (fresh, not the cache). Add Provider is offered only for a computer in the hub-level group (the wizard saves there).
-`StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Launcher health in New Agent").
+`StartingNote` shows a coded start failure (`Session.startErrorCode`) as Didn't Start over the hub's whole sentence. Screenshots: `docs/operations/testing.md` ("Mock-data screenshots").
 
 ## Recent setups in New Agent (#2134)
 
@@ -735,7 +737,7 @@ Every start from New Agent (the Codex and Claude Code paths, where the per-machi
 - The form's top section **Recent** (hidden when joining a space) shows at most three cards on the machines offered (`RecentSetupRow`, `Views/NewChat/RecentSetupCards.swift`): folder · machine, then launcher · model · mode · effort; Allow Everything in `Theme.cautionText` with its mark; an offline machine's card gray with Offline and not pickable. A card's context menu has Remove from Recent and Clear Recent Setups.
 - A tap fills every field and focuses First Message; it never starts. Another machine's card is applied once that machine's launchers and directories are in (`pendingFill`, after its saved defaults); the model is picked when `loadModels` moves to that launcher's list (`restoredModel`), before the list comes, so the efforts offered are the model's. A Codex card leaves the machine's Claude mode and effort as they were.
 - Picking a machine (on open or by its card) also restores the model of its latest setup with the launcher it restores (`RecentSetups.model`); none: the default. No new per-machine key: Siri's `newChat.machine`, `launcher.<m>`, `cwd.<m>` are unchanged.
-- UI flow: `RecentSetupsUITests` (`docs/operations/testing.md`, "Recent setups in New Agent").
+- UI flow: `RecentSetupsUITests` (`docs/operations/testing.md`, "Mock-data screenshots").
 
 ## An agent's live reply (#1309)
 
@@ -929,6 +931,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     Page sides `Theme.Space.page` 16, aligned search/filters/group titles/cards/capsules, not individual paddings.
   - `Theme.Size` (requested 2026-10-31): named text-adjacent icons/dots/avatars/tap targets/thumbnails/label widths, default original points,
     `.scaledFrame(width:height:)` / `.scaledFrame(minWidth:…)` follows text up to 1.6× accessibility (44pt buttons not a third of screen).
+    `.tapTargetFrame(alignment:)`: a hit area that grows like `scaledFrame` but never under `tapTarget` (44pt) at Small / smaller system sizes, for small controls hit wider than drawn (uploaded avatar's corner delete).
     Lines/dividers/progress ≤4pt stay unscaled `frame`; geometric sizes unchanged; watch keeps own sizes, not App text sizing.
   - Dynamic Type + Settings › Appearance › Interface Style › Text Size (Small/Standard/Large, `TextSize`, `ui.textSize`) offsets system one level via RootView `.dynamicTypeSize`,
     changing text styles, `@ScaledMetric`, MarkdownUI and BeautifulUI together, ratios intact.
@@ -955,9 +958,33 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     (circle logos fill, others `Theme.Brand.inCircle`). Boxes: Settings `icon`, detail header `wellM`, email account `wellXS`,
     source `wellS`, sign-in `iconXS`; new marks measure opaque bounds after `rsvg-convert` and crop viewBox whitespace.
   Lock Screen Live Activities capped at `.large` (~160pt height, clips beyond).
-- Motion (`Theme.Motion`: state `.snappy` 0.25, layout `.smooth` 0.3): continuous only Needs you dot breathing and system working spinner;
-  Reduce Motion (`accessibilityReduceMotion`) stops dot (and loading/preparing placeholders), working dot static outer ring.
-  No wobbling icons/spinning gears/pulsing avatars/spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
+- Motion (`Theme.Motion`): one meaning, one motion. A page picks the row for what is happening; a new meaning gets a token and a row
+  here first, never an inline `.easeInOut(duration:)` (`TokenRatchetTests` counts those). Details and why: `docs/lessons/ios.md`, "Motion rules (#2943)".
+
+  | What happens | Motion |
+  | --- | --- |
+  | A value or state changes in place (toggle, tone, selection, a menu or card opening) | `state` / `standard`: `.snappy` 0.25 |
+  | Things take new places (rows in, out or reordered) | `layout`: `.smooth` 0.3 |
+  | A block grows in place and the eye follows its rows | `expand`: `.smooth` 0.4 |
+  | Something opens in the chat, or closes | `.unfolding`: `reveal` easeOut 0.28, `conceal` easeIn 0.2 |
+  | A number changes | `.contentTransition(.numericText)` |
+  | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
+  | Moving with the keyboard | `keyboard` (the system's spring) |
+  | The composer and the 「+」 panel | their `composer…` / `hold…` / `attach…` tokens, measured from Telegram |
+
+  Red lines:
+  - Leaving is quicker than arriving (`conceal` < `reveal`, `holdLeave` < `holdAppear`, `attachContentOut` < `attachContentIn`), and a
+    panel, card or row leaving fades and moves but does not shrink. Only a glyph swapped inside one control shrinks (`composerSwapScale`);
+    `composerAccessory` fading in quicker than out is Telegram's measured exception.
+  - Under the finger nothing animates: a drag follows it frame for frame, and the animation starts at release with the finger's speed.
+  - Only a few things move on their own, each listed with its reason in `apple/PersonaTests/ContinuousMotionTests.swift`: the Needs you
+    dot's breath, the persona while it works, typing dots, loading skeletons, the voice orb in a call, the recording dot, the watch's frog.
+    A loop changes only transform, opacity or color, never a frame, padding or font (that relays out every frame); it stops off screen,
+    in the background and with the wrist down; the persona and the voice orb also hold still in Low Power Mode.
+  - Reduce Motion (`accessibilityReduceMotion`, `Theme.Motion.reduced` outside a view): loops show one still frame (the working dot its
+    static ring); changes land at once or cross-fade, without sliding or scaling. The registry test fails for a loop whose file, or its
+    caller, never reads it.
+  - No wobbling icons, spinning gears, pulsing avatars or spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
   doubling otherwise); neighboring glass keys/top Back/⋯ use `GlassEffectContainer`.
   - An extension's View drawn again (#37, as on the web and Android; `Views/Settings/ExtensionMotion.swift`): under the same key, a `metric`, `stat_grid`
     or row value whose numbers alone changed rolls (`.numericText`, counting down when the number fell); any other change of a value or a badge's words fades in,
@@ -1303,12 +1330,12 @@ Like Telegram: network trouble shows no banner; **the page title becomes "small 
 
 ## SSH tunnels (fallback when direct connections fail, #891)
 
-When a device cannot reach the hub address, connect through an SSH server. For the mechanism, server setup and security, see [network.md, "Connect to the hub through an SSH tunnel"](../operations/network.md#经-ssh-隧道连-hub直连不通时的后备); this section covers the App side.
+When a device cannot reach the hub address, connect through an SSH server. For the mechanism, server setup and security, see [network.md, "Connecting to hub through SSH"](../operations/network.md#经-ssh-隧道连-hub直连不通时的后备); this section covers the App side.
 
 - **Code**: the tunnel itself is in the shared package `apple/Packages/PersonaSSH` (swift-nio-ssh + Network.framework, shared by iOS and Mac, not linked into the watch);
   App-side `Persona/App/SSHTunnels.swift` (one tunnel per hub, `SSHKeys`, routing `AppModel.sshRoute`),
   `Shared/HubTransport.swift` (maps hub addresses to tunnel loopback addresses, `SSHRoute` configuration), `Persona/Views/Settings/SSHTunnelView.swift`.
-- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets and port-forwarding address construction pass through `HubTransport.resolve`;
+- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets, port-forwarding address construction and the Feishu video and voice player's stream URL (`LarkMedia.streamURL`) pass through `HubTransport.resolve`;
   `ServerConfig`, the pairing registry, `currentConfig` and all comparisons still use the hub's own address, so multi-hub grouping, routing and credential upgrades need no tunnel awareness.
   `HubRoute.healthProbe` uses `direct: true`, always probing the direct route.
 - **Routing**: with usable SSH settings in a group (host, user, confirmed fingerprint), `routePicker` always has a value: before every connection, `HubRoute.answering` probes direct routes (even a single address),
@@ -1383,7 +1410,7 @@ The file viewer opens http(s) links within its own presentation layer: on iPhone
 | Tables | CSV, TSV, xlsx use a native table (`TableFileView`, #1294), see "Tables" below; the menu offers "View source" for CSV and "Open with Quick Look" for xlsx |
 | Office, iWork, RTF | docx, doc, xlsx, xls, pptx, ppt, pages, numbers, key, rtf use system QuickLook (#1293): downloaded through `…/file/download` to this preview's temporary file, then embedded in the page (iOS `QLPreviewController`, Mac `QLPreviewView`), without another presentation layer. The menu can "Share" the file (open in another App, save to Files). Closing the preview clears the temporary file. `.key` sent as text (PEM private key) still displays as code; iWork documents saved as folders (packages) are still listed as directories |
 
-**Thumbnails on the Files page** (#1293): for images, PDFs, videos and the documents above, when a row appears it requests a thumbnail from the computer holding the file (`GET …/file/thumb`, hub feature `file_thumb`, `docs/protocol/protocol.md` ("File previews")), sized to the row's tile × screen scale, at most three concurrently (`FileThumbnails`). Results are stored in memory and the cache directory by (hub group, machine, path, size, modification time): a changed file changes the key and is requested again. Every copy on disk is also checked once per launch with its ETag (`If-None-Match`, 304 keeps it), so a node that draws differently (#1303, JPEG orientation) replaces old pictures of unchanged files. If the machine cannot render it (`no_thumbnail`: Office on Linux, missing tools), or an old hub lacks the feature, the icon stays and no further request is made in this launch. Code and text get no thumbnails. A dark-page document thumbnail is not used; the icon is shown instead (in Mac dark mode, Quick Look gives RTF and text a dark background, making a black square in the list). Items with only a path (file cards in chats; `FileThumbnailIcon` passes size 0 and no time) are stored by path alongside the node's ETag and checked the same way: 304 reuses the old image, while a file regenerated at the same path gets a new one. The card's tile can be enlarged with `width` / `height`, and the image fits proportionally.
+**Thumbnails on the Files page** (#1293): for images, PDFs, videos and the documents above, when a row appears it requests a thumbnail from the computer holding the file (`GET …/file/thumb`, hub feature `file_thumb`, `docs/protocol/protocol.md` ("File preview")), sized to the row's tile × screen scale, at most three concurrently (`FileThumbnails`). Results are stored in memory and the cache directory by (hub group, machine, path, size, modification time): a changed file changes the key and is requested again. Every copy on disk is also checked once per launch with its ETag (`If-None-Match`, 304 keeps it), so a node that draws differently (#1303, JPEG orientation) replaces old pictures of unchanged files. If the machine cannot render it (`no_thumbnail`: Office on Linux, missing tools), or an old hub lacks the feature, the icon stays and no further request is made in this launch. Code and text get no thumbnails. A dark-page document thumbnail is not used; the icon is shown instead (in Mac dark mode, Quick Look gives RTF and text a dark background, making a black square in the list). Items with only a path (file cards in chats; `FileThumbnailIcon` passes size 0 and no time) are stored by path alongside the node's ETag and checked the same way: 304 reuses the old image, while a file regenerated at the same path gets a new one. The card's tile can be enlarged with `width` / `height`, and the image fits proportionally.
 
 **Binary files return only metadata**: when the hub has `file_stream`, the Files page reads with `stream=1` and binary files return only size, type and revision; images and PDFs are then fetched in full through `…/file/download` (no longer capped at 2 MB), QuickLook still downloads to a temporary file, and videos read segments on demand (#706, see "Video" above). Old hubs still return the entire file as base64.
 
@@ -1516,8 +1543,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 
 - **Inbox items are their id and their manager** (`InboxItem.key`): the store, the bulk arithmetic (`InboxBulk`), the reply and status
   spinners, the Mac's selection, item windows and Quick Open use it. An answer about one item is put back with the manager asked
-  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. An item's
+  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. A request
+  about one item (details, Done, Mute, a reply, its suggestion, hand-off and Trail) names its manager unless that is the
+  roster's default (`AppModel.itemManager`, as the web's `itemHeaders`), and names its stamp until the roster is read (the
+  default may have moved); the Rules and Muted lists name their stamp. An item's
   rule sheet reads and saves its manager's rules and moves only that manager's items (`InboxPolicyTarget.manager`).
+- **An item's Lark chat is its manager's**: its emoji and quick reactions (`LarkMedia.catalog`, one per manager), its messaging
+  source (`MessagingSources.source(for:manager:)`: a named manager's list is read through it when its chat, a profile or a Moments
+  post opens, until one is found this launch; the default's stays the hub's), its drafts (`LarkDrafts.Key`, and the Lark user
+  its outbox draft opens under, `LarkOutboxAccounts`; the default's under the names they had) and the clients of what opens
+  inside it (thread, composer, profile, cards: `AppModel.larkAPI`, through the chat's group, `larkGroup`). A Moments post
+  pushed from an item sets its manager on its page. Tests `LarkChatManagerTests`, `LarkDraftsTests`, `LarkOutboxStoreTests`.
 - **Rules and Muted per manager**: both lists read every installed manager's at once, each one named
   (`ManagerRoster.readEach`), and show each one's under its name (`ManagerHeading`), the default first, a manager with none
   left out; one that can't be read says so in its place (offline: that they show once it is back). Each entry is stamped

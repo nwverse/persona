@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Where GitHub's token comes from, as the user picks it in Settings › Connectors › GitHub (docs/extensions/connectors.md "2 · 7"): a
+// Where GitHub's token comes from, as the user picks it in Settings › Connectors › GitHub (docs/extensions/connectors.md "Login supports"): a
 // computer's gh login or the device flow. The choice is kept in settings ("github_auth"); hub.json's
 // github.auth.from_machine is only the default until the user chooses.
 

@@ -1,4 +1,4 @@
-// 设置 › 模型供应商's list (docs/integrations/launchers.md「同步状态」): the rc-file launchers grouped by the file they came from,
+// 设置 › 模型供应商's list (docs/integrations/launchers.md「Sync state」): the rc-file launchers grouped by the file they came from,
 // the built-in claude as one row per machine, and how each machine's list came in this time. Pure: the page draws it.
 import { t } from "../i18n";
 import { api } from "./api";

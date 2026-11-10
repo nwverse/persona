@@ -39,8 +39,11 @@ export interface HubExtension {
   /** An extension from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
    *  happened last with an upgrade (docs/extensions/extensions.md "Automatic upgrades"). */
   auto_upgrade?: boolean;
-  /** Why its own switch does not apply now: "disabled" while the extension is off (the switch is kept for when it is on). */
+  /** Why its own switch does not apply now (the switch is kept either way): "market_removed" once its market is no longer
+   *  registered, "disabled" while the extension is off. */
   auto_upgrade_paused?: string;
+  /** The market it upgrades from, kept after that market is removed (a hub from before it: none, though `auto_upgrade` is set). */
+  market?: string;
   upgrade?: ExtensionUpgrade;
   upgrade_note?: ExtensionUpgradeNote;
   /** An extension with a program on computers: how that program is on each machine it is switched on for. */
@@ -99,7 +102,7 @@ export function channelOf(p: Pick<HubExtension, "contributes">): string | null {
   return p.contributes?.channel?.find((id) => id.trim() !== "") ?? null;
 }
 
-/** An extension's program on one machine (docs/extensions/extensions.md "Programs that run on computers"). */
+/** An extension's program on one machine (docs/extensions/extensions.md "Programs running on computers"). */
 export interface ExtensionNodeState {
   machine_id: string;
   version?: string;
@@ -207,6 +210,12 @@ export interface HubExtensionDetail extends HubExtension {
   contributions?: Contribution[];
   depends?: DependencyState[];
   extension_pack?: PackMember[];
+  /** A pack whose Enabled switch takes its installed members along (#1830); a hub before it switches the pack alone. */
+  pack_members_follow?: boolean;
+  /** The members switching the pack off switched off: switching it back on turns these on again. */
+  pack_off?: string[];
+  /** The installed members that are on: the ones switching the pack off switches off, named in its confirmation. */
+  pack_on?: { id: string; name: string }[];
 }
 
 // ── the hub ─────────────────────────────────────────────
@@ -216,7 +225,7 @@ const base = (id: string) => `${extRoot()}/${enc(id)}/-`;
 type ListAnswer = { extensions?: HubExtension[]; plugins?: HubExtension[]; can_install?: boolean; markets?: boolean };
 
 export const listExtensions = () => api<ListAnswer>(extRoot()).then((r) => listOf(r));
-/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension markets"). */
+/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension marketplace"). */
 export const listExtensionsInfo = () =>
   api<ListAnswer>(extRoot()).then((r) => ({
     extensions: listOf(r),

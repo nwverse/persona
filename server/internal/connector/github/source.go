@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
-// Where the token comes from (docs/extensions/connectors.md "2 · 7"): one computer's gh login, which the user picks in the app
+// Where the token comes from (docs/extensions/connectors.md "Login supports"): one computer's gh login, which the user picks in the app
 // (hub.json's github.auth.from_machine is only the default), or the device flow (login.go), which needs no computer.
 // Choosing one leaves the other: there is no separate signing out.
 

@@ -7,7 +7,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// ---- the Agents business: the manager's (docs/assistant/agent-work.md "Who owns what") ----
+// ---- the Agents business: the manager's (docs/assistant/agent-work.md "Responsibilities") ----
 //
 // The manager triages an agent's turn once it ends (rules first, then a model), sends "Continue" after a transient model
 // error, wakes an agent when what it waits for should be over, and opens a card for what the user is to decide; it
@@ -83,7 +83,7 @@ type LauncherRepairConfig struct {
 }
 
 // DelegateConfig is manager.json agents.delegate: an agent's question goes to the assistant before the user
-// (docs/assistant/assistant.md "The assistant answers questions first").
+// (docs/assistant/assistant.md "Assistant answers questions first").
 type DelegateConfig struct {
 	// Enabled: off unless true.
 	Enabled *bool `json:"enabled,omitempty"`

@@ -2,7 +2,7 @@ import Foundation
 import Network
 import Observation
 
-/// What the top of the main screens says about the link to the hub, the way Telegram does it (docs/apple/ios.md「连接状态」):
+/// What the top of the main screens says about the link to the hub, the way Telegram does it (docs/apple/ios.md「Connection status」):
 /// no banner, the title itself turns into a small spinner and Waiting for Network / Connecting… / Updating…, and quietly back.
 @Observable
 final class ConnectionStatus {
@@ -36,7 +36,7 @@ final class ConnectionStatus {
     private(set) var shown: Phase = .online {
         didSet { if shown != oldValue { onShown?(shown) } }
     }
-    /// Told of each new `shown` as it is set (the iPhone shell's floating link pill: docs/apple/shell.md「连接状态和 toast」).
+    /// Told of each new `shown` as it is set (the iPhone shell's floating link pill: docs/apple/shell.md「Connection status and toasts」).
     @ObservationIgnored var onShown: ((Phase) -> Void)?
     private(set) var networkUp = true
     private(set) var catchingUp = false
@@ -128,7 +128,7 @@ final class ConnectionStatus {
         return catchingUp ? .updating : .online
     }
 
-    /// Several groups (docs/protocol/multi-hub.md「连接状态」): connecting only while none of them is up — one group out of reach
+    /// Several groups (docs/protocol/multi-hub.md「What the user sees」): connecting only while none of them is up — one group out of reach
     /// (a work hub behind a VPN) would otherwise keep every title on Connecting…; the hub list and the group chips say which
     /// one is down. One group: exactly the single-link rule.
     static func phase(network: Bool, links: [(state: LiveConnection.State, stalled: Bool)], catchingUp: Bool) -> Phase {

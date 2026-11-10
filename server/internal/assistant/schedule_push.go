@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
-// A scheduled task's "Push when done" (#2396, docs/assistant/assistant.md "Push when done"): each run is a turn in a conversation, and the
+// A scheduled task's "Push when done" (#2396, docs/assistant/assistant.md "Push after running"): each run is a turn in a conversation, and the
 // hub pushes every finished turn (hub/machine.go notifyFinished). Right for a morning briefing, wrong for a task that watches
 // something ("push me when there is new mail"): every run pushed "task name · no new mail". A task's push is then
 //

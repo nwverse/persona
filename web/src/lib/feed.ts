@@ -9,12 +9,13 @@ import { getState, onHubEvent, putTodo, refreshTodos } from "./store";
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
-import { deleteTodo, type Todo } from "./todos";
+import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { conversationManager, itemHeaders } from "./manager-choice";
 import { closePanel, getPanel } from "./panel";
 import type { ChatLine } from "./turns";
 import type { Item } from "./types";
+import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
 export interface PlanTask {
   title: string;
@@ -86,7 +87,7 @@ export interface BriefRow {
   /** accept: the verdict line, word for word as the Lark card says it (#1226), in the bot's language; a hub from before leaves it out. */
   verdict?: string;
   /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
-  outcome?: "done" | "cannot" | "decide";
+  outcome?: TodoAsk["outcome"];
   recommend?: string;
 }
 
@@ -280,6 +281,7 @@ export function answeredItems(it: FeedItem): AnsweredItem[] {
 interface FeedState {
   feeds: Record<string, FeedItem[]>;
   plans: Record<string, TaskPlan>;
+  taskCards: Record<string, TaskCardMetadata[]>;
   /** Conversation → the task the next message goes to ("Tell "xx""). */
   routes: Record<string, string>;
   busy: Record<string, boolean>;
@@ -287,7 +289,7 @@ interface FeedState {
   later: Record<string, boolean>;
 }
 
-let st: FeedState = { feeds: {}, plans: {}, routes: {}, busy: {}, later: {} };
+let st: FeedState = { feeds: {}, plans: {}, taskCards: {}, routes: {}, busy: {}, later: {} };
 const listeners = new Set<() => void>();
 function set(patch: Partial<FeedState>) {
   st = { ...st, ...patch };
@@ -368,12 +370,13 @@ export async function loadFeed(conversation: string) {
   try {
     let last = st.feeds[conversation]?.at(-1)?.at;
     for (let n = 0; n < FEED_PAGES; n++) {
-      const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
+      const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
         `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
       );
       if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
       const items = res.items ?? [];
       received(items, res.plans ?? undefined);
+      if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
       // the cards' snapshot comes whole with every page: what an event missed comes back here
       applySnapshot(conversation, res);
       const newest = items.at(-1)?.at;

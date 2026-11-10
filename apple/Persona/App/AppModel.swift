@@ -35,7 +35,7 @@ final class AppModel {
     /// The hub-level group's hub (what Persona, Inbox and the hub's settings talk to); nil when not paired.
     var config: ServerConfig? { hub?.config }
     /// Persona's looks (docs/apple/persona.md): the chosen one, what the hub offers, the packages on the phone.
-    let personas = PersonaStore()
+    let personas: PersonaStore
     /// Which paths conversations mention are there on their machines (only those are linked).
     let filePresence = FilePresence()
     /// Which machine ports links point at are listening (docs/operations/ports.md).
@@ -176,7 +176,7 @@ final class AppModel {
         return r.dismissed != true
     }
     /// A short message: the result of something just done, floating over the page for a moment (`ToastOverlay`; in the
-    /// iPhone's shell in a window of its own, `ToastWindow`, docs/apple/shell.md「连接状态和 toast」).
+    /// iPhone's shell in a window of its own, `ToastWindow`, docs/apple/shell.md「Connection status and toasts」).
     var toast: Toast?
     /// The extension page opened from a notification, widget or shortcut; not written to UserDefaults.
     var extensionOpen: ExtensionSystemOpen?
@@ -314,8 +314,10 @@ final class AppModel {
     var isDemo: Bool { links.first?.isDemo == true }
     static let demoKey = "demo.on"
 
-    init(stateFolder: URL? = nil) {
+    /// `personas`: a store of its own (tests: a folder and defaults of their own); the app's otherwise.
+    init(stateFolder: URL? = nil, personas store: PersonaStore? = nil) {
         self.stateFolder = stateFolder
+        personas = store ?? PersonaStore()
         RetiredPreferences.clear(from: .standard)
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
@@ -373,7 +375,7 @@ final class AppModel {
             return all
         }
 
-        // Settings › Appearance › Language (docs/apple/ios.md「界面语言」): written for the next launch, the extensions and the watch.
+        // Settings › Appearance › Language (docs/apple/ios.md「Interface language」): written for the next launch, the extensions and the watch.
         let language = LanguageStore.shared.apply()
         WatchSync.shared.onActivated = { [weak self] in
             WatchSync.shared.push(language: language)
@@ -532,9 +534,9 @@ final class AppModel {
     }
 
     /// Adds a hub (scanned / pasted pairing link). Another group's hub, or a hub already paired again, joins what is
-    /// there; any other hub starts a group of its own beside the others (docs/protocol/multi-hub.md「添加 hub」). The other
+    /// there; any other hub starts a group of its own beside the others (docs/protocol/multi-hub.md「What the user sees」). The other
     /// groups keep everything.
-    /// `ssh`: the SSH tunnel set up on the pairing page (docs/operations/network.md「经 SSH 隧道连 hub」): pairing goes through it
+    /// `ssh`: the SSH tunnel set up on the pairing page (docs/operations/network.md「Connecting to hub through SSH」): pairing goes through it
     /// when the address does not answer (or always, with Always Use SSH), and the hub keeps it.
     func pair(_ new: ServerConfig, ssh: SSHRoute? = nil) async throws {
         try refusePairingWhileSigningOut()
@@ -697,6 +699,8 @@ final class AppModel {
         // No hub left to answer: the open questions are denied, their results have nowhere to go.
         phoneConfirmations.denyAll()
         toolResults.forget(groups: Set(links.map(\.group)))
+        // Where Hand to AI sent each source's items: ids on a hub that is gone (#2121).
+        for group in Set(links.map(\.group)).union([hubGroup]) { InboxHandOffMemory.forget(group: group) }
         LarkDrafts.shared.forget()
         pairingEngineMachine = nil
         checklistPending = false
@@ -1575,7 +1579,7 @@ final class AppModel {
     #endif
 
     /// How this device introduces itself to the hub. The iPhone is the phone (its phone_* tools, the wake pushes when
-    /// it is away); a Mac is a desktop, like WeChat's 「Mac 微信已登录」 (hub/desktops.go, docs/apple/mac.md「Mac 是桌面端，不是手机」):
+    /// it is away); a Mac is a desktop, like WeChat's 「Mac 微信已登录」 (hub/desktops.go, docs/apple/mac.md「Mac is a desktop, not a phone」):
     /// registered as the phone it took every phone_* call and kept the hub from waking the iPhone.
     /// `deviceID` is the phone's id for pushes: while it is connected the hub sends its Live Activity no pushes, the app
     /// draws it from the fleet events (hub/liveactivity.go).
@@ -1752,8 +1756,19 @@ final class AppModel {
         case .todos:
             if isHub { TodoStore.shared.reload() }
         case .personas:
-            // The new tier's package is downloaded whole before the face changes (PersonaStore.load).
-            if isHub { Task { await personas.refresh(api) } }
+            // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
+            // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
+            if isHub { Task { await personas.reload(api) } }
+        case .look(let id, let effective):
+            // Another device chose an avatar, or the hub went back to the default. Like every hub-level setting, the
+            // avatar is the current hub's: another group's choice is its own (docs/protocol/multi-hub.md). The hub it
+            // came from goes with it: when another group's became current before it is handled, it changes nothing.
+            if isHub, let from = api {
+                Task {
+                    guard api?.config.url == from.config.url else { return }
+                    await personas.follow(id, effective: effective, api: from)
+                }
+            }
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
@@ -1884,6 +1899,7 @@ final class AppModel {
         case .inbox: "inbox"
         case .todos: "todos"
         case .personas: "personas"
+        case .look: "look"
         case .managers: "managers"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
@@ -1956,7 +1972,7 @@ final class AppModel {
     func isAnswering(_ uid: String) -> Bool { answering.contains(uid) }
 
     func resolve(_ ix: Interaction, _ r: Resolution) async {
-        // To the hub of the interaction's own group (docs/protocol/multi-hub.md「操作发到哪」).
+        // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
         guard canAnswer(ix), let api = api(ix.group) else { return }
         // No network: the card stays as it is (taking it away and bringing it back a moment later read as "done").
         guard connection.networkUp else { notDone(); return }
@@ -2805,6 +2821,7 @@ final class AppModel {
             StateCache.remove(Self.snapshotName(g), in: stateFolder)
             ChatCache.removeGroup(g)
             PinsStore.forget(suffix: g)
+            InboxHandOffMemory.forget(group: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
         }
         if links.contains(where: { $0.fleet != nil }) { LiveActivityController.shared.apply(mergedFleet()) }
@@ -2824,6 +2841,8 @@ final class AppModel {
         InboxStore.shared.reload()
         TodoStore.shared.forget()
         TodoStore.shared.reload()
+        // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
+        personas.switchHub(api)
         Task {
             await refreshAssistant()
             await personas.refresh(api)
@@ -2887,7 +2906,7 @@ final class AppModel {
     // MARK: Badges
 
     /// The tab badges' numbers, counted here when what they count changes and published only when a number does
-    /// (docs/apple/ios-state.md「第 3 步」): the tabs read two numbers, not every pending question and its session.
+    /// (docs/apple/ios-state.md「Step 3」): the tabs read two numbers, not every pending question and its session.
     private(set) var badges = TabBadges()
     @ObservationIgnored private var watchingMutes = false
 
@@ -3093,7 +3112,7 @@ final class AppModel {
         }
     }
 
-    /// Every group's fleet for the Live Activity (docs/protocol/multi-hub.md「实时活动」), all at once: one hub out of reach held
+    /// Every group's fleet for the Live Activity (docs/protocol/multi-hub.md「Live Activities」), all at once: one hub out of reach held
     /// the others' agents off the island by its requests' timeouts (#4705). Applied as each answers.
     func loadFleets() async {
         let byGroup = Dictionary(links.map { ($0.group, $0) }, uniquingKeysWith: { a, _ in a })
@@ -3160,7 +3179,7 @@ final class AppModel {
                                                    quiet: isQuiet)
         // Connectors' items too: the watch lists them read-only under their own label (#2727).
         let inbox = InboxStore.shared.items.filter { !$0.isDone && $0.triage == .action }
-        // A task's agent asking: the watch names the task (docs/assistant/unified-entry.md「手表」). Muted agents and spaces
+        // A task's agent asking: the watch names the task (docs/assistant/unified-entry.md「Steps」). Muted agents and spaces
         // stay off the wrist too (#4360), the same rule as the Agents badge and the inbox.
         let tasks = TasksStore.shared
         let interactions = asking.filter { $0.showsOnWatch && !isQuiet($0.sessionKey) && !isMuted($0.sessionKey) }.map { ix in

@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The session lists the apps get (docs/protocol/protocol.md "Session deltas", docs/server/server.md "What gets pushed to the app"). An app that asks for
+// The session lists the apps get (docs/protocol/protocol.md "Session deltas", docs/server/server.md "Traffic pushed to the app"). An app that asks for
 // sessions_delta (?features= on the WebSocket) gets each machine's list once when it connects, then only what
 // changed: the sessions that are new or different, each whole, and the ids that went. An older app gets the whole
 // list each time, as before, though never the same list twice. A machine's list is ~1 KB a session and up to 150
