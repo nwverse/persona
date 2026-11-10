@@ -188,6 +188,9 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 			}
 			go func(id string) {
 				if err := l.forward(ctx, id, o.Target); err != nil {
+					if ctx.Err() != nil { // called off because the link ended: that says nothing about the node
+						return
+					}
 					o.Logf("link: stream %s: %v", id, err)
 					_ = l.send(ctx, Message{Type: "open_failed", ID: id, Error: err.Error()})
 					rep.set(func(s *Status) { s.Node, s.NodeError = "offline", err.Error() })

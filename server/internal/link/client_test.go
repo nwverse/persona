@@ -646,3 +646,81 @@ func TestLinkUnderAProxyPath(t *testing.T) {
 		t.Fatal("the link did not go under the prefix")
 	}
 }
+
+// Statuses reach Options.Status in the order they were made: one handed over while another caller changes the status
+// is not overtaken, so persona-link keeps the latest (the App's line, link.status.json).
+func TestReporterDeliversInOrder(t *testing.T) {
+	var got []string
+	entered, release := make(chan struct{}), make(chan struct{})
+	r := &reporter{out: func(s Status) {
+		got = append(got, s.State)
+		if len(got) == 1 {
+			close(entered)
+			<-release
+		}
+	}}
+	first := make(chan struct{})
+	go func() { defer close(first); r.set(func(s *Status) { s.State = "connected" }) }()
+	<-entered
+	if r.mu.TryLock() { // the first delivery is still out: a second set must wait for it
+		r.mu.Unlock()
+		t.Fatal("the status was handed over without the reporter's lock")
+	}
+	second := make(chan struct{})
+	go func() { defer close(second); r.set(func(s *Status) { s.State = "waiting" }) }()
+	close(release)
+	<-first
+	<-second
+	if len(got) != 2 || got[0] != "connected" || got[1] != "waiting" {
+		t.Fatalf("delivered %v", got)
+	}
+}
+
+// A stream the hub opens just as the link drops is called off with the link: that is no news about the node, so no
+// status says the node is offline with "context canceled".
+func TestLinkDroppedWhileOpeningAStreamLeavesTheNodeAlone(t *testing.T) {
+	node := newFakeNode(t)
+	asked := make(chan struct{}, 1)
+	var links atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer jd_x" {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == StreamPath { // never answers: the link drops while the stream waits
+			asked <- struct{}{}
+			<-r.Context().Done()
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		if _, _, err := c.Read(r.Context()); err != nil { // hello
+			return
+		}
+		if links.Add(1) == 1 {
+			sendJSON(t, c, `{"type":"open","id":"s1"}`)
+			<-asked
+			return // drops the link
+		}
+		for {
+			if _, _, err := c.Read(context.Background()); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ch := runAgainst(t, srv, "jd_x", Options{Target: node.path})
+	connected := 0
+	waitFor(t, ch, func(s Status) bool {
+		if s.Node == "offline" || s.NodeError != "" {
+			t.Errorf("status %+v", s)
+		}
+		if s.State == "connected" {
+			connected++
+		}
+		return connected == 2 // linked again: the first link's stream was long called off
+	})
+}

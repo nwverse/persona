@@ -179,14 +179,17 @@ func (r *reporter) switchTo(mode string) {
 	r.mu.Unlock()
 }
 
+// set applies change and hands the result to out while still holding r.mu, so the statuses reach out in the order
+// they were made: handed over after unlocking, two callers at once could swap, and persona-link would keep the older
+// one (the App's line, link.status.json) until the next change. out must not call back into the reporter; set may be
+// called with passive's lock held (reportLocked), never the other way round.
 func (r *reporter) set(change func(*Status)) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	change(&r.st)
 	r.st.Mode = r.mode
-	st := r.st
-	r.mu.Unlock()
 	if r.out != nil {
-		r.out(st)
+		r.out(r.st)
 	}
 }
 
