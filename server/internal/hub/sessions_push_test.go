@@ -316,8 +316,9 @@ func TestSessionsMessage(t *testing.T) {
 }
 
 // A change pushes the machine's kept list as decorated gives it, stamped with its manager, from the list itself: the
-// list is neither changed nor copied (Machine.sessions). With an older app, 2.44x the list message's size measured
-// (the encoded sessions and the message), 3.53x before.
+// list is neither changed nor copied (Machine.sessions). With an older app, 2.40x the list message's size measured
+// (the encoded sessions and the message), 2.44x before the rows were written with proto.AppendSession, 3.53x before
+// that.
 func TestSessionsChangedStampsWithoutCopy(t *testing.T) {
 	if !isolatedSessionAllocation(t) {
 		return
@@ -345,7 +346,7 @@ func TestSessionsChangedStampsWithoutCopy(t *testing.T) {
 		h.sessionsChanged(m)
 		<-app.out
 	})
-	if per > size*251/100 {
+	if per > size*247/100 {
 		t.Fatalf("pushing a %d-byte list allocates %d bytes", size, per)
 	}
 }
@@ -448,6 +449,7 @@ func TestEncodeSessionsMatchesMarshal(t *testing.T) {
 		{SessionID: "s2", Status: proto.StatusWorking, Queued: []string{"next", "<i>"}, UpdatedAt: time.Unix(1700000000, 5)},
 		{SessionID: "s3", SourceKind: "codex_history", Title: "history", LastText: strings.Repeat("y", 5<<10)},
 		{SessionID: "s4"},
+		{SessionID: "s5", Title: "bad \xff \xed\xa0\x80 utf-8", SeenAt: time.Date(2026, 1, 2, 3, 4, 5, 6, time.FixedZone("", 5*3600))},
 	}
 	got := encodeSessions(list)
 	if len(got) != len(list) {
@@ -471,12 +473,49 @@ func TestEncodeSessionsMatchesMarshal(t *testing.T) {
 	if len(encodeSessions(nil)) != 0 {
 		t.Fatal("nil list encoded to sessions")
 	}
+	// A session json cannot encode (a year past 9999) is left out, its neighbours whole.
+	bad := []proto.Session{list[0], {SessionID: "far", UpdatedAt: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)}, list[1]}
+	if got := encodeSessions(bad); len(got) != 2 || got[0].id != "s1" || got[1].id != "s2" || !sameSessions(got, encodeSessions(list[:2])) {
+		t.Fatalf("with a session that does not encode: %+v", got)
+	}
 
-	// One shared buffer and little else: each session is written straight into it (proto.Session.MarshalJSONTo), not
-	// copied and marshalled to a buffer of its own first. 1.44x the list's size measured, 4.8x before.
+	// One shared buffer and little else: each session is written straight into it (proto.AppendSession), not copied and
+	// marshalled to a buffer of its own first. 1.35x the list's size measured, 1.44x with proto.Session.MarshalJSONTo,
+	// 4.8x before that.
 	many := busyList()
 	size := len(sessionsMessage("box", encodeSessions(many)))
-	if per := allocated(func() { encodeSessions(many) }); per > size*148/100 {
+	if per := allocated(func() { encodeSessions(many) }); per > size*139/100 {
 		t.Fatalf("encoding a %d-byte list allocates %d bytes", size, per)
+	}
+}
+
+// A list encoded whole again (encodeKept without raws: a list the manager's bytes did not give) is the same rows as
+// encodeStamped's, written into one buffer sized from the rows encoded last rather than from the first row with a
+// quarter more to spare (encodeSessions above): 1.16x the list's size measured, 1.33x sized from its first row.
+func TestEncodeKeptSizedFromLastRows(t *testing.T) {
+	if !isolatedSessionAllocation(t) {
+		return
+	}
+	m := new(Machine)
+	many := busyList()
+	want := encodeStamped(many, "assistant")
+	for range 2 { // sized from its first row, then from the rows before
+		got := m.encodeKept(many, "assistant", nil)
+		if !sameSessions(got, want) || slices.ContainsFunc(got, func(s sentSession) bool { return cap(s.raw) != len(s.raw) }) {
+			t.Fatal("encoded whole again, the rows differ from encodeStamped's")
+		}
+	}
+	// Rows longer than the last ones still come out whole.
+	longer := slices.Clone(many)
+	for i := range longer {
+		longer[i].LastText += strings.Repeat("y", 2<<10)
+	}
+	if got := m.encodeKept(longer, "assistant", nil); !sameSessions(got, encodeStamped(longer, "assistant")) {
+		t.Fatal("rows longer than the last ones differ from encodeStamped's")
+	}
+	m.encodeKept(many, "assistant", nil)
+	size := len(sessionsMessage("box", want))
+	if per := allocated(func() { m.encodeKept(many, "assistant", nil) }); per > size*119/100 {
+		t.Fatalf("encoding a %d-byte list whole again allocates %d bytes", size, per)
 	}
 }

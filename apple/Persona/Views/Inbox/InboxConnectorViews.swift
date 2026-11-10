@@ -78,7 +78,7 @@ struct InboxConnectorTextView: View {
                 }
                 .padding(.vertical, Theme.Space.xs)
                 if let url = connector?.url.flatMap(URL.init(string:)) {
-                    Button { link = LinkTarget(url: url) } label: {
+                    Button { link = LinkTarget(url: url, manager: model.linkManager(item.manager)) } label: {
                         Label(ConnectorText.tightCJK(String(localized: "Open in \(item.accountName) [Inbox Connector Views 0e0e38]")), systemImage: Theme.Icon.safari).lineLimit(1)
                     }
                 }
@@ -138,7 +138,7 @@ struct InboxConnectorTextView: View {
 
     private func load() async {
         do {
-            context = try await model.api?.inboxItem(item.id).context ?? ""
+            context = try await model.api?.manager(item.manager).inboxItem(item.id).context ?? ""
             failure = nil
         } catch {
             if error.isCancellation { return }

@@ -99,4 +99,10 @@ func TestMailAccountRequestInEnglish(t *testing.T) {
 	if got := computerSummary(i18n.ZhHans, "Studio", "run_script", "open -a Notes", nil); got != "在「Studio」上运行脚本：open -a Notes" {
 		t.Errorf("computer zh: %q", got)
 	}
+	if got := clipped(i18n.En, " "); got != "(none)" {
+		t.Errorf("none en: %q", got)
+	}
+	if got := changeSummary(i18n.ZhHans, "规则", "", "新"); got != "改规则：（无） → 新" {
+		t.Errorf("change zh: %q", got)
+	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devices"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -48,6 +49,13 @@ type Devices interface {
 	Usage() assistantwire.UsageSummary
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.
 	Follow(ctx context.Context, machine, session string, on bool) error
+	// SetAttention hands over Persona Link's "Needs you" summary (fleet_attention.go) on every look; it goes on to the
+	// computers only when it changed.
+	SetAttention(a link.Attention)
+	// LinkRang waits, within one deadline and while ctx lasts, for one of the manager's Persona Link desktops to have
+	// confirmed it handed card's notification to Notification Center: false at once while there is none
+	// (notifyInteraction).
+	LinkRang(ctx context.Context, card string, within time.Duration) bool
 }
 
 // localDeviceCall is a device.call the manager answers itself: a node's method on a machine it has. The hub still

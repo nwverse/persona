@@ -26,6 +26,16 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+// forgetTodoOwner drops a to-do's cached owner (the hub itself keeps them; the test checks the cache it reads).
+func (h *Hub) forgetTodoOwner(id string) {
+	if id == "" {
+		return
+	}
+	h.todoOwnersMu.Lock()
+	delete(h.todoOwners, id)
+	h.todoOwnersMu.Unlock()
+}
+
 // guardManager is a manager on the bus that answers the hub's calls with answer and keeps a log of them; onEvent
 // (f.mu), when set, is told the hub's events (heard).
 type guardManager struct {
@@ -809,5 +819,41 @@ func TestASourceLockIsForgotten(t *testing.T) {
 	defer mv.mu.Unlock()
 	if len(mv.sources) != 0 {
 		t.Fatalf("kept: %v", mv.sources)
+	}
+}
+
+func TestByTodoRoutesToItsManager(t *testing.T) {
+	h := &Hub{}
+	h.noteTodoOwner("t1", "m-other")
+	h.noteTodoOwner("t2", "assistant")
+
+	// When unnamed, routes to the manager that owns it
+	req1 := httptest.NewRequest(http.MethodPatch, "/api/v1/todos/t1", nil)
+	req1.SetPathValue("id", "t1")
+	id, err := h.byTodo(req1)
+	if err != nil || id != "m-other" {
+		t.Fatalf("unnamed manager: got %s, %v, want m-other", id, err)
+	}
+
+	// Unnamed todo owned by assistant
+	req2 := httptest.NewRequest(http.MethodDelete, "/api/v1/todos/t2", nil)
+	req2.SetPathValue("id", "t2")
+	id, err = h.byTodo(req2)
+	if err != nil || id != "assistant" {
+		t.Fatalf("unnamed manager: got %s, %v, want assistant", id, err)
+	}
+
+	// Sub-paths like /retry or /decisions also use {id}
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/todos/t1/retry", nil)
+	req3.SetPathValue("id", "t1")
+	id, err = h.byTodo(req3)
+	if err != nil || id != "m-other" {
+		t.Fatalf("retry sub-path: got %s, %v, want m-other", id, err)
+	}
+
+	// Forget todo owner clears the cached routing
+	h.forgetTodoOwner("t1")
+	if h.todoOwner("t1") != "" {
+		t.Fatal("todo t1 owner should be forgotten")
 	}
 }

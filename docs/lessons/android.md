@@ -1,5 +1,49 @@
 # Lessons: Android
 
+## Latest chat text needs both a stable slot and fresh Markdown (#2602)
+
+Changing only default-open flags leaves Agent running-step previews visible. Remove the preview and tool-card exceptions, keep every call in the manual trace, and key the outside reply by its turn slot rather than its changing message ID. Preserve the actual ID for menus, jumps and receipts. `produceState` retains its previous value when keys change: a stable slot can therefore briefly draw the predecessor's parsed Markdown even after the text has changed. Carry the parse's source identity and render it only when it matches the current source; show the new plain text while parsing. A regression must render running → new text → completed under the same key, not just compare pure line lists. Test every conversation type × style × appearance, manual toggles, completion folding and restored hub-fold loading. A background wake continues the same genuine user exchange: do not truncate ordered/process rows after its latest reply or divert tail tools into a noninteractive drawer. A wake after an away recap must mark the real reopened turn live, not add a second empty working placeholder.
+
+## `-dontobfuscate` does not keep every method name (#2441)
+
+When D8 or R8 desugars a Kotlin lambda, it may rename the implementation method to `$r8$lambda$<hash>`, whatever the
+obfuscation flags say: about a third of persona's lambda methods carry such names in an unshrunk build and about half in
+the shrunk release. Error-report frames inside Compose callbacks and coroutine blocks then need `mapping.txt`; the
+release build is reproducible, so rebuilding the reported commit regenerates it. State what shrinking keeps from the built
+dex or `mapping.txt`, not from the flags' names. And pin the switch itself: the shrink check passes an unshrunk APK by
+design and hosted CI builds no release, so `scripts/release/test_check_android_shrink.py` asserts `isMinifyEnabled = true`.
+
+## Inbox writes must not wait behind full-list reads (#2545)
+
+A grouped conversation swipe used the explicit bulk-cleanup path, so each success emitted its own Undo notice (deliberately exempt
+from feedback deduplication). Use silent completion for row gestures and a stable inline retry for failed writes; retain Undo for explicit
+bulk cleanup. A failure of the subsequent read must not turn an accepted write into a failed action. Keep writes independent of the
+full-refresh lock, bound concurrent requests, serialize overlapping item targets, and conflate invalidations and ambiguous responses.
+Record local write generations so a list captured before a write cannot resurrect its rows. A different incoming message version must
+still win over both a write response and rollback. Persist confirmed results with their manager identity, never speculative marks.
+Test delayed reads, delayed writes, new messages during writes, pairing replacement, duplicate manager IDs and cache-only restoration.
+Virtual-clock request timings prove ordering and request counts, not phone frame times or production latency. Run filesystem-backed
+restoration waits with a real timeout: a virtual timeout can fire before the IO dispatcher gets a turn.
+
+## Host-owned lifecycle controls need real application wiring (#2397)
+
+A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
+unsupported default. Forward both per-extension and global preferences. A manager-bound detail page must also bind catalog/global reads
+and carry its owner into upgrade consent and operation filtering; an extension-ID-only pin does not cover `extensions/-/catalog`.
+Keep a persisted preference separate from its pause reason. HTTP operation receipts belong to the captured request owner even when
+older responses omit `manager`; broadcasts must still be filtered by their explicit hub-stamped owner. Treating both alike loses a
+non-default manager's start/retry receipt. Finally, `HubExtension.kind` is a contribution point, not a declared runtime:
+missing runtime metadata must say **Not provided**, never infer execution details from a UI category.
+
+## Register new native wire examples, not just generated models (#1187)
+
+A generated permission DTO can compile while `ExtensionWireTest.examplesRoundTrip` cannot select its serializer.
+Go's generated definition registry does not prove the Kotlin test's explicit registry covers the same new fixture.
+Register each new app-visible definition, retain the shared example and original round-trip assertion, and test
+sparse permissions with the production codec so absent storage and explicit false queue/blob flags stay distinct.
+Plugin-only storage RPC examples remain under `schema/extension/examples/plugin/`; do not expose those methods to clients or move
+an app-visible permission fixture there just to avoid the failure.
+
 ## Negotiated capabilities are not queued-event completion (#1669)
 
 The connection stores its authenticated hello before catch-up, but a separate queued event consumer can still be
@@ -31,6 +75,16 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Plugin alerts `notify.kind=alert` have no interaction ID, and one session may have multiple distinct alerts. Notification tags must distinguish individual alerts, not reuse completion alerts' `kind:machine/session` replacement rule (#1654). Empty machine or session identifiers mean a generic alert; do not use them to refresh session lists or create empty-session deep links. Check the `input` preference at both delivery and notification construction, so disabling it during async refresh does not still show an alert.
 
 ## UI and Compose
+
+- A settings sheet must register every settings child, including Assistant configuration (#2589). Otherwise that row closes the sheet and returns to the home instead of Settings. Accepted external links must dismiss shell overlays before navigating, so their destination is actually visible. A drawer's accessibility semantics fence does not block hardware-keyboard focus; prevent focus from entering the obscured main content as well.
+- System-font TextStyle can leave lineHeight unspecified (#2589). Converting it directly through Density throws before the composer renders. Measure the actual font line with TextMeasurer when no Sp line height is provided; retain explicit style line heights where present, and test normal and large system text. Do not invent a global content line-height multiplier merely to satisfy a layout calculation.
+- Same navigation labels do not establish iPhone visual parity (#2589). Pin the iPhone default style, language, appearance, text size and source revision; distinguish custom app chrome from system List, sheet, font and icon behavior. Own the side drawer and settings sheet at shell scope, and distinguish closing Settings from popping a settings child. Keep Android's legal assets and contrast floors; adjust text hues rather than weakening tests to copy a lower-contrast system accent.
+- Native reference capture must prove which page is visible (#2589). Retained off-screen pages can expose matching accessibility controls; `exists` and `isHittable` alone are not page-state evidence. Use the shell's actual-page probe and observed visible control coordinates, drive the welcome-to-Demo transition explicitly, and inspect the exported image before labeling it as a home/sidebar/settings reference. A successful compile or an incorrectly named image is not screenshot acceptance.
+
+- A shared sidebar must own its data/view lifetime outside the Assistant page (#2589). Navigation 3 can dispose the Assistant root while one of its secondary pages is open; publishing a composable lambda from that root and popping hidden pages to recover it silently discards drafts. Render the sidebar from the shell snapshot, keep its saveable state at shell scope, and only change navigation after an explicit destination selection.
+- After moving Settings/Inbox from tabs into secondary pages, wide-pane collapse policy must follow the visible list, not the originating primary tab (#2589). Otherwise an Agents list hidden beside a chat can also hide a later Settings subpage. Update the splitter's policy dynamically, mask the saved collapse choice for non-collapsible lists, and preserve it when returning to Agents.
+- Removing a navigation enum does not necessarily reject old saved state (#2589): `JsonCodec` coerces unknown enum values to field defaults, so an old Inbox/Settings tab can become Assistant while restoring the rest of the old shell. Use a strict codec for navigation positions when the whole old position must be ignored, and assert that loading does not rewrite the file.
+- Home-navigation removal includes appearance previews and screenshot fixtures (#2589). Hiding a dock in the app still leaves misleading four-tab previews if they build their own old navigation. Remove the obsolete dock/rail components and tab-only strings, render the real shared switcher in previews, and verify Settings by tapping the sidebar gear from both primary pages.
 
 - `activity-alias` does not inherit its target Activity's metadata (2026-11-03, #758). After retaining the old launcher alias, reading `componentName` returned empty alias metadata, so the DEBUG launch adapter did not load and mock hub, style, and light / dark arguments were ignored. Query canonical `MainActivity` metadata, retaining the original key and single launcher; Release still must not register the DEBUG adapter. Screenshot scripts must verify pairing, actual mock requests, and every subprocess exit code. A welcome page or a successful later `printf` exit is not screenshot acceptance.
 
@@ -76,6 +130,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - In an anonymous `BaseInputConnection`, `override fun getEditable() = editable` with an outer field also named `editable` resolves first to the object's own `getEditable()` (the property corresponding to the Java getter). It recurses, causing stack-overflow crashes as soon as the IME connects (`finishComposingText` → `getEditable`; terminal keyboard, 2026-11-02). Do not give outer fields framework-getter names (renamed to `buffer`). JVM unit tests cannot catch this; tap the keyboard on an emulator.
 - A status card above the terminal ("Taking over…") changes terminal height on both appearance and disappearance, causing two extra pane reflows during takeover and duplicating buffered scrollback. Put changing status in one line below the title; terminal height should change only with the keyboard.
 - Keep a field out of Autofill on the text field's own semantics node (2026-11-09, #1581). Compose's `AndroidAutofillManager` reads each node's own configuration, so `contentDataType = ContentDataType.None` on a wrapping `Column` leaves the `BasicTextField` node autofillable: the service still fills it and offers to save what was typed. Set it through the `BasicTextField` modifier (`JTextField(autofill = false)`, `JSecretField`). On that node it stops the autofill session (no view-entered or value-change notifications, autofill type NONE in the view structure); the save-on-removal commit follows only nodes with a `ContentType`, which such a field must not set. Assert `SemanticsProperties.ContentDataType == ContentDataType.None` on the `hasSetTextAction()` node.
+- The `BackHandler` registered last wins, and handlers register in composition order, not by nesting (2026-11-09, #2481). `SettingsScreen` composes its routed-back handler after `when (page)`, so on a destination that opens straight on a page (Settings › Pairing, `initialPage = "pair"`) it outranked that page's own steps, and Back from the manual form or the confirm page left the page with the typed address. Add hub worked only because its page is switched in later and registers after the host. A host fallback that should yield to a page goes before the page or is turned off for it. Test the host the way the shell wires it (`onBack` set): in place (no `onBack`) the fallback is composed before the page and the bug does not show.
 
 ## Native extension streams (#5956)
 
@@ -102,6 +157,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Testing
 
+- A screenshot test's fake image loader is global state (#2546). `SingletonImageLoader.setUnsafe` survives into later Robolectric classes using the same sandbox. Reset the singleton and shut down the test-owned loader in teardown. Otherwise a later image-fallback assertion can fail because it receives a successful synthetic bitmap; running only that later class hides the leak. Reproduce with the showcase and native-stream classes together, and retain the original fallback assertion.
+
 - `OkHttpHubConnection` publishes `Revoked` before it reports the last refusing hub through `onMemberRevoked`, outside the lock (HubGroupConnectionTest). A test that reads the callback list right after seeing `Revoked` can miss that last entry under load; one hosted run failed `theConnectionIsRevokedOnlyWhenNoHubOfTheGroupIsLeft` this way while main passed. Widening the gap with a temporary sleep before that report fails the old test every time (`but was:<[(hub-a, true), (hub-b, true)]>`). Production consumers launch their cleanup asynchronously and reach the same end state in either order, so the test now waits for the report it asserts, then checks the exact list.
 
 - Closing a `ServerSocket` that another thread is blocked accepting on does not free its port when `close()` returns (PortForwarder, #3483). The JDK only wakes the accepting thread; the port is released after that thread leaves `accept`. On a busy 2-CPU runner the next pairing's forwarder then found the number still taken and bound another one, failing `aClosedOpenerFreesItsPortForTheNext` on two hosted runs while it passed on a 64-CPU machine. A bare JVM probe on 2 CPUs failed an immediate rebind 18/300 times idle and about 200 to 260/300 under load, 0/300 after joining the accept thread. `Forward.close()` now joins its accept threads (bounded). Reproduce with the Gradle run pinned to two busy CPUs (`taskset -c 0,1` plus busy loops); `closeReturnsOnlyOnceItsPortIsFree` fails at once on the old code there. A test failing only on hosted runners can be a real bug; an earlier retry of the probed port here was the wrong diagnosis.
@@ -113,6 +170,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Tests of `OkHttpHubConnection.events` wait for events, not time (2026-11-08, #1254). `events` is hot, and the connection's forwarding coroutine hands each event over after the socket's loop queued it, on its own schedule. Await the subscription (`onSubscription`) before the hub sends. Skip the first socket's hello: it can still reach a subscriber that subscribed after Online. Wait for `onReady` to know the connection handled a socket's hello: a socket that did not resume dropped earlier sockets' queued events by then, while a resumed one calls `onReady` too and keeps forwarding them. Online stays up through a restart's grace, and `lastHello` is set before earlier sockets' events stop being forwarded. Watch a subscriber that never blocks to see which event is being handed over, and end with one more event rather than a delay to show nothing else came (`HubSlowSubscriberTest`).
 
 - Internationalization cleanup (#2453): localized Compose components do not prove that background feedback is localized. Fixed-language fallbacks such as `OperationFeedback.message` and `PendingStatus.label` can leak Chinese through view models, state objects and snackbars. Remove the old APIs and resolve `UiText` with the current page's resources. In contrast, pure JVM `CoreText.shown` already uses the translator injected by the App; `joinToString` alone is not evidence of missing translations. Exempt only the design system's developer catalog, not all of `src/debug`, and test that ordinary debug Kotlin, XML and similarly named directories still fail the check. Robolectric Native renders Chinese and Japanese glyphs but is not simulator acceptance; assert that light and dark screenshots differ.
+
+- A settings hierarchy migration has two compatibility surfaces (#2521): serialized `NavKey` values and standalone `rememberSaveable` page strings. Keep both old values readable and restore the new parent without replacing the leaf's identity. Exercise cold/warm external intents and Back, not only a DEBUG direct-open alias. A loaded ledger can put its introduction after dozens of rows: use the visible filter/list as the emulator readiness marker, not an off-screen footer.
 
 - Settings-entry migration screenshots must not just hand-build identically named `JRow`s (2026-11-05, #2196). Old channel screenshots drew "Extensions → Channels" themselves and could not detect misplaced entries after Settings changed. Render the real `SettingsScreen` with minimal fake services and navigation callbacks; check separate sections, ordering, click targets, two-column selection, missing capabilities, and demo mode. When removing the "Meet Persona" entry, first find the actual label (Android's `Persona` under Assistant); do not delete the main chat or the profile page still used by top bars / launchers. Open and inspect Robolectric Native images, explicitly stating that they are not emulator screenshots. After cleaning wrapper imports, rebuild after automatically merging the latest `main`: another PR may make a retained page use a dependency previously used only by the wrapper (#2192's main-chat migration callback reused `LocalAssistantHost`). No textual Git conflict does not mean dependencies remain complete.
 
@@ -188,7 +247,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - `debug.mockAddress` pairs silently (`platformPairing.pair`, bypassing the pairing page), hiding post-pairing steps (engine selection, readiness checklist). To inspect those, open the pairing page with `persona://pair?url=…&token=mock`, then tap Confirm pairing.
 - To make a save fail, do not rely on `adb reverse --remove` to disconnect the mock: established long-lived OkHttp pooled connections still work and requests succeed. Use mock failure switches (`MOCK_ENGINE_ERROR`, `MOCK_MODEL_CONFLICT`, `MOCK_DEPLOY_ERROR`).
 - **Do not send a `persona://pair` deep link to an App already paired with the user's hub.** It opens root pairing; confirmation makes `HubDataStore.pair` discard the old pairing and write the new one.
-  Add a test hub through Settings › Hub › Add hub (a new group, preserving the old). With the readiness checklist unfinished, both deep-link and Add hub pairing pages stop there first and ignore the link.
+  Add a test hub through Settings › Hub › Add hub (a new group, preserving the old). An unfinished first-run checklist no longer blocks a pairing link: it goes to its confirm page (it used to stop at the checklist and drop the link). Add hub was never affected: its pairing service reports unpaired, so it always starts at the connect choices.
 - **`adb shell input text` is corrupted by Chinese IMEs**: WeChat Input and Gboard in pinyin mode reorder characters, turn `?` full-width, swallow `=` / `_`, and convert letters to Chinese characters.
   For ASCII such as links, temporarily `ime set` an IME that does not process keystrokes (such as an enabled `com.google.android.gms/.autofill.service.AutofillInputMethodServiceProxy`),
   then immediately restore the value recorded from `settings get secure default_input_method`. The pairing address field parses as soon as it starts with `persona://`; type the latter half of a long link first, then prepend `persona://`.
@@ -366,3 +425,11 @@ When the APK download reuses the constrained paired connection, HTTP metadata an
 ## Wait for screenrecord to exit before pulling the file (2026-11-05, #2835)
 
 After sending SIGINT to `screenrecord`, wait for the recording process on the device to exit before `adb pull`. Pulling while it still writes the index can give an MP4 whose `mdat` length is a placeholder and which lacks the final `moov`; `file` still says MP4, so check the top-level atoms, `moov/mvhd` and duration before archiving. If pulled too early, pull the finished file again after the process exits.
+
+## Pin update downloads to the advertised APK (#2331)
+
+An update card can retain metadata for hours. A content-addressed file on disk is not enough if the download route always resolves the latest manifest: publishing another release makes the cached checksum reject the new bytes before installation. Return a hash-pinned `download_url` (older clients already preserve the query), retain those APKs, and refresh metadata before a new install attempt. Keep the unpinned route for bootstrap downloads. Test publication between discovery and download.
+
+Separate metadata, download, verification, permission and installer failures. Log the stage and exception class without transport messages that could contain credentials. Returning from unknown-source settings requires checking the actual grant before continuing; a result code alone does not establish permission. A committed PackageInstaller session only proves handoff, never installation success. A signing receipt or publication message also does not prove the online verifier ran: retain and inspect its terminal result.
+
+- A renderer version bump also changes negative fixtures: a newly supported field, chart or icon can no longer stand for an unknown value. Assert its concrete v6 meaning and retain a separate unknown-value rejection case; keep the advertised device version pinned to the delivered contract (#828).

@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,25 @@ func TestCallApps(t *testing.T) {
 		{"computer_run", "", "", `[{"click": {"app": "Calculator", "name": "6"}}, {"click": {"app": "Calculator", "name": "7"}}]`, "Calculator", true},
 		{"computer_run", "Notes", "", `[{"tool": "press_key", "args": {"key": "return"}}]`, "Notes", true},
 		{"computer_run", "", "", `[{"tool": "press_key", "args": {"key": "return"}}]`, "", false},
+		// An app the call opens is one it touches, not the call's default app.
+		{"computer_run", "Calculator", "", `[{"launch_app": {"name": "Terminal"}}]`, "Terminal", true},
+		{"computer_run", "Calculator", "", `[{"tool": "launch_app", "args": {"name": "Terminal"}}, {"click": {"name": "7"}}]`, "Terminal,Calculator", true},
+		{"computer_run", "", "", `[{"launch_app": {"bundle_id": "com.apple.Terminal"}}]`, "com.apple.Terminal", true},
+		{"computer_run", "Calculator", "", `[{"launch_app": {}}, {"click": {"name": "7"}}]`, "Calculator", false},
+		{"computer_run", "Calculator", "", `[{"tool": "launch_app"}]`, "", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch("Terminal");`, "", "Calculator,Terminal", true},
+		{"computer_run", "", `await cua.launch('Terminal'); return 1`, "", "Terminal", true},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch(name);`, "", "Calculator", false},
+		// JavaScript allows space and comments before the call's parentheses, and a computed callee: those calls
+		// are not read, so the script's apps are unknown and it is asked about every time, however many apps of it
+		// were read. An always-allowed Calculator must not make them run without a card.
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const b = await cua.getApp ("Terminal"); await b.click();`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const b = await cua.getApp/*x*/("Terminal"); await b.click();`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const b = await cua["getApp"]("Terminal"); await b.click();`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch ("Terminal");`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.launch/*x*/("Terminal");`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); const f = cua.launch; await f("Terminal");`, "", "Calculator", false},
+		{"computer_run", "", `const a = await cua.getApp("Calculator"); await cua.getApp("Term\u0069nal");`, "", "Calculator", false},
 	} {
 		apps, whole := callApps(c.name, c.app, c.script, json.RawMessage(c.steps))
 		if strings.Join(apps, ",") != c.want || whole != c.whole {
@@ -73,6 +93,36 @@ func TestComputerAppsAreAskedOnce(t *testing.T) {
 	defer cancel()
 	if res := h.callComputerTool(short, "conv1234", "computer_run", json.RawMessage(`{"machine": "mac", "steps": `+calc+`}`)); res.IsError {
 		t.Fatalf("always allowed: not asked again: %+v", res)
+	}
+	// Calculator is allowed, but a call in it that opens Terminal asks about Terminal, every time.
+	for _, args := range []string{
+		`{"machine": "mac", "app": "Calculator", "steps": [{"launch_app": {"name": "Terminal"}}]}`,
+		`{"machine": "mac", "script": "const a = await cua.getApp(\"Calculator\"); await cua.launch(\"Terminal\"); return 1"}`,
+	} {
+		done := make(chan proto.ToolResult, 1)
+		go func() { done <- h.callComputerTool(ctx, "conv1234", "computer_run", json.RawMessage(args)) }()
+		if card := answerCard(t, h, true, false); !strings.Contains(card.Summary, "「Terminal」") || strings.Contains(card.Summary, "Calculator") || card.AlwaysLabel != "" {
+			t.Fatalf("%s: asked about Terminal alone, with no 一直允许: %+v", args, card)
+		}
+		if res := <-done; res.IsError {
+			t.Fatalf("%+v", res)
+		}
+	}
+	// The same with a script that hides the Terminal call from the literal reader: the apps are unknown, so the
+	// phone is asked even though Calculator is always allowed, and declining stops the script.
+	for _, script := range []string{
+		`const a = await cua.getApp("Calculator"); const b = await cua.getApp ("Terminal"); await b.click();`,
+		`const a = await cua.getApp("Calculator"); await cua.launch ("Terminal");`,
+	} {
+		args := `{"machine": "mac", "script": ` + strconv.Quote(script) + `}`
+		done := make(chan proto.ToolResult, 1)
+		go func() { done <- h.callComputerTool(ctx, "conv1234", "computer_run", json.RawMessage(args)) }()
+		if card := answerCard(t, h, false, false); card.AlwaysLabel != "" {
+			t.Fatalf("%s: an unreadable script offered 一直允许: %+v", script, card)
+		}
+		if res := <-done; !res.IsError || !strings.Contains(res.Content[0].Text, "declined") {
+			t.Fatalf("%s: ran after it was declined: %+v", script, res)
+		}
 	}
 	code, out := call(t, mux, "GET", "/api/v1/machines/mac/computer/apps", h.cfg.Token, "")
 	apps, _ := out["apps"].([]any)

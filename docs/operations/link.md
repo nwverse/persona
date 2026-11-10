@@ -1,15 +1,82 @@
 # Persona Link: the computer connects to the hub, or the hub connects to the computer
 
-> Naming (#1159): the connection helper is **Persona Link**, and the command is `persona-link`. The installer creates `persona-link` beside `persona-link` as an alias; both names run the same program,
-> and its prompts use whichever name you ran. The executable `~/.persona/bin/persona-link`, download name `persona-link-<os>-<arch>.gz`,
-> systemd unit `persona-link.service`, launchd identity and helper inside the Mac App keep their old names, so this page still says `persona-link` when referring to the program below.
-> Copyable commands from the hub and admin page also still use `persona-link`, because the hub doesn't know that computer's version, and older versions have no `persona-link`.
+> Naming (#1159): the connection helper is **Persona Link**, and the command is `persona-link`. The installer also puts the old command name beside it as an alias; both names run the same program,
+> and its prompts use whichever name you ran. The executable `~/.persona/bin/persona-link`, the download `persona-link-<os>-<arch>.gz`, the systemd unit `persona-link.service`, the launchd identity
+> and the helper inside the Mac App carry the new name; what the old names still reach is in [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md). Copyable commands from the hub and admin page use `persona-link`.
 
 The hub can't reliably SSH into computers such as laptops whose IP and network keep changing. Requested 2026-10-31: no Tailscale or reverse tunnels;
 instead, the client on the computer connects to the hub and reconnects on its own after a disconnect, and the hub reuses that link to talk to its node. No SSH or VPN is needed anywhere along the path.
 
 The user decided again on 2026-11-02 ([plan-hub-center.md](../archive/operations/plan-hub-center.md), sections 0 and 4): hubs and computers always connect through a preinstalled service on the computer, not SSH (too much permission);
 the computer can connect to the hub or accept a connection from it. The recommendation is one hub for the whole household, with a **node service** on every other computer: resident node plus persona-link, installed by one command or one App.
+
+## On computers: the web app and Persona Link
+
+On a computer, Persona has two parts. The native Mac app is frozen and no other desktop client takes its place ([mac.md](../apple/mac.md)).
+
+- **The web app** is the interface, in the browser or installed as an app ([web.md](../web/web.md), "On computers").
+- **Persona Link** runs on a computer whose Agents the hub should reach, and does only what a browser cannot. Today that is the connection to the hub and the resident node service.
+  A computer you only use the web app from does not need it.
+  Its menu bar App (Mac) and tray (Windows) show the link's state and handle pairing, reconnecting, renaming, the background service and starting at sign-in.
+  Neither tells you about Agents: the menu bar App posts no notifications, and the Windows tray posts only about its own link ([windows.md](windows.md), "Tray").
+
+A desktop need goes into the web app first, and into Persona Link only when the browser cannot meet it (for example notifications while no Persona page is open, presence, local integrations).
+
+### Menu bar App or command-line Link
+
+Both run the same persona-link with the `link.json` in their data directory; they differ in how that directory is chosen, what starts persona-link and how you see it.
+
+| | Menu bar App (Mac) | Command-line Link |
+| --- | --- | --- |
+| Program | `/Applications/Persona Link.app`, with persona-link and persona-node in `Contents/Helpers/` (`./scripts/app/mac-link.sh install`) | `persona-link`; the installers put it in the data directory's `bin/` (`install.sh --node`, or `persona-link install` on Linux) |
+| Data directory | `PERSONA_HOME` in the App's own environment, else the one the node service file names, else the default ("Helper" under "Menu bar App" below) | `PERSONA_HOME` in the environment it starts in, else the default (`~/.persona`, [rename.md](rename.md)) |
+| What keeps it running | The App runs `persona-link run --parent` and restarts it when it exits; **Launch at login** starts the App | Linux: the systemd user service `persona-link.service` (`persona-link install`). Mac: nothing from this repository: `persona-link install` refuses on a Mac, and `install.sh --node` installs only the node service and the pairing, leaving `persona-link run` to you |
+| State and pairing | Menu bar icon, menu and pairing window | `persona-link status`, `persona-link pair`, `persona-link logs` |
+| Where | Mac | Linux (headless or desktop); a Mac without the App |
+
+Windows has one program for both: `persona-link install` sets up the sign-in task and the tray ([windows.md](windows.md)). Linux has no menu bar App, so the command-line Link stays there.
+
+### Move a Mac from the command-line Link to the menu bar App
+
+The App takes over the pairing, the computer's name on the hub and the node service when it opens the data directory the command-line Link used.
+The App picks its data directory in this order: `PERSONA_HOME` (or its former name) in its own environment, then the one the node service file names, then the default.
+These steps assume the App's own environment sets neither variable, as when it starts from Finder, `open` or as a login item; if yours does, change that first.
+One persona-link runs per data directory (the `link.json.run` lock beside `link.json`): while the command-line one runs there, the App's helper exits at once and the App keeps restarting it.
+The steps name the command-line program `<link>` and its data directory `<dir>`, as steps 1 and 2 record them. The App's menu is in Chinese only for now; the bold menu names below are English renderings of its items.
+
+1. Record how the command-line Link runs:
+   - `pgrep -fl 'link run'` prints its process id `<pid>`; the pattern also finds the program under its former name.
+   - How it starts: from a terminal, or from something you set up yourself (your own launch agent, a terminal multiplexer). This repository installs nothing that starts it on a Mac.
+     Take `<link>`, the program's full path, and any `PERSONA_HOME` (or former name) from that command or setup, not from the `pgrep` output, which drops quoting.
+2. Record `<dir>`: in that same environment, `"<link>" status --json` shows `running: true` and `link.pid` equal to `<pid>`; `<dir>` is the directory of its `config` (absolute and normalized).
+   Use this `<dir>` from here on, also on the way back. Then check that the App will open it: `"<link>" node status --json` gives the node service file (`file`), and `/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables' "<file>"` lists its variables.
+   Their `PERSONA_HOME` (or the same variable under its former name, [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md)) must name `<dir>`, with `~` and relative paths taken from your home folder; with neither, or no node service, `<dir>` must be the default.
+   If it names another directory, the node did not share the Link's (the Link reaches the node only through `<dir>/node-attach.sock`): make the node service name `<dir>` before going on. Keep `<dir>` as the base; pairing again does not fix this.
+3. Stop the command-line Link: Ctrl-C in its terminal or `kill <pid>`, and stop or remove whatever you set up to start it again.
+   `PERSONA_HOME="<dir>" "<link>" status --json` then shows `running: false`. Do not run `persona-link uninstall --purge`: it deletes `link.json`, the pairing the App takes over.
+4. Install the App: `./scripts/app/mac-link.sh install`. It builds, copies the App to `/Applications/Persona Link.app` and opens it.
+   Use only "Prerequisites" and "Build and install" in [persona-link-install.md](persona-link-install.md); skip its "Pairing".
+5. Do not pair again: the App opens `<dir>` and connects with the pairing there. If its menu says the Mac is not connected to a hub yet, it opened another directory: quit it and go back to step 2.
+6. Leave the node service as it is. On first launch the App checks for a node service and installs one only when there is none. An existing one, under the current or the former name, stays unchanged.
+7. Check the result:
+   - The menu says the local node is online (**Local node online**) and names this computer on the hub.
+   - `pgrep -fl 'link run'` lists only `…/Persona Link.app/Contents/Helpers/persona-link run --parent`.
+   - `PERSONA_HOME="<dir>" "/Applications/Persona Link.app/Contents/Helpers/persona-link" status --json` shows the same `config` as step 2, `running: true`, `link.state` `connected`,
+     and a `link.pid` equal to the helper's process id from `pgrep`. Another `link.pid` means another persona-link still holds the lock: go back to step 3.
+   - The computer is online in the web app's **Machines**.
+8. Turn on **Launch at login** in the menu.
+
+**Optional, later: the device's program.** The App works with the node service on either program. When `node status --json` shows it runs personad (`runs`) and this Mac runs no hub or manager,
+`PERSONA_HOME="<dir>" "/Applications/Persona Link.app/Contents/Helpers/persona-link" node switch`, in Terminal on the Mac, moves it to persona-node.
+The switch restarts the node and cuts off an answer the assistant is writing on this computer; conditions and recovery are in "The device's program" below.
+
+**To go back**:
+
+1. In the App's menu, turn off **Launch at login** and choose **Quit Persona Link**; its helper exits with it. `PERSONA_HOME="<dir>" "<link>" status --json` shows `running: false`.
+2. Start the command-line Link the way step 1 recorded, and put back anything you removed in step 3; from a terminal, `PERSONA_HOME="<dir>" "<link>" run`.
+   `PERSONA_HOME="<dir>" "<link>" status --json` shows `running: true` and the same `config` as step 2.
+3. To remove the App, delete only `/Applications/Persona Link.app`. Keep `<dir>` (pairing, passive-mode TLS identity, logs), the node service and its program, and the computer on the hub.
+   Do not follow "Uninstall" in [persona-link-install.md](persona-link-install.md): it removes those shared files and the computer on the hub.
 
 ## Two modes
 
@@ -77,10 +144,11 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 
 ## Responsibilities
 
-- **persona-link** (`server/cmd/persona-link`, also reachable as `server/cmd/persona-link`; `server/internal/link`): a separate small program doing only three things:
+- **persona-link** (`server/cmd/persona-link`, also reachable as `server/cmd/persona-link`; `server/internal/link`): a separate small program doing only these things:
   - Discovery: find the hub among candidate addresses and connect;
   - Reporting: identify the computer, version and address used;
-  - Link: maintain the connection and forward streams opened by the hub unchanged to the local resident node.
+  - Link: maintain the connection and forward streams opened by the hub unchanged to the local resident node;
+  - Summary: put the hub's "Needs you" summary into its status for the menu bar App and the tray (see "Needs you").
 
   It implements no specific feature.
 - **node is unchanged**: all features live in `personad node`. This computer needs a resident node (installed together under "Install the node service" above; separately, use `persona-link node install`
@@ -100,7 +168,9 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 
 ```text
 persona-link ── WSS /api/v1/link ──▶ hub TLS port (public.tls_listen)
-  → hello {machine, version, address}          First message; hub closes with 4003 if machine id doesn't match credentials
+  → hello {machine, version, address, features?}
+                                               First message; hub closes with 4003 if machine id doesn't match credentials;
+                                               features: ["attention"] asks for the "Needs you" summary
   ← endpoints {endpoints, hub_name, mesh_hubs, ping_ms?, ping_timeout_ms?, pending?, machine_name?}
                                                Sent on connect and again when hub addresses, linked group, heartbeat, pending status or this computer's name changes
   ← open {id}                                  hub wants to connect to node
@@ -109,7 +179,10 @@ persona-link ── WSS /api/v1/link ──▶ hub TLS port (public.tls_listen)
   ← node {online, error}                       Whether hub connected to node, displayed in the menu bar
   → rename {id, machine_name}                  Asks the hub to call this computer machine_name ("": its id again); see "The computer's name"
   ← renamed {id, machine_name | code, error}   The hub's answer to that rename: the name it has now, or why not
+  ← attention {attention}                      The "Needs you" summary, to a link whose hello asked for it: right after endpoints, then on every change
 ```
+
+Both sides ignore a message type they don't know.
 
 **Route selection**
 - Candidate addresses are ordered "LAN → public IPv6 → domain → public IPv4", with manually added addresses first within their category.
@@ -281,13 +354,14 @@ The direction is reversed from active mode (the computer may not be able to reac
 
 ### Endpoints
 
-Only these three exist: no shell, files or port forwarding; streams can connect only to `~/.persona/node-attach.sock`. All other paths and methods return `404 {"error":"not_found"}`.
+Only these four exist: no shell, files or port forwarding; streams can connect only to `~/.persona/node-attach.sock`. All other paths and methods return `404 {"error":"not_found"}`.
 Errors are JSON: `{"error":"<code>","message":"<human-readable Chinese>"}`.
 
 | Endpoint | Authentication | Request | Response |
 | --- | --- | --- | --- |
 | `POST /api/v1/connector/pair` | One-time code | Body ≤ 16 KiB: `{"code","token","machine","hub_id","hub_name"}`; `code`, `token`, `machine` required (`token`: 32–512 printable ASCII characters, no whitespace), `hub_id`, `hub_name` optional but please include them | `200 {"version"}`; invalid fields: `400 bad_request` (not rate-limited, doesn't invalidate the code); wrong, expired or used code: `401 bad_code` (rate-limited) |
-| `GET /api/v1/connector/info` | `Authorization: Bearer <credential>` | — | `200 {"machine","version"}`: `machine` is the machine id supplied by the hub during pairing; missing / wrong credential: `401 unauthorized` |
+| `GET /api/v1/connector/info` | `Authorization: Bearer <credential>` | — | `200 {"machine","version","features","attention_rev"?}`: `machine` is the machine id supplied by the hub during pairing; `features: ["attention"]`: it takes the "Needs you" summary; `attention_rev`: the `rev` of the summary it holds (absent: none); missing / wrong credential: `401 unauthorized` |
+| `POST /api/v1/connector/attention` | Same | One summary object (see "Needs you") and nothing after it but white space, the whole body ≤ 64 KiB | `204`; no `rev`, anything else in the body or over the cap: `400 bad_request`; missing / wrong credential: `401 unauthorized` |
 | `GET /api/v1/connector/stream` | Same | WebSocket upgrade; optional `X-Persona-Ping` (heartbeat, below) | Authenticate, connect node-attach.sock, then upgrade: node unreachable: `503 node_unavailable` (`message` gives the reason for the hub to record as this computer's error); non-upgrade request: `400`; after upgrading, see below |
 
 - Successful pairing replaces the previously paired hub ("only trusts the hub it paired with": the group's primary; a new primary re-pairs after a switch). Old credentials stop working immediately, and streams opened with them close with code **4002**.
@@ -335,6 +409,119 @@ Errors are JSON: `{"error":"<code>","message":"<human-readable Chinese>"}`.
 - Firewall: open this TCP port only to the hub (or its proxy), not everyone. `pair --listen`, `install --listen` and `mode passive` all show a reminder, for example
   `sudo ufw allow from <hub address> to any port 18663 proto tcp`; likewise for routers and cloud security groups. With the Mac application firewall enabled, the system may ask whether to allow
   incoming connections on first listen (not tested).
+
+## Needs you
+
+The manager that carries this computer tells its Persona Link which agents wait for the user, so the menu bar App and the Windows tray can list them and notify while no web page is open (#2214).
+persona-link only relays the summary into its status: it shows nothing itself, and nothing on this computer can answer or approve a card with it.
+
+**What is in it**
+- The list and the count are the web app's "Needs you" badge as it is (`stateCounts().badge` in `web/src/lib/sessions.ts`): agents whose row says "Needs you" (the same rows the web app gets; a card read
+  just after its row does not count before the row says so), without quiet tasks' agents and the assistant's conversations;
+  muted agents and agents waiting only on a question the assistant is still deciding on (`delegating`) stay. One item per agent, by its oldest card handed to the user; while it has none,
+  by its oldest card (one the manager has not decided on yet, or a question the assistant is still deciding on). Cards of the same time go by id. An agent with no card that can stand for it
+  (a terminal dialog, an MCP elicitation) is `screen`.
+- Whether an item notifies is the phone's push rule, worked out by the manager into `notify`: only once one of its cards is the user's (the manager rang it, when the phone is pushed; not a question
+  the assistant is still deciding on: such a question is pushed only once the assistant hands it to the user), and never for a muted agent (or one in a muted space;
+  `server/internal/assistant/fleet_mutes.go`). An agent in a terminal dialog notifies once the screen card made for it is announced (a moment later, or when its dialog can be read),
+  as the phone is pushed then; the web app rings such a dialog at once. Otherwise the web app's system notifications follow the same rule. Clients notify on `notify` alone
+  and never work the rule out themselves; `muted` is only for showing the item muted. An item notifies the first time it shows with `notify: true`, which may come after it was listed
+  without it: a question the assistant hands to the user keeps its `interaction_id` and `since`.
+- A card made again (a screen card read again once its node is back, a card the manager takes back after a restart, a Codex card listed again) notifies only when the manager can tell it
+  rang before: a screen card read again as the very card that rang (its own id; one matched only by its session is not). Any other comes back not notifying, until it rings again: fewer notifications rather than more. A hook's card waits in the manager
+  while its node reconnects: it is the same card and keeps what it was. (Persona Link takes the first summary of a link as its baseline, so a card pushed before a restart does not ring
+  there again either.)
+- `spec/fixtures/attention` holds the manager and the web app to the same list, count and `notify`.
+- Order: by when the agent started waiting (`since`), newest first, then by machine and session id. Past 20 items the oldest are cut, so an agent that just started waiting is always listed and can be notified.
+  The same agents and cards always give the same summary.
+- Scope: the agents of the manager that carries this computer; with one manager (the default), every agent.
+
+```json
+{"rev": "9f2c41d0a1b2c3d4", "needs_you": 3, "more": 0, "web_url": "https://hub.example.com/persona",
+ "items": [{"machine_id": "laptop", "session_id": "<session id>", "title": "Fix the login redirect", "place": "Laptop · web › 2",
+            "kind": "permission", "detail": "Bash: npm test", "muted": false, "notify": true, "interaction_id": "<card id>",
+            "since": "2026-11-09T07:00:00Z", "route": "/s/laptop/<session id>"}]}
+```
+
+- `needs_you`: the count, muted and not-notifying items included; `items`: at most 20, newest first; `more`: the rest. Nothing needs you: `"needs_you": 0, "items": []`.
+- `kind`: `permission` / `plan` / `question` / `screen`. `interaction_id`: the card's id (a screen card has one too); absent for an agent no card stands for. `since`: when it started waiting, RFC 3339 UTC to the second; absent when unknown.
+- `title`, `place`: at most 80 characters, `detail` at most 60, the ellipsis that marks a cut included. The largest summary stays far below the 64 KiB post cap and the link's 1 MiB read limit.
+- `route`: the web app's path for the session (`/s/<machine>/<session>`, percent-encoded); open `web_url` + `route`.
+- `web_url`: the hub's https `public_url`, sub-path included (`devicewire.Config.web_url`); without one, in active mode the hub address of the link's hello, in passive mode absent.
+  That address may have a self-signed certificate and be another origin than the one the user signed in to, so the menu bar App's own "Web address" setting wins.
+- `rev`: a hash of the rest; the same summary has the same `rev`, so sending it again changes nothing.
+
+**When it is sent**
+- The manager works it out in `liveLoop` from the Live Activity's inputs (woken by session lists, cards and mutes, at most every 100 ms, and every 15 seconds) and hands it on only when it changed.
+  The Live Activity's own count does not change: it leaves muted agents out and counts questions the assistant is still deciding on.
+- Active mode: to a link whose hello listed `features: ["attention"]`, once right after `endpoints`, then on every change.
+- Passive mode: `POST /api/v1/connector/attention` to a connector whose `info` listed `attention`, on every change; and again after an `info` read whose `attention_rev` is not the summary's
+  (a post that failed, a connector that restarted). Not while the connector holds the hub off (`401`, `429`), as for `info` and streams.
+- A computer waiting to be confirmed or marked `trust: "work"` gets an empty summary (`needs_you: 0`, no items, no `web_url`): the summary names every agent's work, which neither may read.
+  That also takes back what a computer had when it may no longer have it, without the link reconnecting. It gets the summary once it may. While the hub cannot say which computers wait to be
+  confirmed, nothing new goes to a computer that is not known to be a work one: what it has stays, and one that has nothing gets nothing (an empty summary and the full one back would ring every
+  item again). A work computer gets the empty summary all the same.
+
+**On the computer**
+- persona-link puts the latest summary into its status as `attention`: the JSON line the menu bar App reads and `link.status.json` (`persona-link status`, the Windows tray).
+- Active mode: the status is reset when the link drops and when it connects, so the last link's list never shows on the next one. Passive mode: the summary goes when another hub pairs,
+  and after 2 minutes without the hub coming in (it may have answered the cards meanwhile); the hub's next `info` read sees that and posts it again.
+
+**Old and new**
+- Old persona-link: no `features` in its hello, so the manager sends nothing (an unknown type would be ignored anyway). Old connector: no `features` in its `info`, so it is never posted to.
+- Old manager: ignores `features` and the extra `info` fields and sends nothing; persona-link's status has no `attention`.
+
+## Presence
+
+While you are at a computer whose menu bar App can notify you, the hub counts that computer as a desktop: a phone with "Phone Muted" on leaves to it the "Needs you" cards whose notifications the App handed to Notification Center (#2214).
+This takes over what the native Mac App's `register_desktop` did (`docs/apple/mac.md`), for Persona Link. Active mode only: a computer in passive mode is no desktop yet, and its phone gets every card (see "Not yet").
+
+**Who decides**
+- The menu bar App, by what it sees on this Mac; the conditions and the lines it writes are under "Menu bar App" › "Presence".
+- The App confirms a card only once it handed the card's notification to Notification Center, on the connection the card came on: `{"rang":{"conn":<link>,"interaction_id":"<card id>"}}` on persona-link's stdin, the id as the "Needs you" summary names it and `conn` that of the status line whose summary listed the card.
+  A notification dropped before it was handed over (the card left a capped summary or was answered while it waited, the connection went), one Notification Center refused, or any while notifications are off, is not confirmed.
+  A notification handed over is not always shown: Focus or Do Not Disturb on the Mac may still hold it back (see "Not yet").
+- The command-line Link reports nothing (nothing writes its stdin): it cannot show notifications, so muting the phone for it would lose alerts. Nor does the Windows tray yet.
+
+**persona-link** (`internal/link/presence.go`)
+- `run --parent` reads stdin line by line; a line that is neither presence nor a confirmation is skipped, and the end of stdin still means the App went away.
+- It keeps the latest presence line and forwards every one, the App's repeats included; it never repeats one by itself, so presence lapses when the App goes quiet.
+  An active line older than 120 seconds counts as inactive.
+- On the link: `{"type":"presence","active","notifies","ttl_ms"}` as the link comes up and for every presence line (`ttl_ms` is what is left of the 120 seconds since the App wrote it),
+  and `{"type":"rang","interaction_id"}` for every confirmation that names this link (`conn`): persona-link numbers its links in the status line, rising with each link and not reused by a restarted persona-link, so a confirmation for an earlier link, still in the pipe when the link changed or persona-link restarted, is dropped.
+  The number stays between the App and persona-link; the hub never sees it.
+
+**The manager** (`internal/devices/presence.go`)
+- Keeps the presence until when it heard it + `ttl_ms` (120 seconds when missing, at most 4 minutes), and reports its desktops to the hub in `devices.desktops`: one report at a time from one task, in order, a run of requests making one;
+  on every presence it hears (each renewal), when a delivery may change which computers count (a confirmation never does: it only wakes the pushes waiting for it), after a `devices.state` when the list changed, and in full, as it is then, after the full `devices.state` each handshake sends.
+  Another report may reach the hub before that state: the hub drops the entry of a computer it does not yet have as this manager's, and the full list after the state brings it back.
+  Each says the TTL left, which the hub counts on its own clock. A separate event, so a renewal once a minute does not resend the apps' machine list.
+- Counts only a computer that gets the "Needs you" summary as it is (see "Needs you" above): its Persona Link takes the summary, it is not waiting to be confirmed and not a work computer.
+  While the hub cannot say which computers wait to be confirmed, none counts: the summary freezes then, so a new card would reach neither the computer nor the phone. A work computer never counts.
+- Counts only while its link keeps up with the summary: it took one (each change then goes out at once), and no send failed since; only a summary taken again brings it back.
+- The presence ends when the link drops or another link of the computer takes over, and when its time runs out.
+- Keeps the confirmations on the link they came on: a new link starts with none; only cards the summary that link holds (or the one on its way to it) lists are kept. A confirmation changes no computer's being a desktop.
+- **Which cards it leaves to Persona Link.** When it pushes a card, it works out with the summary's own rule whether the card is the one that stands for its agent, notifying, among the listed items (not in More).
+  If so, the push waits until one of its Persona Link desktops with `notifies` confirmed that card on its current link, then until the desktops as they are then were reported, and then checks that the same link still is such a desktop with that confirmation; only then does it say `link_covered`.
+  A link replaced or stopping meanwhile does not count, and the wait goes on for a confirmation that does. The App's confirmation is what lets the hub mute the phone at all; the hub then mutes only for a Persona Link desktop it still has a valid record of, and pushes the phone when it has none.
+  The whole wait has one deadline, 2 seconds, and ends with the manager: past it, or without a desktop, the push goes to the phone. Another card of the same agent, a card past the cap (also one handed to the user late), and a card the App did not confirm go to the phone.
+
+**The hub** (`internal/hub/desktops.go`)
+- A computer of the sending manager's own, with `notifies`, is a Persona Link desktop for the TTL it says, counted on the hub's clock from when it takes it and at most 4 minutes; a mesh member's computer does not count yet.
+- "Phone Muted" while only Persona Link desktops are active holds back a "Needs you" card (the APNs card push and the `interaction` WebSocket alert) only when its push says `link_covered` and one of that manager's Persona Link desktops is active.
+  The hub does not judge which cards a Persona Link took over: the manager says. Cards without `link_covered`, "Agent finished", reply reminders, decisions, MCP forms and links, `POST /api/v1/notify` alerts and the Live Activity's start alert still go to the phone. A connected native Mac App mutes as before.
+- The deadline is checked when an alert goes out, so a computer whose manager or App went quiet stops muting the phone once it passes (2 minutes after the App last spoke); the `desktops` event follows when it lapses, also when a manager's list arrives first and leaves it out.
+- The `desktops` event lists a Persona Link desktop as `{"kind":"link","machine_id","device":"","name","since"}`, only to clients that list `desktops_link` (`docs/protocol/protocol.md`); others get the list as before.
+
+**Old and new**
+- Old menu bar App: writes neither presence nor confirmations, so a new persona-link reports nothing. New App with an old persona-link: the old one discards its stdin.
+- Old manager: ignores the `presence` and `rang` messages, and its card pushes carry no `link_covered`, so a new hub mutes none of them for a Persona Link desktop. Old hub: ignores `devices.desktops` and `link_covered`. Either way the phone gets the cards.
+- The iOS App lists `desktops_link`. Clients that do not (older iOS builds, Android, the web app) do not show Persona Link desktops; a phone with "Phone Muted" on still has the confirmed cards held back while one is active.
+
+**Not yet**
+- Passive mode: a connector has no way to send a confirmation back within the wait, so a computer in passive mode is no desktop, and the phone gets every card.
+- Focus or Do Not Disturb on the Mac is not checked: a notification the App handed over may stay unseen there while the phone is muted for it.
+- The web app still shows its own notifications while a Persona Link desktop is active.
 
 ## Credentials (active mode)
 
@@ -397,9 +584,12 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - `./scripts/app/mac-link.sh build|install|snapshot <directory>`.
 - A standalone SwiftPM package (not in `apple/project.yml`, no shared code with the Persona App), built with `xcodebuild`: on this development machine, `swift build`'s default build system reports "Developer directory not found".
 - persona-link and persona-node are built into `Contents/Helpers/` (persona-node is for the resident node; see "The device's program").
+- The App's newer text is in `Resources/Localizable.xcstrings` (en / zh-Hans / ja); the build copies its resource bundle into `Contents/Resources/`.
+  `scripts/i18n/apple_l10n.py check` checks that catalog apart from the apps' and keeps the older hard-coded Chinese from growing (`LINK_CJK`, counts per file that may only go down).
+- Unit tests: `xcrun swift test --package-path apple/PersonaLink`; the Apple CI packages lane runs them (`scripts/ci/apple.sh`).
 - Local ad-hoc signing (Sign to Run Locally), no hard-coded team.
 - Default bundle id is the placeholder `com.example.persona.link`, overrideable by `mac.link_bundle_id` in `~/.config/persona/config.json` or environment variable
-  `PERSONA_LINK_BUNDLE_ID` (old name `PERSONA_LINK_BUNDLE_ID`).
+  `PERSONA_LINK_BUNDLE_ID`.
 - After building, `vtool` changes the executable's recorded SDK version to the actual SDK used: xcodebuild records Swift packages as deployment target 15.0, making the system draw menu bar panels in the old SDK style
   ([lessons/macos.md](../lessons/macos.md), "Persona Link's panel looks old").
 - `UNIVERSAL=1` also builds Intel.
@@ -419,6 +609,7 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - Stderr appends to `~/.persona/link.log`; if over 1 MB, it is cleared on the next helper start.
 - Uses the resident node's data directory: if the App environment lacks `PERSONA_HOME` / `PERSONA_HOME`, it reads the directory from `~/Library/LaunchAgents/com.persona.node.plist` and passes it to the helper; otherwise defaults to `~/.persona` (`~/.persona` on machines that used the old version) (`LinkStatePaths.swift`).
 - `--parent` exits the helper when stdin closes, so any App exit, including a crash, also exits the helper.
+  The App also writes presence lines to that stdin (see "Presence" below).
 - If the helper exits, the App restarts it: exponential delay from 1 second to 30 seconds; after running for a full minute, restart delay resets to 1 second.
 
 **Icons**: template images remain clear on light and dark menu bars.
@@ -443,7 +634,41 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - The first line describes the state plainly: unpaired is "Not connected to hub yet" (menu action "Paste pairing link…"); "Connected to hub"; awaiting confirmation is "Waiting for confirmation on your phone" plus "Tap ‘This is my computer’ in the phone App";
   if the resident node is not running, "Persona's background service on this computer is not running", with **Reinstall** in the menu (`persona-link node uninstall` then `node install`, preserving the node program in `~/.persona/bin`); "Connecting" or "Offline".
   "Waiting for confirmation" uses status-line `pending`: the hub does not yet send this field (#4655), so this period currently shows "Connected".
-- **Reconnect now** (not in passive mode, where the hub initiates), **Pair / Change connection…**, **Install local node service** (only when absent), **Launch at login**, **Quit**.
+- **Reconnect now** (not in passive mode, where the hub initiates), **Pair / Change connection…**, **Install local node service** (only when absent), **Set Web Address…** (while the hub sends a "Needs you" summary, or once an address is set), **Launch at login**, **Quit**.
+
+**Needs you** (the status line's `attention`: the hub's summary of the sessions waiting on you; without it the menu and the icon are as above)
+- The icon: the count (`needs_you`, muted sessions included) beside the symbol, `99+` above 99; nothing at 0.
+- The menu: a **Needs You** section under the status block with the first 5 sessions in the hub's order (latest `since` first): title, the card's kind and detail ("Permission: Bash: npm test"), place.
+  A muted session (`muted`) is listed dimmed, with a muted bell; `muted` changes only how it looks. **And N More…** counts the rest (the ones the hub left out included) and opens the web app's root. An empty summary says "Nothing needs you right now".
+- Notifications (`UNUserNotificationCenter`): one per session, identifier `<machine_id>/<session_id>#needs` (the web app's tag), only for items with `notify: true`
+  (the manager applies the phone's push rule: not for a muted session, nor for a question the assistant is still deciding on; a missing `notify` counts as false).
+  A card notifies once per connection, the first time it has `notify: true`, also when it was listed before without it (the assistant handed you its question); a card whose notification is still shown does not notify again.
+  The cards already notifying in a connection's first summary make none (the web app's baseline rule). A newer card of a session replaces the older notification once its own goes out; when it does not notify, or its post is dropped, the older one is taken back. A session that leaves the summary, or no longer waits on the card its notification shows, takes the notification back, including one left from an earlier run of the App (a notification remembers its card).
+  The summary goes away with the connection, so the next connection's first summary is a baseline again; a summary that does not decode changes nothing. A notification counts as shown only once it went out; one still waiting (behind the permission prompt) is dropped once its card is answered or replaced, it stops notifying, or the connection is gone.
+  While the list is capped (`more` above 0, the oldest cut), a session missing from it may still wait: its notification stays (also one found at launch), and it does not notify again when it comes back; a post still waiting for it is dropped.
+- Permission to notify is asked when the first summary arrives, not at launch (an older hub never sends one). Denied: the section says so, with **Turn On Notifications…** (System Settings › Notifications).
+- A row or a notification opens `<web address> + route` in the default browser. The web address is **Set Web Address…** if set, else the summary's `web_url`
+  (the hub's https public URL; in active mode without one, the hub address the link went to, which may have a self-signed certificate and is another origin than the one you signed in to).
+  Set the web address when the hub has no https public URL. Without either (passive mode, no public URL), the section says so, and a row or a notification opens the **Web Address** window; saving an address there opens what was clicked, unless a later click already opened it. A typed address without a scheme is saved as https.
+
+**Presence** (`Presence.swift`: the App's part of "Presence" above)
+- `active` is true only while all of these hold:
+  1. Keyboard, mouse or trackpad input within the last 5 minutes, as the HID system sees it (`CGEventSource`, no permission needed).
+     Reading, a call or a long build without touching the keyboard keeps the phone quiet; a Mac left unlocked hands the alerts back to the phone 5 minutes later.
+  2. The screen is not locked (`com.apple.screenIsLocked` / `com.apple.screenIsUnlocked`, distributed notifications macOS posts without documenting them).
+  3. The displays are awake (`NSWorkspace` `screensDidSleep` / `screensDidWake`).
+  4. This user's session is on screen, not switched away from (`NSWorkspace` `sessionDidResignActive` / `sessionDidBecomeActive`).
+  5. `notifies` is true.
+- `notifies`: Persona Link's notifications are allowed and shown as banners or alerts. Quiet delivery and the None style reach only Notification Center, so they do not count;
+  neither does a permission not asked yet (the App asks when the first "Needs you" summary arrives). Focus on this Mac is not checked.
+- The lock and session state at launch come from `CGSessionCopyCurrentDictionary`, the displays' from `CGDisplayIsAsleep`; the notifications keep them current. Notification settings are read again at most once a minute.
+  The lock notifications are observed with `deliverImmediately`: AppKit otherwise holds distributed notifications back while the App is not active, which a menu bar App almost never is.
+- One JSON object per line on the helper's stdin: `{"presence":{"active":true,"notifies":true}}`.
+  - Written at once when either field changes, again every 60 s while `active`, and once to every helper as it starts (inactive too).
+  - Idle time is checked when it would pass the limit; while only input is missing, every 10 s; while notifications do not show, once a minute. While locked, asleep or switched away, nothing runs until the next notification.
+  - The pipe does not block: a helper that stops reading loses lines instead of stalling the App, and a helper that has gone fails the write (`EPIPE`; SIGPIPE is ignored).
+- `{"rang":{"conn":<link>,"interaction_id":"<card id>"}}` on the same stdin once a card's notification went to Notification Center (`UNUserNotificationCenter.add` succeeded), on the connection it was for, `conn` being the status line's `conn` that brought the card's summary; nothing for a notification that was dropped, refused or not allowed, nor with a helper whose status line has no `conn`.
+  A confirmation lost (no helper, a full pipe) leaves the card to the phone.
 
 **Pairing window**
 - Select **Connect to hub (active)** or **Let hub connect (passive)** at the top, defaulting to the current mode; viewing doesn't switch. Switching happens when pairing (active: paste and pair; passive: generate link),
@@ -458,9 +683,9 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 
 **Screenshots**
 - `./scripts/app/mac-link.sh snapshot <directory>` renders the App's own views offscreen, a light and dark set each:
-  - Every menu state;
-  - Pairing window;
-  - Every icon.
+  - Every menu state, including "Needs you" with none, one, five (all four kinds, one muted), an item that does not notify without being muted, more than the menu lists, the longest text the hub sends, notifications off, and no web address;
+  - Pairing window and the web address window;
+  - Every icon, and the icon with a count.
 - No screen-recording permission needed, and no unrelated content captured.
 
 ## Status line (helper → App)
@@ -482,6 +707,14 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - `machine_name`: what the hub calls this computer (see "The computer's name"); absent with old hubs. `rename`: how the last rename asked of this persona-link went: `{id, name}` or `{id, code, error}`.
 - `pending`: meaningful only when `connected`; `true` means the hub is waiting for the user to confirm this computer (see "Pending confirmation"); absent or `false` means confirmed.
 - `trust`: `system` when active mode validates the hub through system CAs (reverse proxy, no fingerprint); absent when pinned.
+- `conn`: active mode while `connected`: which link it is, a number that rises with each link (across mode switches) and that a restarted persona-link does not reuse (it starts from the time it started). The menu bar App's confirmations name it (see "Presence"); absent otherwise and with old helpers.
+- `attention`: the hub's latest "Needs you" summary, as it sent it; the full shape is in "Needs you". In short: `needs_you` (the count), `items` (at most 20,
+  newest first, each with `machine_id`, `session_id`, `title`, `place`, `kind`, `detail`, `muted`, `notify`, `route`, and `interaction_id`, `since` when known), `more` (the rest),
+  `web_url` (where `route` opens; in active mode the manager already fell back to the hub address when the hub has no https `public_url`, so the App needs no fallback of its own;
+  absent in passive mode without one) and `rev` (the same summary has the same `rev`). Notify only items with `notify: true` (an item without it does not notify), also one listed before without it;
+  `muted` only shows an item muted.
+  Absent before the first summary, with old hubs, when the link drops or reconnects, and in passive mode once the hub stopped coming in for 2 minutes. A computer that may not have it
+  (waiting to be confirmed, or a work computer) has an empty one (`needs_you: 0`, no items).
 - No credentials included.
 - Each line is also written to `~/.persona/link.status.json` (with `pid`, `version`, `updated`; normal exit writes `"state":"stopped"`) for
   `persona-link status` to read, since it can't query the running instance.

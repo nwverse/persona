@@ -71,49 +71,6 @@ func clampTTL(ttl uint32) time.Duration {
 	return min(d, maxTTL)
 }
 
-// parseEntries reads the instances of the service type browse that one message describes, without any cache:
-// an instance with only a PTR in this message comes back with an empty Host and Port 0. Queries, malformed
-// messages and a bad browse type give nil.
-func parseEntries(msg []byte, browse string) []Entry {
-	typ, err := parseType(browse)
-	if err != nil {
-		return nil
-	}
-	m, err := unpackMessage(msg)
-	if err != nil || !m.isResponse() {
-		return nil
-	}
-	now := time.Now()
-	insts, addrs := group(m, typ)
-	out := make([]Entry, 0, len(insts))
-	for _, g := range insts {
-		e := Entry{Instance: g.label, Seen: now}
-		switch {
-		case g.ptr != nil:
-			e.TTL = clampTTL(g.ptr.ttl)
-		case g.srv != nil:
-			e.TTL = clampTTL(g.srv.ttl)
-		case g.txt != nil:
-			e.TTL = clampTTL(g.txt.ttl)
-		}
-		if g.srv != nil {
-			e.Host = g.srv.target.String()
-			e.Port = int(g.srv.port)
-			for _, a := range addrs {
-				if a.name.equal(g.srv.target) && !slices.Contains(e.Addrs, a.addr) {
-					e.Addrs = append(e.Addrs, a.addr)
-				}
-			}
-			slices.SortFunc(e.Addrs, netip.Addr.Compare)
-		}
-		if g.txt != nil {
-			e.TXT = decodeTXT(g.txt.txt)
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
 // instance is what the browser knows about one instance, gathered over several messages.
 type instance struct {
 	label    string
