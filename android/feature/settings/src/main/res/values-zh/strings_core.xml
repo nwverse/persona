@@ -265,7 +265,6 @@
     <string name="settings_not_paired">尚未配对</string>
     <string name="settings_hub_computers_online">电脑在线</string>
     <string name="settings_hub_address">hub 地址</string>
-    <string name="settings_section_connection">连接</string>
     <string name="settings_row_hubs">hub</string>
     <string name="settings_row_hubs_subtitle">添加、改名和断开 hub</string>
     <string name="settings_row_hub_update">hub 版本</string>
@@ -274,7 +273,6 @@
     <string name="settings_row_pairing_subtitle">扫码、粘贴链接或手动输入</string>
     <string name="settings_row_devices_subtitle">已配对设备和访问权限</string>
     <string name="settings_row_diag_subtitle">连接路径、探测结果和记录</string>
-    <string name="settings_section_notifications">通知与后台</string>
     <string name="settings_row_capsule_subtitle">在其他 App 中查看任务、继续对话</string>
     <string name="settings_row_notifications_subtitle">需要你、做完了和系统通知渠道</string>
     <string name="settings_row_background">后台保活</string>
@@ -290,7 +288,6 @@
     <string name="settings_row_claude_subtitle">各台电脑上的常用选项，可以一起改</string>
     <string name="settings_row_codex">Codex 设置</string>
     <string name="settings_row_codex_subtitle">各台电脑上 Codex 的常用选项，可以一起改</string>
-    <string name="settings_section_channels">渠道</string>
     <string name="settings_section_connectors">连接器</string>
     <string name="settings_row_phone_subtitle">通讯录、日历、照片、位置和剪贴板</string>
     <string name="settings_row_mail">邮箱</string>
@@ -298,7 +295,6 @@
     <string name="settings_row_lark">飞书</string>
     <string name="settings_row_lark_subtitle">飞书网关连接状态与账号</string>
     <string name="settings_connectors_caption">Persona 能读、能替你操作的数据来源：助手、AI 分身和 Agent 通过它们查日程、读消息、发邮件；替你出面的操作都会先问你。</string>
-    <string name="settings_section_appearance">外观</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_row_about_subtitle">当前版本和构建号</string>
     <string name="settings_update_check">检查更新</string>

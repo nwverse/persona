@@ -585,7 +585,8 @@ private struct InnerWidthProbe: View {
 
     var body: some View {
         Color.clear
-            .frame(width: 0, height: 0)
+            .frame(width: Theme.Size.line, height: Theme.Size.line)
+            .allowsHitTesting(false)
             .onChange(of: width) { seen.count += 1 }
             .screenProbe("tree-inner", seen)
     }

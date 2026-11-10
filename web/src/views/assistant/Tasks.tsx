@@ -2,7 +2,7 @@
 // task cards that follow their agents, the hub's lines (answered, receipt, routed), the "Today" card, message cards about
 // a task, quick results, the dock above the composer, the tasks' questions, the route chip, and a task's detail in the
 // side panel.
-import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
 import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
@@ -12,7 +12,6 @@ import {
   cardSent,
   dayLabel,
   dismissPlan,
-  draftPlaceholder,
   field,
   feedNotice,
   getFeedState,
@@ -22,13 +21,11 @@ import {
   type InterruptResolution,
   isToday,
   sentByPersona,
-  later,
   planEditsToSend,
   planUltracodeToSend,
   removeTask,
   retryKey,
   retryTask,
-  sendMessage,
   startFailure,
   setRoute,
   startPlan,
@@ -42,7 +39,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { runningWorkflows, workflowCounts, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { askOptions, dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -61,12 +58,15 @@ import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
 import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { AcceptRow, BriefCard } from "./Brief";
+
+// A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
+const DecisionRow = lazy(() => import("./DecisionRow").then((m) => ({ default: m.DecisionRow })));
 import { SentLine, TaskSentList } from "./Sent";
 import { latestReview, progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
 import { AnsweredCard, InteractionCard } from "../chat/Interactions";
 import { MessageActions } from "../chat/MessageActions";
-import { clock, sessionTitle, stateOf } from "../../lib/format";
+import { sessionTitle, stateOf } from "../../lib/format";
 import { formatDate, t } from "../../i18n";
 import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
@@ -641,7 +641,7 @@ export function TaskLine({ todoId }: { todoId: string }) {
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
   const plan = useFeed((s) => (item.kind === "plan" && item.ref ? s.plans[item.ref] : undefined));
-  const isLater = useFeed((s) => (item.ref ? s.later[item.ref] : false));
+  const isLater = useFeed((s) => !!s.later[item.id]);
   const title = useStore((s) => s.todos.find((todo) => todo.id === item.ref)?.title) ?? t("assistant-tasks.task_fallback");
   const known = useStore((s) => s.todos.some((t) => t.id === item.ref));
   const planned = useFeed((s) => item.kind === "task" && Object.values(s.plans).some((p) => p.conversation === item.conversation && p.tasks.some((task) => task.todo_id === item.ref)));
@@ -1120,75 +1120,11 @@ function useSayToPersona(conversation: string) {
 
 // ── message cards ──
 
+const LazyMessageDraft = lazy(() => import("./MessageDraft"));
+export const draftTasks = { useTodo, useTaskNow, progressOf, TaskMark, openTask };
+
 function MessageCard({ item }: { item: FeedItem }) {
-  const todo = useTodo(field(item, "todo_id"));
-  const now = useTaskNow(todo);
-  const sent = cardSent(item);
-  // handled without a reply from here: nothing left to edit or send
-  const filed = cardFiled(item);
-  const busy = useFeed((s) => !!s.busy[item.id]);
-  const [text, setText] = useState<string | null>(null);
-  const headingId = useId();
-  const draft = text ?? field(item, "draft") ?? "";
-  const blank = sent || filed ? undefined : draftPlaceholder(draft);
-  const send = async () => {
-    try {
-      await sendMessage(item, draft);
-      toast(t("assistant-tasks.sent_done"), "ok");
-    } catch (e) {
-      toast(t("assistant-tasks.send_failed", { error: String(e instanceof Error ? e.message : e) }), "error");
-    }
-  };
-  const status = now?.status;
-  return (
-    <div className="flex flex-col gap-2.5 rounded-card bg-surface p-4 shadow-card" data-testid="message-card">
-      <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
-        <Icon name={field(item, "source") === "mail" ? "mail" : "chat"} size={13} className="text-accent" />
-        {[field(item, "sender"), field(item, "chat")].filter(Boolean).join(" · ")}
-      </div>
-      <div className="border-l-[3px] border-accent pl-3 text-[14.5px]">{field(item, "text")}</div>
-      {todo && status && (
-        <button type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-[12.5px] hover:bg-hover">
-          <TaskMark status={status} />
-          <span className="font-semibold">{todo.title}</span>
-          <span className="min-w-0 flex-1 truncate text-ink-2">{progressOf(now?.lead)?.text || TODO_STATUS_INFO[status].label}</span>
-          <Icon name="chevronRight" size={13} className="text-ink-3" />
-        </button>
-      )}
-      {/* handled elsewhere: no longer a draft waiting on you, so not drawn like one (#5095) */}
-      <div className={cx("flex flex-col gap-1 rounded-control p-3", sent ? "bg-green-tint" : filed ? "bg-field" : "bg-accent-tint")}>
-        <span id={headingId} className={cx("flex items-center gap-1 text-[12px] font-semibold", sent ? "text-green" : filed ? "text-ink-2" : "text-accent")}>
-          <Icon name={sent ? "check" : filed ? "archive" : "pencil"} size={12} />
-          {sent ? t("assistant-tasks.replied_as_you") : filed ? t("assistant-tasks.filed_title") : t("assistant-tasks.draft_from_progress")}
-          {sent && <span className="ml-auto font-normal text-ink-3">{clock(sent.at)}</span>}
-        </span>
-        {!sent && !filed ? (
-          // Named by the visible heading above it; the global focus ring covers only buttons and links, so it draws its own.
-          <textarea
-            value={draft}
-            onChange={(e) => setText(e.target.value)}
-            aria-labelledby={headingId}
-            rows={Math.min(6, Math.max(2, draft.split("\n").length))}
-            className="-mx-1.5 resize-none rounded-control bg-transparent px-1.5 text-[14.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          />
-        ) : (
-          <div className="whitespace-pre-line text-[14.5px]">{sent ? sent.text : draft}</div>
-        )}
-      </div>
-      {blank && <div className="text-[12px] text-red">{t("assistant-tasks.draft_blank", { blank })}</div>}
-      {filed && <div className="text-[12px] text-ink-2">{t("assistant-tasks.filed_not_sent")}</div>}
-      {!sent && !filed && (
-        <div className="flex gap-2">
-          <Button tone="accent" busy={busy} disabled={!!blank || !draft.trim()} onClick={send} className="flex-1">
-            {t("assistant-tasks.send")}
-          </Button>
-          <Button disabled={busy} onClick={() => later(item.ref!)}>
-            {t("assistant-tasks.later")}
-          </Button>
-        </div>
-      )}
-    </div>
-  );
+  return <Suspense fallback={null}><LazyMessageDraft item={item} tasks={draftTasks} /></Suspense>;
 }
 
 // ── above the composer ──
@@ -1412,7 +1348,15 @@ function NeedsYouRow({ item }: { item: NeedsYouItem }) {
   const { todo, asks, status } = item;
   if (asks.length) return <div data-needs-row={item.key}><button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   const ask = openAsk(todo);
-  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), ...ask }} /></div>;
+  // a decision with its options is answered on the row (#3804); any other ask keeps its one button
+  if (ask && askOptions(ask).length)
+    return (
+      // until its code is here: the row's surface with the task's title, so the tray does not jump
+      <Suspense fallback={<div data-needs-row={item.key} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
+        <DecisionRow key={todo.id + ask.asked_at} rowKey={item.key} todo={todo} ask={ask} />
+      </Suspense>
+    );
+  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
   return <button type="button" data-needs-row={item.key} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
 }
 

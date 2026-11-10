@@ -105,6 +105,10 @@ struct MachineDetailView: View {
                         if let computer = machine.computer { ComputerSection(ref: ref, computer: computer, online: online) }
                         if let browser = machine.browser { BrowserSection(ref: ref, browser: browser, online: online) }
                         if machine.browser?.setUp == true { BrowserLoginsSection(ref: ref, online: online) }
+                        #if os(iOS)
+                        // The iPhones paired with this computer, for the assistant (docs/extensions/iphone.md); the frozen Mac app skips it.
+                        if let iphone = machine.iphone { IPhoneControlSection(ref: ref, iphone: iphone, online: online) }
+                        #endif
                         if let system {
                             VStack(alignment: .leading, spacing: Theme.Space.m) {
                                 heading(String(localized: "System"))

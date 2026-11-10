@@ -387,7 +387,7 @@ func interactionDetail(l i18n.Lang, ix proto.Interaction) string {
 		if ix.Summary != "" {
 			return ix.Summary
 		}
-		return ix.ToolName
+		return ixToolName(ix)
 	case proto.IxPlan:
 		return planTitle(ix.Plan)
 	case proto.IxQuestion:
