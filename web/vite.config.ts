@@ -93,7 +93,13 @@ function startupPreload(): Plugin {
     apply: "build",
     async transform(code, id) {
       if (!id.includes("/src/") || !code.includes("lazyPage(")) return;
-      for (const spec of idleImports(code)) {
+      let specs: string[];
+      try {
+        specs = idleImports(code);
+      } catch (e) {
+        this.error(`startup-preload: ${(e as Error).message}`); // Rollup names the file
+      }
+      for (const spec of specs) {
         const target = await this.resolve(spec, id);
         if (!target) this.error(`startup-preload: ${id} loads ${spec} at idle, which does not resolve`);
         idle.add(target.id);

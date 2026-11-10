@@ -121,10 +121,45 @@ export async function gzipBytes(dir: string, files: string[]): Promise<number> {
   return sizes.reduce((sum, n) => sum + n, 0);
 }
 
-/** The modules a source file (`code`) loads at idle: each `lazyPage(() => import("x")…, { idle: true })`'s "x", as
- *  written. Build time only. */
+// The arguments of the call whose "(" ends just before `from` in `code`, as written and split at its top-level commas;
+// null when it never closes (not a call).
+function callArgs(code: string, from: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let start = from;
+  for (let i = from; i < code.length; i++) {
+    const c = code[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < code.length && code[i] !== c; i++) if (code[i] === "\\") i++;
+    } else if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c) && depth-- === 0) return [...args, code.slice(start, i)].filter((a) => a.trim());
+    else if (c === "," && !depth) {
+      args.push(code.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * The modules a source file (`code`) loads at idle: the "x" of each `lazyPage(() => import("x")…, { idle: true })`, as
+ * written, wherever `idle` stands among its options. Throws on a lazyPage marked idle whose loader is written another
+ * way, and on one whose options are not an object literal: either would load at idle without counting against
+ * IDLE_TIER_BUDGET. Build time only.
+ */
 export function idleImports(code: string): string[] {
-  return [...code.matchAll(/lazyPage\(\s*\(\)\s*=>\s*import\(\s*["']([^"']+)["']\s*\)[^;]*?\{\s*idle:\s*true\s*,?\s*\}/g)].map((m) => m[1]);
+  const specs: string[] = [];
+  for (const m of code.matchAll(/(?<!function\s*)\blazyPage\(/g)) { // each call, not lazyPage's own definition
+    const [load, opts] = callArgs(code, m.index + m[0].length) ?? [];
+    if (opts === undefined) continue;
+    const call = `lazyPage(${load.trim().slice(0, 60)}…)`;
+    if (!opts.trim().startsWith("{")) throw new Error(`${call}: write its options as an object literal, so the idle tier's budget sees whether it is idle`);
+    if (!/\bidle\b(?!\s*:\s*false\b)/.test(opts)) continue;
+    const spec = /^\(\s*\)\s*=>\s*import\(\s*(["'])([^"'`]+)\1\s*\)/.exec(load.trim())?.[2];
+    if (!spec) throw new Error(`${call} is idle, but its loader is not \`() => import("…")\`, so the idle tier's budget cannot count it`);
+    specs.push(spec);
+  }
+  return specs;
 }
 
 /**

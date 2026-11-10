@@ -94,8 +94,19 @@ describe("idle tier", () => {
       "const Chart = lazyPage(() => import('./Chart').then((m) => m.Chart), {\n  idle: true,\n});",
       'const Diff = lazyPage(() => import("./DiffView").then((m) => m.DiffView));',
       'const idle = { idle: true };',
+      'const Inbox = lazyPage(() => import("./views/Inbox").then((m) => m.Inbox), { idle: true, routes: ["inbox"] });',
+      'const Kb = lazyPage(() => import("./views/Kb").then((m) => m.Kb), { routes: ["kb"], idle: true });',
+      'const Todos = lazyPage(() => import("./views/Todos").then((m) => m.Todos), { idle: false, routes: ["todos"] });',
+      "export function lazyPage(load, opts = {}) {}",
     ].join("\n");
-    expect(idleImports(code)).toEqual(["./views/Palette", "./Chart"]);
+    expect(idleImports(code)).toEqual(["./views/Palette", "./Chart", "./views/Inbox", "./views/Kb"]);
+  });
+
+  it.each([
+    ['lazyPage(() => codeViews().then((m) => m.Header), { idle: true })', "its loader is not"],
+    ['lazyPage(() => import("./Header"), opts)', "object literal"],
+  ])("refuses an idle page it cannot count: %s", (code, why) => {
+    expect(() => idleImports(code)).toThrow(why);
   });
 
   it("counts each file gzipped at the best level, or as it is under 1 KB", async () => {
