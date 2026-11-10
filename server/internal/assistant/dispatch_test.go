@@ -121,7 +121,7 @@ func TestDispatchStartsOnAnotherComputerAndReadsTheResult(t *testing.T) {
 	}
 }
 
-// wait_seconds holds the read until the task's turn is over.
+// wait_seconds holds the read until a later poll finds the task's turn is over.
 func TestDispatchReadWaitsForTheTaskToStop(t *testing.T) {
 	old := dispatchPoll
 	dispatchPoll = 5 * time.Millisecond
@@ -131,10 +131,19 @@ func TestDispatchReadWaitsForTheTaskToStop(t *testing.T) {
 		t.Fatal(resultText(r))
 	}
 	f.setItems(proto.Item{ID: "i1", Role: "assistant", Kind: proto.KindText, Text: "built"})
-	go func() {
-		time.Sleep(40 * time.Millisecond)
-		setStatus(f, "box", "s1", proto.StatusDone)
-	}()
+	polled := make(chan struct{})
+	f.answerNode(DeviceSessionGet, func(machine string, _ json.RawMessage) (any, error) {
+		if machine != "box" {
+			return nil, fmt.Errorf("unexpected machine %q", machine)
+		}
+		select {
+		case <-polled:
+			return map[string]any{"session": map[string]any{"session_id": "s1", "status": proto.StatusDone}, "ok": true}, nil
+		default:
+			close(polled)
+			return map[string]any{"session": map[string]any{"session_id": "s1", "status": proto.StatusWorking}, "ok": true}, nil
+		}
+	})
 	out := resultText(dispatchCall(s, "mac", "caller-0001", "dispatch_read", `{"session_id":"s1","wait_seconds":5}`))
 	if !strings.Contains(out, ": stopped.") || !strings.Contains(out, "built") {
 		t.Fatalf("read: %q", out)

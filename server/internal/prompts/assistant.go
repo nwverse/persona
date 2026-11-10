@@ -222,21 +222,22 @@ type Snapshot struct {
 	Awaiting []SnapshotAgent
 	// Muted: agents (or their spaces) the user turned notifications off for that would be in one of the above; in
 	// none of them, as the Live Activity and the Agents badge count none of them (#4562).
-	Muted         []SnapshotAgent
-	Working       []SnapshotAgent
-	Workflows     []SnapshotWorkflow // background workflow runs still running, newest first
-	PhoneOnline   bool
-	KB            string            // RenderKBDigest, "" leaves it out
-	Chats         *SnapshotChats    // nil: Feishu did not answer in time
-	Calendar      *SnapshotCalendar // nil: the calendar did not answer in time
-	Followups     []SnapshotFollowup
-	Routines      []SnapshotRoutine // the daily tasks that are on (at most eight)
-	RoutinesTotal int               // all of them
-	Missed        []SnapshotMiss    // scheduled runs that failed or were skipped since yesterday 18:00, newest first
-	MissedTotal   int               // all of them (Missed is the newest six)
-	Tasks         []SnapshotTask    // tasks opened from assistant conversations (task_plan), newest first
-	Plans         []SnapshotPlan    // plan cards in the main conversation waiting for "Start", newest first (at most five)
-	PlansTotal    int
+	Muted          []SnapshotAgent
+	Working        []SnapshotAgent
+	Workflows      []SnapshotWorkflow // background workflow runs still running, newest first
+	PhoneOnline    bool
+	KB             string             // RenderKBDigest, "" leaves it out
+	Chats          *SnapshotChats     // nil: Feishu did not answer in time
+	Calendar       *SnapshotCalendar  // nil: the calendar did not answer in time
+	Followups      []SnapshotFollowup // the next eight
+	FollowupsTotal int                // all of them
+	Routines       []SnapshotRoutine  // the daily tasks that are on (at most eight)
+	RoutinesTotal  int                // all of them
+	Missed         []SnapshotMiss     // scheduled runs that failed or were skipped since yesterday 18:00, newest first
+	MissedTotal    int                // all of them (Missed is the newest six)
+	Tasks          []SnapshotTask     // tasks opened from assistant conversations (task_plan), newest first
+	Plans          []SnapshotPlan     // plan cards in the main conversation waiting for "Start", newest first (at most five)
+	PlansTotal     int
 	// Asked: the assistant's ask_user questions nobody answered in time, now to-dos waiting for the user's call (#1617),
 	// oldest first.
 	Asked []SnapshotAsked
@@ -247,7 +248,19 @@ type Snapshot struct {
 	// Approvals: open tasks whose finished work waits for the user's nod to go live (merge, deploy, turn on, send),
 	// oldest first: told to the user as one list to approve at once (docs/assistant/todos.md "Delivery").
 	Approvals []SnapshotApproval
+	// Omit: the sections left out to keep the block within its budget (assistant/context.go fitSnapshot).
+	Omit SnapshotOmit
 }
+
+// SnapshotOmit marks the sections a snapshot leaves out for size (#3203). An omitted section still renders its heading
+// and its count, with the tool that lists it, never as empty: the node sends only the sections that changed, so a
+// section that went missing would read as unchanged, and one rendered without its items as "none".
+type SnapshotOmit struct {
+	Muted, Done, Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+}
+
+// SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).
+func SnapshotCut() string { return render("assistant/snapshot_cut", nil) }
 
 // SnapshotApproval is a task held short of live until the user approves: what it is, how far it got, where it is held.
 type SnapshotApproval struct {

@@ -268,7 +268,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		wk := agentWake{Attempt: e.Wakes, Wait: e.Work.Wait, Then: e.Work.Then}
 		s.work.mu.Lock()
 		if a, ok := s.work.approved[k]; ok && risky(e.Work.Then) && a.covers(&e.Work) {
-			wk.Approved = a.then // the user said yes to it: the wake must not tell it to ask again
+			wk.Approved, wk.ApprovedByTask = a.then, a.task != "" // said yes to: the wake must not tell it to ask again
 		}
 		s.work.mu.Unlock()
 		if a := e.Work.Agent; a != nil && s.agentStopped(v, *a) {

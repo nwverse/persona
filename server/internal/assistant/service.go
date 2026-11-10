@@ -48,6 +48,8 @@ type Service struct {
 	id string
 	// nodeAnswering: the computers' requests being answered now, but the ones that wait on a person (idle.go).
 	nodeAnswering atomic.Int64
+	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
+	taskStarting atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
 

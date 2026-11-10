@@ -13,17 +13,19 @@ func RenderAgentToolLoop() string { return render("agents/tool_loop", nil) }
 
 // AgentTriageInput is the turn to triage (agents/triage_input).
 type AgentTriageInput struct {
-	Now     string // the user's local time, "2006-01-02 15:04 Mon"
-	Agent   string // its tab / title
-	Machine string
-	Cwd     string
-	Project string // the knowledge base's project for its directory, "" when none
-	Ask     string // what the user asked in this turn, "" when it is not known
-	Reply   string // its last reply, clipped
-	Others  []AgentTriageOther
+	Now      string // the user's local time, "2006-01-02 15:04 Mon"
+	Agent    string // its tab / title
+	Machine  string
+	Cwd      string
+	Project  string // the knowledge base's project for its directory, "" when none
+	Ask      string // what the user asked in this turn, "" when it is not known
+	Reply    string // its last reply, clipped
+	Others   []AgentTriageOther
+	Answered []AgentAnswerItem // durable question/answer pairs, newest first; not authorization for automatic actions
 	// The risky step the user already said yes to, once what it waits for is over ("" when none): a turn still
 	// waiting for it is no question for the user.
 	ApprovedWait, ApprovedThen string
+	ApprovedByTask             bool // the agent's task authorized it, not the user on a card (#3246)
 }
 
 // AgentTriageOther is another agent working on the same machine: what this one may be waiting for.
@@ -41,6 +43,8 @@ type AgentWake struct {
 	Agent     string // the agent it waited for, when it is that one stopping that wakes it
 	AgentLine string // what that agent said last
 	Approved  string // the risky step the user already said yes to, once the wait is over ("" when none)
+	// ApprovedByTask: the agent's task asked for that step, not the user on a card (#3246).
+	ApprovedByTask bool
 }
 
 func RenderAgentWake(w AgentWake) string { return render("agents/wake", w) }

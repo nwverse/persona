@@ -28,6 +28,7 @@
   "accept_open": "見てみる",
   "accept_reply_hint": "これに返信：「OK」で検証済みに。それ以外は ToDo の決定事項に記録し、元の Agent に修正を頼みます",
   "accepted": "確認済み：検証済みにしました",
+  "accepted_by_supervisor": "監督役が証拠を確認し、検証済みにしました",
   "accept_gone": "このタスクはもうありません",
   "accept_question": "確認時の意見",
   "accept_to_agent": "ユーザーが確認時に返した意見（Lark から）：\n{feedback}\n\nこのとおり直して再デプロイし、最後の返信に変更点・見る場所・確認方法を書いてください。",
@@ -78,5 +79,6 @@
   "goal_summary": "{title}：{tasks}",
   "deploy_gate_out": "デプロイ待ち：稼働中の hub（{hub}）にマージ {merge} がまだ入っていません",
   "deploy_gate_unmerged": "PR がまだマージされていないため、デプロイされていません",
-  "deploy_gate_unknown": "デプロイ未確認：稼働中の hub にこのマージが入っているか確認できません"
+  "deploy_gate_unknown": "デプロイ未確認：稼働中の hub にこのマージが入っているか確認できません",
+  "deploy_gate_not_in": "デプロイ待ち：稼働中の hub（{hub}）にこの PR のマージがまだ入っていません"
 }

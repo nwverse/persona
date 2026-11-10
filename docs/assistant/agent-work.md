@@ -125,7 +125,7 @@ Apply in order; on a match, do not call the model:
 ### Model
 
 - Purpose `agent.triage`, "Session Triage" (**Settings › Model Settings**, under "Information filtering"; defaults to inheriting the inexpensive Inbox triage model).
-- Input: Agent name, directory / project, the user's request for this turn (`lastTurn` ask), final reply (first and last 1500 characters), other working Agents on the same computer (name + short id), current time.
+- Input: Agent name, directory / project, the user's request for this turn (`lastTurn` ask), final reply (first and last 1500 characters), other working Agents on the same computer (name + short id), current time, and up to 20 resolved user question/answer pairs from the session's latest 100 interactions, newest first. Each question and answer is capped at 200 runes. Non-question interactions, assistant-authored answers, cancellations and deferrals (including localized canned pause/wait/hold answers) are excluded. A history read failure leaves triage retryable. This history is decision context, not permission to send an automatic wake.
 - JSON output (`server/internal/prompts/agents/triage.md`):
 
   ```json
@@ -139,7 +139,8 @@ Apply in order; on a match, do not call the model:
 
 - Decision principles in the prompt:
   - An optional offer at the end such as "Would you also like me to…?" does not mean blocked. If the task is complete, it is `done`; include the offer in the conclusion.
-  - If the next step is **pushing code, deploying / releasing, sending messages / comments to others, or merging / modifying someone else's MR / PR**, always classify it as `blocked · user` and ask whether to proceed, regardless of what the Agent says it is waiting for (see "Safety boundary").
+  - Only an unanswered request for a user decision, information, or action can be `blocked · user`. Arrangements, status reports, and acknowledgments are not questions. `questions[].question` must quote the final reply verbatim: a question ending in `?` / `？` after ignoring trailing Markdown, quotes, brackets, emoji or an answer annotation such as `(y/n)`, or an explicit request. Code rejects invented or paraphrased questions, and an authorization/login link is a separate `user` case even without a question.
+  - **Pushing code, deploying / releasing, sending messages / comments to others, or merging / modifying someone else's MR / PR** still receives no automatic wake unless it is approved (see "Safety boundary"). Blocking automation does not invent a request for permission.
   - If uncertain whether the task is complete, use `unsure`, not `done`.
 
 ### Where the conclusion goes
@@ -223,11 +224,20 @@ Persona **sends to Agents on its own** only four kinds of message, none introduc
 3. The answer the user selected on a card;
 4. After the auth relay completed the authorization link it stopped at ([auth-relay.md](../operations/auth-relay.md)): go on with what it was doing.
 
-Any next step involving **pushing code, deploying / releasing, messaging others, or touching someone else's MR / PR** can only become "Waiting for your decision":
+Any next step involving **pushing code, deploying / releasing, messaging others, or touching someone else's MR / PR** must not receive an unapproved automatic wake:
 
-- The prompt requires the model to classify these next steps as `blocked · user` (also when `wait.risky` is true);
-- Code fallback: if `wait.then` / `line` contains push, deploy, `部署` (deploy), `发布` (release), `上线` (go live), merge, `合并` (merge), `发消息` (send a message), `回复` (reply), `评论` (comment), testflight, or release, do not register a wakeup. Instead, ask on a card, "After 'X', it plans to 'Y'. Should it proceed?";
+- The prompt marks such waits with `wait.risky`; without an approval the hub registers no wakeup and does not invent a question for the user. A card still requires an actual unanswered request in the Agent's reply; missing request evidence is left uncertain, not labeled done.
+- Code fallback: if `wait.then` / `line` contains push, deploy, `部署` (deploy), `发布` (release), `上线` (go live), merge, `合并` (merge), `发消息` (send a message), `回复` (reply), `评论` (comment), testflight, release, `发送` (send), `删除` (delete), `购买` / `付费` / `续费` / `充值` (spend), or `生产` / production, do not register a wakeup unless the same wait and step are approved;
+- An approval comes from the user's "Do it once it's ready" on a card the Agent asked, or from a task that authorizes the step (#3246). The wake then goes out with the approval, and no second card is opened;
 - When the user chooses "Do it" on the card, the Agent receives the user's answer, which counts as user authorization.
+
+**A step its task already asked for is not asked again** (#3246, `agents_work_authorized.go`): before the card goes up, the hub reads the title and notes of the Agent's open to-do (supervised or not). When the to-do authorizes the step, the hub treats it as the user's "Do it once it's ready": no card and no push, a normal wakeup once the wait is due, the line `等「X」，任务已授权，好了就去「Y」`, and the work event `auto_approved` (to-do id, whether supervised, wait, step) as the trace. The wake tells the Agent that its task authorized the step. A new wait (the next release node) is checked the same way, so it is not asked again either. The to-do authorizes the step only when every risky word in it passes:
+
+- Never: sending or replying to people (`发消息`, `回复`, `评论`, `发送`, send, comment), deleting (`删除`, delete), spending (`购买`, `付费`, `续费`, `充值`), changing production (`生产`, production). These remain the user's whatever the to-do says.
+- Pushing its own branch (push, `推送`, `推到`): allowed for any to-do.
+- Merging, releasing, deploying (`合入`, `发布`, `上线`, `部署`, merge, release…): only when the to-do text contains the same word and no negation (`不要`, `别`, `禁止`, don't…) precedes it in the same clause.
+
+With no open to-do, or with a step its to-do does not authorize, the hub neither wakes it nor opens a card of its own: a card only carries a question the Agent actually wrote (#3290). With the wake switch off nothing is woken either, and a card the Agent wrote still goes up. With more than one question or an authorization link, the task does not auto-approve the step.
 
 ## Avoid conflicting with manual user actions
 

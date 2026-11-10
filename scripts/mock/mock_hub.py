@@ -31,7 +31,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
-            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -2319,7 +2319,7 @@ if "nas" in MANAGED_MACHINES and any(m["id"] == "nas" for m in MACHINES) and not
                          "备份改成增量了。", seen_at=ago(minutes=190)))
 # hub-assistant_link.offline (zh-Hans): what the hub puts in an offline manager's computers' error
 MANAGER_OFFLINE_ERROR = "助手暂时连不上，稍后再试"
-MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2"}
+MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2", "lark:f2:200": "m-3fa21c", "mail:acc1:t4:504": "m-3fa21c"}
 # extensions / plugins / connectors of the other managers: by position among the ones not built in. The built-ins
 # (source "builtin": cua, ego, imessage, voice…) are every manager's own, as each one's extmgr adds them (extensions.go
 # AddBuiltin), so the merged list has them once per installed manager.
@@ -2359,6 +2359,19 @@ def inbox_owner(item_id):
     dflt = MANAGERS["default"]
     mid = MANAGED_INBOX.get(item_id, dflt)
     return mid if _manager_known(mid) else dflt
+
+
+def inbox_needs_you():
+    """Each installed, online manager's `inbox_needs_you` in the roster (hub/managers.go): its open inbox items under
+    "Needs you" (the hub's status, else the tier; untriaged counts), the connectors' among them. A manager that is
+    away or being installed has none. MOCK_MANAGER_NEEDS_YOU=0: none at all, as a hub or managers from before it."""
+    if os.environ.get("MOCK_MANAGER_NEEDS_YOU") == "0": return {}
+    out = {m["id"]: 0 for m in MANAGERS["list"] if m.get("online") and not m.get("installing")}
+    for x in INBOX:
+        status = x.get("status") or (x.get("tier") if x.get("tier") in ("fyi", "noise") else "action")
+        owner = inbox_owner(x.get("id"))
+        if owner in out and not x.get("done_at") and status == "action": out[owner] += 1
+    return out
 
 
 def merged_by_manager(items):
@@ -2526,7 +2539,9 @@ def managers_route(h, method, p):
                         datetime.fromisoformat(m["installing"].replace("Z", "+00:00")) > datetime.now(timezone.utc) - timedelta(days=7)]
     ms, dflt = MANAGERS["list"], MANAGERS["default"]
     if p == "/api/v1/managers" and method == "GET":
-        out = [dict(m, default=True) if m["id"] == dflt else m for m in ms]
+        needs_you = inbox_needs_you()
+        out = [dict(m, **({"default": True} if m["id"] == dflt else {}),
+                    **({"inbox_needs_you": needs_you[m["id"]]} if m["id"] in needs_you else {})) for m in ms]
         out.sort(key=lambda m: (m["id"] != dflt, bool(m.get("installing"))))
         reply = {"managers": out, "default": dflt}
         if os.environ.get("MOCK_SHARED_BOTS") == "1":
@@ -5883,6 +5898,84 @@ def wechat_connector():
     return c
 
 
+# Settings › Knowledge selection (docs/assistant/knowledge.md "Selection"): the hub's defaults until a PUT replaces them.
+KB_SELECTION_MESSAGES = ["mentions", "mine", "dm", "group", "bot", "official", "muted", "collapsed", "done"]
+KB_SELECTION_DOCS = ["mentions", "comment_mentions", "authored", "viewed"]
+KB_SELECTION = {"doc": None}
+
+
+def kb_selection_defaults():
+    messages = {n: {"on": n in ("mentions", "mine", "dm"), "days": None, "attachment_days": None} for n in KB_SELECTION_MESSAGES}
+    messages["mentions"]["include_all"] = True
+    messages["mine"]["context"] = 50
+    return {"version": 1,
+            "messages": {"order": [["mentions", "mine"]] + [[n] for n in KB_SELECTION_MESSAGES[2:]], "rules": messages},
+            "docs": {"order": [["mentions", "comment_mentions"], ["authored"], ["viewed"]],
+                     "rules": {n: {"on": True, "days": None} for n in KB_SELECTION_DOCS}},
+            "items": [], "history": {}}
+
+
+def kb_selection_problem(doc):
+    """Why the hub would refuse the document (kb.Selection.Validate); None when it would take it."""
+    def days(d):
+        return d is None or (isinstance(d, int) and not isinstance(d, bool) and 1 <= d <= 36500)
+    if not isinstance(doc, dict) or set(doc) - {"version", "messages", "docs", "items", "history"} or doc.get("version") != 1:
+        return "version or fields"
+    for part, names, fields in (("messages", KB_SELECTION_MESSAGES, {"on", "days", "attachment_days", "include_all", "context"}),
+                                ("docs", KB_SELECTION_DOCS, {"on", "days"})):
+        rules = doc.get(part) or {}
+        order = rules.get("order") or []
+        if sorted(n for level in order for n in level) != sorted(names) or any(not level for level in order):
+            return part + ".order"
+        if sorted(rules.get("rules") or {}) != sorted(names):
+            return part + ".rules"
+        for name, rule in rules["rules"].items():
+            if set(rule) - fields or not isinstance(rule.get("on", False), bool):
+                return "%s.%s" % (part, name)
+            if not days(rule.get("days")) or not days(rule.get("attachment_days")):
+                return "%s.%s days" % (part, name)
+            if rule.get("include_all") is not None and name != "mentions":
+                return "%s.%s include_all" % (part, name)
+            context = rule.get("context")
+            if context is not None and (name != "mine" or isinstance(context, bool) or
+                                        not isinstance(context, int) or not 0 <= context <= 200):
+                return "%s.%s context" % (part, name)
+    seen = set()
+    for item in doc.get("items") or []:
+        key = (item.get("source"), item.get("kind"), item.get("id"))
+        if set(item) - {"source", "kind", "id", "name", "read", "store", "days"} or not key[0] or not key[2] or key[1] not in ("chat", "doc"):
+            return "items"
+        if key in seen or (item.get("store") and not item.get("read")) or not days(item.get("days")):
+            return "items"
+        seen.add(key)
+    for source, history in (doc.get("history") or {}).items():
+        if not source or set(history) - {"back_days"} or not days(history.get("back_days")):
+            return "history"
+    return None
+
+
+def kb_selection_route(h, method, p, raw):
+    """GET / PUT /api/v1/kb/selection; True when it answered. MOCK_KB_SELECTION=missing: a hub from before it (404),
+    future: a document with a field no client knows yet, fail: the save is refused."""
+    if p != "/api/v1/kb/selection":
+        return False
+    mode = os.environ.get("MOCK_KB_SELECTION", "")
+    if mode == "missing":
+        return h.send_json({"code": "not_found", "error": "unknown kind"}, 404) or True
+    if method == "PUT":
+        if is_read_only(h):
+            return h.send_json({"error": "read-only device"}, 403) or True
+        if mode == "fail":
+            return h.send_json({"error": "知识库暂时写不进去"}, 503) or True
+        doc = json.loads(raw or b"{}")
+        problem = kb_selection_problem(doc)
+        if problem:
+            return h.send_json({"code": "invalid", "error": "selection: " + problem}, 400) or True
+        KB_SELECTION["doc"] = doc
+    doc = KB_SELECTION["doc"] or kb_selection_defaults()
+    return h.send_json(dict(doc, later={"added": True}) if mode == "future" else doc) or True
+
+
 def triage_route(h, method, p, raw):
     """Settings › Session triage (GET / PUT /api/v1/agents/triage); True when it answered."""
     if p != "/api/v1/agents/triage":
@@ -7960,6 +8053,15 @@ if os.environ.get("MOCK_WAKES") == "1":
     _k += tool("Bash", {"command": "git commit -am 'lint'"}, "[main 1a2b3c] lint", 7)
     _k.append(it("assistant", "text", 6, text="lint 有两处要改，已经改好提交了。"))
     ITEMS[WAKES] = _k
+    # A wake whose continuation has tools but no new answer yet: the previous answer stays visible until it streams.
+    if os.environ.get("MOCK_WAKE_PENDING") == "1":
+        _pending = [it("user", "text", 40, text="发版前把测试跑一下，好了告诉我")]
+        _pending += tool("Bash", {"command": "xcodebuild test", "description": "跑测试", "run_in_background": True},
+                         "Command running in background with ID: bkt. Output is being written to: /tmp/claude/bkt.output", 39)
+        _pending.append(it("assistant", "text", 38, text="测试已经在后台跑了，结束后我告诉你。"))
+        _pending.append(wake(30, "completed", "跑测试", "bkt", "后台命令完成 · 跑测试"))
+        _pending += tool("Read", {"file_path": "/tmp/claude/bkt.output"}, "Test Suite 'All tests' passed", 29)
+        ITEMS[WAKES] = _pending
     # Alignment regression: short and overflowing Monitor events, each followed by a short answer.
     if os.environ.get("MOCK_WAKE_ALIGNMENT") == "1":
         _k = [it("user", "text", 40, text="检查后台上传的进展"),
@@ -8484,7 +8586,8 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
 # MOCK_CARDS=1: the main conversation ends with a health answer drawn as cards (#886, ```persona-card): a stacked bar
-# with a rest, a stat with a note, a line and bars, and a block the app cannot read (stays a code block).
+# with a rest, a stat with a note, a line and bars, a ring, a type the app does not know (shown in words, #3397) and a block the
+# app cannot read (stays a code block).
 if os.environ.get("MOCK_CARDS") == "1":
     _card = lambda d: "```persona-card\n" + json.dumps(d, ensure_ascii=False) + "\n```"
     _days = ["10/28", "10/29", "10/30", "10/31", "11/1", "11/2", "11/3"]
@@ -8501,7 +8604,13 @@ if os.environ.get("MOCK_CARDS") == "1":
                    "points": [{"label": d, "value": v} for d, v in zip(_days, [6.5, 7.2, 5.8, 7.9, 6.1, 8.4, 7.0])]}),
             _card({"type": "bar", "title": "近 7 天活动能量", "unit": "千卡",
                    "points": [{"label": d, "value": v} for d, v in zip(_days, [420, 380, 510, 460, 120, 530, 272])]}),
-            _card({"type": "pie", "segments": [{"label": "a", "value": 1}]}),
+            _card({"type": "ring", "title": "今日热量", "unit": "kcal", "total": {"value": 2250},
+                   "segments": [{"label": "早餐", "value": 555, "note": "已吃"}, {"label": "午餐", "value": 900},
+                                {"label": "晚餐", "value": 750}], "note": "还能吃 45 kcal"}),
+            _card({"type": "sunburst", "title": "本周饮食", "unit": "kcal", "total": {"value": 14200},
+                   "segments": [{"label": "主食", "value": 6100}, {"label": "蛋白质", "value": 4300}, {"label": "蔬果", "value": 2600}],
+                   "rest": {"label": "零食", "value": 1200}}),
+            "```persona-card\n{\"type\": \"stat\", \"title\": \"步\n```",
         ])),
     ]
 # The health space's conversations (docs/assistant/health.md "Charts", #3140): the numbers in each answer come with the charts its
@@ -9081,7 +9190,16 @@ def paged_sessions(query):
     Changed fixtures expire cursors/revisions instead of retaining a delta journal.
     """
     rows = out_by_machine(all_sessions())
-    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not query:
+    # ?manager=<id> (feature sessions_manager): that manager's computers' sessions only, in the whole list, the pages
+    # and the counts; one the roster lacks is 404 no_manager. A hub from before the roster (MOCK_MANAGERS=0) ignores it.
+    if "manager" in query and os.environ.get("MOCK_MANAGERS") != "0":
+        named = query["manager"][0].strip()
+        if len(query["manager"]) != 1:  # (an empty value never gets here: parse_qs drops it; the hub answers 400)
+            return {"error": "manager must have exactly one nonempty value", "code": "invalid_query"}, 400
+        if not any(m["id"] == named and not m.get("installing") for m in MANAGERS["list"]):
+            return {"error": "no such manager: %r" % named, "code": "no_manager"}, 404
+        rows = [s for s in rows if s.get("manager") == named]
+    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
     fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
@@ -12375,6 +12493,67 @@ if MOCK_COMPUTER:
 # seconds a step); an open setup is done a few steps later. Mac Studio is a Mac it is not on for, not installed.
 MOCK_BROWSER = os.environ.get("MOCK_BROWSER", "")
 
+# MOCK_CLIPBOARD=off|on|image (#3064, docs/operations/clipboard.md): the hub shares clipboards. MacBook can, with its switch
+# off / on; with "image" its clipboard holds a picture, else text. Mac Studio can, switched off; the Linux machines have no
+# desktop session (unsupported, reason_code no_display). GET / PUT /api/v1/machines/{mid}/clipboard, GET / PUT
+# …/clipboard/settings, with the hub's errors: 403 clipboard_disabled, 409 clipboard_unsupported, 503 offline, 413
+# too_large (body over 10 MB, text over 4 MiB, an image over 7 MiB), 400 clipboard_bad_image / bad_request, and with
+# MOCK_CLIPBOARD_FAIL=1 502 clipboard_failed. What the phone sends becomes the clipboard; a switch change pushes machines.
+MOCK_CLIPBOARD = os.environ.get("MOCK_CLIPBOARD", "")
+CLIPBOARD = {"macbook": {"kind": "text", "text": "https://example.com/docs/release-notes\n发布说明草稿：本周修复了剪贴板同步的两个问题。"}}
+if MOCK_CLIPBOARD:
+    for _m in MACHINES:
+        if _m["os"] == "linux":
+            _m["clipboard"] = {"supported": False, "enabled": False, "reason": "这台电脑没有桌面会话，所以没有剪贴板。",
+                               "reason_code": "no_display"}
+        else:
+            _m["clipboard"] = {"supported": True, "enabled": _m["id"] == "macbook" and MOCK_CLIPBOARD in ("on", "image")}
+    if MOCK_CLIPBOARD == "image":
+        CLIPBOARD["macbook"] = {"kind": "image", "image": {"mime": "image/png", "data": base64.b64encode(_page_png(480, 300)).decode()}}
+
+
+def clipboard_call(method, path, body):
+    """(answer, status) for …/clipboard and …/clipboard/settings, as the hub answers them; status 204: no body."""
+    mid = path.split("/")[4]
+    machine = next((m for m in MACHINES if m["id"] == mid), None)
+    if machine is None: return {"error": "找不到机器", "code": "not_found"}, 404
+    state = machine.get("clipboard")
+    if state is None: return {"error": "not found", "code": "not_found"}, 404
+    if path.endswith("/settings"):
+        if method == "GET": return state, 200
+        if method != "PUT": return {"error": "method not allowed"}, 405
+        enabled = json.loads(body or b"{}").get("enabled")
+        if not isinstance(enabled, bool): return {"error": "需要 enabled", "code": "bad_request"}, 400
+        state["enabled"] = enabled  # can change while offline or unsupported, as on the hub
+        for send, _ in list(LIVE):
+            try: send({"type": "machines", "machines": out_machines()})
+            except Exception: pass
+        return state, 200
+    if body and len(body) > 10_000_000: return {"error": "太大了", "code": "too_large"}, 413
+    if not state["enabled"]: return {"error": "这台电脑没有打开剪贴板共享", "code": "clipboard_disabled"}, 403
+    if not state["supported"]: return {"error": state.get("reason") or "不支持剪贴板", "code": "clipboard_unsupported"}, 409
+    if not machine.get("online"): return {"error": "电脑不在线", "code": "offline"}, 503
+    if os.environ.get("MOCK_CLIPBOARD_FAIL"): return {"error": "剪贴板正被别的程序占用", "code": "clipboard_failed"}, 502
+    if method == "GET": return CLIPBOARD.get(mid, {"kind": "empty"}), 200
+    if method == "PUT":
+        sent = json.loads(body or b"{}")
+        text, image = sent.get("text"), sent.get("image")
+        if (text is None) == (image is None): return {"error": "需要 text 或 image（只能一个）", "code": "bad_request"}, 400
+        if isinstance(text, str):
+            if len(text.encode()) > 4 << 20: return {"error": "文字太长了", "code": "too_large"}, 413
+            CLIPBOARD[mid] = {"kind": "text", "text": text}
+            return None, 204
+        if not isinstance(image, dict) or image.get("mime") not in ("image/png", "image/jpeg"):
+            return {"error": "只收 PNG 或 JPEG", "code": "clipboard_bad_image"}, 400
+        try: raw = base64.b64decode(image.get("data") or "", validate=True)
+        except Exception: return {"error": "图片不是有效的 base64", "code": "clipboard_bad_image"}, 400
+        if len(raw) > 7 << 20: return {"error": "图片太大了", "code": "too_large"}, 413
+        magic = b"\x89PNG\r\n\x1a\n" if image["mime"] == "image/png" else b"\xff\xd8\xff"
+        if not raw.startswith(magic): return {"error": "图片内容和类型对不上", "code": "clipboard_bad_image"}, 400
+        CLIPBOARD[mid] = {"kind": "image", "image": {"mime": "image/png", "data": image["data"]}}
+        return None, 204
+    return {"error": "method not allowed"}, 405
+
 def mock_usage_windows():
     """GET /api/v1/usage/windows (#2432): two Codex / Claude accounts relative to now; MOCK_USAGE=none has none,
     MOCK_USAGE=stale has the Claude account read two hours ago and out of date (#1906: ultracode's quota line says so)."""
@@ -13951,6 +14130,7 @@ VOICE_VOICES = {
 }
 # What --help lists after the options.
 MOCK_HELP = [
+    "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
@@ -14483,6 +14663,11 @@ class H(BaseHTTPRequestHandler):
                 COOKIES_FAILED[0] = True
                 return self.send_json({"error": "读不到这台 Mac 上 ego 的登录，点「再试一次」；还不行就在那台 Mac 上重新打开 ego lite"}, 502)
             return self.send_json(*cookie_call("GET", q, None))
+        if MOCK_CLIPBOARD and p.startswith("/api/v1/machines/") and (p.endswith("/clipboard") or p.endswith("/clipboard/settings")):
+            answer, status = clipboard_call(self.command, p, getattr(self, "last_body", None))
+            if status == 204:
+                self.send_response(204); self.end_headers(); return
+            return self.send_json(answer, status)
         if p.startswith("/api/v1/machines/") and p.endswith("/browser"):  # the plugin ego (MOCK_BROWSER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "browser" not in machine:
@@ -14895,6 +15080,7 @@ class H(BaseHTTPRequestHandler):
         if telegram_area(self, "GET", p, b""): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
+        if kb_selection_route(self, "GET", p, b""): return
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
         if github_area(self, "GET", p, b""): return
@@ -15132,8 +15318,11 @@ class H(BaseHTTPRequestHandler):
                                        "prev": days[i - 1] if i else "", "next": days[i + 1] if i + 1 < len(days) else ""})
             e = next((e for e in KB.get(kind, []) if e["id"] == parts[1]), None)
             if e is None: return self.send_json({"error": "not found"}, 404)
-            # Like the hub's Detail, meta is always there (the entry's own fields unless KB_DETAIL has more).
-            d = dict({"kind": kind, "id": e["id"], "path": "/home/me/.persona/data/%s/%s" % (kind, e["id"]), "meta": e,
+            # Like the hub's Detail, meta is always there (the entry's own fields unless KB_DETAIL has more). A chat's
+            # and a document's say where it came from (source and the source's id), which a per-item selection names.
+            meta = dict(e, source="lark", source_id=e["id"], kind=e.get("extra") or "group") if kind == "chats" else \
+                dict(e, source="lark") if kind == "docs" else e
+            d = dict({"kind": kind, "id": e["id"], "path": "/home/me/.persona/data/%s/%s" % (kind, e["id"]), "meta": meta,
                       "summary": e.get("one_line")}, **KB_DETAIL.get((kind, e["id"]), {}))
             out = {"detail": d}
             word = (q.get("q") or [""])[0]
@@ -15425,6 +15614,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(s)
         if telegram_area(self, self.command, p, self.last_body): return
         if triage_route(self, self.command, p, self.last_body): return
+        if kb_selection_route(self, self.command, p, self.last_body): return
         if wechat_area(self, self.command, p, self.last_body): return
         if github_thread_area(self, self.command, p, self.last_body): return
         if github_area(self, self.command, p, self.last_body): return
@@ -15682,6 +15872,11 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"chats": 6, "people": 9, "inbox": 1})
         if p.startswith("/api/v1/machines/") and p.endswith("/browser/cookies") and MOCK_BROWSER:  # sign-ins in ego (#1304)
             return self.send_json(*cookie_call(self.command, parse_qs(urlparse(self.path).query), self.last_body))
+        if MOCK_CLIPBOARD and p.startswith("/api/v1/machines/") and (p.endswith("/clipboard") or p.endswith("/clipboard/settings")):
+            answer, status = clipboard_call(self.command, p, getattr(self, "last_body", None))
+            if status == 204:
+                self.send_response(204); self.end_headers(); return
+            return self.send_json(answer, status)
         if p.startswith("/api/v1/machines/") and (p.endswith("/browser") or "/browser/" in p):  # the plugin ego (MOCK_BROWSER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "browser" not in machine:
@@ -16581,6 +16776,18 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         self.send_json({"ok": True})
 
+    _do_post = do_POST
+
+    def do_POST(self):
+        """As the hub: a request that moved a manager's inbox_needs_you tells the apps to read the roster again (at
+        once: the hub waits a second for the counts that change together). Only a request does here: an inbox the
+        mock changes on its own (/mock/… fixtures, timers) moves the roster's number without a push."""
+        before = inbox_needs_you()
+        try:
+            return self._do_post()
+        finally:
+            if inbox_needs_you() != before: _managers_changed()
+
     do_PUT = do_POST
     do_DELETE = do_POST
     do_PATCH = do_POST
@@ -17176,6 +17383,7 @@ MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
+MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
 MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装码过期了还没装的（码已过期，可以拿新的安装码），和一个过期超过 7 天的（像 hub 一样不在名册里）")

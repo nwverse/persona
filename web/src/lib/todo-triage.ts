@@ -111,7 +111,7 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   if (status === "failed") return at(now - last < SHELVE_AFTER_MS ? "waiting" : "done", "failed_start");
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
   if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
-  if (status === "working") return at("working", "agent_running");
+  if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(recent(ms(todo.done_at)) ? "just_done" : "done", "closed");
   if (acceptanceStands(todo)) return at(recent(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
   if (todo.delivery?.state === "live") return at(recent(ms(todo.delivery.at) || last) ? "just_done" : "done", "deployed");
@@ -128,6 +128,17 @@ export function countsAsOpen(todo: Todo, t: Triage): boolean {
   if (t.rule === "failed_start") return t.section === "waiting";
   if (todo.done_at || t.section === "shelved" || t.section === "done") return false;
   return t.rule !== "accepted" && t.rule !== "deployed";
+}
+
+/** Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the conversation's
+ *  Progress entry read this one rule, so the two numbers agree. `open` counts, `shelved` folds (no activity for 48 h,
+ *  nothing running), `closed` is finished (done, accepted, deployed, an old failed start). */
+export type TodoBucket = "open" | "shelved" | "closed";
+
+export function todoBucket(todo: Todo, lookup: SessionLookup | undefined, now: number, restoredAt = 0): TodoBucket {
+  const t = triage(todo, lookup, now, restoredAt);
+  if (countsAsOpen(todo, t)) return "open";
+  return t.section === "shelved" ? "shelved" : "closed";
 }
 
 // ── Related to-dos ────────────────────────────────────────────

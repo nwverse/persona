@@ -478,6 +478,7 @@ private fun SettingsContent(
                 },
                     enabled = !services.demo && !busy && !installing, onClick = ::checkUpdate)
             } }
+            if (!services.demo) item { AppUpdateRecovery(updateController) }
             if (update != null || updateMessage != null) item {
                 JCard(Modifier.padding(top = Tokens.Space.m)) {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,9 +25,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
@@ -46,8 +49,12 @@ import persona.core.contracts.Item
 import persona.core.contracts.SessionKey
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.ComposerFrame
+import persona.core.designsystem.HomeChrome
 import persona.core.designsystem.JPage
+import persona.core.designsystem.LocalHomeChrome
+import persona.core.designsystem.NavItem
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.icons.PhIcons
 
 /**
  * The conversation's messages under a focused composer (#3056): a tap on a reply's blank width puts the keyboard away,
@@ -145,5 +152,32 @@ class ChatKeyboardDismissTest {
         rule.waitForIdle()
         assertTrue(focused)
         assertNull("a scroll opens no menu", menu.target)
+    }
+
+    @Test fun tappingTheRealComposerKeepsItsFieldFocused() {
+        lateinit var composer: ChatComposerState
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                composer = rememberChatComposerState()
+                CompositionLocalProvider(LocalHomeChrome provides HomeChrome(
+                    listOf(NavItem("home", "Home", PhIcons.House)), "home", onSelect = {}, leading = {})) {
+                    JPage("对话", bottomBar = {
+                        ChatComposer(SessionKey("box", "s1"), composer, working = false, sending = false, canClear = false,
+                            service = null, onSend = {}, onCommand = {}, onNotice = {}, modeHint = "默认模式",
+                            accessory = { Text("建议操作", Modifier.testTag("suggestion")) })
+                    }) { _ -> }
+                }
+            }
+        }
+        rule.onNodeWithTag("suggestion").assertDoesNotExist()
+        rule.onNode(hasSetTextAction()).performTouchInput { click() }
+        rule.waitForIdle()
+        assertTrue(composer.focused)
+        rule.onNodeWithTag("suggestion").assertExists()
+        rule.onNode(hasSetTextAction()).performTextInput("a")
+        rule.waitForIdle()
+        assertEquals("a", composer.value.text)
+        assertTrue(composer.focused)
+        rule.onNodeWithTag("suggestion").assertExists()
     }
 }
