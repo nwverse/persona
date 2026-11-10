@@ -296,8 +296,10 @@ func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
 
 // runtimeModes is a runtime row's modes capability: the runtime declared caps.modes (the node refuses session.modes
 // otherwise, runtimes_calls.go), the row is not a subagent's, and its agent takes Claude Code's modes (claude: Orca,
-// Paseo's Claude providers) or is the runtime's own (agy). A Paseo row running Codex or opencode gets none: Paseo refuses
-// a Claude permission mode for it.
+// Paseo's Claude providers) or is the runtime's own (agy). Paseo has no agent of its own: its bridge calls every agent
+// other than Claude Code and Codex "paseo" (integrations/paseo/lib/map.js appAgent), and refuses a permission mode for
+// any of them that is not Claude (bridge.js modes). So a Paseo row running Codex, opencode or any other agent gets none.
 func runtimeModes(declared bool, rt string, s proto.Session) bool {
-	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || s.Agent == rt)
+	own := s.Agent == rt && rt != paseoRuntimeID
+	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || own)
 }

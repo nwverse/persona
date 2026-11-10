@@ -431,6 +431,8 @@ func TestRuntimeModesCapability(t *testing.T) {
 		{true, "orca", "session-1", "claude", true},
 		{true, "agy", "session-1", "agy", true},
 		{true, "paseo", "session-1", "codex", false},
+		{true, "paseo", "session-1", "claude", true},
+		{true, "paseo", "session-1", "paseo", false}, // Paseo's catch-all (opencode, grok, ...): its modes refuses them
 		{true, "orca", "session-1" + subagentSep + "a1", "claude", false},
 		{false, "dsh", "session-1", "dsh", false},
 	} {
