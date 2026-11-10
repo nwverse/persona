@@ -1,6 +1,86 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Just Finished": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Just finished" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "刚做完待看" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "完了したばかり" } }
+      }
+    },
+    "PR to Merge": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "PR to merge" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "PR 待合并" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "マージ待ちのPR" } }
+      }
+    },
+    "Other Open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Other open" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "其余没完成" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "その他の未完了" } }
+      }
+    },
+    "Shelved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Shelved" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "搁置" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "保留" } }
+      }
+    },
+    "Done [To-do Sections]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Done" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "已完成" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "完了" } }
+      }
+    },
+    "Not checked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Not checked: added after the task was accepted" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "验收后追加，未单独核对" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "受け入れ後に追加、個別の確認なし" } }
+      }
+    },
+    "%lld open · %lld shelved · %lld done": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%1$lld open · %2$lld shelved · %3$lld done" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "没完成 %1$lld · 搁置 %2$lld · 已完成 %3$lld" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "未完了%1$lld · 保留%2$lld · 完了%3$lld" } }
+      }
+    },
+    "%lld related": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%lld related" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "相关 %lld 项" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "関連 %lld 件" } }
+      }
+    },
+    "Last moved %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Last moved %@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "%@动过" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "最終更新 %@" } }
+      }
+    },
+    "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "超过 48 小时没有进展、也没有 Agent 在跑。不计入没完成，数据都还在。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "48時間進展がなく、動いているエージェントもありません。未完了には数えません。データは削除されていません。" } }
+      }
+    },
     "Meeting Minutes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -327,6 +407,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "通话结束或回到 Persona 时会自动继续。"
+          }
+        }
+      }
+    },
+    "It is taken back through %@ and removed for everyone who can see it. This can't be undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It is taken back through %@ and removed for everyone who can see it. This can't be undone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 経由で取り消され、表示できるすべての人から削除されます。元に戻せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将通过 %@ 撤回，所有能看到它的人都将看不到它，且无法恢复。"
+          }
+        }
+      }
+    },
+    "It isn't known whether the message was removed. Try again to check." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It isn't known whether the message was removed. Try again to check."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージが削除されたかどうか分かりません。もう一度試して確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不确定消息是否已被删除。可以再试一次确认。"
           }
         }
       }
@@ -687,6 +811,28 @@
         }
       }
     },
+    "Only one of your own devices with full access can recall a message." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only one of your own devices with full access can recall a message."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージを取り消せるのは、フルアクセスを持つ自分のデバイスだけです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有你自己的、拥有完整权限的设备才能撤回消息。"
+          }
+        }
+      }
+    },
     "Open Questions" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -762,6 +908,72 @@
         "en": { "stringUnit": { "state": "translated", "value": "Pending deletions have not been removed from Knowledge yet." } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "待删除内容尚未从知识库移除。" } },
         "ja": { "stringUnit": { "state": "translated", "value": "削除待ちの内容は、まだナレッジから削除されていません。" } }
+      }
+    },
+    "Recall" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recall"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回"
+          }
+        }
+      }
+    },
+    "Recall this message?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recall this message?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージを取り消しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回这条消息？"
+          }
+        }
+      }
+    },
+    "Recall…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recall…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消す…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回…"
+          }
+        }
       }
     },
     "Record a Meeting" : {
@@ -1092,6 +1304,28 @@
         "ja": { "stringUnit": { "state": "translated", "value": "このコンピューターとの接続が切れました。再接続して、直前の操作が反映されたか確認してから再試行してください。" } }
       }
     },
+    "The connector is off, signed out or offline. Turn it on or sign in, then try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The connector is off, signed out or offline. Turn it on or sign in, then try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コネクタがオフ、未サインイン、またはオフラインです。オンにするかサインインしてから再試行してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接器已关闭、未登录或离线。请打开或登录后再试。"
+          }
+        }
+      }
+    },
     "The hub is turning the transcript into key points, decisions, action items and open questions." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1137,6 +1371,28 @@
         "en": { "stringUnit": { "state": "translated", "value": "The manager is offline or restarting. Try again shortly." } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "管理者不在线或正在重启，请稍后重试。" } },
         "ja": { "stringUnit": { "state": "translated", "value": "マネージャーはオフラインか再起動中です。しばらくしてから再試行してください。" } }
+      }
+    },
+    "The message was not recalled: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message was not recalled: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージは取り消されませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息没有撤回：%@"
+          }
+        }
       }
     },
     "The minutes couldn't be written." : {
@@ -1193,12 +1449,144 @@
         }
       }
     },
+    "This hub runs without a database, so it can't recall messages." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub runs without a database, so it can't recall messages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブはデータベースなしで動作しているため、メッセージを取り消せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 没有数据库，不能撤回消息。"
+          }
+        }
+      }
+    },
+    "This hub's version can't recall messages. Update the hub and try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub's version can't recall messages. Update the hub and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブのバージョンはメッセージの取り消しに対応していません。ハブを更新してから再試行してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 的版本还不能撤回消息。请升级 hub 后再试。"
+          }
+        }
+      }
+    },
     "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.": {
       "extractionState": "manual",
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "This manager has turned off the knowledge base. Enable it in the manager configuration to use it." } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "此管理者已关闭知识库。请在管理者配置中启用后使用。" } },
         "ja": { "stringUnit": { "state": "translated", "value": "このマネージャーのナレッジは無効です。利用するにはマネージャーの設定で有効にしてください。" } }
+      }
+    },
+    "This message can't be recalled." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This message can't be recalled."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージは取り消せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息不能撤回。"
+          }
+        }
+      }
+    },
+    "This message is too old to recall now." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This message is too old to recall now."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージは送信から時間が経ちすぎているため、取り消せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息发出太久，已不能撤回。"
+          }
+        }
+      }
+    },
+    "This message was already recalled." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This message was already recalled."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージはすでに取り消されています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息已经撤回过了。"
+          }
+        }
+      }
+    },
+    "This record is no longer on the hub." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This record is no longer on the hub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この記録はハブにもうありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 上已没有这条记录。"
+          }
+        }
       }
     },
     "To Start" : {
@@ -105634,6 +106022,28 @@
       },
       "extractionState" : "manual"
     },
+    "Some personal agents can't be listed right now" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Some personal agents can't be listed right now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一部の個人エージェントを現在表示できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分个人 Agent 暂时列不出来"
+          }
+        }
+      }
+    },
     "Some questions are unanswered" : {
       "localizations" : {
         "en" : {
@@ -106609,6 +107019,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标准字号"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始"
           }
         }
       },
@@ -143552,6 +143985,1777 @@
           }
         }
       }
+    },
+    "Add email: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Add email: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "添加邮箱：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "メールを追加：%1$@"
+                }
+            }
+        }
+    },
+    "Add phone: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Add phone: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "添加电话：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "電話番号を追加：%1$@"
+                }
+            }
+        }
+    },
+    "Alarm [Persona Alarm]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Alarm"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "闹钟"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "アラーム"
+                }
+            }
+        }
+    },
+    "Alarms and Timers": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Alarms and Timers"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "闹钟与计时器"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "アラームとタイマー"
+                }
+            }
+        }
+    },
+    "Becomes an all-day event": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Becomes an all-day event"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "改为全天日程"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "終日の予定に変更"
+                }
+            }
+        }
+    },
+    "Brightness: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Brightness: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "亮度：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "明るさ：%1$@"
+                }
+            }
+        }
+    },
+    "Calendar: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Calendar: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "日历：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "カレンダー：%1$@"
+                }
+            }
+        }
+    },
+    "Call %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Call %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "给 %1$@ 打电话"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@ に電話をかける"
+                }
+            }
+        }
+    },
+    "Can't find this contact (or Persona has no access to Contacts): %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Can't find this contact (or Persona has no access to Contacts): %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "找不到这个联系人（或没有通讯录权限）：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "この連絡先が見つかりません（または連絡先へのアクセス権がありません）：%1$@"
+                }
+            }
+        }
+    },
+    "Can't find this event (or Persona has no access to Calendar): %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Can't find this event (or Persona has no access to Calendar): %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "找不到这个日程（或没有日历权限）：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "この予定が見つかりません（またはカレンダーへのアクセス権がありません）：%1$@"
+                }
+            }
+        }
+    },
+    "Cancel the alarm or timer %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Cancel the alarm or timer %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "取消闹钟或计时器 %1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "アラームまたはタイマー %1$@ を取り消す"
+                }
+            }
+        }
+    },
+    "Cancel the alarm “%@”": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Cancel the alarm “%1$@”"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "取消闹钟「%1$@」"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "アラーム「%1$@」を取り消す"
+                }
+            }
+        }
+    },
+    "Change contact “%@”": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Change contact “%1$@”"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "修改联系人「%1$@」"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "連絡先「%1$@」を変更"
+                }
+            }
+        }
+    },
+    "Change event “%@”": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Change event “%1$@”"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "修改日程「%1$@」"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "予定「%1$@」を変更"
+                }
+            }
+        }
+    },
+    "Close [Home Accessory]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Close"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "关闭"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "閉める"
+                }
+            }
+        }
+    },
+    "Control accessories and scenes once you confirm": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Control accessories and scenes once you confirm"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "确认后控制家居配件和场景"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "確認後にアクセサリとシーンを操作"
+                }
+            }
+        }
+    },
+    "Delete event “%@”": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Delete event “%1$@”"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "删除日程「%1$@」"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "予定「%1$@」を削除"
+                }
+            }
+        }
+    },
+    "FaceTime %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "FaceTime %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "和 %1$@ FaceTime 视频通话"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@ と FaceTime"
+                }
+            }
+        }
+    },
+    "FaceTime audio call to %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "FaceTime audio call to %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "和 %1$@ FaceTime 语音通话"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@ に FaceTime オーディオ通話"
+                }
+            }
+        }
+    },
+    "First name": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "First name"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "名"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "名"
+                }
+            }
+        }
+    },
+    "For: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "For: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "用途：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "用途：%1$@"
+                }
+            }
+        }
+    },
+    "High [Reminder Priority]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "High"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "高"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "高"
+                }
+            }
+        }
+    },
+    "Home [Phone Data]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Home"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "家庭"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "ホーム"
+                }
+            }
+        }
+    },
+    "Home: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Home: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "家庭：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "ホーム：%1$@"
+                }
+            }
+        }
+    },
+    "Invalid parameters; no call will be made.": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Invalid parameters; no call will be made."
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "参数无效，不会拨打。"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "パラメータが無効なため、発信しません。"
+                }
+            }
+        }
+    },
+    "Invalid parameters; nothing will be changed.": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Invalid parameters; nothing will be changed."
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "参数无效，不会做任何修改。"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "パラメータが無効なため、何も変更しません。"
+                }
+            }
+        }
+    },
+    "Invalid parameters; nothing will be saved.": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Invalid parameters; nothing will be saved."
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "参数无效，不会保存任何内容。"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "パラメータが無効なため、何も保存しません。"
+                }
+            }
+        }
+    },
+    "Invalid parameters; nothing will be set.": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Invalid parameters; nothing will be set."
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "参数无效，不会设置任何内容。"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "パラメータが無効なため、何も設定しません。"
+                }
+            }
+        }
+    },
+    "It will run without asking again. You can stop it any time.": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "It will run without asking again. You can stop it any time."
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "之后运行它不会再问你，随时可以取消。"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "今後は確認せずに実行します。いつでも取り消せます。"
+                }
+            }
+        }
+    },
+    "Job title": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Job title"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "职位"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "役職"
+                }
+            }
+        }
+    },
+    "Label: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Label: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "标签：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "ラベル：%1$@"
+                }
+            }
+        }
+    },
+    "Last name": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Last name"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "姓"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "姓"
+                }
+            }
+        }
+    },
+    "Let Persona run the shortcut “%@”?": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Let Persona run the shortcut “%1$@”?"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "允许 Persona 运行快捷指令「%1$@」吗？"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Persona にショートカット「%1$@」の実行を許可しますか？"
+                }
+            }
+        }
+    },
+    "Location removed": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Location removed"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "移除地点"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "場所を削除"
+                }
+            }
+        }
+    },
+    "Location: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Location: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "地点：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "場所：%1$@"
+                }
+            }
+        }
+    },
+    "Lock [Home Accessory]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Lock"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "上锁"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "施錠"
+                }
+            }
+        }
+    },
+    "Low [Reminder Priority]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Low"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "低"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "低"
+                }
+            }
+        }
+    },
+    "Medium [Reminder Priority]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Medium"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "中"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "中"
+                }
+            }
+        }
+    },
+    "Messages [Phone Data]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Messages"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "信息"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "メッセージ"
+                }
+            }
+        }
+    },
+    "Move to list: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Move to list: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "移到列表：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "リストに移動：%1$@"
+                }
+            }
+        }
+    },
+    "Music": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Music"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "音乐"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "ミュージック"
+                }
+            }
+        }
+    },
+    "New contact “%@”": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "New contact “%1$@”"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "新建联系人「%1$@」"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "新規連絡先「%1$@」"
+                }
+            }
+        }
+    },
+    "No longer all-day": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "No longer all-day"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "不再是全天日程"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "終日ではなくなります"
+                }
+            }
+        }
+    },
+    "None [Reminder Priority]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "None"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "无"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "なし"
+                }
+            }
+        }
+    },
+    "Notes removed": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Notes removed"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "删除备注"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "メモを削除"
+                }
+            }
+        }
+    },
+    "Notes replaced with: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Notes replaced with: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "备注替换为：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "メモを置き換え：%1$@"
+                }
+            }
+        }
+    },
+    "Only this occurrence": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Only this occurrence"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "仅此一次"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "この回のみ"
+                }
+            }
+        }
+    },
+    "Open [Home Accessory]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Open"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "打开"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "開ける"
+                }
+            }
+        }
+    },
+    "Pause [Persona Alarm]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Pause"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "暂停"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "一時停止"
+                }
+            }
+        }
+    },
+    "Phone and FaceTime": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Phone and FaceTime"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "电话与 FaceTime"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "電話と FaceTime"
+                }
+            }
+        }
+    },
+    "Play and control Apple Music": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Play and control Apple Music"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "播放和控制 Apple Music"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Apple Music の再生と操作"
+                }
+            }
+        }
+    },
+    "Prepare a message for you to send yourself": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Prepare a message for you to send yourself"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "写好短信，由你自己点发送"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "メッセージを用意し、送信はあなたが行います"
+                }
+            }
+        }
+    },
+    "Priority: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Priority: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "优先级：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "優先度：%1$@"
+                }
+            }
+        }
+    },
+    "Repeats: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Repeats: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "重复：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "繰り返し：%1$@"
+                }
+            }
+        }
+    },
+    "Replace emails with: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Replace emails with: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "邮箱替换为：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "メールを置き換え：%1$@"
+                }
+            }
+        }
+    },
+    "Replace phone numbers with: %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Replace phone numbers with: %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "电话替换为：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "電話番号を置き換え：%1$@"
+                }
+            }
+        }
+    },
+    "Resume [Persona Alarm]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Resume"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "继续"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "再開"
+                }
+            }
+        }
+    },
+    "Run the scene “%@”": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Run the scene “%1$@”"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "执行场景「%1$@」"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "シーン「%1$@」を実行"
+                }
+            }
+        }
+    },
+    "Run the shortcuts you allowed": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Run the shortcuts you allowed"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "运行你允许的快捷指令"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "許可したショートカットを実行"
+                }
+            }
+        }
+    },
+    "Security accessory: check before you allow it.": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Security accessory: check before you allow it."
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "安防设备：确认无误再允许。"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "セキュリティ関連のアクセサリです。確認してから許可してください。"
+                }
+            }
+        }
+    },
+    "Set alarms and timers once you confirm": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Set alarms and timers once you confirm"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "确认后设置闹钟和计时器"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "確認後にアラームとタイマーを設定"
+                }
+            }
+        }
+    },
+    "Set an alarm at %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Set an alarm at %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "设一个 %1$@ 的闹钟"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@ にアラームを設定"
+                }
+            }
+        }
+    },
+    "Set an alarm for %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Set an alarm for %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "设一个闹钟：%1$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "アラームを設定：%1$@"
+                }
+            }
+        }
+    },
+    "Shortcuts [Phone Data]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Shortcuts"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "快捷指令"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "ショートカット"
+                }
+            }
+        }
+    },
+    "Start a call once you confirm": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Start a call once you confirm"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "确认后拨打电话"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "確認後に発信"
+                }
+            }
+        }
+    },
+    "Start a timer for %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Start a timer for %1$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "开一个 %1$@ 的计时器"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@ のタイマーを開始"
+                }
+            }
+        }
+    },
+    "Stop [Persona Alarm]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Stop"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "停止"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "停止"
+                }
+            }
+        }
+    },
+    "Temperature: %@ °C": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Temperature: %1$@ °C"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "温度：%1$@ °C"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "温度：%1$@ °C"
+                }
+            }
+        }
+    },
+    "This and all future occurrences": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "This and all future occurrences"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "这次及以后所有"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "この回以降すべて"
+                }
+            }
+        }
+    },
+    "This scene changes a lock, garage door or security system.": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "This scene changes a lock, garage door or security system."
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "这个场景会改动门锁、车库门或安防系统。"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "このシーンは錠、ガレージドア、またはセキュリティシステムを変更します。"
+                }
+            }
+        }
+    },
+    "Time: %@ → %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Time: %1$@ → %2$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "时间：%1$@ → %2$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "時間：%1$@ → %2$@"
+                }
+            }
+        }
+    },
+    "Timer [Persona Alarm]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Timer"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "计时器"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "タイマー"
+                }
+            }
+        }
+    },
+    "Title: %@ → %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Title: %1$@ → %2$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "标题：%1$@ → %2$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "タイトル：%1$@ → %2$@"
+                }
+            }
+        }
+    },
+    "Turn off": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Turn off"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "关闭"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "オフにする"
+                }
+            }
+        }
+    },
+    "Turn on": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Turn on"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "打开"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "オンにする"
+                }
+            }
+        }
+    },
+    "Unlock [Home Accessory]": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "Unlock"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "开锁"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "解錠"
+                }
+            }
+        }
+    },
+    "%@: %@ → %@": {
+        "extractionState": "manual",
+        "localizations": {
+            "en": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@: %2$@ → %3$@"
+                }
+            },
+            "zh-Hans": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@：%2$@ → %3$@"
+                }
+            },
+            "ja": {
+                "stringUnit": {
+                    "state": "translated",
+                    "value": "%1$@：%2$@ → %3$@"
+                }
+            }
+        }
     }
   },
   "version" : "1.0"

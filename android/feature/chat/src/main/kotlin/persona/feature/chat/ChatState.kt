@@ -132,6 +132,21 @@ internal fun awaitingTurn(message: Item?, status: String?, startFailed: Boolean,
 internal fun awaitingDelivered(messages: List<OutboxMessage>, status: String?, startFailed: Boolean): Boolean =
     mayBeCatchingUp(status, startFailed) && messages.any { it.state == DeliveryState.Sent }
 
+/**
+ * The session waits on you by the hub's word (#2483): its unified state says needs you, which also covers a question, plan
+ * or permission a hook holds while herdr's status stays working (docs/protocol/agent-states.md), or its status says blocked
+ * (an older hub without the state).
+ */
+internal fun Session?.needsYou(): Boolean = this?.status == "blocked" || this?.agentState == AgentState.NeedsYou
+
+/**
+ * The current turn waits on you rather than works (#2483): the session [needsYou], or one of its own requests is pending
+ * here before the hub's state says so. A task agent's request (Persona's chat lists those too) does not count: this
+ * session's own turn may still be at work. Whenever this holds, the header says "Waiting for you" too ([chatStatusState]).
+ */
+internal fun turnWaitsOnYou(session: Session?, key: SessionKey, requests: List<Interaction>): Boolean =
+    session.needsYou() || requests.any { it.sessionKey == key }
+
 internal fun chatStatusState(
     res: android.content.res.Resources,
     snapshot: persona.core.contracts.api.ChatSnapshot,
@@ -148,7 +163,7 @@ internal fun chatStatusState(
     answering = answering,
     unconfirmed = operationUnknown || messages.any { it.state.resultUnknown },
     pendingRequests = requests.size,
-    blocked = session?.status == "blocked",
+    blocked = session.needsYou(),
     requestSummary = requests.singleOrNull()?.headline?.shown,
     stopping = snapshot.stopping,
     working = session?.status == "working" || awaiting,

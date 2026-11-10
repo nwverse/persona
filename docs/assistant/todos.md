@@ -48,8 +48,10 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
-External runtime starts (including Paseo) still fail closed: their start protocol does not guarantee enforcement,
-and a runtime may ignore the mode or fall back to a different provider at dispatch.
+External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
+without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
+(#3238): a plan start runs on a Paseo provider that runs Claude Code, in Paseo's `plan` mode; a non-Claude provider, no
+such provider, an agent Paseo reports in another mode (archived at once), or a takeover are refused.
 Update both the assistant and nodes for this behavior. This is the runtime's plan restriction on task work, not a
 promise that the runtime writes no session metadata or plan files, and it does not prevent a later explicit mode
 change by the user.
@@ -590,7 +592,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 - Sidebar has a **To-dos** entry with unfinished-count badge.
 
 ### 2. To-do list and details
-- List: search bar, unfinished list, collapsed completed group at bottom. The web's default list is by status section (Waiting on you, Working, Just finished, PR to merge, then Other open, Shelved and Done folded), related to-dos merged into one row and stale ones shelved; by folder is the secondary view (`docs/assistant/todo-status-sop.md`). Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
+- List: search bar, unfinished list, collapsed completed group at bottom. Every client's default list (web, iOS / Mac and Android, #3206) is by status section (Waiting on you, Working, Just finished, PR to merge, then Other open, Shelved and Done folded), related to-dos merged into one row and stale ones shelved; by folder is the web's secondary view (`docs/assistant/todo-status-sop.md`). Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
 - Details: edit title/notes directly (iOS: notes can be dictated with the composer's mic, in details and in the New To-Do sheet, #2188); current state; linked projects (whole-project links) and active Agents (state dot, title, machine/workspace labels, latest-message summary, update time, tap to chat; beyond session time window use snapshot and mark "Ended"; launch failures show reason/removal); collapsed "Previously involved" list; persistent bottom **Hand to Agent** and **Done / Reopen** buttons; delete in top-right more menu.
 - **Decisions** section under notes (web): effective decisions chronologically (question, choice, reason, time, provenance), each can **Change decision** (write a replacement) or ⋯ **Which decision did this replace?** / **Undo replacement**; when superseded records exist, **View full history**, with old records struck through. Hide whole section if hub unsupported (route 404).
 - **Projects** section above Agents: each row "project · machine", with **Remove**; projects without online Agents show "No Agents currently": only sessions in current hub group, on connected computers, not offline count (same-ID computers in other groups do not; disconnected computer sessions marked unknown by hub rather than offline do not count either, matching web). Agent source says "With project <name>" or "Dispatched by <parent title>"; missing project source shows only "With project", missing parent only "Spawned", manual links unlabelled.

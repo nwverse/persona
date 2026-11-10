@@ -145,7 +145,7 @@ func TestEngineUseSwitches(t *testing.T) {
 	if live(m, sidA) || m[sidB].PaneID != "herdr-core:t1" || m[sidB].Status != proto.StatusWorking {
 		t.Errorf("after the switch: %v", m)
 	}
-	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.HerdrCore {
+	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.HerdrCore+","+host.Tmux {
 		t.Errorf("hosts %v", kinds)
 	}
 	select {
@@ -165,7 +165,7 @@ func TestEngineUseSwitches(t *testing.T) {
 	if live(m, sidB) {
 		t.Errorf("herdr-core's session still live: %+v", m[sidB])
 	}
-	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr {
+	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr+","+host.Tmux {
 		t.Errorf("hosts %v", kinds)
 	}
 
@@ -201,7 +201,7 @@ func TestEngineBothListsBothHosts(t *testing.T) {
 	if a.PaneID != "w1:p1" || b.PaneID != "herdr-core:t1" || b.Status != proto.StatusWorking {
 		t.Fatalf("combined sessions: %+v / %+v", a, b)
 	}
-	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr+","+host.HerdrCore {
+	if kinds := hostKinds(n); strings.Join(kinds, ",") != host.Herdr+","+host.HerdrCore+","+host.Tmux {
 		t.Errorf("hosts %v", kinds)
 	}
 	if n.defaultHost().Kind() != host.Herdr {

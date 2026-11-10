@@ -335,6 +335,7 @@ internal fun ChatPicture(session: SessionKey, item: Item, loader: ImageLoader, a
 /** [userImages] renders neighboring user-image rows in the same bubble; hide those rows with [imagesInUserBubble].
  * [workRunning] comes from the parent work group's live flag; [lastWorkStep] ends its timeline connector; [plan] is the
  * group's plan ([latestPlan]): its TodoWrite is the full plan card, with earlier updates retained as ordinary steps.
+ * [waiting]: the turn waits on you ([turnWaitsOnYou]); a running work line then reads "Waiting for you".
  */
 @Composable
 internal fun ChatLineContent(
@@ -350,6 +351,7 @@ internal fun ChatLineContent(
     lastWorkStep: Boolean = false,
     plan: LinePlan? = null,
     showSourceLabel: Boolean = true,
+    waiting: Boolean = false,
 ) {
     val res = LocalResources.current
     when (line) {
@@ -382,9 +384,12 @@ internal fun ChatLineContent(
             // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary.
             if (style.compactToolSummary) AssistantWorkSummary(line, onToggle)
             else {
-                val now by rememberNow(1_000, enabled = line.live)
-                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }), line.open,
-                    { onToggle(line.id) }, running = line.live) {}
+                // Waiting on you, the turn stays the live one (it folds and opens as while it runs), but its line says it
+                // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
+                val waits = waiting && line.live
+                val now by rememberNow(1_000, enabled = line.live && !waits)
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
+                    { onToggle(line.id) }, running = line.live && !waits) {}
             }
         }
         is ChatLine.Step -> WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
