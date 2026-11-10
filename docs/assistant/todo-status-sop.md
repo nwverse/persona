@@ -48,8 +48,21 @@ The first rule that holds wins.
 | 10 | `stale` | Shelvable (see "Shelving") and no activity for 48 hours | Shelved |
 | 11 | `rest` | Anything else | Other open |
 
+**Waiting on you is only for what the owner must do in person**: answer a question, grant a permission, decide on a
+large feature. A deployed to-do's "Please verify" ask and a "done" conclusion are not: the supervising assistant
+checks and accepts them by default, so they sit in Just finished (rule 8), their one-tap button still there for the
+owner who wants to accept it themselves.
+
 A merged but not deployed delivery (`merged`, `off`) has no section of its own: the row says where it is held and
 who can unhold it, and the to-do falls under rules 10 and 11.
+
+### Deployed needs evidence
+
+"Deployed" must mean the running hub contains the work: the commit of the hub's `health.version` includes the PR's merge
+commit. Today the hub sets `delivery.state = live` from the agent's own delivery line ("交付：已上线并实测",
+`server/internal/assistant/delivery.go`) or the completion judge, without that check, so a PR merged but not yet
+deployed can be marked deployed and ask "Please verify". The page can only read the state the hub gives; the check
+belongs on the hub and is tracked separately (#3205). Until it lands, rule 7 trusts `live` as the hub reports it.
 
 ## Header count
 

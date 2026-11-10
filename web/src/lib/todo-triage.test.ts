@@ -56,6 +56,12 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(at(todo("t", { ask: { outcome: "decide", verdict: "v", asked_at: hoursAgo(1) } })).section).toBe("waiting");
   });
 
+  it("a deployed to-do's Please verify, or a done conclusion, is Just finished: the supervisor accepts it, not the owner", () => {
+    const idle = { agents: [agent("idle")] };
+    expect(at(todo("t", { ...idle, ask: { verdict: "done, deployed: verify below", asked_at: hoursAgo(1) } }))).toMatchObject({ section: "just_done", rule: "finished_unseen" });
+    expect(at(todo("t", { ...idle, ask: { outcome: "done", verdict: "done", asked_at: hoursAgo(1) } })).section).toBe("just_done");
+  });
+
   it("an agent running is Working, even on an old to-do", () => {
     expect(at(todo("t", { updated_at: hoursAgo(400), agents: [agent("run")] }))).toMatchObject({ section: "working", rule: "agent_running" });
   });
