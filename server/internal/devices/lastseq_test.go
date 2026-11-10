@@ -107,8 +107,14 @@ func TestARewatchedSessionAsksSinceItsSeqOnlyWhileWatched(t *testing.T) {
 		t.Fatalf("unwatched: seq %d kept", seq)
 	}
 	notify(9) // a late batch, sent before the node took the unwatch
+	// The late batch is handled before the new watch: Call marks the session watched before its request goes out, so a
+	// batch the read loop took after that would count. The read loop handles each event before it reads the next line,
+	// so once the reply to a call made after the batch is in, the batch was handled.
+	if err := m.call(ctx, "node.info", map[string]any{}, nil); err != nil {
+		t.Fatal(err)
+	}
 	call("session.watch")
-	notify(6) // the new watch's catch-up; events arrive in order, so the late batch was handled before it
+	notify(6) // the new watch's catch-up
 	seen(6)
 	m.reconnect()
 	eventually(t, 5*time.Second, "watched again from its new seq", func() bool {

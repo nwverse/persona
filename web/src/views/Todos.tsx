@@ -10,7 +10,8 @@ import { usageLimitLabel } from "../lib/usage-limit";
 import { plainMarkdown } from "../lib/plain-markdown";
 import { composing } from "../lib/send-history";
 import { useAgentSessions } from "../lib/sessions";
-import { dropTodo, refresh, refreshTodos, useStore } from "../lib/store";
+import { useScoped } from "../lib/current-assistant";
+import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/store";
 import {
   addTodoDecision,
   createTodo,
@@ -117,7 +118,14 @@ export function TodosView({
   onToggleSidebar?: () => void;
 }) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  const todos = useStore((s) => s.todos);
+  // with several assistants, the current one's to-dos (docs/assistant/managers.md "Clients"); a link to another assistant's
+  // to-do still opens it, without switching
+  const everyTodo = useStore((s) => s.todos);
+  const ownTodos = useScoped(everyTodo);
+  const todos = useMemo(() => {
+    const linked = selectedId && !ownTodos.some((x) => x.id === selectedId) ? everyTodo.filter((x) => x.id === selectedId) : [];
+    return linked.length ? [...ownTodos, ...linked] : ownTodos;
+  }, [everyTodo, ownTodos, selectedId]);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosError = useStore((s) => s.todosError);
   const machines = useStore((s) => s.machines);
@@ -125,7 +133,8 @@ export function TodosView({
   const allSessions = useAgentSessions();
   const answered = useStore((s) => s.answered);
   // a card answered here stops its agent's "Needs you" at once, not at the hub's next push (#4186)
-  const lookup = useMemo(() => answeredLookup(allSessions, interactions, answered), [allSessions, interactions, answered]);
+  const taskRows = useStore((s) => s.taskRows);
+  const lookup = useMemo(() => answeredLookup(withTaskRows(makeSessionLookup(allSessions), taskRows), interactions, answered), [allSessions, taskRows, interactions, answered]);
 
   const [activeId, setActiveId] = useState<string | undefined>(selectedId);
   const [search, setSearch] = useState("");
@@ -886,6 +895,7 @@ const DOT_STATE: Record<TodoStatus, AgentState> = {
   usage_limit: "idle",
   unread: "unread",
   working: "working",
+  waiting: "working",
   follow_up: "idle",
   done: "offline",
   not_started: "offline",
@@ -1340,7 +1350,7 @@ function TodoDetail({
         ? "idle"
       : shown === "unread"
         ? "unread"
-        : shown === "working"
+        : shown === "working" || shown === "waiting"
           ? "working"
           : shown === "follow_up"
             ? "idle"
@@ -1408,8 +1418,8 @@ function TodoDetail({
       <TodoPlanEditor todo={todo} />
       <ReviewChecklist todo={todo} />
 
-      {/* Stage Bar (#2776): progress from plan to verified, from the hub's todo; nothing on hubs that don't send it. */}
-      <TodoStageBar stage={todo.stage} prURL={todo.pr_url} className="mt-4" />
+      {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />
 
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 

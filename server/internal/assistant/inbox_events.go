@@ -306,8 +306,9 @@ func batchStart(it *InboxItem, prev inboxSeen, n int, fresh bool) string {
 }
 
 // contextLine is a message line of a chat's context as the Feishu plugin writes it: "[01-02 15:04] <name>(@-mentioned me): ...",
-// with the full-width parentheses and colon matched below.
-var contextLine = lazyre.New(`^\[[^\]]{1,20}\] ([^：]{1,60}?)(（@了我）)?：(.*)$`)
+// with the full-width parentheses and colon matched below. The line's trailing notes for the AI ("(id=…, 回复 …)") are
+// left out of the text.
+var contextLine = lazyre.New(`^\[[^\]]{1,20}\] ([^：]{1,60}?)(（@了我）)?：(.*?)(?: \(id=[^()]*\))?$`)
 
 // contextMessages are the newest n message lines of a chat's context; nil when its lines don't read as messages.
 func contextMessages(context string, n int) []InboxChainMessage {
