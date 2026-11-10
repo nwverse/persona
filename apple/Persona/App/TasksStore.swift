@@ -260,7 +260,7 @@ final class TasksStore {
         defer { endMessage(card.id, generation: ticket) }
         // Keep the Inbox's optimistic filing, saved failed reply and item-wide Send lock on the existing path.
         if injected == nil, let item = cardItem(itemID, conversation: card.conversation) {
-            let sent = await InboxStore.shared.send(item, text: text, card: card.id)
+            let sent = await InboxStore.shared.send(item, text: text, card: card.id, api: api)
             guard generation == ticket else { return }
             if sent { sentMessages.insert(card.id) } else { InboxStore.shared.reload() }
             return
@@ -347,7 +347,7 @@ final class TasksStore {
     }
 
     private func cardItem(_ itemID: String, conversation: String) -> InboxItem? {
-        let owner = feedAPIs[conversation]?.managerID
+        let owner = AppModel.shared.itemManager(feedAPIs[conversation]?.managerID)
         return InboxStore.shared.items.first {
             $0.id == itemID && AppModel.shared.itemManager($0.manager) == owner
         }
