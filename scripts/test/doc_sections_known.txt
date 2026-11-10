@@ -57,6 +57,7 @@ server/internal/proto/proto.go	docs/assistant/assistant.md	Push when done
 server/internal/proto/proto.go	docs/protocol/protocol.md	Origin of assistant conversations
 server/internal/proto/usagewindows.go	docs/server/usage-windows.md	Account pool gateways
 server/internal/update/manifest.go	docs/operations/hub-update.md	Release manifest and signature
+server/internal/update/onebuild_test.go	docs/operations/hub-update.md	Taking the skill out of the binary
 web/src/lib/extensions.ts	docs/extensions/extensions.md	Automatic upgrades
 web/src/lib/terminal-mode.ts	docs/integrations/terminal.md	The full herdr view
 web/src/lib/turns.ts	docs/protocol/protocol.md	Sending video
