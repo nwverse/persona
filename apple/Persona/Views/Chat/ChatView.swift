@@ -2493,7 +2493,9 @@ struct ChatView: View {
         }
         #endif
         let presented = hooked
+        #if os(macOS)
         .sheet(item: $menu.selecting) { t in SelectableTextSheet(text: t.text, plain: t.plain, quote: menu.selectionQuote(of: t)) }
+        #endif
         .sheet(item: $menu.sharing) { m in MessageShareSheet(message: m) }
         .confirmationDialog("This Reply", isPresented: Binding(get: { menu.more != nil }, set: { if !$0 { menu.more = nil } })) {
             if let id = menu.more {

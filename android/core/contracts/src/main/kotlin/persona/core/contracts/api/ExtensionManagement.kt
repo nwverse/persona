@@ -136,6 +136,8 @@ data class ExtensionField(
     val picksMachine: Boolean get() = type == "string" && enum == null && format == "machine"
     /** One of the hub's launchers, picked from them (a string of format launcher without choices of its own). */
     val picksLauncher: Boolean get() = type == "string" && enum == null && format == "launcher"
+    /** Whether flipping a switch of it asks [confirm] first: only turning one on, and only with a sentence. */
+    fun asksFirst(on: Boolean): Boolean = on && !confirm.isNullOrBlank()
 }
 
 /**

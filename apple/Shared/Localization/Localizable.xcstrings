@@ -870,25 +870,25 @@
         }
       }
     },
-    "Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on your iPhone; its transcript goes to Knowledge." : {
+    "Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on this device; its transcript goes to Knowledge." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on your iPhone; its transcript goes to Knowledge."
+            "value" : "Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on this device; its transcript goes to Knowledge."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はiPhoneに残り、文字起こしがナレッジに入ります。"
+            "value" : "Personaで会議の録音を始め、カレンダーで進行中の予定の名前を付けます。音声はこのデバイスに保存され、文字起こしがナレッジに入ります。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 Persona 中开始会议录音，以日历里正在进行的会议命名。音频留在 iPhone 上，转写文字进入知识库。"
+            "value" : "在 Persona 中开始会议录音，以日历里正在进行的会议命名。音频保存在本机，转写文字进入知识库。"
           }
         }
       }
