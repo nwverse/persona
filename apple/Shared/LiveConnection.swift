@@ -603,12 +603,13 @@ final class LiveConnection {
         comps.scheme = config.url.scheme == "https" ? "wss" : "ws"
         comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream)
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         RequestClientMetadata.current.apply(to: &req)
         req.timeoutInterval = 15
         resumed = false // until this socket's hello says so
         let t = session.webSocketTask(with: req)
+        t.delegate = HubRedirects.shared
         t.maximumMessageSize = 64 << 20
         task = t
         state = .connecting
@@ -704,7 +705,10 @@ final class LiveConnection {
                     // The handshake's answer: 401 is the hub refusing this credential, not the hub being away.
                     let refused = (t.response as? HTTPURLResponse)?.statusCode == 401
                     if refused != self.rejected { self.rejected = refused }
-                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)") : err.localizedDescription)
+                    // Cloudflare Access in front of the hub turned the handshake away: say so, not a generic failure.
+                    let access = CloudflareAccess.blocked(t.response) ? CloudflareAccessError(tokenSent: self.config?.access != nil) : nil
+                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)")
+                                         : access?.localizedDescription ?? err.localizedDescription)
                     self.stalled = false
                     self.scheduleReconnect(gen)
                 }
