@@ -504,9 +504,9 @@ export function sections(items: InboxItem[], f: InboxFilter): InboxSections {
   return out;
 }
 
-/** The sidebar badge: open items that need the user. */
+/** The sidebar badge: unread open items, independent of their pending section. */
 export function badgeCount(items: InboxItem[]): number {
-  return items.filter((it) => !isDone(it) && statusOf(it) === "action").length;
+  return items.filter((it) => !isDone(it) && !it.read).length;
 }
 
 /** The connectors with items in the list (GitHub…), one filter chip each, in the order they first come. */
@@ -1726,7 +1726,7 @@ export function useInbox<T>(select: (s: InboxState) => T): T {
   return useSyncExternalStore(subscribe, read, read);
 }
 
-/** How many unhandled "Needs you" items the inbox has (the sidebar's badge). */
+/** How many unread open items the inbox has (the sidebar's badge). */
 export function useInboxBadge(): number {
   // the current assistant's, with several (docs/assistant/managers.md "Clients")
   const scope = useScope();

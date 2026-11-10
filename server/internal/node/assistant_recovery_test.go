@@ -337,10 +337,8 @@ func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	back := make(chan error, 1)
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		back <- os.Rename(moved, claude)
-	}()
+	// the install finishes half a second in, while the start is being retried
+	time.AfterFunc(500*time.Millisecond, func() { back <- os.Rename(moved, claude) })
 	n := codexTestNode(t)
 	withFakeHub(t, n)
 	const id = "11111111-2222-3333-4444-555555555555"
@@ -807,10 +805,7 @@ func TestAssistantPendingFailureUsesTheReplacementProcess(t *testing.T) {
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
 	n.runAssistantRecovery(old, r, "claude", old.cwd, old.model, "primary-model", false)
-	deadline := time.Now().Add(2 * time.Second)
-	for calls.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitWithin(t, 2*time.Second, "the replacement's recovery send", func() bool { return calls.Load() >= 2 })
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("the replacement's pending failure was dropped: %d recovery send(s), want 2", got)
 	}

@@ -156,3 +156,5 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
   changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
   the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+
+- Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.

@@ -105,6 +105,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
+leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
