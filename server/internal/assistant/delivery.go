@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"sort"
 	"strings"
 	"time"
@@ -77,6 +78,11 @@ func deliveryMark(text string) (d TodoDelivery, ok bool) {
 			d.Unblock = unblockOf(u[1])
 		}
 		ok = true
+	}
+	if !ok { // no delivery line: a closeout says the same of merging and deploying (agents_closeout.go)
+		if c, artifacts, has := closeout.Parse(text); has {
+			return closeoutDelivery(c, artifacts)
+		}
 	}
 	return d, ok
 }

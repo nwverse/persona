@@ -221,7 +221,9 @@ export function Spinner({ size = 12 }: { size?: number }) {
 /** An on / off switch (role=switch): the knob slides over 200 ms with the design system's ease (reduced motion: at once).
  *  Settings' rows, and the chat's and "New agent"'s ultracode switch (#3428). `className`: added to the track (a place
  *  that needs its grayed state drawn more clearly); without it the switch is as before. */
-export function Switch({ on, onChange, disabled, label, className, describedBy }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string; describedBy?: string }) {
+/** The one on/off switch, iOS-style (#3675): a green or grey track and a white knob with a soft shadow and no ring
+ *  (`--switch-on`, `--switch-off`, `--shadow-knob`). The `switch` class gives it a pill-shaped ring on keyboard focus only. */
+export function Switch({ on, onChange, disabled, label, className, describedBy, title }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string; describedBy?: string; title?: string }) {
   return (
     <button
       type="button"
@@ -229,11 +231,12 @@ export function Switch({ on, onChange, disabled, label, className, describedBy }
       aria-checked={on}
       aria-label={label}
       aria-describedby={describedBy}
+      title={title}
       disabled={disabled}
       onClick={() => onChange(!on)}
-      className={cx("touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-accent" : "bg-hover-2", className)}
+      className={cx("switch touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-switch-on" : "bg-switch-off", className)}
     >
-      <span className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-btn transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
+      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
     </button>
   );
 }

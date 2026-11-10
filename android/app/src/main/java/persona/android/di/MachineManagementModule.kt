@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.transform
 import kotlinx.serialization.json.JsonObject
@@ -170,8 +171,19 @@ object MachineManagementModule {
                 "${group.id}:${data.scope.hubId}:${data.scope.pairingGeneration}" to (group.namespace ?: "primary")
             }
         }
+        // A source subscription saved, run or deleted (#2041) draws the subscription pages again, as an invalidate of theirs.
         override val uiEvents: Flow<ExtensionUiEvent> = (application as PersonaApp).hub
-            .flatMapLatest { hub -> hub?.connection?.events ?: emptyFlow() }.filterIsInstance<ExtensionUiEvent>()
+            .flatMapLatest { hub -> hub?.connection?.events ?: emptyFlow() }
+            .mapNotNull { event ->
+                when (event) {
+                    is ExtensionUiEvent -> event
+                    is persona.core.contracts.SubscriptionEvent -> ExtensionUiEvent(persona.core.contracts.api.SUBSCRIPTIONS_UI, invalidate = true)
+                    else -> null
+                }
+            }
+        // Source subscriptions (#2041): entry rows once the hub says they deliver.
+        override val subscriptionsAvailable: Flow<Boolean> = features.map { "source_subscriptions" in it }.distinctUntilChanged()
+        override suspend fun subscriptionSummary() = api().subscriptionSummary()
         // A hub without the `extensions` feature (before #1844, or no hello yet) answers under /api/v1/plugins only;
         // a newer one under both.
         private fun api() = runtime.connection().let { HttpExtensionManagement(it, available, legacy = "extensions" !in it.serverFeatures.value) }

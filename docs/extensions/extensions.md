@@ -2433,16 +2433,26 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
 ```
 
 - **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` is not enough.
-- **`leader.changed {id, title, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
-  record by; `title` its title as the apps show it; `project` the knowledge-base project's slug it is filed under (left
+- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
+  record by; `title` its title as the apps show it; `name` what the direction is called, **the one to show** (#3679): the
+  name the owner (`PUT /api/v1/assistant/directions/{id}/name`) or the secretary (`direction_name`) gave it, else its
+  knowledge-base project's name, else `title` without its `MMDD | kind | ` prefix; a new name is a change, told once; `project` the knowledge-base project's slug it is filed under (left
   out while none; the hub files a new direction under the project most of its tasks are filed under); `ended: true`
   once it left `assistant.leaders` (nothing is deleted; made a leader again, it is sent without `ended`). Sent once per
   change: what was last told is kept in the hub's store, so a restart or a replay of the same state sends nothing.
-- **`leader.report {id, leader, kind, todo, text, link?, at}`**: written by the hub from the task's ledger, never by a
-  model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner) or `stuck` (in Waiting
+- **`leader.report {id, leader, kind, todo, plan?, text, link?, at, reached?, doing?, needs_you?, links?}`**: written by the hub from the task's ledger, never by a
+  model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner, or a plan of the
+  leader's waits for the owner's Start: then `plan` is the plan's id and `todo` is `""`, as a plan has no to-do until
+  it starts; #3608) or `stuck` (in Waiting
   on you, or stopped unfinished, for 24 hours; at most once per 24 hours). `id` names the report and is never sent
   twice; `text` is at most 300 characters in the owner's language; `link` the task's PR when it has one. Progress is
-  never reported.
+  never reported. Besides those, `kind: "progress"` (#3679) is the
+  leader's own summary of its direction at the goal level, sent with its `leader_progress` tool (each reached task, each
+  report cycle): `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
+  owner has to do) and `links` (evidence, at most 5; `link` is the first), each part at most 200 characters; `text` puts
+  the parts together in the owner's language (「达成：…」「在做：…」「要你做：…」, one per line); `todo` is `""`. A work-log
+  card renders one line per direction from the day's latest `progress`. `GET /api/v1/assistant/leaders` lists each
+  direction's `name` and latest `progress` (`{reached?, doing?, needs_you?, links?, at}`).
 - **Leaders made before the extension**: `GET /api/v1/assistant/leaders` (`leaders.read`) lists every direction as
   `leader.changed` would tell it now, with `by` (`assistant` or `user`), `at` and `ended_at?`; current leaders first.
 - They share the to-do events' queue and its limits.
@@ -2454,7 +2464,7 @@ Extensions with an `error_reports` contribution (and the permission `error_repor
 - **Off unless an extension takes them**: reporting is on only while an enabled, running extension has an `error_reports` contribution switched on. The manager then adds `error_reports` to `features` (the WebSocket `hello`, `GET /api/v1/health`); the hub, the manager and the apps collect and send only while it is there. An extension whose required secret is missing doesn't start, so it turns nothing on.
 - **What goes in**: the apps send `POST /api/v1/error-reports` ([protocol.md](../protocol/protocol.md)); the hub's handlers' panics (answered with 500) and its log's error lines (`panic`, `error`, `failed`, a 5xx request) go to the manager over the bus (`extensions.error_reports`); the manager's process reports its own log's error lines.
 - **Format**: `ErrorReport` in `schema/extension/protocol.schema.json`: `id` (the sender's, for dedupe), `source`, `kind` (`exception` / `crash` / `anr` / `panic` / `log`), `level` (`fatal` / `error` / `warning`), `time`, `release` / `build` / `commit`, `os` / `os_version` / `device_model` (the model only), `message`, `exceptions` (`type`, `value`, `frames`, innermost last), `breadcrumbs`, `tags`, `previous_launch`. The manager adds `fingerprint`, `count` and `received_at`. Longer fields are cut: message 1 KB, 5 exceptions of 64 frames, 30 breadcrumbs of 200 characters, 16 tags.
-- **Scrubbing** (`server/internal/errreport`, applied to every string before an extension sees it; clients don't put user content in reports to begin with): quoted spans in messages become `"<redacted>"`; named secrets (`token=`, `password`, `Authorization`, `Bearer …`), known key prefixes, JWTs and long hex / base64 become `<redacted>`; home directories become `~` (no user names); e-mail addresses `<email>`; IPv4 / IPv6 `<ip>`; URLs keep scheme and path only (`https://<host>/api/v1/inbox`); the hub machine's host name and user name, and every computer's name, id, SSH host, host name and user name become `<machine>`.
+- **Scrubbing** (`server/internal/errreport`, applied to every string before an extension sees it; clients don't put user content in reports to begin with): quoted spans in messages become `"<redacted>"` (also when they span lines; single quotes only within one line); a breadcrumb keeps its `level` only if it is `debug` / `info` / `warning` / `error` / `fatal`, and its `time` only as an RFC 3339 time (in UTC); named secrets (`token=`, `password`, `Authorization`, `Bearer …`), known key prefixes, JWTs and long hex / base64 become `<redacted>`; home directories become `~` (no user names); e-mail addresses `<email>`; IPv4 / IPv6 `<ip>`; URLs keep scheme and path only (`https://<host>/api/v1/inbox`); the hub machine's host name and user name, and every computer's name, id, SSH host, host name and user name become `<machine>`.
 - **Dedupe and limits**: the same `id` within 24 hours is dropped (a retry); the same fingerprint within 10 minutes is folded, and the next one after that carries `count`; at most 30 reports a minute per device, 60 from the hub and the manager, 300 overall.
 - **Delivery**: notifications `error_reports.deliver {contribution, reports}` (`ErrorReportsDeliver`), at most 20 reports or every 2 seconds, one per contribution with the sources it takes. Nothing is persisted for redelivery: a report lost while the extension restarts is lost.
 
