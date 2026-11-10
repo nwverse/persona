@@ -1,4 +1,4 @@
-// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects the computers"): it connects each one —
+// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects to computers"): it connects each one —
 // the hub machine's own node as a child process, ssh, tailcat, a Persona Link that dialed the hub (relayed to the
 // manager as it is), a connector of kind service, a member hub's computer through that hub — keeps it connected, and
 // holds what is known of it: online, node.info, its sessions and their revs, warm start across restarts, the engine,
@@ -79,7 +79,7 @@ type Options struct {
 	// machine: its own ways).
 	DialNode func(machine string) func(context.Context) (net.Conn, error)
 	// Event takes a node's event (and a session list the manager passes on again) before the hub would: what is the
-	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles the computers' events"); false:
+	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles computer events"); false:
 	// the hub does not get it. nil: every event goes to the hub.
 	Event func(machine, event string, params json.RawMessage) (forward bool)
 	// Detached: a machine's node connection ended (not for another one taking over): what waited on it ends.
@@ -122,12 +122,14 @@ type Devices struct {
 	byID      map[string]*Machine
 	warm      *savedWarm // taken at start, for the machines when they come
 
-	fleet    fleet
-	tailcat  tailcatDialer
-	engines  engineChoices
-	links    linkSet
-	stopping atomic.Bool
-	workers  sync.WaitGroup
+	fleet   fleet
+	tailcat tailcatDialer
+	engines engineChoices
+	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
+	clipboard clipboardSwitches
+	links     linkSet
+	stopping  atomic.Bool
+	workers   sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]
@@ -142,6 +144,11 @@ type Devices struct {
 	reportMu  sync.Mutex
 	reportDue chan struct{}
 	lastSent  string // the last devices.state sent (stateKey), to send only changes
+	// desktopsRep is the desktops reporter (presence.go); ring is closed at the next delivery or confirmation, for
+	// LinkRang.
+	desktopsRep desktopsReporter
+	ringMu      sync.Mutex
+	ring        chan struct{}
 
 	packages nodePackages // the node builds for the machines' platforms (packages.go)
 
@@ -378,6 +385,20 @@ func (d *Devices) startMachines(ctx context.Context) {
 			for id := range old.watched { // what the hub watches is watched again on the new connection
 				m.watched[id], m.lastSeq[id] = true, old.lastSeq[id]
 			}
+			// So are the manager's own follows (Follow: a channel's turn), and a follow the old node did not take
+			// stays unsettled: the assistant keeps its mark and never asks again.
+			for id := range old.followed {
+				if m.followed == nil {
+					m.followed = map[string]bool{}
+				}
+				m.followed[id], m.lastSeq[id] = true, old.lastSeq[id]
+				if old.unsettled[id] {
+					if m.unsettled == nil {
+						m.unsettled = map[string]bool{}
+					}
+					m.unsettled[id] = true
+				}
+			}
 			old.mu.Unlock()
 		} else {
 			d.applyWarmLocked(m)
@@ -480,6 +501,7 @@ func (d *Devices) report(all bool) {
 	default:
 		return // the machines are not made yet; the first report follows when they are (startMachines)
 	}
+	defer d.requestDesktops(all) // a change of computers or of who may count goes with it, after it (presence.go)
 	d.reportMu.Lock()
 	defer d.reportMu.Unlock()
 	st := d.states()
@@ -847,6 +869,7 @@ func (d *Devices) Follow(ctx context.Context, machine, session string, on bool) 
 		m.followed[session] = true
 	} else {
 		delete(m.followed, session)
+		m.forgetSeqLocked(session)
 	}
 	m.mu.Unlock()
 	var err error

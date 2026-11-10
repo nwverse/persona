@@ -3,6 +3,9 @@ package devices
 import (
 	"context"
 	"errors"
+	"maps"
+	"math/rand/v2"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,5 +177,155 @@ func TestMergeUsageAccountsOrdersByThePlanWindows(t *testing.T) {
 	}
 	if len(names) != 3 || names[0] != "C" || names[1] != "B" || names[2] != "A" {
 		t.Fatalf("order = %v, want [C B A]", names)
+	}
+}
+
+// Each account says when it turns stale (#1905): a client that keeps the answer while refreshes fail judges it itself,
+// with the threshold of where the newest sample came from (a computer's 30 minutes, a gateway's 6 hours).
+func TestMergeUsageAccountsSaysWhenEachTurnsStale(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	week := now.Add(3 * 24 * time.Hour)
+	in := []proto.UsageAccount{
+		{Provider: "codex", Name: "machine", SampledAt: now.Add(-10 * time.Minute), Local: true, Windows: []proto.UsageWindow{uw("7d", 10080, 10, week)}},
+		{Provider: "claude", Name: "gateway", SampledAt: now.Add(-time.Hour), Sources: []string{"Relay"}, Windows: []proto.UsageWindow{uw("7d", 10080, 20, week.Add(time.Hour))}},
+		{Provider: "kimi", Name: "flagged", SampledAt: now, Sources: []string{"Relay"}, Stale: true, Windows: []proto.UsageWindow{uw("7d", 10080, 30, week)}},
+	}
+	got := map[string]proto.UsageAccount{}
+	for _, a := range mergeUsageAccounts(in, now) {
+		got[a.Name] = a
+	}
+	for name, want := range map[string]time.Time{
+		"machine": now.Add(-10 * time.Minute).Add(usageHubStaleAfter),
+		"gateway": now.Add(-time.Hour).Add(usageGatewayStaleAfter),
+		"flagged": now.Add(usageGatewayStaleAfter),
+	} {
+		a := got[name]
+		if a.StaleAt == nil || !a.StaleAt.Equal(want) {
+			t.Errorf("%s: stale_at %v, want %v", name, a.StaleAt, want)
+		}
+	}
+	if got["machine"].Stale || got["gateway"].Stale || !got["flagged"].Stale {
+		t.Errorf("stale now: %+v", got)
+	}
+}
+
+// An account read on computers names them (#1907): a phone or another computer cannot tell "this computer" apart from
+// the device in hand. The same account on two computers names both; a node's own say is not taken, a rename is.
+func TestUsagePollNamesTheComputersThatReadAnAccount(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	week := now.Add(3 * 24 * time.Hour)
+	machine := func(id, name string, used float64) usageSource {
+		return usageSource{id: id, name: name, online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageAccount{{Provider: "codex", Name: "Codex Pro", SampledAt: now,
+				Machines: []string{"what the node says"}, Windows: []proto.UsageWindow{uw("7d", 10080, used, week)}}}}, nil
+		}}
+	}
+	var u usageWindowsHub
+	u.gateways = func(time.Time) []proto.UsageAccount {
+		return []proto.UsageAccount{{Provider: "claude", Name: "seat", SampledAt: now, Sources: []string{"Relay"}, Windows: []proto.UsageWindow{uw("7d", 10080, 1, week)}}}
+	}
+	got := u.poll(context.Background(), []usageSource{machine("m2", "Studio", 10), machine("m1", "", 20)}, now)
+	if len(got) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	for _, a := range got {
+		switch a.Provider {
+		case "codex": // one account on two computers; one without a name goes by its id
+			if !a.Local || !slices.Equal(a.Machines, []string{"Studio", "m1"}) {
+				t.Errorf("codex: %+v", a)
+			}
+		case "claude":
+			if a.Local || a.Machines != nil {
+				t.Errorf("a gateway-only account names no computer: %+v", a)
+			}
+		}
+	}
+	got = u.poll(context.Background(), []usageSource{machine("m2", "Mac Studio", 10), machine("m1", "", 20)}, now.Add(usageHubFresh+time.Second))
+	for _, a := range got {
+		if a.Provider == "codex" && !slices.Equal(a.Machines, []string{"Mac Studio", "m1"}) {
+			t.Errorf("renamed: %+v", a)
+		}
+	}
+}
+
+// Every account in the answer has its own id (#1904): the clients use it as a row key, and same-name numbering follows
+// it. Two accounts of one gateway, and accounts with no reset time, used to share one.
+func TestMergeUsageAccountsGivesEveryAccountItsOwnID(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	noReset := func(used float64) []proto.UsageWindow {
+		return []proto.UsageWindow{{Label: "7d", WindowMinutes: 10080, UsedPercent: used}}
+	}
+	same := now.Add(3 * 24 * time.Hour)
+	in := []proto.UsageAccount{
+		// two seats of one gateway without a reset time, and two with the same one
+		{Provider: "codex", Name: "Seat A", SampledAt: now, Ref: "s1:a", Origin: "s1:a", Sources: []string{"Relay"}, Windows: noReset(10)},
+		{Provider: "codex", Name: "Seat B", SampledAt: now, Ref: "s1:b", Origin: "s1:b", Sources: []string{"Relay"}, Windows: noReset(20)},
+		{Provider: "codex", Name: "Seat C", SampledAt: now, Ref: "s1:c", Origin: "s1:c", Sources: []string{"Relay"}, Windows: []proto.UsageWindow{uw("7d", 10080, 30, same)}},
+		{Provider: "codex", Name: "Seat D", SampledAt: now, Ref: "s1:d", Origin: "s1:d", Sources: []string{"Relay"}, Windows: []proto.UsageWindow{uw("7d", 10080, 40, same)}},
+		// a gateway account without an id of its own
+		{Provider: "codex", Name: "Pooled", SampledAt: now, Origin: "s2#0", Sources: []string{"Pool"}, Windows: noReset(50)},
+		// two computers, each signed in to a different Codex account, neither with a reset time; and two Codex homes on one
+		{Provider: "codex", Name: "Codex Pro", SampledAt: now, Local: true, Origin: "mac/0", Windows: noReset(60)},
+		{Provider: "codex", Name: "Codex Pro", SampledAt: now, Local: true, Origin: "linux/0", Windows: noReset(70)},
+		{Provider: "codex", Name: "Codex Pro", SampledAt: now, Local: true, Origin: "linux/1", Windows: noReset(80)},
+		// only per-model windows that reset together: nothing but the suffix tells them apart
+		{Provider: "claude", Name: "Fable seat", SampledAt: now, Local: true, Origin: "mac/1", Windows: []proto.UsageWindow{{Label: "7d", WindowMinutes: 10080, UsedPercent: 5, ResetsAt: &same, Model: "Fable"}}},
+		{Provider: "claude", Name: "Fable seat", SampledAt: now, Local: true, Origin: "mac/2", Windows: []proto.UsageWindow{{Label: "7d", WindowMinutes: 10080, UsedPercent: 6, ResetsAt: &same, Model: "Fable"}}},
+	}
+	got := mergeUsageAccounts(in, now)
+	if len(got) != len(in) {
+		t.Fatalf("accounts merged that are not one: %d of %d: %+v", len(got), len(in), got)
+	}
+	ids := map[string]string{}
+	for _, a := range got {
+		if prev, dup := ids[a.ID]; dup {
+			t.Errorf("%q and %q share the id %s", prev, a.Name, a.ID)
+		}
+		ids[a.ID] = a.Name
+	}
+
+	// The same answer in another order (the machines come from a map) gives the same ids and the same names to the same accounts.
+	byOrigin := func(out []proto.UsageAccount) map[string]string {
+		m := map[string]string{}
+		for _, a := range out {
+			m[a.Origin] = a.ID + " " + a.Name
+		}
+		return m
+	}
+	want := byOrigin(got)
+	for range 20 {
+		shuffled := slices.Clone(in)
+		rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+		if again := byOrigin(mergeUsageAccounts(shuffled, now)); !maps.Equal(again, want) {
+			t.Fatalf("order changed ids or names:\n%v\n%v", again, want)
+		}
+	}
+
+	// and the numbers moving does not move the id
+	later := slices.Clone(in)
+	for i := range later {
+		later[i].Windows = slices.Clone(later[i].Windows)
+		later[i].Windows[0].UsedPercent += 1
+		later[i].SampledAt = now.Add(time.Minute)
+	}
+	if again := byOrigin(mergeUsageAccounts(later, now.Add(time.Minute))); !maps.Equal(again, want) {
+		t.Errorf("new numbers changed ids:\n%v\n%v", again, want)
+	}
+}
+
+// Where a machine's samples were read is kept for the ids: two computers on two Codex accounts with no reset time
+// stay two rows with their own ids, whichever answers first.
+func TestUsagePollKeepsTwoMachinesAccountsApart(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	machine := func(id string, used float64) usageSource {
+		return usageSource{id: id, online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageAccount{{Provider: "codex", Name: "Codex Pro", SampledAt: now,
+				Windows: []proto.UsageWindow{{Label: "7d", WindowMinutes: 10080, UsedPercent: used}}}}}, nil
+		}}
+	}
+	var u usageWindowsHub
+	got := u.poll(context.Background(), []usageSource{machine("mac", 10), machine("linux", 20)}, now)
+	if len(got) != 2 || got[0].ID == got[1].ID || got[0].Name == got[1].Name {
+		t.Fatalf("got %+v", got)
 	}
 }

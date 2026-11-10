@@ -277,7 +277,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].Title = t // "MMDD | type | topic", the user's own, "Persona" for the main one (titles.go)
 		}
 		if ch := via[[2]string{machine, list[i].SessionID}]; len(ch) > 0 {
-			list[i].Channels = ch // where its messages came from (docs/extensions/channels.md "Source marks")
+			list[i].Channels = ch // where its messages came from (docs/extensions/channels.md "Source markers")
 		}
 		if list[i].Assistant {
 			list[i].Archived = shown[list[i].SessionID].Archived

@@ -138,6 +138,40 @@ struct ChatLayoutTests {
         #expect(!state.open([], height: 600, top: 60, at: 0))
     }
 
+    /// Letting go is a choice only once the finger has gone past the slop to another tick (#2615): the tick the
+    /// navigator opens on is just where the finger happened to be.
+    @Test func onlyAMoveToAnotherTickIsAChoice() throws {
+        let state = EdgeScrubState()
+        let marks = (0..<5).map { EdgeMark(id: "m\($0)", text: "\($0)") }
+        #expect(state.open(marks, height: 600, top: 60, at: 0))
+        #expect(!state.moved)
+        let column = try #require(state.column)
+        #expect(!state.move(to: column.y(of: 0) + 1)) // still the tick it opened on
+        #expect(!state.moved)
+        #expect(state.move(to: column.y(of: 2)))
+        #expect(state.moved)
+        #expect(state.move(to: column.y(of: 0))) // back to where it opened, on purpose: still a choice
+        #expect(state.moved)
+        #expect(state.close()?.id == "m0")
+        #expect(!state.moved)
+        // A finger held still trembles: over the line between two ticks it picks the next one (a haptic tick), but
+        // within the slop that is no choice; going on past the slop is, even without another tick.
+        let line = column.y(of: 2) + column.gap / 2 - 1
+        #expect(state.open(marks, height: 600, top: 60, at: line))
+        #expect(state.pickedMark?.id == "m2")
+        #expect(state.move(to: line + 2))
+        #expect(state.pickedMark?.id == "m3")
+        #expect(!state.moved)
+        #expect(!state.move(to: line + Theme.Space.s + 2))
+        #expect(state.pickedMark?.id == "m3")
+        #expect(state.moved)
+        state.close()
+        // The next slide starts without a choice, even on another tick.
+        #expect(state.open(marks, height: 600, top: 60, at: 10_000))
+        #expect(state.pickedMark?.id == "m4")
+        #expect(!state.moved)
+    }
+
     // MARK: Exchanges and boxes
 
     @Test func linksInAnExchangeOpen() {
@@ -146,6 +180,25 @@ struct ChatLayoutTests {
         let links = linked.runs.compactMap(\.link)
         #expect(links == [URL(string: "https://github.com/example/weather/pull/45")!])
         #expect(ExchangeText.linked("没有链接").runs.allSatisfy { $0.link == nil }) // i18n-ignore
+    }
+
+    /// An Agent's words show their Markdown, not its marks (#2363): bold without `**`, code without backticks, a
+    /// heading without `#`s, lines kept, a Markdown link and a bare link both links.
+    @Test func anExchangeRendersInlineMarkdown() {
+        let text = "## Result\n**Status**: memory capped at `180 MB`.\n- see [the PR](https://github.com/example/weather/pull/45)\n- log https://example.com/log"
+        let linked = ExchangeText.linked(text)
+        let plain = String(linked.characters)
+        #expect(plain == "Result\nStatus: memory capped at 180 MB.\n- see the PR\n- log https://example.com/log")
+        #expect(linked.runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true })
+        #expect(linked.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
+        #expect(linked.runs.compactMap(\.link) == [URL(string: "https://github.com/example/weather/pull/45")!, URL(string: "https://example.com/log")!])
+        #expect(ExchangeText.withoutHeadingMarks("#123 is a PR, not a heading") == "#123 is a PR, not a heading")
+        // A folded line's header: the words without the marks.
+        #expect(ExchangeText.plain("**Fix** the `cache` first") == "Fix the cache first")
+        // A report's heading after its kind's prefix ("Says it is done: ## Result") loses its marks too.
+        let report = ReviewText.reportLine(kind: "done", text: ExchangeText.withoutHeadingMarks("## Result\n**Done**"))
+        #expect(!String(ExchangeText.linked(report).characters).contains("#"))
+        #expect(String(ExchangeText.linked(report).characters).hasSuffix("Result\nDone"))
     }
 
     /// The boxes' words are the primary color: black on the light boxes, white on the dark ones, both well past 4.5:1;

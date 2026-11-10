@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-/// What was sent from a composer, per conversation, for ↑ / ↓ recall and the ⌃R search (docs/apple/mac.md「发送历史」, the
+/// What was sent from a composer, per conversation, for ↑ / ↓ recall and the ⌃R search (docs/apple/mac.md「Details」, the
 /// web's `web/src/lib/send-history.ts`, #2434): the last 100 messages of each conversation, on this Mac only (the app's
 /// state cache, never sent anywhere). The rules are pure functions here; `MacSendHistory.shared` keeps the lists.
 @MainActor final class MacSendHistory {

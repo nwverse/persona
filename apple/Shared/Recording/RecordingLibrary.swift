@@ -35,8 +35,11 @@ final class RecordingLibrary {
     nonisolated func audio(_ id: UUID, _ index: Int) -> URL { folder(id).appendingPathComponent(RecordingSegment.fileName(index)) }
     func entry(_ id: UUID) -> RecordingEntry? { entries.first { $0.id == id } }
 
-    @discardableResult func create(source: RecordingEntry.Source, locale: String = "zh-CN") throws -> RecordingEntry {
-        let entry = RecordingEntry(id: UUID(), createdAt: .now, source: source, locale: locale)
+    @discardableResult func create(source: RecordingEntry.Source, locale: String = "zh-CN", title: String = "",
+                                   meeting: RecordingMeeting? = nil) throws -> RecordingEntry {
+        var entry = RecordingEntry(id: UUID(), createdAt: .now, source: source, locale: locale)
+        entry.title = title
+        entry.meeting = meeting
         try save(entry)
         return entry
     }
@@ -91,6 +94,8 @@ final class RecordingLibrary {
         }
         var entry = entry(transfer.id) ?? RecordingEntry(id: transfer.id, createdAt: transfer.createdAt, source: .watch, locale: transfer.locale)
         entry.marks = Array(Set(entry.marks + transfer.marks)).sorted()
+        // A meeting started on the watch: the phone names it after the calendar (`MeetingRecorder.tagWatchRecording`).
+        if transfer.meeting == true, entry.meeting == nil { entry.meeting = RecordingMeeting() }
         if var segment = transfer.segment, !entry.segments.contains(where: { $0.index == segment.index }) {
             segment.sentences = nil; segment.delivered = false
             entry.segments.append(segment)

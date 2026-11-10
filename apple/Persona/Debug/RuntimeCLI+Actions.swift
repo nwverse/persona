@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 
-/// Acting on the app (docs/operations/runtime-cli.md「动作和截图」): `activate`, `scroll`, `type`, `dismiss-keyboard`, `snapshot`,
+/// Acting on the app (docs/operations/runtime-cli.md「Actions and screenshots」): `activate`, `scroll`, `type`, `dismiss-keyboard`, `snapshot`,
 /// `pasteboard`, `share`.
 /// A real touch (a menu's items, which take no accessibility activation) is `personactl.py tap`'s fallback: `idb`.
 extension RuntimeCLI {

@@ -371,6 +371,8 @@ export interface ItemsEvent {
 type SessionListener = {
   items?: (e: ItemsEvent) => void;
   delta?: (text: string) => void;
+  /** The hub's `revs` event: the transcript grew to this rev; the list's row keeps the rev it had (lib/stale-page.ts). */
+  rev?: (rev: number) => void;
   reconnected?: () => void;
 };
 const sessionListeners = new Map<string, Set<SessionListener>>();
@@ -688,6 +690,14 @@ function onMessage(msg: Record<string, unknown>) {
     case "items": {
       const e = msg as unknown as ItemsEvent;
       sessionListeners.get(key(e.machine_id, e.session_id))?.forEach((l) => l.items?.(e));
+      break;
+    }
+    case "revs": {
+      // Transcripts that grew while their rows' other fields stayed: only an open chat uses it, to notice a lost push.
+      const mid = msg.machine_id as string;
+      for (const [sid, rev] of Object.entries((msg.revs as Record<string, unknown> | undefined) ?? {})) {
+        if (typeof rev === "number") sessionListeners.get(key(mid, sid))?.forEach((l) => l.rev?.(rev));
+      }
       break;
     }
     case "agents.prefs":
@@ -1094,6 +1104,8 @@ export function setSpacesSupported(supported: boolean) {
 
 /** Puts a todo the hub just answered in place of the one we have (a retried task shows starting at once). */
 export function putTodo(todo: Todo) {
+  // A confirmed write is newer than every list read that is still in flight.
+  todosAsked.forget();
   if (todo.manager) noteItemManager(`/todos/${encodeURIComponent(todo.id)}`, todo.manager);
   set({ todos: state.todos.map((t) => (t.id === todo.id ? { ...t, ...todo } : t)) });
 }

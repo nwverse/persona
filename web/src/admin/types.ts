@@ -282,11 +282,11 @@ export interface ExtensionPreview {
   from?: string;
   more_permissions?: boolean;
   added_permissions?: PermissionLine[];
-  /** The market it comes from, when previewed from one (docs/extensions/extensions.md "Extension markets"). */
+  /** The market it comes from, when previewed from one (docs/extensions/extensions.md "Extension marketplace"). */
   market?: string;
 }
 
-// ── how the extensions run (docs/extensions/extensions.md "Activity") ──
+// ── how the extensions run (docs/extensions/extensions.md "Runtime status") ──
 
 export type MetricsWindow = "1h" | "24h" | "7d";
 

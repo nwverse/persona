@@ -94,7 +94,8 @@ class ReplyComposers(private val repository: InboxRepository, private val scope:
 internal fun rememberReplyComposers(repository: InboxRepository): ReplyComposers {
     val paired by repository.replyComposers.collectAsStateWithLifecycle()
     paired?.let { return it }
-    if (repository is InboxExperienceRepository) return repository.composers
+    val shared = (repository as? PinnedInboxRepository)?.base ?: repository
+    if (shared is InboxExperienceRepository) return shared.composers
     val scope = rememberCoroutineScope()
     return remember(repository, scope) { ReplyComposers(repository, scope) }
 }

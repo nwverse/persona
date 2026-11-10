@@ -47,7 +47,7 @@ final class ConnectorsTests: XCTestCase {
                       "GitHub must show a connected state, optionally followed by its manager name")
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "来自 MacBook 的 gh 登录")).firstMatch.exists)
         shot("github")
-        // GitHub's inbox options (docs/assistant/inbox.md「连接器：GitHub」): the CI choice and the muted repositories.
+        // GitHub's inbox options (docs/assistant/inbox.md「Connector: GitHub」): the CI choice and the muted repositories.
         let mode = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "CI 失败")).firstMatch
         for _ in 0..<4 where !(mode.exists && mode.isHittable) { app.swipeUp() }
         XCTAssertTrue(mode.waitForExistence(timeout: 5), "no CI choice:\n\(app.debugDescription)")

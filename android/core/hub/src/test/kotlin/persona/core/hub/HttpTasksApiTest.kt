@@ -45,6 +45,21 @@ class HttpTasksApiTest {
         }
     }
 
+    @Test fun acceptanceCarriesTheCapturedRoundAndRetainsAStaleRefusal() = runBlocking {
+        MockWebServer().use { server ->
+            val askedAt = "2026-11-01T09:00:00.123Z"
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).acceptTask("todo/one", askedAt)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/todos/todo%2Fone/accept", request.path)
+            assertEquals("""{"asked_at":"$askedAt"}""", request.body.readUtf8())
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"Already handled"}"""))
+            try { api(server).acceptTask("todo/one", askedAt); fail("stale acceptance was not refused") }
+            catch (error: HubFailure) { assertEquals(409, error.status) }
+        }
+    }
+
     @Test fun retryPostsAndAnswersTheReopenedTodo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo_1","title":"设置页按钮对齐","origin":"c","plan_id":"p","agents":[]}}"""))
@@ -120,6 +135,23 @@ class HttpTasksApiTest {
         }
     }
 
+    @Test fun directCompletionOnlyPatchesDoneAndDecodesTheUserCompletionReceipt() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo/one","title":"Review the sample release","done_at":"2026-11-04T10:00:00Z"}}"""))
+            val completed = api(server).patchTodo("todo/one", done = true)
+            val request = server.takeRequest()
+            assertEquals("PATCH", request.method)
+            assertEquals("/api/v1/todos/todo%2Fone", request.path)
+            assertEquals("""{"done":true}""", request.body.readUtf8())
+            assertEquals("todo/one", completed.id)
+            assertTrue(completed.isDone)
+            assertNull(completed.doneBy)
+            assertNull(completed.doneReason)
+            assertNull(completed.ask)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
     @Test fun createPatchDeleteAndLinkTodo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo_new","title":"测试待办","notes":"说明","agents":[]}}"""))
@@ -189,7 +221,7 @@ class HttpTasksApiTest {
         }
     }
 
-    // A card's action (docs/assistant/assistant-views.md "Persisted submits"): the key is one escaped path segment, the version goes with it.
+    // A card's action (docs/assistant/assistant-views.md "Persistent submission"): the key is one escaped path segment, the version goes with it.
     @Test fun aCardsActionEscapesItsKeyAndSendsTheVersion() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"action":{"key":"uuid#0/2","action":"choose-b","client_msg_id":"m1","status":"pending","revision":1,"at":"2026-11-05T10:00:00Z"}}"""))

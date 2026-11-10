@@ -56,23 +56,6 @@ func handleBus(method string, fn busCall) {
 	busMethods[method] = fn
 }
 
-// handleBusCall registers fn for method with the codec around it: params decoded into P (invalid_params when they
-// do not fit), fn's answer encoded as the result. It is how a hub function with its own types is put on the bus, e.g.
-// the assistant's boundary:
-//
-//	handleBusCall("device.call", func(h *Hub, ctx context.Context, p assistant.DeviceCall) (json.RawMessage, error) {
-//		return assistantLink{h}.DeviceCall(ctx, p)
-//	})
-func handleBusCall[P, R any](method string, fn func(h *Hub, ctx context.Context, p P) (R, error)) {
-	handleBus(method, func(h *Hub, ctx context.Context, _ *busConn, params json.RawMessage) (any, error) {
-		var p P
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
-		}
-		return fn(h, ctx, p)
-	})
-}
-
 // handleBusEvent registers what takes event (a one-way message) once a connection said its handshake; unregistered
 // events are dropped.
 func handleBusEvent(event string, fn busEvent) {
@@ -553,7 +536,7 @@ func (h *Hub) busManagers(ctx context.Context) []busManagerBrief {
 	if s == nil {
 		return out
 	}
-	list, err := s.BusIdentities(ctx)
+	list, err := h.busIdentities(ctx, s)
 	if err != nil {
 		h.logf("bus: identities: %v", err)
 	}
@@ -569,6 +552,7 @@ func (h *Hub) busManagers(ctx context.Context) []busManagerBrief {
 // left (busEnded) until its keepalive hangs up.
 func (h *Hub) busRosterChanged(ctx context.Context, except *busConn) {
 	gen := h.bus.rosterGen.Add(1) // before the list: the list of a later change sees every change before it
+	h.forgetIdentities()          // and it is read afresh
 	list := h.busManagers(ctx)
 	h.bus.mu.Lock()
 	var to []*busConn

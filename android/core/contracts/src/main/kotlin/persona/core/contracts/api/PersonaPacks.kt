@@ -9,7 +9,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * The persona packages on the hub (docs/apple/persona.md "Package format"): GET /api/v1/personas lists the ones that check out,
+ * The persona packages on the hub (docs/apple/persona.md "Pack format"): GET /api/v1/personas lists the ones that check out,
  * and each file of a package comes from GET /api/v1/personas/<id>/<file>.
  */
 interface PersonaPacks {
@@ -18,7 +18,7 @@ interface PersonaPacks {
     suspend fun file(id: String, file: String): ByteArray
 
     /**
-     * GET /api/v1/looks (#3200, docs/extensions/extensions.md "Persona looks"): the built-in looks, the hub's packages and the extensions'
+     * GET /api/v1/looks (#3200, docs/extensions/extensions.md "Avatars"): the built-in looks, the hub's packages and the extensions'
      * in one list, and the look the user chose, kept on the hub for every device. Throws [PersonaPacksUnsupported] on
      * a hub without it.
      */
@@ -72,7 +72,7 @@ data class PersonaInfo(val id: String, val rev: String, val bytes: Long = 0, val
 private val PERSONA_REV = Regex("^[0-9a-f]{16}$")
 
 /** persona.json, format 1. [colors] feed the "Follow persona" theme color (docs/apple/persona.md "Color scheme"); an extension's look adds names in
- *  other languages, a dark avatar and where it comes from (docs/extensions/extensions.md "Persona looks"). */
+ *  other languages, a dark avatar and where it comes from (docs/extensions/extensions.md "Avatars"). */
 @Serializable
 data class PersonaManifest(
     val format: Int,

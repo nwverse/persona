@@ -9,6 +9,7 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 ## Checks
 
 - It reuses "Test availability" (`docs/integrations/launchers.md`): the node's `launchers.check` runs `claude -p … --max-turns 1` / `codex exec` once in an empty directory, with a 90-second timeout, spending a few tokens.
+- **The check leaves nothing behind** (#2959): it runs with `--no-session-persistence` (Codex: `--ephemeral`), and removes the empty projects directory Claude Code keeps for its temp directory even so; a CLI without the flag is retried without it. A check a hundred times a day used to leave that many transcripts, filling the 80 newest offline sessions the session list keeps and pushing the user's Agents out of it. The list also skips the check's transcripts on its own — its temp directory is gone, which is what tells them from the user's own work in a directory with a similar name (an older node's name included) — and only sessions it lists count toward the 80: one in a blocked directory or a wordless probe no longer takes a slot.
 - **Interactive-readiness pre-check for Claude** (#2018): before spending that request, the node reads `hasCompletedOnboarding` from Claude Code's global config (`.claude.json`, located by Claude Code's own rule, including a `CLAUDE_CONFIG_DIR` the login shell exports).
   A headless `claude -p` probe answers even while the first-run setup is unfinished, but an interactive start then stops on the first-run screens (style picker, sign-in) and ends with a generic readiness timeout; the check therefore fails at once with an error that names the unfinished setup, without spending a request. A missing config file means Claude Code has never run there and counts as unfinished; an unreadable or malformed config is not a verdict and the real probe runs anyway. An interactive start that still reaches its readiness timeout gets the same explanation appended when the flag says the setup is unfinished.
 - When: it looks every 5 minutes (`healthTick`); on computers that are online (`Reachable`), any launcher last checked longer ago than the interval (default 30 minutes) is rerun.
@@ -18,6 +19,7 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 - A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
   That follow-up reserves the same single-flight probe used by an immediate detour, including its 30-second throttle, so one failure does not run two checks.
+  So are `shell_waiting` and `start_line_rejected` (#2570): the start ended in the new tab's shell before the launcher ran.
   A coded `agent_start_stalled` error is excluded: the agent opened but its session could not be identified before the deadline. It leaves launcher health unchanged, runs no probe and ends the task without an automatic retry or detour. The node stops the abandoned start before a later retry opens a replacement (see `docs/integrations/codex.md`). An older node that returns only text retains the previous generic-failure handling.
   The App's own starts count as well (#1642, `launcher_health_starts.go`): the hub tells the manager how a start it waited for went (`session.start_ended`: a failure, or a start the node ran before answering that worked),
   and a "New Agent" answered at once (`async`) is followed in the machine's session list, from `starting` to started or to `start_error` (counted once while the node lists it: the starts counted are kept with the records, so one is not counted again after the manager restarts; the failure's `updated_at` is the node's clock and is not compared with the record's).
@@ -145,6 +147,21 @@ Decided with the user: gray out with the reason, never hide.
 - **Add Provider** in the help is offered only for a computer in the hub group the provider wizard saves to (the hub-level one); on another group's computer the words still say to add a provider there.
 - The assistant's launcher menus (headless `claude -p` in the login shell) are unchanged: `not_in_terminal` does not apply there, and the main chat's readiness covers its model.
 - A failed start whose session has `start_error_code` (#1642) shows the hub's whole sentence under "Didn't Start" in the chat (iOS `StartingNote`, web chat page) instead of clipping it after three lines; without a code it is shown as before.
+
+## Capacity-aware notes
+
+The health record is per machine; the account-pool gateways know a different, fleet-wide fact: how many subscription accounts of each upstream
+provider are schedulable right now and when the nearest one recovers (`docs/server/usage-windows.md` "Account-pool gateways"). The manager derives a
+read-only `proto.CapacitySnapshot` (`devices.CapacitySnapshot`, from the gateway inventory and the merged usage windows; no gateway or machine is
+asked for it) and uses it only on the detour path (`healthDetour`, the chokepoint `agent_start` and task plans share):
+
+- A provider whose accounts are all unavailable with **fresh** data is *saturated* (`ProviderCapacity.Saturated`); the detour line then adds
+  "no schedulable `<provider>` account in the pool right now" and, when known, "the nearest one recovers …". Stale data or any schedulable account
+  says nothing, and no pool configured means the original wording, unchanged.
+- The launcher's provider is its health record's `agent`, falling back to a Persona-managed launcher's `agent`; an unknown provider gets no note.
+- This first cut never reorders machines or blocks a start: one launcher maps to one provider, so every machine offering it sees the same
+  provider-level capacity, and two different providers are not equivalent (an explicit model configuration is never silently changed,
+  `docs/assistant/model-config.md`). Deferring starts until recovery, per-machine gateway attribution and the App/Lark entries are later work.
 
 ## Not done
 

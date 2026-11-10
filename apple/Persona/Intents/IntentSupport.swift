@@ -3,7 +3,7 @@ import Foundation
 
 // Siri / Shortcuts entry points. Every intent talks to the hubs directly (HubStore + APIClient), so the app does not
 // have to be in the foreground; only OpenSessionIntent runs inside the app and moves its navigation. With several
-// groups of hubs (docs/protocol/multi-hub.md「Siri」) they see every group: machines and sessions carry their group, the status
+// groups of hubs (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」) they see every group: machines and sessions carry their group, the status
 // adds the groups up, and whatever acts goes to the group of what it acts on.
 
 /// Everything the intents say out loud. Pure functions, so the tests can pin the wording without a hub.

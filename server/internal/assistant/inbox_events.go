@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Inbox events, phase 1 (docs/assistant/inbox.md "Events and the handling chain (phase 1)"): an item is an event. Besides what it always had it
+// Inbox events, phase 1 (docs/assistant/inbox.md "Events and handling chain"): an item is an event. Besides what it always had it
 // keeps its handling chain (chain: the key calls in time order, every one recorded by the program where it happens, never
 // written by a model), whether it is urgent, the manager's recap, the processing conversation bound to it (handling),
 // at most one suggestion, and the items it is related to across atoms. Its section (status) is computed from those.
@@ -94,8 +94,11 @@ type InboxRelated struct {
 }
 
 // chainAdd appends an entry stamped with the next id, keeping the newest chainMax. An item from before chains (none
-// yet, but messages and a tier) gets its two synthesized entries first, so they don't vanish. Under b.mu.
+// yet, but messages and a tier) gets its two synthesized entries first, so they don't vanish. The item changed, so
+// GET /api/v1/inbox encodes it again (inbox_list_memo.go): many changes put an entry here and make a call before they
+// save, or never save (a reply kept open). Under b.mu.
 func (b *inboxBook) chainAdd(it *InboxItem, e InboxChainEntry) {
+	delete(b.listMemo.kept, it.ID)
 	if len(it.Chain) == 0 && e.Kind != ChainReceived {
 		it.Chain = synthesizedChain(b.userLang(), it)
 		it.ChainSeq = len(it.Chain)

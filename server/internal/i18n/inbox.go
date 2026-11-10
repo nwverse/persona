@@ -53,14 +53,17 @@ var inboxTemplates = sync.OnceValue(func() *templateIndex {
 // InboxJSON translates copies at the public response boundary, including saved reply receipts. Only known
 // item/status/error slots are visited: metadata, context, summaries, suggestions, names and user text stay intact.
 // Return the original bytes when no recognized text changes, avoiding any impact on unrelated responses.
+//
+// What it does to a value depends on that value alone, so a list's items can be localized one at a time and the rest
+// of the answer on its own, unless the answer is itself an item (InboxIsItem: then its list is not visited). When
+// anything changed, the whole answer is marshaled again: an item that did not change then reads as InboxReencoded
+// gives it (the hub's inbox list, hub/inbox_forms.go).
 func InboxJSON(l Lang, raw []byte) []byte {
-	if l == "" || !json.Valid(raw) {
+	if l == "" {
 		return raw
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var value any
-	if dec.Decode(&value) != nil {
+	value, ok := decodeInbox(raw)
+	if !ok {
 		return raw
 	}
 	changed := false
@@ -80,7 +83,7 @@ func InboxJSON(l Lang, raw []byte) []byte {
 			}
 		case map[string]any:
 			translate(x, "error")
-			if id, ok := x["id"].(string); ok && id != "" && x["source"] != nil && x["kind"] != nil {
+			if inboxItem(x) {
 				for _, field := range []string{"agent", "handling", "doc", "moment"} {
 					if part, ok := x[field].(map[string]any); ok {
 						translate(part, "error")
@@ -128,4 +131,47 @@ func InboxJSON(l Lang, raw []byte) []byte {
 		return raw
 	}
 	return out
+}
+
+// InboxReencoded is raw as InboxJSON's marshaling writes it: decoded with its numbers as they are, then marshaled.
+// Raw when it does not decode.
+func InboxReencoded(raw []byte) []byte {
+	value, ok := decodeInbox(raw)
+	if !ok {
+		return raw
+	}
+	out, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// InboxIsItem: raw is an object InboxJSON reads as one item, whose own slots it localizes and nothing under it.
+func InboxIsItem(raw []byte) bool {
+	value, ok := decodeInbox(raw)
+	if !ok {
+		return false
+	}
+	m, ok := value.(map[string]any)
+	return ok && inboxItem(m)
+}
+
+// inboxItem: m has an id, a source and a kind, so InboxJSON reads it as an item.
+func inboxItem(m map[string]any) bool {
+	id, ok := m["id"].(string)
+	return ok && id != "" && m["source"] != nil && m["kind"] != nil
+}
+
+func decodeInbox(raw []byte) (any, bool) {
+	if !json.Valid(raw) {
+		return nil, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var value any
+	if dec.Decode(&value) != nil {
+		return nil, false
+	}
+	return value, true
 }

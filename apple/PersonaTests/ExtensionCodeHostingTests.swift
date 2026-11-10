@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// UI version 4's code-hosting parts on Apple (#2961, docs/extensions/extensions.md「UI 版本 4」): the schema's examples read
+/// UI version 4's code-hosting parts on Apple (#2961, docs/extensions/extensions.md「UI version 4: code hosting」): the schema's examples read
 /// with every component known, a diff's lines numbered and paired, a file tree built from paths, the page's blocks
 /// laid out lazily (threads under their lines, the inline comment box where it was opened), the values a control
 /// sends, and a View from an older hub drawn as before.

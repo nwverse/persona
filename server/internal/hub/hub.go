@@ -74,6 +74,9 @@ type Hub struct {
 	todoOwnersMu sync.RWMutex
 	todoOwners   map[string]string // todo id -> manager id
 
+	inboxForms   inboxForms   // the inbox lists' items as localized lately (inbox_forms.go)
+	inboxAnswers inboxAnswers // the merged inbox answer, reused while no manager's inbox moved (inbox_answers.go)
+
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
 	sessionsSent map[string][]sentSession
@@ -82,10 +85,14 @@ type Hub struct {
 	mu      sync.Mutex
 	clients map[*client]struct{}
 	events  *eventLog // what was broadcast lately, numbered (eventlog.go); guarded by mu
+
+	// linkDesktops: the computers whose Persona Link says the user is at them (desktops.go); guarded by mu.
+	linkDesktops linkDesktops
+
 	// stopping: a planned stop has begun (beginStop, docs/operations/hub-restart.md): what the stop itself causes (machines going
 	// offline, their questions ending) is not news for the apps, which reconnect to the next hub in a moment.
 	stopping atomic.Bool
-	// slot: the hub's edge started this process (hub_edge.go, docs/operations/hub-restart.md "Blue-green switch"); it listens on the edge's
+	// slot: the hub's edge started this process (hub_edge.go, docs/operations/hub-restart.md "Blue-green switching: the hub's edge"); it listens on the edge's
 	// sockets, and an update or a rollback hands over to the next slot instead of exec'ing. nil: the hub listens itself.
 	slot *hubedge.Slot
 	// deltas: the live text of each session's message being generated, as last relayed (machine, session -> text): a
@@ -99,6 +106,7 @@ type Hub struct {
 	// phoneToolsMu: one phone tool registration written at a time, so the rows and phoneTools agree on the latest.
 	// Never held with mu taken first; the write it covers runs outside mu (#5358).
 	phoneToolsMu sync.Mutex
+	phoneWrites  phoneWriteQueue
 
 	// askVia replaces fleet.ask in tests that play the manager (waitInteraction).
 	askVia func(context.Context, proto.Interaction) (proto.Resolution, error)
@@ -158,6 +166,14 @@ type Store interface {
 	CleanupClientOps(ctx context.Context, before time.Time) error
 	ReplacePhoneTools(ctx context.Context, registration db.PhoneToolRegistration) error
 	PhoneTools(ctx context.Context) ([]db.PhoneToolRegistration, error)
+	FindQueuedPhoneWrite(ctx context.Context, tool string, args json.RawMessage) (*db.PhoneWrite, error)
+	EnqueuePhoneWrite(ctx context.Context, id, tool string, args json.RawMessage) (*db.PhoneWrite, error)
+	PhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
+	QueuedPhoneWrites(ctx context.Context) ([]db.PhoneWrite, error)
+	ClaimPhoneWrite(ctx context.Context, id string) (bool, error)
+	FinishPhoneWrite(ctx context.Context, id, state string, result json.RawMessage) error
+	CancelPhoneWrite(ctx context.Context, id string) (*db.PhoneWrite, error)
+	RecoverPhoneWrites(ctx context.Context) error
 	ClaimSend(ctx context.Context, id, machine, session string) (string, error)
 	SettleSend(ctx context.Context, id, state string) error
 	UpsertDevice(ctx context.Context, d db.Device) error
@@ -258,6 +274,9 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.importLegacy(ctx)
 	h.loadUserLang(ctx)
 	h.loadPhoneTools()
+	if err := h.startPhoneWrites(ctx); err != nil {
+		return err
+	}
 	h.push = newPusher(cfg.dir, h.store, h.logf)
 	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
@@ -344,6 +363,7 @@ var phoneToolsTimeout = 5 * time.Second
 // setPhoneTools saves a phone's tools, then lists them. The write runs outside h.mu, the hub's global lock: a stalled
 // database used to stop every broadcast and client message with it (#5358).
 func (h *Hub) setPhoneTools(registration db.PhoneToolRegistration) {
+	defer h.wakePhoneWrites()
 	h.phoneToolsMu.Lock()
 	defer h.phoneToolsMu.Unlock()
 	if h.store != nil {
@@ -396,11 +416,34 @@ func (h *Hub) phoneToolList() []proto.Tool {
 	if tools == nil {
 		tools = []proto.Tool{}
 	}
-	return tools
+	return h.withPhoneWriteTools(tools)
 }
 
 func (h *Hub) callPhone(ctx context.Context, name string, args json.RawMessage) proto.ToolResult {
+	if result, handled := h.phoneWriteTool(ctx, name, args); handled {
+		return result
+	}
+	args, queue, err := phoneQueueOption(name, args)
+	if err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
+	if queue && h.store != nil {
+		lookupCtx, cancel := context.WithTimeout(ctx, phoneToolsTimeout)
+		existing, err := h.store.FindQueuedPhoneWrite(lookupCtx, name, args)
+		cancel()
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+		if existing != nil {
+			h.wakePhoneWrites()
+			go h.requestPhoneWake(name)
+			return phoneWriteResult(existing)
+		}
+	}
 	c := h.phoneClient(name)
+	if c == nil && queue {
+		return h.enqueuePhoneWrite(ctx, name, args)
+	}
 	if c == nil {
 		c = h.wakePhone(ctx, name)
 	}
@@ -430,8 +473,8 @@ func (h *Hub) callPhone(ctx context.Context, name string, args json.RawMessage) 
 	case <-ctx.Done():
 		if confirmed {
 			return proto.TextResult("Timed out waiting for the user to approve this on the phone. The approval may still be "+
-				"open there, or the change may already be saved: check first (list the events / reminders) and do not just "+
-				"call it again.", true)
+				"open there, or the change may already be saved: check first (list the events / reminders / alarms / contacts) "+
+				"and do not just call it again.", true)
 		}
 		return proto.TextResult("Timed out waiting for the iPhone (is the Persona app still open?).", true)
 	}
@@ -446,20 +489,35 @@ var (
 	phoneConfirmWait = 30 * time.Minute
 )
 
-// phoneConfirmedTools are the phone's tools that ask the user before they run (docs/apple/phone-tools.md "Confirmation flow").
+// phoneConfirmedTools are the phone's tools that wait for the user before they finish (docs/apple/phone-tools.md
+// "Confirmation flow"): writes approved on a card, and the ones the user finishes in a system sheet (a message they
+// send themselves, #2279).
 var phoneConfirmedTools = map[string]bool{
 	"phone_calendar_create_event": true,
+	"phone_calendar_update_event": true, // #2276
+	"phone_calendar_delete_event": true,
 	"phone_reminders_create":      true,
 	"phone_reminders_complete":    true,
 	"phone_reminders_update":      true,
 	"phone_reminders_delete":      true,
 	"phone_health_write_sample":   true,
+	"phone_alarm_create":          true, // #2278
+	"phone_timer_start":           true,
+	"phone_alarm_cancel":          true,
+	"phone_messages_compose":      true, // #2279: the user sends or cancels in the compose sheet
+	"phone_call_start":            true, // #2280
+	"phone_shortcuts_register":    true, // #2283
+	"phone_home_control":          true, // #2285
+	"phone_home_run_scene":        true,
+	"phone_contacts_create":       true, // #2286
+	"phone_contacts_update":       true,
 }
 
-// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
-func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+// requestPhoneWake selects a provider and asks iOS to wake it without waiting for a connection.
+// It reports whether a provider can be woken, including when a recent request throttles this push.
+func (h *Hub) requestPhoneWake(name string) bool {
 	if !h.push.ready() {
-		return nil
+		return false
 	}
 	h.mu.Lock()
 	var candidates []db.PhoneToolRegistration
@@ -501,10 +559,18 @@ func (h *Hub) wakePhone(ctx context.Context, name string) *client {
 	}
 	h.mu.Unlock()
 	if len(candidates) == 0 {
-		return nil
+		return false
 	}
 	if len(wakeIDs) > 0 {
 		h.push.wakeDevices("tool", wakeIDs)
+	}
+	return true
+}
+
+// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
+func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+	if !h.requestPhoneWake(name) {
+		return nil
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
