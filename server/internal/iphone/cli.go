@@ -249,17 +249,26 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 			return fail(err)
 		}
 		var r struct {
-			Already   bool  `json:"already"`
-			Refreshed *bool `json:"services_refreshed"`
+			Already   bool   `json:"already"`
+			Image     string `json:"image"`
+			Ticket    string `json:"ticket"`
+			Refreshed *bool  `json:"services_refreshed"`
 		}
 		_ = json.Unmarshal(result, &r)
-		switch {
-		case r.Already:
+		if r.Already {
 			fmt.Fprintln(stdout, "The developer disk image is already mounted on "+udid+".")
-		case r.Refreshed != nil && !*r.Refreshed:
-			fmt.Fprintln(stdout, "Mounted the developer disk image on "+udid+"; the session reconnects on the next call to see it.")
-		default:
-			fmt.Fprintln(stdout, "Mounted the developer disk image on "+udid+".")
+			return 0
+		}
+		fmt.Fprintln(stdout, "Mounted the developer disk image on "+udid+".")
+		ticket := map[string]string{"phone": "the phone's own", "apple": "from Apple's signing server"}[r.Ticket]
+		if ticket == "" {
+			ticket = r.Ticket
+		}
+		fmt.Fprintf(stdout, "  image: %s\n  ticket: %s\n", r.Image, ticket)
+		if r.Refreshed != nil && !*r.Refreshed {
+			fmt.Fprintln(stdout, "  services: not read again; the session reconnects on the next call")
+		} else {
+			fmt.Fprintln(stdout, "  services: read again")
 		}
 		return 0
 	case "call":

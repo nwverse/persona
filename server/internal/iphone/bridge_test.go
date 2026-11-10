@@ -54,6 +54,10 @@ serve)
       echo '{"event":"disconnected","reason":"wifi lost"}'
       exit 1
     fi
+    if [ "$op" = "mount_ddi" ]; then
+      echo '{"v":1,"id":"'"$id"'","ok":true,"op":"mount_ddi","result":{"mounted":true,"already":false,"image":"x.dmg","ticket":"apple","services_refreshed":true}}'
+      continue
+    fi
     echo '{"v":1,"id":"'"$id"'","ok":true,"op":"'"$op"'","result":{"op":"'"$op"'"}}'
   done
   exit 0

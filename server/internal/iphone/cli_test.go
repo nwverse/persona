@@ -96,7 +96,7 @@ func TestCommandMountDDI(t *testing.T) {
 		t.Fatal("address failed")
 	}
 	code, out, errOut := runCLI(t, m, "mount-ddi", testUDID, "--ddi-dir", "/tmp/ddi", "--force")
-	if code != 0 || !strings.Contains(out, "Mounted the developer disk image") {
+	if code != 0 || !strings.Contains(out, "Mounted the developer disk image") || !strings.Contains(out, "image: x.dmg") || !strings.Contains(out, "from Apple's signing server") || !strings.Contains(out, "services: read again") {
 		t.Fatalf("mount-ddi: %d %q %q", code, out, errOut)
 	}
 	sent, _ := os.ReadFile(requests)

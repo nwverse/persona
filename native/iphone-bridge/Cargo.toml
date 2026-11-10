@@ -24,6 +24,9 @@ idevice = { version = "=0.1.68", default-features = false, features = [
     "tcp",
     "mobile_image_mounter",
     "tss",
+    "installation_proxy",
+    "dvt",
+    "device_info",
 ] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "time", "net", "sync", "process"] }

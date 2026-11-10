@@ -185,11 +185,14 @@ ready event.
 - `orientation`: `portrait` | `portrait_upside_down` | `landscape_left` | `landscape_right` (Home button or indicator on that side).
 - Any field the phone did not answer is `null`. `locked` is always `null` in v1: no service found yet says whether the screen is locked.
 - `capabilities`: whether the phone lists the services each group needs (`screenshot`; `input` for touches, keys and buttons; `apps`),
-  and `ax_tree`, always `false` in v1. For each `false`, `notes` gives the reason with an error code: `developer_mode_off`,
-  `ddi_not_mounted`, `unsupported`. A listed service can still fail when used; the operation's error says so.
+  and `ax_tree`, always `false` in v1. `input` is also `false` below **iOS 27**, read from the phone's version (never by trying):
+  older iOS has no remote input. For each `false`, `notes` gives the reason with an error code: `developer_mode_off`,
+  `ddi_not_mounted`, `unsupported` (for `input`: the iOS version). A listed service can still fail when used; the operation's error says so.
 - `ddi_mounted`: whether the developer services are listed at all; `null` when Developer Mode is off, since then nothing is listed either way.
 
 ### `screenshot`
+
+The bridge always asks the phone for PNG (iOS 18.7.3 refuses "jpeg", error 4864) and converts to JPEG itself when asked.
 
 | Arg | Default | Meaning |
 | --- | --- | --- |
@@ -232,6 +235,10 @@ Node fields: `id` (unique within one answer only), `role` (lower camel case), `l
 
 ### Input: `tap`, `long_press`, `drag`, `swipe`, `keys`, `button`
 
+**Needs iOS 27 or later.** On older iOS the phone refuses remote input outright (CoreDevice error 9021, "Remote control requires iOS
+27.0 or later on this device", seen on iOS 18.7.3), so every input operation answers `unsupported` at once, saying so, without touching
+the phone; `capabilities.input` is `false` there. On those phones the bridge can look (screenshots) and start apps, not touch.
+
 The phone takes synthetic input only while a display stream to this computer is running. The bridge starts one before the first input
 (about a third of a second), reads and drops its video, and in `serve` keeps it for 10 seconds after the last input so a series of taps
 does not restart it. Results are `{}`.
@@ -258,12 +265,15 @@ Durations are capped at 10 seconds.
 
 ### `terminate_app`
 
-`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true }`, `false` when it was not running.
+`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true }`, `false` when it was not running. Through the instruments service
+(its process list and kill), which needs the developer disk image; only an app process is ever killed.
 
 ### `list_apps`
 
 `{ "include_system": true }` → `{ "apps": [ { "bundle_id": "…", "name": "…", "version": "…", "type": "user" } ] }`: `type` `user` |
-`system` (Apple's own).
+`system` (Apple's own). Through the installation service, which needs no developer disk image. (CoreDevice's own app and process
+lists never answered on iOS 18.7.3, so the bridge doesn't use them.) The app operations give up after 20 seconds without an answer with
+`service_unavailable`, leaving the session usable.
 
 ### `mount_ddi`
 
@@ -355,7 +365,7 @@ Results from the simulator backend say nothing about a real iPhone. The differen
 | --- | --- | --- |
 | Accessibility tree | yes, through the test runner | `unsupported` in v1 |
 | `keys {text}` | any text | printable ASCII, tab and newline only |
-| Input path | XCUIAutomation inside the simulator | HID events over the tunnel while a display stream is held open; not verified on a real device |
+| Input path | XCUIAutomation inside the simulator | HID events over the tunnel while a display stream is held open: only iOS 27 or later; `unsupported` below |
 | `button` | `home` only | `home`, `lock`, `volume_up`, `volume_down` |
 | Connection | none: local `simctl` and a loopback runner | RemotePairing, encrypted tunnel, service directory; not verified on a real device |
 | Developer Mode, disk image, lock state | not applicable (`null`) | read from the phone |
@@ -388,17 +398,18 @@ phone has run against one only where the table says so:
 
 | Part | Status |
 | --- | --- |
-| RemotePairing verify, tunnel, userspace TCP, service directory | not verified on a real device |
+| RemotePairing verify, tunnel, userspace TCP, service directory | checked on a real iPhone (iPhone13,4, iOS 18.7.3) over its USB network interface |
 | Default port 49152; reaching the phone over Tailscale | not verified on a real device |
-| `device_info` fields (lockdown keys for screen size, Developer Mode, battery) | not verified on a real device |
-| `screenshot`, its rotation in landscape | not verified on a real device |
-| `list_apps`, `launch_app`, `terminate_app` | not verified on a real device |
-| Input gate (display stream), touch coordinates and rotation, keys, buttons | not verified on a real device |
+| `device_info` fields (lockdown keys for screen size, Developer Mode, battery) | checked on that iPhone: build, battery, 428 × 926 points, scale 3, Developer Mode |
+| `screenshot` | PNG checked on that iPhone (about 1 s); JPEG was refused by the phone, so it now always asks for PNG and converts: not yet rechecked. Landscape rotation not verified |
+| `launch_app` | checked on that iPhone |
+| `list_apps`, `terminate_app` | CoreDevice's lists never answered on that iPhone (iOS 18.7.3); moved to the installation and instruments services: not yet rechecked |
+| Input gate (display stream), touch coordinates and rotation, keys, buttons | **not available below iOS 27**: on that iPhone (iOS 18.7.3) the phone refused the display stream with CoreDevice error 9021; now `unsupported` up front. Not verified on iOS 27 |
 | `usb-list` | checked on a real iPhone (iPhone13,4, iOS 18.7.3, trusting the computer): it lists the phone with its name |
 | `pair` over USB (consent prompt, `altIRK`) | not verified on a real device yet. First try on that iPhone: it already trusted the computer and answered the pairing request with pairing data straight away instead of asking its user, so the library asked the bridge for the PIN, got an empty one and panicked (exit code 101). The bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error |
 | `match` against a real advertisement | not verified on a real device; unit-tested against the library's tag function |
 | `ax_tree` | `unsupported` |
-| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | not verified on a real device; the build for an A14 phone (chip `0x8101`) is in this computer's Xcode image. Unit-tested against a fake phone |
+| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | checked on that iPhone: mounted in 3.3 s, then `already: true`; `device_info` showed `ddi_mounted: true` and the developer services. Which ticket it used was not shown at the time |
 | Simulator backend: pair, `device_info`, `screenshot`, apps, `ax_tree` (with a system alert), tap, `keys` (ASCII and Chinese), swipe, `button home`, `serve`, runner cleanup after exit and after `kill -9` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
 ## Open questions
