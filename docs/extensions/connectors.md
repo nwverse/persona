@@ -37,7 +37,7 @@ Discord (the user's own bot, extension, #917): the first step (D1) is the `disco
 | `Capabilities` | Typed capabilities (`CapStatus`, `CapTools`, `CapActions`, `CapEvents`, `CapInbox`, `CapSettle`, `CapArchive`, `CapChats`, `CapItems`, `CapLogin`, `CapOptions`), each corresponding to an interface |
 | `Hosts` | Link hostnames (for link recognition in the App) |
 | `AgentTools` | Tools also given to Agents (not only the assistant), name globs (`mail_*` for mail) |
-| `Unlisted` | Tools and writes excluded from the model's tool list, name globs: the connector's own frontend calls them by name (the Telegram extension's `tg` CLI and skill, `docs/protocol/connector-protocol.md` ("CLI")). Not a permission |
+| `Unlisted` | Tools and writes excluded from the model's tool list, name globs: the connector's own frontend calls them by name (the Telegram extension's `tg` CLI and skill, `docs/protocol/connector-protocol.md` ("Command line")). Not a permission |
 | `ConfirmAlways` | Writes that always require confirmation on the phone, name globs (optional): matching `allow` rules in `connector_gate` are clamped to `confirm`, while `deny` stays unchanged (see "Gate"). Written as `confirm_always` in extension manifests |
 | `Poll` | How often to query `Archive` (0 is the hub default; mail is 6 minutes) |
 | `Kinds` | Inbox item kinds; each needs a description in `prompts/inbox/kinds/<id>.md` (`connector.CheckKinds`, each connector's `TestKindsAreDescribed`); an undeclared kind received is logged |
@@ -55,7 +55,7 @@ unknown capabilities, or kinds without an Inbox capability all fail registration
 | `archive`, `chats`, `items` | `Archive`, `Chats`, `Items` | Three shapes for knowledge-base ingestion | See above |
 | `inbox`, `settle` | `Inbox`, `InboxSettler` | Inbox candidates and replies (`Reply` receives the full `InboxReply`: conversation, item, which step it answers, body); settle old items by rule | GitHub, Messages, Telegram; `settle` only GitHub |
 | `login` | `Login` | Stepwise login | Telegram |
-| `threads` | `Threads` | Opens an Inbox conversation as a chat page in the App: `Thread(thread, before, limit)` returns a page of messages (sender, avatar, media, references, cursor); `Media(ref)` supplies avatar/media bytes. Read-only; replies use the action named in `ThreadChat.Reply` (gated). The App selects a page by `ThreadChat.Kind`: bubbles for dm / group / channel, GitHub layout for pr / issue | Telegram (#1054), GitHub (#1055, `docs/plans/plan-connectors.md` ("Conversation pages")) |
+| `threads` | `Threads` | Opens an Inbox conversation as a chat page in the App: `Thread(thread, before, limit)` returns a page of messages (sender, avatar, media, references, cursor); `Media(ref)` supplies avatar/media bytes. Read-only; replies use the action named in `ThreadChat.Reply` (gated). The App selects a page by `ThreadChat.Kind`: bubbles for dm / group / channel, GitHub layout for pr / issue | Telegram (#1054), GitHub (#1055, `docs/plans/plan-connectors.md` ("Conversation page")) |
 
 `Runner` (its own loop) and `Machines` (a computer connected) describe how it runs, not capabilities, and still use type assertions. Inbox tiers are `connector.Tier` (`TierAction`, `TierFYI`, `TierNoise`);
 the hub drops unknown tiers and leaves classification to the model.
@@ -95,6 +95,7 @@ the hub drops unknown tiers and leaves classification to the model.
 Every write that went out through the gate is kept in the ledger `sent_as_user` (migration `manager/0420`, #5278), so the user can see what Persona wrote in their name, where, and why it was allowed. The ledger is on the manager's side: the gate runs there, and so do the approval card and the conversation that asked.
 
 - **What is a row**: a gated call (`Registry.Call`) whose action (`Do`) returned without an error; `Registry.SetSent` tells the manager (`recordSent` in `extmgr/sent_ledger.go`). Not a row: a write the gate denied, one the user declined on the phone, one whose `Do` failed (a program's `Do` that timed out may have happened anyway; nothing is kept for it), and everything the user sent by their own hand (`Registry.Run`: the conversation-page composer, Inbox "Send", Lark sends). Taking a row's message back is described below (**Recall**). An extension's connector that sends in the user's name by itself, outside the gate, and says so in its manifest (`contributes.connectors[].sends_as_user`), can put such a send in the ledger with `sent.record` (below). The assistant's Lark writes through the node's gate proxy come in with `lark.sent` (below).
+- **Archive provenance** (#2814): extensions granted both `kb.read` and `sent.read` can read `kb.day` origin marks (`sent_by`, `sent_ledger_id`, and `recalled_at` for recalled sends). Only unique matches are marked; recall preserves authorship, and an unmarked line is not proof the user typed it. This reads the existing ledger without changing sending or confirmation. Matching rules, permission status, and known gaps are in [Knowledge base RPC](extensions.md#knowledge-base-rpc-1908).
 - **Columns**: `id`, `at`, `connector`, `action`, `target` (where it went), `text` (what it said, at most 4000 characters), `summary` (one line), `origin`, `let_through`, `message_ref`, `recalled_at`.
   - `target` is read from the arguments: GitHub comments and reviews `{ref: "owner/name#12"}` (a review also `event`); mail `{to, cc?, bcc?, subject, account_id?}`; any other connector (an extension's too) the fields they usually name a destination by (`chat`, `thread`, `channel`, `conversation`, `recipient`, `to`, `reply_to`, `subject`, `repo`, `number`), and when none is there `{arg_keys: [...]}`, the names of the arguments it was given.
   - `summary` is the first line of the card's words when the user was asked, else the action and its target; for an extension's own record the line it gave, else `<connector>: <target fields>`.
@@ -308,7 +309,7 @@ Current state: three execution models, three conventions.
 
 - Subprocess: no version, relies on "same build". Most fields lack JSON tags, so wire keys are Go field names (`Cursor`, `Batches`), hard for third parties to reproduce.
 - node relay: five iMessage-specific methods, then hardcoded in `node/node.go` (now `serveLocalConnector` in `node/connectors.go`).
-- Third party: HTTP + MCP was designed in `../plans/plan-connectors.md` ("External processes") but not implemented.
+- Third party: HTTP + MCP was designed in `../plans/plan-connectors.md` ("External process") but not implemented.
 
 Proposal:
 

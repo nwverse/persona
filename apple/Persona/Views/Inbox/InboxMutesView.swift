@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Muted (the inbox's More menu): the repositories, chats and senders muted from an item's menu, in every source,
 /// newest first; with several managers, under each one's name. A swipe or a long press takes one back; nothing it
-/// covered comes back, only what comes in later (docs/assistant/inbox.md「静音」).
+/// covered comes back, only what comes in later (docs/assistant/inbox.md「Muting」).
 struct InboxMutesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: InboxMutesModel
@@ -126,7 +126,8 @@ struct InboxMutesView: View {
         }
     }
 
-    /// Takes a mute back (on its manager) at once; a failure puts it back, into its manager's group.
+    /// Takes a mute back at once, naming its manager even when it is the default now (it may have changed since the list
+    /// was read); a failure puts it back, into its manager's group.
     func unmute(_ m: InboxMute) async {
         guard case .loaded(let list) = state, let api = deps.api() else { return }
         let gone = { (x: InboxMute) in x.id == m.id && x.manager == m.manager }
@@ -136,7 +137,7 @@ struct InboxMutesView: View {
             shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }
         }
         do {
-            try await api.manager(deps.roster().map { $0.naming(m.manager) } ?? m.manager).unmuteInbox(m.id)
+            try await api.manager(m.manager).unmuteInbox(m.id)
             // A reload read before the unmute reached the hub may have brought it back.
             if case .loaded(let now) = state { state = .loaded(now.filter { !gone($0) }) }
             shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }

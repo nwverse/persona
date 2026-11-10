@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › Translation (docs/apple/ios.md「翻译」): on / off, the target language, and what gets translated: mail (on), and the
+/// Settings › Translation (docs/apple/ios.md「Translation」): on / off, the target language, and what gets translated: mail (on), and the
 /// Feishu chats picked here (none: Feishu has too many messages to translate them all).
 struct TranslationSettingsView: View {
     @Environment(AppModel.self) private var model

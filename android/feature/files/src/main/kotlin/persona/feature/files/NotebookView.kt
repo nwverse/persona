@@ -36,7 +36,7 @@ private sealed interface NotebookLoad {
 }
 
 /**
- * A Jupyter notebook as its cells (docs/android/android.md "File viewer", iOS `NotebookFileView`): Markdown cells rendered,
+ * A Jupyter notebook as its cells (docs/android/android.md "Files and Git in chat", iOS `NotebookFileView`): Markdown cells rendered,
  * code cells with their run count and colored source, then each output: text and streams in the mono face (stderr in
  * neutral secondary ink), pictures, HTML as its text, errors with the traceback. ⋯ shows the JSON source instead.
  */

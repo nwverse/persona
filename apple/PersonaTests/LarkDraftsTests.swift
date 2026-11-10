@@ -71,4 +71,30 @@ struct LarkDraftsTests {
         #expect(disk.writes == 1)
         #expect(disk.saved?["chat:f3"]?.text == "字字字字字")
     }
+
+    /// One chat open through two managers (each signed in as its own user) keeps two drafts.
+    @Test func eachManagerKeepsItsOwnDraft() {
+        let disk = Disk()
+        let d = drafts(disk)
+        d.set(LarkDraft(text: "工作"), for: .chat("f3", manager: "m-2"))
+        d.set(LarkDraft(text: "家里"), for: .chat("f3"))
+        d.set(LarkDraft(text: "话题里"), for: .thread("m1", manager: "m-2"))
+        #expect(d[.chat("f3", manager: "m-2")].text == "工作")
+        #expect(d[.chat("f3")].text == "家里", "the default's is its own")
+        #expect(d[.chat("f3", manager: "m-3")].isEmpty)
+        #expect(d[.thread("m1", manager: "m-2")].text == "话题里" && d[.thread("m1")].isEmpty)
+        d.flush()
+        #expect(disk.saved?.keys.sorted() == ["chat:f3", "chat:f3@m-2", "thread:m1@m-2"])
+    }
+
+    /// The default's drafts keep the names they had on disk: one kept before managers comes back in the default's chat only.
+    @Test func theDefaultsDraftsKeepTheirNames() {
+        let disk = Disk()
+        disk.saved = ["chat:f3": LarkDraft(text: "八点"), "thread:m9": LarkDraft(text: "九点")]
+        let d = drafts(disk)
+        #expect(d[.chat("f3")].text == "八点" && d[.thread("m9")].text == "九点")
+        #expect(d[.chat("f3", manager: "m-2")].isEmpty && d[.thread("m9", manager: "m-2")].isEmpty, "never a named manager's")
+        #expect(LarkDrafts.Key.chat("f3", manager: nil).name == "chat:f3")
+        #expect(LarkDrafts.Key.thread("m9").name == "thread:m9")
+    }
 }

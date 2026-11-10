@@ -4,7 +4,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What comes from the nodes is the manager's (docs/server/machines.md "Who handles the computers' events"): it creates and answers the
+// What comes from the nodes is the manager's (docs/server/machines.md "Who handles computer events"): it creates and answers the
 // interactions, works out each Agent's state, decides the pushes and the Live Activity's content, runs the nodes' MCP
 // tools and keeps the machines' monitoring. The hub shows and delivers what it reports: the session lists, the
 // pending interactions and the fleet (kept while the manager is away), and the pushes (APNs, the relay, the apps'

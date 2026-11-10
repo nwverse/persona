@@ -70,21 +70,23 @@ RUN go generate ./internal/runtimepkg
 # itself runs; the PR smoke build passes linux/amd64 only).
 ARG TARGETARCH
 ARG NODE_PLATFORMS="linux/amd64 linux/arm64 darwin/arm64 darwin/amd64"
+# Every program is built with server/build-tags.txt, as the release is: it leaves out the tailscale.com features
+# persona never uses (server/internal/buildtags).
 RUN if [ -n "$UPDATE_URL" ]; then plats="linux/$TARGETARCH"; else plats="$NODE_PLATFORMS"; fi; \
     for t in $plats; do \
-      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath \
+      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" \
         -o /out/nodes/personad-${t%/*}-${t#*/} ./cmd/personad || exit 1; \
     done
 # The built-in plugins' programs (the WeChat bot, docs/extensions/wechat.md), for this image's platform only: the hub runs them next to personad, and starts one only when its `version -v` is
 # personad's (the same -X).
 RUN for p in wechat; do \
-      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath \
+      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker" -o /out/personad-$p ./cmd/personad-$p || exit 1; \
     done
 # The hub's and the manager's own programs (docs/server/server.md "Programs"), the same build as personad.
 RUN for p in persona-hub persona-manager; do \
-      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath \
+      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" -o /out/$p ./cmd/$p || exit 1; \
     done
 

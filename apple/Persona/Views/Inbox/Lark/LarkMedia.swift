@@ -15,20 +15,28 @@ final class LarkMedia {
 
     /// Bumped whenever an inline emoji image arrives, so text that drew `[label]` redraws with the picture.
     private(set) var emojiVersion = 0
-    private(set) var emojis: [String: APIClient.LarkEmojis.Emoji] = [:]
-    /// The picker's sections (Default, provider…), keys in order.
-    private(set) var emojiGroups: [APIClient.LarkEmojis.Group] = []
-    /// The user's quick reactions (most used first).
-    private(set) var quickReactions: [String] = ["THUMBSUP", "OK", "DONE", "HEART", "SMILE", "LAUGH", "SURPRISED"]
+    /// Each manager's emoji, by manager ("" the default's): each manager reads its own Lark (docs/assistant/managers.md
+    /// "Clients").
+    private(set) var catalogs: [String: EmojiCatalog] = [:]
+
+    /// What the emoji of one manager's Lark are.
+    struct EmojiCatalog {
+        var emojis: [String: APIClient.LarkEmojis.Emoji] = [:]
+        /// The picker's sections (Default, provider…), keys in order.
+        var groups: [APIClient.LarkEmojis.Group] = []
+        /// The user's quick reactions (most used first).
+        var quickReactions: [String] = ["THUMBSUP", "OK", "DONE", "HEART", "SMILE", "LAUGH", "SURPRISED"]
+    }
 
     @ObservationIgnored private let images = NSCache<NSString, UIImage>()
     @ObservationIgnored private var inflight: [String: Task<UIImage?, Never>] = [:]
     @ObservationIgnored private var emojiImages: [String: UIImage] = [:]
     @ObservationIgnored private var emojiLoading = Set<String>()
-    @ObservationIgnored private var catalogTask: Task<Void, Never>?
+    @ObservationIgnored private var catalogTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private let dir = URL.cachesDirectory.appending(path: "lark-media", directoryHint: .isDirectory)
 
-    private init() { images.totalCostLimit = 120 << 20 }
+    /// The app uses `shared` only; tests make their own.
+    init() { images.totalCostLimit = 120 << 20 }
 
     /// Settings › Storage cleared the files: drop the decoded copies too (emoji stay, they are tiny and on every page).
     func clearMemory() { images.removeAllObjects() }
@@ -132,38 +140,61 @@ final class LarkMedia {
         return head + "manager=" + value + String(url[hash...])
     }
 
+    /// Where the player streams `url` from: a hub path under the hub's address, a named manager's as `url(_:manager:)`
+    /// names it, its query kept (AVPlayer sends no header but the bearer); a full URL as it is.
+    nonisolated static func streamURL(_ url: String, hub: URL, manager: String?) -> URL {
+        guard url.hasPrefix("/") else { return URL(string: url) ?? hub }
+        guard let manager, !manager.isEmpty, !url.hasPrefix("//"), let named = URLComponents(string: Self.url(url, manager: manager)),
+              var c = URLComponents(url: hub, resolvingAgainstBaseURL: false) else { return hub.appending(path: url) }
+        var base = c.percentEncodedPath
+        while base.hasSuffix("/") { base.removeLast() }
+        c.percentEncodedPath = base + named.percentEncodedPath
+        c.percentEncodedQuery = named.percentEncodedQuery
+        return c.url ?? hub.appending(path: url)
+    }
+
     private nonisolated static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     // MARK: Emoji
 
-    /// Loads the emoji catalogue once (key → image URL), so reactions and inline emoji can be drawn.
-    func loadEmojiCatalog() {
-        guard catalogTask == nil else { return }
-        catalogTask = Task {
-            guard let api = AppModel.shared.api, let r = try? await api.larkEmojis() else { catalogTask = nil; return }
-            emojis = r.emojis
-            emojiGroups = r.groups ?? []
+    /// Loads manager `manager`'s emoji catalogue once (key → image URL), so reactions and inline emoji can be drawn; nil:
+    /// the default's. Read through `api` (the group the page talks to), the hub-level link's when nil.
+    @discardableResult
+    func loadEmojiCatalog(manager: String? = nil, using api: APIClient? = nil) -> Task<Void, Never>? {
+        let slot = manager ?? ""
+        if let t = catalogTasks[slot] { return t }
+        guard let api = (api ?? AppModel.shared.api)?.manager(manager) else { return nil }
+        let t = Task {
+            guard let r = try? await api.larkEmojis() else { catalogTasks[slot] = nil; return }
+            catalogs[slot, default: EmojiCatalog()].emojis = r.emojis
+            catalogs[slot]?.groups = r.groups ?? []
             emojiVersion += 1
-            if let q = try? await api.larkQuickReactions(), !q.isEmpty { quickReactions = q }
+            if let q = try? await api.larkQuickReactions(), !q.isEmpty { catalogs[slot]?.quickReactions = q }
             // The long-press bar's pictures, ahead of the first long press: a context menu is drawn once when it opens,
             // so one opened before they loaded showed [HEART]-style codes, and only the three of them that fit (#1627).
-            for key in LarkQuickReactions.bar(quickReactions) { _ = emojiImage(key, points: LarkMedia.barPoints) }
+            for key in LarkQuickReactions.bar(catalog(manager).quickReactions) { _ = emojiImage(key, points: LarkMedia.barPoints, manager: manager) }
         }
+        catalogTasks[slot] = t
+        return t
     }
 
     /// The long-press bar's emoji size (LarkChatView's menu).
     static let barPoints: CGFloat = 28
 
-    func emoji(_ key: String) -> APIClient.LarkEmojis.Emoji? { emojis[key.lowercased()] }
+    /// Manager `manager`'s catalogue (nil: the default's); empty, with the stock quick reactions, until it loads.
+    func catalog(_ manager: String?) -> EmojiCatalog { catalogs[manager ?? ""] ?? EmojiCatalog() }
 
-    /// An emoji drawn at `points` for inline text, or nil while it loads (a redraw follows via `emojiVersion`).
-    func emojiImage(_ key: String, points: CGFloat) -> UIImage? {
-        let k = key.lowercased() + "@" + String(Int(points))
+    func emoji(_ key: String, manager: String? = nil) -> APIClient.LarkEmojis.Emoji? { catalog(manager).emojis[key.lowercased()] }
+
+    /// An emoji of manager `manager`'s catalogue drawn at `points` for inline text, or nil while it loads (a redraw follows
+    /// via `emojiVersion`).
+    func emojiImage(_ key: String, points: CGFloat, manager: String? = nil) -> UIImage? {
+        let k = key.lowercased() + "@" + String(Int(points)) + (manager.map { "@" + $0 } ?? "")
         if let img = emojiImages[k] { return img }
-        guard let url = emoji(key)?.url, !emojiLoading.contains(k) else { return nil }
+        guard let url = emoji(key, manager: manager)?.url, !emojiLoading.contains(k) else { return nil }
         emojiLoading.insert(k)
         Task {
-            if let img = await image(url, maxPixel: 96) {
+            if let img = await image(Self.url(url, manager: manager), maxPixel: 96) {
                 emojiImages[k] = Self.fitted(img, points: points)
                 emojiVersion += 1
             }
@@ -182,7 +213,8 @@ final class LarkMedia {
     }
 }
 
-/// An image from Feishu with a quiet placeholder while it loads and a broken-image mark when it fails.
+/// An image from Feishu with a quiet placeholder while it loads and a broken-image mark when it fails. In a chat, a hub
+/// path is loaded through the chat's manager (`larkManager`, `LarkMedia.url(_:manager:)`), avatars too.
 struct LarkRemoteImage: View {
     var url: String
     var size: Int? = nil
@@ -190,10 +222,12 @@ struct LarkRemoteImage: View {
     var contentMode: ContentMode = .fill
     /// Called when the image cannot be loaded, for callers that draw something else instead of the broken mark.
     var onFailure: (() -> Void)? = nil
+    @Environment(\.larkManager) private var manager
     @State private var image: UIImage?
     @State private var failed = false
 
     var body: some View {
+        let url = LarkMedia.url(self.url, manager: manager)
         ZStack {
             if let image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
@@ -247,10 +281,12 @@ struct LarkAvatarImage: View {
 
 // MARK: - Viewers
 
-/// Plays a Feishu video or voice message through the hub (the bearer header rides on the asset request).
+/// Plays a Feishu video or voice message through the hub (the bearer header rides on the asset request), in a chat
+/// through the chat's manager (`larkManager`).
 struct LarkPlayerView: View {
     var url: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.larkManager) private var manager
     @State private var player: AVPlayer?
 
     var body: some View {
@@ -269,7 +305,7 @@ struct LarkPlayerView: View {
         }
         .task {
             guard let cfg = AppModel.shared.config else { return }
-            let full = url.hasPrefix("/") ? cfg.url.appending(path: url) : (URL(string: url) ?? cfg.url)
+            let full = LarkMedia.streamURL(url, hub: cfg.url, manager: manager)
             let asset = AVURLAsset(url: full, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(cfg.token)"]])
             let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             player = p
@@ -279,9 +315,11 @@ struct LarkPlayerView: View {
     }
 }
 
-/// Downloads a Feishu file and opens it in Quick Look (which also offers share / save to Files).
+/// Downloads a Feishu file and opens it in Quick Look (which also offers share / save to Files), in a chat through the
+/// chat's manager (`larkManager`).
 struct LarkFileOpener: ViewModifier {
     @Binding var request: (url: String, name: String)?
+    @Environment(\.larkManager) private var manager
     @State private var local: URL?
     @State private var loading = false
 
@@ -297,9 +335,10 @@ struct LarkFileOpener: ViewModifier {
                 guard let r = request else { return }
                 request = nil
                 loading = true
+                let url = LarkMedia.url(r.url, manager: manager)
                 Task {
                     defer { loading = false }
-                    do { local = try await LarkMedia.shared.file(r.url, name: r.name) } catch { AppModel.shared.show(error) }
+                    do { local = try await LarkMedia.shared.file(url, name: r.name) } catch { AppModel.shared.show(error) }
                 }
             }
     }

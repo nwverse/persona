@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The composer's send history (docs/apple/mac.md「发送历史」): the web's `send-history.test.ts` cases, on the Mac's keys.
+/// The composer's send history (docs/apple/mac.md「Details」): the web's `send-history.test.ts` cases, on the Mac's keys.
 struct MacSendHistoryTests {
     private typealias H = MacSendHistory
     private func entries(_ texts: [String]) -> [H.Entry] {

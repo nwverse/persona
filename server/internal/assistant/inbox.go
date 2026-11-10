@@ -315,9 +315,11 @@ type inboxBook struct {
 	batch     *inboxBatch          // while a collection runs: the items it starts, which enter once triaged
 	held      map[string]inboxHeld // by source: the new items its last collection held back (inbox_admit.go)
 	// readErrs: the sources the last round could not read, by id, as a short code (assistantwire.ReadFailed…): the
-	// apps say which one is behind (InboxTriage.Sources). Memory only.
-	readErrs map[string]string
-	grouping inboxGrouping // the batches being related to events (inbox_group.go)
+	// apps say which one is behind (InboxTriage.Sources). mailReadErrs: the same of the mail accounts the last mail
+	// round could not read, by account id. Memory only.
+	readErrs     map[string]string
+	mailReadErrs map[string]assistantwire.InboxMailFailed
+	grouping     inboxGrouping // the batches being related to events (inbox_group.go)
 
 	cfgMu sync.Mutex
 	cfg   assistantwire.InboxConfig // the hub's (InboxConfigMethod), as last read

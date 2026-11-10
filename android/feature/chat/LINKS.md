@@ -22,7 +22,7 @@
 
 ## WebView 池
 
-池随会话页面释放，最多 4 个页面（屏幕上的一个 + 最多 3 个预加载），LRU 淘汰，系统 HTTP 缓存、DOM 存储和第三方 Cookie（页面里嵌的登录要用）；第一次加载先用磁盘缓存（看过的页面直接出来），加载完改回默认。只预加载 15 分钟内 Agent 回复里的前 3 个链接（最后 40 条里，主机没有点的不算；hub 有飞书扩展时卡片原生打开的飞书文档、公司圈链接也不算，文档改成预读进阅读器的缓存，见 `docs/android/android.md`「飞书」），列表停止滚动后预启动引擎，支持时调用预渲染 API，否则普通加载；后台页面暂停并在支持时静音。渲染进程崩溃或被杀只丢掉那一个页面（`onRenderProcessGone`），卡片显示「网页意外退出了」和「重新载入」；系统内存紧张（`onTrimMemory`）时销毁不在屏幕上的页面。池容量和等待时间是实现配置，性能未实测。API 说明见 [Android WebViewCompat](https://developer.android.com/reference/androidx/webkit/WebViewCompat)。
+池随会话页面释放，最多 4 个页面（屏幕上的一个 + 最多 3 个预加载），LRU 淘汰，系统 HTTP 缓存、DOM 存储和第三方 Cookie（页面里嵌的登录要用）；第一次加载先用磁盘缓存（看过的页面直接出来），加载完改回默认。只预加载 15 分钟内 Agent 回复里的前 3 个链接（最后 40 条里，主机没有点的不算；hub 有飞书扩展时卡片原生打开的飞书文档、公司圈链接也不算，文档改成预读进阅读器的缓存，见 `docs/android/android.md`「Lark through extensions」），列表停止滚动后预启动引擎，支持时调用预渲染 API，否则普通加载；后台页面暂停并在支持时静音。渲染进程崩溃或被杀只丢掉那一个页面（`onRenderProcessGone`），卡片显示「网页意外退出了」和「重新载入」；系统内存紧张（`onTrimMemory`）时销毁不在屏幕上的页面。池容量和等待时间是实现配置，性能未实测。API 说明见 [Android WebViewCompat](https://developer.android.com/reference/androidx/webkit/WebViewCompat)。
 
 ## 当前 App 接线
 

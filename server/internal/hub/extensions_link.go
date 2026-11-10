@@ -214,7 +214,11 @@ func (h *Hub) emitToExtensions(owner, event string, params any) {
 // extensionRoutesRelayed relays the apps' requests on the manager's routes.
 func (h *Hub) extensionRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range extwire.Routes {
-		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) })
+		relay := func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) }
+		if pattern == "/api/v1/agents/" { // messages to the personal Agents (terminal_controls.go)
+			relay = h.withoutTerminalControls(relay)
+		}
+		api.HandleFunc(pattern, relay)
 	}
 	// The lists: every manager's extensions and sources (ownership_lists.go).
 	for pattern, key := range mergedLists {
@@ -478,11 +482,8 @@ func (k *keptRecorder) Write(p []byte) (int, error) {
 	return k.ResponseWriter.Write(p)
 }
 
-func (k *keptRecorder) Flush() {
-	if f, ok := k.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
+// Flush goes through http.ResponseController, as codeWriter.Flush does.
+func (k *keptRecorder) Flush() { _ = http.NewResponseController(k.ResponseWriter).Flush() }
 
 func (k *keptRecorder) Unwrap() http.ResponseWriter { return k.ResponseWriter }
 

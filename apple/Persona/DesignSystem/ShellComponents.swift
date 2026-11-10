@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-// Components of the ChatGPT-style shell (docs/apple/ios.md「新外壳」). Neutral in every style (Theme.Shell): the shell is laid
+// Components of the ChatGPT-style shell (docs/apple/ios.md「New shell」). Neutral in every style (Theme.Shell): the shell is laid
 // out like ChatGPT's, the styles still color the rest of the app.
 
 /// The top switch: Assistant | Agents in a glass capsule, the selected one on a soft gray pill that glides across. Agents carries
@@ -283,7 +283,7 @@ struct ShellCircleButton: View {
 }
 
 /// The top bar's left button on both pages (2026-11-01 user request, in place of ☰): the persona's face in Persona's
-/// state, shared with the platform bar's centered `PersonaDot` (docs/apple/persona.md「状态」), opening the drawer
+/// state, shared with the platform bar's centered `PersonaDot` (docs/apple/persona.md「States」), opening the drawer
 /// (Chat History, Inbox…). The state is that of Persona's conversation on Assistant (`assistantCurrent`), on Agents too, so the
 /// face stays the same while the strip slides. While the inbox has something for the user a small soft red dot sits
 /// on the face's lower right (2026-11-04 user request, in place of a red tray beside it: smaller, paler, overlapping
@@ -367,7 +367,7 @@ extension View {
 }
 
 extension View {
-    /// The shell's chrome a size up (docs/apple/ios.md「新外壳」): one Dynamic Type step, about 12 %, so its text, icons, buttons
+    /// The shell's chrome a size up (docs/apple/ios.md「New shell」): one Dynamic Type step, about 12 %, so its text, icons, buttons
     /// and the composer grow together and keep their proportions, ChatGPT's roomier scale. The conversation's messages
     /// keep the reading size. Small / Standard / Large and the system's size still apply under it.
     func shellScaled() -> some View { modifier(ShellScaled()) }

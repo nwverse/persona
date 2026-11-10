@@ -277,7 +277,7 @@ function MachineRow({
 }
 
 // RenameForm edits what the hub calls a computer, in place of its name: written to hub.json and taken at once, without
-// a restart or a reconnect (docs/operations/admin.md "Computers"). Empty is its id again.
+// a restart or a reconnect (docs/operations/admin.md "Pages"). Empty is its id again.
 function RenameForm({ m, onDone }: { m: AdminMachine; onDone: (saved: boolean) => void }) {
   const [value, setValue] = useState(m.name && m.name !== m.id ? m.name : "");
   const [busy, setBusy] = useState(false);

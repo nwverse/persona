@@ -40,11 +40,11 @@ extension MarkdownUI.Theme {
             .listItem { config in config.label.markdownMargin(top: .em(0.2)) }
             .codeBlock { config in
                 // A card the assistant drew (persona-view, or the older persona-card, #886), drawn with the extensions'
-                // components (docs/extensions/extensions.md「助手的卡片」); one the app cannot read stays a code block.
+                // components (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」); one the app cannot read stays a code block.
                 if AssistantCardBlock.handles(config.language), let view = AssistantCardBlock.parse(language: config.language, config.content) {
                     AssistantViewCard(view: view).markdownMargin(top: 4, bottom: 12)
                 } else if let kind = RenderedFence.kind(config.language) {
-                    // A formula or a diagram (docs/apple/ios.md「公式和图」); the code block when it cannot be drawn.
+                    // A formula or a diagram (docs/apple/ios.md「Math and diagrams」); the code block when it cannot be drawn.
                     RenderedBlock(kind: kind, source: config.content.trimmingCharacters(in: .whitespacesAndNewlines)) { plainCodeBlock(config) }
                         .markdownMargin(top: 4, bottom: 12)
                 } else {
@@ -1114,7 +1114,7 @@ nonisolated enum MarkdownMemo {
     static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply($0)))) } }
 }
 
-/// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「文件查看器」), the code
+/// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「File viewer」), the code
 /// spans that are a whole path too; tapping one opens it in the file viewer at its line (`PathLinkURL`, the chat's
 /// `openURL`). Until the machine answers, and outside a chat, the plain Markdown: the same words in the same place, only
 /// their color changes when the answer comes (a link is the text's size, so the row does not grow).

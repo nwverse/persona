@@ -15,7 +15,7 @@ data class DoctorCheck(
     @SerialName("items") val items: List<String> = emptyList(),
 )
 
-/** `GET /api/v1/machines/{id}/doctor` and `POST …/doctor/fix` (docs/server/machines.md "Self-check"). */
+/** `GET /api/v1/machines/{id}/doctor` and `POST …/doctor/fix` (docs/server/machines.md "Doctor: what this computer can do"). */
 @Serializable
 data class DoctorReport(
     @SerialName("ok") val ok: Boolean = false,
@@ -50,7 +50,7 @@ data class UsageAccount(
     @SerialName("local") val local: Boolean = false,
     /** The account-pool gateways that report it, by name. */
     @SerialName("sources") val sources: List<String> = emptyList(),
-    /** unreachable | error: the gateway could not read it just now; the numbers are its last. */
+    /** Why a gateway's numbers are old: error (it could not read this account just now), or rejected | unreachable | failed (its own last read failed). */
     @SerialName("problem") val problem: String? = null,
 )
 

@@ -4,7 +4,7 @@ import XCTest
 /// search field stays as it was, pulled out or folded, and the rows do not move. The link used to take a row of room
 /// through the window's safe area: folding, the list read an inset of 0 for 100–200 ms and jumped some 210 pt, and
 /// now and then (2 in 12) the navigation bar took that for a scroll and folded the search pulled out of it (#413).
-/// It floats now (docs/apple/shell.md「连接状态和 toast」).
+/// It floats now (docs/apple/shell.md「Connection status and toasts」).
 final class ShellRoomScrollTests: XCTestCase {
     private var app: XCUIApplication!
 

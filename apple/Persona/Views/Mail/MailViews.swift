@@ -87,7 +87,7 @@ extension APIClient {
     }
     func deleteMailAccount(_ id: String) async throws { try await delete("/api/v1/mail/accounts/\(id)") }
 
-    /// Outlook's "Sign in with Microsoft" (docs/extensions/mail.md「Outlook 接入方式」): the client ID the user registered in
+    /// Outlook's "Sign in with Microsoft" (docs/extensions/mail.md「Outlook: Sign In with Microsoft」): the client ID the user registered in
     /// Microsoft Entra (kept on the hub) and the redirect URI to register with it.
     struct MicrosoftConfig: Codable, Equatable {
         var configured: Bool

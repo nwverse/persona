@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// The Persona tab's top bar (docs/apple/ios.md「Persona 顶栏和侧边栏」), floating over the conversation with a fog under it
+/// The Persona tab's top bar (docs/apple/ios.md「Persona top bar and sidebar」), floating over the conversation with a fog under it
 /// instead of a solid bar: Chat History (the sidebar) on the left, Persona's face and name in the middle, New Chat on the right.
 /// The face opens a menu: Knowledge, Details (the profile), the copy items (the working directory, a block of facts to
 /// paste to another agent, the session id), the launcher, the session info card, Interrupt. While the hub is out of reach
 /// the name pill shows the spinner and Waiting for Network / Connecting… / Updating….
 struct AssistantTopBar: View {
     @Environment(AppModel.self) private var model
-    /// In the shell (docs/apple/ios.md「新外壳」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
+    /// In the shell (docs/apple/ios.md「New shell」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
     @Environment(\.shell) private var shell
     /// The system's bars down the side (iPhone Duo): the shell's bar is the side rail there.
     @Environment(\.shellRailEdge) private var railEdge
@@ -40,7 +40,10 @@ struct AssistantTopBar: View {
     static let height: CGFloat = 70
     #endif
     /// How far below the bar the fog fades out.
-    static let fade: CGFloat = 30
+    static let fade: CGFloat = 44
+    /// How far below the safe area's top the fog stays solid: just past the round buttons and the switch, so a line of
+    /// text is hidden under the controls and starts fading right below them.
+    static let fogSolid: CGFloat = height - Theme.Space.l
     /// What the page leaves free at its top for the bar: little while it is the side rail (iPhone Duo, `ShellSideRail`),
     /// where the column beside the content holds it.
     static func room(_ railEdge: HorizontalEdge?) -> CGFloat {
@@ -206,7 +209,7 @@ struct AssistantTopBar: View {
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, Theme.Space.xxs)
         .frame(height: Self.height, alignment: .top)
-        .background(alignment: .top) { BarFog(solid: Self.height - 6, fade: Self.fade) }
+        .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
         .connectionDetails($showLink)
         .modifier(ShellBarAtRest(page: 0)) // ShellMovingBar stands in while the strip slides
     }
@@ -241,7 +244,7 @@ struct AssistantTopBar: View {
         .background(alignment: .top) {
             // Solid down to the bar's bottom edge, fading out below it (fading under the pill let the messages show
             // through the name).
-            BarFog(solid: Self.height - 6, fade: Self.fade)
+            BarFog(solid: Self.fogSolid, fade: Self.fade)
         }
     }
 
@@ -425,7 +428,7 @@ struct AssistantTopBar: View {
 
     @ViewBuilder private func menuItems(_ link: ConnectionStatus.Phase) -> some View {
         if model.isMultiHub, let current = model.hub?.group {
-            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「hub 级页面」); pick whose.
+            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「Terminology」); pick whose.
             Section("hub") {
                 Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
                     ForEach(model.groupIDs, id: \.self) { g in
@@ -591,7 +594,7 @@ extension AppModel {
         key?.machineID ?? assistantConfig?.machineID ?? hubMachineID
     }
 
-    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「状态」): Offline when the hub or
+    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「States」): Offline when the hub or
     /// Persona's machine is out of reach, Waiting for you when the conversation waits on the user, Thinking / Working while a turn
     /// runs (thinking until it writes or calls a tool), else Idle. Read only by the face's own view (`TopBarDot`,
     /// `ShellPersonaButton`): every hub push changes what it reads. `inFront`: the page's `tabIsActive`; behind another
@@ -631,20 +634,36 @@ struct BarFog: View {
 }
 
 /// The fog under a floating bar: the page's own color, blurred, solid for `solidHeight` and then fading out over
-/// `fadeHeight` (the content scrolls under it and shows through only below the bar).
+/// `fadeHeight` (the content scrolls under it and shows through only below the bar). Both layers fade along an eased
+/// curve, so the end of the solid part leaves no line across the text; the blur fades out over the first half only, so
+/// a line half under the fog dims rather than shows a smeared copy of itself (#2909).
 struct TopFog: View {
     var solidHeight: CGFloat
     var fadeHeight: CGFloat
 
     var body: some View {
-        let solid = solidHeight / max(solidHeight + fadeHeight, 1)
+        let total = max(solidHeight + fadeHeight, 1)
+        let solid = solidHeight / total
+        let fade = fadeHeight / total
         ZStack {
             Rectangle().fill(.regularMaterial)
+                .mask(Self.easedMask(from: solid, over: fade / 2))
             Theme.pageBackground.opacity(0.82)
+                .mask(Self.easedMask(from: solid, over: fade))
         }
-        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid),
-                                     .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// Opaque down to `start`, then out to clear over `length` (unit points) along a smoothstep curve: no kink where the
+    /// fade begins or ends for the eye to read as an edge.
+    private static func easedMask(from start: CGFloat, over length: CGFloat) -> LinearGradient {
+        let steps = 8
+        let stops = (0...steps).map { i -> Gradient.Stop in
+            let t = CGFloat(i) / CGFloat(steps)
+            let eased = t * t * (3 - 2 * t)
+            return .init(color: .black.opacity(1 - eased), location: min(1, start + length * t))
+        }
+        return LinearGradient(stops: [.init(color: .black, location: 0)] + stops, startPoint: .top, endPoint: .bottom)
     }
 }

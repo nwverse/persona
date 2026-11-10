@@ -116,6 +116,10 @@ func (d *mirrorDevices) Usage() assistantwire.UsageSummary {
 	return assistantwire.UsageSummary{Machines: []assistantwire.MachineUsage{}}
 }
 
+func (d *mirrorDevices) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
+	return proto.CapacitySnapshot{}
+}
+
 func (d *mirrorDevices) SetAttention(link.Attention) {}
 
 func (d *mirrorDevices) LinkRang(context.Context, string, time.Duration) bool { return false }

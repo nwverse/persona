@@ -12,7 +12,7 @@ import (
 // A message can carry <persona-context kind="…" title="…" url="…"> blocks: context picked on the phone, or everything
 // a Feishu /agent request hands its agent (prompts/lark). The tag is being renamed <persona-context> (#3182): readers
 // take either name. The apps show only the text outside the blocks as what the
-// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How the app shows it").
+// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How it shows in the App").
 
 // contextBlockRe is one attributed block (the bare snapshot, ContextRe, is dropped before this).
 var contextBlockRe = lazyre.New(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)

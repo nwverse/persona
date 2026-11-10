@@ -305,6 +305,13 @@ func echoWords(s string) []rune {
 // pictures fits a line with none; a bare command fits the command with the arguments picked for it; /compact fits the
 // notice it became.
 func echoFits(r *echoRecord, line []proto.Item) bool {
+	if inert := inertControls(r.Text); inert != r.Text { // a terminal is pasted the inert text (hostPrompt), a runtime the text
+		e := *r
+		e.Text = inert
+		if echoFits(&e, line) {
+			return true
+		}
+	}
 	var words []rune
 	user, notice := false, false
 	first := "" // the line's first word
