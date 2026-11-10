@@ -2,6 +2,7 @@
 package transcript
 
 import (
+	"bytes"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"fmt"
@@ -242,7 +243,8 @@ type Meta struct {
 	notified map[noticeKey]bool
 	// taskCalls: a background task's id → the call that started it, from its notifications that name both, for a
 	// later one that names only the task (noteCall). It grows like notified.
-	taskCalls map[string]string
+	taskCalls  map[string]string
+	agentCalls map[string]agentCall
 	// handbacks: a subagent's id → the report it handed back (SubagentHandback), until its task notification takes it
 	// as its detail. handbackCalls: those calls in the subagent's own transcript, whose results are not shown.
 	handbacks     map[string]string
@@ -481,6 +483,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		// peer origin that says handback, written by Claude Code itself. Like the hidden user line of one that came
 		// while idle, it is no message: its report goes to the subagent's notification, which follows (reportFor).
 		if a.Origin != nil && a.Origin.Kind == "peer" {
+			if it, ok := meta.agentPeer(mk, attachmentOrigin(line), a.Prompt); ok {
+				return []proto.Item{it}
+			}
 			if agent, report, ok := handbackOf(attachmentOrigin(line)); ok {
 				meta.handedBack(agent, report)
 				return nil
@@ -609,6 +614,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		if e.Message == nil {
 			return nil
 		}
+		if it, ok := meta.agentPeer(mk, e.Origin, e.Message.Content); ok {
+			return []proto.Item{it}
+		}
 		if agent, report, ok := handbackOf(e.Origin); ok {
 			meta.handedBack(agent, report)
 		}
@@ -623,7 +631,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 		}
 		var s string
-		if unmarshalLine(e.Message.Content, &s) == nil {
+		if raw := bytes.TrimSpace(e.Message.Content); len(raw) > 0 && raw[0] == '"' && unmarshalLine(raw, &s) == nil {
 			if strings.Contains(s, "<task-notification>") {
 				meta.taskFinished(s, e.Timestamp)
 			}
@@ -687,6 +695,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				it.IsError = b.IsError
 				it.Text = clip(text)
 				it.Outcome = claudeOutcome(text, b.IsError, record, denial)
+				it.Task = meta.agentResult(it.ToolUseID, it.Text, it.IsError, line)
 				out = append(out, it)
 				for j, img := range imgs {
 					im := mk(i*100+j+1, "user", proto.KindImage)
