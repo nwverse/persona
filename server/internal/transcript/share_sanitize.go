@@ -4,24 +4,25 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"golang.org/x/text/unicode/norm"
 	"net/url"
-	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
+	"golang.org/x/text/unicode/norm"
 )
 
 const ShareMessageLimit = 1 << 20
 const ShareDisplayLimit = 32 << 10
 
 var ErrShareComponentLimit = errors.New("sharing component exceeds complete-content limit")
-var privateKeyStart = regexp.MustCompile(`(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
-var privateKeyEnd = regexp.MustCompile(`(?i)-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-var shareBearer = regexp.MustCompile(`(?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]+`)
-var shareAssignment = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|authorization)\b(["']?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)`)
-var shareCredential = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b`)
-var shareURL = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)
-var shareSensitiveKey = regexp.MustCompile(`(?i)^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|authorization|credential|private[_-]?key)$`)
+var privateKeyStart = lazyre.New(`(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+var privateKeyEnd = lazyre.New(`(?i)-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+var shareBearer = lazyre.New(`(?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]+`)
+var shareAssignment = lazyre.New(`(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|authorization)\b(["']?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)`)
+var shareCredential = lazyre.New(`\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b`)
+var shareURL = lazyre.New(`(?i)https?://[^\s<>"']+`)
+var shareSensitiveKey = lazyre.New(`(?i)^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|authorization|credential|private[_-]?key)$`)
 
 // SanitizeShareText sees the entire decoded component before any display clipping.
 // An unterminated private-key block removes everything through EOF. This is
