@@ -133,14 +133,16 @@ COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$COMMIT${PERSONA_PUBLISH_URL:+ -X main.updateURL=$PERSONA_PUBLISH_URL/dl}"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 go generate ./internal/runtimepkg
+# The release's tags (server/build-tags.txt): without the tailscale.com features persona never uses.
+TAGS="$(cat build-tags.txt)"
 # Every platform a machine can run, the same four the release and the Docker image build (docs/operations/release.md): each
 # machine gets the one it runs (machine_platform), and the hub keeps all four for "Redeploy" (#3103).
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
 # persona-node is the device's own program (cmd/persona-node): the hub keeps it beside personad, and "Redeploy" gives it
 # to a machine whose node runs it (devices/deploy.go nodeBinary). Machines this script installs get personad.
 for plat in "${PLATFORMS[@]}"; do
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
 done
 echo "built $VERSION"
 # The web client goes with the hub: built here with the binaries, uploaded after the hub restarts.
@@ -271,7 +273,7 @@ $command")
 install_program() {
   local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
   case $name in persona-hub | persona-manager)
     keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
   esac
