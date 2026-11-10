@@ -1497,17 +1497,31 @@ func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, titl
 
 // failTodo ends a todo whose agent did not start: done, with why, and its agents no longer count for it.
 func (s *Service) failTodo(ctx context.Context, id, reason string) error {
+	_, err := s.failTodoIf(ctx, id, reason, nil)
+	return err
+}
+
+// failTodoIf checks keep under the same write lock as completion and agent linking. Startup recovery must not
+// turn a task the user just completed, or one whose agent was just linked, into a failed start.
+func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(Todo) bool) (bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return err
+		return false, err
 	}
 	s.todos.writing.Lock() // memory takes the rows in the order the store committed them (todoBook.writing)
+	if keep != nil {
+		t, ok := s.todoNow(id)
+		if !ok || !keep(t) {
+			s.todos.writing.Unlock()
+			return false, nil
+		}
+	}
 	now := time.Now().UTC()
 	doneAt := now
 	if st := s.todoDB(); st != nil {
 		row, err := st.FailTodo(ctx, id, reason, now)
 		if err != nil {
 			s.todos.writing.Unlock()
-			return err
+			return false, err
 		}
 		if row.DoneAt != nil {
 			doneAt = *row.DoneAt
@@ -1535,7 +1549,7 @@ func (s *Service) failTodo(ctx context.Context, id, reason string) error {
 	s.todos.mu.Unlock()
 	s.todos.writing.Unlock()
 	if t == nil {
-		return db.ErrTodoNotFound
+		return false, db.ErrTodoNotFound
 	}
 	if closing != nil {
 		s.threadPost(id, *closing)
@@ -1546,7 +1560,7 @@ func (s *Service) failTodo(ctx context.Context, id, reason string) error {
 	}
 	s.linksChanged(ctx)
 	s.todosChanged(ctx)
-	return nil
+	return true, nil
 }
 
 // autoDoneTodo marks todo id done by the assistant's judge when it is still open and was not reopened after work
