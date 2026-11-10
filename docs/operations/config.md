@@ -268,6 +268,8 @@ The sections that are a manager's (whose assistant it is, `ai`, `agents`, `inbox
   (new Agent, to-do dispatch, assistant's agent_start, assistant chats), e.g. `"~/.config/claude-code/profiles/work"` (`~/` is that machine's home). For computers where "claude is signed into a profile directory, not `~/.claude`":
   without it, Persona's claude uses the default directory, which is not logged in and immediately replies `Not logged in · Please run /login` (#1459). Only controls the `claude` launcher;
   aliases / functions in `~/.zshrc` and Persona-managed launchers keep their own settings. This directory is also added automatically to the session-search directories above. The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
+- `machines[].inbox_dir` (optional): this computer's **receive folder**, where files sent to it to keep land (from the phone with `dest=inbox`, and from another computer through `POST /api/v1/files/transfer`), e.g. `"~/Inbox"` (`~/` is that machine's home) or an absolute folder in the home.
+  Omitted means `~/Downloads/Persona`. The node makes it when missing and refuses a folder the phone may not write to (outside the home, `~/.persona`, `~/Library`, key folders, links out of the home: 409 `read_only`), so a typo never creates a folder elsewhere ([file-transfer.md](../protocol/file-transfer.md)). Manual hub.json edits require a hub restart.
 - `machines[].botmux` (optional): false means this computer's node neither lists botmux sessions nor runs botmux (no `botmux observe`, `botmux dashboard current`);
   omitted means the old behavior, listing sessions if botmux is installed (`docs/integrations/engines.md` ("botmux")). The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
   It is now only a default: "Also Show botmux Sessions" in machine details (the web in the page header, iOS under "Engine") is stored per machine in settings (`botmux/<machine id>`) and wins once set (#2575).
@@ -416,6 +418,16 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 
   Model selection is elsewhere: **Settings › Model Configuration › Question Delegation** (purpose `agent.delegate`). If never selected, it uses the "Information Filtering" connection with Opus 5.5 (`claude-opus-5-5`);
   change provider or model there, or use `PATCH /api/v1/model-config/purposes/agent.delegate` (`{"revision": <current>, "model": "claude-sonnet-5-5"}`); "Restore Defaults" returns to Opus.
+- `agents.dispatch` (#3253): an Agent hands a subtask to a new Agent on another connected computer and reads the result back ([plan-agent-dispatch.md](../plans/plan-agent-dispatch.md)). **Off by default.**
+  `enabled` (true lists the Agents' `dispatch_start` / `dispatch_read` tools; a dispatched task runs on the target computer's default launcher and model for new Agents, started by an Agent and not by you),
+  `max_active` (how many of one Agent's dispatched tasks may be working at a time, default 3). Work computers and guest conversations never get the tools. Restart the hub after changing it. Example:
+
+  ```json
+  "agents": {
+    "dispatch": { "enabled": true }
+  }
+  ```
+
 - `agents.review` (#2173): the independent review of a supervised task's finished change ([unified-entry.md](../assistant/unified-entry.md) ("Independent review")). **Off by default**, on once `launcher` names a launcher on the working agent's computer (pick one on another model than your agents'; there is no default reviewer).
   `model` and `effort` (optional) override the launcher's own; `permission` is the reviewer's permission mode (default `plan`); `timeout_minutes` bounds one review (default 30). The reviewer works in a disposable copy of the change, so its permission mode is a second guard, not the only one. Example:
 

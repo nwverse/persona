@@ -387,6 +387,10 @@ extension Theme {
         static let pointerCenter = "scope"
         /// The Mac's clipboard and the phone's, both ways.
         static let clipboard = "clipboard"
+        /// Send Clipboard: the phone's clipboard to a computer (#3064).
+        static let clipboardSend = "arrow.up.doc.on.clipboard"
+        /// Get Clipboard: a computer's clipboard onto the phone.
+        static let clipboardGet = "square.and.arrow.down.on.square"
         /// How to use it (Help).
         static let help = "questionmark.circle"
         /// I'm Done: the Mac handed back to the agent.
@@ -414,6 +418,9 @@ extension Theme {
         /// A hub reached through a SOCKS5 proxy another app on this device serves (Settings › hub › Local Proxy,
         /// docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
         static let localProxy = "app.connected.to.app.below.fill"
+        /// A hub behind Cloudflare Access and the service token that lets the app through (Settings › hub › Cloudflare
+        /// Access, docs/operations/network.md "Behind Cloudflare Access").
+        static let cloudflareAccess = "person.badge.shield.checkmark"
         /// This device's own SSH key (its public half, to copy onto the server).
         static let sshKey = "key.horizontal"
         /// The SSH server's key fingerprint, confirmed and pinned.

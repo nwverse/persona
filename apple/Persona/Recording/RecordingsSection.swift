@@ -41,7 +41,12 @@ struct RecordingsSection: View {
                     .accessibilityIdentifier("recording-sync-problem")
             }
         }
-        .task { PhoneRecordingReceiver.shared.start(); transcription.resumePending(); sync.kick(reconcile: true) }
+        .task {
+            PhoneRecordingReceiver.shared.start()
+            transcription.resumePending()
+            sync.kick(reconcile: true)
+            RecordingRollingKeeper.shared.schedule()
+        }
     }
 }
 
@@ -77,7 +82,10 @@ struct RecordingStatusText: View {
     }
 
     static func status(_ entry: RecordingEntry, transcription: RecordingTranscription, sync: RecordingSync) -> (String, Color) {
-        if entry.active { return (String(localized: "Recording [Recordings Section e35a14]"), Theme.danger) }
+        if entry.active {
+            if entry.isRolling { return (String(localized: "Rolling recording"), Theme.danger) }
+            return (String(localized: "Recording [Recordings Section e35a14]"), Theme.danger)
+        }
         if let error = transcription.errors[entry.id] { return (error, Theme.danger) }
         if transcription.current == entry.id { return (String(localized: "Transcribing"), Theme.accent) }
         if !entry.receivedAll { return (entry.expectedSegments == 0 ? String(localized: "No audio recorded") : String(localized: "Waiting for Apple Watch"), .secondary) }
@@ -298,7 +306,9 @@ struct RecordingDetailView: View {
     @State private var library = RecordingLibrary.shared
     @State private var transcription = RecordingTranscription.shared
     @State private var sync = RecordingSync.shared
+    @State private var keeper = RecordingRollingKeeper.shared
     @State private var deleting = false
+    @State private var erasing = false
     @State private var failure: String?
     /// The transcript line a timestamp jumped to, lit for a moment.
     @State private var lit: Int?
@@ -315,12 +325,26 @@ struct RecordingDetailView: View {
         .task(id: "\(library.entry(id)?.revision ?? 0)|\(minutes.round)") { await followMinutes() }
         .navigationTitle("Record [Recordings Section ef2821]")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            if library.entries.contains(where: \.isRolling) {
+                #if os(iOS)
+                await RecordingHealthSignals.requestAccess() // HealthKit bookmarks are iOS only
+                #endif
+                await keeper.run()
+            }
+        }
         .confirmationDialog("Delete This Recording?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 transcription.cancel(id)
                 do { try sync.delete(id); dismiss() } catch { failure = String(localized: "The recording wasn't deleted. Try again later.") }
             }
         } message: { Text("The audio on this device will be deleted now. Its text in Knowledge is removed after sync succeeds; if Knowledge is off or read-only, that deletion stays pending.") }
+        .confirmationDialog("Erase the last 10 minutes?", isPresented: $erasing, titleVisibility: .visible) {
+            Button("Erase", role: .destructive) {
+                let now = Date.now
+                library.erase(id, from: now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: now)
+            }
+        }
         .alert("Couldn't Finish", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK [Recordings Section de32e2]") { failure = nil }.lineLimit(1)
         } message: { Text(failure ?? "") }
@@ -332,7 +356,11 @@ struct RecordingDetailView: View {
                 Text(entry.displayTitle).font(Theme.Font.heading)
                 if let meeting = entry.meeting { RecordingMeetingFacts(meeting: meeting) }
                 HStack(spacing: Theme.Space.xs) {
-                    Text("\(entry.sourceTitle) · \(RecordingFormat.clock(entry.duration)) ·")
+                    if entry.isRolling {
+                        Text("\(entry.sourceTitle) · keeps \(Int(RecordingRolling.keepHours))h · \(retainedMinutes(entry)) min now ·")
+                    } else {
+                        Text("\(entry.sourceTitle) · \(RecordingFormat.clock(entry.duration)) ·")
+                    }
                     RecordingStatusText(entry: entry)
                 }
                 .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
@@ -342,32 +370,44 @@ struct RecordingDetailView: View {
                 }
                 if transcription.current == id { ProgressView().tint(Theme.accent) }
             } footer: {
-                Text("Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge.")
+                Text(entry.isRolling
+                    ? String(localized: "Rolling keeps the last \(Int(RecordingRolling.keepHours)) hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.")
+                    : String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge."))
             }
-            RecordingMinutesSections(entry: entry, model: minutes) { jump(to: $0, in: entry, proxy: proxy) }
-            Section("Transcript") {
-                if entry.sentences.isEmpty {
-                    Text("No transcript yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
-                }
-                ForEach(Array(entry.sentences.enumerated()), id: \.offset) { index, sentence in
-                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        Text(RecordingFormat.clock(sentence.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        Text(sentence.text).font(Theme.Font.body).textSelection(.enabled)
+            if entry.isRolling {
+                rollingSections(entry)
+            } else {
+                RecordingMinutesSections(entry: entry, model: minutes) { jump(to: $0, in: entry, proxy: proxy) }
+                Section("Transcript") {
+                    if entry.sentences.isEmpty {
+                        Text("No transcript yet.").font(Theme.Font.secondary).foregroundStyle(.secondary)
                     }
-                    .id(RecordingDetailView.anchor(index))
-                    .listRowBackground(lit == index ? Theme.accentTint : nil)
-                    .accessibilityIdentifier(lit == index ? "recording-sentence-lit" : "recording-sentence")
+                    ForEach(Array(entry.sentences.enumerated()), id: \.offset) { index, sentence in
+                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                            Text(RecordingFormat.clock(sentence.start)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(sentence.text).font(Theme.Font.body).textSelection(.enabled)
+                        }
+                        .id(RecordingDetailView.anchor(index))
+                        .listRowBackground(lit == index ? Theme.accentTint : nil)
+                        .accessibilityIdentifier(lit == index ? "recording-sentence-lit" : "recording-sentence")
+                    }
                 }
             }
             if !entry.active {
                 Section {
-                    Picker("Transcription Language", selection: Binding(get: { entry.locale }, set: { transcription.setLocale(id, $0) })) {
-                        Text("Chinese").tag("zh-CN"); Text("English").tag("en-US"); Text("Japanese").tag("ja-JP")
-                    }.disabled(transcription.current == id)
-                    if transcription.current == id {
-                        Button("Stop Transcribing") { transcription.cancel(id) }.lineLimit(1)
-                    } else if !entry.transcribedAll {
-                        Button("Resume Transcribing") { transcription.enqueue(id) }.lineLimit(1)
+                    if !entry.isRolling {
+                        Picker("Transcription Language", selection: Binding(get: { entry.locale }, set: { transcription.setLocale(id, $0) })) {
+                            Text("Chinese").tag("zh-CN"); Text("English").tag("en-US"); Text("Japanese").tag("ja-JP")
+                        }.disabled(transcription.current == id)
+                        if transcription.current == id {
+                            Button("Stop Transcribing") { transcription.cancel(id) }.lineLimit(1)
+                        } else if !entry.transcribedAll {
+                            Button("Resume Transcribing") { transcription.enqueue(id) }.lineLimit(1)
+                        }
+                    } else {
+                        Button(role: .destructive) { erasing = true } label: {
+                            Label("Erase last 10 minutes", systemImage: Theme.Icon.delete).lineLimit(1)
+                        }
                     }
                     Button("Delete Recording", role: .destructive) { deleting = true }.lineLimit(1)
                         .accessibilityIdentifier("recording-delete")
@@ -397,6 +437,96 @@ struct RecordingDetailView: View {
             if lit == index { withAnimation(Theme.Motion.standard) { lit = nil } }
         }
     }
+
+    @ViewBuilder private func rollingSections(_ entry: RecordingEntry) -> some View {
+        Section {
+            HStack(spacing: Theme.Space.s) {
+                ForEach(RecordingRolling.pullMinutes, id: \.self) { minutes in
+                    Button("\(minutes) min") { transcription.pull(id, minutes: minutes) }
+                        .themedButton().lineLimit(1)
+                }
+            }
+        } header: {
+            Text("Pull")
+        } footer: {
+            Text("Rolling recordings aren't transcribed until you pull a range.")
+        }
+        if let range = transcription.pulls[id] {
+            let picked = entry.segments(from: range.lowerBound, to: range.upperBound)
+            let lines = entry.pulledSentences(from: range.lowerBound, to: range.upperBound)
+            let state = entry.pullState(from: range.lowerBound, to: range.upperBound,
+                                        transcribing: transcription.current == id, error: transcription.errors[id])
+            Section {
+                if case .failed = state, let message = state.message {
+                    Text(message).font(Theme.Font.secondary).foregroundStyle(Theme.danger)
+                    Button { transcription.pull(id, range: range) } label: {
+                        Label("Retry", systemImage: Theme.Icon.retry).lineLimit(1)
+                    }.accessibilityIdentifier("recording-pull-retry")
+                } else if lines.isEmpty, let message = state.message {
+                    Text(message).font(Theme.Font.secondary).foregroundStyle(.secondary)
+                }
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text(line.0.formatted(date: .omitted, time: .standard)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(line.1).font(Theme.Font.body).textSelection(.enabled)
+                    }
+                }
+                if !picked.isEmpty {
+                    Button { saveAsClip(picked.map(\.index)) } label: {
+                        Label("Save as recording", systemImage: Theme.Icon.save).lineLimit(1)
+                    }
+                }
+            } header: {
+                Text("Pulled range")
+            }
+        }
+        let runs = keptRuns(entry)
+        if !runs.isEmpty {
+            Section {
+                ForEach(runs) { run in
+                    Button { transcription.pull(id, range: run.from...run.to) } label: {
+                        HStack(spacing: Theme.Space.m) {
+                            Text("\(run.from.formatted(date: .omitted, time: .shortened))–\(run.to.formatted(date: .omitted, time: .shortened))")
+                                .font(Theme.Font.body.monospacedDigit()).lineLimit(1)
+                            Spacer(minLength: Theme.Space.s)
+                            Text(run.keep.title).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("Kept segments")
+            } footer: {
+                Text("Bookmarks and health spikes keep a few minutes around them for 7 days.")
+            }
+        }
+    }
+
+    private func retainedMinutes(_ entry: RecordingEntry) -> Int {
+        Int((entry.segments.map(\.duration).reduce(0, +) / 60).rounded())
+    }
+
+    private func keptRuns(_ entry: RecordingEntry) -> [RecordingKeptRun] {
+        var runs: [RecordingKeptRun] = []
+        for segment in entry.segments.sorted(by: { $0.index < $1.index }) {
+            guard let keep = segment.kept, let from = segment.startedAt, let to = segment.endedAt else { continue }
+            if let last = runs.last, last.keep.reason == keep.reason, last.endIndex + 1 == segment.index {
+                runs[runs.count - 1].endIndex = segment.index
+                runs[runs.count - 1].to = to
+            } else {
+                runs.append(RecordingKeptRun(id: segment.index, endIndex: segment.index, from: from, to: to, keep: keep))
+            }
+        }
+        return runs
+    }
+
+    private func saveAsClip(_ indexes: [Int]) {
+        do {
+            _ = try library.saveClip(from: id, indexes: indexes)
+        } catch {
+            failure = String(localized: "Couldn't save a clip from those segments.")
+        }
+    }
 }
 
 /// A meeting recording's meeting: when it was booked, where, and who was invited (from the calendar event it is named after).
@@ -416,5 +546,13 @@ struct RecordingMeetingFacts: View {
                 .font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
         }
     }
+}
+
+private struct RecordingKeptRun: Identifiable {
+    var id: Int
+    var endIndex: Int
+    var from: Date
+    var to: Date
+    var keep: RecordingKeep
 }
 #endif

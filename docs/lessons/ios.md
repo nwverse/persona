@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Example-domain labels must be generic too (#3593)
+
+An `example.com` suffix does not make its hostname label anonymous: the label can still match a configured private machine value and block both app and web prebuild privacy scans. Use neutral fixture labels and change the expected route together, preserving trimming, encoding and forwarding assertions. Do not exempt a private value just because it appears in test data.
+
 ## Binary-plist reference bytes are not text (#3166)
 
 A compiled localization dictionary's reference table can accidentally spell an address even when every decoded key
@@ -1639,3 +1643,13 @@ A worktree's display name and its Agents' conversation names are different comma
 ## Configuration refusals are not retryable connection failures (#1915)
 
 HTTP failures live in `Shared/APIClient.swift`, not PersonaKit's model-response `APIErrorInfo`. Classify business codes before status or timeout wording. A background sync must pause on disabled/read-only configuration without discarding uploads or deletion intent; another local save cannot repair that configuration. Reopen/foreground can explicitly recheck. Do not continue writes after failed reconciliation, and do not acknowledge a remote deletion from an unsupported 404. Keep the list's pending-delete explanation durable across relaunch.
+
+## Rolling recording
+
+### Segment wall-clock start comes from the audio host time
+
+When the segment writer opens a new file, record the tap callback's host time and carry it out with the segment (`docs/apple/recording-rolling.md`). Do not back-compute from when the callback reaches the main thread: queueing and batched `stop()` saves would be wrong.
+
+### Watch holds unconfirmed rolling segments; bookmarked ones longer
+
+The watch only prunes by age. Segments the phone has not confirmed stay up to `undeliveredHours`; bookmarked ones stay `keptDays` so the phone can still mark them kept.

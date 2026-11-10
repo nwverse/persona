@@ -28,7 +28,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Run history | Every run (chat started successfully / failed to start / skipped because downtime missed it) is stored in settings `assistant.runs` (latest 200), `GET /api/v1/assistant/runs[?ref=]`; scheduled tasks include `last_status` |
 | Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt |
 | Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them |
-| Tools without approval | The assistant process gets `--allowedTools mcp__persona`: Persona tools (notify_user, schedule_followup, agents_list, kb_*…) no longer request phone approval each time. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls still follow the session permission mode |
+| Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls still follow the session permission mode |
 | Agents | `agents_list` / `agent_read` / `agent_send` / `agent_start`: use hub session state (`decorated`) and node `session.items` / `session.send` / `session.start` directly, not ssh. With `worktree.branch`, `agent_start` first has the computer's engine make the worktree through node `worktree.prepare` / `worktree.create` (the workspace found by `cwd`; herdr's or Orca's own, so Orca and the app list it), then starts the Agent in it, instead of the Agent running `git worktree add` itself (#5325, `assistant/agent_worktree.go`) |
 | Answer questions on the user's behalf | `interaction_answer`: when the owner says "answer that question for me, choose A", the assistant answers other Agents' **question-type** interactions. Only `kind: question`, excluding the assistant's own chat; `permission` / `plan` / `screen` are always rejected with an explanation that only the owner can answer in the App (no proxy approvals is a hard boundary). Validate every question: all must be answered, keys must be exact question text, choices must be listed, single-select exactly one, multi-select joined as `A, B` like the App; reject free text (answer in the App or use `agent_send`). Expired, answered, dismissed, cancelled, and nonexistent interactions each return their own error (the latter four consult history). `Resolution.AnsweredBy = "assistant"` accompanies interaction history (`GET /api/v1/interactions/history`) and `interaction_resolved` broadcasts; the App marks "Answered by Persona". On Agent questions, the assistant first decides whether to answer, see "Assistant answers questions first" below. `agents_list`'s waiting rows include `interaction_id` and options for every question, avoiding another lookup (tools and rules all belong to the assistant: `toolInteractionAnswer` in `assistant/tools_apps.go`, tests `assistant/tools_apps_test.go`; the interaction queue also lives in the manager: `interactions.get` returns the interaction or its historical outcome if no longer waiting; `interactions.answer` records validated answers as assistant answers, directly in-process, `assistant/fleet_routes.go`) |
 | Interrupt, adopt, report | `agent_interrupt`: stop an Agent's current turn immediately, optionally followed by a new instruction (`agent_send` queues behind the turn); `agent_supervise`: bring an Agent not dispatched by main chat under its supervision (it becomes a main-chat task); the Agents' `report_to_supervisor`: an Agent on a supervised task reports a needed decision, blocker, completion with evidence, or progress into the supervision message. See `docs/assistant/unified-entry.md` ("Supervision", #5112) |
@@ -265,6 +265,17 @@ The assistant and the L2 read-only connector are available; Inbox, knowledge bas
     `{"method":"CLI","path":"/im/+messages-send","action":"allow"}` also works).
 - **Not done**: runtime assistant (DSH, pi) prompts and extension-gate tool declarations still only know the gateway; settings-page lark-cli status and missing permissions (L2).
 
+## Built-in MCP namespaces
+
+For a new Claude, Agent SDK or guest assistant session, a hub announcing `persona_contracts_v1` selects only the
+`persona` MCP namespace and matching automatic tool permissions. This avoids sending duplicate tool definitions and
+starting a second copy of the same built-in handler. Old or unknown hubs keep the compatibility alias. Resumed
+assistant sessions also keep both namespaces, including restarts after idle recycling, until removing historically
+used aliases has been verified with the model provider. Existing transcript readers continue recognizing both names.
+See [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md) ("MCP namespace / tools") for the
+negotiation and resume boundary. Extension permissions, guest tool restrictions and tool-specific confirmation gates
+remain in force; no setting is required to enable the new-session behavior.
+
 ## Extension MCP servers (Claude assistant only)
 
 Extensions can contribute `mcp_servers` (`docs/extensions/extensions.md` ("MCP servers")): when the named CLI is installed on the assistant computer, node attaches it as another MCP server for the **Claude assistant**
@@ -323,6 +334,24 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Audit and changing answers**: triage answers sent to Agents explain "The assistant answered for me under my rules (reason: …); I may change my answer later" (`prompts/agents/answer.md`); task chat activity says "Assistant answered: X, because Y". Don't record delegation as to-do decisions (those are the user's). To change: `POST /api/v1/interactions/{id}/reanswer {answers}` (hub forwards to manager; card-answer-only devices can't use it). The Agent has already acted, so send the new answer as a message (`prompts/agents/reanswer.md`, including original assistant answer), broadcast `interaction_reanswered`, and record the user answer in task history / decisions.
 - **Statistics**: each evaluation writes `session_work_events` (`delegate_answered` / `delegate_asked` / `delegate_failed`), shown with triage statistics.
 - **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). **Not done**: Android. Questions being delegated during manager restart aren't delegated again or catch-up pushed (cards remain in the App).
+
+## Interjecting while it answers (#3278)
+
+A message sent while a Claude chat is still answering is written to the running `claude -p`, and Claude Code takes it up only at the next
+tool boundary: behind a long foreground command (a download without a timeout, a wait loop) the user waits minutes for any reaction. Codex
+merges such a message into the turn with `turn/steer` ("Codex" below); a Claude in a terminal pane has Send Now (#1097).
+
+- **Switch**: `interject_background` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key
+  `assistant.interject_background`), **off by default**. The manager adds `interject_background: true` to `assistant.send` and to the
+  `session.send` parameters it fills in (`SendParams`) while it is on.
+- **Node** (`node/assistant_interject.go`): when such a message reaches a chat that is busy, runs Claude on the CLI (not the Agent SDK bridge
+  or a runtime) and whose `system/init` named `claude_code_version` 2.1.139 or later, the message gets `prompts/assistant/interject.md`
+  after its live snapshot, and once it is written the node sends the control request `{"subtype":"background_tasks"}` (Ctrl+B: every
+  in-flight foreground Bash command and subagent goes on in the background). The model then reads the message right after the tool that
+  was running returns; the backgrounded work reports back as a task notification, as `run_in_background` does. 2.1.139 is the first
+  release whose control protocol has `background_tasks` (Agent SDK 0.2.139).
+- **Best effort**: an older or unknown version gets no control request and no note; a refused or failed request is logged and the message
+  still waits for the next tool boundary, as before. An idle chat is unaffected.
 
 ## Main chat, knowledge base, and context flow
 
@@ -445,6 +474,9 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
   and include it too.
 - No `--append-system-prompt` remains; Codex `developerInstructions` contains only memory (changes with its index; resumed handling not measured).
 - hub snapshot: reuse data for 45 seconds; refresh stale data in the background, wait at most 1.5 seconds per message, then use the prior snapshot if within 30 minutes. Time is always current; ended items removed.
+- Size budget (#3203): a rendered snapshot carries at most 6000 characters (`snapshotBudget` in `assistant/context.go`). Measured on one install over 14 days before it, a full snapshot was a median 8.3k characters (12.5 KB) and the changed sections a message carried a median 6.6k; tasks, the Agents section and the knowledge digest were most of it, resent on almost every message because one of their items changed.
+  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: muted, done and waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
+  A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`): never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
 
 ## Compaction
 
@@ -529,7 +561,8 @@ Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), thre
 Readiness skips carry the optional persisted `not_ready` flag (#1857). The failure-streak counter ignores them, including temporary sleep / offline skips: they do not increase or reset the streak, and cannot trigger its notification. Other failures and skips still count as before. Existing history without the flag is not reclassified from its localized error text; the ready-again notice above is unchanged.
 
 **Failure and retry**: node accepts `assistant.send` before model output, so runs ending in API errors (quota, removed model, upstream 503) formerly counted successful.
-`watchScheduledRun` now follows the turn, reads final text, records API errors as failed, pushes "Scheduled task failed: …", and retries after 3 minutes once
+Before a turn is allowed to finish, node's bounded transient recovery may keep it working through a same-model retry and later launcher-model fallbacks (safeguards / 429 / 5xx only; [../integrations/claude-integration.md](../integrations/claude-integration.md) "Headless assistant"). The watcher therefore does not mistake an intermediate provider error for the run's outcome.
+`watchScheduledRun` now follows the final turn, reads final text, records API errors as failed, pushes "Scheduled task failed: …", and retries after 3 minutes once
 (`Retried`, no further push on repeat failure). Retry uses the task **then** in the table, not the startup copy (before #2313, users followed failure push and disabled / deleted it,
 yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry, disabled repeating tasks don't retry, once follow-ups disabled on due still retry, edited prompts use new text.
 
