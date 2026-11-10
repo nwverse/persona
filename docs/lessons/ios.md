@@ -2,6 +2,67 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Completing a task-review decision without another Agent turn (#3040)
+
+- A `task_review needs_user` conclusion is a to-do acceptance `ask`, not a runtime `Interaction`. Use the existing
+  `PATCH /api/v1/todos/{id}` with `done: true` to end it without delivering another message. `/accept` takes the
+  recommendation and resumes the Agent; interaction resolution answers a different object and must not be used.
+- Apple must decode the optional `ask` before the pending tray can show a stopped Agent's decision. Keep malformed or
+  absent asks compatible, retain the exact `asked_at` for recommendation acceptance, and ignore cached asks on completed
+  tasks. The conversation's shared task cards, the iPhone pending tray and the iPad task board use the same action.
+  Completion and recommendation share one in-flight guard for each hub/task/round; a failed completion leaves
+  the card available and shows an error. Apply the successful todo response to the shared index before refreshing it.
+- A SwiftUI accessibility identifier on a wrapper can overwrite identifiers on all of its child buttons. The first
+  decision-tray UI run found the buttons by label but not by their action ids. Keep identifiers on the actions rather
+  than the padding wrapper, and verify the actual accessibility tree before changing waits or weakening assertions.
+
+## Motion rules (#2943)
+
+The table and red lines are in `docs/apple/ios.md` ("Design language", Motion); this is why they read that way.
+
+- **One meaning, one motion.** Pages that each chose their own curve for the same thing (a card opening at 0.5 s here, 0.25 s there)
+  read as several apps. Picking a row by what happens, not by what looks nice on that page, keeps the app consistent and the reviews
+  short: a curve that is not in the table is a question, not a taste.
+- **Leaving is quicker than arriving.** Something arriving is news the eye wants to follow; something leaving is done with, and a slow exit
+  makes the next tap wait. Exits fade and move but do not shrink: a shrinking card looks like it is being sucked into something that is not
+  there. The two exceptions are measured ones: a glyph swapped inside the same round button (Telegram's send) and the quote bar fading in
+  quicker than out (Telegram's input panel), kept as measured.
+- **No easing under the finger.** An animation on a drag makes the content trail the finger, which reads as lag. Track the gesture with
+  `transaction.animation = nil` / plain state writes and hand the finger's speed to the release animation (`drawer(velocity:)`,
+  `attachOpen(velocity:)`), so the motion carries on instead of starting over.
+- **Continuous motion is registered.** Each loop costs battery and attention, and a loop nobody asked about is how a pulsing avatar or a
+  spinning gear ships. `ContinuousMotionTests` scans the app targets for `repeatForever`, `TimelineView(.animation…)`, `phaseAnimator`,
+  `repeatCount = .infinity` and `startAnimating()`; a new one fails until it is registered with its reason and the file that reads Reduce
+  Motion for it (a caller counts: `PersonaFace`'s blink is held by `AssistantAvatar`, the breathing rings by `StatusDot` in
+  `Components.swift`). A loop that is gone must leave the registry too, so the list stays the truth. `.periodic` timelines are clocks
+  (relative times, countdowns), not motion, and are not scanned; neither are SF Symbol effects or system spinners, which follow Reduce
+  Motion themselves. BeautifulUI's shimmer lives in its package and follows its own rules.
+- **What a loop may touch.** Transform, opacity and color are composited; a loop that changes a frame, padding or font relays out its
+  container every frame. On the Mac even an opacity-only `TimelineView(.animation)` relaid the whole window, which moved the
+  breathing ring to Core Animation (`docs/lessons/macos.md`). Prefer Core Animation
+  or a paused `TimelineView` that stops off screen (`VisibleWork`) and with the wrist down (`isLuminanceReduced`).
+- **Reduce Motion means still, not slower.** A loop shows one representative frame (the watch's frog its clip's `still` frame, the working
+  dot its static ring); a change lands at once or cross-fades. The watch's frog page was the one loop that ignored it and kept playing
+  (fixed with this registry).
+
+## Fog under a floating top bar (#2909)
+
+The Persona tab's top bar floats over the chat, and a fog under it (`TopFog`: material plus page color under a gradient mask) keeps text
+from colliding with its buttons.
+
+- **A hard edge slices text.** A fog solid down to a line and then a short linear fade cut lines of text in half as they scrolled under it.
+  The fade now runs 44 pt with an eased mask (eight smoothstep stops), so there is no visible edge.
+- **Blur over crisp text in the fade smears.** Text half under a full-strength blur looks out of focus rather than covered. The blur fades
+  out over the first half of the fade and the page color over all of it, so text first dims, then blurs as it goes under the bar.
+- **A second fog starts where the first stops being solid.** The manager switcher under the bar draws its own fog. Lifting it to the top of
+  the screen drew it over the bar and hid the bar's buttons; it starts at `AssistantTopBar.fogSolid`, the bar fog's solid end, and goes
+  down from there. The bar, the shell's moving bar and the switcher share `fogSolid` and `fade` so they cannot drift apart.
+
+## Personal Agent entry availability (#2935)
+
+- Gate entry points on source setup, configured accounts and an unfiltered session list, not the personal page's search/unread preferences. Unknown availability starts hidden; a source/account response alone cannot reveal the chip. Keep an event listener alive while the Agents tab is visible so the first session can reveal a previously hidden entry, and fence cancelled reads and changed hub credentials.
+- A mock returning sessions with `sources: []` is not a configured fixture. Entry and remove UI tests use `MOCK_PERSONAL_AGENTS=1` and `TEST_RUNNER_PERSONA_PERSONAL_HUB`; `/mock/personal-agents?state=configured|empty|missing|disabled|no_accounts` changes availability and broadcasts an `agents` event. Native preference captures need a configured source too: `MOCK_PERSONAL_UPGRADE=1` supplies the named conversation and leaves preferences at 404. A capture with a synthetic pairing does not by itself prove an old-to-new upgrade; preserve old-build state for that separate acceptance.
+
 ## Pages that move sideways under iPhone Duo's side bars (#2752)
 
 - Under iPhone Duo's vertical bars (the outer display, the inner one on its side), a view that hosts a `UINavigationController` and moves sideways makes the controller run its deferred transition on every layout pass and lay its top view controller out twice (`transitionConductor:didStartDeferredTransition:context:` → `_layoutTopViewControllerLookForNested:`, then `_computeAndApplyScrollContentInsetDeltaForViewController:` → `_updateTopViewFramesToMatchScrollOffsetInViewController:…`). The shell's slide between Assistant and Agents spent 28 ms a frame (p95), 140 ms of hitches a second. An `offset`, a render-only `transformEffect` and a page under a mask all cost the same; only not moving helps (`ShellPageSlide` cross-fades there). An ordinary iPhone runs the same passes cheaply, so measure on the Duo simulator.
@@ -374,6 +435,12 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
   Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
   (`splitPush`), or give each link its own row.
+- A `.sheet` or `.task` that belongs to a whole `List` page goes on the `List`, never on its rows (2026-11-10, #2988). Modifiers on a `Group` of
+  sections go to every section: an extension page's Update sheet was presented five times over, and once it rose the whole Settings sheet (the
+  shell's) closed under it. Moving it to the first section (#2547) still failed on a long page: that row is lazily built and taken down once it
+  scrolls off, so Review tapped at the bottom closed Settings the same way, and its `.task(id:)` ran again every time the row came back. A page
+  made of a child view's rows puts its page-wide modifiers in a `ViewModifier` the page applies to its `List` (`ExtensionSettingsPageWork`).
+  Test it with the largest text, which pushes the first rows off screen.
 - If `x` in `NavigationPath([x])` is `AnyHashable`, the recorded type is `AnyHashable` and a concrete `navigationDestination(for:)` cannot match,
   producing a yellow warning. Append concrete types (`SettingsView.openDebugPage`).
 - `NavigationSplitView` detail pages use destinations registered in the sidebar and are built in its environment. Put detail environment values
@@ -466,6 +533,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 - `List` `.simultaneousGesture(TapGesture())` (blank-area dismiss) treats long-press release as a tap unless held >~2 seconds:
   newly opened message actions close on release. Suppress closing during that press and 0.3 seconds after release (`MessageMenu.pressChanged`).
 - `List` `Section` headers are not cells; `.contextMenu` rarely responds there. Give header actions visible buttons / `Menu`.
+- A `.contextMenu` on a view inside a `List` / `Form` row is the whole row's (2026-11-10, #2405): with several in one row (Settings › Avatar's grid of cards is one row), a long press anywhere lifts the whole row and runs one of them, whichever SwiftUI kept, intermittently. The uploaded avatar's Delete deleted another avatar, and a long press on Mochi offered New from Photo's Photos / Files. Give each card a control of its own: a visible button (the avatars' corner Delete), on iOS a `Menu` with a `primaryAction` (`.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)`), on the Mac `macBoundedContextMenu`. A UI test that long-presses the card it means passes whenever SwiftUI happens to keep that card's menu: long-press a neighbor too and assert no menu opens.
 - A `.contextMenu(menuItems:preview:)` preview is drawn in the context menu's own host, which the app's environment objects do not reach (2026-11-08, #1490): a preview showing a view with `@Environment(AppModel.self)` crashed the app on the long press, in SwiftUI's environment assertion with no app frame on the stack. Hand the preview what it reads (`.environment(model)`, the scopes it uses).
 - Put MarkdownUI `.markdownTextStyle` inside `.markdownTheme`, called first, or theme text styles overwrite it.
 - Link endings have one rule (`Links`): stop at whitespace or any non-ASCII (Chinese / fullwidth punctuation), strip trailing `.,;:!?` and unmatched `)` / `]`.
@@ -1522,3 +1590,40 @@ A worktree's display name and its Agents' conversation names are different comma
   `FleetIntentsTests.sayingYesNeedsUnlock`). The policy covers the whole intent, so its other replies wait for the unlock too.
   Ask Claude and Give an Agent a Task still send messages from a locked phone; changing that is a separate decision.
 - An entry that never shows the plan in full approves plans in `acceptEdits`, never `bypassPermissions`.
+
+## A caret written into streamed Markdown lands in whatever block is open (2026-11-10, #2916)
+
+- `StreamingText` appended ` ▍` to the block being written. Inside an open fence it was a line of code, in a table a cell's text; on a
+  line that closes a fence or a `$$` block (`` ``` ▍``, `$$ ▍`) it kept the line from closing it, and `$$x$$ ▍` was no longer a formula.
+  Ask where the text ends (`StreamRepair.end`) before writing anything after it.
+- What is added to close a block goes in that block's container: a closing fence or a table's delimiter row written at
+  column 0 under a list item's indented fence or header ended the item, and cmark-gfm drew an empty code block under the
+  list (or the rows as a paragraph). Indent it as the line that opened the block, and check the result with cmark-gfm.
+- A render queue chained from unstructured `Task`s is not cancelled with the view's `.task`: each half-written ```mermaid source of a
+  streaming reply was drawn in turn. Jobs with their own waiters and a cancellation handler let one nobody waits for be dropped
+  (`MarkdownRenderer`). Keep MarkdownUI's inline image loads uncancelled: `InlineText` stores whatever a cancelled load returns, and
+  `MathInlineImages` returns the TeX source as a picture on an error.
+- Keys that change at every delta in a shared memo that empties itself when full (`TextMemo`) wipe everyone else's entries every few
+  seconds; give them their own small memo (`StreamTail`).
+
+## `difference(from:)` can need memory in the square of the changes (2026-11-10, #2915)
+
+- The standard library's Myers diff keeps every step's frontier in the older runtimes: on macOS 15.6, two sides of
+  2,000 lines that share none took the process to 67 MB, of 4,000 lines to 290 MB (of 500 lines: 6 MB). iOS devices before 26.4
+  are expected to behave the same.
+- Never hand it a whole file or an unbounded input from a view or a memo. `LineDiff` (PersonaKit) sets the lines both
+  sides start and end with aside first (a typical edit leaves a few lines to compare), maps lines to integers, and above
+  1,000 lines in between draws them as removed then added instead. `TextCompare` (document versions) caps each side at
+  20,000 lines only, far more than a phone has memory for when two big versions share little; not changed yet.
+
+## A read the user asked for must say when it fails (2026-11-10, #1889)
+
+- The Git tab's load paths kept a failure quiet once a status was shown (`if status == nil && !live`), and Load Earlier
+  Commits used `try?`: a pull to refresh or ⌘R over a stale status, or a failed page of history, looked exactly like
+  "nothing new" or "no earlier commits". Keep the quiet path only for the automatic live refresh; a read the user started
+  says it failed over what stays shown (a notice with Retry, or the button itself turning into Try Again). Decide it in a
+  small pure type (`GitReadFailure`) so a test pins which case is quiet.
+
+## Configuration refusals are not retryable connection failures (#1915)
+
+HTTP failures live in `Shared/APIClient.swift`, not PersonaKit's model-response `APIErrorInfo`. Classify business codes before status or timeout wording. A background sync must pause on disabled/read-only configuration without discarding uploads or deletion intent; another local save cannot repair that configuration. Reopen/foreground can explicitly recheck. Do not continue writes after failed reconciliation, and do not acknowledge a remote deletion from an unsupported 404. Keep the list's pending-delete explanation durable across relaunch.

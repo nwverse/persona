@@ -38,6 +38,8 @@ interface TasksApi {
     suspend fun retryTask(todoId: String): Todo
     /** Removes a task: its todo goes; its agents and their chats stay. */
     suspend fun removeTask(todoId: String)
+    /** Accept only the owner's displayed round, never a newer ask under the same todo id. */
+    suspend fun acceptTask(todoId: String, askedAt: String): Unit = error("Task acceptance unavailable")
     /** Sends text straight to a task's agent; the answer is the conversation's new `routed` item. */
     suspend fun route(conversation: String, todoId: String, text: String): FeedItem
     /** The conversation's "Today" card for the user's day (made on the first call of the day). */

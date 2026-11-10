@@ -45,6 +45,21 @@ class HttpTasksApiTest {
         }
     }
 
+    @Test fun acceptanceCarriesTheCapturedRoundAndRetainsAStaleRefusal() = runBlocking {
+        MockWebServer().use { server ->
+            val askedAt = "2026-11-01T09:00:00.123Z"
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).acceptTask("todo/one", askedAt)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/todos/todo%2Fone/accept", request.path)
+            assertEquals("""{"asked_at":"$askedAt"}""", request.body.readUtf8())
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"Already handled"}"""))
+            try { api(server).acceptTask("todo/one", askedAt); fail("stale acceptance was not refused") }
+            catch (error: HubFailure) { assertEquals(409, error.status) }
+        }
+    }
+
     @Test fun retryPostsAndAnswersTheReopenedTodo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo_1","title":"设置页按钮对齐","origin":"c","plan_id":"p","agents":[]}}"""))
@@ -117,6 +132,23 @@ class HttpTasksApiTest {
             val req = server.takeRequest()
             assertEquals("DELETE", (req.method).zhAny())
             assertEquals("/api/v1/todos/todo_1", (req.path).zhAny())
+        }
+    }
+
+    @Test fun directCompletionOnlyPatchesDoneAndDecodesTheUserCompletionReceipt() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo/one","title":"Review the sample release","done_at":"2026-11-04T10:00:00Z"}}"""))
+            val completed = api(server).patchTodo("todo/one", done = true)
+            val request = server.takeRequest()
+            assertEquals("PATCH", request.method)
+            assertEquals("/api/v1/todos/todo%2Fone", request.path)
+            assertEquals("""{"done":true}""", request.body.readUtf8())
+            assertEquals("todo/one", completed.id)
+            assertTrue(completed.isDone)
+            assertNull(completed.doneBy)
+            assertNull(completed.doneReason)
+            assertNull(completed.ask)
+            assertEquals(1, server.requestCount)
         }
     }
 

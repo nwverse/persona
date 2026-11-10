@@ -804,6 +804,7 @@
         "jarvis-",
         "jarvis-agent-sdk-runtime",
         "jarvis-blob",
+        "jarvis-check-",
         "jarvis-circuit",
         "jarvis-context",
         "jarvis-dsh-runtime",
@@ -935,6 +936,14 @@
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
         "JARVIS_HOME"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "server/internal/node/testdata/session_list_keep.json": {
+      "reason": "Baseline regression fixture or generated carrier asserting an exact versioned contract.",
+      "tokens": [
+        "started_by_jarvis"
       ],
       "path_tokens": [],
       "external_refs": []

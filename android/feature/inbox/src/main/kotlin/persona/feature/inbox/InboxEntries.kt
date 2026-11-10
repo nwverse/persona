@@ -3,11 +3,13 @@ package persona.feature.inbox
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.InboxRoute
 import persona.core.navigation.Navigator
+import persona.core.contracts.api.ManagerPins
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -33,49 +35,49 @@ fun EntryProviderScope<NavKey>.inboxEntries(
         InboxScreen(source, navigator, onOpenCard)
     }
     entry<MailRoute> { route ->
-        val source = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
-        PinItemManager(source, route.itemId)
+        val shared = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
+        val pins = itemPins(shared, route.itemId)
+        val source = remember(shared, pins) { shared.pinned(pins) }
         val pairedMail by source.mailTransport.collectAsStateWithLifecycle()
+        val mail = mailTransport ?: LocalMailTransport.current ?: pairedMail
+        val pinnedMail = remember(mail, pins) { mail?.pinnedForPage(pins) }
         LarkLinkHost(source, itemManager(source, route.itemId)) {
             val opener = LocalLarkLinkOpener.current
-            MailScreen(source, mailTransport ?: LocalMailTransport.current ?: pairedMail, route, navigator,
+            MailScreen(source, pinnedMail, route, navigator,
                 onMailAskAi, onMailOpenLink ?: { url -> opener?.invoke(url, null); Unit })
         }
     }
     entry<LarkRoute> { route ->
-        val source = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
-        PinItemManager(source, route.itemId)
+        val source = pinnedForItem(repository ?: LocalInboxRepository.current ?: injectedInboxRepository(), route.itemId)
         CompositionLocalProvider(LocalInboxNavigator provides navigator) {
             LarkScreen(source, route, navigator)
         }
     }
     entry<InboxItemDetailRoute> { route ->
-        val source = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
-        PinItemManager(source, route.itemId)
+        val source = pinnedForItem(repository ?: LocalInboxRepository.current ?: injectedInboxRepository(), route.itemId)
         CompositionLocalProvider(LocalInboxNavigator provides navigator) {
             LarkLinkHost(source, itemManager(source, route.itemId)) { InboxItemDetailScreen(source, route, navigator) }
         }
     }
     entry<InboxEventRoute> { route ->
-        val source = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
-        PinItemManager(source, route.itemId)
+        val source = pinnedForItem(repository ?: LocalInboxRepository.current ?: injectedInboxRepository(), route.itemId)
         CompositionLocalProvider(LocalInboxNavigator provides navigator) {
             LarkLinkHost(source, itemManager(source, route.itemId)) { InboxEventScreen(source, route, navigator) }
         }
     }
     entry<ConnectorThreadRoute> { route ->
-        val source = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
-        PinItemManager(source, route.itemId)
+        val shared = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
+        val pins = itemPins(shared, route.itemId)
+        val source = remember(shared, pins) { shared.pinned(pins) }
         CompositionLocalProvider(LocalInboxNavigator provides navigator) {
             LarkLinkHost(source, itemManager(source, route.itemId)) {
                 if (connectors == null) InboxItemDetailScreen(source, InboxItemDetailRoute(route.itemId), navigator)
-                else ConnectorThreadScreen(source, connectors, route, navigator)
+                else ConnectorThreadScreen(source, connectors, route, navigator, pins)
             }
         }
     }
     entry<LarkMomentRoute> { route ->
-        val source = repository ?: LocalInboxRepository.current ?: injectedInboxRepository()
-        PinItemManager(source, route.itemId)
+        val source = pinnedForItem(repository ?: LocalInboxRepository.current ?: injectedInboxRepository(), route.itemId)
         CompositionLocalProvider(LocalInboxNavigator provides navigator) {
             LarkMomentsScreen(source, route, navigator)
         }
@@ -106,21 +108,28 @@ internal val ItemDetailPrefixes = listOf(
 )
 
 /**
- * While an inbox item's page is open, what it reads besides the item goes to the item's manager (the merged list's
- * stamp, docs/assistant/managers.md "Clients"); the default's, or one manager, sends none.
+ * What an inbox item's page reads besides the item goes to the item's manager (the merged list's stamp,
+ * docs/assistant/managers.md "Clients"): the pins of that page's own requests, carried by the APIs it hands its
+ * children. An unstamped item (one manager) pins nothing. The default's stamp still makes pins, so the page's APIs are
+ * still wrapped; they name no manager on the wire (no header, no `?manager=`).
  */
 @androidx.compose.runtime.Composable
-internal fun PinItemManager(source: InboxRepository, itemId: String?) {
+internal fun itemPins(source: InboxRepository, itemId: String?): ManagerPins? {
     val snapshot by source.snapshot.collectAsStateWithLifecycle()
     val record = snapshot.records.inboxRecord(itemId)
     val manager = record?.manager
     // the item itself too (its mail page reads it), by its id on the hub (InboxItemKey)
-    val hubId = record?.hubItemId
-    androidx.compose.runtime.DisposableEffect(manager, hubId) {
-        val release = persona.core.contracts.api.AssistantManagerChoice.pin(
-            ItemDetailPrefixes + listOfNotNull(hubId?.let { listOf("inbox", it) }), manager)
-        onDispose { release() }
+    val hubItemId = record?.hubItemId
+    return remember(manager, hubItemId) {
+        ManagerPins.of(ItemDetailPrefixes + listOfNotNull(hubItemId?.let { listOf("inbox", it) }), manager)
     }
+}
+
+/** [source] with the pins of the page of the item [itemId] (itemPins). */
+@androidx.compose.runtime.Composable
+internal fun pinnedForItem(source: InboxRepository, itemId: String?): InboxRepository {
+    val pins = itemPins(source, itemId)
+    return remember(source, pins) { source.pinned(pins) }
 }
 
 /** The manager the item [itemId] names is stamped with (null: none known), for the links its page opens (LarkLinkHost). */

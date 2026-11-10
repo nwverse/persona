@@ -22,6 +22,7 @@ struct LarkProfileView: View {
     @Environment(\.feishuOpen) private var feishuOpen
     @Environment(\.larkAccount) private var account
     @Environment(\.larkManager) private var manager
+    @Environment(\.larkGroup) private var group
     var person: LarkPersonRef
     /// Pushed inside an existing navigation stack (a route) rather than presented as its own sheet.
     var embedded = false
@@ -67,7 +68,8 @@ struct LarkProfileView: View {
         }
         .ignoresSafeArea(edges: .top)
         .task {
-            guard let api = model.api?.manager(manager).lark(account) else { return }
+            await model.readMessagingSource(group: group, manager: manager) // a profile also opens outside its chat (a document)
+            guard let api = model.larkAPI(group: group, manager: manager, account: account) else { return }
             do { profile = try await api.larkProfile(person.id, feedID: person.feedID) } catch { self.error = error.localizedDescription }
         }
     }
@@ -124,7 +126,7 @@ struct LarkProfileView: View {
     private var messageButton: some View {
         Button {
             Task {
-                guard let api = model.api?.manager(manager).lark(account) else { return }
+                guard let api = model.larkAPI(group: group, manager: manager, account: account) else { return }
                 opening = true
                 defer { opening = false }
                 do {

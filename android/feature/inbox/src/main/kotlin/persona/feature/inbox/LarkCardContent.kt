@@ -16,10 +16,12 @@ class LarkContentSource(internal val transport: InboxAssistantTransport, val man
     /** The pairing, and the manager when it is not the default: what reads through this source are cached under. */
     val scope: String get() = named()?.let { "${transport.scope}#$it" } ?: transport.scope
     suspend fun document(url: String): LarkDocument = parseLarkDocument(read { readDocument(url) })
-    fun image(ref: String, document: Boolean = false): LarkPart.Image = LarkPart.Image(
+    fun image(ref: String, document: Boolean = false, width: Int = 1, height: Int = 1): LarkPart.Image = LarkPart.Image(
         AuthenticatedLarkImage("$scope:$ref") {
             read { if (document && ref.startsWith("/api/v1/lark/raw/documents/")) documentMedia(ref) else media(ref) }
-        })
+        }, width = width, height = height)
+    suspend fun media(ref: String): ByteArray = read { media(ref) }
+    suspend fun avatar(ref: String): ByteArray = read { avatar(ref) }
 
     /** This pairing's reads as [manager]'s; null keeps this source. */
     fun forManager(manager: String?): LarkContentSource =
@@ -129,5 +131,6 @@ fun parseLarkCard(meta: JsonObject, fallback: String): LarkCardContent {
 }
 
 /** Shared by the current data repository and the window-based inbox adapter. */
-fun larkInteractivePart(metadata: JsonObject, fallback: String, transport: InboxAssistantTransport, messageId: String? = null): LarkPart.Card =
-    LarkPart.Card(parseLarkCard(metadata, fallback), LarkContentSource(transport), messageId)
+fun larkInteractivePart(metadata: JsonObject, fallback: String, transport: InboxAssistantTransport, messageId: String? = null,
+    manager: String? = null): LarkPart.Card =
+    LarkPart.Card(parseLarkCard(metadata, fallback), LarkContentSource(transport, manager), messageId)
