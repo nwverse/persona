@@ -73,7 +73,9 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - AskUserQuestion unavailable in headless `claude -p`, tool disabled rather than disconnected hook. Phone questions need blocking MCP `ask_user` (`docs/assistant/assistant.md`). Model may call it alongside other tools; side-effecting tools require their own hub approval.
 - Claude Code ends a stdio MCP tool call silent for 30 minutes (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`, Claude Code 2.1.3xx; remote servers 5 minutes), whatever the server's own deadline (#1498, 2026-11-08). A wait as long as that limit races it: the phone confirmation's 30 minutes lost 2 of 3 times, and the model got "sent no response or progress for 1800s; aborting" instead of the hub's "check before calling again". `notifications/progress` for the call's `_meta.progressToken` restarts the clock (`personad mcp` `keepAlive`); the per-server `timeout` / `MCP_TOOL_TIMEOUT` is a separate hard cap progress does not extend (default 1e8 ms). Also check `personad mcp`'s own `CallTimeout` when a wait grows: it was 40 minutes under ask_user's 2 hours. Tested end to end with a fake node socket: without progress the call ended at the idle limit, with it the 150-second answer came through.
 - Default-mode headless assistant even needs phone approval for Persona MCP notify_user / `schedule_followup`, stalling nighttime follow-ups / Monitor (tested 2026-10-30). Pass `--allowedTools mcp__persona`; hub asks separately for acting-on-user-behalf tools (`docs/assistant/assistant.md`).
+- A tray's Waiting status describes the parent turn, not whether its background work is idle (#3591, 2026-11-10). Reuse the header's activity data for a Working spinner and phase/progress or running counts; reserve the clock for no background activity. A lightweight `DockAgent` projection must carry that data too: otherwise a same-state workflow update leaves manual-Agent rows stale. Aggregate all linked task agents, deduplicate session references and compatibility workflow markers, and keep progress digits outside truncated phase text.
 - Background tasks / Monitor are Claude child processes; idle recycling or systemd personad restart killing cgroup kills them, leaving chat waiting forever. Node reads `stream-json` `system/background_tasks_changed`, does not recycle with active tasks, persists task list continuously, tells chat what was lost after restart.
+- `background_tasks_changed` comes only when the set changes, never at start (Claude Code's schema, 2.1.311): a process that never ran a background task has reported no list, which is not the same as an empty one. A repeated `initialize` control request is answered with the current set right behind its success, empty included; the first one is not, and node sends none of its own, so asking means sending two (#3495). A fake CLI that prints an empty list at start hides this: recovery's model switch passed its tests and never ran on the real CLI.
 - A read-only task label must constrain every launch boundary (#1841). Normalize its saved permission, card edits and retries, then verify the runtime actually consumes the mode. Ordinary Codex terminal starts discarded `plan`: map it to explicit sandbox and approval CLI flags, check both alias and managed launcher arguments for conflicts, and retain the constraint across later resumes. Runtime bridges can ignore the mode or fall back to another provider; refuse paths without an enforcement guarantee before sending the prompt; test the emitted start arguments and the absence of a runtime call on refusal.
 - Scheduled assistant work needs one table only (2026-10-31, `docs/assistant/assistant.md` “Scheduled tasks”). Separate schedules / follow-ups forced repeated checks to `schedule_followup` each round; entry disappeared on start, invisible / unstopppable during hour-long approval waits. Repeating work uses every; self-reschedule recognized as same task. Only user changes task model / permission in app; assistant cannot elevate itself. Headless `bypassPermissions` only at launch.
 - Lark assistant uses gateway skill (copy formerly `server/internal/assistantskills/`, embedded personad, installed `.claude/skills` at assistant startup, upstream sync script; since 2026-11-04 in Lark plugin). Token formerly process env; since #1317 not even env, below. Node Bash PreToolUse `node/larkgate.go` applies only `assistant-hooks` / assistant-settings.json. Unparsed commands containing `ol POST/PUT/PATCH/DELETE` still require phone confirmation, otherwise bypass permits; credential-proxy gate now rejects them outright.
@@ -119,7 +121,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 
 - **A space-wide rule must be at every entrance to the write** (#5278): the health space's "confirm every write, whatever a rule says" was in `larkCheck` (the gated command) only; the gate proxy, which a script reaches with no command in front, let a write through when a rule allowed it, with no card. Now the address is marked health when it is opened and takes only the grant a card left. When a rule is added to one check, look for the other route to the same write, and test it by calling the address itself. Both must decide the conversation's space from the same place: the process's own, noted when its address is opened. The hook's directory moves with the model's `cd`; and a grant kept under a conversation id needs the address to have that id, which a new Codex conversation gets only when its thread starts (`codexConn.start`).
 
-- **`confirmOutbound` is not a general confirmation**: it asks on the phone only in the health space and returns true at once everywhere else (`assistant/health.go`). A tool that must always ask the user (closing an Agent with `agent_archive` and `close`, changing an assistant setting) builds its own permission card through `s.ask`, as `ownSettingAction` and `archiveAndCloseTool` do, and treats a dismissed, expired or unanswered card as declined.
+- **`confirmOutbound` is not a general confirmation**: it asks on the phone only in the health space and returns true at once everywhere else (`assistant/health.go`). A tool that must always ask the user (closing an Agent with `agent_archive` and `close`, changing an assistant setting) builds its own permission card through `s.ask`, as `ownSettingAction` and `archiveAndCloseTool` do. A dismissed, expired or unanswered card changes nothing, but it is no decline: only the user's own answer counts (`Resolution.UserAllowed` / `UserDenied`; one with `AnsweredBy` set was given for them), and the tool says nobody answered. Reporting an expired card as "the user declined" made a leader conversation tell its supervisor the user had refused a change they never saw (#3722).
 
 - **A selection that does not read is not the defaults** (#1523): the knowledge base's default selection stops writing plain group messages, so falling back
   to it while the settings table is unavailable would silently drop what chats send (the connectors' cursors move on regardless). `kbSelectionNow` keeps
@@ -155,3 +157,60 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
   changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
   the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+
+- Inbox fixtures must wait for the first asynchronous roster count before writing directly to their items (#3459). `inboxReady` returns after scheduling `tellInboxNeedsYou`, whose goroutine holds the Inbox mutex while reading the map and status fields. Legacy fixture seeding bypassed that mutex and could crash the whole test process, even without the race detector. Use `waitNeedsYouIdle` at the fixture readiness boundary; later concurrent mutations must still use the Inbox mutex. Keep the real teller enabled and verify the complete Inbox test group under `-race`.
+- **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
+  of a tool's schema send `agent_send`'s `task` as `{"title":"","done_when":[],"expect_minutes":0}` instead of leaving it
+  out, and the server took any `task` as a hand-off: a reply to another conversation's agent was refused, and one to an
+  agent on no task made a supervised task. A handler that branches on whether an optional object is there treats one
+  with nothing in it as absent (`givenTask`), keeps anything else as it was (another type, a wrongly typed field or an
+  unknown key such as a misspelled `title` must not turn a hand-off into an untracked reply), and its schema allows null
+  and requires none of the object's fields the handler does not.
+
+- A report written before a tool call vanished from the push and the Lark answer. A main-chat turn wrote a long report,
+  called `agent_send`, then closed with one short line; the push and the Lark bot showed only that line, and the owner
+  took it for another conversation's message. Both read "the answer" as the last text (`Meta.LastText`) or the texts
+  after the last tool call (`channel.Answer`), but the model often reports first and acts after. The hub's answer is now
+  every text of the turn from the first, minus a passing line of at most two sentences right before a tool call
+  (`transcript.AnswerParts`), for the push body and the Lark answer alike. The chat pages still fold all but the last
+  text (super rule 2); changing them needs the administrator's approval.
+
+- A source the manager hands to the Inbox itself, rather than a registered connector, must be named in every round's `names`, the Feishu-chats rounds included (#2039). The Inbox keeps a source's held-back count and read error only while rounds name it (`recordHeld`, `recordReads`), and a chats-only round, which follows every Lark event, would otherwise drop a source subscription's "waiting for triage" count within seconds. Name such sources cheaply in those rounds (no items read) and hand in their things only in rounds that read the connectors (`extmgr` `readSubscriptions`).
+
+- **`/stop` has to read the conversation's state, and a state that may be stale is not "nothing running"** (#3793). The
+  command and the progress card's Stop button shared `stopConversation`, which answered "stopped the turn" whenever the
+  conversation existed and sent `session.interrupt`; for an ordinary herdr agent the node answers that by pressing Escape
+  in the agent's terminal (`node/node.go`), so an idle window got a keystroke and the owner was told a turn was stopped
+  that had already finished. Refuse only when the state says the last turn ended (`unread` / `idle`, and not `Starting`)
+  — a state that cannot be told still tries, the owner asked — and let a live run this chat sent into that conversation
+  win (`channel.Run.Seen` false: the turn may just not be read as working yet), or a `/stop` sent right after the message
+  stops nothing.
+
+- **A table row is split at every unescaped `|`, inside a code span too** (#3852). GFM cuts a cell at a pipe the row did
+  not escape, so `| `a || b` | 或 |` really is a row with four cells while its header has two; GFM draws only the
+  header-width cells and ignores the excess, and `answerTables` (`feishubot/answer.go`) built a row the same way, by
+  looping over the header's columns alone, so everything past the header's width — here "b`" and "或" — never reached
+  the card, with nothing said. The rich-text fallback kept those words, so the same answer read differently as a card
+  and as a refused card's text. Those words are still the row's: keep the surplus cells in the last column, joined with
+  " | " and with empty ones skipped (a trailing `||` adds no junk), clipped and escaped like any other cell. When
+  changing how a table row is laid out, compare its card with its fallback.
+
+- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `clipMarkdown` (`assistant/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string.
+
+- **A finished run's last write into the progress card has to wait out a card rate limit** (#3915). The progress tick
+  answers 230020 by pausing its updates (`prog.quietUntil`), but the answer's write comes right after a tick's, and a
+  card update (PATCH) gets no retry of its own on 230020 (`feishubot/api.go` leaves that wait to the caller, because the
+  tick may be holding the run's progress lock): the answer was then posted as a card of its own while nothing wrote the
+  progress card again — the run had ended — so it kept saying it was still working, and a quiet end wrote nothing at
+  all. `botUpdateAnswerCard` (`feishu_turn.go`) waits `answerCardWait` (5 seconds, the first progress backoff) and
+  tries once more before the answer falls back to a card of its own; another refusal still falls back at once. Waiting
+  synchronously is the whole fix here: the run is over, so no tick can write that card later.
+
+- **A quiet ending says nothing when the run has no card left, so a timeout must carry a note** (#3930). `channel.Run.Check`
+  returned the 2-hour held timeout (`HeldMost`) with no note, and `checkChannelRun` turns an empty note into `Quiet`; the
+  Lark sink answers a quiet ending only by rewriting the card it still has (`feishu_turn.go`), and a held run has none —
+  `finishChannelRun` gives the card back with the message (`delete(r.Ext, "card")`) — so the owner's first answer stayed
+  the last word and the chat never learned the wait was over. Both limits now end with `channel-turns.gave_up`, as the
+  docs promise ("Timed out, see the app"); a run with no card gets that line as a card of its own. Plugin channels, which
+  send a note as plain text, stop being silent the same way. When a step ends a run without an answer, give it a note, or
+  check what the sink does with a quiet end and no card.

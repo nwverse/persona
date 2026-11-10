@@ -33,6 +33,8 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
+	"github.com/nwverse/persona/server/internal/subscriptions"
+	"github.com/nwverse/persona/server/internal/subscriptionsui"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -99,6 +101,8 @@ type Options struct {
 type Manager struct {
 	// errReports: the error reports' pipeline (error_reports.go).
 	errReports errorReports
+	// iphoneTurns: one iphone_do at a time per iPhone, across conversations (iphone.go, iphoneTurn).
+	iphoneTurns sync.Map
 	// serving: the requests the hub relayed to the extensions being served now, a WebSocket (a voice call, an
 	// extension's live view) for as long as it is open (Serving).
 	serving atomic.Int64
@@ -113,8 +117,12 @@ type Manager struct {
 
 	ctx context.Context
 
-	mail          Mail
-	connectors    *connector.Registry
+	mail       Mail
+	connectors *connector.Registry
+	subs       *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
+	// subDrafts are the model drafts the subscription pages started (#2040, subscriptions_ui.go), made on first use.
+	subDrafts     *subscriptionsui.Drafts
+	subDraftsOnce sync.Once
 	connectorsOff map[string]bool
 	migrated      sync.Map
 	media         mediaCache

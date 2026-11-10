@@ -27,7 +27,8 @@ final class NodeMenuUITests: XCTestCase {
     @MainActor private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES"]
+        // By space: the ⋯ these tests open is a space group's, and the list groups by repository by default.
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES", "-dev.grouping", "space"]
         app.launchPinned()
         return app
     }
@@ -76,7 +77,8 @@ final class NodeMenuUITests: XCTestCase {
         shot(app, "row-git")
         let before = try actions().count
         app.buttons["拉取"].tap()
-        XCTAssertTrue(text(app, containing: "拉取：已是最新").waitForExistence(timeout: 15), "no toast with the node's summary")
+        // The outcome in the app's words (#2895), as NodeMenuTests has it.
+        XCTAssertTrue(text(app, containing: "拉取：已经是最新代码").waitForExistence(timeout: 15), "no toast with the node's summary")
         shot(app, "row-pulled")
         let pulled = try actions().dropFirst(before)
         XCTAssertEqual(pulled.first?["route"], "panes/git")
@@ -127,10 +129,36 @@ final class NodeMenuUITests: XCTestCase {
         XCTAssertEqual(started?["route"], "panes/agent")
         XCTAssertEqual(started?["pane"], "w1:p2")
         XCTAssertFalse((started?["launcher"] ?? "").isEmpty)
+        // The agent it started opens, as New Session's does (#3287): its chat comes up, not the list with it idle there.
+        let title = app.buttons.matching(identifier: "chat.title").firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "the started agent's chat did not open")
+        // Its name comes with the machine's list, which the hub pushes once the node has the session.
+        let named = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "chat.title", "新会话")).firstMatch
+        XCTAssertTrue(named.waitForExistence(timeout: 10), "another chat opened: \(title.label)")
+        shot(app, "run-here-opened")
     }
 
-    /// New Worktree… (#3099): the path follows the branch, git's refusal is told in the sheet, and a made worktree is
-    /// where New Agent starts.
+    /// New Worktree… (#3099, #3586): an uncoded node refusal keeps git's actionable words instead of a generic HTTP 502.
+    @MainActor func testWorktreeRefusalKeepsGitsReason() throws {
+        let app = launch()
+        let more = app.buttons["weather 的更多操作"].firstMatch
+        XCTAssertTrue(reveal(app, more), "no ⋯ on the space")
+        more.tap()
+        let item = app.buttons["新建 worktree…"]
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "no 新建 worktree… in the space's menu")
+        item.tap()
+        XCTAssertTrue(text(app, containing: "persona · 当前分支 main").waitForExistence(timeout: 10), "the repository was not read")
+        let branch = app.textFields["worktree.branch"]
+        branch.tap()
+        branch.typeText("feat/taken")
+        app.buttons["worktree.create"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["worktree.failure"].waitForExistence(timeout: 10), "git's refusal is not shown")
+        XCTAssertTrue(text(app, containing: "already used by worktree").exists)
+        app.swipeUp()
+        shot(app, "worktree-refused-reason")
+    }
+
+    /// A made worktree is where New Agent starts, and the path follows the branch until it is typed by hand.
     @MainActor func testSpaceMakesAWorktreeAndStartsAnAgentThere() throws {
         let app = launch()
         let more = app.buttons["weather 的更多操作"].firstMatch
@@ -143,20 +171,11 @@ final class NodeMenuUITests: XCTestCase {
         XCTAssertTrue(text(app, containing: "persona · 当前分支 main").waitForExistence(timeout: 10), "the repository was not read")
         let branch = app.textFields["worktree.branch"]
         branch.tap()
-        branch.typeText("feat/taken")
+        branch.typeText("feat/x")
         let path = app.textFields["worktree.path"]
-        XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-taken", "the path does not follow the branch")
+        XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-x", "the path does not follow the branch")
         shot(app, "worktree-form")
-        app.buttons["创建"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["worktree.failure"].waitForExistence(timeout: 10), "git's refusal is not shown")
-        XCTAssertTrue(text(app, containing: "already used by worktree").exists)
-        shot(app, "worktree-refused")
-
-        branch.tap()
-        for _ in 0..<5 { branch.typeText(XCUIKeyboardKey.delete.rawValue) }
-        branch.typeText("x")
-        XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-x")
-        app.buttons["创建"].tap()
+        app.buttons["worktree.create"].tap()
         XCTAssertTrue(text(app, containing: "persona · feat/x").waitForExistence(timeout: 10), "新建 Agent is not set to the new worktree")
         shot(app, "worktree-new-agent")
         let made = try actions().last

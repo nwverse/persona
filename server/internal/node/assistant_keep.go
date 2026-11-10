@@ -121,6 +121,18 @@ func (k *assistantKeeper) keep(owner *Node, procs map[string]*assistantProc, rec
 	return stop
 }
 
+// carryRecovery records owner as the Node whose closed map holds p's recovery, while the keeper still holds p: true
+// when the next adopt will carry it. owner.mu is held (the order keep takes them in).
+func (k *assistantKeeper) carryRecovery(p *assistantProc, owner *Node) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.procs[p.id] != p {
+		return false
+	}
+	k.recoveryOwners[p.id] = owner
+	return true
+}
+
 // adopt hands what is kept to the Node serving the new connection, including the remaining per-model retry budget.
 func (k *assistantKeeper) adopt(n *Node) []*assistantProc {
 	k.mu.Lock()
@@ -130,11 +142,7 @@ func (k *assistantKeeper) adopt(n *Node) []*assistantProc {
 	k.recoveryOwners = map[string]*Node{}
 	k.mu.Unlock()
 	var out []*assistantProc
-	var resume []struct {
-		p       *assistantProc
-		r       *assistantTurnRecovery
-		failure *assistantPendingFailure
-	}
+	var resume []adoptedFailure
 	for id, p := range kept {
 		if !p.alive() {
 			continue
@@ -158,7 +166,7 @@ func (k *assistantKeeper) adopt(n *Node) []*assistantProc {
 				if r.finished || (!busy && pending == nil) {
 					r = nil // a result completed between handover and adoption; there is nothing left to recover
 				} else {
-					r.pending, r.running, r.done, r.proc = nil, false, nil, p
+					r.running, r.done, r.proc = false, nil, p // pending stays until resumeAdoptedFailures: it still holds the turn
 				}
 				delete(previous.recoveries, id)
 			}
@@ -181,17 +189,40 @@ func (k *assistantKeeper) adopt(n *Node) []*assistantProc {
 		}
 		out = append(out, p)
 		if pending != nil && r != nil {
-			resume = append(resume, struct {
-				p       *assistantProc
-				r       *assistantTurnRecovery
-				failure *assistantPendingFailure
-			}{p, r, pending})
+			resume = append(resume, adoptedFailure{p, r, pending})
 		}
 	}
-	for _, item := range resume {
-		n.recoverAssistantResultFor(item.p, item.r, true, item.failure.text, item.failure.kinds...)
-	}
+	n.mu.Lock()
+	n.adoptedFailures = append(n.adoptedFailures, resume...)
+	n.mu.Unlock()
 	return out
+}
+
+// adoptedFailure is a failed turn a handover carried, with its recovery and the result to resume it from.
+type adoptedFailure struct {
+	p       *assistantProc
+	r       *assistantTurnRecovery
+	failure *assistantPendingFailure
+}
+
+// resumeAdoptedFailures goes on with the failures adopt carried, once the session state has loaded (startState): a
+// send before it would read an empty state (no guest restrictions, no main flag, no launcher) and write it back (#3495).
+// Without the state, or when one cannot go on, the failure is published as final.
+func (n *Node) resumeAdoptedFailures(loaded bool) {
+	n.mu.Lock()
+	resume := n.adoptedFailures
+	n.adoptedFailures = nil
+	n.mu.Unlock()
+	for _, item := range resume {
+		n.mu.Lock()
+		if n.recoveries[item.p.id] == item.r {
+			item.r.pending = nil // going on from it now
+		}
+		n.mu.Unlock()
+		if !loaded || !n.recoverAssistantResultFor(item.p, item.r, true, item.failure.text, item.failure.kinds...) {
+			n.finishAssistantRecovery(item.p, item.r)
+		}
+	}
 }
 
 // forget drops a kept process that exited between two connections.

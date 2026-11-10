@@ -1,8 +1,5 @@
 {
   "effort": "思考{effort}",
   "not_configured": "未設定",
-  "headless": "バックグラウンド",
-  "engine": "対話型",
-  "processing": "バックグラウンド処理",
   "runtime_fallback": "CLIに切り替えました：{reason}"
 }

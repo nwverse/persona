@@ -159,6 +159,9 @@ data class Todo(
     val supervision: Supervision? = null,
     /** How far its finished work went out, and short of live where it is held (#3306); null from an older hub or before judged. */
     val delivery: TodoDelivery? = null,
+    /** The hub's latest automatic completion check of its work while still current (#3180); null before one, after a
+     *  reopen or a new turn, and from an older hub. */
+    val check: TodoCheck? = null,
     /** When it is due (#1683): a moment, or a day ("yyyy-MM-dd", due by its end in the user's zone); at most one. */
     @WireTime @SerialName("due_at") val dueAt: String? = null,
     @SerialName("due_date") val dueDate: String? = null,
@@ -193,6 +196,21 @@ data class Todo(
     /** Open, and its due moment has passed. */
     fun isOverdue(now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): Boolean =
         !isDone && (dueBy(zone)?.isBefore(now) ?: false)
+
+    /** Its due date as a write sets it: its moment, else its day; null without either. */
+    val due: TodoDue? get() = parseTime(dueAt)?.let { TodoDue.At(it) } ?: dueDay?.let { TodoDue.Day(it) }
+
+    /** The to-do due at [due] instead, as the hub keeps it: a moment or a day, one replacing the other (#2045). */
+    fun withDue(due: TodoDue): Todo = when (due) {
+        is TodoDue.At -> copy(dueAt = due.at.toString(), dueDate = null)
+        is TodoDue.Day -> copy(dueAt = null, dueDate = due.day.toString())
+    }
+}
+
+/** A to-do's due date as `PATCH /api/v1/todos/{id}` sets it: a moment (`due_at`) or a day in the user's time zone (`due_date`). */
+sealed interface TodoDue {
+    data class At(val at: Instant) : TodoDue
+    data class Day(val day: LocalDate) : TodoDue
 }
 
 @Serializable
@@ -214,6 +232,20 @@ data class TodoDelivery(
     val gate: String? = null,
     val unblock: String? = null,
     @WireTime val at: String? = null,
+)
+
+/**
+ * The hub's latest automatic completion check of a task (#3180, docs/assistant/todos.md "Automatic completion"): [verdict] done,
+ * not_done, waiting, needs_user, undelivered or unsure (a later one kept as sent), [reason] the judge's line in the user's
+ * language, [at] when it was judged and [workSince] the start of the work it judged.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = TodoCheckSerializer::class)
+data class TodoCheck(
+    val verdict: String = "",
+    val reason: String? = null,
+    @WireTime val at: String? = null,
+    @WireTime @SerialName("work_since") val workSince: String? = null,
 )
 
 /** One criterion as a review found it (#3124). */
@@ -255,14 +287,27 @@ data class Supervision(
     val progress: TaskProgress? = null,
 )
 
+/**
+ * A supervised task's agent's latest report: [text] is its own words in one line, [line] the hub's one-sentence paraphrase
+ * in the user's language (#3181; "" until written, with no model, or from an older hub), [detail] the whole report as
+ * written, Markdown ("" when it is [text]).
+ */
 @Serializable
 data class TaskProgress(
     val kind: String = "",
     val step: Int = 0,
     val steps: Int = 0,
     val text: String = "",
+    val line: String = "",
+    val detail: String = "",
     @WireTime val at: String? = null,
-)
+) {
+    /** What the Progress row says: the paraphrase when there is one, else the agent's words. */
+    val rowText: String get() = line.takeIf(String::isNotBlank) ?: text
+
+    /** The report as the agent wrote it, for the task's details. */
+    val reportText: String get() = detail.takeIf(String::isNotBlank) ?: text
+}
 
 /**
  * Todo states in order of rank (umbrella.final.md / docs/assistant/todos.md "State calculation rules"):
@@ -416,6 +461,7 @@ object ReviewCheckSerializer : WireSerializer<ReviewCheck>(ReviewCheck.generated
 object TaskReviewSerializer : WireSerializer<TaskReview>(TaskReview.generatedSerializer())
 object SupervisionSerializer : WireSerializer<Supervision>(Supervision.generatedSerializer())
 object TodoDeliverySerializer : WireSerializer<TodoDelivery>(TodoDelivery.generatedSerializer())
+object TodoCheckSerializer : WireSerializer<TodoCheck>(TodoCheck.generatedSerializer())
 object TodosResponseSerializer : WireSerializer<TodosResponse>(TodosResponse.generatedSerializer())
 object FeedResponseSerializer : WireSerializer<FeedResponse>(FeedResponse.generatedSerializer())
 object TodosEventSerializer : WireSerializer<TodosEvent>(TodosEvent.generatedSerializer())

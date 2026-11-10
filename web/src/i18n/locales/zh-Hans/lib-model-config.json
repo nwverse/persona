@@ -1,8 +1,5 @@
 {
   "effort": "思考 {effort}",
   "not_configured": "未配置",
-  "headless": "后台进程",
-  "engine": "交互式",
-  "processing": "后台处理",
   "runtime_fallback": "已退回 CLI：{reason}"
 }

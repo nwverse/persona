@@ -1,5 +1,33 @@
 # Lessons: Android
 
+## Receipt navigation inside task details (#3841)
+
+A receipt reused inside task details must not invoke the same task-sheet destination again: assigning the same Compose state produces no visible change. Resolve the task's existing lead binding and open its Agent page after dismissing the sheet. Keep missing-target feedback inside that sheet; generic operation feedback discards arbitrary exception messages and a snackbar behind a modal does not prove the explanation is visible. Exercise the receipt button independently of the footer and verify the real navigation stack in addition to callback tests.
+
+## Late receipts must settle manual review (#3748)
+
+The review timeout does not invalidate the hub's later operation receipt. Include the manual-review state in the
+compare-and-set sources for a confirmed successful receipt, without resending the message or accepting an unknown
+outcome. Keep discarded messages outside that source set so a lookup that finishes later cannot undo the user's choice.
+
+
+## Large-font screenshots need Compose density, not just configuration (#3588)
+
+Setting `LocalConfiguration.fontScale` alone can leave the rendered Compose text at the original size. Override
+`LocalDensity` with the same font scale, assert that default/large pixels differ, and inspect the real page's capture.
+A decorative mark inside a clickable row may be merged into that row's semantics: assert its test tag with the
+unmerged tree, not by dropping the visual assertion. With a frozen Compose clock, a Robolectric `performScrollTo`
+can keep waiting for a choreographer frame and fill the trace-recording heap; keep the requested rows visible in a
+bounded real-page fixture and test state transitions on the same row instead of hiding the failure with more heap.
+
+## Snapshot subscriptions are not page visibility
+
+The shell, badges and floating capsule can collect a repository snapshot without its page being visible. Do not use subscriber
+counts to activate a fast full-list network poller when the hub already pushes invalidations and refreshes on reconnect; a slow poll is enough to back up a missed event. Likewise,
+session-list metadata updates should not prefetch every recent chat's message bodies. Keep message synchronization tied to
+observers and reuse immutable transcript projections across metadata-only events; background allocation can make the UI
+thread wait for garbage collection even when parsing itself runs on an IO dispatcher.
+
 ## Installed extension details need their own dependency metadata (#1315)
 
 Decoding dependency and pack fields in an installation preview does not retain them in the installed detail's separate
@@ -236,6 +264,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Foreground-service `onStartCommand` runs more than once: the App starts it each time it returns to the foreground, and each call needs `startForeground`. Use the notification currently displayed (`HubService.shown`), not one recomputed from current data. Recomputing omits "after 5 minutes with only Unread remaining, fall back to the connection row," so a collapsed "1 finished" reappears. The collector sees no state change, cannot correct it, and it persists until the next fleet change (reproduced on an emulator 2026-11-02).
 - Do not update a foreground-service notification when stopping it. During unpairing, connection state and notification preferences change first (the App posted "Waiting for network" twice), then the service stops and `stopForeground(REMOVE)` removes the notification. System notification handling is async (emulator call stacks confirmed both posts before onDestroy); the final update lands after removal and becomes an ordinary persistent notification that cannot be swiped away and has no owner left (reproduced twice, remained twice). `HubService.show` no longer updates while unpaired.
 - For notification buttons requiring unlock (`setAuthenticationRequired(true)`), tapping on the lock screen and entering a PIN makes SystemUI send the PendingIntent immediately while `KeyguardManager.isDeviceLocked` remains true (one Android 15 emulator observation; false about 0.8 seconds later). Checking immediately rejects lock-screen Allow / Approve every time with "Unlock first." Persistent-service Resume is silently swallowed too; phone-tool confirmation Allow is dropped and returned to Claude as denial after 90 seconds. Allow unlock to settle before checking (`lockedAfterUnlockSettles`, one copy each in `:platform:notify` and `:platform:phonetools`, waits up to 3 seconds; still locked then means locked).
+- A notification that waits for an answer needs a delete intent, or a swipe / "Clear all" reaches nobody: the phone-tool write confirmation had none, so a dismissed one kept the call (and, the registry being serial, every other phone call) waiting the full 90 seconds and then reported "nobody answered" (#3861). The system also sends the delete intent when its own `setTimeoutAfter` fires (an app's `cancel` sends none), so make the system timeout a little longer than the in-app one, or a timeout reads as a dismissal (`PhoneConfirmations.NOTIFICATION_GRACE_MILLIS`).
 - Phone tools: hub merges same-named tools from phones into one definition (the longer description wins), but may route calls to any phone declaring the tool (`phoneClient`). If Android definitions differ from iOS, Claude invokes Android with iOS arguments (a new version rejected out-of-range `limit` as an error). Match iOS definitions verbatim, guarded by exported fixtures (`PhoneToolCatalogTest`).
 
 - Stopping a service started by `startForegroundService` before it calls `startForeground` (its own `stopSelf` or external `stopService`) crashes the App with `ForegroundServiceDidNotStartInTimeException`. Under load the gap grows, and a brief "Unpaired" during pairing hits it. `HubService` always enters the foreground before deciding whether to stay, and stops only after foreground entry (`ForegroundStarts`, `docs/android/android.md`).
@@ -491,3 +520,16 @@ Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where 
 - A committed PackageInstaller session may remain sealed after its confirmation page disappears, including across an APK upgrade. Only its installer UID can abandon it. Offer an explicit, confirmed recovery action from Settings even when no newer APK is available; recheck ownership, package and the confirmed session IDs before cancellation. Do not cancel a new session that appeared after confirmation or clear pairing data to recover an installer task.
 
 - PackageInstaller deliberately withholds its sender's background Activity launch privileges. An activity PendingIntent callback must opt in on the creator side for current targets; without it, a task record may exist with no resumed Activity and the sealed session never reaches system confirmation. Use API 36's visible-only creator mode, the compatible explicit mode on API 34/35, and guard the API on older devices. Do not grant always-background launch just to save a final toast. If the user leaves before confirmation, retain the explicit pending-session cancellation path in Settings; verify success using the installed package version.
+
+## Hidden tabs and unread windows still own work
+
+- A composed but unplaced tab still inherits the activity lifecycle: lifecycle-aware collectors and pollers keep running after switching away. Give each primary tab its own lifecycle capped at CREATED while hidden; keep composition for navigation and scroll restoration.
+- Three unread chat windows can still hold tens of thousands of messages if older snapshots contain full histories. Skip oversized window snapshots before reading/decoding them, preserving the file and server history cursors, and trim new snapshots under the same limit so a fresh cache is never one the reader skips.
+- Bounding one cache does not bound another: the inbox has a repository window snapshot and a feature-side Lark window cache. Turning the three-window unread prefetch back on after bounding only the first one brought back main-thread GC waits of about 15 s per two minutes and an out-of-memory crash in the second. Measure a prefetch change on a device with real data before shipping it.
+- Stopping a closed chat's sync at once makes every tab switch a cold open, and a message sent from a chat the user then left never sees its echo. Release a closed chat after a delay, keep the most recently closed idle entries, and keep syncing chats the outbox still waits on.
+- A capsule started on Main must move catalog transformations off Main explicitly; conflate alone only removes queued inputs, not main-thread work.
+- Full adb meminfo can invoke app-side Explicit GC and amplify the stall being measured. Compare natural GC with meminfo --local and exclude profiling/dumpheap intervals from acceptance readings.
+
+## Wait for local listener shutdown before reusing its port
+
+On the JVM, closing a server socket with a blocked accept can defer the actual descriptor close until that I/O exits. A preferred-port restart immediately after close can then collide with its own old listener and choose a fallback. Register the accept worker under the same lifecycle lock as close, close the socket first, then wait for the worker with a bounded deadline. Preserve interruption and report a shutdown deadline without adding a new exception to synchronous close callers; keep independently occupied-port fallback distinct from listener shutdown.

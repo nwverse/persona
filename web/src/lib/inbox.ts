@@ -504,9 +504,9 @@ export function sections(items: InboxItem[], f: InboxFilter): InboxSections {
   return out;
 }
 
-/** The sidebar badge: open items that need the user. */
+/** The sidebar badge: unread open items in Needs you; reading never completes them. */
 export function badgeCount(items: InboxItem[]): number {
-  return items.filter((it) => !isDone(it) && statusOf(it) === "action").length;
+  return items.filter((it) => !isDone(it) && !it.read && statusOf(it) === "action").length;
 }
 
 /** The connectors with items in the list (GitHub…), one filter chip each, in the order they first come. */
@@ -553,7 +553,7 @@ export function interactionAsk(ix: Interaction): string {
     case "question":
       return ix.questions?.[0]?.question || ix.summary || "";
     case "permission":
-      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_name || "";
+      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_title || ix.tool_name || "";
     case "screen":
       return ix.dialog?.question || ix.summary || "";
     case "elicitation":
@@ -1726,7 +1726,7 @@ export function useInbox<T>(select: (s: InboxState) => T): T {
   return useSyncExternalStore(subscribe, read, read);
 }
 
-/** How many unhandled "Needs you" items the inbox has (the sidebar's badge). */
+/** How many unread open items the inbox has (the sidebar's badge). */
 export function useInboxBadge(): number {
   // the current assistant's, with several (docs/assistant/managers.md "Clients")
   const scope = useScope();

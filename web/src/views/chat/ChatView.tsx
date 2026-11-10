@@ -19,7 +19,7 @@ import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotic
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, type TaskIndex } from "../../lib/tasks";
+import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -47,6 +47,8 @@ import { PendingCards } from "./Interactions";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
 import { lostWith } from "../../lib/dock-focus";
 import { FailureNote, showsFailureNote } from "./FailureNote";
+import { CloseoutCard } from "./CloseoutCard";
+import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { ContextMeter } from "./ContextMeter";
@@ -102,11 +104,14 @@ import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark } from "../../ui/AgentMark";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
 import { t } from "../../i18n";
+import { lazyOverlay } from "../LazyOverlay";
 
 // The terminal view (TerminalPanel and its stream / cell parsing) loads on demand: most visits only read the chat, so it
 // stays out of the main chunk. A page that can switch to it fetches it in the background (loadTerminal below), so the
 // first switch does not slide in an empty layer.
 const loadTerminal = () => import("../session/TerminalPanel");
+// Sharing settings load on their first open, outside the first screen (docs/web/web.md "First screen").
+const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 
 const NO_FEED: FeedItem[] = [];
@@ -980,7 +985,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
-  const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
+  const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
   // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, the running bar shows no time (#3534)
   const [clocks, setClocks] = useState(0);
@@ -1025,9 +1030,17 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const wfCalls = useMemo(() => workflowCalls(runs), [wfKey]);
   // Preserve conversation identity; execution summaries have the same collapsed default everywhere (#2602).
   const lineStyle = workLineStyle(assistant, (session ?? archivedHere)?.assistant);
+  // A stopped agent's closeout is a card above the transcript (#3612, CloseoutCard): while it is there, the reply that
+  // carried the raw block, the last exchange's, shows without it.
+  const closeoutShown = !assistant && Boolean(shownCloseout(session));
+  const closeoutSegment = useMemo(() => {
+    if (!closeoutShown) return undefined;
+    const last = lines.findLast((line) => line.kind === "segment");
+    return last?.kind === "segment" ? last.seg.id : undefined;
+  }, [closeoutShown, lines]);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, closeoutSegment }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, closeoutSegment],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──
@@ -1291,6 +1304,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       {/* the page's middle: the chat and (once shown) the terminal stacked in one box; without a terminal to show it adds no box */}
       <div className={switchable ? "relative min-h-0 flex-1" : "contents"}>
       <ViewLayer bare={!switchable} on={view === "chat"} from="start">
+      {/* what a stopped agent said of its own work, above the transcript and not part of it (#3612) */}
+      {closeoutShown && session && <CloseoutCard key={`${mid}/${sid}`} session={session} />}
       <div className="relative min-h-0 flex-1">
         {(tr.notLive || refreshFailed) && <NotLivePill error={refreshFailed} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
         <div ref={scrollRef} onScroll={onScroll} data-chat-scroll className="relative h-full overflow-y-auto [overflow-anchor:none]">
@@ -1739,6 +1754,7 @@ export const Header = memo(function Header({
     }
   };
   const [linkTodoOpen, setLinkTodoOpen] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const state = session ? stateOf(session) : "unknown";
   // Awaiting Reply (#5096): seen, but it asked you something you have not answered
   const awaiting = session ? awaitsReply(session, mutes) : false;
@@ -1796,6 +1812,7 @@ export const Header = memo(function Header({
         // phone width: "Same space" leaves the header row to the title (#3576) and opens from ⋯ instead
         ...(phone && others.length > 0 ? [spaceAgentsItem(others, () => tabs.openAt(menu.anchor))] : []),
         ...assistantItems,
+        ...(!assistant && !main ? [{ key: "share", label: t("chat-chatview.share"), icon: "link" as const, onSelect: () => setSharingOpen(true) }] : []),
         ...(session.todo
           ? [
               {
@@ -1967,6 +1984,7 @@ export const Header = memo(function Header({
       {session && <RenameSpaceDialog open={dialog === "space"} onClose={() => setDialog(null)} session={session} />}
       {session && <DeleteSessionDialog open={dialog === "delete"} onClose={() => setDialog(null)} session={session} machineName={machineName} />}
       <LinkTodoDialog open={linkTodoOpen} session={session} onClose={() => setLinkTodoOpen(false)} />
+      {session && sharingOpen && !assistant && !main && <SharingDialog key={`${session.machine_id}/${session.session_id}/${session.manager ?? ""}`} session={session} onClose={() => setSharingOpen(false)} />}
       {assistantDialogs}
     </header>
   );

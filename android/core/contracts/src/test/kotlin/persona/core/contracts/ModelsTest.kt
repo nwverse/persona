@@ -7,6 +7,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelsTest {
+    @Test fun agentTaskResultsDecodeRunningAndKeepOriginalReportIdentity() {
+        for (status in listOf("running", "waiting", "completed", "failed", "stopped")) {
+            val item = JsonCodec.decodeFromString<Item>("""{"id":"report#0","seq":12,"role":"user","kind":"tool_result",
+                "tool_use_id":"toolu_launch","text":"Full report","full_size":8192,
+                "task":{"kind":"agent","status":"$status","task_id":"agent-a","tool_use_id":"toolu_launch","detail":"Preview"}}""")
+            assertEquals(status, item.task?.status)
+            assertEquals("toolu_launch", item.toolUseId)
+            assertEquals("Full report", item.text)
+            assertEquals(8192, item.fullSize)
+            assertEquals(item, JsonCodec.decodeFromString<Item>(JsonCodec.encodeToString(item)))
+        }
+        assertNull(JsonCodec.decodeFromString<Item>("""{"id":"legacy","kind":"tool_result","text":"general-purpose says hello"}""").task)
+    }
+
     @Test fun sessionDecodesWithMissingFieldsAndUnknownState() {
         val s = JsonCodec.decodeFromString<Session>(
             """{"machine_id":"server","session_id":"u1","cwd":"/home/x/code/foo","status":"done","state":"later","extra":1}""",
@@ -79,6 +93,9 @@ class ModelsTest {
         assertEquals(listOf("tool:Bash"), bash.alwaysKeys)
         val legacy = JsonCodec.decodeFromString<Interaction>("""{"id":"ix_legacy","machine_id":"computer","session_id":"chat","kind":"permission","tool_name":"Bash"}""")
         assertEquals(null, legacy.alwaysKeys)
+        assertEquals(null, legacy.alwaysHonored)
+        val own = JsonCodec.decodeFromString<Interaction>("""{"id":"ix_own","machine_id":"computer","session_id":"chat","kind":"permission","tool_name":"iphone_do","always_honored":false}""")
+        assertEquals(false, own.alwaysHonored)
     }
 
     @Test fun interactionNamesItsAgentAndWhatAlwaysAllows() {
@@ -90,10 +107,10 @@ class ModelsTest {
         assertEquals("访问网络", (codex.reason).zhAny())
         val dsh = JsonCodec.decodeFromString<Interaction>("""{"id":"d","kind":"question","agent":"dsh","agent_label":"DSH"}""")
         assertEquals("DSH", (dsh.agentDisplayName).zhAny())
-        assertEquals("DSH 有问题问你", (dsh.headline).zhAny())
+        assertEquals("DSH 在问你", (dsh.headline).zhAny())
         assertEquals("DSH 请求使用 read_file：读取报表", (dsh.copy(kind = "permission", toolName = "read_file", summary = "读取报表").headline).zhAny())
         assertNull(JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question","agent":"claude"}""").agentDisplayName)
-        assertEquals("Claude 有问题问你", (JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question"}""").headline).zhAny())
+        assertEquals("Claude 在问你", (JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question"}""").headline).zhAny())
     }
 
     @Test fun sessionInfoDecodes() {

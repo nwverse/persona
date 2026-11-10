@@ -346,7 +346,7 @@ struct PlanEditSheet: View {
 
 // MARK: - Task card
 
-/// A task in the conversation, updated in place: its mark, title, time, where it runs, what its agent says now.
+/// A task's full card: its mark, title, time, where it runs, what its agent says now.
 struct TaskCard: View {
     var todoID: String
     var conversation: String
@@ -510,7 +510,7 @@ struct TaskNowLine: View {
     }
 }
 
-/// A task of another day, folded: one line; a tap opens its detail.
+/// A task of another day, folded: one line; a tap opens its detail (its Agent's chat, as the card does).
 struct TaskLine: View {
     var todoID: String
     @State private var removing: TodoItem?
@@ -554,12 +554,12 @@ struct FeedLine: View {
 
     var body: some View {
         switch item.kind {
-        case .plan:
-            if let id = item.ref, let plan = store.plans[id] ?? item.plan { PlanCard(plan: plan) }
-        case .task:
-            if let id = item.ref {
-                // A task card of another day folds into a line: its mark, title and where it got to.
-                if Calendar.current.isDateInToday(item.at) { TaskCard(todoID: id, conversation: item.conversation) } else { TaskLine(todoID: id) }
+        case .plan, .task:
+            if let tasks = DispatchedTasks.entries(for: item, plans: store.plans,
+                                                  titleOf: { store.todos[$0]?.title }, fallback: String(localized: "Tasks")) {
+                DispatchedTaskLinks(tasks: tasks)
+            } else if let id = item.ref, let plan = store.plans[id] ?? item.plan {
+                PlanCard(plan: plan)
             }
         case .today:
             if let body = item.today { TodayCard(item: item, body: body) }
@@ -882,6 +882,16 @@ struct ReceiptCard: View {
     }
 
     var body: some View {
+        switch item.interruptLook {
+        case .hidden: EmptyView() // drawn inside its batch's card (#3834)
+        case .batch(let batch): InterruptBatchCard(batch: batch)
+        case .resolved(let resolution):
+            InterruptHandledLine(todoID: item.ref, title: Self.title(item, todo: item.ref.flatMap { store.todos[$0] }), resolution: resolution)
+        case .pending, nil: card
+        }
+    }
+
+    @ViewBuilder private var card: some View {
         let todo = item.ref.flatMap { store.todos[$0] }
         let outcome = Self.outcome(item, todo: todo)
         let title = Self.title(item, todo: todo)
@@ -960,6 +970,126 @@ struct ReceiptCard: View {
     }
 }
 
+// MARK: - Interruptions after the fact (#3834)
+
+/// The words for how the hub says an interrupted task was dealt with.
+nonisolated enum InterruptWords {
+    static func resolution(_ r: InterruptResolution) -> String {
+        switch r {
+        case .pending: String(localized: "Pending [interrupt resolution]")
+        case .cancelled: String(localized: "Cancelled [interrupt resolution]")
+        case .rerouted: String(localized: "Dispatched again [interrupt resolution]")
+        case .resumed: String(localized: "Resumed [interrupt resolution]")
+        case .accepted: String(localized: "Accepted [interrupt resolution]")
+        case .done: String(localized: "Done [interrupt resolution]")
+        }
+    }
+
+    /// What cut a batch off (the hub's `cause`); one this build doesn't know reads as a model service error.
+    static func cause(_ c: String) -> String {
+        switch c {
+        case "rate_limited": String(localized: "Model service rate limit")
+        case "auth": String(localized: "Sign-in or key refused")
+        case "model_route": String(localized: "Unknown model [interrupt cause]")
+        case "no_output": String(localized: "Turns with no output")
+        default: String(localized: "Model service error")
+        }
+    }
+
+    static func title(_ b: InterruptBatch) -> String {
+        let what = cause(b.cause)
+        if let machine = b.machine, !machine.isEmpty {
+            return String(localized: "\(what) on \(machine): \(b.total) tasks interrupted")
+        }
+        return String(localized: "\(what): \(b.total) tasks interrupted")
+    }
+
+    static func counts(_ b: InterruptBatch) -> String {
+        b.pending > 0 ? String(localized: "→ \(b.resolved) handled / \(b.pending) pending") : String(localized: "→ all handled")
+    }
+}
+
+/// An interrupted task that was dealt with since: a grey line with its result; it opens the task.
+struct InterruptHandledLine: View {
+    var todoID: String?
+    var title: String
+    var resolution: InterruptResolution
+    private var store: TasksStore { .shared }
+
+    var body: some View {
+        let known = todoID.map { store.todos[$0] != nil } ?? false
+        Button { if let todoID { store.detailTask = todoID } } label: {
+            Label(String(localized: "“\(title)” was interrupted · \(InterruptWords.resolution(resolution))"), systemImage: Theme.Icon.infoFilled)
+                .lineLimit(1)
+                .font(Theme.Font.secondary)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(!known)
+        .accessibilityIdentifier("receipt.interrupt.handled")
+    }
+}
+
+/// Several tasks one outage cut off: one card with its cause and how many are handled and still pending, that opens
+/// to each task and its result. Red only while one is pending.
+struct InterruptBatchCard: View {
+    var batch: InterruptBatch
+    @State private var open = false
+    private var store: TasksStore { .shared }
+
+    var body: some View {
+        let pending = batch.pending > 0
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Button { withAnimation(Theme.Motion.reveal) { open.toggle() } } label: {
+                HStack(alignment: .top, spacing: Theme.Space.m) {
+                    ThemedIcon(Theme.Icon.errorFilled)
+                        .font(Theme.Font.heading)
+                        .foregroundStyle(pending ? Theme.danger : .secondary)
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text(InterruptWords.title(batch))
+                            .font(Theme.Font.bodyStrong)
+                            .foregroundStyle(pending ? Color.primary : Color.secondary)
+                        Text(InterruptWords.counts(batch))
+                            .font(Theme.Font.secondary)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    ThemedIcon(open ? Theme.Icon.expand : Theme.Icon.disclosure)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            if open {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    ForEach(batch.tasks, id: \.receipt) { task in
+                        let todo = store.todos[task.todoID]
+                        Button { store.detailTask = task.todoID } label: {
+                            HStack(spacing: Theme.Space.s) {
+                                Text(todo?.title ?? task.title).lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text(InterruptWords.resolution(task.resolved)).lineLimit(1)
+                                    .foregroundStyle(task.resolved == .pending ? Theme.danger : .secondary)
+                            }
+                            .font(Theme.Font.secondary)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(todo == nil)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(Theme.Space.l)
+        .background(pending ? Theme.danger.opacity(0.12) : Theme.Fill.well,
+                    in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        .accessibilityIdentifier(pending ? "receipt.interrupt.batch.pending" : "receipt.interrupt.batch.handled")
+    }
+}
+
 // MARK: - Above the composer
 
 /// What the conversation's tasks are asking, at the bottom where the user is: the oldest question under its task's
@@ -990,112 +1120,8 @@ struct TaskQuestions: View {
     }
 }
 
-/// The dock: All for the board, held at the leading edge so it never scrolls out of reach, then a pill for each task
-/// going on (waiting for the user first), scrolling sideways beside it. In the main conversation the agents going on
-/// that no task stands for (opened on the Agents page, #1113) follow the tasks, marked as agents.
-struct TaskDock: View {
-    var conversation: String
-    /// The conversation's model operating a Mac (#1343): a pill of its own, first.
-    var computer: ComputerActivity? = nil
-    @State private var removing: TodoItem?
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let dock = store.dock(conversation)
-        let all = store.tasks(of: conversation)
-        let agents = store.agents(of: conversation)
-        let operating = ComputerActivityPill.shows(computer)
-        if !all.isEmpty || !agents.isEmpty || operating {
-            HStack(spacing: Theme.Space.s) {
-                if !all.isEmpty || !agents.isEmpty { board(all.count + agents.count) }
-                if !dock.isEmpty || !agents.isEmpty || operating {
-                    ScrollView(.horizontal) {
-                        HStack(spacing: Theme.Space.s) {
-                            if operating { ComputerActivityPill(activity: computer) }
-                            ForEach(dock) { todo in pill(todo) }
-                            ForEach(agents) { agent in pill(agent) }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
-                    #if os(macOS)
-                    // The pills fade out at the trailing edge instead of being cut off by it (#1224 B6): a window
-                    // narrower than the dock showed half a pill with its words cut.
-                    .mask {
-                        Color.black
-                            .padding(.trailing, Theme.Size.macRowFade)
-                            .overlay(alignment: .trailing) {
-                                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: Theme.Size.macRowFade)
-                            }
-                    }
-                    #else
-                    // A pill cut by the screen's edge mid-word reads as broken: the pills fade out at an end with more.
-                    .edgeFade()
-                    #endif
-                    .animation(Theme.Motion.layout, value: dock.map(\.id) + agents.map(\.key.path))
-                }
-            }
-            .padding(.horizontal, Theme.Space.xs)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            #if !os(macOS)
-            .padding(.top, Theme.Space.s)
-            .dockChatFade()
-            // Drawn under the question and the @ list over it in the footer, so the fade reaches only the chat.
-            .zIndex(-1)
-            #endif
-            .confirmTaskRemoval($removing)
-        }
-    }
-
-    private func board(_ count: Int) -> some View {
-        Button {
-            store.showBoard = true
-        } label: {
-            Text("All \(count) [Task Views b479ca]")
-                .dockCapsule()
-                .fixedSize() // the pills give way, All does not
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("task-dock.board")
-    }
-
-    private func pill(_ todo: TodoItem) -> some View {
-        let state = store.state(todo)
-        return Button {
-            store.detailTask = todo.id
-        } label: {
-            DockPillLabel(title: todo.title, state: state.agentState, waiting: state == .needsYou) {
-                TaskMark(state: state, size: Theme.Size.dot)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("task-dock.pill")
-        .menuPreviewShape(.capsule)
-        .contextMenu { TaskRemoveMenuItem(todo: todo, state: state, pending: $removing) }
-        .transition(.scale.combined(with: .opacity))
-    }
-
-    /// An agent no task stands for: its state's dot and the Agents mark, opening its page in the task's sheet.
-    private func pill(_ agent: DockAgent) -> some View {
-        Button {
-            store.detailAgent = agent.key
-        } label: {
-            DockPillLabel(title: agent.title, state: agent.state, waiting: agent.isWaiting) {
-                StatusDot(state: agent.state, size: Theme.Size.dot)
-                ThemedIcon(Theme.Icon.agents).font(Theme.Font.label)
-                    .foregroundStyle(agent.isWaiting ? AnyShapeStyle(agent.state.tone.text) : AnyShapeStyle(.secondary))
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Agent \(agent.title), \(agent.isWaiting ? StateName.needsYou.text : StateName.working.text)")
-        .accessibilityIdentifier("task-dock.agent")
-        .transition(.scale.combined(with: .opacity))
-    }
-}
-
-/// The capsule the row above the assistant's composer draws an entry in: the dock's All (#1094) and, on the phone, the
-/// action bar's Pending / Progress / Agents (#2879). One look for both, so the bar is exactly as low as the dock was:
+/// The capsule the row above the assistant's composer draws an entry in: the action bar's Needs You / In Progress (#3393)
+/// and its trays' All, the look the dock's All had (#1094), so the bar is exactly as low as the dock was:
 /// caption medium (13 pt at the default text size; it follows Dynamic Type), 12 pt sideways and 6 pt up and down
 /// (`Theme.Space.m` / `.sm`), a capsule, `Theme.Fill.chip` behind secondary words: 28 pt tall at the default text size.
 /// `.selected` (its tray is open) is the filter chip's on look in the same size (`FilterChip`: the accent behind white,

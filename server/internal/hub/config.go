@@ -143,16 +143,21 @@ func (p AssistantProfile) ServiceBound() bool {
 // HTMLViewsOn is assistant.html_views with its default (on); it means nothing while PersonaView is off.
 func (p AssistantProfile) HTMLViewsOn() bool { return p.HTMLViews == nil || *p.HTMLViews }
 
+type SharingConfig struct {
+	PublicOrigin string `json:"public_origin,omitempty"`
+}
+
 type Config struct {
 	// AutoUpdateNodes explicitly opts into fleet upgrades after Hub updates and node reconnects.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Name is what people see this hub as (hubName); empty: its machine's host name.
 	Name string `json:"name,omitempty"`
 	// ShutdownTimeoutSeconds bounds the entire shutdown, including pool closure (default 8; policy, not a latency measurement).
-	ShutdownTimeoutSeconds int    `json:"shutdown_timeout_seconds,omitempty"`
-	Listen                 string `json:"listen"`
-	Token                  string `json:"token"`
-	PublicURL              string `json:"public_url"`
+	ShutdownTimeoutSeconds int            `json:"shutdown_timeout_seconds,omitempty"`
+	Listen                 string         `json:"listen"`
+	Token                  string         `json:"token"`
+	PublicURL              string         `json:"public_url"`
+	Sharing                *SharingConfig `json:"sharing,omitempty"`
 	// DatabaseURL points at the Postgres container (scripts/deploy/deploy.sh creates it and fills this in).
 	DatabaseURL string `json:"database_url"`
 	// The manager's own sections (managerconf.Moved: the connectors, extensions, bots, mail sign-ins, Lark, usage

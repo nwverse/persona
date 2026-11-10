@@ -2,9 +2,10 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { extRoot } from "../../lib/extension-api";
 import {
-  chooseProvider, draftFor, executionForm, providerAgent, providerName, modelConfiguration, modelPurpose, modelSummary, providersFor, purposeGroups, purposeLaunch, runtimeChoices, runtimeLabel, saveModelPurpose, supportsField,
+  chooseProvider, draftFor, providerAgent, providerName, modelConfiguration, modelPurpose, modelSummary, providersFor, runtimeChoices, runtimeLabel, saveModelPurpose, supportsField,
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
+import { executionForm, purposeGroups, purposeLaunch } from "../../lib/model-config-execution";
 import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";

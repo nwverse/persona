@@ -72,6 +72,24 @@ final class PersonalAgentRemoveTests: XCTestCase {
         shot("empty-hint")
     }
 
+    @MainActor func testFailedPinSaveReportsAndRollsBack() throws {
+        try open()
+        let hub = ProcessInfo.processInfo.environment["PERSONA_PERSONAL_HUB"]!
+        _ = try Data(contentsOf: URL(string: hub + "/mock/personal-agents?prefs_fail=500")!)
+        let pin = app.buttons.matching(label("Pin", "置顶")).firstMatch
+        row("代码评审").press(forDuration: 1)
+        XCTAssertTrue(pin.waitForExistence(timeout: 5), app.debugDescription)
+        pin.tap()
+
+        let toast = app.descendants(matching: .any).matching(identifier: "toast").firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 5), "a refused preference save must be visible")
+        XCTAssertTrue(toast.label.contains("Couldn't save:") || toast.label.contains("没保存："), toast.label)
+        shot("prefs-save-failed")
+
+        row("代码评审").press(forDuration: 1)
+        XCTAssertTrue(pin.waitForExistence(timeout: 5), "the refused pin was rolled back, so the menu offers Pin again")
+    }
+
     @MainActor func testRemoveAndUndoBringsItBack() throws {
         try open()
         shot("list")

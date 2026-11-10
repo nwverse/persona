@@ -35,6 +35,9 @@ func (s *Service) agentRoutes() {
 		var request struct {
 			TriageSwitches
 			ToolLoop *bool `json:"tool_loop"`
+			Closeout *bool `json:"closeout"`
+			// CloseoutAsk shadows the embedded switch, as the two above do: left out is not "off".
+			CloseoutAsk *bool `json:"closeout_ask"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&request); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -47,6 +50,14 @@ func (s *Service) agentRoutes() {
 		in.ToolLoop = prev.ToolLoop
 		if request.ToolLoop != nil {
 			in.ToolLoop = *request.ToolLoop
+		}
+		in.Closeout = prev.Closeout // an app that does not know it leaves it as it was
+		if request.Closeout != nil {
+			in.Closeout = *request.Closeout
+		}
+		in.CloseoutAsk = prev.CloseoutAsk
+		if request.CloseoutAsk != nil {
+			in.CloseoutAsk = *request.CloseoutAsk
 		}
 		if in.ReplyReminder == nil {
 			in.ReplyReminder = prev.ReplyReminder
@@ -98,15 +109,21 @@ func (s *Service) agentRoutes() {
 
 // workStats is GET /api/v1/agents/work/stats: how the triage did over the last hours (docs/assistant/agent-work.md "Evaluation").
 type workStats struct {
-	Hours    int            `json:"hours"`
-	Triaged  map[string]int `json:"triaged"` // "done", "blocked/user", … "unsure", "failed"
-	By       map[string]int `json:"by"`      // rule, model
-	Actions  map[string]int `json:"actions"` // continued, woke, asked, answered, withdrawn, auto_approved
+	Hours   int            `json:"hours"`
+	Triaged map[string]int `json:"triaged"` // "done", "blocked/user", … "unsure", "failed"
+	By      map[string]int `json:"by"`      // rule, model
+	// Actions: continued, limit_continued, woke, asked, answered, withdrawn, auto_approved; closeout_asked (a stop
+	// held for a closeout); closeout_ask_sent (a status question) and, for the turn after one, closeout_ask_answered
+	// (it carried a closeout) or closeout_ask_ignored (it did not).
+	Actions  map[string]int `json:"actions"`
 	Resumed  map[string]int `json:"resumed"` // by user / hub after a triaged turn
 	Unread   sampleStats    `json:"unread"`  // "Unread" over the hours
 	NeedsYou sampleStats    `json:"needs_you"`
 	// Waits: how long a triaged turn waited for the user's first look or reply (seconds), by what it was.
 	Waits map[string]waitStats `json:"waits"`
+	// OwnerCannotAnswer: the decisions the owner answered "I can't answer this" (decision.go, #3804), by the supervisor
+	// conversation that asked and then by answer (decide_yourself, not_what_i_asked, explain_first).
+	OwnerCannotAnswer map[string]map[string]int `json:"owner_cannot_answer"`
 }
 
 type sampleStats struct {
@@ -144,7 +161,8 @@ func summarizeWork(hours int, events []db.WorkEvent) workStats {
 			s.By[str("by")]++
 		case "failed":
 			s.Triaged["failed"]++
-		case "continued", "limit_continued", "woke", "asked", "answered", "withdrawn", "auto_approved":
+		case "continued", "limit_continued", "woke", "asked", "answered", "withdrawn", "auto_approved",
+			"closeout_asked", closeoutAskSentEvent, closeoutAskAnsweredEvent, closeoutAskIgnoredEvent:
 			s.Actions[e.Kind]++
 		case "resumed", "seen":
 			if e.Kind == "resumed" {
@@ -171,6 +189,7 @@ func summarizeWork(hours int, events []db.WorkEvent) workStats {
 		}
 	}
 	s.Unread, s.NeedsYou = samples(unread), samples(needs)
+	s.OwnerCannotAnswer = ownerCannotStats(events)
 	for k, v := range waits {
 		slices.Sort(v)
 		s.Waits[k] = waitStats{N: len(v), Median: v[len(v)/2], P90: v[min(len(v)-1, len(v)*9/10)]}

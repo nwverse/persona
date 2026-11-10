@@ -328,6 +328,35 @@ done
 	}
 }
 
+// The model switch registers its replacement before it marks it busy and sends it the retry. The fixture's wait for
+// the end of a turn must not take that gap for it, as the node does not (#3815): waiting on busy alone counted the
+// requests while the fallback model had not been asked yet.
+func TestSDKFixtureIdleWaitsOutTheModelSwitch(t *testing.T) {
+	n := assistantNode(t)
+	f := &sdkFixture{n: n}
+	const id = "11111111-2222-3333-4444-555555555555"
+	replacement := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}, tasksObserved: true}
+	n.procs[id] = replacement
+	n.recoveries = map[string]*assistantTurnRecovery{id: {
+		retried: map[string]bool{"primary-model": true},
+		used:    map[string]bool{"primary-model": true, "fallback-model": true},
+		proc:    replacement,
+		running: true,
+	}}
+	if f.turnOver(id) {
+		t.Fatal("the registered replacement, not yet busy, ended a turn its recovery still holds")
+	}
+	if sessions := n.assistantSessions(); len(sessions) != 1 || sessions[0].Status != proto.StatusWorking {
+		t.Fatalf("the node publishes the model switch as %+v, want working", sessions)
+	}
+	n.mu.Lock()
+	delete(n.recoveries, id) // finishAssistantRecovery ends the recovery before it clears busy
+	n.mu.Unlock()
+	if !f.turnOver(id) {
+		t.Fatal("an idle process with no recovery did not end the turn")
+	}
+}
+
 func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
 	shortStartRetries(t, 300*time.Millisecond)
@@ -337,10 +366,8 @@ func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	back := make(chan error, 1)
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		back <- os.Rename(moved, claude)
-	}()
+	// the install finishes half a second in, while the start is being retried
+	time.AfterFunc(500*time.Millisecond, func() { back <- os.Rename(moved, claude) })
 	n := codexTestNode(t)
 	withFakeHub(t, n)
 	const id = "11111111-2222-3333-4444-555555555555"
@@ -365,6 +392,13 @@ func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 	if recovery != r {
 		n.stopAssistant(id)
 		t.Fatal("the failed starter's exit watcher finalized the recovery before its replacement was delivered")
+	}
+	n.mu.Lock()
+	follows := r.proc == current
+	n.mu.Unlock()
+	if !follows {
+		n.stopAssistant(id)
+		t.Fatal("the recovery still follows the starter that exited, not its replacement (#3495)")
 	}
 	n.stopAssistant(id)
 }
@@ -608,6 +642,12 @@ func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
 	}
 	select {
 	case got := <-selected:
+		t.Fatalf("the carried failure resumed (on %q) before the new connection's session state loaded", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	b.resumeAdoptedFailures(true) // startState, once the state is in
+	select {
+	case got := <-selected:
 		if got != "fallback-model" {
 			t.Fatalf("the queued failure restarted or consumed the wrong budget: %q", got)
 		}
@@ -794,10 +834,7 @@ func TestAssistantPendingFailureUsesTheReplacementProcess(t *testing.T) {
 	}
 	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
 	n.runAssistantRecovery(old, r, "claude", old.cwd, old.model, "primary-model", false)
-	deadline := time.Now().Add(2 * time.Second)
-	for calls.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitWithin(t, 2*time.Second, "the replacement's recovery send", func() bool { return calls.Load() >= 2 })
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("the replacement's pending failure was dropped: %d recovery send(s), want 2", got)
 	}

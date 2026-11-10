@@ -1,8 +1,5 @@
 {
   "effort": "Thinking {effort}",
   "not_configured": "Not set",
-  "headless": "Background process",
-  "engine": "Interactive",
-  "processing": "Background processing",
   "runtime_fallback": "Fell back to the CLI: {reason}"
 }

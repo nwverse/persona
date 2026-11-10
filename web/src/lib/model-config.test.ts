@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  chooseProvider, draftFor, executionForm, modelConfiguration, modelPatch, modelPurpose, modelSummary, providersFor, purposeGroups, runtimeChoices, runtimeFallbackText, saveModelPurpose,
+  chooseProvider, draftFor, modelConfiguration, modelPatch, modelPurpose, modelSummary, providersFor, runtimeChoices, runtimeFallbackText, saveModelPurpose,
   type ModelProvider, type ModelPurpose,
 } from "./model-config";
+import { executionForm, purposeGroups } from "./model-config-execution";
 
 const purpose: ModelPurpose = {
   id: "lark.agent", name: "飞书 /agent", group: "对话", kind: "launcher", revision: 3,

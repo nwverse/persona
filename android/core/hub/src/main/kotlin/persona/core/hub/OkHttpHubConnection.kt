@@ -83,9 +83,15 @@ class OkHttpHubConnection(
     private val ways: HubWays? = null,
     /** How often a socket that went through a tunnel because no address answered asks the addresses again. */
     private val tunnelRecheckMillis: Long = HubWay.RECHECK_MILLIS,
+    /**
+     * A paired hub's Cloudflare Access service token, by hub id (docs/operations/network.md "Behind Cloudflare Access").
+     * Asked per request; null for the mesh's hubs, which are not paired here.
+     */
+    private val access: (hubId: String) -> HubAccess? = { null },
 ) : HubConnection, ConnectionDiagnosticsSource, AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val lock = Any()
+    private val sharingGeneration = AtomicLong()
     private val selector = HubRouteSelector(clockMillis) { endpoint -> probe(endpoint) }
     @Volatile private var members: List<HubMember> = config.members
     @Volatile private var centerHubId: String? = config.centerHubId
@@ -189,7 +195,18 @@ class OkHttpHubConnection(
     /** Where the next socket resumes from: the stream and its last broadcast seen. */
     internal val resumePoint: Pair<String, Long>? get() = eventStream?.let { it to lastEventSeq.get() }
 
-    init { updateDiagnostics { it }; reconnect() }
+    init { http.access = ::accessFor; updateDiagnostics { it }; reconnect() }
+
+    /**
+     * The service token a request to [url] carries: that of the paired hub one of whose HTTPS candidates has its origin,
+     * this hub's first. Never for another origin, so a group's other hubs, the mesh's and any other URL get none.
+     */
+    private fun accessFor(url: HttpUrl): HubAccess? {
+        fun List<Endpoint>.serve() = any { runCatching { it.baseUrl() }.getOrNull()?.sameOrigin(url) == true }
+        if (!url.isHttps) return null
+        config.hubId?.let { home -> if ((config.endpoints + candidates()).serve()) return access(home) }
+        return members.firstOrNull { it.token != null && memberCandidates(it).serve() }?.let { access(it.hubId) }
+    }
 
     override suspend fun readDiagnostics(): ConnectionDiagnostics {
         val deviceId = config.deviceId ?: return diagnostics.value
@@ -424,6 +441,7 @@ class OkHttpHubConnection(
      */
     fun updateMembers(value: List<HubMember>, centerHubId: String? = null) {
         val reconnect = synchronized(lock) {
+            if (value != members || (centerHubId != null && centerHubId != this.centerHubId)) sharingGeneration.incrementAndGet()
             if (centerHubId != null) this.centerHubId = centerHubId
             else {
                 val newCenter = value.firstOrNull { it.center }?.hubId
@@ -468,6 +486,27 @@ class OkHttpHubConnection(
 
     override fun send(message: JsonObject): Boolean = socket?.send(message.toString()) ?: false
 
+    /** Sharing keeps the authenticated owner opaque and fences center, credential and socket generations. */
+    internal fun captureSharingFence(): HubSharingFence = synchronized(lock) {
+        val selected = activeRoute()
+        val owner = routeOwner?.takeIf { it.first === selected }?.second ?: throw HubFailure(HubError.NoNetwork)
+        val center = centerId
+        val generation = sharingGeneration.get()
+        val hello = lastHello ?: throw HubFailure(HubError.NoNetwork)
+        fun currentCredential(): Boolean {
+            val live = if (owner.home) homeOwner() else members.firstOrNull { it.hubId == owner.hubId }?.let { memberOwner(it) }
+            return live != null && live.token == owner.token && live.fingerprint == owner.fingerprint &&
+                live.ownToken == owner.ownToken && live.center == owner.center
+        }
+        if (!currentCredential()) throw persona.core.contracts.api.AgentShareFailure("authority_changed")
+        HubSharingFence(selected) {
+            synchronized(lock) {
+                if (closed || revoked || _route.value !== selected || routeOwner?.second != owner || !currentCredential() ||
+                    centerId != center || sharingGeneration.get() != generation || lastHello !== hello) throw persona.core.contracts.api.AgentShareFailure("authority_changed")
+            }
+        }
+    }
+
     /** The selected origin has already passed health identity validation. Caller owns the response. */
     suspend fun request(
         path: String, method: String = "GET", body: RequestBody? = null,
@@ -475,7 +514,9 @@ class OkHttpHubConnection(
         expectedRoute: HubRoute? = null,
         /** Longer than the client's 15 s, for answers the hub waits on a machine for (a CLI starting). */
         readTimeoutSeconds: Long? = null,
+        sharingFence: HubSharingFence? = null,
     ): Response {
+        sharingFence?.requireCurrent()
         val selected = awaitRoute()
         if (expectedRoute != null && selected !== expectedRoute) throw HubFailure(HubError.NoNetwork)
         val owner = synchronized(lock) {
@@ -485,14 +526,22 @@ class OkHttpHubConnection(
         require(path.startsWith("/api/") && !path.contains('#')) { "Expected an API path" }
         val base = selected.endpoint.baseUrl()
         val url = base.hubUrl(path).withRequestManager()
+        if (sharingFence != null) {
+            sharingFence.requireCurrent()
+            val manager = headers.entries.singleOrNull { it.key.equals(ManagerHeader, true) }?.value
+            val selectors = url.queryParameterValues(ManagerQuery)
+            if (manager.isNullOrBlank() || selectors.any { it != manager } || selectors.size > 1)
+                throw persona.core.contracts.api.AgentShareFailure("manager_selector_conflict", 400)
+        }
         require(base.hubPath(url)?.startsWith("/api/") == true) { "Expected an API path" }
         val request = Request.Builder().url(url).apply {
             headers.forEach { (name, value) -> header(name, value) }
         }.header("Authorization", "Bearer ${owner.token}").method(method, compatibleRequestBody(path, body)).build()
         val client = readTimeoutSeconds?.let { http.client.newBuilder().readTimeout(it, java.util.concurrent.TimeUnit.SECONDS).build() } ?: http.client
         val response = client.newCall(request).awaitResponse(buffered)
+        try { sharingFence?.requireCurrent() } catch (error: Exception) { response.close(); throw error }
         if (!response.isSuccessful) {
-            val error = response.use { HubFailure.from(it) }
+            val error = response.use { if (sharingFence != null) sharingFailure(it) else HubFailure.from(it) }
             // recordFailure owns revocation: it cancels the socket, clears the route and diagnostics. In a group only
             // the hub that refused is dropped, and the connection moves on to the others.
             if (error.kind == HubError.PairingExpired && recordFailure(error, owner)) reconnect()

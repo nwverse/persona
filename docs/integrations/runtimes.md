@@ -4,7 +4,7 @@ Agents in Persona come from two kinds of places, integrated differently:
 
 | | Host | Runtime |
 | --- | --- | --- |
-| What it is | Where the terminal lives: herdr, Herdr App, Orca (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
+| What it is | Where the terminal lives: herdr, Herdr App, Orca, Tern (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
 | Where sessions come from | node reads panes, recognizes sessions by process, reads Claude / Codex transcripts | The runtime reports its sessions and provides their content |
 | Interactions (questions / plans / permissions) | Claude Code hooks | The runtime asks itself (`interaction.create`) |
 | Where the code lives | One host implementation in Persona (`internal/host`, `node/host*.go`) | **No code added to Persona**: the runtime implements the same protocol with the SDK |
@@ -51,7 +51,7 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect |
 | `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field) |
 | `hasLocalClient()` | Whether this runtime's own UI is open (decides who gets permission requests first, see below) |
-| `modes({session_id, permission_mode, effort})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
+| `modes({session_id, permission_mode, effort, model})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; optional model changes require `createRuntime` option `modelSwitch: true`, advertised as `caps.model`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
@@ -193,7 +193,8 @@ To avoid going to the computer and clicking every time, the plugin is split into
   an unchanged path means the old code. The store sits next to node's socket: `~/.persona/runtime-packages/<package name>/`, with `current.json` recording which one is running.
 - **Package**: a set of files and their hash (sorted by path, one `path\0sha256 of content\n` per file, then a sha256 over the whole). Which files belong to a package is listed twice, in Go
   (`Packages` in `server/internal/runtimepkg`) and JS (`PACKAGES` in `runtime-sdk/lib/package.js`), and the two must match
-  (guarded by `TestPackagesMatchTheLoader`). Before building personad, run `go generate ./internal/runtimepkg`, which copies these files from `integrations/` and embeds them in the binary
+  (guarded by `TestPackagesMatchTheLoader`). Before building personad, run `go generate ./internal/runtimepkg`, which packs these files from `integrations/` and embeds them in the binary
+  (gzipped, a directory several packages share stored once; a package is unpacked the first time node needs it)
   (the Dockerfile, `deploy.sh` and `publish.sh` all run it), so node always carries the plugin from the same build as itself. A build that skipped generation carries no package and offers nothing.
 - **Flow**: hello carries `package: {name, hash}`; when node carries a package with the same name and a different hash, the reply includes `update: {name, hash, version}`.
   The SDK passes it to `onUpdate`; the loader fetches the files with `runtime.package`, checks paths, sizes and hashes, and writes them to `<store>/<hash>/` (written alongside and then renamed, so there's never a half-written version).
@@ -270,7 +271,37 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
+
+### Antigravity CLI
+
+The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
+start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
+socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
+serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
+with ACP support; `--agy-bin`, `--agy-dir` and `--socket` override the executable, CLI data directory and node socket.
+Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
+five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
+(`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
+default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
+settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
+their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+
+Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
+the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.
+`auto` keeps native safe-operation approval, while Persona's explicit full bypass answers permission requests automatically.
+External session models stay unspecified until native metadata is available. Session discovery does not resume them.
+
+Availability checks use optional `check({launcher, cwd, prompt})` (`caps.check`) through the companion's authenticated
+ACP client. They run the existing one-word probe, cancel tool permission requests, and close their temporary session
+on success, failure or timeout. Completed probe workspaces stay out of the user inventory after companion restarts.
+The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
+node's shell check. Shell and managed launchers keep their own execution context.
+
+Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
+
+### Shared runtime behavior
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".
