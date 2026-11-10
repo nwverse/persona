@@ -2,6 +2,7 @@
 """Run the Android release pipeline for new commits on the configured main branch."""
 import argparse
 import fcntl
+import gzip
 import hashlib
 import json
 import os
@@ -37,6 +38,17 @@ def digest(path):
         for chunk in iter(lambda: stream.read(64 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def gzip_file(source, destination):
+    """Write source gzipped to destination, flushed before it takes the name."""
+    temporary = destination.with_name(destination.name + ".tmp")
+    with source.open("rb") as plain, temporary.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", compresslevel=6, fileobj=raw, mtime=0) as packed:
+            shutil.copyfileobj(plain, packed, 1024 * 1024)
+        raw.flush()
+        os.fsync(raw.fileno())
+    temporary.replace(destination)
 
 
 def version_code(checkout, sha, base=VERSION_BASE):
@@ -99,19 +111,29 @@ def build(config, checkout, sha, directory):
     run(["python3", "-m", "unittest", "discover", "-s", "scripts/test",
          "-p", "test_persona_script_identity.py"], checkout, env=env)
     run(["python3", "scripts/privacy_check.py"], checkout, env=env)
+    outputs = checkout / "android/app/build/outputs"
+    # The checks and the copy below read these: an APK or R8 output an earlier build left must never pass for this one.
+    for stale in (outputs / "apk/release", outputs / "mapping/release"):
+        if stale.exists():
+            shutil.rmtree(stale)
     run(["./gradlew", "--no-daemon", "--console=plain",
          "-PpersonaApplicationId=" + config["application_id"],
          f"-PpersonaVersionCode={code}", "-PpersonaVersionName=" + name,
          ":core:hub:test", ":feature:settings:testDebugUnitTest",
          ":feature:agents:testDebugUnitTest", ":platform:notify:testDebugUnitTest",
          ":app:assembleRelease"], checkout / "android", env=env)
-    outputs = checkout / "android/app/build/outputs"
     apk = outputs / "apk/release/app-release-unsigned.apk"
     # R8 keeps only what code references; stop before signing when it dropped something reached by name.
     run(["python3", "scripts/release/check_android_shrink.py", str(apk), str(outputs / "mapping/release")],
         checkout, env=env)
     shutil.copyfile(apk, unsigned)
-    result = dict(repository=config["repository"], source_sha=sha, unsigned_sha256=digest(unsigned),
+    unsigned_sha256 = digest(unsigned)
+    # Frames of optimized code need R8's mapping to read (docs/android/android.md "Release shrinking"); it is about
+    # 200 MB, gzip makes it about 12 MB. Named by the APK it belongs to, and kept beside it.
+    mapping = outputs / "mapping/release/mapping.txt"
+    if mapping.exists():
+        gzip_file(mapping, directory / f"mapping-{unsigned_sha256}.txt.gz")
+    result = dict(repository=config["repository"], source_sha=sha, unsigned_sha256=unsigned_sha256,
                   package=config["application_id"], version_code=code, version_name=name)
     atomic_json(receipt, result)
     return result

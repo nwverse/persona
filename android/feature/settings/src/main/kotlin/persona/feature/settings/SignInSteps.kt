@@ -18,7 +18,7 @@ import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 
 /**
- * How a connector's sign-in step or a channel's binding step is drawn (docs/extensions/connectors.md "Sign-in", #4488): fields to fill
+ * How a connector's sign-in step or a channel's binding step is drawn (docs/extensions/connectors.md "Login supports", #4488): fields to fill
  * in, a QR code, the link a QR code encodes when its modules did not come, a code to enter or send; or one it cannot
  * draw: a kind it does not know ([Unknown], a newer hub's) or a known one without what it shows ([Incomplete]: a QR code
  * with neither, a code step with neither the code nor a page to open, a form with no fields). Those two say so with

@@ -1,6 +1,6 @@
 # Lessons: Claude Code, Codex, and herdr
 
-Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md` ("Lessons"), index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
+Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
 - Task placement must preserve locality (#1175): a failed launcher check is not permission to move an explicitly targeted task to another computer with the original absolute directory. Persist fixed placement by default through preview, card edits and retries; require an explicit flexible policy for portable work. Returning from background dispatch only proves the work was queued, not that a native Agent received its first prompt.
 
@@ -41,7 +41,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 - Persona-managed launchers pass keys through `ANTHROPIC_API_KEY`. Interactive claude first seeing that key prompts "Detected a custom API key … Do you want to use this API key?",
   with No selected by default (measured 2026-11-03 on 2.1.309). Selecting No puts the key in `customApiKeyResponses.rejected`, and every session from that launcher reports not logged in. `-p` doesn't ask,
   so the launcher "Check" passes but creating a session from the phone blocks. `ANTHROPIC_AUTH_TOKEN` (sends `Authorization: Bearer`) and `apiKeyHelper` don't ask, but the official API doesn't accept the former,
-  and the latter needs another `--settings` (only the last is used, above). `personad launch` now records the key as allowed before startup (`docs/integrations/launchers.md` ("How Persona-managed launchers run")).
+  and the latter needs another `--settings` (only the last is used, above). `personad launch` now records the key as allowed before startup (`docs/integrations/launchers.md` ("Running Persona-managed launchers")).
   Acquire Claude's own config lock before writing (the `<config path>.lock` directory, stale after 10 seconds), or concurrent writes by a running claude lose one side's changes.
   Claude Code 2.1.317 includes a `storageV5` config backend (off by default); once it becomes default, global config may stop reading `.claude.json`. Recheck this behavior when upgrading Claude Code.
 - If a launcher connected to a relay gateway returns 401, don't suspect the header first: the relay used here accepted both `Authorization: Bearer` and `x-api-key` from its first version (check its authentication middleware).
@@ -51,7 +51,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   Claude Code fills variables **absent** from the environment from settings `env`, so it sends both `Authorization: Bearer <that token>` and `x-api-key`, and the relay returns 401
   `invalid or missing API key` (2026-11-04, once misdiagnosed as "the gateway only accepts Bearer"). Existing environment variables, even empty ones, aren't overwritten by settings. `personad launch` now sets the other variable empty.
   Reproduce with a fake gateway logging headers, a `settings.json` with `env` under `CLAUDE_CONFIG_DIR=<temporary directory>`, and `claude -p`.
-- User-started claude (launchers, profile directories) lacks Persona hooks; AskUserQuestion can only be answered through screen-reading cards. These must recognize 2.1.316 multiple selection: `[ ]` / `[✔]` are state, not text. Digits toggle but don't submit; move to Submit, press enter, then press 1 on the confirmation page. A digit on the free-answer row types text; a digit on Submit does nothing. Sending several keys together loses some; send one at a time (`docs/integrations/claude-integration.md` ("Screen cards for multi-select questions")).
+- User-started claude (launchers, profile directories) lacks Persona hooks; AskUserQuestion can only be answered through screen-reading cards. These must recognize 2.1.316 multiple selection: `[ ]` / `[✔]` are state, not text. Digits toggle but don't submit; move to Submit, press enter, then press 1 on the confirmation page. A digit on the free-answer row types text; a digit on Submit does nothing. Sending several keys together loses some; send one at a time (`docs/integrations/claude-integration.md` ("Screen cards for multiselect questions")).
 - With preview-bearing AskUserQuestion options, digits only move the cursor; enter is needed to select. A digit-only screen card appears answered but has no effect. After keys, check the screen to confirm the question actually advanced (`docs/integrations/claude-integration.md` ("Questions with previews")).
 - When a screen card is withdrawn because the Agent is no longer blocked, also mark it ended (cancelled) in the database, or history stays pending until hub restarts.
 - Screen dialog recognition must first anchor the dialog's starting row (`screen.dialogTop`: the final separator below the conversation, or the row after a selection panel's `▔` edge), then find numbers below it. Searching the whole screen mistakes the Agent's "1. … 2. …" answer for options—
@@ -138,7 +138,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 - Codex image generation (`scripts/assets/make_persona.py generate`): `codex exec`'s built-in `image_gen` can create transparent PNGs using Codex's own ChatGPT login,
   but its HTTP client doesn't accept `socks5h://` proxies (chat requests do); use an HTTP CONNECT proxy. `-i` takes multiple values, prompts come from stdin; ChatGPT login supports only some models.
   If generation hangs (over ten minutes per image, all parallel work stopped), measure proxy tunnel throughput before blaming rate limits: on 2026-10-31 the hub machine's outbound bandwidth was only 11 KB/s; opening `ssh -D` on a faster internet machine produced four avatars in 6 minutes (`docs/apple/persona.md`).
-- Orca host (`docs/plans/plan-orca-support.md` ("Orca sources")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
+- Orca host (`docs/plans/plan-orca-support.md` ("Orca source")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
   (the first version did this; fake runtime didn't validate parameters, so all tests passed; `orcarttest` now validates Orca's schema). If Orca can't recognize the foreground Agent, it types the "prompt" straight into
   the shell and presses Enter; `accepted:false` exists only with `requireAgentStatus`. Before sending, verify the Agent is foreground using the process table + `terminal.agentStatus`;
   Orca's `agentPrompt` pastes only for Agents it has seen working; newly started claude receives raw text, and multiline input submits at the first newline. Persona sends bracketed paste itself, then Enter separately;
@@ -203,7 +203,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   alongside `herdr remote-client-bridge` and `peers.json`; terminal tabs live in `doc.get("herdr-app")`. It and terminal `herdr server`
   (`~/.config/herdr/herdr.sock`) can't see each other. If "sessions opened locally through App remote aren't found", check herdr-core `terminal.list` first, not only the classic socket.
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
-  (`docs/integrations/engines.md` ("Side by side"), `docs/plans/plan-orca-support.md` ("Combined engines")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
+  (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
@@ -216,6 +216,16 @@ The pre-effort-change check read only plain text, mistook suggestions for drafts
 A new herdr tab's tty is in canonical mode until zsh's line editor takes it, and macOS limits a canonical line to 1024 bytes (`getconf MAX_CANON /`). herdr 0.9.5 refuses a longer `pane run` up front with `pane_send_failed`. The node types its start about 300 ms after creating the tab, so the shell is rarely at its prompt yet. After #1055 added the `unset` of the assistant's environment (about 460 bytes), every managed-launcher start or resume was over the limit and failed every time. Before that, it only failed when the shell happened to be slow. A retry that seemed to work had a shorter line.
 
 In a herdr pane whose shell sources a file (sh family, fish), a start now writes its whole command to a 0600 `agent-start-*.sh` in the node's directory and types only `. '<file>'`. The shell sources the file, so aliases and functions used as launchers still work, and the file deletes itself first. When the pane refuses the line, the start closes the tab it made and returns `terminal_not_ready` (503, `retryable: true`, `delivered: none`). `TestHerdrStartTypesAShortLine` checks the worst case. Not covered: Orca panes and herdr's restore (`claudeResumeArgv`) still type the full command.
+
+## A startup question eats a typed start's head (2026-11-10, #2570)
+
+oh-my-zsh asks "[oh-my-zsh] Would you like to update? [Y/n]" while `~/.zshrc` loads and reads a single key. A start typed into a new tab a fixed 300 ms after creating it lost its first character to that question: the shell printed `command not found: nset` (for `unset …`) or `permission denied` for the start file (for `. <file>`, with the `.` gone), and the start then waited the full 3 minutes for a claude that was never run. Typed input is not "buffered either way": anything that reads the terminal before the line editor (`read -k 1`, `read -q`, a `[Y/n]` prompt) consumes it.
+
+The node now waits for the new tab's shell to settle before typing (`node/shellsettle.go`): only shells in front of the pane (no `git` or `nvm` an rc file runs) and the screen unchanged for 600 ms, at most 15 s. A question on the last line is never answered for the user: after 20 s the start ends with `shell_waiting` and the tab is kept open for 10 minutes. A typed line the shell still answers for (`rejects` / `rejectedLine` in `node/shellmiss.go`) is typed once more right away instead of waiting out `claudeStartWait`. Avoid fixed sleeps before typing into a fresh shell; read its screen and foreground processes instead.
+
+## A pane's shell may be fish: quote for it too (2026-11-10, #2867)
+
+What the node quotes for a pane is parsed by the user's own shell: the start file runs through `source` in fish, and Orca types `cd -- <cwd>` and the command into the terminal. fish still takes `\'` and `\\` as escapes inside single quotes, so the POSIX quoting of the first message `a\';touch PWNED;#` kept the quotes open in fish and ran `touch`. `shellQuote` (`server/internal/node/node.go`) now puts each backslash outside the quotes (`'\\'`), where the sh family and fish read it alike, as the SSH deploy already did after the same finding (`docs/lessons/server.md`). `TestShellQuoteReadsBackInRealShells` reads such words back in every installed shell, fish included. No quoting makes a control character safe on a typed line (a tab completes and closes the quoted word): a first message gets its controls made inert (`typedArg`, "Text an agent is sent can press keys in its terminal" below), but a directory can't be rewritten, so Orca refuses one whose name holds a control character before it opens a terminal.
 
 ## Allowing one command for an Agent (2026-11-04, #1300)
 
@@ -277,7 +287,7 @@ other engines' panes (Orca) keep their original error.
   nor does another `--settings` in launcher arguments (Persona's later `--settings` replaces it entirely).
   Manually adding `enableArtifact: false` to `launcher-settings/<name>-env-settings.json` seems ineffective: node rewrites that file at every launch, losing the edit before the next Agent starts.
   Both `enableArtifact: false` in `--settings` and environment `CLAUDE_CODE_DISABLE_ARTIFACT=1` worked in tests (interactive claude in tmux, three configs compared);
-  Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("How Persona-managed launchers run")).
+  Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("Running Persona-managed launchers")).
 
 ## "the tab's shell had not run it yet (is the machine busy?)" when the launcher isn't there at all (#1642)
 
@@ -340,7 +350,7 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   so disconnections, timeouts, and missing threads appeared "changed" on the phone, and later `turn/start` carried the stale selection, potentially changing thread settings unexpectedly after reconnect (PR review).
   Bind remembered selections to that connection and thread; invalidate on change.
 - Test method: start stdio `codex app-server` in a temporary `CODEX_HOME`; `thread/start` needs no login and calls no model, so it can test settings APIs. Don't touch live `~/.codex`.
-  See `docs/integrations/codex.md` ("Effort").
+  See `docs/integrations/codex.md` ("Thinking effort").
 
 ## Interrupt (Esc) doesn't trigger Stop; pid files include procStart (2026-11-04)
 
@@ -356,7 +366,7 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 
 - Before installing hooks in the user's **global** `~/.claude/settings.json`, inspect existing hooks (locally: moshi-hook, Orca synchronous `PermissionRequest`). Hooks for an event compose;
   several blocking hooks run one after another, and terminal dialogs wait until all return. Persona's permission / question hook waits for the phone (`timeout` 86400); installed globally, it prevents the person at the computer from answering in the terminal too.
-  Global hooks must therefore be asynchronous, short-timeout, reporting-only (`hub.json machines[].claude_global_hooks`, `docs/integrations/claude-integration.md` ("Global reporting-only hooks")); blocking hooks remain in the `--plugin-dir` plugin and affect only Persona-started sessions.
+  Global hooks must therefore be asynchronous, short-timeout, reporting-only (`hub.json machines[].claude_global_hooks`, `docs/integrations/claude-integration.md` ("Global report-only hooks")); blocking hooks remain in the `--plugin-dir` plugin and affect only Persona-started sessions.
 - `CLAUDE_CODE_PLUGIN_DIRS` exists (absolute-path list, PATH separator), but is one variable. Another tool (moshi) already occupies its `settings.json` `env` value; using it for Persona would mean changing someone else's value.
 - Global entries must be recognizable: commands end with `hook --persona-global`, and install / uninstall touches only such entries; don't use generic words like `hook --global` that other tools may also use.
 - These global hooks must not bind panes by environment `HERDR_PANE_ID` either: claude started by a tmux server (botmux) inherits it without being in that pane.
@@ -372,6 +382,10 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 - `pollAgents` rebuilds the whole list every second, so a lookup made once per row is made once per row per second. With 199 Codex rollouts on disk, `codexSessions` resolved each rollout's directory through `realPath` (an `lstat` per path part, a `readlink` per link), stat'ed the rollout up to three times, resolved the Codex home per rollout and rebuilt the assistant's project name with a regexp: about 19 stats per rollout per pass, 5,600 `newfstatat` and 380 `readlinkat` a second from an idle node, half its CPU. A pass-local memo (`codexListPass`) that keeps each directory's resolved path, each rollout's stat, the App socket check per home and the project name for that one call brought it to about 1,000 `newfstatat` and 13 `readlinkat` a second, with the rows unchanged. Keep such a memo local to the call: nothing is shared between callers, and nothing can go stale for longer than one pass. Count with `strace -c -f -p <node pid>` over a steady window against a copy of a real corpus (symlinks to `~/.claude/projects` and `~/.codex/sessions` in a scratch HOME), not on a fixture with a handful of files.
 - A walk of a Go map before a stable sort leaks the map's random order into the result wherever the sort key ties. Live panes with no transcript yet all have a zero `UpdatedAt`, the list key is order-sensitive, and every reshuffle sent the whole list to the hub (67 times a minute with eight such agents). Walk the map in sorted key order when the result is compared or published.
 - On a node's first list, `scanBackground` reads each listed transcript whole and tested each line against 28 markers one by one; that was over half of a reconnect's CPU on a real corpus. One Aho-Corasick pass (`bgmatch.go`) is about four times faster on real lines. It is built on the first scan, never at package init ("Package-level work" above). A new marker still goes into `bgMarkers` or transcript's marker slices; the matcher is built from them.
+
+## A resident node's reconnect read every transcript again (2026-11-10, #2864)
+
+- `personad node --attach` makes a new `Node` for each hub connection. The assistant keeper, the spool and the runtime socket already belonged to the resident process, but the background-task scans (`bgScans`) did not, so every reconnect read each listed transcript whole again: on a real corpus of about 270 MB that was half of the reconnect's CPU and over half a gigabyte read, and the first list after it had no background or plan state for the big transcripts until those reads were done. `Attach` now carries the scans to the next connection's `Node` (`carry.go`): adopted before `Serve`, handed over after it returns, never shared by two Nodes. Something kept across connections must be checked on its first use, not trusted: a transcript can be deleted, replaced (another inode at the same path) or rewritten in place while no connection runs. A carried scan goes on only if the path is still the same file (`os.SameFile`), not shorter than what it read, and its first bytes hash the same; anything else starts it over. A new connection has no quick metas yet, so pruning has to look at scans without one too.
 
 ## MessageDisplay holds the terminal; measuring it in an isolated claude (2026-11-07, #1309, 2.1.319)
 
@@ -419,7 +433,7 @@ Recorded screens: `server/internal/screen/testdata/claude-2.1.318-rewind-*`; par
   The explanation below (`The code will be restored +1 -1 in notes.txt.` / `The code will be unchanged.`) follows the cursor. 2.1.304 wording differs (`The conversation will be forked`); recognize only by title and option names.
 - Esc: confirmation → list (cursor retained) → closed; Enter on `(current)` also closes silently. After confirmation, the panel closes immediately, the input box contains that message (including multiline), and files are restored as selected.
 - **Chat history isn't deleted**: the file is a tree; the next message after rewind has `parentUuid` equal to the uuid before the target, and abandoned turns remain. node transcript reading removes them using "two user-authored messages under the same parent abandon the earlier message's whole subtree"
-  (`transcript/branch.go`, `docs/protocol/protocol.md` ("Rewind to a message")). **Don't walk parentUuid backward from the final line**: parallel tool results and attachments are legitimate branches (7681 in a real corpus of 122 files); a compaction `compact_boundary`
+  (`transcript/branch.go`, `docs/protocol/protocol.md` ("Rewinding to a message")). **Don't walk parentUuid backward from the final line**: parallel tool results and attachments are legitimate branches (7681 in a real corpus of 122 files); a compaction `compact_boundary`
   has null `parentUuid`, so walking a chain loses the entire pre-compaction chat. Real corpus (122 local jsonl files, comparing only counts / ids): 3 had such user-message branches; old → new reading removed only abandoned items, every other file matched item-for-item,
   and windowed and full reading agree (`TestCorpusWindowed`). Rewind writes no new lines, so node marks its own rewind directly (`File.Rewound`); this isn't persisted, and after node restart it becomes detectable again only with the next message.
   In windowed reads (only the last 8 MB of large files), if the earlier branch begins before the window, its in-window lines are removed only when paging back to that section; removal changes the token and clients refetch.
@@ -519,7 +533,7 @@ Don't assume "hook disconnected = Agent no longer waiting": while waiting, node 
 
 ## Closing a question is a runtime operation (#5700)
 
-`dismiss` hands a question back to the computer and leaves its runtime waiting. A close-without-answer action needs a separate resolution and an explicit runtime capability; sending Escape to a terminal is unsafe because it can fold a question pane or interrupt the turn. See `docs/protocol/protocol.md` ("Question cancellation").
+`dismiss` hands a question back to the computer and leaves its runtime waiting. A close-without-answer action needs a separate resolution and an explicit runtime capability; sending Escape to a terminal is unsafe because it can fold a question pane or interrupt the turn. See `docs/protocol/protocol.md` ("Closing a question without an answer").
 
 Claiming a resolution and persisting it are separate operations. A timeout or disconnected waiter must not write an earlier terminal outcome while the claimed resolution is still being persisted: the database keeps the first outcome, so a reconnect would otherwise lose the cancellation. Arbitrate under the claim lock and broadcast the committed result to overlapping resumable waiters.
 
@@ -610,10 +624,12 @@ Closing is not durable merely because the card vanished: persist the interaction
 
 ## Text an agent is sent can press keys in its terminal
 
-- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename,
-  a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed later, in a prompt. Control
-  characters in that text are keys to the terminal, and the program in it acts on them as on the user's own, which can
-  change what the agent may do.
+- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename's
+  title (`/rename`, a prompt), a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed
+  later, in a prompt. Control characters in that text are keys to the terminal, and the program in it acts on them as
+  on the user's own, which can change what the agent may do. A rename's tab name is not typed: it goes to the host as
+  the tab's label (herdr, Orca, Herdr App), which the node does not make inert; herdr's renderer drops control
+  characters when it draws one.
 - So the hub refuses terminal control characters (Unicode `Cc` but newline, carriage return and tab) from callers whose
   grant is narrower than the user's, extension tokens, on the routes that type a caller's text into a terminal or keep
   it for a prompt (`server/internal/hub/terminal_controls.go`). Check kept text as it comes in, while the caller is
@@ -624,6 +640,19 @@ Closing is not durable merely because the card vanished: persist the interaction
   a struct's field names without regard to case, so a check of `p["text"]` misses a body that spells it `"Text"`, and
   a handler that decodes only the first value of a body leaves the rest to whatever reads it next. Check the decoded
   path and query too: a route can keep text from them (a knowledge-base entry is named from its id).
+- The hub's refusal covers only extension tokens; channel messages and the apps reach a prompt without one. So the
+  computer also makes those characters inert in every text it prompts an agent with (`inertControls`,
+  `server/internal/node/hosts.go`): an ESC becomes `<ESC>` and any other becomes `<U+XXXX>`, for every host and
+  caller. That covers each paste (`hostPrompt`, the fallback paste, Codex answers) and a compatible CLI's first
+  message, which is shell-quoted onto a command line that may be typed into a shell: there `^U` erases the line,
+  quotes or not, and a carriage return then runs what follows. A shell's line editor acts on more than controls
+  inside quotes: a tab completes the quoted word, closes the quote and leaves the rest to the shell (bash, zsh), and
+  csh ends the command at a line break. So that first message also gets its tabs as spaces, and its line breaks as
+  spaces unless a sh-family shell sources it from a start file (`typedArg`, `server/internal/node/start_agent.go`):
+  Orca types the line itself and does not say which shell it opened, so the user's login shell is only a guess there.
+  Match what the agent shows or its transcript records against that inert text, not the text as sent; a runtime is
+  sent the text itself, so the echo tie accepts either.
+  Keys sent as keys (`session.keys`) are the one way left to press a control key, on purpose.
 
 ## Profile acceptance must include launcher defaults
 
@@ -665,3 +694,17 @@ A purpose-level model override does not change the managed launcher's default. L
 ## A Codex assistant conversation needs its own "process gone" row (2026-11-09, #2126)
 
 `scanOffline` reads only Claude's projects and `codexSessions` leaves the assistant's conversations out of Agents, so a Codex main conversation had no row once its idle process was reaped. A client with no row can't send, so the composer turned off and the message that would resume it could not go. `codexAssistantsAtRest` in `server/internal/node/sessions_offline.go` lists them now.
+
+## A Claude Code hint can depend on the terminal, not only the version (2026-11-09, #2467, 2.1.311)
+
+The node knew one send-now hint, `ctrl+x ctrl+s to send now` (measured on 2.1.319), and told the user to update Claude Code when it
+didn't see it. 2.1.311 binds `ctrl+x ctrl+s` and `ctrl+enter` both to `chat:sendNow`, but its hint names `ctrl+enter` only where the
+terminal reports extended keys and `$TMUX` / `$STY` are unset (a herdr pane), and `ctrl+x ctrl+s` otherwise. The same binary shows
+either one.
+
+- Capture a hint in the engine the node drives (a herdr pane, not tmux or a plain terminal) before writing the string into code; a
+  version number alone doesn't pin the text. The bundled code that chooses among a key's bindings shows which ones it may name.
+- Press the keys the screen names. When the node doesn't recognize a hint, it reports exactly that (`send_now_unrecognized`) and
+  presses nothing. Saying "update Claude Code" sent the user after a fix that didn't exist.
+- To check that a key really arrives, run a control: a plain Enter on the empty prompt left the queue as it was, while `ctrl+enter`
+  (herdr's key name, or the CSI u bytes `ESC [13;5u`) sent it. Confirm in the transcript (`queue-operation remove`), not only on screen.

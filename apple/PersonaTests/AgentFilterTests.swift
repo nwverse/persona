@@ -183,7 +183,7 @@ import Testing
     }
 
     /// Views about one session (its chat, its top bar) show neither the ticks nor its last line: a new last line is
-    /// no change for them; what they show is (docs/apple/ios-state.md「第 3 步」).
+    /// no change for them; what they show is (docs/apple/ios-state.md「Step 3」).
     @Test func aNewLastLineIsNoChangeForItsPage() {
         let a = session("a", state: "working", updated: 600)
         var b = a
@@ -204,7 +204,7 @@ import Testing
     }
 
     /// Time changes the list only through the order it puts agents in (rows, and spaces by their agents): a minute
-    /// passing is no change, an agent moving ahead of another is (docs/apple/ios-state.md「第 3 步」).
+    /// passing is no change, an agent moving ahead of another is (docs/apple/ios-state.md「Step 3」).
     @Test func timeIsStructureOnlyThroughTheOrder() {
         let a = session("a", state: "unread", updated: 600), b = session("b", state: "unread", updated: 500)
         var a2 = a

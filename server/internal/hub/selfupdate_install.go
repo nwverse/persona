@@ -181,7 +181,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		return
 	}
 	if u.handover != nil {
-		// Blue-green (docs/operations/hub-restart.md "Blue-green switch"): the edge starts the new binary next to this one and hands over
+		// Blue-green (docs/operations/hub-restart.md "Blue-green switching: the hub's edge"): the edge starts the new binary next to this one and hands over
 		// only once it checked itself; this process goes on serving until then, and stops when the edge releases it.
 		// The edge is the watchdog too (it goes back when the new one does not confirm the update in time).
 		u.set("restarting", "", "")

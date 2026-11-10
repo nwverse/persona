@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A message's card from a messaging source (#2138): the extension turned the vendor's card into a declarative View
-/// (`docs/extensions/extension-messaging.md`「五」, `view.schema.json`), drawn here in the chat's card frame: text, rows, numbers,
+/// (`docs/extensions/extension-messaging.md`「Conversations and messages」, `view.schema.json`), drawn here in the chat's card frame: text, rows, numbers,
 /// links, and buttons that go back to the extension (`POST messages/{id}/actions/{action}`). What a card cannot do in a
 /// chat (fields to fill, charts) is left out; the card's `text` is the fallback when nothing is left.
 struct MessagingViewCard: View {
@@ -13,6 +13,7 @@ struct MessagingViewCard: View {
     @Environment(\.larkContext) private var context
     @Environment(\.larkAccount) private var larkAccount
     @Environment(\.larkManager) private var larkManager
+    @Environment(\.larkGroup) private var larkGroup
     @Environment(\.larkRefresh) private var refresh
     @Environment(\.openURL) private var openURL
     @Environment(AppModel.self) private var model
@@ -91,7 +92,7 @@ struct MessagingViewCard: View {
     /// A button: the extension does what it does; a word comes back as a toast, then the chat reads again.
     private func press(_ action: String) {
         // The chat's account: a button of another account's card goes to that account.
-        guard running == nil, let message = context.messageID, let api = model.api?.manager(larkManager).lark(larkAccount), let source = api.messagingSource else { return }
+        guard running == nil, let message = context.messageID, let api = model.larkAPI(group: larkGroup, manager: larkManager, account: larkAccount), let source = api.messagingSource else { return }
         running = action
         Task {
             defer { running = nil }

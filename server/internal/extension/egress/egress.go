@@ -91,7 +91,7 @@ type Proxy struct {
 	// Upstream is the proxy the hub itself goes out through for u (nil, nil: straight). Default: the hub's
 	// environment (HTTPS_PROXY / HTTP_PROXY / NO_PROXY).
 	Upstream func(u *url.URL) (*url.URL, error)
-	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Observability").
+	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Egress").
 	OnDecision func(ext, host string, allowed bool)
 	// LocalAddrs are this machine's addresses (nil: its interfaces); tests replace it.
 	LocalAddrs func() []net.IP

@@ -2,7 +2,7 @@ import MarkdownUI
 import PersonaKit
 import SwiftUI
 
-/// A Jupyter notebook in the file viewer (docs/apple/ios.md「Jupyter 笔记本」): Markdown cells in the chat's Markdown look,
+/// A Jupyter notebook in the file viewer (docs/apple/ios.md「File viewer」): Markdown cells in the chat's Markdown look,
 /// code cells as code in the notebook's language with their run number, and under each what it printed: streams,
 /// results, images, errors with their traceback. An HTML result shows its text version.
 struct NotebookFileView: View {

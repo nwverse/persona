@@ -1,6 +1,6 @@
 # Android App
 
-`android/`: the Android client, in Kotlin + Jetpack Compose. It connects to the same hub with the same API as iOS (`docs/protocol/protocol.md`); the server needs no changes.
+`android/`: the Android client, in Kotlin + Jetpack Compose. It connects to the same hub with the same API as iOS (`docs/protocol/protocol.md`); shared additive fields, such as task-row identity, are available to every client.
 minSdk 30 (Android 11), compileSdk 37, targetSdk 37. The UI comes in three languages, 简体中文, English and 日本語. It follows the system by default and can be chosen in Settings; see "Internationalization".
 
 In one sentence: on an Android phone, see the Agents in the engine of each of your computers (herdr, Herdr App, Orca or Paseo, one per computer, `docs/integrations/engines.md`), send messages, answer questions / approve plans / grant permissions, and press the options of terminal dialogs,
@@ -45,6 +45,63 @@ chat-rendering preferences are independent of home navigation and remain availab
 
 Apple PR #1696 removed the old root-navigation switch; PR #2539 separately removed conversation-presentation settings.
 The latter is not a home-layout toggle and is not a reason to remove Android's Inbox rendering preference.
+
+### Simplified Assistant conversation and action trays (#2878)
+
+The existing **Assistant / Agents** home tabs do not change. Above the Assistant composer, the old All/task/Agent chip
+strip becomes three single-line actions, ordered **Pending**, **Progress**, **Agents**. Tapping opens a bounded, scrollable
+tray upward and flips its arrow; opening another closes the first. The bar is absent on the Agents page.
+
+- **Pending:** orange dot/count; one row per decision, with Approve or Review and an Approve all header. Bulk approval
+  takes only explicitly approvable permissions/plans, respects the session's approval capability and never chooses an
+  answer to a question. Task plans awaiting Start and task acceptance decisions use their existing review/detail flows.
+  Draft replies have a separate **Sent on your behalf · Only after you tap** group, with individual Send actions. An empty
+  Pending action becomes gray; data-read failures must not be represented as an empty successful read.
+- **Progress:** blue dot and neutral count. Each task has **one row only**, from its planned slot through execution and
+  acceptance. Title, PR reference, reported steps, blocked orange state and completed check update in that row; tapping
+  opens task details. Scheduled tasks and supervision have a separate quiet group and an inspectable background-record
+  entry rather than new conversation turns. A missing numeric progress total is indeterminate, not a guessed percentage.
+- **Agents:** green dot and neutral count; one session per row, working green / needs-you orange / completed-unread blue,
+  with the computer display name and latest state line. A row opens that session. The old All entry still opens the task
+  board, and task/Agent details plus routing controls remain accessible. The old chips were navigation and task routing,
+  not an Agent-based message filter; this change does not invent a new conversation filter.
+
+Task plan/task/receipt/review/report cards, including historical ones, are no longer rendered in the conversation. A
+small **Dispatched N tasks · See Progress** entry opens Progress instead; the task row there is the only card. Tools and
+intermediate narration remain under a default-collapsed **Checked N places** summary, which can be opened manually.
+Housekeeping notices (compaction, restarts, schedule setup) are hidden while dates remain. Explicit message-source
+metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
+Original events and background records remain inspectable rather than being deleted from history.
+
+#### Shared data contract
+
+The only hub API addition is `task_cards` on the existing `GET /api/v1/assistant/conversations/{id}/feed?since=` response:
+`{id,todo_id?,plan_id?,index?,at,updated_at,state,receipt_id?,report_id?}`. It is an additive **upsert page**, not a removal
+snapshot. Identity is `plan:<plan_id>:<index>` before and after task binding, or `todo:<todo_id>` without a plan; `at` stays
+at creation, not receipt time. A missing/null projection keeps legacy/cached data, and an empty page does not delete rows.
+The full state and compatibility semantics are in [the protocol](../protocol/protocol.md#tasks-and-the-chat-feed).
+
+Everything else reuses current endpoints and pushes:
+
+| Use | Existing data and write path |
+| --- | --- |
+| Delegated tasks and PRs | `GET /api/v1/todos`, `Todo.origin`, `plan_id`, `pr_url`, `agents`, `done_at`, `supervision.state`, and live `todos` updates |
+| Real progress | `Todo.supervision.progress.{kind,step,steps,text,at}`; otherwise the linked `Session.plan.{done,total,current}` and `activity` / `last_text` |
+| Planning | Feed `plans` / `GET /api/v1/task-plans/{id}`; Start / Dismiss use their existing plan routes |
+| Decisions | Current interactions and the existing `/interactions/{id}/resolve`; nontrivial questions/forms keep the existing Review flow |
+| Draft replies | Feed message drafts and Inbox `suggestion.{kind,version,text}`; suggestion confirmation uses `/inbox/{id}/suggestion` with the captured `version`, `action:confirm`, and `client_id`; ordinary feed sends retain the existing message-send path |
+| Quiet schedules | `GET /api/v1/assistant/tasks`, `repeat`, `every_minutes`, `next_run`, `last_run`, `last_status`, `last_error`, `run_machine_id`, `run_session_id`; refreshed by `assistant_schedule` |
+| Agent rows | Existing session and computer snapshots, `state`, pending interactions, activity and completion-unread state |
+
+No new database tables, model calls, approval bypass or draft-send endpoint are introduced. Android now decodes the
+already-served progress/plan, PR and cancellation fields; Apple can use the same hub contract in its independent implementation.
+
+For real-app synthetic captures, start `PORT=<unused loopback port> python3 scripts/mock/assistant_trays.py` and pair a
+task-owned emulator through the existing DEBUG mock address. The fixture has four tasks (working, blocked and accepted),
+a permission, a question and a versioned Inbox reply draft, with only fictional names and messages. Its
+`GET /mock/assistant-trays?clear=1` removes pending decisions/drafts and pushes the new state without changing pairing;
+`?reset=1` restores the fixture. `python3 scripts/mock/test_assistant_trays.py` verifies the stable rows and clear behavior
+without opening sockets. JVM Native-rendered component captures are separate evidence, not emulator or handset captures.
 
 ## Pairing pages (#2481)
 
@@ -135,7 +192,7 @@ Ported 2026-11-02 from the old App on the main line (inventory items C1–C4, D1
 
 Ported 2026-11-02 from the old App on the main line (inventory items C5–C7, C9, D2–D5). The rules match iOS; the logic is in `core:domain`: `sort/SessionSource.kt` (capabilities, origin wording, resume commands), `sort/AgentClose.kt` (close confirmation), `answer/RequestPresentation.kt` ("Always allow").
 
-- Session origin and capabilities (`docs/protocol/protocol.md` ("Codex origin and capabilities")): `Session` carries `source_kind` (`codex_app_server` / `codex_history` / `identity_conflict` / `runtime`), `source_thread_id`, `read_only_reason`, `capabilities` (read / send / interrupt / approve / terminal / attach), `attached`, `agent_label`. Old sessions without `source_kind` can do everything; sessions with an origin only get capabilities that are explicitly true (a missing field means no); `canAttach` = has an origin, `attach` is true, and not yet `attached`. Before session metadata arrives the phone doesn't block anything (the hub / node will still refuse); read-only and capability checks use the metadata that is known.
+- Session origin and capabilities (`docs/protocol/protocol.md` ("Codex sources and capabilities")): `Session` carries `source_kind` (`codex_app_server` / `codex_history` / `identity_conflict` / `runtime`), `source_thread_id`, `read_only_reason`, `capabilities` (read / send / interrupt / approve / terminal / attach), `attached`, `agent_label`. Old sessions without `source_kind` can do everything; sessions with an origin only get capabilities that are explicitly true (a missing field means no); `canAttach` = has an origin, `attach` is true, and not yet `attached`. Before session metadata arrives the phone doesn't block anything (the hub / node will still refuse); read-only and capability checks use the metadata that is known.
   - Chat page: when it can't send, the composer is disabled with the placeholder **This session is view only**, and a line above shows the origin (`JTag`) and the reason (the node's "View only:" prefix isn't doubled); the web card's "Use as context / AI edit" are not accepted either. Without the terminal capability there is no terminal button or entry; without interrupt there's no **Stop** and no **Interrupt** menu item; without approve, the interaction panel still shows the request but no button can be pressed (not even **Leave to computer**), and the note says "Attach live to answer this request on the phone…" (when live attach is possible) or "This session can't be approved on the phone. Approve it on the computer." The top bar subtitle starts with the origin ("Codex live / server / directory").
   - ⋯ menu: **Join live** (`canAttach`, `ChatAction.Attach` → `POST …/attach`; when the result is unclear it checks `attached` in the session list; once attached the node lets it approve). **Rename** and **Close agent** need a terminal; **Copy resume command** is only for sessions with a terminal (Codex uses `codex resume <source_thread_id>`).
   - Agents list: rows with an origin show it in their facts ("Codex live / codex-desk"), plus **View only** when read-only; Agents the App doesn't know show the hub's `agent_label` ("DSH") instead of always calling them Claude. The long-press menu gains **Join live** (`AgentOperations.attachSession`); rename, close and resume command need a terminal, and **Stop loop** needs send. Request cards, request details and `AgentsViewModel.answer` never answer on behalf of sessions that can't approve, and request details offer no **Open terminal** without a terminal. Origin sessions opened from History don't offer **Continue this session**, and the read-only reason is shown.
@@ -291,7 +348,7 @@ Android's take on plan section 4 ("session keys must tell groups apart"), decide
 
 `cacheBudgets = CacheBudgets(...)` in `HubDataStore` sets separate budgets, in bytes, for items, chat images and Inbox files. The defaults are 32 MiB, 128 MiB and 128 MiB respectively; these are an initial policy, **not measured**, and do not represent actual memory use or an assessment of device capacity.
 
-- Items still keep the last two turns, strip the raw bytes of embedded images, and are charged by the UTF-8 byte count of the JSON in the database. A save measures only its own session (one query along the primary key) against per-session byte counts the cache keeps in memory; the scan of every cached session runs when a chat is opened or released, after a failed write, and when a save takes the total over budget. Live items events coalesce per session: while one save waits, later events ride on it, and it reads the chat's latest state when it starts. Over budget, whole sessions are evicted by most recent read/write time, and their cursors are deleted too, so no false continuity record is left behind. A session is protected while a page subscribes to it; when protected data alone exceeds the budget, eviction is postponed and cleanup catches up once the last subscription is released. SQLite pages, indexes and the WAL are not counted against the JSON budget, and the database file may keep reusable free pages; this is not a hard cap on the database file's size.
+- Items still keep the last two turns, strip the raw bytes of embedded images, and are charged by the UTF-8 byte count of the JSON in the database. A save measures only its own session (one query along the primary key) against per-session byte counts the cache keeps in memory; the scan of every cached session runs when a chat is opened or released, after a failed write, and when a save takes the total over budget. A save writes only the difference from the session's stored rows, in the same transaction: rows that are new or whose seq, part or JSON changed, and deletes of ids that left the window (writing the whole window again put every row in the WAL on each streaming update). Live items events coalesce per session: while one save waits, later events ride on it, and it reads the chat's latest state when it starts. Over budget, whole sessions are evicted by most recent read/write time, and their cursors are deleted too, so no false continuity record is left behind. A session is protected while a page subscribes to it; when protected data alone exceeds the budget, eviction is postponed and cleanup catches up once the last subscription is released. SQLite pages, indexes and the WAL are not counted against the JSON budget, and the database file may keep reusable free pages; this is not a hard cap on the database file's size.
 - Chat images are downsampled proportionally to Coil's display size, orientation-corrected, encoded as PNG and written atomically into the pairing scope. The cache key includes the session, image id and target size, so an unsuitable thumbnail is never reused; without an explicit size the current screen size is used. Images are charged by their actual file bytes, reads update the LRU, and all images of a visible session are protected. When a single image or protected files leave no room for a new image, the write is refused and the existing image failure notice reports it.
 - Inbox files are charged by the bytes actually written to disk; hits are reused directly, and over budget the least recently used files are evicted. File descriptors the system viewer opens through FileProvider hold a protecting reference, released on close; when a single file exceeds the budget, or open files fill the budget, the download returns an error. Attachments keep their original content; file downloads are not turned into thumbnails.
 
@@ -314,39 +371,43 @@ The app's crashes and ANRs go to the hub's `error_reports` (format and rules: [p
 
 ## Release shrinking
 
-The release build runs R8 in shrink-only mode (`android/app/build.gradle.kts`, `android/app/proguard-rules.pro`, #2441): it
-removes the classes and members nothing reaches, and with `-dontobfuscate` and `-dontoptimize` it obfuscates, optimizes
-and merges nothing; only lambda bodies' method names change ("Error reports" below). Resource shrinking stays off, and
-debug builds are not shrunk.
+The release build runs R8 with shrinking and optimization but without obfuscation (`android/app/build.gradle.kts`,
+`android/app/proguard-rules.pro`, #2441, #2840): it removes the classes and members nothing reaches, then inlines,
+merges and outlines code; with `-dontobfuscate` the classes and members that are left keep their source names. Resource
+shrinking stays off (below), and debug builds are not shrunk.
 
-- **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it is 32,358,397
-  bytes, 3 dex files and 32,796 classes (-65%). Most of the removed code is library code. The build's
-  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member; by that list, 1,090 of persona's
-  own classes went whole (unused contract models, generated factories, `R` classes).
-- **Error reports** ("Error reports" above): class and source file names are the source's, so frames keep `in_app`
-  for `persona.*`, and breadcrumbs keep route type names. Method names are the source's except in lambda bodies: when a
-  lambda is desugared, its implementation method may be renamed `$r8$lambda$<hash>` (in one build,
-  `PersonaApp.onCreate$lambda$0` became `$r8$lambda$Dco_yZEW5o_ibRoRPfpTRYJvUSI`). D8 already does this in an unshrunk build (5,027 of persona's
-  15,484 lambda methods, 32%); R8 does it to more (7,899 of 15,194, 52%), so a frame inside a Compose callback or a
-  coroutine block more often carries a hashed `function`, which `mapping.txt` maps back. Lines are the source's too,
-  except inside bodies kotlinc inlined from an `inline` function (Compose's `remember` and `Layout`, collection
-  helpers): an unshrunk build already numbers those past the end of the file, and R8 gives them new numbers that its
-  `mapping.txt` resolves to the inlined function and the calling line. In `:feature:settings`, 13,501 methods keep
-  exactly the unshrunk lines, 985 differ only inside such bodies, and 5 lost a line no instruction was left on. The
-  release worker does not keep `mapping.txt` yet, but the release build is reproducible: the same commit and toolchain
-  give a byte-identical APK (six rebuilds of one commit matched). Running `:app:assembleRelease` at the commit in a
-  report's release (`0.1.<versionCode>-<commit>`) regenerates its `mapping.txt`, and `retrace` from the SDK
-  command-line tools applies it.
-  R8 also adds `$$ExternalSyntheticApiModelOutline` / `$$ExternalSyntheticBUOutline` classes (source file
-  `R8$$SyntheticClass`), which put one extra frame between app code and a newer platform API or a backport.
+- **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it was 32,358,397
+  bytes. At 02202d070 the shrunk APK is 33,222,269 bytes, 3 dex files, 33,625 classes and 179,195 method references;
+  optimized it is 19,476,047 bytes (-41%), one dex file, 13,451 classes and 59,922 method references, and an update
+  download, which the hub sends gzipped ([protocol.md](../protocol/protocol.md) "Android packages"), is about 10.3 MB
+  instead of 33.2 MB. Most of the removed code is library code. The build's
+  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member. Optimizing costs build time:
+  `:app:minifyReleaseWithR8 --rerun` took a median 130.7 s instead of 85.7 s (five alternating runs on a shared
+  machine, paired difference +43.8 s).
+- **Error reports** ("Error reports" above): exception types and breadcrumbs keep their source names. Class merging folded
+  exceptions into other classes, `CoreTextException` and four of its subclasses and 25 library ones (a lateinit crash
+  came out as `coil3.network.HttpException`), so `-keepnames class * extends java.lang.Throwable` keeps every
+  Throwable's name, the libraries' too: reports, and messages that fall back to the simple name, print whatever was
+  thrown. R8 keeps the InnerClass annotation that gives a nested exception its simple name only when it keeps the names
+  of both the exception and its outer class (seven persona nested exceptions lost theirs), so the rules also keep those
+  five outer classes' names. Library exceptions nested in a class that is no Throwable (11, such as
+  `FrameworkSQLiteOpenHelper$OpenHelper$CallbackException`) report their simple name as `Outer$Inner`. All 45 route
+  classes keep their names without a rule. Frames are another matter: an
+  inlined method runs inside its caller, a merged class's code under the class it went into, and outlined or desugared
+  code under R8's names (`$r8$lambda$<hash>`, `$$ExternalSyntheticApiModelOutline`, source file `R8$$SyntheticClass`),
+  so a frame's class, method and line can differ from the source. `retrace` from the SDK command-line tools maps them
+  back with the build's `mapping.txt`, which the release worker keeps gzipped next to the unsigned APK it belongs to
+  (`mapping-<unsigned sha256>.txt.gz`, about 12 MB; [release.md](../operations/release.md)).
 - **Reached by name**: R8 keeps what code references, the libraries' own rules (AndroidX, WorkManager, Room, Hilt,
   kotlinx.serialization) and the default `@JavascriptInterface` rule. What the app itself reaches only by name needs a
   rule in `proguard-rules.pro`; today that is `HubFailure.getStatus` / `getCode`, which the tasks store looks up on a
   failed call. `scripts/release/check_android_shrink.py` checks a release APK for manifest components and App Startup
   initializers with their no-argument constructors, workers' `(Context, WorkerParameters)` constructors, Room's
   generated `_Impl` classes, the Markdown bridge's `done` / `fail`, those getters, the InnerClass annotations that give
-  persona exceptions and routes their simple names, and an empty `missing_rules.txt`. The release worker runs it before
-  signing ([release.md](../operations/release.md) "Android publisher repository migration and status retries"):
+  persona exceptions and routes their simple names, an empty `missing_rules.txt`, every class R8's `seeds.txt` lists
+  either in the dex or removed in `usage.txt`, never merged, and every Throwable in the dex among those seeds (the
+  `-keepnames` rule matches them all). The release worker runs it before signing ([release.md](../operations/release.md) "Android publisher
+  repository migration and status retries"):
 
   ```bash
   cd android && ./gradlew :app:assembleRelease
@@ -354,10 +415,18 @@ debug builds are not shrunk.
     app/build/outputs/mapping/release
   ```
 
-- **Rollback**: set `isMinifyEnabled = false` in `android/app/build.gradle.kts` and change the assertion that pins it in
-  `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
-  release worker before it builds, so a merge or an edit that turns shrinking off by mistake stops there instead of
-  publishing a 93 MB APK. After a rollback the rules file is unused, and the check reads only the APK.
+- **Rollback**: `-dontoptimize` in `proguard-rules.pro` goes back to shrinking only (a 33 MB APK; the name rules can
+  stay). `isMinifyEnabled = false` in `android/app/build.gradle.kts` turns R8 off. Either way, change the assertion that
+  pins it in `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
+  release worker before it builds, so a merge or an edit that turns shrinking off or drops a name rule by mistake stops
+  there instead of publishing a 93 MB APK or renamed exceptions. After `isMinifyEnabled = false` the rules file is
+  unused, and the check reads only the APK.
+- **Compose trace markers**: optimized R8 already removes them (no `traceEventStart` call or trace string is left in the
+  dex, against 1,528 trace strings in the shrunk APK), so `includeTraceMarkers = false` in the Compose compiler options
+  saves nothing (the APK size did not change) and is not set.
+- **Resource shrinking**: `isShrinkResources = true` takes 67,422 bytes off the optimized APK but removes 98 of
+  persona's own resources from the table (strings and plurals that no code left after R8 references, such as
+  `chat_composer_placeholder` and `notify_stopped_title`), so it stays off.
 - **Icons**: icons come from `PhIcons` ([android-design.md](android-design.md)); `material-icons-extended`, whose only
   use was a button nothing called, is no longer a dependency. The debug APK went from 123,355,666 to 91,537,359 bytes
   (-31.8 MB, 29 to 28 dex files); R8 had already dropped the library from the release APK.
@@ -438,7 +507,7 @@ Modules are defined by `android/settings.gradle.kts`, and direct in-repository d
 | `:core:data` | Room items / outbox / drafts, DataStore / Tink credentials, scopes, caches and real repositories | `:core:contracts`, `:core:domain`, `:feature:inbox` |
 | `:core:demo` | Local demo data and DemoHub, using sample fixtures in assets | `:core:contracts`, `:core:hub` |
 | `:core:designsystem` | Tokens for three styles (palettes, typography, shapes, motion), component skins (page scaffolds, lists, buttons, decisions, chats, Inbox), shell navigation components, glass (Haze); bundled fonts (OFL) and Phosphor icons | `:core:domain`, `:core:hub` |
-| `:core:domain` | Pure JVM: continuity reducer, chatLines, sorting, Inbox sections, answering policies and pairing parsing | `:core:contracts` |
+| `:core:domain` | Pure JVM: continuity reducer, chatLines (and `ChatLinesMemo`, the same lines keeping the turns before the first change between calls), sorting, Inbox sections, answering policies and pairing parsing | `:core:contracts` |
 | `:core:hub` | Pure JVM: OkHttp HTTP / WS, TLS pinning, routing, heartbeat, pairing and business transports; error reports (see "Error reports") | `:core:contracts` |
 | `:core:navigation` | Navigation 3 route types, Navigator, notification and machine page routes | No in-repository module dependencies |
 | `:core:terminal` | Pure JVM: VT grid, Unicode width, wrapping and terminal input encoding | No in-repository module dependencies |
@@ -656,7 +725,7 @@ With one installed manager (installing ones don't count) none of this draws and 
 - **Offline**: a greyed chip; the composer is off and reads "<name> · last synced …", the empty page says it can't take messages now, nothing is sent or queued; an open conversation is read-only. A conversation opened from elsewhere (a notification, the Agents page) goes by its own manager: when that one is offline its composer is off with "<name> · last synced …" (`managerOfflineNote`), whichever manager the switcher shows.
 - **Messages keep their manager**: the main queue (`AssistantMainConversationResolver`) always asks the default (`?manager=`, empty); a message for another manager goes to that manager's main conversation (`mainConversationOf`, asked of it alone with `?manager=<id>`) and through the outbox to that session, so retries stay there. If it can't be found the send fails and the words stay. **Hand to AI** → Persona, and Summarize / Draft reply on an item's page (`askPersona`), do the same for another manager's inbox item: it goes to that manager's main conversation (`RealInboxRepository`'s `mainConversationOf`), not the default's, naming the item by its id on the hub.
 - **Grouping**: machines page, Settings › Extensions and the inbox (sections inside each group) put items under `JManagerHeader`, by their `manager` stamp (none: the default), default first, empty groups left out. Row keys carry the manager, since the same id can be under two (a built-in extension is listed under every manager).
-- **Item routing**: an inbox item or conversation a list showed as another manager's is noted (`AssistantManagerChoice.noteItem`, keyed by hub and path; only a picked manager's conversations, so a placeholder default is never sent); requests under its path (`inbox/<id>…`, `assistant/conversations/<id>…`) carry its `X-Persona-Manager`. The inbox repository names an item's manager on each request it makes for it (`asItem`: the `RequestManager` coroutine element, which `OkHttpHubConnection.request` and the actions transport turn into `?manager=`; `""` for the default's names none over any note), so a request that goes out later keeps it; with no record known it names nothing and the page's pin decides (a chat's send uses the one item of that chat, if there is one). An answer about one item comes back unstamped and keeps the record's manager and id. Every item of a manager other than the hub's own assistant has the app id `InboxItemKey.of(id, manager)`, whatever the lists' order, so two managers reading one source are two records and a draft or queued reply never moves to the other's copy; rows and local state go by it, requests take the hub's id back (`hubItemId`), and an id from outside the lists (a notification, a link) finds the first record with that hub id (`inboxRecord`). A page that knows its item's manager pins it while it is shown (`AssistantManagerChoice.pin`, released on leave), which wins over the notes: the inbox item, mail, Lark, Moments and connector thread pages pin their record's manager for the detail calls (and `inbox/<hub id>` for the item itself); an extension's page and UI pin the manager from the route (`ExtensionRoute(id, manager)`, `ExtensionUiRoute`, which a page's push and a place's card keep: `ExtensionViewText.pushed` / `opened`), and Settings › Extensions selects a row by (manager, id), since a built-in has the same id under every manager (rows are keyed by manager and id, also before the roster loads). An extension's page shows the connectors it contributes from its own manager's list and pins `connectors/<id>` for their switches.
+- **Item routing**: an inbox item or conversation a list showed as another manager's is noted (`AssistantManagerChoice.noteItem`, keyed by hub and path; only a picked manager's conversations, so a placeholder default is never sent); requests under its path (`inbox/<id>…`, `assistant/conversations/<id>…`) carry its `X-Persona-Manager`. The inbox repository names an item's manager on each request it makes for it (`asItem`: the `RequestManager` coroutine element, which `OkHttpHubConnection.request` and the actions transport turn into `?manager=`; `""` for the default's names none over any note), so a request that goes out later keeps it; with no record known it names nothing and the page's pin decides (a chat's send uses the one item of that chat, if there is one). An answer about one item comes back unstamped and keeps the record's manager and id. Every item of a manager other than the hub's own assistant has the app id `InboxItemKey.of(id, manager)`, whatever the lists' order, so two managers reading one source are two records and a draft or queued reply never moves to the other's copy; rows and local state go by it, requests take the hub's id back (`hubItemId`), and an id from outside the lists (a notification, a link) finds the first record with that hub id (`inboxRecord`). A page that knows its item's manager pins it on its own requests only (`ManagerPins`, a coroutine context element: the page hands its children the repository and APIs wrapped with it, `InboxRepository.pinned`, `ExtensionManagement.pinned`, `MailTransport.pinned`, and the hub client puts it on the request as `?manager=` where the request is made; a call that moves to another scope takes it along, as the app's shared inbox does into the pairing's scope with `awaitAsCaller`), so what the rest of the app asks for meanwhile names nothing by it; an item's `RequestManager` wins over it, and it over the notes: the inbox item, mail, Lark, Moments and connector thread pages pin their record's manager for the detail calls (and `inbox/<hub id>` for the item itself), and a Lark chat opened that way keeps its manager for its later pages, pictures and downloaded files (each manager's cached apart; the default's keep their names), cards, threads and replies; an extension's page and UI pin the manager from the route (`ExtensionRoute(id, manager)`, `ExtensionUiRoute`, which a page's push and a place's card keep: `ExtensionViewText.pushed` / `opened`), and Settings › Extensions selects a row by (manager, id), since a built-in has the same id under every manager (rows are keyed by manager and id, also before the roster loads). An extension's page shows the connectors it contributes from its own manager's list and pins `connectors/<id>` for their switches. An item page an extension draws has its body drawn and worked, buttons and controls included, by the item's manager's extension under the item's hub id (`rememberInboxItemBody`), and opens its links as that manager (`ManagerLinks`; the shell's `ChatLinkHost` is a `ManagerUriHandler`, and a link inside the document or post it opens natively opens as the same manager); a Moments post's pictures from the hub carry `?manager=` (`LarkMoments.imageUrl`; none for the default's). The inbox's conversation rows (`InboxConversations`: the list's prefetched chats, the capsule, read all) read and acknowledge each chat as their row's manager. A chat's composer is one per chat and sends in the pairing's scope, so the chat page and the capsule pass their pins to `ReplyComposer.send(context = …)`: when two managers list the chat, a send goes as the copy it was sent from, and a read of shown messages goes through that copy's window. A chat page also reads where to open (the first unread) from its item's manager's chat list, and a mail page keeps its attachment downloads under its pins (`pinnedForPage`).
 - **Extension pushes keep their manager** (#1834): `extension_auth`, `extension_operation` and `extension_ui` read the top-level `manager` (none: the assistant the hub starts, `pushManager`). A sign-in push changes only its own manager's row in Settings › Extensions and only the page of that manager's copy (`ExtensionModel` gets the route's manager); Settings' nav-page badges (the default manager's `…/-/ui`) and the market's catalog page (the default manager's installs) leave other managers' pushes out, as the web does.
 - **Bulk inbox actions** (mark all seen, clear all, mark several done): split by each item's manager, one request per manager naming it (`bulkByManager`, `?manager=`), the answers merged, as the web does. A manager that fails (offline) leaves the others' done: its items go back and are the result's `failed` (the page says some were put back); only when every manager fails does the action fail.
 - **Settings › Managers › one**: Notifications switch (`ManagerPushModel`, `PUT …/prefs {"muted_managers"}` alone, optimistic). Delete says how many computers go back to the hub's own manager and, in the caution colour, that its sources are deleted with it (`ManagerDeleteDialog`; not while installing). New install code for a never-installed manager that left the roster (`404 no_manager`, 7 days after its code expired) makes it again under the same name. A manager the hub marks `needs_update` has a **Needs update** tag (`Tone.Caution`) in the list and on its page, with a note to update personad where it runs.
@@ -698,7 +767,7 @@ Unit tests: `InboxHandOffTest` in `feature/inbox` (iOS-matching handoff message,
 
 ## Inbox: new items waiting for triage (#1773)
 
-The shared three-client specification (placement, wording, fallback, source naming, setup navigation, mock hub `MOCK_INBOX_TRIAGE`) is in [inbox.md](../assistant/inbox.md), "Triage state" → "Waiting-for-triage banner". Android specifics:
+The shared three-client specification (placement, wording, fallback, source naming, setup navigation, mock hub `MOCK_INBOX_TRIAGE`) is in [inbox.md](../assistant/inbox.md), "AI triage" → "Waiting-for-triage banner". Android specifics:
 
 - **Data**: on every Inbox refresh `RealInboxRepository` reads `triage` into `InboxSnapshot.triage` (`InboxTriage.kt` in `feature/inbox`); old hubs without the field produce null and no banner.
 - **Banner**: a separate list item after the filter/search item (`item("triage")` in `InboxScreen`), using design system `JNotice`, the needs-you state color (amber border in Glass, amber strip in Board, Brief's own notice style), and `Clock` icon (waiting, like web). Copy in `InboxTriageText.banner` matches web `triageBanner` case by case.
@@ -730,13 +799,24 @@ Behavior and API follow the first-phase Inbox specification shared by all four c
 
 ## Inbox: cloud document items (#2323)
 
-Notifications that @mention you or comment on your Lark documents, sheets and bases (`kind: "doc"`, with a `doc` block and no `lark.feed_id`; specification in [inbox.md](../assistant/inbox.md) ("Cloud documents")) previously opened the mail page and showed "Mail failed to load".
+Notifications that @mention you or comment on your Lark documents, sheets and bases (`kind: "doc"`, with a `doc` block and no `lark.feed_id`; specification in [inbox.md](../assistant/inbox.md) ("Docs: mentions in sheets, bases, and documents")) previously opened the mail page and showed "Mail failed to load".
 
 - **Data**: `RealInboxRepository` uses `inboxDocRef` (`InboxDocDetail.kt` in `feature/inbox`) to read `doc` into `InboxRecord.doc`: `url` (fallback `link`), `type`, `notice`, `reply.label`, `error`, `rows` (title, table name, fields, status-column names and values); other fields ignored. Local cache (`CachedInboxRecord`) also stores `source` and `doc`, so opening after cold start still gives a document.
 - **Routing** (`inboxItemPage`): Moments post → Lark chat (has `feed_id`) → mail (`mail` block, `source: "mail"` or `kind: "mail"`, without `doc`) → everything else to `InboxItemDetailRoute`. Connector items and unknown shapes no longer open mail.
 - **Item page** (`InboxItemDetailScreen`): reuses the extension item shell (`InboxItemExtensionScreen`: triage tier, source tag, AI summary, AI draft / handoff, done); body shows "Sheet · a person mentioned you", **Open sheet** (through `LocalLarkLinkOpener` in `LarkLinkHost`: native document reader when the hub has `lark`, otherwise web sheet), where replies go, why the document couldn't be read, and **Rows that mention you** (one card per row: fields + status-column tags). Unknown items show only preview. Status columns are read-only on Android; editing remains web / iOS.
 - **List**: document avatars use document-type icons (`avatarIcon` in `MessageItem`: sheet `SquaresFour`, base `Kanban`, other `FileText`), type tag **@me / Comment**; without summary the second line is "Sheet · a person mentioned you".
 - **Tests**: `InboxItemPagesTest.aDocumentsNoticeOpensItsOwnPageAndOnlyMailOpensTheMailPage` (parsing, routing for document / Lark chat / Moments / mail / kind-only mail / connector / unknown items, cache, selection, tags); screenshots `./gradlew :feature:inbox:testDebugUnitTest --tests '*InboxDocShotsTest*'`, three styles × light / dark, also verifies **Open sheet** reaches the link opener; PNGs in `build/inbox-doc-shots/`.
+
+## Inbox: groups, Done's history and selection (#2576)
+
+The design of #2059 (web and iOS / iPad), with the user's choices there: the hub keeps done items 90 days and pages them (#2200), "Select all" is what is shown, "Jump to" is a menu, and Collapsed groups like the rest.
+
+- **Groups**: Needs you, FYI and Collapsed by source or by time, a switch under the search field (`InboxPreferences.grouping`, kept on this device with the other filters); the managers' grouping stays outermost, In progress stays flat. By source: the agents' cards ("Agents waiting on you", first either way), Lark, each mail account ("Mail · account"), then connectors and extensions by their own name. By time: today, yesterday, each of the 2–6 days before ("Sat, Nov 7"), 7+ days, 1+ month, by the last message. A section with one group shows no group header.
+- **Done**: always by when it was done, "Just now" (the last hour) first. After the list's few days the page asks each manager's history (`GET /api/v1/inbox/done`, `InboxRepository.doneHistory`, a cursor per manager; an old hub's 404 is no history), merged under Done; "Show older" asks the next pages. Its header has **Jump to**: each group with its count (a tap opens it and scrolls there), Collapse all / Expand all.
+- **Folding**: each group folds to its title and count; Done's start folded except Just now and Today; what the user flipped is kept (`InboxPreferences.folds`, "section/key"). Group headers stay pinned at the top while their rows scroll under them (a background only while pinned).
+- **Selection**: a long-press on a row starts it (the Android convention); the bar becomes "N selected · Select all · Mark as done" with ← (or Back) to end it. Each group header gets a tick (none / some / all, `JTriCheckbox`) that picks the whole group, folded or not, and says how many it has picked; a section without groups has the tick on its own header. Agents' cards, done items and ones Persona is working on can't be picked (faded). Mark as done is one `POST /api/v1/inbox/bulk` per manager (`markAll`, with Undo). With one row picked the bar's **⋯** has what its long-press used to: Hand to AI, mutes and rules.
+- **Code**: the rules in `core/domain` (`InboxGroups`: time keys, source order, folds, ticks; `InboxGroupsTest`), the rows' groups and titles and the history in `feature/inbox` (`InboxSections.kt`), the page in `InboxScreen`; `MessageItem` `checked` / `dimmed`, `JSectionHeader` `leading` / `sub`, `JTriCheckbox` / `JCheckMark` in the design system. Checked by `InboxGroupsShotsTest` (mock data: by source, by time, Done with two pages of history and Jump to, a selection marked done; every style, light and dark).
+- **Not yet**: reopening an item of a non-default manager's history that the list no longer has goes to the default manager (the repository finds an item's manager in the list).
 
 ## Inbox, Lark chats and connectors: iOS parity (#3045)
 
@@ -1251,7 +1331,7 @@ Behavior ported 2026-11-02 from old single-module App (batch E: machine, engine,
   - To-do **Hand to Agent › Start a new one** starts from the same memory: the last machine New Agent started on if it is online (else the first online one), with that machine's folder, launcher (following the configuration when that is what it remembers) and mode; a machine with nothing remembered still gets `~`, claude and the default mode. Picking another machine loads its memory.
 - **Devices** (Settings › Devices): revoked credentials separate dim section Revoked at…; unused devices Added at…, explains credentials. Unsupported 404/no database 503 explained directly.
 - Debug `--es debug.openPage machine:<id>`, `engine:<id>`, `purpose:<id>`, `new-agent`, `new-agent:<id>:<directory>`; creation `--es debug.newAgent '<step>'`, applied after load: `launcher:<name>`, `effort:<level>`, `model:<id>`, `models[:<search>]`, comma-separated. Post-pair engine step needs pairing-link page; silent `debug.mockAddress` doesn't show it.
-- **Add model provider** (#1331, `docs/integrations/launchers.md` ("From extension")): model-config top + or provider picker Add model provider…; `NewProviderScreen.kt`, `NewProviderState.kt` `NewProviderModel`: manual name, type Claude Code launcher / Direct API (Messages/Responses), Base URL, non-echoed Key, default model; launchers also small/sub-Agent models/extra args. Extension presets `GET /api/v1/launchers/presets` (legacy 404 empty) add Manual/From extension tabs; extension fills name/key, preset model picker, `POST /api/v1/launchers` name/api_key/preset plus model only if changed. Name validates by hub rules locally; hub refusal shown without losing inputs. Save reloads model config; adding from purpose auto-selects while retaining edits, still Save required. `ProviderSetup` (`core:contracts`), `HttpProviderSetup` (`core:hub`), selected-group DI `MachineManagementModule.providers`. Debug `--es debug.openLink 'persona://open?target=settings&page=modelconfig' --es debug.newProvider manual|preset`; batch shots `settings-modelconfig`, `new-provider-manual`, `new-provider-preset`. Tests `HttpProviderSetupTest` (`core:hub`), `NewProviderStateTest` (`feature:settings`).
+- **Add model provider** (#1331, `docs/integrations/launchers.md` ("Adding from extensions")): model-config top + or provider picker Add model provider…; `NewProviderScreen.kt`, `NewProviderState.kt` `NewProviderModel`: manual name, type Claude Code launcher / Direct API (Messages/Responses), Base URL, non-echoed Key, default model; launchers also small/sub-Agent models/extra args. Extension presets `GET /api/v1/launchers/presets` (legacy 404 empty) add Manual/From extension tabs; extension fills name/key, preset model picker, `POST /api/v1/launchers` name/api_key/preset plus model only if changed. Name validates by hub rules locally; hub refusal shown without losing inputs. Save reloads model config; adding from purpose auto-selects while retaining edits, still Save required. `ProviderSetup` (`core:contracts`), `HttpProviderSetup` (`core:hub`), selected-group DI `MachineManagementModule.providers`. Debug `--es debug.openLink 'persona://open?target=settings&page=modelconfig' --es debug.newProvider manual|preset`; batch shots `settings-modelconfig`, `new-provider-manual`, `new-provider-preset`. Tests `HttpProviderSetupTest` (`core:hub`), `NewProviderStateTest` (`feature:settings`).
 - Mock `MOCK_NODE_MISMATCH=1` (Mac Studio personad differs from hub), `MOCK_DEPLOY_ERROR=<reason>`, `MOCK_ENGINE_ERROR=1` (503), `MOCK_MODEL_CONFLICT=1` (409), `MOCK_START_SECONDS=<seconds>`, `MOCK_START_ERROR=<reason>` after delay, `MOCK_MACHINES=1` offline lab machine brought online by reconnect.
 - Tests `MachineManagementContractTest` (`core:contracts`); `HttpMachineManagementTest`, `HttpModelConfigurationTest`, `AgentCreationModelTest`, `DeviceCredentialsTest` (`core:hub`); `SessionsAdoptTest` (`core:data`); `EnginesTest` (`core:domain`); `MachineActionsTest` (`feature:machines`); `SettingsMachinesTest` (engine/Claude/models), `DeviceCredentialsStateTest` (`feature:settings`); `NewAgentAsyncTest` (first message once, model inheritance, Codex, prefill, `feature:agents`); `RecentSetupsFixtureTest` (every case of `spec/fixtures/recents`), `NewAgentRecentTest` (a card fills every field and never starts, offline cards, a machine's model, recording, the to-do hand-off's defaults), `NewAgentRecentShotsTest` (two starts then a fresh form and a tap; three styles × light / dark of the cards, a tapped card, the long-press menu and the hand-off sheet, `build/recent-setups-shots/`, `feature:agents`); `ChatStartingNoteTest` (`feature:chat`); `GroupRoutingTest.anotherGroupsMachineIsManagedOnItsOwnHub` (`app`, target-group mock).
 
@@ -1392,7 +1472,7 @@ not emulator, physical-device or production deployment evidence. Images go to th
 
 ### Extension model and declarative contributions (#2226)
 
-Specification [extensions.md](../extensions/extensions.md) ("Contribution toggles", "Dependencies, exports and bundles", "Declarative contributions", "Sandbox"). Android UI/HTTP only, no extension program execution or generated `ExtensionWire.kt` edits.
+Specification [extensions.md](../extensions/extensions.md) ("Turning contributions on and off", "Dependencies, exports and bundles", "Declarative contributions", "Sandbox"). Android UI/HTTP only, no extension program execution or generated `ExtensionWire.kt` edits.
 
 - **Contribution toggles**: detail contributions listed individually, disableable via `setContribution` `PUT …/-/contributions/{point}/{id}`, update from detail response; unsaved settings retained, failure preserves state/reason. can_disable false status-only; via connector says controlled in connector settings; manager.json read-only. Legacy absent field uses contributes/Provides list.
 - **Dependencies/bundles**: preview depends/bundle/unresolved, manifest extension_pack. `BundlePreview` confirmation lists dependency status/members/every extension installed-upgraded/permissions/additions/warnings. Disabled/unknown dependencies or missing members block confirmation; flattened bundle evaluates member dependencies as group. Confirm returns all `{preview_id, permissions_digest}` in original order, never installs only main silently. Legacy previews unchanged.
@@ -1511,7 +1591,7 @@ Full-duplex chat with hub voice extension ([extensions.md](../extensions/extensi
 
 - Entry: two public APIs. `voiceEntries(navigator, extensions, identity, onModelConfiguration = null)` registers route (purpose-id callback, Root like monitoring; demo no service/explanation). `rememberVoiceExtension(extensions, active)` when active reads first running voice extension, failures404 treated none, re-pair reload; host decides Voice chat menu. `ShellSession.voice` like metrics rebuilds transport per current route/pinned client/token, pairing change cancels.
 - Permission RECORD_AUDIO first visit, declares MODIFY_AUDIO_SETTINGS. Missing empty state Voice chat needs microphone / Listens only here, leaving ends, no background recording. Denied says No microphone permission / Enable Persona microphone in system settings. Allow microphone asks again if possible, after two denials opens App system settings, rechecks on return.
-- Model: purpose plugin.id via modelChoice and extension /models. Non-unverified status error shows unavailable/reason; missing configured model says choose again; old404 uses extension default or omits model; other read error only Retry, never treated no config ([model-config.md](../assistant/model-config.md) ("Effective boundaries")). Read only start/restart. Host onModelConfiguration(purposeId), `voicePurposeId`, enables menu/error-page Model configuration; absent top-right directly Voice, error page only Retry.
+- Model: purpose plugin.id via modelChoice and extension /models. Non-unverified status error shows unavailable/reason; missing configured model says choose again; old404 uses extension default or omits model; other read error only Retry, never treated no config ([model-config.md](../assistant/model-config.md) ("When changes take effect")). Read only start/restart. Host onModelConfiguration(purposeId), `voicePurposeId`, enables menu/error-page Model configuration; absent top-right directly Voice, error page only Retry.
 - Voice picker lists model voices (Female/Male · Chinese, English · Default), check current, tap closes. Failed list notice, chat uses prior voice. Saved per pairing `hub-data/<pairing>/voice.json`, each extension, deleted unpair; absent voice falls back without deleting preference (other models may restore). Voice/model change restarts chat.
 - Page top extension/model·voice; `VoiceOrb` fast pulse speaking, slow breathing/volume listening, spinner connecting, gray mute/end; Glass glowing orb, Brief ink disk with highlighter speaking ring, Board state square/five levels. `VoiceStatus` Connecting / Listening / Speaking—start talking to interrupt / Muted / tool… / Ended, errors red. `VoiceCaption` user right bubble, Persona body, provisional dim, latest auto-scroll. `VoiceControl` three labeled round Mute/Unmute, Interrupt only speaking, Hang up; ended left Restart. Glass glow blue listening/mint speaking.
 - `VoiceProtocol.kt`: start frame with optional model/voice once connected; ready before recording/playback, sample rates from ready with defaults16000/24000 for missing/invalid. Uplink20 ms PCM16 mono binary, zeros when muted; binary downlink plays immediately. Transcript same-id replace, blank new lines ignored; multiple tools show latest unfinished; clear flushes playback; error shown, fatal ends; Interrupt sends type interrupt and flushes. WS no read timeout,15 sec ping.

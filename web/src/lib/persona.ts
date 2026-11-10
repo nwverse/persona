@@ -171,7 +171,7 @@ export function usablePersonas(list: PersonaInfo[] | null | undefined): PersonaI
 }
 
 /**
- * What the face shows for a Persona conversation (AppModel.personaState, docs/apple/persona.md "State"): "Offline" while the hub or
+ * What the face shows for a Persona conversation (AppModel.personaState, docs/apple/persona.md "States"): "Offline" while the hub or
  * Persona's computer is out of reach, "Needs you" when it waits on you, "Thinking" / "Working" while a turn runs (thinking until it
  * writes or calls a tool), else "Idle".
  */

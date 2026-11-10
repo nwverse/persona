@@ -2,7 +2,7 @@ import AppKit
 import Testing
 @testable import Persona
 
-/// ⏎ and ⇧⏎ in a composer (docs/apple/mac.md「细节」, #785): ⏎ sends, ⇧⏎ starts a new line, an input method's ⏎ confirms
+/// ⏎ and ⇧⏎ in a composer (docs/apple/mac.md「Details」, #785): ⏎ sends, ⇧⏎ starts a new line, an input method's ⏎ confirms
 /// its candidate, and the other ⏎ combinations stay with the field (⌥⏎ a new line) and the send button (⌘⏎).
 struct MacComposerKeysTests {
     private func action(_ modifiers: NSEvent.ModifierFlags = [], key: UInt16 = MacComposerKeys.returnKey,

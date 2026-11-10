@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// The `brief` item of a routine's conversation (docs/protocol/protocol.md "Conversation feed"): the facts of a run with facts on,
+// The `brief` item of a routine's conversation (docs/protocol/protocol.md "Tasks and the chat feed"): the facts of a run with facts on,
 // written when the run is sent whether or not the Lark bot is on, so the apps show the same fixed part as the Lark card.
 
 const feedBrief = "brief" // ref: the routine's task id; body: briefBody

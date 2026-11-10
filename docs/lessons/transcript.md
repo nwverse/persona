@@ -105,7 +105,7 @@ The same window also lost the last words of online sessions (#1583): after the A
 `last_text` became empty, leaving task cards and main-chat snapshots showing "No activity yet" for 7 minutes. `readQuickMetaSince` now reuses the previously read text when the window contains none;
 if there is no previous value (the node has just started), it searches backward in segments (`lastWordsBefore`, up to 8 MB). For any "last X" value found only in the tail, consider that it may already be outside the window.
 - **A Claude Code transcript is a tree** (`uuid` / `parentUuid`): rewinding (`/rewind`) or editing and resending with ↑ writes the next message as a sibling of an earlier one. Rewound turns remain in the file. See
-  `transcript/branch.go` (two messages from the user under the same parent, with an assistant reply to the earlier one → the earlier message's entire subtree produces no items) and `docs/protocol/protocol.md` ("Rewind to a message");
+  `transcript/branch.go` (two messages from the user under the same parent, with an assistant reply to the earlier one → the earlier message's entire subtree produces no items) and `docs/protocol/protocol.md` ("Rewinding to a message");
   **pressing Esc to cancel a message before any reply, then sending again, also writes the same pair of siblings** (#3036; observed: two identical messages under the same "[Request interrupted by user]" line, with no reply to the first).
   This is not a rewind. Older versions treated any "two siblings" as a rewind, added `.r1` to `history`, made all clients discard and refetch local content, and removed the interrupted turn from the chat too.
   To detect a rewind, check whether the earlier message received a reply. Persona's own rewind does not rely on this inference (`File.Rewound` is marked by the node).
@@ -164,3 +164,25 @@ A view that fetches once per id cannot recover when the store puts the same id b
 - Decide placement (assistant, space, health redaction) by where the session started: the node's start record, else the transcript's first `cwd` (`quickMeta.start`), else its own project directory's name (a first prompt bigger than the 256 KB head read hides the first line). Agents keep reporting their latest directory: their git place walks up to `.git`, so a `cd` into a subfolder keeps the repository. Except an assistant or health directory itself: an agent started in the home directory that `cd`s into one is listed where it started, or the hub, going by the exact directory, takes it for one of their conversations at rest.
 - Hiding and confirming may count a directory inside a health space (`identity.InHealthSpace`); classifying must not (`SpaceOf`, `IsAssistantDirOf` stay exact): a pane-less Claude the user runs in a subfolder of the assistant directory is theirs.
 - Reproduce with Stop, not the 20-minute reap: Stop kills `claude -p`, and the conversation is listed from its transcript at once.
+
+## A tool call's outcome is in its record, not in its text (#2912, Claude Code up to 2.1.314)
+
+- Claude Code writes `toolUseResult` next to every tool result, and its shape depends on the tool and on how the call
+  went: a failed call records a string (`"Error: …"`), an MCP call its content blocks, the rest an object that holds the
+  whole output again (`stdout`, a Read's `content`, an Edit's `originalFile`). Decode only the fields you read, through a
+  type that takes any value (`claudeToolResult`): a plain struct field fails the whole line on the first string, and a
+  `json.RawMessage` copies megabytes per line (`TestToolUseResultNotCopied`). The same goes for any new top-level
+  field such as `toolDenialKind`: a value of another type there fails the whole line, so read it through a type that
+  takes any value.
+- Strings an outcome takes from a result's text (the output's tail, a saved output's path) are copies
+  (`strings.Clone`): a slice keeps the whole output alive in every light item a node keeps, a megabyte per result
+  where the page holds 4 KB (`TestLightResultRetainsNoOutput`).
+- The tail starts where the page's text stops (`pageCut`), not at a fixed 4 KB: `light` ends the page at a newline
+  up to 512 bytes earlier, so a fixed start dropped the line across the cut, often the one that says what failed.
+- A denial is marked by the line's top-level `toolDenialKind` (`user-rejected`, `permission-rule` for rules, the
+  permission mode and hooks, `automode-*`; `interrupted` / `cancelled` are aborts, not denials). Lines from older
+  versions only have the words, and a hook's denial says whatever the hook printed.
+- `timedOutAfterMs` came with `backgroundTaskId` every time: the command was moved to the background, not killed.
+  A Write that creates a file records no hunks; its lines are the content's.
+- One machine's transcripts (2026-11-10): 76k records, 4.4k of them strings and 554 arrays, none with a field of an
+  unexpected type; parsing them before and after the change gave the same items in all 2,023 files.
