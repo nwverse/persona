@@ -82,7 +82,10 @@ Read-only tasks using `none` do not claim a workspace.
 
 The saved `PlanTask.workspace_resolved` is a hub-owned object, separate from the policy, so future repository entries can be
 added without overloading `cwd`. Examples below omit the other task fields and unrelated response fields; the paths are illustrative
-engine answers, not a required directory layout:
+engine answers, not a required directory layout.
+
+`task_plan` itself still returns a textual plan/dispatch acknowledgement. The response fragments are saved tasks read from
+`GET /api/v1/task-plans/{id}` or the conversation feed **after dispatch completes**, not confirmation from the initial queued reply:
 
 ```json
 {"workspace":"new","cwd":"/code/app"}
