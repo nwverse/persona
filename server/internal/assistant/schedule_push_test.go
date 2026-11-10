@@ -189,6 +189,26 @@ func TestScheduleOwnKeepsPush(t *testing.T) {
 	}
 }
 
+// A run rescheduling a follow-up that continues a conversation cannot give it its own launcher: those runs keep the
+// conversation's. Refused before the task is touched.
+func TestScheduleOwnRefusesAModelOverrideIntoASourceConversation(t *testing.T) {
+	h := newStorelessService(t, newFakeHub().withMachine())
+	ctx := context.Background()
+	setTasks(h, Task{ID: "fu_own", Title: "新邮件", Prompt: "看看邮箱", Repeat: repeatOnce, At: time.Now().Add(-time.Minute), Enabled: false,
+		MachineID: "server", SessionID: "source-1", LastRun: time.Now().Add(-time.Minute)})
+	sc := h.loadSchedule(ctx)
+	sc.mu.Lock()
+	sc.runs = append(sc.runs, ScheduleRun{RefID: "fu_own", SessionID: "run-1", Status: runOK})
+	sc.mu.Unlock()
+	raw, _ := json.Marshal(map[string]any{"prompt": "看看邮箱", "title": "新邮件", "at": "30m", "launcher": "cheap"})
+	if _, err := h.runTool(ctx, "server", "run-1", "schedule_followup", raw); err == nil {
+		t.Fatal("a launcher override for a run into a source conversation was accepted")
+	}
+	if got, _ := taskByID(h, "fu_own"); got.Enabled {
+		t.Fatalf("the refused call still rescheduled the task: %+v", got)
+	}
+}
+
 // A task that pushes only what its runs send runs in its own conversation (#2396): set from the app, a follow-up
 // that ran in the conversation it came from (the main one) moves to its own; switched back, it stays there.
 func TestQuietTaskRunsInItsOwnConversation(t *testing.T) {
