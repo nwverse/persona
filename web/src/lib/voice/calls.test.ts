@@ -139,10 +139,10 @@ describe("the page's first voice call", () => {
 // The first screen's voice modules that name the call's types take them as types only (an `import type` is erased).
 const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
 const staticImports = (source: string) => [...source.matchAll(/^import(?!\s+type\b)[^;]*from\s+["']([^"']+)["']/gm)].map((m) => m[1]);
-const CALL_ONLY = /(?:^|\/)(?:call-stack|conversation|audio|uplink|resample|capture-pace|cues)$/;
+const CALL_ONLY = /(?:^|\/)(?:call-stack|conversation|audio|uplink|resample|capture-pace|cues|frames)$/;
 
 describe("the first screen's voice modules", () => {
-  it.each(["./calls.ts", "./support.ts", "./notes.ts", "./bar-line.ts", "../../views/chat/voice/VoiceParts.tsx", "../../views/chat/voice/VoiceBar.tsx"])("%s does not bring the call's code in", (file) => {
+  it.each(["./calls.ts", "./support.ts", "./notes.ts", "./bar-line.ts", "./wire.ts", "./availability.ts", "../../views/chat/voice/VoiceParts.tsx", "../../views/chat/voice/VoiceBar.tsx"])("%s does not bring the call's code in", (file) => {
     expect(staticImports(read(file)).filter((s) => CALL_ONLY.test(s))).toEqual([]);
   });
 

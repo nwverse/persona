@@ -10,7 +10,7 @@ import { BrowserVoiceAudio } from "./audio";
 import type { VoiceContexts } from "./audio-contexts";
 import type { VoiceDeps } from "./conversation";
 import { chosenVoice, resolveModel } from "./support";
-import { voiceSocketURL } from "./wire";
+import { voiceSocketURL } from "./frames";
 
 export { endedByUser, VoiceConversation } from "./conversation";
 
