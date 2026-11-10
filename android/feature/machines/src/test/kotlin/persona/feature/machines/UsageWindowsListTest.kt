@@ -44,6 +44,8 @@ class UsageWindowsListTest {
         rule.setContent { PersonaTheme(reduceMotion = true) { LazyColumn { usageWindows(accounts, now) } } }
         rule.onNodeWithText("MacBook · Studio · Relay").assertExists()
         rule.onNodeWithText(rule.activity.getString(R.string.machines_usage_source_local)).assertExists()
+    }
+
     /** A gateway that turned the key away says where to fix it, not that it can't be reached (#1902). */
     @Config(sdk = [35])
     @Test fun aRejectedKeyIsNotCalledUnreachable() {
