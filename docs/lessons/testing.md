@@ -786,7 +786,7 @@ Two more from the same harness:
 `AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.
 
 - A test that only needs the model empty calls `forgetRestoredForTests()` after making it.
-- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). Nothing it writes reaches the app's files.
+- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). That folder must also own the chat cache: deleting a shared cache at test startup cannot stop a previous model's queued save or prefetch from filling it again. Capture the immutable folder before asynchronous work, and use it for reads, writes and removal. The default app keeps its existing cache path and format.
 
 To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
 

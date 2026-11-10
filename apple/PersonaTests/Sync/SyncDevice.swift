@@ -52,7 +52,7 @@ struct SyncView: Equatable, CustomStringConvertible {
 final class SyncDevice {
     let name: String
     let key: SessionKey
-    /// What it keeps on disk (the snapshot, the outbox): a folder of its own, so it starts from nothing whatever the
+    /// What it keeps on disk (the snapshot, the outbox, the chat cache): a folder of its own, so it starts from nothing whatever the
     /// simulator's app saved (#1637), and a relaunch finds what it wrote.
     let folder: URL
     private(set) var model: AppModel

@@ -688,7 +688,7 @@ final class AppModel {
         starterDrafts = [:] // the demo's group is the empty one, as a hub's may be
         if let k = assistantCurrent, demo.contains(k) { assistantCurrent = nil }
         if let k = openChat, demo.contains(k) { openChat = nil }
-        for key in demo { ChatCache.remove(key) }
+        for key in demo { ChatCache.remove(key, in: stateFolder) }
     }
 
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
@@ -1076,7 +1076,7 @@ final class AppModel {
         chatTick += 1
         chatUse[key] = chatTick
         if let c = chats[key] { return c }
-        let c = ChatStore(key: key)
+        let c = ChatStore(key: key, cacheFolder: stateFolder)
         c.onArrived = { [weak self] in self?.saveOutbox() }
         chats[key] = c
         evictChats()
@@ -2804,7 +2804,7 @@ final class AppModel {
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
             StateCache.remove(Self.snapshotName(g), in: stateFolder)
-            ChatCache.removeGroup(g)
+            ChatCache.removeGroup(g, in: stateFolder)
             PinsStore.forget(suffix: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
         }

@@ -119,7 +119,6 @@ final class SyncRun {
         // A new chat's first message starts it from the new-conversation page (AssistantStart, #1349), not through
         // AppModel's send, so there is no chat page to project until it has started.
         if c["chat"]?["new"]?.bool == true { throw SyncUnplayable(description: "a new chat: its start is the new-conversation page's, not AppModel's") }
-        ChatCache.remove(key)
         for n in names { try await start(n) }
         for (i, step) in (c["steps"]?.array ?? []).enumerated() {
             try await run(step)
@@ -148,12 +147,13 @@ final class SyncRun {
 
     /// The device already shows the start: connected, its lists in, the chat open and loaded.
     private func start(_ name: String) async throws {
+        let folder = disks.appending(path: name)
         if let cursor = cachedInitialThrough {
             let lines = hub.lines.filter { ($0["seq"]?.int ?? 0) <= cursor }
             let items = try JSON.decoder.decode([Item].self, from: JSONEncoder().encode(JSONValue.array(lines)))
-            ChatCache.save(key, items: items, hasMore: false, history: hub.history, covered: cursor)
+            ChatCache.save(key, items: items, hasMore: false, history: hub.history, covered: cursor, in: folder)
         }
-        let d = SyncDevice(name: name, key: key, folder: disks.appending(path: name))
+        let d = SyncDevice(name: name, key: key, folder: folder)
         d.model.clock = clock
         if let cursor = cachedInitialThrough {
             // Load the seeded store before background prefetch can advance the on-disk copy.
