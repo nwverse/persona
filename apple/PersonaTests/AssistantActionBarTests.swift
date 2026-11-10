@@ -26,8 +26,26 @@ struct AssistantActionBarTests {
             task("failed", .failed, at: 30),
             task("follow", .followup, at: 20),
         ], own: [], taskAgents: [])
-        #expect(ids(content.progress) == ["task:asks", "task:working-new", "task:working-old", "task:done-new", "task:failed", "task:follow"])
-        #expect(content.count(.progress) == 3, "only the tasks still going on are counted")
+        // a task stopped between rounds (followup) is still open: listed with the open ones and counted
+        #expect(ids(content.progress) == ["task:asks", "task:working-new", "task:working-old", "task:follow", "task:done-new", "task:failed"])
+        #expect(content.count(.progress) == 4, "every open task is counted, not only the running ones")
+    }
+
+    private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: TimeInterval) -> TaskPlan {
+        TaskPlan(id: id, conversation: "c", tasks: (0..<tasks).map { PlanTask(title: "task \($0)", prompt: "p", machine: "box", cwd: "/demo") },
+                 state: state, createdAt: Date(timeIntervalSince1970: at))
+    }
+
+    @Test func plansWaitingForStartHaveTheirOwnEntry() {
+        let content = ActionTrayContent(tasks: [], own: [], taskAgents: [], plans: [
+            plan("later", .open, tasks: 1, at: 20), plan("first", .open, tasks: 2, at: 10), plan("started", .started, tasks: 3, at: 5),
+        ])
+        #expect(content.plans.map(\.id) == ["first", "later"])
+        #expect(content.count(.start) == 3)
+        #expect(content.entries == [.pending, .start, .progress, .agents])
+        // not counted twice
+        #expect(content.count(.pending) == 0)
+        #expect(ActionTrayContent(tasks: [], own: [], taskAgents: [], plans: [plan("gone", .dismissed, tasks: 1, at: 1)]).entries == [.pending, .progress, .agents])
     }
 
     @Test func pendingIsWaitingTasksThenOwnWaitingAgents() {

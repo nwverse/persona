@@ -103,7 +103,9 @@ type Service struct {
 	sched     schedule       // schedule.go
 	tasks     tasksState     // tasks.go
 	questions questions      // tools.go (ask_user)
-	askTodos  askTodoBook    // ask_todo.go: the questions nobody answered, now to-dos
+	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
+	deadlineSweeping atomic.Bool
+	askTodos         askTodoBook // ask_todo.go: the questions nobody answered, now to-dos
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex

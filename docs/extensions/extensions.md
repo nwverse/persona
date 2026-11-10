@@ -245,7 +245,7 @@ and the API returns the ordered `form.fields`). Anything outside the subset can'
 | Type | Allowed keywords | Form |
 | --- | --- | --- |
 | `string` | `title`, `description`, `default`, `enum` (with labels: `oneOf: [{"const", "title"}]`), `format` (`uri` / `email` / `hostname` / `machine` / `launcher`), `x-os` (only with `machine`: a list of `darwin` / `linux` / `windows`), `pattern`, `minLength`, `maxLength` | Text field; with `enum`, a picker; with `format: machine` or `launcher`, a picker of the hub's machines or launchers (below) |
-| `integer`, `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field; the App adds a stepper to an `integer`, held to `minimum` / `maximum` |
+| `integer`, `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field; the iOS and Android apps add a stepper to an `integer`, held to `minimum` / `maximum` |
 | `boolean` | Descriptive keywords | Toggle; with `x-confirm` (one sentence), turning it on first asks that sentence in the same dialog as a machine's toggle (below), titled with the field's title; Cancel leaves it off, Turn On sets it for Save; turning off doesn't ask (web and Android; the App doesn't ask yet) |
 | `array` | `items` must be `string` (may have `enum`), `minItems`, `maxItems`, `uniqueItems` | Editable list; with `enum` in `items`, multi-select; with `format: machine` in `items`, one toggle per machine (below) |
 | `object` | Top level only, containing only the scalars and arrays above; may have its own `required` | A group |
@@ -256,9 +256,9 @@ and the API returns the ordered `form.fields`). Anything outside the subset can'
 - When the list has `x-confirm` (one sentence), turning on a machine's toggle first asks that sentence and only saves once confirmed; turning off doesn't ask. The App and web both show a dialog: title **Turn On “<machine name>”?**, body is the sentence, buttons **Cancel** and **Turn On** (the App uses `alert`, the web uses `Dialog`, #1830).
 - When the form has only these toggles, the form no longer says "…takes effect immediately, no need to save" underneath (the field's own description covers it, and there's nothing to save); if there are other items, it still says which take effect immediately and that the rest need Save. The `cua` extension's **Don't Auto-Lock While On** uses it (#1507).
 - When the hub loads an extension, any of these values written as a machine name or host name (ignoring case, spaces, `-`, `_`, and only when exactly one machine matches) is replaced with that machine's id and saved back (`extension_machines.go`).
-- **One** machine (`{"type": "string", "format": "machine", "x-os": [...]}`, #2385) is a picker on the App's and web's settings page: **Not set** first (the field's default or its empty meaning), then the machines of the systems `x-os` names, by name. It is saved with the rest of the form (Save). A value that names no machine is still shown, marked as not found, so it can be changed.
+- **One** machine (`{"type": "string", "format": "machine", "x-os": [...]}`, #2385) is a picker on the apps' (iOS / Mac, Android: a choice sheet, #2448) and web's settings page: **Not set** first (the field's default or its empty meaning), then the machines of the systems `x-os` names, by name. It is saved with the rest of the form (Save). A value that names no machine is still shown, marked as not found, so it can be changed.
 
-**Launchers (`format: launcher`, #2385)**: the value is the name of one of the hub's launchers (what `POST /api/v1/assistant/conversations` takes as `launcher`). The hub checks only that it is a name (not empty, no surrounding spaces): a launcher lives on computers that may be offline. The App and web draw a picker of the hub's launchers (`GET /api/v1/launchers`, read once while the page is open, since it asks every machine), **Not set** first, hidden launchers left out, a display name that differs shown with the name. Until the list is in, or when it can't be read, the field is a text field. A value that names no launcher is still shown, marked. Android draws both kinds as text fields for now. Only a hub with this format installs a manifest that uses it: declare a matching `engines.persona`.
+**Launchers (`format: launcher`, #2385)**: the value is the name of one of the hub's launchers (what `POST /api/v1/assistant/conversations` takes as `launcher`). The hub checks only that it is a name (not empty, no surrounding spaces): a launcher lives on computers that may be offline. The App and web draw a picker of the hub's launchers (`GET /api/v1/launchers`, read once while the page is open, since it asks every machine), **Not set** first, hidden launchers left out, a display name that differs shown with the name. Until the list is in, or when it can't be read, the field is a text field. A value that names no launcher is still shown, marked. Android does the same with its choice sheet (#2448). Only a hub with this format installs a manifest that uses it: declare a matching `engines.persona`.
 
 **Conventional settings**: names the hub recognizes; when an extension declares one, it gets extra uses.
 - `triage_rules` (a top-level `string`; `maxLength` of at most 4000 is recommended, since the hub uses only the first 4000 characters): this source's Inbox triage rules, in the user's own words. The extension attaches it as `rules` when it hands over items (`docs/protocol/connector-protocol.md`),
@@ -1005,7 +1005,7 @@ personad extension pack [<dir>] [--platforms linux-amd64,…] [--out <dir>] [--s
 ## Extension marketplace
 
 A repository or website publishes an **index** `persona-extensions.json` that declares all the extensions it offers. Once the hub registers this marketplace, the app, web, admin UI and command line can all browse, search,
-install, upgrade and uninstall its extensions. Only one official marketplace is preset (see "Official marketplace" below); every other marketplace is registered by the user. Code is in `server/internal/extension/market.go` (index, download, verification) and `server/internal/extmgr/extension_market*.go` (registration, catalog, endpoints).
+install, upgrade and uninstall its extensions. Only one official marketplace is preset (see "Official marketplace" below); every other marketplace is registered by the user. Code is in `server/internal/extension/market*.go` (index, download, verification) and `server/internal/extmgr/extension_market*.go` (registration, catalog, endpoints).
 
 **Marketplace address**:
 
@@ -1023,7 +1023,7 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 
 - **Public repos can take a token too** (a fine-grained token with Public repositories selected and no permissions checked), which raises the quota to 5000 per hour. When the app / web cannot read a GitHub marketplace and has no token,
   the error is followed directly by **Add token** and this explanation (the official marketplace is the exception: the catalog page does not let newcomers fill it in there and only shows an unobtrusive link to **Manage marketplaces**, see onboarding.md 4.5); on the command line, `personad extension market token <id>` (read from stdin, `--clear` removes it).
-- **Fallback addresses without a token** (`githubFallback` in `extension/market.go`): when the API returns a rate limit, the same file is read from places without the API quota — files in the repo (the single catalog document and packages at relative paths)
+- **Fallback addresses without a token** (`githubFallback` in `extension/market_fetch.go`): when the API returns a rate limit, the same file is read from places without the API quota — files in the repo (the single catalog document and packages at relative paths)
   from `raw.githubusercontent.com/<owner>/<repo>/<branch, default HEAD>/<path>`, `release:` assets from `github.com/<owner>/<repo>/releases/download/<tag>/<asset>`. Only public repos are there;
   private ones return 404 and still report the rate limit / need a token. Marketplaces with a token always go through the API only (the token is not sent elsewhere). What is read is still signature-verified and packages are still checked by sha256; reading from another place does not change what is trusted.
   A signed catalog is one document, so caching cannot pair a new payload with an old detached signature.
@@ -1934,11 +1934,14 @@ Cards in assistant replies use the same components and renderer as extension Vie
   (`prompts/assistant/claude_md.md`); off by default, to be enabled once every client can draw UI version 3.
 - **```` ```persona-card ````** (#886, old format) still renders: clients **convert it to components** before drawing. The rules are documented in `sdk/go/wire/personacard.go` (the Go reference implementation), consistently across all four clients;
   `schema/extension/examples/persona-card/` contains cases (card → expected View; `null` means it cannot be drawn and stays a code block), used by each client's tests:
-  - Cannot draw: `stat` without `value`; `stacked_bar` with no parts, negative values or a sum of 0; `line` with fewer than two points; `bar` with no points.
+  - Cannot draw: `stat` without `value`; `stacked_bar` with no parts, negative values or a sum of 0; `line` with fewer than two points; `bar` with no points; `ring` with fewer than two parts (after the remainder), negative values or a sum of 0.
   - One section; the card's `title` is the section title (a `stat`'s `title` is its `metric`'s `label`); `subtitle` is a leading paragraph of secondary text. Numbers use thousands separators and at most one decimal place (`2,250`, `7.5`), followed by a space and the unit.
   - `stat` → `metric {label: title or "Value", value, detail: note}`.
   - `stacked_bar` → `metric {label: Total, value: total (the sum of parts if absent), detail: note}`; one stacked bar chart, one series per part (beyond 4 parts, the first three plus "Other"; `rest` and "Other" are `neutral`),
     one point per series with `title` or "Total" as its label; then one `row {title: label, subtitle: note, value}` per part. Use `total`'s unit, or the card's if absent.
+  - `ring` (#3061, one day's total and its parts; `stacked_bar` is for comparing days or people) → one `donut` chart, one series with a point per part (beyond 8 parts, the first seven plus "Other"),
+    `center` the total with its unit (left out past 20 characters), `detail: note`; then one `row` per part. When `total` is more than the parts' sum, a "Remaining" part (total minus the sum) comes last.
+    Use `total`'s unit, or the card's if absent. iOS draws `donut` / `pie` with `RingChart` (ring, total in the hole, legend with shares); an app that does not know `ring` keeps the code block.
   - `line` / `bar` → when there is a `value`, start with `metric {label: Current, value}`; one chart of this kind, one series (the last 120 points), with `note` as `detail`.
 
 ### Compatibility

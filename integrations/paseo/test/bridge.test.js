@@ -274,7 +274,10 @@ test('interrupt, rename, permission mode and effort go to the agent', async (t) 
   assert.deepEqual([fake.requestsOf('set_agent_mode_request')[0].modeId, fake.requestsOf('set_agent_thinking_request')[0].thinkingOptionId], ['plan', 'high'])
   await assert.rejects(call(node, 'session.modes', { session_id: SID, effort: 'xhigh' }), /没有「xhigh」/)
   await assert.rejects(call(node, 'session.modes', { session_id: SID, permission_mode: 'auto' }), /没有「auto」模式/)
-  await assert.rejects(call(node, 'session.modes', { session_id: `paseo-${a.codex.id}`, permission_mode: 'plan' }), /没有 Claude Code 的权限模式/)
+  await assert.rejects(call(node, 'session.modes', { session_id: `paseo-${a.codex.id}`, permission_mode: 'plan' }), /没有这个权限模式/)
+  // Codex: Persona's bypassPermissions is Paseo's full-access; the other modes are Paseo's own (left alone).
+  await call(node, 'session.modes', { session_id: `paseo-${a.codex.id}`, permission_mode: 'bypassPermissions' })
+  assert.equal(fake.requestsOf('set_agent_mode_request').at(-1).modeId, 'full-access')
 })
 
 test('a new session: an agent of the launcher\'s provider, with the form\'s choices, under an id kept on it', async (t) => {
@@ -294,6 +297,15 @@ test('a new session: an agent of the launcher\'s provider, with the form\'s choi
   await assert.rejects(call(node, 'session.start', { cwd: '/nonexistent/dir', prompt: 'x' }), /没有这个目录/)
   fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: 'Provider unavailable' } })
   await assert.rejects(call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /Paseo 没能新建：Provider unavailable/)
+})
+
+test("a new Codex session: bypassPermissions starts it with Paseo's full-access mode; the other modes are left alone", async (t) => {
+  const { fake, node } = await setup(t)
+  const start = (permission_mode) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-codex', permission_mode })
+    .then(() => fake.requestsOf('agent.create.request').at(-1).config)
+  assert.equal((await start('bypassPermissions')).modeId, 'full-access')
+  assert.equal((await start('auto')).modeId, undefined)
+  assert.equal((await start('default')).modeId, undefined)
 })
 
 test("完成未看 follows Paseo: seen there, seen here; a new turn to look at, unread again", async (t) => {

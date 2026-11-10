@@ -373,11 +373,12 @@ struct ChatsView: View {
                         if model.openChat != nil { DispatchQueue.main.async { takeOpenChat() } }
                         if model.openPersonalAgent != nil { DispatchQueue.main.async { takeOpenPersonalAgent() } }
                     }
-                    // A new tree (RootView swaps the shell and the tabs when the width class changes, which iOS does
-                    // for its snapshots when the app goes to the background: iPhone Duo open, 2026-11-04) starts at the
-                    // list: open the chat that was open, as a launch does (AppModel.init). Back at the list it is
-                    // forgotten (rememberChat(nil) above). A turn later: the split of the tree going away empties
-                    // the paths as it goes, and a push made in the same update did not show.
+                    // A new tree (RootView swaps the shell and the tabs when the width class changes while the app is
+                    // active: iPhone Duo folded or opened; iOS's snapshots on the way to the background did it too
+                    // until #2836, 2026-11-04) starts at the list: open the chat that was open, as a launch does
+                    // (AppModel.init). Back at the list it is forgotten (rememberChat(nil) above). A turn later: the
+                    // split of the tree going away empties the paths as it goes, and a push made in the same update
+                    // did not show.
                     // Still the same chat a turn later: going back runs onAppear before onChange(path) forgets it (#1868).
                     // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
                     if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,

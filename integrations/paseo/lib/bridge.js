@@ -10,9 +10,9 @@ import { realpathSync, statSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { createRuntime, light, page, RpcError, snippet } from '../../runtime-sdk/index.js'
 import {
-  EFFORTS, MODES, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, claudeId, defaultProvider, interactionOf,
-  launchersOf, linkedWorktree, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf, spaceIdOf, strayRecord,
-  timelineItems, transcriptOf,
+  EFFORTS, RUNTIME, SESSION_LABEL, agentRoot, agentRow, appAgent, claudeId, defaultProvider, interactionOf,
+  launchersOf, linkedWorktree, paseoMode, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf, spaceIdOf,
+  strayRecord, timelineItems, transcriptOf,
 } from './map.js'
 import { PaseoClient } from './paseo.js'
 
@@ -307,7 +307,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
       if (asks.get(request.id) !== entry) return
       asks.delete(request.id)
       const agent = agents.get(agentId)?.agent
-      const out = responseOf(request, res, agentRoot(agent, roots))
+      const root = agentRoot(agent, roots)
+      const out = responseOf(request, res, root)
       if (!out) {
         // Handed back (or no hub to ask: asked again when it is back): Paseo's app answers it meanwhile.
         if (rt.hubConnected) handedBack.add(request.id)
@@ -316,9 +317,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
       try {
         await paseo.request('agent_permission_response', { agentId, response: out.response },
           { requestId: request.id, expect: 'agent_permission_resolved', timeoutMs: 30_000 })
-        if (out.setMode) {
-          const r = await paseo.request('set_agent_mode_request', { agentId, modeId: out.setMode })
-          if (r?.accepted === false) log(`paseo: mode ${out.setMode} for ${agentId}: ${r.error ?? 'refused'}`)
+        const modeId = paseoMode(root, out.setMode)
+        if (modeId) {
+          const r = await paseo.request('set_agent_mode_request', { agentId, modeId })
+          if (r?.accepted === false) log(`paseo: mode ${modeId} for ${agentId}: ${r.error ?? 'refused'}`)
         }
       } catch (err) {
         log(`paseo: answer ${request.id} of ${agentId}: ${err.message}`)
@@ -519,13 +521,12 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const agent = agentFor(params.session_id)
     const mode = params.permission_mode
     if (mode) {
-      if (agentRoot(agent, roots) !== 'claude' || !MODES.includes(mode)) {
-        throw new RpcError('这个 Agent 没有 Claude Code 的权限模式', 'unsupported')
-      }
-      if ((agent.availableModes ?? []).length && !agent.availableModes.some((m) => m?.id === mode)) {
+      const modeId = paseoMode(agentRoot(agent, roots), mode)
+      if (!modeId) throw new RpcError('这个 Agent 没有这个权限模式', 'unsupported')
+      if ((agent.availableModes ?? []).length && !agent.availableModes.some((m) => m?.id === modeId)) {
         throw new RpcError(`Paseo 里这个 Agent 没有「${mode}」模式`, 'bad_request')
       }
-      const res = await paseo.request('set_agent_mode_request', { agentId: agent.id, modeId: mode })
+      const res = await paseo.request('set_agent_mode_request', { agentId: agent.id, modeId })
       if (res?.accepted === false) throw new RpcError(`Paseo 没有换模式：${res.error ?? '原因不明'}`, 'rejected')
     }
     const effort = params.effort
@@ -632,7 +633,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const root = roots[provider] ?? provider
     const config = { provider, cwd }
     if (typeof params.model === 'string' && params.model) config.model = params.model
-    if (root === 'claude' && MODES.includes(params.permission_mode)) config.modeId = params.permission_mode
+    const modeId = paseoMode(root, params.permission_mode)
+    if (modeId) config.modeId = modeId
     if (EFFORTS.includes(params.effort)) {
       const opts = thinkingOptions({ provider, model: config.model })
       if (!opts.length || opts.includes(params.effort)) config.thinkingOptionId = params.effort

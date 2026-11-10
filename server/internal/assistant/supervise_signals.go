@@ -21,6 +21,7 @@ const (
 	sigFailed      = "failed"      // its agent did not start
 	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
+	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 )
 
 var (
@@ -79,7 +80,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigFailed, sigInterrupted, sigStarted: // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigFailed, sigInterrupted, sigStarted, sigEscalated: // started: the user waits to hear it
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -92,11 +93,11 @@ type superviseBook struct {
 	writeMu sync.Mutex // one ledger write at a time (updateSupervision)
 	dedupMu sync.Mutex // serializes digest reservations and delivery
 	dedup   map[string]superviseFingerprint
-	pending map[string]superviseSignal // by todo|kind
-	sent    map[string]string          // todo|kind → the key last told
-	asks    map[string]string          // todo → what its agent last asked (InteractionRaised)
-	last    time.Time                  // when the last supervision message went out
-	queued  []superviseSignal          // the signals of the message still waiting in the main conversation's queue
+	pending map[string]superviseSignal   // by todo|kind
+	sent    map[string]string            // todo|kind → the key last told
+	asks    map[string]string            // todo → what its agent last asked (InteractionRaised)
+	last    time.Time                    // when the last supervision message went out
+	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	timer   *time.Timer
 	timerAt time.Time
 	hold    map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed

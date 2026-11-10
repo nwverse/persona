@@ -75,6 +75,14 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
+		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
+			About: "empty (the default): only the main conversation supervises the tasks it hands out. A leader is a side conversation " +
+				"(one repository or long-running project each) that supervises the tasks it hands out with task_plan itself: their " +
+				"supervision messages go to it and it reviews them with task_review; needs_user and failed starts still come to the " +
+				"main conversation. Applies to tasks handed out from now on",
+			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
+			get: s.getLeaders,
+			set: s.setLeaders},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -193,6 +201,7 @@ func orNone(s string) string {
 var settingTitles = map[string]string{"assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
+	"assistant.leaders":    "title_leaders",
 	"model_profiles.tiers": "title_model_tiers"}
 
 // clipped is a value as the card shows it, in l.
