@@ -155,6 +155,7 @@ type todoStage struct {
 	Stage    string        `json:"stage"`
 	PR       string        `json:"pr,omitempty"`
 	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
+	Check    *TodoCheck    `json:"check,omitempty"`    // task_check.go
 }
 
 const reportStagesKey = "assistant.todo_stages"

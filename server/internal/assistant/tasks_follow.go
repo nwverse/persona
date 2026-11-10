@@ -149,6 +149,7 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
+	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
 	s.setTaskStage(ctx, t.ID, "develop", "")
 	if t.Supervision != nil {
 		s.supervisedWorking(ctx, t)
