@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -638,12 +637,12 @@ func findConfigFields(value any, out *ConfigInfo) {
 }
 
 var (
-	configAppIDPattern = regexp.MustCompile(`(?i)["']?app[_-]?id["']?\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
-	configBrandPattern = regexp.MustCompile(`(?i)["']?brand["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)`)
-	loginURLPattern    = regexp.MustCompile(`https://[^\s"'<>]+`)
+	configAppIDPattern = lazyre.New(`(?i)["']?app[_-]?id["']?\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
+	configBrandPattern = lazyre.New(`(?i)["']?brand["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)`)
+	loginURLPattern    = lazyre.New(`https://[^\s"'<>]+`)
 )
 
-func firstRegex(raw []byte, re *regexp.Regexp) string {
+func firstRegex(raw []byte, re *lazyre.Regexp) string {
 	match := re.FindSubmatch(raw)
 	if len(match) == 2 {
 		return strings.TrimRight(string(match[1]), ".,;)")

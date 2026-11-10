@@ -1060,13 +1060,15 @@ class OkHttpHubConnection(
 
     /** Pinned health probes; without other hubs exactly the single-hub probe. */
     private suspend fun probe(endpoint: Endpoint): Health {
-        if (members.isEmpty()) return http.health(endpoint)
+        // A replacement tunnel can listen on the same loopback address: never probe it through the old listener's connection.
+        val fresh = endpoint.kind == "ssh" || endpoint.kind == "proxy"
+        if (members.isEmpty()) return http.health(endpoint, fresh = fresh)
         val owner = ownerFor(endpoint)
         // HTTPS without a pin is only checked against the system CAs when the group's own pairing had no fingerprint.
         if (endpoint.baseUrl().isHttps && owner.fingerprint == null && !http.systemTrusted) {
             throw HubFailure(HubError.CertificateMismatch, retryable = false)
         }
-        return http.health(endpoint, expectedHubId = owner.hubId, expectedPin = owner.fingerprint)
+        return http.health(endpoint, fresh = fresh, expectedHubId = owner.hubId, expectedPin = owner.fingerprint)
     }
 
     /** The hub behind a route: id, pin, the credential to send and whether it is that hub's own. */
