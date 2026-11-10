@@ -800,35 +800,14 @@ struct MessageCard: View {
                     .accessibilityIdentifier("messageCard.filed")
             }
             if state == .open {
-                // Two rows keep all four localized labels readable on a compact iPhone and at large text sizes.
                 VStack(spacing: Theme.Space.s) {
-                    HStack(spacing: Theme.Space.s) {
-                        Button {
-                            Task {
-                                await store.sendMessage(card, itemID: itemID, text: text.isEmpty ? (card.draft ?? "") : text)
-                                editing = false
-                            }
-                        } label: { Text("Send").lineLimit(1).frame(maxWidth: .infinity) }
-                            .draftDecisionButton(prominent: true)
-                            .accessibilityIdentifier("messageCard.send")
-                        Button {
-                            if text.isEmpty { text = card.draft ?? "" }
-                            withAnimation(Theme.Motion.state) { editing.toggle() }
-                        } label: { Text(editing ? String(localized: "Done [Task Views 9b8ee8]") : String(localized: "Edit [Task Views 928324]")).lineLimit(1) }
-                            .draftDecisionButton()
-                            .accessibilityIdentifier("messageCard.edit")
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Theme.Space.s) { sendButton(card); editButton(card) }
+                        VStack(spacing: Theme.Space.s) { sendButton(card); editButton(card) }
                     }
-                    HStack(spacing: Theme.Space.s) {
-                        Button { withAnimation(Theme.Motion.state) { store.later(card.id) } } label: {
-                            Text("Later [Task Views 9d2ca2]").lineLimit(1).frame(maxWidth: .infinity)
-                        }
-                        .draftDecisionButton()
-                        .accessibilityIdentifier("messageCard.later")
-                        Button { Task { await store.dismissMessage(card) } } label: {
-                            Text("Do not handle [Task Draft]").lineLimit(1).frame(maxWidth: .infinity)
-                        }
-                        .draftDecisionButton()
-                        .accessibilityIdentifier("messageCard.dismiss")
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Theme.Space.s) { laterButton(card); dismissButton(card) }
+                        VStack(spacing: Theme.Space.s) { laterButton(card); dismissButton(card) }
                     }
                 }
                 .disabled(store.busyMessages.contains(card.id))
@@ -837,6 +816,47 @@ struct MessageCard: View {
         .card(padding: Theme.Space.l)
         .accessibilityElement(children: .contain)
         .animation(Theme.Motion.state, value: state)
+    }
+
+    private func sendButton(_ card: FeedItem) -> some View {
+        Button {
+            Task {
+                await store.sendMessage(card, itemID: itemID, text: text.isEmpty ? (card.draft ?? "") : text)
+                editing = false
+            }
+        } label: {
+            Text("Send").lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(maxWidth: .infinity)
+        }
+        .draftDecisionButton(prominent: true)
+        .accessibilityIdentifier("messageCard.send")
+    }
+
+    private func editButton(_ card: FeedItem) -> some View {
+        Button {
+            if text.isEmpty { text = card.draft ?? "" }
+            withAnimation(Theme.Motion.state) { editing.toggle() }
+        } label: {
+            Text(editing ? String(localized: "Done [Task Views 9b8ee8]") : String(localized: "Edit [Task Views 928324]"))
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+        }
+        .draftDecisionButton()
+        .accessibilityIdentifier("messageCard.edit")
+    }
+
+    private func laterButton(_ card: FeedItem) -> some View {
+        Button { withAnimation(Theme.Motion.state) { store.later(card.id) } } label: {
+            Text("Later [Task Views 9d2ca2]").lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(maxWidth: .infinity)
+        }
+        .draftDecisionButton()
+        .accessibilityIdentifier("messageCard.later")
+    }
+
+    private func dismissButton(_ card: FeedItem) -> some View {
+        Button { Task { await store.dismissMessage(card) } } label: {
+            Text("Do not handle [Task Draft]").lineLimit(1).fixedSize(horizontal: true, vertical: false).frame(maxWidth: .infinity)
+        }
+        .draftDecisionButton()
+        .accessibilityIdentifier("messageCard.dismiss")
     }
 
     private func heading(_ state: TasksStore.MessageState) -> String {

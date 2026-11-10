@@ -150,6 +150,8 @@ final class TasksStore {
     }
 
     func received(_ item: FeedItem, group: String = "") {
+        // An authoritative push or write receipt wins over a snapshot already in flight, including a no-op Undo.
+        if item.kind == .message { messageWrites[item.id, default: 0] &+= 1 }
         viewStore.receive(item, group: group)
         merge([item], into: item.conversation)
         if item.kind == .task || item.kind == .receipt || item.kind == .review || item.kind == .report { reloadTodos() }
