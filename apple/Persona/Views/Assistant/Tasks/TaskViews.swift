@@ -862,10 +862,18 @@ struct ReceiptCard: View {
         return .done
     }
 
+    /// The task's name on its receipt (#3036): its to-do's title now, so a rename (the user's, or the model's a moment
+    /// after the task was handed out) shows on every receipt, as on the card and lines beside it; the receipt's own title
+    /// (the name when it was written) once the to-do is gone from the list.
+    nonisolated static func title(_ item: FeedItem, todo: TodoItem?) -> String {
+        if let now = todo?.title.trimmingCharacters(in: .whitespacesAndNewlines), !now.isEmpty { return now }
+        return item.title ?? String(localized: "Tasks")
+    }
+
     var body: some View {
         let todo = item.ref.flatMap { store.todos[$0] }
         let outcome = Self.outcome(item, todo: todo)
-        let title = item.title ?? String(localized: "Tasks")
+        let title = Self.title(item, todo: todo)
         let tint: Color = switch outcome {
         case .failed, .interrupted: Theme.danger
         case .stopped: .secondary

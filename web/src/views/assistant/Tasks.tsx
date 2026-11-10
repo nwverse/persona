@@ -15,6 +15,7 @@ import {
   feedNotice,
   getFeedState,
   receiptState,
+  receiptTitle,
   isToday,
   sentByPersona,
   later,
@@ -740,7 +741,7 @@ function InterruptedReceipt({ item }: { item: FeedItem }) {
   const clock = useNow(30_000, task?.status === "usage_limit");
   const retrying = useRetrying(todo?.id);
   const status = task?.status;
-  const title = field(item, "title") ?? t("assistant-tasks.task_fallback");
+  const title = receiptTitle(item, todo) ?? t("assistant-tasks.task_fallback");
   if (todo && task?.status === "usage_limit") {
     const goesOn = task.lead ? usageLimitContinues(task.lead) : false;
     return (
@@ -810,7 +811,7 @@ function OutcomeReceipt({ item, failed }: { item: FeedItem; failed: boolean }) {
   const cardShown = useTaskCardShown(item.conversation, todo?.id);
   const pr = field(item, "pr");
   const prN = pr?.split("/").at(-1);
-  const title = field(item, "title") ?? t("assistant-tasks.task_fallback");
+  const title = receiptTitle(item, linked) ?? t("assistant-tasks.task_fallback");
   if (failed && todo && status && status !== "failed") {
     const again = status === "not_started" ? t("assistant-tasks.receipt_restarting", { title }) : t("assistant-tasks.receipt_restarted", { title });
     return (

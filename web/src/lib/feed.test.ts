@@ -12,6 +12,7 @@ import {
   mergeInto,
   quickResult,
   receiptState,
+  receiptTitle,
   removeTask,
   retryKey,
   retryTask,
@@ -356,6 +357,13 @@ describe("a receipt's outcome (#1516)", () => {
     expect(receiptState(receipt({ state: "done", summary: "修好了 API Error: Connection lost 时的崩溃" }))).toBe("done");
     expect(receiptState(receipt({ state: "failed", summary: "没开起来：x" }))).toBe("failed");
     expect(receiptState(receipt({}))).toBe("done");
+  });
+
+  it("names the task as it is called now, else as the receipt was written (#3036)", () => {
+    expect(receiptTitle(receipt({ title: "Example task" }), { title: "Renamed task" })).toBe("Renamed task");
+    expect(receiptTitle(receipt({ title: "Example task" }), undefined)).toBe("Example task");
+    expect(receiptTitle(receipt({ title: "Example task" }), { title: "  " })).toBe("Example task");
+    expect(receiptTitle(receipt({}), undefined)).toBeUndefined();
   });
 
   it("a line from a clock ahead does not hide the day lines after it (#1996)", () => {
