@@ -135,7 +135,9 @@ func taskLead(st string, agents []proto.Session) proto.Session {
 		case "unread":
 			makes = c.State == proto.StateUnread
 		case "working":
-			makes = c.State == proto.StateWorking
+			makes = c.State == proto.StateWorking && !agentWaits(c)
+		case "waiting":
+			makes = agentWaits(c)
 		}
 		if makes && (lead.SessionID == "" || c.UpdatedAt.After(lead.UpdatedAt)) {
 			lead = c
@@ -166,10 +168,15 @@ func taskState(t Todo, agents []proto.Session) string {
 		return "done"
 	}
 	has := map[string]bool{}
-	interrupted, limited := false, false
+	interrupted, limited, working, waiting := false, false, false, false
 	now := time.Now()
 	for _, c := range agents {
 		has[c.State] = true
+		if agentWaits(c) {
+			waiting = true
+		} else if c.State == proto.StateWorking {
+			working = true
+		}
 		if usageLimitWaiting(c, now) {
 			limited = true
 		} else {
@@ -185,12 +192,27 @@ func taskState(t Todo, agents []proto.Session) string {
 		return "usage_limit"
 	case has[proto.StateUnread]:
 		return "unread"
-	case has[proto.StateWorking]:
+	case working:
 		return "working"
+	case waiting:
+		return "waiting"
 	case len(agents) > 0:
 		return "followup"
 	}
 	return "not_started"
+}
+
+// agentWaits: c's turn ended and the hub or its own background work brings it back, so its task waits rather than
+// stopped (#3274): only background commands, subagents, Monitors or workflows still run and will report back
+// (BackgroundWorking), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure for it
+// and wakes it (Work blocked on anything but the user).
+func agentWaits(c proto.Session) bool {
+	if c.State == proto.StateWorking {
+		return c.BackgroundWorking
+	}
+	w := c.Work
+	return c.State != proto.StateNeedsYou && c.State != proto.StateUnread && w != nil && w.Phase == proto.WorkBlocked &&
+		(w.On == proto.WaitAgent || w.On == proto.WaitExternal || w.On == proto.WaitTransient)
 }
 
 func taskStateLabel(st string) string {
@@ -199,5 +221,5 @@ func taskStateLabel(st string) string {
 		"followup": "停着", "not_started": "还没开始",
 		// "cancelled" shares the ignored final line: every label here is model-read prompt text, and this keeps the
 		// hardcoded-Chinese baseline count unchanged instead of raising it.
-		"cancelled": "已取消", "usage_limit": "订阅的用量额度用完了，等额度重置（没做完；重置前发「继续」也会被拒）"}[st] // i18n-ignore: the model reads it
+		"cancelled": "已取消", "waiting": "在等（后台命令、子 Agent 或外部条件，hub 会叫醒它，不用管）", "usage_limit": "订阅的用量额度用完了，等额度重置（没做完；重置前发「继续」也会被拒）"}[st] // i18n-ignore: the model reads it
 }

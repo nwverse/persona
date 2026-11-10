@@ -7,6 +7,6 @@
   "ask_unknown": "{summary} (it can’t tell every app this touches, so it asks this time)",
   "always": "Don’t ask again for {apps}",
   "err_no_database": "no database",
-  "owner_changed": "This computer changed managers. Refresh the machine page before trying again.",
+  "owner_changed": "This computer changed assistants. Refresh the machine page before trying again.",
   "owner_required": "Reload the machine page before revoking this saved approval."
 }

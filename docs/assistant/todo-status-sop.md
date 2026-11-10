@@ -82,7 +82,7 @@ to-do is asked about again only when the hub's commit changes, or every 10 minut
 "Please verify": no turn said it was deployed.
 
 **Without GitHub**: a hub that cannot reach GitHub decides from a file the deploy writes, `deployed-commits.txt`, in
-the hub's state directory (`~/.persona`, or `~/.jarvis` kept from before) or next to the hub's binary:
+the hub's state directory (or its compatible predecessor) or next to the hub's binary:
 
 ```
 # persona deployed commits v1

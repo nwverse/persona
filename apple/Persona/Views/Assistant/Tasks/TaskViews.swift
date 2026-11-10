@@ -33,6 +33,7 @@ extension TaskState {
         case .needsYou: StateName.needsYou.text
         case .working: StateName.working.text
         case .unread: StateName.unread.text
+        case .waiting: StateName.taskWaiting.text
         case .followup: StateName.followUp.text
         case .notStarted: String(localized: "Starting [Task Views d14c3a]")
         case .done: StateName.done.text

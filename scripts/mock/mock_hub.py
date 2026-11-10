@@ -31,7 +31,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
-            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -7975,6 +7975,15 @@ if os.environ.get("MOCK_WAKES") == "1":
     _k += tool("Bash", {"command": "git commit -am 'lint'"}, "[main 1a2b3c] lint", 7)
     _k.append(it("assistant", "text", 6, text="lint 有两处要改，已经改好提交了。"))
     ITEMS[WAKES] = _k
+    # A wake whose continuation has tools but no new answer yet: the previous answer stays visible until it streams.
+    if os.environ.get("MOCK_WAKE_PENDING") == "1":
+        _pending = [it("user", "text", 40, text="发版前把测试跑一下，好了告诉我")]
+        _pending += tool("Bash", {"command": "xcodebuild test", "description": "跑测试", "run_in_background": True},
+                         "Command running in background with ID: bkt. Output is being written to: /tmp/claude/bkt.output", 39)
+        _pending.append(it("assistant", "text", 38, text="测试已经在后台跑了，结束后我告诉你。"))
+        _pending.append(wake(30, "completed", "跑测试", "bkt", "后台命令完成 · 跑测试"))
+        _pending += tool("Read", {"file_path": "/tmp/claude/bkt.output"}, "Test Suite 'All tests' passed", 29)
+        ITEMS[WAKES] = _pending
     # Alignment regression: short and overflowing Monitor events, each followed by a short answer.
     if os.environ.get("MOCK_WAKE_ALIGNMENT") == "1":
         _k = [it("user", "text", 40, text="检查后台上传的进展"),
@@ -9096,7 +9105,16 @@ def paged_sessions(query):
     Changed fixtures expire cursors/revisions instead of retaining a delta journal.
     """
     rows = out_by_machine(all_sessions())
-    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not query:
+    # ?manager=<id> (feature sessions_manager): that manager's computers' sessions only, in the whole list, the pages
+    # and the counts; one the roster lacks is 404 no_manager. A hub from before the roster (MOCK_MANAGERS=0) ignores it.
+    if "manager" in query and os.environ.get("MOCK_MANAGERS") != "0":
+        named = query["manager"][0].strip()
+        if len(query["manager"]) != 1:  # (an empty value never gets here: parse_qs drops it; the hub answers 400)
+            return {"error": "manager must have exactly one nonempty value", "code": "invalid_query"}, 400
+        if not any(m["id"] == named and not m.get("installing") for m in MANAGERS["list"]):
+            return {"error": "no such manager: %r" % named, "code": "no_manager"}, 404
+        rows = [s for s in rows if s.get("manager") == named]
+    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
     fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
@@ -12390,6 +12408,67 @@ if MOCK_COMPUTER:
 # seconds a step); an open setup is done a few steps later. Mac Studio is a Mac it is not on for, not installed.
 MOCK_BROWSER = os.environ.get("MOCK_BROWSER", "")
 
+# MOCK_CLIPBOARD=off|on|image (#3064, docs/operations/clipboard.md): the hub shares clipboards. MacBook can, with its switch
+# off / on; with "image" its clipboard holds a picture, else text. Mac Studio can, switched off; the Linux machines have no
+# desktop session (unsupported, reason_code no_display). GET / PUT /api/v1/machines/{mid}/clipboard, GET / PUT
+# …/clipboard/settings, with the hub's errors: 403 clipboard_disabled, 409 clipboard_unsupported, 503 offline, 413
+# too_large (body over 10 MB, text over 4 MiB, an image over 7 MiB), 400 clipboard_bad_image / bad_request, and with
+# MOCK_CLIPBOARD_FAIL=1 502 clipboard_failed. What the phone sends becomes the clipboard; a switch change pushes machines.
+MOCK_CLIPBOARD = os.environ.get("MOCK_CLIPBOARD", "")
+CLIPBOARD = {"macbook": {"kind": "text", "text": "https://example.com/docs/release-notes\n发布说明草稿：本周修复了剪贴板同步的两个问题。"}}
+if MOCK_CLIPBOARD:
+    for _m in MACHINES:
+        if _m["os"] == "linux":
+            _m["clipboard"] = {"supported": False, "enabled": False, "reason": "这台电脑没有桌面会话，所以没有剪贴板。",
+                               "reason_code": "no_display"}
+        else:
+            _m["clipboard"] = {"supported": True, "enabled": _m["id"] == "macbook" and MOCK_CLIPBOARD in ("on", "image")}
+    if MOCK_CLIPBOARD == "image":
+        CLIPBOARD["macbook"] = {"kind": "image", "image": {"mime": "image/png", "data": base64.b64encode(_page_png(480, 300)).decode()}}
+
+
+def clipboard_call(method, path, body):
+    """(answer, status) for …/clipboard and …/clipboard/settings, as the hub answers them; status 204: no body."""
+    mid = path.split("/")[4]
+    machine = next((m for m in MACHINES if m["id"] == mid), None)
+    if machine is None: return {"error": "找不到机器", "code": "not_found"}, 404
+    state = machine.get("clipboard")
+    if state is None: return {"error": "not found", "code": "not_found"}, 404
+    if path.endswith("/settings"):
+        if method == "GET": return state, 200
+        if method != "PUT": return {"error": "method not allowed"}, 405
+        enabled = json.loads(body or b"{}").get("enabled")
+        if not isinstance(enabled, bool): return {"error": "需要 enabled", "code": "bad_request"}, 400
+        state["enabled"] = enabled  # can change while offline or unsupported, as on the hub
+        for send, _ in list(LIVE):
+            try: send({"type": "machines", "machines": out_machines()})
+            except Exception: pass
+        return state, 200
+    if body and len(body) > 10_000_000: return {"error": "太大了", "code": "too_large"}, 413
+    if not state["enabled"]: return {"error": "这台电脑没有打开剪贴板共享", "code": "clipboard_disabled"}, 403
+    if not state["supported"]: return {"error": state.get("reason") or "不支持剪贴板", "code": "clipboard_unsupported"}, 409
+    if not machine.get("online"): return {"error": "电脑不在线", "code": "offline"}, 503
+    if os.environ.get("MOCK_CLIPBOARD_FAIL"): return {"error": "剪贴板正被别的程序占用", "code": "clipboard_failed"}, 502
+    if method == "GET": return CLIPBOARD.get(mid, {"kind": "empty"}), 200
+    if method == "PUT":
+        sent = json.loads(body or b"{}")
+        text, image = sent.get("text"), sent.get("image")
+        if (text is None) == (image is None): return {"error": "需要 text 或 image（只能一个）", "code": "bad_request"}, 400
+        if isinstance(text, str):
+            if len(text.encode()) > 4 << 20: return {"error": "文字太长了", "code": "too_large"}, 413
+            CLIPBOARD[mid] = {"kind": "text", "text": text}
+            return None, 204
+        if not isinstance(image, dict) or image.get("mime") not in ("image/png", "image/jpeg"):
+            return {"error": "只收 PNG 或 JPEG", "code": "clipboard_bad_image"}, 400
+        try: raw = base64.b64decode(image.get("data") or "", validate=True)
+        except Exception: return {"error": "图片不是有效的 base64", "code": "clipboard_bad_image"}, 400
+        if len(raw) > 7 << 20: return {"error": "图片太大了", "code": "too_large"}, 413
+        magic = b"\x89PNG\r\n\x1a\n" if image["mime"] == "image/png" else b"\xff\xd8\xff"
+        if not raw.startswith(magic): return {"error": "图片内容和类型对不上", "code": "clipboard_bad_image"}, 400
+        CLIPBOARD[mid] = {"kind": "image", "image": {"mime": "image/png", "data": image["data"]}}
+        return None, 204
+    return {"error": "method not allowed"}, 405
+
 def mock_usage_windows():
     """GET /api/v1/usage/windows (#2432): two Codex / Claude accounts relative to now; MOCK_USAGE=none has none,
     MOCK_USAGE=stale has the Claude account read two hours ago and out of date (#1906: ultracode's quota line says so)."""
@@ -14498,6 +14577,11 @@ class H(BaseHTTPRequestHandler):
                 COOKIES_FAILED[0] = True
                 return self.send_json({"error": "读不到这台 Mac 上 ego 的登录，点「再试一次」；还不行就在那台 Mac 上重新打开 ego lite"}, 502)
             return self.send_json(*cookie_call("GET", q, None))
+        if MOCK_CLIPBOARD and p.startswith("/api/v1/machines/") and (p.endswith("/clipboard") or p.endswith("/clipboard/settings")):
+            answer, status = clipboard_call(self.command, p, getattr(self, "last_body", None))
+            if status == 204:
+                self.send_response(204); self.end_headers(); return
+            return self.send_json(answer, status)
         if p.startswith("/api/v1/machines/") and p.endswith("/browser"):  # the plugin ego (MOCK_BROWSER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "browser" not in machine:
@@ -15697,6 +15781,11 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"chats": 6, "people": 9, "inbox": 1})
         if p.startswith("/api/v1/machines/") and p.endswith("/browser/cookies") and MOCK_BROWSER:  # sign-ins in ego (#1304)
             return self.send_json(*cookie_call(self.command, parse_qs(urlparse(self.path).query), self.last_body))
+        if MOCK_CLIPBOARD and p.startswith("/api/v1/machines/") and (p.endswith("/clipboard") or p.endswith("/clipboard/settings")):
+            answer, status = clipboard_call(self.command, p, getattr(self, "last_body", None))
+            if status == 204:
+                self.send_response(204); self.end_headers(); return
+            return self.send_json(answer, status)
         if p.startswith("/api/v1/machines/") and (p.endswith("/browser") or "/browser/" in p):  # the plugin ego (MOCK_BROWSER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "browser" not in machine:

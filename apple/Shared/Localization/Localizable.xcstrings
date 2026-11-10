@@ -1,12 +1,587 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@ can't share its clipboard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ can't share its clipboard."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ はクリップボードを共有できません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 不能共享剪贴板。"
+          }
+        }
+      }
+    },
+    "%@ can't share its clipboard: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ can't share its clipboard: %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ はクリップボードを共有できません：%2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 不能共享剪贴板：%2$@"
+          }
+        }
+      }
+    },
+    "%@ couldn't use its clipboard. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ couldn't use its clipboard. Try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ はクリップボードを読み書きできませんでした。もう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 读写剪贴板失败，请再试一次。"
+          }
+        }
+      }
+    },
+    "%@ couldn't use its clipboard: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ couldn't use its clipboard: %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ はクリップボードを読み書きできませんでした：%2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 读写剪贴板失败：%2$@"
+          }
+        }
+      }
+    },
+    "%@'s clipboard holds hidden content (such as a password), so it wasn't copied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@'s clipboard holds hidden content (such as a password), so it wasn't copied"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ のクリップボードは非表示の内容（パスワードなど）のため、コピーしませんでした"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 的剪贴板里是隐藏内容（比如密码），没有复制"
+          }
+        }
+      }
+    },
+    "%@'s clipboard is empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@'s clipboard is empty"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ のクリップボードは空です"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 的剪贴板是空的"
+          }
+        }
+      }
+    },
+    "Asked every time? In Settings, set Paste from Other Apps to Allow.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Asked every time? In Settings, set Paste from Other Apps to Allow."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "毎回確認されますか？設定で「ほかのAppからペースト」を「許可」にできます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每次都要确认？可在设置里把「从其他 App 粘贴」改成「允许」"
+          }
+        }
+      }
+    },
+    "Clipboard sharing is off for %@. Turn it on on the computer's page in Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clipboard sharing is off for %1$@. Turn it on on the computer's page in Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ ではクリップボード共有がオフです。Persona のこのコンピュータのページでオンにしてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ 没有打开剪贴板共享，请在 Persona 里这台电脑的页面上打开。"
+          }
+        }
+      }
+    },
+    "Clipboard sharing isn't available on this operating system.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clipboard sharing isn't available on this operating system."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このオペレーティングシステムではクリップボード共有を使えません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个操作系统暂不支持剪贴板共享。"
+          }
+        }
+      }
+    },
+    "Computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电脑"
+          }
+        }
+      }
+    },
+    "Copied %@'s clipboard to this phone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied %1$@'s clipboard to this phone"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ のクリップボードをこのスマートフォンにコピーしました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已把 %1$@ 的剪贴板复制到这台手机"
+          }
+        }
+      }
+    },
+    "Copied the image from %@ to this phone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied the image from %1$@ to this phone"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ の画像をこのスマートフォンにコピーしました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已把 %1$@ 的图片复制到这台手机"
+          }
+        }
+      }
+    },
+    "Copies a computer's clipboard (text or an image) to this phone and returns the text. The computer needs clipboard sharing turned on in Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copies a computer's clipboard (text or an image) to this phone and returns the text. The computer needs clipboard sharing turned on in Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータのクリップボード（テキストまたは画像）をこのスマートフォンにコピーし、テキストを返します。Persona でそのコンピュータのクリップボード共有をオンにしておく必要があります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把电脑剪贴板里的文字或图片复制到手机，并返回其中的文字。需要先在 Persona 里给这台电脑打开剪贴板共享。"
+          }
+        }
+      }
+    },
+    "Get Clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get Clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリップボードを取得"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取回剪贴板"
+          }
+        }
+      }
+    },
+    "Get Computer's Clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get Computer's Clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータのクリップボードを取得"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取回电脑剪贴板"
+          }
+        }
+      }
+    },
+    "Get the clipboard of ${machine}": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get the clipboard of ${machine}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "${machine} のクリップボードを取得"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取回 ${machine} 的剪贴板"
+          }
+        }
+      }
+    },
+    "Image from the computer's clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image from the computer's clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピュータのクリップボードの画像"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "电脑剪贴板里的图片"
+          }
+        }
+      }
+    },
+    "Image sent to %@'s clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image sent to %1$@'s clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像を %1$@ のクリップボードに送りました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片已发到 %1$@ 的剪贴板"
+          }
+        }
+      }
+    },
     "Just Finished": {
       "extractionState": "manual",
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Just finished" } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "刚做完待看" } },
         "ja": { "stringUnit": { "state": "translated", "value": "完了したばかり" } }
+      }
+    },
+    "No computer shares its clipboard yet. Turn on clipboard sharing on a computer's page in Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No computer shares its clipboard yet. Turn on clipboard sharing on a computer's page in Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリップボードを共有しているコンピュータがまだありません。Persona のコンピュータのページでオンにしてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有电脑打开剪贴板共享。请在 Persona 里电脑的页面上打开。"
+          }
+        }
+      }
+    },
+    "Not available on this computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not available on this computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータでは使えません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑用不了"
+          }
+        }
+      }
+    },
+    "Not available: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not available: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使えません：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用不了：%1$@"
+          }
+        }
+      }
+    },
+    "Nothing to send: the clipboard is empty, or pasting wasn't allowed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to send: the clipboard is empty, or pasting wasn't allowed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送る内容がありません。クリップボードが空か、ペーストが許可されませんでした"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有可发送的内容：剪贴板是空的，或者没有允许粘贴"
+          }
+        }
+      }
+    },
+    "Now on this phone's clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Now on this phone's clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このスマートフォンのクリップボードにあります"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在手机剪贴板上"
+          }
+        }
+      }
+    },
+    "Off by default. When on, you can send this phone's clipboard to this computer and get the computer's here. Nothing is kept on the hub.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, you can send this phone's clipboard to this computer and get the computer's here. Nothing is kept on the hub."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "既定ではオフです。オンにすると、このスマートフォンのクリップボードをこのコンピュータに送ったり、コンピュータのクリップボードをここに取り込んだりできます。内容は hub に残りません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "默认关闭。打开后，可以把手机的剪贴板发到这台电脑，也能把电脑的剪贴板取到手机上；内容不会留在 hub 上。"
+          }
+        }
+      }
+    },
+    "Offer to Send What You Copied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offer to Send What You Copied"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "戻ったときにコピー内容の送信を提案"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回到 App 时提示发送剪贴板"
+          }
+        }
       }
     },
     "PR to Merge": {
@@ -23,6 +598,236 @@
         "en": { "stringUnit": { "state": "translated", "value": "Other open" } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "其余没完成" } },
         "ja": { "stringUnit": { "state": "translated", "value": "その他の未完了" } }
+      }
+    },
+    "Persona Link runs outside the desktop session on this computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona Link runs outside the desktop session on this computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータの Persona Link はデスクトップセッションの外で動いています。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑上的 Persona Link 运行在桌面会话之外。"
+          }
+        }
+      }
+    },
+    "Puts this phone's clipboard, or the text you pass in, on a computer's clipboard. The computer needs clipboard sharing turned on in Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Puts this phone's clipboard, or the text you pass in, on a computer's clipboard. The computer needs clipboard sharing turned on in Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このスマートフォンのクリップボード（または渡したテキスト）をコンピュータのクリップボードに入れます。Persona でそのコンピュータのクリップボード共有をオンにしておく必要があります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把手机的剪贴板（或传入的文字）放到电脑的剪贴板上。需要先在 Persona 里给这台电脑打开剪贴板共享。"
+          }
+        }
+      }
+    },
+    "Send Clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリップボードを送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送剪贴板"
+          }
+        }
+      }
+    },
+    "Send Clipboard to Computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Clipboard to Computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリップボードをコンピュータに送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送剪贴板到电脑"
+          }
+        }
+      }
+    },
+    "Send the clipboard to ${machine}": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send the clipboard to ${machine}"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリップボードを ${machine} に送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把剪贴板发到 ${machine}"
+          }
+        }
+      }
+    },
+    "Send what you just copied to %@?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send what you just copied to %1$@?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コピーした内容を %1$@ に送りますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把刚复制的内容发到 %1$@？"
+          }
+        }
+      }
+    },
+    "Sends without the paste prompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends without the paste prompt"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペーストの確認なしで送信"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直接发送，不弹粘贴确认"
+          }
+        }
+      }
+    },
+    "Sent instead of the clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent instead of the clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリップボードの代わりに送る内容"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代替剪贴板发送的内容"
+          }
+        }
+      }
+    },
+    "Sent to %@'s clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent to %1$@'s clipboard"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ のクリップボードに送りました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已发到 %1$@ 的剪贴板"
+          }
+        }
+      }
+    },
+    "Share Clipboard with Phone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share Clipboard with Phone"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スマートフォンとクリップボードを共有"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "与手机互传剪贴板"
+          }
+        }
       }
     },
     "Shelved": {
@@ -1426,6 +2231,75 @@
         "ja": { "stringUnit": { "state": "translated", "value": "サービスがこの要求を完了できませんでした。しばらくしてから再試行してください。（HTTP %1$lld）" } }
       }
     },
+    "This computer has no clipboard tool installed (wl-clipboard or xclip).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This computer has no clipboard tool installed (wl-clipboard or xclip)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータにはクリップボードツール（wl-clipboard または xclip）がインストールされていません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑没有安装剪贴板工具（wl-clipboard 或 xclip）。"
+          }
+        }
+      }
+    },
+    "This computer has no desktop session, so it has no clipboard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This computer has no desktop session, so it has no clipboard."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このコンピュータにはデスクトップセッションがないため、クリップボードがありません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台电脑没有桌面会话，所以没有剪贴板。"
+          }
+        }
+      }
+    },
+    "This device can't use clipboard sharing. Use your phone or a signed-in computer.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device can't use clipboard sharing. Use your phone or a signed-in computer."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバイスではクリップボード共有を使えません。スマートフォンかサインイン済みのコンピュータを使ってください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台设备不能使用剪贴板共享，请用手机或已登录的电脑。"
+          }
+        }
+      }
+    },
     "This hub doesn't write meeting minutes yet. They come after it's updated." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1489,6 +2363,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这台 hub 的版本还不能撤回消息。请升级 hub 后再试。"
+          }
+        }
+      }
+    },
+    "This image couldn't be read. Copy it again, or save it and send it as a file.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This image couldn't be read. Copy it again, or save it and send it as a file."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像を読み取れませんでした。もう一度コピーするか、保存してファイルとして送ってください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这张图片读不出来。请重新复制，或者保存后作为文件发送。"
           }
         }
       }
@@ -1607,6 +2504,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "待开始"
+          }
+        }
+      }
+    },
+    "Too large to send: text up to 4 MB, images up to 7 MB.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too large to send: text up to 4 MB, images up to 7 MB."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "大きすぎて送信できません。テキストは 4 MB、画像は 7 MB までです。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "内容太大，发不了：文字最多 4 MB，图片最多 7 MB。"
+          }
+        }
+      }
+    },
+    "Update Persona Link on this computer to share its clipboard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Persona Link on this computer to share its clipboard."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "クリップボードを共有するには、このコンピュータの Persona Link をアップデートしてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新这台电脑上的 Persona Link 后才能共享剪贴板。"
+          }
+        }
+      }
+    },
+    "When you come back to Persona after copying something, offers to send it to a computer that shares its clipboard. The clipboard is read only when you tap Send.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When you come back to Persona after copying something, offers to send it to a computer that shares its clipboard. The clipboard is read only when you tap Send."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかの場所でコピーして Persona に戻ったとき、クリップボードを共有しているコンピュータへ送るよう提案します。クリップボードは「送信」をタップしたときだけ読み取ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在别处复制了内容再回到 Persona 时，提示把它发到打开了剪贴板共享的电脑。只有点「发送」时才会读取剪贴板。"
           }
         }
       }
@@ -53228,6 +54194,29 @@
         }
       }
     },
+    "Task Waiting [State Names]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待機中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待中"
+          }
+        }
+      }
+    },
     "Follow-up · new chat" : {
       "localizations" : {
         "en" : {
@@ -89144,28 +90133,28 @@
       },
       "extractionState" : "manual"
     },
-    "Pull" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Pull"
+    "Pull": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pull"
           }
         },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "プル"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取回"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "拉取"
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り出す"
           }
         }
-      },
-      "extractionState" : "manual"
+      }
     },
     "Pull %lld" : {
       "localizations" : {
@@ -145757,6 +146746,604 @@
                 }
             }
         }
+    },
+    "Transcribing…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcribing…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "转写中…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字起こし中…"
+          }
+        }
+      }
+    },
+    "Waiting for on-device transcription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for on-device transcription"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待本机转写"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端末内の文字起こしを待っています"
+          }
+        }
+      }
+    },
+    "No audio was recorded in this range.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No audio was recorded in this range."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这段时间没有录到音频。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この範囲には録音がありません。"
+          }
+        }
+      }
+    },
+    "No speech was recognized in this range.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No speech was recognized in this range."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这段没有识别到语音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この範囲では音声を認識できませんでした。"
+          }
+        }
+      }
+    },
+    "Rolling recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling recording"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滚动录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリング録音"
+          }
+        }
+      }
+    },
+    "Couldn't save a clip from those segments.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save a clip from those segments."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没法从这些分段另存为录音。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これらのセグメントから録音を保存できませんでした。"
+          }
+        }
+      }
+    },
+    "Rolling recording paused — tap Continue to resume": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling recording paused — tap Continue to resume"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滚动录音已暂停，点继续接着录"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリング録音を一時停止しました。続けるをタップして再開"
+          }
+        }
+      }
+    },
+    "Elevated heart rate": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elevated heart rate"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "心率偏高"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "心拍数が高め"
+          }
+        }
+      }
+    },
+    "Low HRV": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Low HRV"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HRV 偏低"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HRVが低め"
+          }
+        }
+      }
+    },
+    "Logged mood": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logged mood"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "记过心境"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "気分を記録済み"
+          }
+        }
+      }
+    },
+    "Rolling · keeps the last 6 hours": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling · keeps the last 6 hours"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滚动录音中 · 只留最近 6 小时"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリング中 · 直近6時間だけ残します"
+          }
+        }
+      }
+    },
+    "Rolling": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滚动录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリング"
+          }
+        }
+      }
+    },
+    "Rolling recordings aren't transcribed until you pull a range.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling recordings aren't transcribed until you pull a range."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滚动录音平时不转写，取回一段才转写。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリング録音は範囲を取り出すまで文字起こししません。"
+          }
+        }
+      }
+    },
+    "Pulled range": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pulled range"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取回的内容"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取り出した範囲"
+          }
+        }
+      }
+    },
+    "Kept segments": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kept segments"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "留下来的片段"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保持するセグメント"
+          }
+        }
+      }
+    },
+    "Bookmarks and health spikes keep a few minutes around them for 7 days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bookmarks and health spikes keep a few minutes around them for 7 days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "书签和健康数据异常的前后几分钟会留 7 天。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブックマークと健康データの異常の前後数分は7日間残ります。"
+          }
+        }
+      }
+    },
+    "Erase last 10 minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erase last 10 minutes"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删掉最近 10 分钟"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分を削除"
+          }
+        }
+      }
+    },
+    "Erase the last 10 minutes?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erase the last 10 minutes?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删掉最近 10 分钟？"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直近10分を削除しますか？"
+          }
+        }
+      }
+    },
+    "Erase": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erase"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删掉"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "削除"
+          }
+        }
+      }
+    },
+    "Save as recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save as recording"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "另存为录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "録音として保存"
+          }
+        }
+      }
+    },
+    "Start Rolling": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start Rolling"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开始滚动录音"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリングを開始"
+          }
+        }
+      }
+    },
+    "Keeps the last 6 hours on this watch and your iPhone. Audio stays on your devices. Ask others before recording them.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keeps the last 6 hours on this watch and your iPhone. Audio stays on your devices. Ask others before recording them."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只留最近 6 小时在手表和手机上。音频留在自己的设备上。录别人说话前先征得同意。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このApple WatchとiPhoneに直近6時間だけ残します。音声は自分のデバイスに留まります。他の人を録音する前に同意を得てください。"
+          }
+        }
+      }
+    },
+    "Erase 10m": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erase 10m"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删 10 分钟"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10分削除"
+          }
+        }
+      }
+    },
+    "Transcription didn't finish: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription didn't finish: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "转写没有完成：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文字起こしが完了しませんでした：%1$@"
+          }
+        }
+      }
+    },
+    "Rolling · %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling · %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滚动录音 · %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリング · %1$@"
+          }
+        }
+      }
+    },
+    "Rolling keeps the last %lld hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling keeps the last %1$lld hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "滚动录音只留最近 %1$lld 小时。取回一段才会转写；文字同步进知识库。音频留在本机。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローリング録音は直近 %1$lld 時間だけ残します。範囲を取り出してから文字起こしし、テキストはナレッジに同期されます。音声はこの端末に残ります。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
