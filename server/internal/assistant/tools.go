@@ -32,7 +32,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"inbox_folders", "inbox_move", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review", "task_start_screen", "task_start_keys", "task_retry",
+	"conversation_new", "conversation_send", "task_plan", "task_review", "task_scope", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
 	"direction_name", "leader_progress"}
 
@@ -83,7 +83,8 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 			return proto.TextResult(err.Error(), true)
 		}
 	}
-	res, err := s.runTool(ctx, call.MachineID, call.SessionID, call.Name, args)
+	// A model's call says which conversation asked (task_brief.go callerOrigin); the hub's own runTool calls do not.
+	res, err := s.runTool(withToolCaller(ctx, call.MachineID, call.SessionID), call.MachineID, call.SessionID, call.Name, args)
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
@@ -125,6 +126,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTaskStartKeys(ctx, self, args)
 	case "task_retry":
 		return s.toolTaskRetry(ctx, self, args)
+	case "task_scope":
+		return s.toolTaskScope(ctx, self, args) // task_brief_scope.go
 	case "task_review":
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {

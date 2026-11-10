@@ -375,7 +375,29 @@ type BriefFacts struct {
 	Accept                                                           []BriefAccept
 	Progress                                                         []BriefProgress
 	Leaders                                                          []BriefLeader // one per direction (#3609)
+	// Briefs: the open pieces of work that need the owner or changed since the last briefing, in their own words;
+	// BriefsDone: those that ended since, once, with each criterion's result (#3822).
+	Briefs, BriefsDone []BriefTask
 }
+
+// BriefTask is one piece of work in the briefing, told from its brief: Date and Words are when the owner asked and
+// what they wrote (Words "" when they did not ask: then By says who started it, and Goal what for); Now is where it
+// stands in a line, Need what is wanted from the owner, Scope the scope changes since the last briefing, Result each
+// criterion's outcome for one that ended.
+type BriefTask struct {
+	Date, Words, By, Goal string
+	Now, Need             string
+	// Status: the closeout's status when Now is the agent's own account (done, not_done, blocked). Decide: it waits
+	// for the owner's decision and no ask words it. Cancelled: one that ended by being cancelled.
+	Status          string
+	Decide, Overdue bool
+	Cancelled       bool
+	Scope, AlsoDone []string
+	Result          []BriefCriterion
+}
+
+// BriefCriterion is one criterion's result in the briefing: met, not_met, unchecked, or dropped by scope change Change.
+type BriefCriterion struct{ Criterion, State, Change string }
 
 // BriefLeader is one direction in the briefing's facts: its name, its open tasks, those waiting for the owner, those
 // stuck over a day, and its leader's latest summary of the day (empty parts: none).
@@ -483,6 +505,8 @@ type Supervise struct {
 	Leader, Escalated bool
 	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
+	// Overdue: an entry is a task past its brief's clock (#3822).
+	Overdue bool
 	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
 	// they wait here before going up a rung.
 	Asked      bool
@@ -521,6 +545,11 @@ type SuperviseEntry struct {
 	// cards a leader gave the user.
 	Asks      []SuperviseAsk
 	Decisions string
+	// From the task's brief (#3822): Asked is the owner's message that led to the work (clipped) and AskedAt its day;
+	// Started says who started it when it was not the owner; Dropped are the criteria scope changes took out.
+	// (assistant, leader, routine, hub) and StartedWhy the reason given.
+	Asked, AskedAt, Started, StartedWhy string
+	Dropped                             []string
 }
 
 // SuperviseAsk is one card of a task's agent on its way to the user: its interaction id, kind (question, permission,
@@ -675,8 +704,12 @@ func RenderSideConversation(in SideConversation) string {
 // TaskDoneInput is the task as it was handed out and what its agents said when they stopped (assistant/task_done_input).
 type TaskDoneInput struct {
 	Title, Prompt string
-	Replies       []TaskDoneReply
-	Criteria      []string `json:"criteria,omitempty"`
+	// From the task's brief (#3822): Asked is the owner's message that led to the work, verbatim, and AskedAt its day;
+	// Dropped the criteria logged scope changes took out. Criteria are the brief's as those changes left them.
+	Asked, AskedAt string
+	Dropped        []string
+	Replies        []TaskDoneReply
+	Criteria       []string `json:"criteria,omitempty"`
 	// Hints the hub found in the replies: a merged pull request, a TestFlight build number.
 	MergedPR, Build bool
 }

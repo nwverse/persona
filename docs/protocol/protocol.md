@@ -616,6 +616,25 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                                "findings":"the reviewer's report","error":"why it failed","session_id":"<reviewer>","worktree":"<its copy>",
                                "started_at":"...","ended_at":"..."},
                 "updated_at":"..."},
+ // The task's brief (#3822, docs/assistant/unified-entry.md "Briefs"): what was asked when the work was handed out, never rewritten; absent on a to-do with none.
+ // Clients that don't know it show the to-do as usual.
+ "brief":{"id":"brief_…","created_at":"...",
+          "request":{"text":"the owner's message, verbatim","truncated":false,"at":"...","conversation":"<chat id>","message_id":"<item id>"},   // absent when the owner did not ask for it
+          "started_by":"owner|assistant|leader|routine|hub|unknown",
+          "trigger":"supervision|followup|routine|conversation|notice|meeting|wake","trigger_title":"…","reason":"why it was started",   // when not the owner
+          "conversation":"<chat id>","goal":"one sentence","done_when":["…"],"expect_minutes":30,"out_of_bounds":["…"],   // as handed out
+          "reconstructed":true,"handover":"the prompt at hand-over, not the owner's words",   // a task from before briefs
+          "log":[{"at":"...","kind":"scope","todo_id":"todo_…","by":"<chat id>","change":"…","why":"…","done_when":["…"],"expect_minutes":90,
+                  "added":["…"],"dropped":["…"],"approval":{"text":"…","at":"...","conversation":"…","message_id":"…"}},   // approval: the owner's message that allowed a risky step
+                 {"at":"...","kind":"overdue","todo_id":"todo_…"}],
+          "criteria":["…"],"expect_minutes_now":90,     // done_when and expect_minutes as the scope changes left them
+          "clock_at":"...","due_at":"...","overdue_at":"...",   // the clock: from the hand-out or the latest scope change to max(expect × 3, 24 h); overdue_at once its supervisor was told
+          "result":{"at":"...","todo_id":"todo_…","by":"judge","verdict":"accepted|cancelled",   // by absent: the supervisor's review
+                    "criteria":[{"criterion":"…","state":"met|not_met|unchecked|dropped","evidence":"…","change":"the scope change that dropped it","changed_at":"..."}],
+                    "also_done":["…"]}},
+ // The to-dos that carried the brief's work, oldest first; why: why it stopped (the reason the one that took over gave, else its own end)
+ "lineage":[{"todo_id":"todo_…","title":"…","agent":"claude","machine":"<machine id>","session_id":"…","started":"...","ended":"...","why":"…",
+             "continues":"todo_…","superseded_by":"todo_…","current":true}],
  "spaces":[{"machine_id":"…","space":"group/alpha","linked_at":"..."}],
  "agents":[{"machine_id":"…","session_id":"…","linked_at":"...","released_at":null,
            "title":"…","cwd":"…","agent":"claude","start_error":"","source":"manual|space|spawned|review","via":""}]}   // review: an independent reviewer, released from the start (#2173)
@@ -2876,7 +2895,10 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
  "tasks":[{"title":"Fix the login crash","prompt":"The first message to the Agent","machine":"<machine id>","cwd":"/abs/path",
            "launcher":"","model":"","permission":"acceptEdits","readonly":false,"why":"one-line reason",
            "ultracode":true,            // optional (#12): the Claude Code Agent starts with ultracode on; on start, true / false sets it and leaving it out keeps the assistant's choice
-           "done_when":["PR merged into master"],"expect_minutes":30,   // optional (#3124): acceptance criteria, expected minutes; clients only display them and don't send them back on start
+           "done_when":["PR merged into master"],"expect_minutes":30,   // acceptance criteria, expected minutes (#3124); required of task_plan since #3822; clients only display them and don't send them back on start
+           "goal":"one sentence","out_of_bounds":["do not merge"],"started_why":"…",   // optional (#3822): the brief's goal and bounds, and why the assistant starts it on its own
+           "continues":"todo_…","continues_why":"…",   // optional (#3822): the to-do this task takes over from; it keeps that to-do's brief
+           "brief":{…},                 // the hub's (#3822): the brief as it will be kept (the to-do's `brief` above), for the card to show before Start; never sent back
            "reuse_todo":"todo_…",       // optional (#5279): the to-do the task runs on instead of a new one (task_plan's per-task `todo_id`); the apps neither send it back nor change it
            "todo_id":"todo_…",          // only present after start
            "error":"",                   // why the Agent didn't start
