@@ -124,7 +124,7 @@ The "Needs" column: unread = Lark's unread / read position; feed = the conversat
 - App credentials do not go into `hub.json`: lark-cli uses the app bound in its own `config`.
 - **Enable every permission that can be enabled** (user decision 2026-11-03): log in with `lark-cli auth login --domain all` (or `lark-cli --profile <profile> auth login --domain all` for a configured profile; user permissions for all domains; on machines without a browser add `--no-wait --json` to use Device Flow
   and authorize by tapping a link on the phone). Permissions that need admin approval are unavailable until approved: the settings page lists what is missing with `auth check`, and a missing feature says which permission it needs, instead of being reported as a connection failure.
-- Settings › Connectors › Lark: shows the status of each source, which one is currently primary, the account lark-cli is logged in as, when the token expires, and missing permissions; when it has expired, it says to run `lark-cli auth login` on the hub machine.
+- Settings › Connectors › Lark: shows the status of each source, which one is currently primary, the account lark-cli is logged in as, when the token expires, and missing permissions; the lark-cli status lives in the Lark group, and when it has expired, it says to run `lark-cli auth login` on the hub machine.
 
 ## What the Inbox collects (lark-cli source)
 

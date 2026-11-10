@@ -4,6 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HubConnector } from "../../lib/connectors";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 
 type Call = { resolve: (s: FeishuBotStatus) => void };
@@ -75,6 +76,30 @@ afterEach(() => {
 });
 
 describe("Feishu bot dialog", () => {
+  it("puts lark-cli in the Lark group and opens its connector page", async () => {
+    const onOpen = vi.fn();
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    act(() => root.render(<FeishuBot larkcli={larkcli} onOpen={onOpen} />));
+    await act(async () => calls.status[0].resolve(saved()));
+
+    const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.larkcli_row")));
+    expect(row).toBeDefined();
+    expect(row?.closest("section")?.textContent).toContain(t("settings-feishubot.larkcli_footer"));
+    expect(row?.querySelector("img")?.getAttribute("alt")).toBe("");
+    await act(async () => row!.click());
+    expect(onOpen).toHaveBeenCalledWith("larkcli");
+  });
+
+  it("keeps the original group when lark-cli is absent", async () => {
+    act(() => root.render(<FeishuBot />));
+    await act(async () => calls.status[0].resolve(saved()));
+
+    expect(host.textContent).toContain(t("settings-feishubot.footer"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_row"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_footer"));
+    expect(host.querySelectorAll("button")).toHaveLength(1);
+  });
+
   it("keeps a typed App ID when a feature switch is flipped", async () => {
     await open(saved());
     type("App ID", "cli_typed");

@@ -191,7 +191,7 @@ export function isStarting(c?: HubConnector | null): boolean {
 /** The connectors that get rows of their own after "Mail" and Lark (those two keep their own groups; Lark's only shows on a
  * hub with feature `lark`, `larkGroup`, so without it a connector named lark is listed like any other). */
 export function otherConnectors(list: HubConnector[], larkGroup = true): HubConnector[] {
-  return list.filter((c) => c.id !== "mail" && !(larkGroup && c.id === "lark"));
+  return list.filter((c) => c.id !== "mail" && c.id !== "larkcli" && !(larkGroup && c.id === "lark"));
 }
 
 // ── brand and wording, by id ─────────────────────────────
@@ -218,6 +218,7 @@ interface ConnectorProfile {
 const PROFILES = new Map<string, ConnectorProfile>([
   ["github", { brand: "github" }],
   ["lark", { brand: "lark" }],
+  ["larkcli", { brand: "lark" }],
   [
     "telegram",
     {
