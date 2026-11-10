@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -188,6 +189,9 @@ func (s *Service) listSettings(ctx context.Context, own []ownSetting) (string, e
 	return b.String(), nil
 }
 
+// settingCardWait is how long a change's approval card waits for the user before it expires (and changes nothing).
+var settingCardWait = 15 * time.Minute
+
 // ownSettingAction reads one of the assistant's settings, or changes it once the user approves on the phone.
 func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage) (string, error) {
 	switch action {
@@ -213,14 +217,17 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	now := time.Now().UTC()
 	r, err := s.ask(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: change.card(l), ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)})
+		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)})
 	if err != nil {
 		return "", err
 	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
+	switch { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
+	case r.UserAllowed():
+		return change.apply(ctx)
+	case r.UserDenied():
+		return "The user declined the change: nothing changed.", nil
 	}
-	return change.apply(ctx)
+	return prompts.RenderSettingUnanswered(), nil
 }
 
 func orNone(s string) string {
