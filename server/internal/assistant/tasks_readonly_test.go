@@ -256,3 +256,35 @@ func TestReadonlyTaskPlanPersistsAcrossRestart(t *testing.T) {
 		t.Fatalf("persisted plan = %+v, error = %v", saved, err)
 	}
 }
+
+func TestReadonlyTaskExitPlanModeDoesNotAskUser(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, f := readonlyTaskService(t)
+		if _, err := s.toolTaskPlan(context.Background(), "readonly-chat", readonlyTaskArgs(t, readonlyTestTask(""))); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		todo := onlyTodo(s)
+		if len(todo.Agents) != 1 {
+			t.Fatalf("task not dispatched: %+v", todo)
+		}
+		agent := todo.Agents[0]
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r, err := s.nodeInteraction(ctx, proto.Interaction{ID: "readonly-exit", MachineID: agent.MachineID,
+			SessionID: agent.SessionID, Kind: proto.IxPlan, ToolName: "ExitPlanMode", Plan: "Inspection complete."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Approve == nil || *r.Approve || r.Dismiss || r.Mode != "" || !strings.Contains(r.Feedback, "read-only") {
+			t.Fatalf("read-only plan exit must be denied with completion guidance, got %+v", r)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, event := range f.told {
+			if event.event == "fleet.interaction" {
+				t.Fatal("read-only completion created a user approval card")
+			}
+		}
+	})
+}
