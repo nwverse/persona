@@ -35,10 +35,14 @@ final class MeetingSpeaker: NSObject {
         synthesizer.usesApplicationAudioSession = true
     }
 
+    /// The longest an answer can take aloud (the contract's 400 characters, slowly): a stretch never runs past it, even
+    /// if the system never says the answer ended (an interruption that never ends).
+    static let longestAnswer: Double = 150
+
     /// The stretch being said now, still open: a sentence transcribed meanwhile is checked against it.
     func openSpan(for id: UUID) -> RecordingSpan? {
         guard recording == id, let start = spanStart else { return nil }
-        return RecordingSpan(start: start, end: max(RecordingCapture.shared.timeline, start))
+        return RecordingSpan(start: start, end: min(max(RecordingCapture.shared.timeline, start), start + Self.longestAnswer))
     }
 
     /// Says `text` for the exchange `id` of `recording`, in `lang` (BCP 47, the hub's), else the language it is written
@@ -109,19 +113,30 @@ final class MeetingSpeaker: NSObject {
         }
     }
 
-    /// Whether `said` is the utterance being said now.
-    private func current(_ said: ObjectIdentifier) -> Bool { utterance.map { ObjectIdentifier($0) == said } ?? false }
+    /// The answer the system says is over (finished, cancelled, or paused by an interruption, which cuts it): only the
+    /// one being said, compared as the very object, so a late word about the one before never ends the next.
+    fileprivate func over(_ said: AVSpeechUtterance, cut: Bool) {
+        guard let utterance, utterance === said else { return }
+        if cut { synthesizer.stopSpeaking(at: .immediate) }
+        finished()
+    }
 }
 
 extension MeetingSpeaker: AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        let said = ObjectIdentifier(utterance)
-        Task { @MainActor in if self.current(said) { self.finished() } }
+        nonisolated(unsafe) let said = utterance
+        Task { @MainActor in self.over(said, cut: false) }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        let said = ObjectIdentifier(utterance)
-        Task { @MainActor in if self.current(said) { self.finished() } }
+        nonisolated(unsafe) let said = utterance
+        Task { @MainActor in self.over(said, cut: false) }
+    }
+
+    /// A call or Siri paused it: the answer is cut rather than finished later, out of place in the meeting.
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
+        nonisolated(unsafe) let said = utterance
+        Task { @MainActor in self.over(said, cut: true) }
     }
 }
 #endif

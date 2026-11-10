@@ -58,6 +58,8 @@ import Foundation
 
     static func mainCandidate(_ model: AppModel) -> Candidate? {
         guard let key = model.assistantMain else { return nil }
+        // The same test as any other chat, once the hub has listed it (its computer may be a work one).
+        if let s = model.session(key), !mayAttend(s, model: model) { return nil }
         return Candidate(key: key, title: model.persona.name, detail: String(localized: "Main Chat"), main: true, persona: true)
     }
 
@@ -70,14 +72,20 @@ import Foundation
     /// computer, another manager, the health space, a chat whose replies leave the apps, or a session that never asks
     /// before it acts.
     static func mayAttend(_ s: Session, model: AppModel) -> Bool {
-        if s.manager?.isEmpty == false { return false }
+        // Every listed session carries its manager; only one other than the default's is out.
+        if let roster = model.managerRoster {
+            if roster.owner(s.manager) != roster.defaultID { return false }
+        } else if let manager = s.manager, !manager.isEmpty, manager != ManagerRoster.assistant {
+            return false
+        }
         if s.permissionMode == "bypassPermissions" { return false }
+        if model.machine(s.machineRef)?.trust == "work" { return false }
         if s.assistant {
             if s.isHealth { return false }
             if let origin = s.origin, ["lark_agent", "channel", "extension", "inbox"].contains(origin) { return false }
-            return s.openedBy?.isEmpty ?? true
+            if let opener = s.openedBy, !opener.isEmpty { return false }
         }
-        return model.machine(s.machineRef)?.trust != "work"
+        return true
     }
 
     /// The session a meeting starts with: the one picked last while it can still attend, else the main chat.
@@ -85,7 +93,13 @@ import Foundation
         let main = mainCandidate(model)
         guard let path = store.string(forKey: MeetingAttendanceDefaults.sessionKey), path != MeetingAttendanceDefaults.main,
               let key = SessionKey(path: path), key != main?.key else { return main }
-        return candidates(model).first { $0.key == key } ?? main
+        if let listed = candidates(model).first(where: { $0.key == key }) { return listed }
+        // Started before the hub listed anything (Siri, the Control, with the app not running): the one picked last, as
+        // it was named then; the hub says if it can't take messages (`attendee_unavailable`).
+        if model.allSessions.isEmpty, let title = store.string(forKey: MeetingAttendanceDefaults.sessionTitleKey) {
+            return Candidate(key: key, title: title, detail: "", main: false, persona: false)
+        }
+        return main
     }
 
     /// What a meeting recording starts with when nothing was picked for it (the drawer, Siri, the Control, the Action
@@ -99,8 +113,9 @@ import Foundation
     }
 
     /// Remembers the session picked (nil: the main chat), for the next meeting.
-    static func remember(_ key: SessionKey?, store: UserDefaults = .standard) {
+    static func remember(_ key: SessionKey?, title: String?, store: UserDefaults = .standard) {
         store.set(key?.path ?? MeetingAttendanceDefaults.main, forKey: MeetingAttendanceDefaults.sessionKey)
+        store.set(title, forKey: MeetingAttendanceDefaults.sessionTitleKey)
     }
 }
 #endif

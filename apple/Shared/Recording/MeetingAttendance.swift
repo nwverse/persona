@@ -139,6 +139,8 @@ nonisolated enum MeetingAttendanceDefaults {
     /// The session picked last (`SessionKey.path`, `main` for the main chat): the next meeting starts with it again while
     /// it can still attend.
     static let sessionKey = "recording.meeting.attendee"
+    /// Its name then, for a start before the hub has listed it.
+    static let sessionTitleKey = "recording.meeting.attendeeTitle"
     static let main = "main"
 
     /// The role a meeting starts with when nothing is picked: the hub's default while it offers attending, else off.

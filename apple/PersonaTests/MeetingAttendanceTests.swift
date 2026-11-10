@@ -199,18 +199,25 @@ import Testing
         let lib = try library()
         let e = meeting(.listener, lines: [line(1, 2, "a"), line(3, 4, "b"), line(5, 6, "c")])
         try lib.save(e)
-        var hub = 1 // the hub kept only the first
-        var calls: [Int] = []
+        final class Hub { var held = 0; var calls: [Int] = [] }
+        let hub = Hub()
         let sender = live(lib, post: { _, from, s in
-            calls.append(from)
-            if from > hub { throw APIError(status: 409, message: "gap", fields: ["code": "live_gap"]) }
-            hub = max(hub, from + s.count)
-            return .init(next: hub)
+            hub.calls.append(from)
+            if from > hub.held { throw APIError(status: 409, message: "gap", fields: ["code": "live_gap"]) }
+            hub.held = max(hub.held, from + s.count)
+            return .init(next: hub.held)
         })
         sender.append(e.id)
         await sender.send(e.id)
         #expect(sender.state(e.id).next == 3)
-        #expect(calls.first == 0)
+        // The hub lost the last two (a restore); the phone still thinks it holds three, and has a fourth to send.
+        hub.held = 1
+        lib.change(e.id) { $0.segments.append(RecordingSegment(index: 1, start: 60, duration: 30, sentences: [self.line(61, 62, "d")])) }
+        sender.append(e.id)
+        await sender.send(e.id)
+        #expect(hub.calls == [0, 3, 0], "from 3 is a gap; it asks again from the start and the hub skips what it holds")
+        #expect(sender.state(e.id).next == 4)
+        #expect(hub.held == 4)
     }
 
     /// An older manager (a 404 without `recording_not_found`): the meeting stops attending, the recording goes on.

@@ -129,6 +129,7 @@ struct MeetingAttendeePicker: View {
 /// part (changeable), Ask Persona, and the latest answers.
 struct MeetingAttendanceSection: View {
     var entry: RecordingEntry
+    @Environment(AppModel.self) private var model
     @State private var ask = MeetingAsk.shared
     @State private var live = MeetingLive.shared
     @State private var sync = RecordingSync.shared
@@ -158,7 +159,7 @@ struct MeetingAttendanceSection: View {
             .accessibilityIdentifier("meeting-attendance-now")
             if attendance.role.attends {
                 NavigationLink {
-                    MeetingAttendeePicker(selected: attendance.key) { MeetingRecorder.shared.setSession($0, recordingID: entry.id) }
+                    MeetingAttendeePicker(selected: attendance.key ?? model.assistantMain) { MeetingRecorder.shared.setSession($0, recordingID: entry.id) }
                 } label: {
                     MeetingAttendeeLabel(title: attendance.sessionTitle, detail: nil)
                 }

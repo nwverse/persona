@@ -39,7 +39,7 @@ struct RecordingLiveActivity: Widget {
                         }
                         .padding(.horizontal, IslandMetrics.gap)
                         RecordingAnswer(state: state).foregroundStyle(.white.opacity(0.85)).padding(.horizontal, IslandMetrics.gap)
-                        RecordingButtons(id: id, onDark: true, attends: state.persona != nil && state.phase == .recording)
+                        RecordingButtons(id: id, onDark: true, attends: state.persona != nil, recording: state.phase == .recording)
                     }
                     .environment(\.locale, LanguageStore.drawingLocale)
                 }
@@ -136,12 +136,13 @@ struct RecordingSubtitle: View {
 struct RecordingButtons: View {
     var id: String
     var onDark = false
-    /// Persona attends and the recording runs: Ask Persona and Turn Off join the row.
+    /// Persona attends: Turn Off joins the row, and while it records, Ask Persona.
     var attends = false
+    var recording = true
 
     var body: some View {
         HStack(spacing: IslandMetrics.buttonGap) {
-            if attends {
+            if attends && recording {
                 Button(intent: AskPersonaInMeetingIntent(recordingID: id)) { label("Ask Persona", RecordingSymbol.ask) }
                     .buttonStyle(.bordered)
                     .tint(onDark ? .white : .primary)
@@ -181,14 +182,22 @@ struct RecordingButtons: View {
     }
 }
 
-/// Persona's latest answer in a meeting it attends, under the name (the hub posts no notification for answers).
+/// Persona in a meeting it attends, under the name: its latest answer (the hub posts no notification for answers), or,
+/// while the recording is paused and the subtitle says why, that Persona still attends.
 struct RecordingAnswer: View {
     var state: RecordingActivityAttributes.ContentState
 
     var body: some View {
-        if state.persona != nil, let answer = state.answer, !answer.isEmpty {
-            Label { Text(answer).lineLimit(2) } icon: { Image(systemName: RecordingSymbol.persona) }
+        if let persona = state.persona {
+            if let answer = state.answer, !answer.isEmpty {
+                Label { Text(answer).lineLimit(2) } icon: { Image(systemName: RecordingSymbol.persona) }
+                    .font(.caption)
+            } else if state.phase != .recording {
+                Label { Text(persona == "participant" ? "Persona taking part" : "Persona listening").lineLimit(1) } icon: {
+                    Image(systemName: RecordingSymbol.persona)
+                }
                 .font(.caption)
+            }
         }
     }
 }
@@ -230,7 +239,7 @@ struct RecordingLockScreen: View {
                     .foregroundStyle(state.phase == .recording ? Palette.recordingRed : .secondary)
             }
             RecordingAnswer(state: state).foregroundStyle(.secondary)
-            RecordingButtons(id: id, attends: state.persona != nil && state.phase == .recording)
+            RecordingButtons(id: id, attends: state.persona != nil, recording: state.phase == .recording)
         }
         .padding(IslandMetrics.lockPadding)
     }

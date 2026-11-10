@@ -46,7 +46,7 @@ import OSLog
         let previous = shown?.id == id ? shown?.content : nil
         let content = Self.content(entry: entry, recording: state == .recording, interrupted: interrupted,
                                    elapsed: capture.timeline, previous: previous, now: .now,
-                                   answer: entry.attended ? MeetingAsk.shared.latest(for: id)?.answer : nil)
+                                   answer: MeetingAsk.shared.exchanges(for: id).last(where: { $0.answer != nil })?.answer)
         if let previous {
             guard previous != content else { return }
             shown = (id, content)
@@ -67,7 +67,7 @@ import OSLog
         return Content(phase: phase, runningSince: since, elapsed: keep ? previous?.elapsed ?? elapsed : elapsed,
                        title: entry.displayTitle, meeting: entry.isMeeting, marks: entry.marks.count,
                        persona: entry.attended ? entry.attendance?.role.rawValue : nil,
-                       answer: answer.map { String($0.prefix(Self.answerLength)) })
+                       answer: entry.attended ? answer.map { String($0.prefix(Self.answerLength)) } : nil)
     }
 
     /// The most of an answer the activity carries (it shows two or three lines of it).

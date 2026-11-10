@@ -1060,10 +1060,11 @@ final class AppModel {
 
     /// Settings › Meetings (#2981): the role every meeting recording starts with. Shown at once, put back if the hub says no.
     func setMeetingAttendanceDefault(_ role: MeetingAttendance) async {
-        guard let api, var shown = assistantConfig else { return }
-        let was = shown.meetingAttendanceDefault
-        shown.meetingAttendanceDefault = role.rawValue
-        assistantConfig = shown
+        guard let api else { return }
+        // Before the assistant settings are in, the hub's answer brings them.
+        let was = assistantConfig?.meetingAttendanceDefault
+        assistantConfig?.meetingAttendanceDefault = role.rawValue
+        MeetingAttendanceDefaults.remember(offered: true, role: role)
         do {
             let st = try await api.setAssistant(meetingAttendanceDefault: role.rawValue)
             guard showsPage(of: api) else { return }

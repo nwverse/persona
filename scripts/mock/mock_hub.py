@@ -2733,7 +2733,10 @@ def recordings_route(h, method, p):
         return h.send_json({"error": "参数不对"}, 400) or True
     have = RECORDINGS.get(rid)
     if have and have["revision"] > body["revision"]:
-        return h.send_json({"id": rid, "revision": have["revision"], "status": "stale"}) or True
+        stale = {"id": rid, "revision": have["revision"], "status": "stale"}
+        # With the feature every 200 says the role in effect (the contract), a stale one too.
+        if MEETING_ATTENDANCE["on"]: stale["attendance"] = have.get("attendance") or "off"
+        return h.send_json(stale) or True
     attendance = None
     problem = None
     if MEETING_ATTENDANCE["on"]:

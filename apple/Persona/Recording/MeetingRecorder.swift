@@ -60,6 +60,7 @@ import UserNotifications
         if openPage ?? inForeground { Self.openRecordings() }
         guard capture.state == .idle else { return .alreadyRecording }
         let meeting = await MeetingCalendar.meetingOffMain() ?? RecordingMeeting()
+        let picked = attendance != nil
         let attendance = attendance ?? MeetingAttendees.defaultAttendance(AppModel.shared)
         await capture.start(locale: Self.locale, input: RecordingInput.chosen, title: meeting.title ?? "", meeting: meeting,
                             playsAloud: attendance.role.speaks)
@@ -69,7 +70,8 @@ import UserNotifications
         // Off leaves the recording exactly as it was before attendance existed. Attending, the hub hears of it at once.
         if attendance.role.attends {
             RecordingLibrary.shared.change(id) { $0.attendance = attendance }
-            MeetingAttendees.remember(attendance.key)
+            // Only a pick is remembered: a start with the default keeps the one picked last.
+            if picked { MeetingAttendees.remember(attendance.key, title: attendance.sessionTitle) }
             RecordingSync.shared.attendanceChanged(id)
         }
         RecordingActivity.shared.refresh()
@@ -130,7 +132,7 @@ import UserNotifications
             a.sessionTitle = candidate.title
             e.attendance = a
         }
-        MeetingAttendees.remember(candidate.main ? nil : candidate.key)
+        MeetingAttendees.remember(candidate.main ? nil : candidate.key, title: candidate.title)
         RecordingSync.shared.attendanceChanged(recordingID)
     }
 

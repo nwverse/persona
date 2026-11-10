@@ -145,7 +145,10 @@ final class MeetingAsk {
             }
             let state: Exchange.State
             var answer: Answer?
-            if await deps.settled(start.recordingID) {
+            let settled = await deps.settled(start.recordingID)
+            // The meeting ended meanwhile (its questions went with it): nothing to ask any more.
+            guard exchanges.contains(where: { $0.id == id }) else { return }
+            if settled {
                 do {
                     let got = try await deps.ask(Question(id: id, recordingID: start.recordingID, at: start.at,
                                                           text: start.typed ? start.question : nil, liveNext: liveNext))
@@ -280,8 +283,8 @@ extension MeetingAsk.Deps {
                 case (404, "recording_not_found") where !uploaded:
                     // The hub has no upload of this recording yet: it goes first, then the question again.
                     uploaded = true
-                    RecordingSync.shared.attendanceChanged(q.recordingID)
-                    _ = await settled(q.recordingID)
+                    RecordingSync.shared.reupload(q.recordingID)
+                    guard await settled(q.recordingID) else { throw error }
                 case (404, "recording_not_found"):
                     throw error
                 case (404, _):
@@ -316,7 +319,7 @@ extension MeetingAsk.Deps {
     static func settled(_ id: UUID) async -> Bool {
         func done() -> Bool { RecordingLibrary.shared.entry(id).map { RecordingSync.shared.attendanceSettled($0) } ?? false }
         if done() { return true }
-        RecordingSync.shared.attendanceChanged(id)
+        RecordingSync.shared.reupload(id)
         for _ in 0..<50 {
             try? await Task.sleep(for: .milliseconds(200))
             if done() { return true }

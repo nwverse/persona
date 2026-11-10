@@ -16,8 +16,13 @@ final class MeetingAttendanceUITests: XCTestCase {
         try attendance(hub, on: false)
         let app = launch(hub, ["-openShellPage", "recordings"])
         XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertFalse(app.segmentedControls["meeting-attendance-role"].exists, "no role from a hub that doesn't offer attending")
+        // A launch remembers what the last hub said until this one's hello is in: then the role goes.
+        let role = app.segmentedControls["meeting-attendance-role"]
+        XCTAssertTrue(waitFor(15) { !role.exists }, "no role from a hub that doesn't offer attending")
+        sleep(2)
+        XCTAssertFalse(role.exists, "and it stays away")
         XCTAssertFalse(app.buttons["meeting-attendee"].exists)
+        try shot(app, "older-hub")
     }
 
     /// The hub's default is off: the role shows, Off chosen, nobody attends, Meeting Recording still one tap.
@@ -145,6 +150,11 @@ final class MeetingAttendanceUITests: XCTestCase {
         app.buttons["旁听"].firstMatch.tap()
         XCTAssertTrue(waitFor(10) { (try? self.meeting(hub))?.defaultRole == "listener" }, "the hub's default changed")
         try shot(app, "settings")
+    }
+
+    /// The shared mock goes back to a hub without attending, so the next class sees what it always did.
+    override func tearDownWithError() throws {
+        if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] { try attendance(hub, on: false, default: "off") }
     }
 
     // MARK: Helpers

@@ -148,6 +148,8 @@ final class RecordingSync {
     @ObservationIgnored private var again = false
     /// `worker` is only waiting out a backoff: a new reason to sync cuts it short.
     @ObservationIgnored private var backingOff = false
+    /// `worker` is only waiting out the save debounce.
+    @ObservationIgnored private var debouncing = false
     @ObservationIgnored private var failures = 0
     @ObservationIgnored private var lastReconcile: Date?
     @ObservationIgnored private var started = false
@@ -203,6 +205,14 @@ final class RecordingSync {
         kick(now: true)
     }
 
+    /// The hub doesn't have this recording with its attendance (`recording_not_found`, `not_attending`): it goes again now,
+    /// even if this phone thinks it was stored.
+    func reupload(_ id: UUID) {
+        store.synced[id] = nil
+        attendanceStored[id] = nil
+        attendanceChanged(id)
+    }
+
     func isExpired(_ entry: RecordingEntry) -> Bool {
         store.daysKnown && !entry.active && entry.createdAt < now().addingTimeInterval(-Double(store.days) * 86_400)
     }
@@ -223,10 +233,14 @@ final class RecordingSync {
         guard !automaticRetryPaused else { return }
         if reconcile, lastReconcile.map({ now().timeIntervalSince($0) > 600 }) ?? true { lastReconcile = nil }
         if backingOff { worker?.cancel(); worker = nil; backingOff = false }
+        // Waiting out the save debounce: now is now (a pass already under way takes the urgent ones next).
+        if immediately, debouncing { worker?.cancel(); worker = nil; debouncing = false }
         guard worker == nil else { again = true; return }
+        debouncing = !immediately
         worker = Task { [weak self] in
             if !immediately { try? await Task.sleep(for: .seconds(1)) }
             guard !Task.isCancelled else { return }
+            self?.debouncing = false
             await self?.runPasses()
         }
     }
@@ -272,17 +286,16 @@ final class RecordingSync {
             guard await reconcile(api) else { return }
             lastReconcile = now()
         }
-        // A meeting whose attendance the hub doesn't have yet goes first: its live lines and questions wait for it.
-        for id in urgent.sorted(by: { $0.uuidString < $1.uuidString }) {
-            urgent.remove(id)
-            guard let entry = library.entry(id), status(entry) == .pending else { continue }
-            guard await upload(entry, api) else { urgent.insert(id); return }
-        }
+        // A meeting whose attendance the hub doesn't have yet goes first, also between the others: its live lines and
+        // questions wait for it.
+        guard await uploadUrgent(api) else { return }
         for id in store.deletes.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await sendDelete(id, api) else { return }
         }
         for entry in library.entries where status(entry) == .pending {
-            guard await upload(entry, api) else { return }
+            guard await uploadUrgent(api) else { return }
+            guard let latest = library.entry(entry.id), status(latest) == .pending else { continue }
+            guard await upload(latest, api) else { return }
         }
         lastProblem = nil
     }
@@ -310,6 +323,15 @@ final class RecordingSync {
         }
     }
 
+    private func uploadUrgent(_ api: APIClient) async -> Bool {
+        for id in urgent.sorted(by: { $0.uuidString < $1.uuidString }) {
+            urgent.remove(id)
+            guard let entry = library.entry(id), status(entry) == .pending else { continue }
+            guard await upload(entry, api) else { urgent.insert(id); return false }
+        }
+        return true
+    }
+
     private func upload(_ entry: RecordingEntry, _ api: APIClient) async -> Bool {
         struct Answer: Decodable {
             var revision: Int64?; var status: String?; var attendance: String?; var attendanceProblem: String?
@@ -317,7 +339,13 @@ final class RecordingSync {
         }
         uploading = entry.id
         defer { uploading = nil }
-        let body = RecordingUpload(entry)
+        var body = RecordingUpload(entry)
+        #if os(iOS)
+        // Persona is saying an answer in this meeting right now: what the microphone hears of it isn't the meeting's.
+        if let open = MeetingSpeaker.shared.openSpan(for: entry.id) {
+            body.segments.removeAll { open.holds(RecordingSentence(start: $0.start, end: $0.end, text: $0.text)) }
+        }
+        #endif
         do {
             let data = try await api.request("PUT", "/api/v1/recordings/\(entry.id.uuidString.lowercased())", body: body, timeout: 60)
             let answer = try? JSON.decoder.decode(Answer.self, from: data)

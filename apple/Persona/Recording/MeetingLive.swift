@@ -32,7 +32,7 @@ final class MeetingLive {
         var post: (_ recording: UUID, _ from: Int, _ segments: [RecordingSentence]) async throws -> Answer
         /// The hub has the meeting's current attendance (`RecordingSync.attendanceSettled`).
         var settled: (RecordingEntry) -> Bool
-        /// The hub needs the upload first (`RecordingSync.attendanceChanged`).
+        /// The hub needs the upload first, even if this phone thinks it was stored (`RecordingSync.reupload`).
         var upload: (UUID) -> Void
         /// The stretch Persona is saying now (`MeetingSpeaker.openSpan`).
         var openSpan: (UUID) -> RecordingSpan?
@@ -106,8 +106,9 @@ final class MeetingLive {
     }
 
     /// The log's length once the hub holds every line in it (for a question about what was just said: the hub waits for
-    /// that many); nil when the lines can't go now.
+    /// that many); nil when the lines can't go now. Waits (10 s at most) for a send already under way, then sends the rest.
     func sent(_ id: UUID) async -> Int? {
+        for _ in 0..<50 where sending.contains(id) { await deps.wait(.milliseconds(200)) }
         await send(id)
         guard let entry = library.entry(id), let count = entry.attendance?.live.count, let next = states[id]?.next else { return nil }
         return next >= count ? count : nil
@@ -115,6 +116,8 @@ final class MeetingLive {
 
     private func sendAll(_ id: UUID) async {
         while let entry = library.entry(id), let attendance = entry.attendance, attendance.stopped == nil {
+            // Off for now: the hub refuses lines (`not_attending`); they wait in the log until it is on again.
+            guard attendance.role.attends else { return }
             guard deps.settled(entry) else { return } // the upload that names the attendance goes first; it calls back
             let log = attendance.live
             let from = min(states[id]?.next ?? 0, log.count)
@@ -193,7 +196,7 @@ extension MeetingLive.Deps {
                 return try JSON.decoder.decode(MeetingLive.Answer.self, from: data)
              },
              settled: { RecordingSync.shared.attendanceSettled($0) },
-             upload: { RecordingSync.shared.attendanceChanged($0) },
+             upload: { RecordingSync.shared.reupload($0) },
              openSpan: { MeetingSpeaker.shared.openSpan(for: $0) },
              wait: { try? await Task.sleep(for: $0) })
     }

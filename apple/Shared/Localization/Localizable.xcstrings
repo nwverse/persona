@@ -89369,6 +89369,29 @@
       },
       "extractionState" : "manual"
     },
+    "Persona listening" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona listening"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が聞いています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 旁听中"
+          }
+        }
+      }
+    },
     "Persona listening · %lld bookmarks" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -89679,6 +89702,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Persona taking part" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona taking part"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が参加中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 参会中"
+          }
+        }
+      }
     },
     "Persona taking part · %lld bookmarks" : {
       "extractionState" : "manual",
