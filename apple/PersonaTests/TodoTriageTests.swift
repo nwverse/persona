@@ -213,7 +213,10 @@ struct TodoTriageTests {
             todo("accepted", agents: ["old"]) { $0.supervision = acceptedReopened() },
             todo("quiet") { $0.quiet = true },
         ], lookup: lookup, now: now, quiet: false)
-        #expect([r.open, r.shelved, r.finished] == [1, 1, 2] as [Int])
+        // Each its own: the array literal against the three counts no longer type-checks (ambiguous `==`, Xcode 27.1).
+        #expect(r.open == 1)
+        #expect(r.shelved == 1)
+        #expect(r.finished == 2)
     }
 
     @Test func relatedKeysIgnoreCaseSpacesPunctuationAndATrailingSlash() {
