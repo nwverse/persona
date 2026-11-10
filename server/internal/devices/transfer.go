@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -31,6 +33,8 @@ const (
 	transferWindow = 1
 	// transferStep bounds each call to a machine; a node that does not answer in time fails the transfer.
 	transferStep = time.Minute
+	// transferProgressEvery is how often a running transfer is pushed to the apps; its state changes always are.
+	transferProgressEvery = time.Second
 	// transferKeep is how long a finished transfer can still be read with GET.
 	transferKeep = time.Hour
 	// maxRunningTransfers bounds the transfers running at once in the manager (429 beyond).
@@ -46,7 +50,8 @@ type transfer struct {
 	mu        sync.Mutex
 	st        proto.FileTransfer
 	cancel    context.CancelFunc
-	cancelled bool          // DELETE asked for it (a failure that follows is reported as cancelled)
+	cancelled bool // DELETE asked for it (a failure that follows is reported as cancelled)
+	pushedAt  time.Time
 	done      chan struct{} // closed when it is over (tests)
 }
 
@@ -133,6 +138,7 @@ func (d *Devices) startTransfer(ctx context.Context, from, to *Machine, src prot
 	d.transfers.byID[t.st.ID] = t
 	d.transfers.mu.Unlock()
 	d.logf("transfer %s: %s → %s, %d bytes", t.st.ID, from.cfg.ID, to.cfg.ID, info.Size)
+	d.pushTransfer(t, true)
 	go d.runTransfer(run, t, from, to, proto.FileChunkRequest{Path: info.Path, Cwd: src.Cwd, Revision: info.Revision}, begin.UploadID)
 	return t.snapshot(), nil
 }
@@ -231,6 +237,7 @@ func (d *Devices) runTransfer(ctx context.Context, t *transfer, from, to *Machin
 		t.mu.Lock()
 		t.st.Bytes, t.st.UpdatedAt = off, time.Now()
 		t.mu.Unlock()
+		d.pushTransfer(t, false)
 	}
 	var out proto.UploadedFile
 	if err := callStep(ctx, to, "file.upload.end", map[string]any{"upload_id": uploadID}, &out); err != nil {
@@ -257,7 +264,7 @@ func (e *sideErr) Unwrap() error { return e.err }
 
 func onMachine(m *Machine, err error) error { return &sideErr{machine: m.cfg.Name, err: err} }
 
-// finishTransfer records how a transfer ended.
+// finishTransfer records how a transfer ended and tells the apps.
 func (d *Devices) finishTransfer(t *transfer, err error, path string) {
 	t.mu.Lock()
 	t.st.UpdatedAt = time.Now()
@@ -280,6 +287,7 @@ func (d *Devices) finishTransfer(t *transfer, err error, path string) {
 	} else {
 		d.logf("transfer %s: %s (%d of %d bytes)", st.ID, st.State, st.Bytes, st.Total)
 	}
+	d.pushTransfer(t, true)
 }
 
 // getTransfer is a transfer as it is now; false when this manager does not know it (never, forgotten, or restarted).
@@ -345,5 +353,33 @@ func (d *Devices) pruneTransfers(now time.Time) {
 		if old {
 			delete(d.transfers.byID, id)
 		}
+	}
+}
+
+// pushTransfer tells the apps how a transfer stands: always when its state changes (changed), otherwise at most once
+// a second. The hub passes it on only to the full devices that declared file_transfer, outside the event log (as
+// extension_operation): an app that comes back asks GET.
+func (d *Devices) pushTransfer(t *transfer, changed bool) {
+	now := time.Now()
+	t.mu.Lock()
+	if !changed && now.Sub(t.pushedAt) < transferProgressEvery {
+		t.mu.Unlock()
+		return
+	}
+	t.pushedAt = now
+	st := t.st
+	t.mu.Unlock()
+	d.broadcast(map[string]any{"type": "file_transfer", "transfer": st}) // proto.FileTransferEvent
+}
+
+// broadcast sends the apps a message through the hub (ws.broadcast); the hub decides who gets it by its type
+// (hub/bus_broadcast.go managerMessageTypes).
+func (d *Devices) broadcast(msg map[string]any) {
+	raw, err := json.Marshal(msg)
+	if err != nil || d.opts.Hub == nil {
+		return
+	}
+	if err := d.opts.Hub.Notify(assistantwire.EventBroadcast, assistantwire.Broadcast{Message: raw}); err != nil {
+		d.logf("broadcast %v: %v", msg["type"], err)
 	}
 }
