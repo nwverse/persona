@@ -19,7 +19,7 @@ import { refreshAssistant, useStore } from "../../lib/store";
 import { Button, cx, Dialog, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { Group, Pill, Row, Switch } from "../settings/SettingsParts";
+import { Group, Pill, Row, settingsInputClass, Switch } from "../settings/SettingsParts";
 import { SkillsGroup } from "./Skills";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
@@ -41,10 +41,18 @@ interface AssistantState {
   /** The role a meeting recording pre-selects (#2981, docs/assistant/meeting-minutes.md "Attendance fields"); only from a hub
    *  that attends meetings. */
   meeting_attendance_default?: string;
+  /** How many days recordings stay in the knowledge base (#3235), in effect; the phone drops its own older ones too. */
+  recording_days?: number;
+  /** How many days a meeting's minutes stay once its transcript went (#3780), in effect: never below `recording_days`. */
+  minutes_days?: number;
 }
 
 /** `meeting_attendance_default`'s values, in the picker's order. */
 const MEETING_ROLES = ["off", "listener", "participant"] as const;
+
+/** The bounds `PUT /api/v1/assistant` takes for the two retentions (docs/protocol/protocol.md). */
+const RETENTION = { recording_days: { min: 1, max: 365 }, minutes_days: { min: 1, max: 3650 } } as const;
+type Retention = keyof typeof RETENTION;
 
 export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner);
@@ -85,6 +93,21 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } catch (e) {
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setMeetingBusy(false); }
+  };
+
+  const [retentionBusy, setRetentionBusy] = useState(false);
+  const [retentionTries, setRetentionTries] = useState(0);
+  // Confirmed by the echo: the hub answers the days in effect (minutes never fewer than the recordings' own).
+  const setRetention = async (field: Retention, days: number) => {
+    setRetentionBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { [field]: days } });
+      const want = field === "minutes_days" ? Math.max(days, r.recording_days ?? days) : days;
+      if (r.manager !== manager || r[field] !== want) throw new Error(t("settings-assistantsettings.retention_unconfirmed"));
+      setInfo((i) => i ? { ...i, recording_days: r.recording_days, minutes_days: r.minutes_days } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setRetentionBusy(false); setRetentionTries((n) => n + 1); }
   };
 
   const setQuiet = async (on: boolean) => {
@@ -221,6 +244,15 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Group>
       )}
 
+      {typeof info?.recording_days === "number" && (
+        <Group anchor="recordings" title={t("settings-assistantsettings.recordings_title")} footer={t("settings-assistantsettings.recordings_footer")}>
+          <DaysRow field="recording_days" label={t("settings-assistantsettings.recording_days")} value={info.recording_days} tries={retentionTries}
+            disabled={info.manager !== manager || retentionBusy} onSave={(days) => void setRetention("recording_days", days)} />
+          {typeof info.minutes_days === "number" && <DaysRow field="minutes_days" label={t("settings-assistantsettings.minutes_days")} value={info.minutes_days} tries={retentionTries}
+            disabled={info.manager !== manager || retentionBusy} onSave={(days) => void setRetention("minutes_days", days)} />}
+        </Group>
+      )}
+
       <Group title={t("settings-assistantsettings.knows_title")} footer={t("settings-assistantsettings.knows_footer")}>
         {info && <AboutMe notesSaves={notesSaves} info={info} onSaved={(notes) => setInfo((i) => (i ? { ...i, notes, notes_effective: notes.trim() } : i))} />}
         <div className="flex items-center gap-2 px-4 pt-3 pb-1.5">
@@ -348,6 +380,31 @@ function AboutMe({ notesSaves, info, onSaved }: { notesSaves: ReturnType<typeof 
         <Button tone="primary" busy={busy} disabled={!changed} onClick={() => void save()}>{t("common.save")}</Button>
       </div>
     </div>
+  );
+}
+
+/** One retention in days (#3780): saved on Enter or on leaving the field, and only as a whole number within the hub's
+ *  bounds (said under it otherwise). The field shows the hub's value again after every try (`tries`), so a refused,
+ *  unconfirmed or raised one (minutes never below the recordings' days) shows what is in effect. */
+function DaysRow({ field, label, value, tries, disabled, onSave }: { field: Retention; label: string; value: number; tries: number; disabled: boolean; onSave: (days: number) => void }) {
+  const { min, max } = RETENTION[field];
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value, tries]);
+  const days = Number(draft.trim());
+  const valid = /^\d+$/.test(draft.trim()) && days >= min && days <= max;
+  const commit = () => {
+    if (!valid || disabled) return;
+    if (days !== value) onSave(days);
+    else setDraft(String(value));
+  };
+  return (
+    <Row label={label} hint={valid ? undefined : t("settings-assistantsettings.days_range", { min, max })}>
+      <input type="number" inputMode="numeric" min={min} max={max} step={1} aria-label={label} aria-invalid={!valid || undefined}
+        value={draft} disabled={disabled} onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") setDraft(String(value)); }}
+        className={`${settingsInputClass} max-w-20 text-right tabular-nums`} />
+      <span>{t("settings-assistantsettings.days_unit")}</span>
+    </Row>
   );
 }
 

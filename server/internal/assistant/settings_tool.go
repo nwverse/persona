@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -70,6 +71,14 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "a whole number of days, 1–365"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
 			set: s.setRecordingDays},
+		{Setting: Setting{Key: "assistant.minutes_days", Title: "Keep meeting minutes", Actions: getSet,
+			About: "how many days a meeting recording's minutes stay in the knowledge base. Past assistant.recording_days its " +
+				"transcript, summary and live log are deleted and only the minutes (and the recording's metadata) stay, still " +
+				"searchable and readable with kb_get, until this many days after the meeting; then the rest goes too. Never " +
+				"fewer than assistant.recording_days (a smaller value keeps them as long as the recording). 365 by default",
+			Value: "a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.minutesDays(ctx)), nil },
+			set: s.setMinutesDays},
 		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
 			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
 				"default) only records and makes minutes afterwards; listener follows the meeting in a session and answers questions " +
@@ -244,7 +253,7 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
 	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "model_profiles.tiers": "title_model_tiers",
-	"assistant.meeting_attendance_default": "title_meeting_attendance_default"}
+	"assistant.meeting_attendance_default": "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -342,6 +351,37 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 			s.settingsChanged(ctx)
 			s.kbWake() // a shorter retention prunes now
 			return fmt.Sprintf("assistant.recording_days is %d: recordings older than that leave the knowledge base.", days), nil
+		}}, nil
+}
+
+// setMinutesDays changes minutes_days. The card and the answer say the days in effect, never fewer than
+// recording_days: a smaller value is saved as given (it counts again should recording_days shrink) but changes nothing
+// now.
+func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var days int
+	if err := json.Unmarshal(v, &days); err != nil || days < minMinutesDays || days > maxMinutesDays {
+		return nil, errors.New("value must be a whole number of days, 1–3650")
+	}
+	before, recording := s.minutesDays(ctx), s.recordingDays(ctx)
+	after := kb.MinutesDaysFor(days, recording)
+	if after == before {
+		return &ownChange{summary: fmt.Sprintf("assistant.minutes_days is unchanged: minutes are kept %d days (never fewer than "+
+			"assistant.recording_days, %d)", before, recording)}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_minutes_days", i18n.Args{"before": before, "after": after})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MinutesDays = &days; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.kbWake() // a shorter retention prunes now
+			return fmt.Sprintf("assistant.minutes_days is %d: a meeting's minutes stay that long after it, its transcript "+
+				"only assistant.recording_days.", after), nil
 		}}, nil
 }
 

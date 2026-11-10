@@ -64,6 +64,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
 		return
 	}
+	if d := in.MinutesDays; d != nil && (*d < minMinutesDays || *d > maxMinutesDays) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_minutes_days"))
+		return
+	}
 	if m := in.MeetingAttendanceDefault; m != nil && !slices.Contains(meetingRoles, *m) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_default_role"))
 		return
@@ -133,6 +137,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
+		}
+		if in.MinutesDays != nil {
+			v.MinutesDays = in.MinutesDays
 		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault

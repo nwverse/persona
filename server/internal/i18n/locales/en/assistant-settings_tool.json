@@ -28,5 +28,7 @@
   "change_meeting_attendance_default": "Persona in recorded meetings: {before} → {after}",
   "meeting_role_off": "Off",
   "meeting_role_listener": "Listener",
-  "meeting_role_participant": "Participant"
+  "meeting_role_participant": "Participant",
+  "title_minutes_days": "Keep meeting minutes",
+  "change_minutes_days": "Keep meeting minutes: {before} → {after} days"
 }

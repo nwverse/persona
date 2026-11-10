@@ -28,5 +28,7 @@
   "change_meeting_attendance_default": "録音する会議での Persona：{before} → {after}",
   "meeting_role_off": "出席しない",
   "meeting_role_listener": "聞き手",
-  "meeting_role_participant": "参加者"
+  "meeting_role_participant": "参加者",
+  "title_minutes_days": "議事録を保存する日数",
+  "change_minutes_days": "議事録を保存：{before} → {after} 日"
 }

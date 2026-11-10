@@ -141,6 +141,13 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if a.Kind == kb.KindMeeting || a.Kind == kb.KindEvent {
 			b.WriteString(s.recordingsAt(ctx, e, a.Kind, d.ID))
 		}
+		var trimmed struct {
+			At *time.Time `json:"trimmed_at"`
+		}
+		if a.Kind == kb.KindRecording && json.Unmarshal(d.Meta, &trimmed) == nil && trimmed.At != nil {
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
+				"assistant.minutes_days after the meeting, and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
+		}
 		switch {
 		case d.Recent != "" && a.Kind == kb.KindRecording:
 			fmt.Fprintf(&b, "\ntranscript.md:\n%s\n", d.Recent)
@@ -436,6 +443,9 @@ func (s *Service) recordingLines(ctx context.Context, e *kb.Engine, items []kb.E
 			extra += " minutes-pending"
 		case kb.MinutesFailed:
 			extra += " minutes-failed"
+		}
+		if r.Trimmed() {
+			extra += " transcript-expired"
 		}
 		items[i].Extra = extra
 	}

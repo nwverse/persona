@@ -63,8 +63,9 @@ Stored on the recording, and returned by `GET /api/v1/kb/recordings/{id}` inside
 | `meeting` | The matched knowledge-base item, when one was found: `{kind, id, name}` (`kind` is `meetings` or `events`) |
 | `minutes_state` | `pending` (a meeting whose minutes for the current revision are not written yet: waiting for the transcript, the model, or regenerating), `ready`, `failed`, or absent when the recording is not a meeting (minutes it got while it was one stay in `detail.minutes`) |
 | `minutes_asked` | `true` once the user asked for minutes (`POST …/minutes`), which makes the recording a meeting whatever its `kind` |
+| `trimmed_at` | RFC 3339, set by the hub when the transcript expired with `recording_days` and only the minutes were kept ("Privacy" below); absent while the recording is whole |
 
-`GET /api/v1/recordings` (reconciliation) carries the same `minutes_state` on each recording when it is set, so the phone knows when to fetch a detail.
+`GET /api/v1/recordings` (reconciliation) carries the same `minutes_state` on each recording when it is set, so the phone knows when to fetch a detail, and `trimmed_at` on a trimmed one.
 
 The minutes themselves are `detail.minutes`, present once minutes have been written. While newer ones are `pending` or `failed` (a re-transcription, a regenerate), the previous minutes stay; their `revision` is then below `meta.revision`:
 
@@ -110,7 +111,7 @@ Reading it back:
   - **From the calendar item to its minutes.** `kb_get` on a `meetings` or `events` item lists the recordings matched to it, each with its start, length and minutes state.
   - **Where each action item stands.** After `minutes.md`, `kb_get` prints every action item with `who`, `what` and the deadline as said, and its state now: a suggestion that is not a to-do yet, or its to-do open (with the to-do's due date), done, cancelled or deleted. The to-do is the one `todo_id` names, or the one a confirmation made under the action's deterministic id when writing `todo_id` back failed. The order stays minutes, action items, then the transcript, which the 12k cut may end early.
 
-Regenerating: `POST /api/v1/recordings/{id}/minutes` asks for a fresh generation. It also works on a recording that is not a meeting (an older app, the watch, a forgotten mark), which becomes one (`minutes_asked`). `202 {"state":"pending"}` when it is queued, `409` when the transcript is not `complete`, `404` when there is no such recording. It does not change the transcript or the revision.
+Regenerating: `POST /api/v1/recordings/{id}/minutes` asks for a fresh generation. It also works on a recording that is not a meeting (an older app, the watch, a forgotten mark), which becomes one (`minutes_asked`). `202 {"state":"pending"}` when it is queued, `409` when the transcript is not `complete`, `409 transcript_expired` when the recording was trimmed and has no transcript left, `404` when there is no such recording. It does not change the transcript or the revision.
 
 Confirming suggested to-dos: `POST /api/v1/recordings/{id}/minutes/todos` with `{"version": 2, "actions": ["a1", "a3"]}` creates one Persona to-do per listed action and writes its `todo_id` back. The title is `what`, prefixed with `who: ` when someone was named; the due date is `due_date` when set; the notes name the meeting, its date and the item's clock time. It is an ordinary to-do (no task, no Agent).
 `200 {"todos": [Todo], "minutes": Minutes}`. An action that already has a `todo_id` is not created again, and a retry after a lost response creates nothing new. `409 minutes_stale` when `version` is not the current one (refetch and ask again); `404` no such recording, no minutes, or an unknown action; `400` an empty `actions`; `403` from a device that cannot write to-dos.
@@ -125,7 +126,7 @@ The theme (the title), when and where, attendees and speakers only when known, t
 - A long transcript is handled in segments: consecutive chunks in time order, each chunk reduced to candidate points, decisions, actions and questions with their timestamps, then one merge pass that deduplicates and orders them. The middle of a meeting is no longer dropped on the floor. Chunks are sized to fit the model's context with room for the instructions.
 - When a `meetings` or `events` item overlaps the recording's time window (it starts at most 15 minutes before the recording and before its end; the closest start wins, events before meetings), it becomes `meeting` and its name names the recording unless the user typed a title or the phone sent `calendar.title`. Attendees and place come only from the phone's `calendar` hint or from the transcript.
 - Every item must cite a line the model actually read; items whose `at` matches no transcript line are dropped, and so is a `due_date` that is not a real date from the meeting day to a year after it.
-- The minutes are written next to the recording (`minutes.json`, and `minutes.md` for search, in its directory) and removed by the same delete and the same retention sweep that remove the recording.
+- The minutes are written next to the recording (`minutes.json`, and `minutes.md` for search, in its directory) and removed by the same delete that removes the recording. The retention sweep keeps them longer than the transcript: past `recording_days` it trims the recording to its minutes, and only past `minutes_days` does it remove them with the rest ("Privacy").
 - On success the user gets a single push naming the meeting, with the number of decisions and suggested to-dos; it has a stable id per recording and `version`, so a restart does not repeat it. A tap opens Persona's main chat, as reminders do; the Lark bot and channels with pushes on get the same text with the recording's web link. Opening the recording straight from a push needs a new push field and is later work.
 - No model configured, or the model paused: the minutes stay `pending` and the next round tries again. An answer that cannot be used (not JSON, refused, nothing citable) counts as a failure; after three for one revision they are `failed` until a new revision or a regenerate. Failures do not notify.
 - A slow model is not a failure (#3170). A minutes answer is several times longer than a summary, so a call gets 6 minutes where a summary call gets 3. A try that runs out of its time (one call, or the 45 minutes of all the calls of one recording) is counted apart from unusable answers: the recording waits 2, then 4, then 8 minutes before its next try, the other recordings going first meanwhile, and each try gets 6 more minutes per call than the one before (6, 12, 18, 24). After four such tries for one revision the minutes are `failed`, so a recording no model ever finishes cannot hold the queue for ever.
@@ -133,7 +134,17 @@ The theme (the title), when and where, attendees and speakers only when known, t
 
 ## Privacy
 
-Unchanged by default. Transcription stays on device, only text is uploaded, audio never leaves the phone, and recordings still expire after `recording_days` (default 14).
+Transcription stays on device, only text is uploaded, audio never leaves the phone, and recordings still expire after `recording_days` (default 14).
+
+Minutes are kept longer than their transcript (#3780). Past `recording_days` the hub **trims** a recording that has minutes instead of deleting it: its transcript (`segments.json`, `transcript.md`), the summary made from it, the live log and any undo journal are deleted, and only `meta.json` (now with `trimmed_at`), `minutes.json` and `minutes.md` stay, until the assistant setting `minutes_days` (default 365, 1–3650). A recording without minutes, or one past `minutes_days`, is deleted entirely as before. `minutes_days` is never below `recording_days`: `GET /api/v1/assistant` returns the days in effect, `max(minutes_days, recording_days)`, and `assistant.minutes_days` in `persona_settings` reads and changes it.
+
+A trimmed recording:
+
+- Is still returned by `GET /api/v1/kb/recordings/{id}` with `detail.meta` (`trimmed_at` included, `minutes_state` `ready`), `detail.minutes`, no `segments` and no `summary`; `kb_get` prints the minutes and says the transcript expired; `kb_search` still finds `minutes.md`; earlier-meeting material for an attended meeting still draws on its minutes.
+- Still turns confirmed action items into to-dos (`POST …/minutes/todos`), but cannot regenerate them: `POST …/minutes` is `409 transcript_expired`.
+- Takes no upload: `PUT /api/v1/recordings/{id}` answers `expired` (it started before the `recording_days` window, and the hub never takes a transcript back even when `recording_days` grows again). Its attendance is turned off with the live log gone.
+- Stays in reconciliation (`GET /api/v1/recordings`) at its revision with `trimmed_at`, while `days` stays `recording_days`. A phone deletes its own copy at `days` and never uploads one that old; one that still holds it sees the hub has that revision and sends nothing, so the phone contract is unchanged.
+- Is deleted entirely by the user's delete, which leaves a tombstone as before. Tombstones keep the `recording_days` window: they only refuse late uploads, and an upload of a recording older than that window is expired anyway.
 
 Attending a meeting (below, off by default) also puts the meeting's lines into the chosen session's conversation. Those copies stay in that conversation and do not expire with `recording_days`.
 

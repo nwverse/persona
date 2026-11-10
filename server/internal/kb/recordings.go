@@ -23,7 +23,8 @@ import (
 // completed later all land on one entry. Only text: the audio stays on the phone. A directory per recording:
 // meta.json, segments.json, transcript.md (what the searches read), summary.md (the model's, once it is complete), and
 // for an attended meeting live.json (live.go). Uploads journal the accepted files until all replacements commit
-// (recording_commit.go).
+// (recording_commit.go). Past recording_days a recording with minutes keeps only meta.json and its minutes until
+// minutes_days (recording_trim.go); any other goes.
 // recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept recordingDays.
 
 // KindRecording is the recordings' kind and directory.
@@ -31,6 +32,10 @@ const KindRecording = "recordings"
 
 // DefaultRecordingDays is how long recordings are kept unless the user says otherwise (assistant.recording_days).
 const DefaultRecordingDays = 14
+
+// DefaultMinutesDays is how long a meeting's minutes are kept unless the user says otherwise (assistant.minutes_days);
+// never shorter than the recording itself (MinutesDaysFor).
+const DefaultMinutesDays = 365
 
 // Limits of one upload.
 const (
@@ -150,8 +155,14 @@ type Recording struct {
 	MinutesRetryAt  time.Time `json:"minutes_retry_at,omitzero"`
 	// MinutesAsks counts the user's requests: minutes made from before the latest one don't settle it.
 	MinutesAsks int `json:"minutes_asks,omitempty"`
+	// TrimmedAt is the hub's: when its transcript went with recording_days and only meta.json and the minutes stayed
+	// (recording_trim.go); nil while it is whole.
+	TrimmedAt *time.Time `json:"trimmed_at,omitempty"`
 	Tagging
 }
+
+// Trimmed: the transcript went with recording_days; only the metadata and the minutes are left.
+func (r *Recording) Trimmed() bool { return r.TrimmedAt != nil }
 
 // RecordingState is a recording as the phone reconciles against it (GET /api/v1/recordings).
 type RecordingState struct {
@@ -160,6 +171,9 @@ type RecordingState struct {
 	Complete     bool      `json:"complete"`
 	StartedAt    time.Time `json:"started_at"`
 	MinutesState string    `json:"minutes_state,omitempty"`
+	// TrimmedAt: only its minutes are kept (Recording.TrimmedAt). Listed all the same, at the revision it had, so a phone
+	// that still holds it sees the hub has it and sends nothing (an upload of it would be expired).
+	TrimmedAt *time.Time `json:"trimmed_at,omitempty"`
 }
 
 // What PutRecording did.
@@ -336,9 +350,9 @@ func (u *RecordingUpload) cleanCalendar() error {
 }
 
 // PutRecording stores an upload (the whole state of recording id): RecordingStale when a newer revision is there,
-// RecordingExpired when it started before the retention, ErrRecordingDeleted after a delete. Attendance fields that
-// are wrong never fail it: attending is then off, and the result says why (normalizeAttendance). Engine.LiveChanged
-// hears of a stored upload of a recording that attends or attended until now.
+// RecordingExpired when it started before the retention or was trimmed, ErrRecordingDeleted after a delete.
+// Attendance fields that are wrong never fail it: attending is then off, and the result says why
+// (normalizeAttendance). Engine.LiveChanged hears of a stored upload of a recording that attends or attended until now.
 func (e *Engine) PutRecording(rawID string, u RecordingUpload, now time.Time) (RecordingPut, error) {
 	put, live, err := e.putRecording(rawID, u, now)
 	if err == nil && live && e.LiveChanged != nil {
@@ -378,6 +392,12 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 		return put, false, nil
 	}
 	r, exists := st.Recording(id)
+	if exists && r.Trimmed() {
+		// Its transcript went with the retention (recording_days made longer since lets it back in the window): the
+		// minutes stay what they are, and the hub takes no transcript back.
+		put.Status = RecordingExpired
+		return put, false, nil
+	}
 	if exists && r.Revision > u.Revision {
 		put.Status, put.Attendance = RecordingStale, r.AttendanceRole()
 		return put, false, nil
@@ -501,11 +521,12 @@ func (e *Engine) unlinkRecording(id string, projects []string) {
 	}
 }
 
-// RecordingStates is every recording kept and every tombstone, for the phone to reconcile.
+// RecordingStates is every recording kept (trimmed ones too) and every tombstone, for the phone to reconcile.
 func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	kept, deleted = []RecordingState{}, []string{}
 	for _, r := range e.Store.Recordings() {
-		kept = append(kept, RecordingState{ID: r.ID, Revision: r.Revision, Complete: r.Complete, StartedAt: r.StartedAt, MinutesState: r.MinutesState})
+		kept = append(kept, RecordingState{ID: r.ID, Revision: r.Revision, Complete: r.Complete, StartedAt: r.StartedAt,
+			MinutesState: r.MinutesState, TrimmedAt: r.TrimmedAt})
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].StartedAt.After(kept[j].StartedAt) })
 	for id := range e.Store.tombstones() {
@@ -515,19 +536,32 @@ func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	return kept, deleted
 }
 
-// PruneRecordings removes the recordings that started before the retention (files and index), and the tombstones
-// older than it; how many recordings went.
+// PruneRecordings applies the retention (files and index): a recording that started before recording_days goes, unless
+// it has minutes and started within minutes_days, which trims it to them (recording_trim.go); tombstones older than
+// recording_days go too. How many recordings went (the trimmed ones are not counted).
 func (e *Engine) PruneRecordings(now time.Time) int {
 	if e.Store.ReadOnly() {
 		return 0
 	}
 	cut := now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))
+	minutesCut := now.UTC().AddDate(0, 0, -e.MinutesDays())
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	var gone []string
 	for _, r := range st.Recordings() {
 		if !r.StartedAt.Before(cut) {
+			continue
+		}
+		if !r.StartedAt.Before(minutesCut) && st.hasMinutes(r.ID) {
+			if trimmed, err := st.trimRecording(r, now); err != nil {
+				e.logf("recording %s: trim: %v", r.ID, err)
+			} else if trimmed {
+				st.notify(KindRecording, r.ID, "metadata")
+				st.notify(KindRecording, r.ID, "messages")
+				st.notify(KindRecording, r.ID, "summary")
+				e.index(KindRecording, r.ID, r.Name, r.Tagging, r.OneLine, r.StartedAt)
+			}
 			continue
 		}
 		st.recFilesMu.Lock()
@@ -540,6 +574,12 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 		}
 	}
 	e.unindex(KindRecording, gone)
+	// Tombstones keep the recording_days window, not minutes_days. One only has to outlive the uploads it refuses, and
+	// an upload of a recording that started before that window is expired anyway (putRecording), whether the recording
+	// is gone, trimmed or deleted by the user. A tombstone is never older than its recording's start (it is written when
+	// the recording is deleted), so one that falls out of the window stands for a recording past it: keeping it longer,
+	// as long as a trimmed recording could have stayed, would refuse nothing more. Its other use, the phone dropping a
+	// copy deleted elsewhere, ends with the window too: the phone drops every recording older than days itself.
 	t := st.tombstones()
 	n := len(t)
 	for id, at := range t {
@@ -559,6 +599,25 @@ func (e *Engine) RecordingDays() int {
 		return recordingDays(e.RecordingDaysFunc())
 	}
 	return DefaultRecordingDays
+}
+
+// MinutesDays is how many days a meeting's minutes are kept (Engine.MinutesDaysFunc, the assistant's setting, the
+// default without one), never fewer than RecordingDays.
+func (e *Engine) MinutesDays() int {
+	d := 0
+	if e.MinutesDaysFunc != nil {
+		d = e.MinutesDaysFunc()
+	}
+	return MinutesDaysFor(d, e.RecordingDays())
+}
+
+// MinutesDaysFor is the minutes' retention in effect for the setting minutes (<= 0: DefaultMinutesDays) and the
+// recordings' days: minutes never go before the recording they belong to.
+func MinutesDaysFor(minutes, recording int) int {
+	if minutes <= 0 {
+		minutes = DefaultMinutesDays
+	}
+	return max(minutes, recordingDays(recording))
 }
 
 func (e *Engine) unindex(kind string, ids []string) {
@@ -592,7 +651,7 @@ func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	}
 	var todo []*Recording
 	for _, r := range e.Store.Recordings() {
-		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 {
+		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() {
 			todo = append(todo, r)
 		}
 	}
@@ -625,7 +684,7 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
 		return err
 	}
 	r = &snapshot
-	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision {
+	if !r.Complete || r.Chars == 0 || r.SummarizedRev >= r.Revision || r.Trimmed() {
 		return nil
 	}
 	var segs []RecordingSegment
@@ -647,8 +706,8 @@ func (e *Engine) summarizeRecording(ctx context.Context, r *Recording) error {
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	cur, ok := st.Recording(r.ID)
-	if !ok {
-		return nil // deleted meanwhile
+	if !ok || cur.Trimmed() {
+		return nil // deleted or trimmed meanwhile: no summary of a transcript that is gone
 	}
 	now := time.Now().UTC()
 	if s := strings.TrimSpace(out.Summary); s != "" && !cur.fieldLocked("summary") {

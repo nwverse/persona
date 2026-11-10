@@ -66,5 +66,12 @@
   "meeting_attendance_listener": "旁听",
   "meeting_attendance_participant": "参与",
   "meeting_attendance_footer": "在手机上开始会议录音时预先选中的角色，每次都可以改。旁听时回答只显示在手机屏幕上；参与时还会把回答读出来。回答只用会议资料：之前的纪要、项目进展和各项待办由谁负责。",
-  "meeting_attendance_unconfirmed": "助手未确认这项会议设置，请重新加载后再试。"
+  "meeting_attendance_unconfirmed": "助手未确认这项会议设置，请重新加载后再试。",
+  "recordings_title": "录音",
+  "recording_days": "录音保留",
+  "minutes_days": "会议纪要保留",
+  "days_unit": "天",
+  "days_range": "填 {min} 到 {max} 之间的整数",
+  "recordings_footer": "超过这个天数的录音会从知识库删除，手机也会删掉自己的那份（包括音频）。会议纪要可以留得更久：转写随录音删除，纪要在会议后的这个天数内仍然可以搜索和查看，且不会短于录音的保留天数。",
+  "retention_unconfirmed": "助手没有确认这个保留期限。请刷新后再试。"
 }

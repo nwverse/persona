@@ -68,5 +68,12 @@
   "meeting_attendance_listener": "Listener",
   "meeting_attendance_participant": "Participant",
   "meeting_attendance_footer": "Pre-selects Persona's role when a meeting recording starts on the phone; you can change it each time. As a listener it answers on the phone's screen; as a participant it also says the answers aloud. Answers use meeting material only: earlier minutes, project status and who owns which to-do.",
-  "meeting_attendance_unconfirmed": "The assistant did not confirm this meeting setting. Reload before trying again."
+  "meeting_attendance_unconfirmed": "The assistant did not confirm this meeting setting. Reload before trying again.",
+  "recordings_title": "Recordings",
+  "recording_days": "Keep recordings",
+  "minutes_days": "Keep meeting minutes",
+  "days_unit": "days",
+  "days_range": "A whole number from {min} to {max}",
+  "recordings_footer": "Recordings older than this leave the knowledge base, and the phone deletes its own copies, audio included. A meeting’s minutes stay longer: its transcript goes with the recording, the minutes stay searchable until their own number of days after the meeting, never fewer than the recording’s.",
+  "retention_unconfirmed": "The assistant did not confirm this retention. Reload before trying again."
 }

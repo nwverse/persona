@@ -28,5 +28,7 @@
   "change_meeting_attendance_default": "录音会议里的 Persona：{before} → {after}",
   "meeting_role_off": "不参加",
   "meeting_role_listener": "旁听",
-  "meeting_role_participant": "参与"
+  "meeting_role_participant": "参与",
+  "title_minutes_days": "会议纪要保留",
+  "change_minutes_days": "会议纪要保留：{before} → {after} 天"
 }
