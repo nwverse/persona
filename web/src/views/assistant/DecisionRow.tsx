@@ -11,7 +11,7 @@ import { acceptBrief, type AskAnswer } from "../../lib/feed";
 import { clock } from "../../lib/format";
 import { openPanel } from "../../lib/panel";
 import { refreshTodos } from "../../lib/store";
-import { askOptions, askResponses, type AskOption, type AskResponse, type Todo, type TodoAsk } from "../../lib/todos";
+import { askOptions, type AskOption, type AskResponse, type Todo, type TodoAsk } from "../../lib/todos";
 import { Button, IconButton, Menu, toast, useMenu } from "../../ui/atoms";
 import type { MenuItem } from "../../ui/menu-model";
 import { RecommendedTag } from "../../ui/RecommendedTag";
@@ -19,22 +19,30 @@ import { RecommendedTag } from "../../ui/RecommendedTag";
 /** Where answering the round stands: not yet, being sent, or answered (with what the row then says). */
 type Answering = { state: "idle" } | { state: "busy"; key: string } | { state: "done"; text: string };
 
+/** The fixed answers in the menu's order. */
+const RESPONSES: AskResponse[] = ["decide_yourself", "not_what_i_asked", "explain_first"];
+
+/** The fixed answers this hub takes for the ask; none from a hub that does not know them. */
+function askResponses(ask: TodoAsk): AskResponse[] {
+  return RESPONSES.filter((r) => ask.responses?.includes(r));
+}
+
 const RESPONSE_LABEL: Record<AskResponse, string> = {
-  decide_yourself: "assistant-tasks.decision_decide_yourself",
-  not_what_i_asked: "assistant-tasks.decision_not_what_i_asked",
-  explain_first: "assistant-tasks.decision_explain_first",
+  decide_yourself: "assistant-decisionrow.decide_yourself",
+  not_what_i_asked: "assistant-decisionrow.not_what_i_asked",
+  explain_first: "assistant-decisionrow.explain_first",
 };
 const RESPONSE_DETAIL: Record<AskResponse, string> = {
-  decide_yourself: "assistant-tasks.decision_decide_yourself_detail",
-  not_what_i_asked: "assistant-tasks.decision_not_what_i_asked_detail",
-  explain_first: "assistant-tasks.decision_explain_first_detail",
+  decide_yourself: "assistant-decisionrow.decide_yourself_detail",
+  not_what_i_asked: "assistant-decisionrow.not_what_i_asked_detail",
+  explain_first: "assistant-decisionrow.explain_first_detail",
 };
 
 /** What happens when nobody answers: the recommendation is taken at the deadline, or never; "" when the hub said neither. */
 export function defaultLine(ask: Pick<TodoAsk, "default" | "deadline">): string {
-  if (ask.default === "never") return t("assistant-tasks.decision_default_never");
+  if (ask.default === "never") return t("assistant-decisionrow.default_never");
   const at = ask.default === "taken" ? clock(ask.deadline) : "";
-  return at ? t("assistant-tasks.decision_default_at", { time: at }) : "";
+  return at ? t("assistant-decisionrow.default_at", { time: at }) : "";
 }
 
 /** How many of the option buttons fit beside the row's fixed controls, the first always: each button's width is read
@@ -101,12 +109,12 @@ export function DecisionRow({ todo, ask, rowKey }: { todo: Pick<Todo, "id" | "ti
       (e) => {
         admitted.current = false;
         setAnswering({ state: "idle" });
-        toast(t("assistant-tasks.decision_failed", { error: errorText(e) }), "error");
+        toast(t("assistant-decisionrow.failed", { error: errorText(e) }), "error");
       },
     );
   };
-  const choose = (o: AskOption, i: number) => answer(`option:${i}`, { option: o.label }, t("assistant-tasks.decision_chosen", { option: o.label }));
-  const respond = (r: AskResponse) => answer(`response:${r}`, { response: r }, t("assistant-tasks.decision_responded"));
+  const choose = (o: AskOption, i: number) => answer(`option:${i}`, { option: o.label }, t("assistant-decisionrow.chosen", { option: o.label }));
+  const respond = (r: AskResponse) => answer(`response:${r}`, { response: r }, t("assistant-decisionrow.responded"));
 
   const items: MenuItem[] = [
     ...options.slice(fit).map((o, i): MenuItem => ({ key: `option:${fit + i}`, label: o.label, detail: o.leads_to, onSelect: () => choose(o, fit + i) })),
@@ -130,23 +138,23 @@ export function DecisionRow({ todo, ask, rowKey }: { todo: Pick<Todo, "id" | "ti
       )}
       <ul className="flex min-w-0 flex-col gap-0.5 text-[12px] text-ink-2">
         {options.map((o, i) => (
-          <li key={i} data-decision-leads className="line-clamp-2 [overflow-wrap:anywhere]" title={o.leads_to ? t("assistant-tasks.decision_leads", { option: o.label, leads: o.leads_to }) : o.label}>
+          <li key={i} data-decision-leads className="line-clamp-2 [overflow-wrap:anywhere]" title={o.leads_to ? t("assistant-decisionrow.leads", { option: o.label, leads: o.leads_to }) : o.label}>
             <span className="font-medium text-ink">{o.label}</span>
             {i === 0 && <RecommendedTag />}
-            {o.leads_to ? t("assistant-tasks.decision_leads_to", { leads: o.leads_to }) : ""}
+            {o.leads_to ? t("assistant-decisionrow.leads_to", { leads: o.leads_to }) : ""}
           </li>
         ))}
       </ul>
       {(fallback || ask.cost_of_waiting) && (
         <p className="text-[12px] text-ink-2 [overflow-wrap:anywhere]">
           {fallback && <span data-decision-default={ask.default}>{fallback}</span>}
-          {fallback && ask.cost_of_waiting ? t("assistant-tasks.decision_separator") : ""}
-          {ask.cost_of_waiting && <span data-decision-cost>{t("assistant-tasks.decision_cost", { cost: ask.cost_of_waiting })}</span>}
+          {fallback && ask.cost_of_waiting ? t("assistant-decisionrow.separator") : ""}
+          {ask.cost_of_waiting && <span data-decision-cost>{t("assistant-decisionrow.cost", { cost: ask.cost_of_waiting })}</span>}
         </p>
       )}
       {ask.response && answering.state !== "done" && (
         <p data-decision-response={ask.response} className="truncate text-[12px] text-ink-2">
-          {t("assistant-tasks.decision_responded")}
+          {t("assistant-decisionrow.responded")}
         </p>
       )}
       {answering.state === "done" ? (
@@ -162,7 +170,7 @@ export function DecisionRow({ todo, ask, rowKey }: { todo: Pick<Todo, "id" | "ti
               tone={i === 0 ? "primary" : "secondary"}
               busy={busy && answering.key === `option:${i}`}
               disabled={busy}
-              title={i === 0 ? t("assistant-tasks.decision_choose_recommended", { option: o.label, title: todo.title }) : t("assistant-tasks.decision_choose", { option: o.label, title: todo.title })}
+              title={i === 0 ? t("assistant-decisionrow.choose_recommended", { option: o.label, title: todo.title }) : t("assistant-decisionrow.choose", { option: o.label, title: todo.title })}
               onClick={() => choose(o, i)}
               // alone and still wider than the row, the button gives way and cuts its label; it never wraps
               className={fit === 1 ? "min-w-0 shrink!" : ""}
@@ -173,13 +181,13 @@ export function DecisionRow({ todo, ask, rowKey }: { todo: Pick<Todo, "id" | "ti
             </Button>
           ))}
           <span data-decision-tail className="flex shrink-0">
-            <Button tone="quiet" disabled={busy} title={t("assistant-tasks.decision_another_row", { title: todo.title })} onClick={open}>
-              {t("assistant-tasks.decision_another")}
+            <Button tone="quiet" disabled={busy} title={t("assistant-decisionrow.another_row", { title: todo.title })} onClick={open}>
+              {t("assistant-decisionrow.another")}
             </Button>
           </span>
           {items.length > 0 && (
             <span data-decision-tail className="flex shrink-0">
-              <IconButton icon="more" label={t("assistant-tasks.decision_more")} onClick={menu.open} active={Boolean(menu.anchor)} disabled={busy} size={32} />
+              <IconButton icon="more" label={t("assistant-decisionrow.more")} onClick={menu.open} active={Boolean(menu.anchor)} disabled={busy} size={32} />
             </span>
           )}
         </div>

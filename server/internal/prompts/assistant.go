@@ -88,6 +88,16 @@ type SnapshotAgent struct {
 	Link                    string             // its page in the hub's web app ("" when the hub has no public_url)
 	Ultracode               string             // "on" / "off"; empty when the node does not know
 	Plan                    *SnapshotAgentPlan // its own task list (Session.Plan), nil when it keeps none
+	// Closeout: what its closeout says of merging and deploying, nil when it wrote none or says neither.
+	Closeout *SnapshotAgentCloseout
+}
+
+// SnapshotAgentCloseout is the tail of an agent's line (assistant/snapshot_closeout): Merged and Deployed as the
+// agent claimed them ("yes", "no", "" when unsaid), FoundMerged and FoundDeployed what the hub found where that
+// differs from the claim ("" where it agrees or could not tell).
+type SnapshotAgentCloseout struct {
+	Merged, Deployed           string
+	FoundMerged, FoundDeployed string
 }
 
 // SnapshotAgentPlan is an agent's own task list (TodoWrite / TaskCreate, docs/integrations/agent-goal.md "Plan"): Done of Total
@@ -668,8 +678,11 @@ type TaskDone struct {
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
 
 // RenderTaskDelivery is the delivery standard a task's agent is handed after its prompt (assistant/task_delivery,
-// docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got.
-func RenderTaskDelivery() string { return render("assistant/task_delivery", nil) }
+// docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got. closeout: the
+// closeout's form follows in the same prompt (agents/closeout_brief), so the line goes before that block, not last.
+func RenderTaskDelivery(closeout bool) string {
+	return render("assistant/task_delivery", struct{ Closeout bool }{closeout})
+}
 
 // TaskAttachments ends a message to an agent with the files and pictures the user gave the assistant for it (#2437):
 // where they are on the agent's computer (Copied: copied there from the assistant's), and those that could not come.

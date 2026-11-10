@@ -72,6 +72,7 @@ async function mount() {
   root = createRoot(host);
   act(() => root.render(<AssistantActionBar conversation={conversation} />));
   act(() => host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!.click());
+  await act(async () => void (await import("./DecisionRow"))); // the row's code arrives with the first decision
 }
 
 beforeEach(() => {
@@ -93,7 +94,7 @@ afterEach(() => {
 const row = () => host.querySelector<HTMLElement>('[data-needs-row="task:decision-task"]')!;
 const optionButtons = () => [...row().querySelectorAll<HTMLElement>("[data-decision-option]")].map((s) => s.closest("button")!);
 const menuRows = () => [...document.querySelectorAll<HTMLElement>("[role=menuitem]")];
-const openMenu = () => act(() => row().querySelector<HTMLButtonElement>(`button[aria-label="${t("assistant-tasks.decision_more")}"]`)!.click());
+const openMenu = () => act(() => row().querySelector<HTMLButtonElement>(`button[aria-label="${t("assistant-decisionrow.more")}"]`)!.click());
 const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
 describe("a decision in the Needs you tray", () => {
@@ -103,30 +104,30 @@ describe("a decision in the Needs you tray", () => {
     expect(row().querySelector("[data-decision-question]")!.textContent).toBe(decision.question);
     expect(row().querySelector("[data-decision-background]")!.textContent).toBe(decision.background);
     const leads = [...row().querySelectorAll("[data-decision-leads]")].map((li) => li.textContent);
-    expect(leads[0]).toBe("10% first" + t("chat-interactions.recommended") + t("assistant-tasks.decision_leads_to", { leads: "one more day, a bad build reaches few people" }));
-    expect(leads[1]).toBe(t("assistant-tasks.decision_leads", { option: "Everyone now", leads: "ships today, a bad build reaches all" }));
-    expect(row().querySelector('[data-decision-default="taken"]')!.textContent).toBe(t("assistant-tasks.decision_default_at", { time: clock(deadline) }));
-    expect(row().querySelector("[data-decision-cost]")!.textContent).toBe(t("assistant-tasks.decision_cost", { cost: "the release slips a day" }));
+    expect(leads[0]).toBe("10% first" + t("chat-interactions.recommended") + t("assistant-decisionrow.leads_to", { leads: "one more day, a bad build reaches few people" }));
+    expect(leads[1]).toBe(t("assistant-decisionrow.leads", { option: "Everyone now", leads: "ships today, a bad build reaches all" }));
+    expect(row().querySelector('[data-decision-default="taken"]')!.textContent).toBe(t("assistant-decisionrow.default_at", { time: clock(deadline) }));
+    expect(row().querySelector("[data-decision-cost]")!.textContent).toBe(t("assistant-decisionrow.cost", { cost: "the release slips a day" }));
     const buttons = optionButtons();
     expect(buttons.map((b) => b.textContent)).toEqual(["10% first", "Everyone now", "Hold the release"]);
     expect(buttons[0].className).toContain("bg-ink"); // the one solid button
     expect(buttons[1].className).not.toContain("bg-ink");
     for (const b of row().querySelectorAll("button")) expect(b.className).not.toMatch(/whitespace-normal|flex-wrap/);
-    expect(row().textContent).toContain(t("assistant-tasks.decision_another"));
+    expect(row().textContent).toContain(t("assistant-decisionrow.another"));
     // the fixed answers are in the menu, not buttons on the row
-    expect(row().textContent).not.toContain(t("assistant-tasks.decision_decide_yourself"));
+    expect(row().textContent).not.toContain(t("assistant-decisionrow.decide_yourself"));
     openMenu();
     expect(menuRows().map((r) => r.textContent)).toEqual([
-      t("assistant-tasks.decision_decide_yourself") + t("assistant-tasks.decision_decide_yourself_detail"),
-      t("assistant-tasks.decision_not_what_i_asked") + t("assistant-tasks.decision_not_what_i_asked_detail"),
-      t("assistant-tasks.decision_explain_first") + t("assistant-tasks.decision_explain_first_detail"),
+      t("assistant-decisionrow.decide_yourself") + t("assistant-decisionrow.decide_yourself_detail"),
+      t("assistant-decisionrow.not_what_i_asked") + t("assistant-decisionrow.not_what_i_asked_detail"),
+      t("assistant-decisionrow.explain_first") + t("assistant-decisionrow.explain_first_detail"),
     ]);
   });
 
   it("says an irreversible decision is never taken by default", async () => {
     ask = { ...decision, why_owner: "irreversible", default: "never", deadline: undefined };
     await mount();
-    expect(row().querySelector('[data-decision-default="never"]')!.textContent).toBe(t("assistant-tasks.decision_default_never"));
+    expect(row().querySelector('[data-decision-default="never"]')!.textContent).toBe(t("assistant-decisionrow.default_never"));
   });
 
   it("posts the option chosen with the round, once, and says it was answered", async () => {
@@ -136,7 +137,7 @@ describe("a decision in the Needs you tray", () => {
     act(() => second.click());
     await flush();
     expect(posts).toEqual([{ path: expect.stringContaining("/todos/decision-task/accept"), body: { asked_at: at, option: "Everyone now" } }]);
-    expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-tasks.decision_chosen", { option: "Everyone now" }));
+    expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-decisionrow.chosen", { option: "Everyone now" }));
     expect(optionButtons()).toEqual([]);
   });
 
@@ -146,7 +147,7 @@ describe("a decision in the Needs you tray", () => {
     act(() => menuRows()[1].click());
     await flush();
     expect(posts).toEqual([{ path: expect.stringContaining("/todos/decision-task/accept"), body: { asked_at: at, response: "not_what_i_asked" } }]);
-    expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-tasks.decision_responded"));
+    expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-decisionrow.responded"));
   });
 
   it("keeps the buttons when the answer did not go, and says a round already answered is handled", async () => {
@@ -165,7 +166,7 @@ describe("a decision in the Needs you tray", () => {
 
   it("opens the task from Other…", async () => {
     await mount();
-    const other = [...row().querySelectorAll("button")].find((b) => b.textContent === t("assistant-tasks.decision_another"))!;
+    const other = [...row().querySelectorAll("button")].find((b) => b.textContent === t("assistant-decisionrow.another"))!;
     act(() => other.click());
     expect(getPanel()).toMatchObject({ kind: "task", todo: "decision-task" });
     expect(posts).toEqual([]);
@@ -175,7 +176,7 @@ describe("a decision in the Needs you tray", () => {
     ask = { ...decision, response: "explain_first", default: "never", deadline: undefined };
     await mount();
     const row = host.querySelector("[data-decision-row]")!;
-    expect(row.querySelector("[data-decision-response]")?.textContent).toBe(t("assistant-tasks.decision_responded"));
+    expect(row.querySelector("[data-decision-response]")?.textContent).toBe(t("assistant-decisionrow.responded"));
     expect(row.querySelector("[data-decision-option]")).not.toBeNull(); // the options can still be chosen
   });
 

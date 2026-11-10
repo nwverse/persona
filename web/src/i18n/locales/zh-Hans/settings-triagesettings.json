@@ -17,5 +17,7 @@
   "tool_loop": "检测工具调用循环",
   "tool_loop_hint": "Agent 似乎反复调用工具时，询问你是否中断",
   "reply_reminder": "看过没回时提醒",
-  "reply_reminder_hint": "Agent 问了你、你看过 {minutes} 分钟还没回，就提醒一次；只按规则判断，不花 token"
+  "reply_reminder_hint": "Agent 问了你、你看过 {minutes} 分钟还没回，就提醒一次；只按规则判断，不花 token",
+  "closeout": "要收尾记录",
+  "closeout_hint": "Agent 干了活却没交代做完没有、合没合、部署没有、还缺什么就停下时，拦它一次让它补上这份记录；会多花它自己模型的一小轮"
 }

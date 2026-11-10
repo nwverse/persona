@@ -2,7 +2,7 @@
 // task cards that follow their agents, the hub's lines (answered, receipt, routed), the "Today" card, message cards about
 // a task, quick results, the dock above the composer, the tasks' questions, the route chip, and a task's detail in the
 // side panel.
-import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
 import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
@@ -39,7 +39,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { runningWorkflows, workflowCounts, workflowLine } from "../../lib/workflows";
-import { askOptions, dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { askOptions, dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -58,7 +58,9 @@ import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
 import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { AcceptRow, BriefCard } from "./Brief";
-import { DecisionRow } from "./DecisionRow";
+
+// A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
+const DecisionRow = lazy(() => import("./DecisionRow").then((m) => ({ default: m.DecisionRow })));
 import { SentLine, TaskSentList } from "./Sent";
 import { latestReview, progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
@@ -251,7 +253,7 @@ export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: 
   return (lead && interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)) ?? interactions.find(mine);
 }
 
-/** What a waiting task needs, in a line (#3301): "Asking you: which framework?", "Needs permission: swift test", "Plan to approve", the words
+/** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Needs your permission: swift test", "Plan awaiting approval", the words
  *  the to-dos page's agent rows use; undefined without a card. */
 export function taskAsk(ix: Interaction | undefined): string | undefined {
   if (!ix) return undefined;
@@ -466,6 +468,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
   const workflow = status === "working" || status === "waiting" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
   // what its agent last told Persona (report_to_supervisor): while the task is open
   const reported = status !== "done" && status !== "failed" ? progressLine(todo.supervision) : undefined;
+  // nobody is working on it (#3618): the hub's finding and why, ahead of what its agent last reported
+  const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
   // its agent's own task list (#5302), unless a report to Persona came after it: the report says more
   const plan = status !== "done" && status !== "failed" && planShown(lead, todo.supervision) ? planLine(lead) : "";
   return (
@@ -507,6 +511,12 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
             <span data-plan-line title={planLabel(lead)} aria-label={planLabel(lead)} className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
               <Icon name="list" size={11} stroke={2.2} className="shrink-0" />
               <span className="truncate tabular-nums">{plan}</span>
+            </span>
+          )}
+          {orphan && (
+            <span data-orphaned-line className="flex min-w-0 items-center gap-1 text-[12px] text-orange">
+              <Icon name="warning" size={11} stroke={2.2} className="shrink-0" />
+              <span className="truncate"><span className="font-medium">{orphan.lead}</span>{orphan.reason && <span className="text-ink-3"> · {orphan.reason}</span>}</span>
             </span>
           )}
           {reported && (
@@ -934,7 +944,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
 // ── Today ──
 
 /** The "Today" card's "Needs you" row's lines under its title (#4478), one per task, each truncated on its own: what its task
- *  waits on ("Asking you: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
+ *  waits on ("Has a question: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
  *  has no card) and "N more" past them. A card just answered here is not one it waits on (answeredLookup). */
 const TODAY_WAITING_MAX = 3;
 function todayWaitingLines(s: State, waiting: { id: string; title: string }[]): string[] {
@@ -1254,9 +1264,12 @@ function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetad
   // stopped and not done: the hub's completion check says why (#3180); an agent's open question or waiting line says more
   const why = ask || waits ? undefined : stoppedReason(todo, state);
   const stopped = why === undefined ? undefined : why ? t("assistant-tasks.progress_stopped_reason", { reason: why }) : t("assistant-tasks.progress_stopped");
+  // nobody is working on it (#3618): said ahead of why it stopped and of its agent's last report
+  const orphan = todo && !ask ? orphanedLine(todo) : undefined;
+  const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : liveLine ?? waits ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : liveLine ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
@@ -1318,7 +1331,13 @@ function NeedsYouRow({ item }: { item: NeedsYouItem }) {
   if (asks.length) return <div data-needs-row={item.key}><button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   const ask = openAsk(todo);
   // a decision with its options is answered on the row (#3804); any other ask keeps its one button
-  if (ask && askOptions(ask).length) return <DecisionRow key={todo.id + ask.asked_at} rowKey={item.key} todo={todo} ask={ask} />;
+  if (ask && askOptions(ask).length)
+    return (
+      // until its code is here: the row's surface with the task's title, so the tray does not jump
+      <Suspense fallback={<div data-needs-row={item.key} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
+        <DecisionRow key={todo.id + ask.asked_at} rowKey={item.key} todo={todo} ask={ask} />
+      </Suspense>
+    );
   if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
   return <button type="button" data-needs-row={item.key} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
 }

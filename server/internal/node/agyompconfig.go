@@ -40,7 +40,7 @@ func (n *Node) getAgySettings() ([]ClaudeSetting, error) {
 	for i, s := range agySettings {
 		s.Value = raw[s.Key]
 		if s.Key == "model" {
-			if catalog, ok := n.runtimeLauncherModels("agy"); ok && len(catalog.Models) > 0 {
+			if catalog, ok := n.agyRuntimeModels(); ok && len(catalog.Models) > 0 {
 				s.Type = "enum"
 				for _, model := range catalog.Models {
 					s.Options = append(s.Options, model.Name)
