@@ -312,7 +312,7 @@ describe("Markdown's code before and after the highlighter", () => {
     expect(pre.querySelector("[class*=hljs-]")).toBeNull(); // not laid out: far
     await act(async () => {
       slow();
-      report([{ target: pre, isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+      report([{ target: pre, isIntersecting: true } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
     });
     expect(pre.querySelector(".hljs-keyword")?.textContent).toBe("const");
   });
