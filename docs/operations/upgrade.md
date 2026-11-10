@@ -161,7 +161,7 @@ launchctl kickstart -k gui/$(id -u)/com.persona.hub          # macOS
 
 ### Step 1: update to a build with the split
 
-Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command and a direct deploy install the three together too, on the computer that runs the hub. The install command also runs `hub setup` again, which keeps an existing install's mode and says how to switch. On Linux that rerun also moves the hub's service to `persona-hub run` and restarts it, and says so (on a Mac whose agents already run `personad`, they stay on it, and setup says that: moving them would need Full Disk Access granted again); the automatic update and a direct deploy leave the service on `personad` until setup runs ([server.md](../server/server.md) ("Programs")).
+Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command and a direct deploy install the three together too, on the computer that runs the hub. The install command also runs `hub setup` again, which keeps an existing install's mode and says how to switch. On Linux that rerun also moves the hub's service to `persona-hub run` and restarts it, and says so (on a Mac whose agents already run `personad`, they stay on it, and setup says that: Full Disk Access lists `personad`, and moving would need another program added there); the automatic update and a direct deploy leave the service on `personad` until setup runs ([server.md](../server/server.md) ("Programs")).
 
 **Check:**
 
@@ -200,7 +200,7 @@ Setup checks first that the service can be installed, and changes nothing when i
 1. sets `assistant.mode` to `service`;
 2. restarts the hub's service, moved to `persona-hub run` on Linux if it still ran `personad`;
 3. binds the built-in manager with a one-time code, passed in the environment and never on a command line;
-4. installs its service: on Linux `persona-manager-assistant.service`, running `persona-manager assistant`; on a Mac the launchd agent `com.persona.manager.assistant`, running `personad assistant`;
+4. installs its service: on Linux `persona-manager-assistant.service`, running `persona-manager assistant`; on a Mac the launchd agent `com.persona.manager.assistant`, running `personad assistant` while the hub's agent runs `personad` (an installed Mac), else `persona-manager assistant`;
 5. waits up to 90 seconds for it on the hub's bus.
 
 Without `--json` it prints one line per step.
@@ -267,7 +267,7 @@ Instead of setup, with the same result:
 ### Going back to a build from before the split
 
 1. Go back to child mode (above). A build from before the split doesn't start a service-mode built-in manager, and nothing else would.
-2. Put the hub's service back on `personad`, with this build still in place: `PERSONA_SPLIT_PROGRAMS=0 "$PD" hub setup` (Linux; a Mac's agent runs `personad` already). A build from before the split has no `persona-hub` to run.
+2. Put the hub's service back on `personad`, with this build still in place: `PERSONA_SPLIT_PROGRAMS=0 "$PD" hub setup` (on a Mac installed before the split the agent runs `personad` already). A build from before the split has no `persona-hub` to run.
 3. Put `bin/` back (step 1's way back) and restart the hub's service.
 
 **Check:** `expect '"online":true'`, and `managers` shows one line. The build from just before the split already has the built-in manager's own database and runs on it. An older build, from before that database, finds the manager's data only as it was when it moved: see the known limits. Restore the databases only when the older build doesn't start.
@@ -384,7 +384,7 @@ Whatever the type, the upgrade is done when all of these hold:
 ## Known limits
 
 - **Nothing switches by itself.** Existing installs stay in child mode until switched, and child mode stays supported.
-- **Some services stay on `personad`.** Setup on Linux and the image move the hub and the built-in manager to `persona-hub` and `persona-manager`, but a Mac's agents (until a later change moves them together with the node of the hub's computer), a service under the former name, the managers made in the app, and anything run with `PERSONA_SPLIT_PROGRAMS=0` (Linux and Docker) keep `personad`. The node of the hub's computer runs as `personad` too ([server.md](../server/server.md) ("Programs")).
+- **Some services stay on `personad`.** Setup (on Linux and on a new Mac) and the image move the hub and the built-in manager to `persona-hub` and `persona-manager`, but a Mac's agents that already ran `personad`, a service under the former name, the managers made in the app, and anything run with `PERSONA_SPLIT_PROGRAMS=0` keep `personad`. The node of the hub's computer runs as `personad` too ([server.md](../server/server.md) ("Programs")).
 - **The first update that brings `persona-hub` and `persona-manager`:** if it rolls back, only `personad` goes back, because the old watchdog doesn't know the two. They stay behind, don't match the hub's version, and aren't started until the next update. The install command installs the three on the computer that runs the hub; a release without the two (from before the split) leaves them as they were, at another version than `personad`. When a service runs one of them, neither the install command nor the hub's self-update installs such a release ([hub-update.md](hub-update.md) ("Programs swapped together with personad")).
 - **A service left installed after going back to child mode** waits, refused by the hub, instead of running next to its child. Short overlaps remain while a refused service shuts down and a child starts. Remove it with `manager uninstall --builtin`.
 - **One built-in manager per data directory.** A second one exits 2, kept out by a lock on Linux and macOS. In Docker, if the hub's container still runs its own (no `PERSONA_BUILTIN_MANAGER: separate`) while a manager container runs, one of them keeps exiting 2 and trying again.

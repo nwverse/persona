@@ -279,7 +279,7 @@ func TestSetupMacAgentRunsPersonaHub(t *testing.T) {
 	report = setup("")
 	optedOut := hubPlist(e.home, e.root, bin, "", true)
 	if agentText(t, e) != optedOut || !strings.Contains(optedOut, "<key>PERSONA_SPLIT_PROGRAMS</key><string>0</string>") ||
-		!strings.Contains(report, "服务改成运行 personad，重启了 hub") {
+		!strings.Contains(report, "服务改成运行 personad，重启了 hub") || !strings.Contains(report, macSwitchNote(bin)) {
 		t.Fatalf("opted out:\n%s\n%s", agentText(t, e), report)
 	}
 	for _, c := range cmds.calls {
@@ -289,7 +289,8 @@ func TestSetupMacAgentRunsPersonaHub(t *testing.T) {
 	}
 	e.getenv = func(string) string { return "" }
 	report = setup("")
-	if agentText(t, e) != hubPlist(e.home, e.root, bin, hub, false) || !strings.Contains(report, "服务改成运行 persona-hub，重启了 hub") {
+	if agentText(t, e) != hubPlist(e.home, e.root, bin, hub, false) || !strings.Contains(report, "服务改成运行 persona-hub，重启了 hub") ||
+		!strings.Contains(report, "完全磁盘访问权限现在看 persona-hub") {
 		t.Fatalf("without it again:\n%s\n%s", agentText(t, e), report)
 	}
 }
@@ -310,7 +311,8 @@ func TestSetupMacAgentKeepsPersonadForAnotherBuild(t *testing.T) {
 func TestSetupMacInstalledAgentStaysOnPersonad(t *testing.T) {
 	e, cmds, bin, setup := macSetup(t, "persona 1.0 abc\n")
 	personad := hubPlist(e.home, e.root, bin, "", false)
-	if report := setup(personad); !strings.HasSuffix(report, macStaysNote) || strings.Contains(report, "改成运行") || agentText(t, e) != personad {
+	if report := setup(personad); !strings.HasSuffix(report, macStaysNote) || strings.Contains(report, "改成运行") ||
+		strings.Contains(report, "现在看") || agentText(t, e) != personad {
 		t.Fatalf("report: %s", report)
 	}
 	for _, c := range cmds.calls {

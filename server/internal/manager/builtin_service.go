@@ -248,29 +248,58 @@ func (e *env) builtinBinary(ctx context.Context, bin string) string {
 	return pm
 }
 
-// macKeepsPersonad: the built-in manager's agent on a Mac ran personad before (an installed Mac), so it stays on it:
-// bin, or the program the agent ran when bin is persona-manager and that one is still there. macOS holds the agent and
-// the node of this computer it starts to the agent's program for their privacy permissions (Full Disk Access), so
-// moving it would need them granted again. Said when a persona-manager is beside it. An agent that runs personad for
-// the opt-out keeps update.SplitEnv, and so is not that: it follows splitOff, as on Linux.
+// hubLaunchdLabels are the hub's launchd agent's labels, today's (hub setup's hubLaunchdLabel) and the former one.
+var hubLaunchdLabels = []string{"com.persona.hub", compat.HubLabel}
+
+// macKeepsPersonad: this Mac was installed with personad, so the built-in manager's agent stays on it. That is the
+// manager's own agent when it runs personad, or, before it has one, the hub's agent running personad: with the hub
+// starting the manager as its child, the node of this computer runs under the hub's agent, so the user already allowed
+// personad in Full Disk Access (macOS holds an agent and what it starts to the agent's program; the node of this
+// computer runs under the manager's own agent once it has one). Staying keeps that entry; moving would need another
+// one added. It stays on bin, or on the personad the agent ran when bin is persona-manager; when that one is gone it
+// does not stay. Said when a persona-manager is beside it. An agent that runs personad for the opt-out keeps
+// update.SplitEnv, and so is not that: it follows splitOff, as on Linux.
 func (e *env) macKeepsPersonad(id, bin string) (string, bool) {
-	text, err := os.ReadFile(e.plistPath(id))
+	was, ok := macPersonadAgent(e.plistPath(id))
+	if !ok {
+		if fileExists(e.plistPath(id)) {
+			return "", false
+		}
+		for _, label := range hubLaunchdLabels {
+			if was, ok = macPersonadAgent(filepath.Join(e.home, "Library", "LaunchAgents", label+".plist")); ok {
+				break
+			}
+		}
+		if !ok {
+			return "", false
+		}
+	}
+	p := bin
+	if filepath.Base(bin) == "persona-manager" {
+		if !fileExists(was) {
+			return "", false
+		}
+		p = was
+	}
+	if fileExists(update.ProgramBeside(p, "persona-manager")) {
+		fmt.Fprintf(e.stdout, "Program: %s (this Mac was installed with personad, which Full Disk Access allows for this computer's "+
+			"node; it stays on it, so no new program has to be added there).\n", p)
+	}
+	return p, true
+}
+
+// macPersonadAgent is the personad a launchd agent's plist at path runs, true when it runs one (or the former name)
+// without update.SplitEnv in it.
+func macPersonadAgent(path string) (string, bool) {
+	text, err := os.ReadFile(path)
 	if err != nil || strings.Contains(string(text), "<key>"+update.SplitEnv+"</key>") {
 		return "", false
 	}
 	was := serviceProgram(string(text))
-	if name := filepath.Base(was); name != nodeproto.ProgramPersonad && name != compat.DaemonBinary {
+	if name := filepath.Base(was); was == "" || name != nodeproto.ProgramPersonad && name != compat.DaemonBinary {
 		return "", false
 	}
-	p := bin
-	if filepath.Base(bin) == "persona-manager" && fileExists(was) {
-		p = was
-	}
-	if fileExists(update.ProgramBeside(p, "persona-manager")) {
-		fmt.Fprintf(e.stdout, "Program: %s (this Mac's agent ran personad before and stays on it: moving an installed Mac to "+
-			"persona-manager would need Full Disk Access granted again).\n", p)
-	}
-	return p, true
+	return was, true
 }
 
 // splitOff says update.SplitEnv is 0 here. The unit written then keeps it, so the manager and the node it starts stay
@@ -423,8 +452,13 @@ func (e *env) builtinService(ctx context.Context, home, bin string, bounce bool)
 			}
 			what = "restarted"
 		}
+		moved := programSwitch("the agent", string(before), bin)
 		fmt.Fprintf(e.stdout, "Service: launchd agent %s, %s%s; it runs whenever you are logged in.\n  Log: %s\n", label, what,
-			programSwitch("the agent", string(before), bin), filepath.Join(managerconf.DefaultDir(home), "manager.log"))
+			moved, filepath.Join(managerconf.DefaultDir(home), "manager.log"))
+		if moved != "" {
+			fmt.Fprintf(e.stdout, "  Full Disk Access: this computer's node now reads with %s's permissions (macOS holds what an agent "+
+				"starts to its program); add it there if the node needs Desktop, Documents, Downloads or Messages.\n", filepath.Base(bin))
+		}
 		return nil
 	}
 	return fmt.Errorf("no service for it on %s", e.goos)

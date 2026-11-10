@@ -269,11 +269,11 @@ func explainDeniedFor(path, home, via, exe string, err error) error {
 	switch via {
 	case "ssh": // TCC holds what ssh starts to account against sshd-keygen-wrapper, not to personad
 		how = "打开 sshd-keygen-wrapper（Persona 经 ssh 在这台 Mac 上运行）"
-	case "launchd": // a LaunchAgent's program answers for itself
+	case "launchd": // a LaunchAgent's program answers for itself and what it starts (fullDiskAccessProgram)
 		if exe == "" {
 			exe = "personad"
 		}
-		how = "点「+」加上 " + exe + " 并打开它（Persona 的常驻 node 由 launchd 启动；它更新后又读不了的话，把开关关了再打开）"
+		how = "点「+」加上 " + exe + " 并打开它（Persona 的 node 由 launchd 服务启动，macOS 按这个服务运行的程序给权限；它更新后又读不了的话，把开关关了再打开）"
 	default:
 		how = "打开运行 Persona node 的终端或 App"
 	}

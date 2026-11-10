@@ -61,8 +61,15 @@ func (e *setupEnv) splitOff() bool { return strings.TrimSpace(e.getenv(update.Sp
 
 // macStaysNote is what setup on a Mac says when the hub's agent ran personad before (an installed Mac) and a
 // persona-hub is beside it: the agent stays on personad. macOS holds a LaunchAgent and what it starts to the agent's
-// program for its privacy permissions (Full Disk Access): moving it would need them granted again.
-const macStaysNote = "；这台 Mac 的 hub 服务原来运行 personad，照旧运行它（已经装好的 Mac 不换成 persona-hub：换了要重新给完全磁盘访问权限）"
+// program for its privacy permissions (Full Disk Access): staying keeps the entry the user allowed; moving would need
+// another one added.
+const macStaysNote = "；这台 Mac 的 hub 服务原来运行 personad，照旧运行它（已经装好的 Mac 不换成 persona-hub：完全磁盘访问权限里允许的是 personad，换了要另加一项）"
+
+// macSwitchNote is what setup on a Mac adds when the hub's agent moved to another program (to): what the agent starts
+// reads with that program's privacy permissions now.
+func macSwitchNote(to string) string {
+	return "；macOS 的完全磁盘访问权限现在看 " + filepath.Base(to) + "：本机的 node 要读桌面、文稿、下载或信息的话，在那里加上它"
+}
 
 // programVersion is what the program at path says to `version -v`.
 func (e *setupEnv) programVersion(ctx context.Context, path string) (string, error) {
@@ -763,7 +770,9 @@ func (e *setupEnv) launchdService(ctx context.Context, cfg *Config, bin string) 
 	noteBinary(bin, sum)
 	detail := fmt.Sprintf("装好了常驻服务（launchd %s，登录后自动运行），日志在 %s", hubLaunchdLabel, filepath.Join(e.root, "hub.log"))
 	if beforeErr == nil {
-		detail += switchNote(programBefore, programAfter, loadedErr == nil, loadedErr == nil && cfg.Assistant.StartsBuiltin())
+		if moved := switchNote(programBefore, programAfter, loadedErr == nil, loadedErr == nil && cfg.Assistant.StartsBuiltin()); moved != "" {
+			detail += moved + macSwitchNote(programAfter)
+		}
 	}
 	e.report("service", true, detail+macNote, "")
 	return nil

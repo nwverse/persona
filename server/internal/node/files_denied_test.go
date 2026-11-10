@@ -36,7 +36,7 @@ func TestExplainDeniedSaysWhoToAllow(t *testing.T) {
 	denied := &fs.PathError{Op: "open", Path: "/Users/me/Documents/a.md", Err: fs.ErrPermission}
 	for via, want := range map[string]string{
 		"ssh":     "sshd-keygen-wrapper",
-		"launchd": "加上 /Users/me/.persona/bin/personad 并打开它（Persona 的常驻 node 由 launchd 启动",
+		"launchd": "加上 /Users/me/.persona/bin/personad 并打开它（Persona 的 node 由 launchd 服务启动，macOS 按这个服务运行的程序给权限",
 		"":        "运行 Persona node 的终端或 App",
 	} {
 		err := explainDeniedFor("/Users/me/Documents/a.md", "/Users/me", via, "/Users/me/.persona/bin/personad", denied)

@@ -429,7 +429,7 @@ func fullDiskAccessFor(via, exe string) string {
 		if exe == "" {
 			exe = "personad"
 		}
-		return exe + "（常驻 node，由 launchd 启动）"
+		return exe + "（启动 node 的 launchd 服务运行的程序）"
 	case "ssh":
 		return "sshd-keygen-wrapper（node 经 ssh 启动）"
 	}
