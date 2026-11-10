@@ -317,6 +317,7 @@ struct UserBubbleBody: View {
     private var words: some View {
         PathText(text: text, refs: paths, link: layout.on ? Theme.accent : Theme.userBubbleLink)
             .font(Theme.Font.body).lineHeight(.body).foregroundStyle(layout.on ? Color.primary : Theme.userBubbleText)
+            .selectableInLift(text, as: .plain(layout.on ? Color.primary : Theme.userBubbleText)) // #603
             #if os(macOS)
             .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
             #endif

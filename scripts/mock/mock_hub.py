@@ -8696,12 +8696,48 @@ if os.environ.get("MOCK_CHAT_READ") == "1":
 # MOCK_SELECT_TEXT=1: "Select text" (#3189, SelectTextTests). Your message is plain text with Markdown-looking marks that must
 # stay; the reply has a fence inside a longer fence, a formula with `*`, indented code, a rule and a tab-indented item.
 SELECT_TEXT = "a1f3c2d4-0000-4000-8000-0000005e1ec7"
+SELECT_RICH = "a1f3c2d4-0000-4000-8000-0000005e1ec8"
+SELECT_RICH_REPLY = """## 迁移计划
+
+先把三个页面的数据请求合到一起，再换渲染方式。
+
+| 页面 | 现在 | 改后 | 风险 |
+| --- | --- | --- | --- |
+| 首页 | 4 次请求 | 1 次 | 低 |
+| 价格页 | 3 次请求 | 1 次 | 中：缓存键要改 |
+| 文档页 | 6 次请求 | 2 次 | 低 |
+
+步骤：
+1. 合并首页的请求，跑一遍回归测试
+2. 价格页换成新的缓存键
+3. 文档页最后做
+
+改动大概是这样：
+
+```ts
+export async function load(page: string) {
+  const data = await fetchAll(page)
+  return render(data)
+}
+```
+
+> 价格页的缓存键改了以后，旧缓存要等一天才过期。
+
+做完我会再跑一次首屏时间对比。
+
+**有变化再告诉你**。"""
 if os.environ.get("MOCK_SELECT_TEXT") == "1":
     SESSIONS.append(sess("macbook", SELECT_TEXT, "选择文本", "/Users/me/code/weather", "done", "read", "weather", 1, "select", 2, 1, "Yes"))
     ITEMS[SELECT_TEXT] = [
         it("user", "text", 3, text="Python 里 __init__.py 的 2*3*4 是不是写错了？\n# 不是标题\n- 也不是列表"),
         it("assistant", "text", 2, text="Yes，`2*3*4` 没错，是 **24**。例子：\n\n````md\n```swift\nlet a = x*y*z\n```\n````\n\n"
                                         "公式 $x*y*z$ 照原样。\n\n    indented *code*\n\n* * *\n\n- 一\n\t- tab item"),
+    ]
+    # A long reply with a heading, a table, a list, code and a quote (#603, selecting a lifted message's words in place).
+    SESSIONS.append(sess("macbook", SELECT_RICH, "选择文本 · 长回复", "/Users/me/code/shop", "done", "read", "shop", 1, "select", 2, 1, "迁移计划"))
+    ITEMS[SELECT_RICH] = [
+        it("user", "text", 3, text="三个页面的请求怎么合？"),
+        it("assistant", "text", 2, text=SELECT_RICH_REPLY),
     ]
 
 # MOCK_PORTS=1: an agent running a dev server (docs/operations/ports.md): its session lists the port, its reply links it (and a

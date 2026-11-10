@@ -129,6 +129,8 @@ data class ExtensionField(
     val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
     /** The default it falls back to, when there is one (JSON null is none). */
     val fallback: JsonElement? get() = default?.takeIf { it != JsonNull }
+    /** Whether flipping a switch of it asks [confirm] first: only turning one on, and only with a sentence. */
+    fun asksFirst(on: Boolean): Boolean = on && !confirm.isNullOrBlank()
 }
 
 /**
