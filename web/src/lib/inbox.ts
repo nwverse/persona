@@ -881,9 +881,17 @@ interface InboxState {
   historyLoading: boolean;
   /** Why a manager's last page didn't come, by manager ("" for the only one); an offline one has none (it is asked again later). */
   historyError: Record<string, string>;
+  /** Each manager's done items per calendar day in this device's zone ("YYYY-MM-DD" → count; GET /api/v1/inbox/done/days,
+   *  #2967), by manager ("" for the only one). null: its hub has no day counts, and Done pages the history from the newest
+   *  as before; missing: not known yet (or the manager was offline). */
+  doneDays: Record<string, Record<string, number> | null>;
+  /** Done groups loading a page of their own (#2969), by "<manager>|<group key>". */
+  groupLoading: string[];
+  /** Done groups whose items have all come, by "<manager>|<group key>": a page of theirs reached the group's start. */
+  groupComplete: string[];
 }
 
-const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {} };
+const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [] };
 let state: InboxState = EMPTY;
 const listeners = new Set<() => void>();
 /** A Map that tells its watchers when it changes. The unsent replies live outside InboxState: a keystroke in the draft
@@ -1200,6 +1208,72 @@ export async function loadOlderDone(managers: (string | undefined)[]): Promise<v
     historyLoading: false,
     historyError: errors,
   });
+}
+
+/** Where each Done group's next page starts, once one of its pages has come and the group isn't complete. */
+const groupNext = new Map<string, DoneCursor>();
+
+/**
+ * Each manager's done items per day (GET /api/v1/inbox/done/days, #2967) in this device's zone, so Done lists every
+ * day's group with its count before any of its items load. A hub without them (404 / 405, or 400 for a zone it doesn't
+ * know) gets null: Done pages its history from the newest, as before. An offline manager stays unknown and is asked
+ * again next time. Returns the managers that have no counts.
+ */
+export async function loadDoneDays(managers: (string | undefined)[]): Promise<(string | undefined)[]> {
+  const q = new URLSearchParams({ tz: Intl.DateTimeFormat().resolvedOptions().timeZone, sources: "all" });
+  const got = await Promise.allSettled(managers.map(async (m) => {
+    try {
+      const r = await api<{ days?: { day: string; count: number }[] }>(`/inbox/done/days?${q}`, { headers: itemHeaders(m) });
+      return Object.fromEntries((r.days ?? []).map((d) => [d.day, d.count]));
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 405 || e.status === 400)) return null;
+      throw e;
+    }
+  }));
+  const doneDays = { ...state.doneDays };
+  got.forEach((p, i) => {
+    if (p.status === "fulfilled") doneDays[managers[i] ?? ""] = p.value;
+  });
+  set({ doneDays });
+  return managers.filter((m) => doneDays[m ?? ""] === null);
+}
+
+/**
+ * One page of a Done group's own items (#2969): from the group's end (`before` alone is a moment: the items done before
+ * it), then from where its last page ended. The group is complete when a page reaches its start or the history ends.
+ * The items join `history`; those of older groups a page also brings stay there for theirs.
+ */
+export async function loadDoneGroup(manager: string | undefined, key: string, range: { start: number; end: number }): Promise<void> {
+  const id = `${manager ?? ""}|${key}`;
+  if (state.groupLoading.includes(id) || state.groupComplete.includes(id)) return;
+  set({ groupLoading: [...state.groupLoading, id] });
+  const q = new URLSearchParams({ sources: "all", limit: "100" });
+  const cur = groupNext.get(id);
+  if (cur) {
+    q.set("before", cur.before);
+    q.set("before_id", cur.before_id);
+  } else if (Number.isFinite(range.end)) q.set("before", new Date(range.end).toISOString());
+  const m = manager ?? "";
+  try {
+    const r = await api<{ items?: InboxItem[]; next?: DoneCursor }>(`/inbox/done?${q}`, { headers: itemHeaders(manager) });
+    const got = (r.items ?? []).map((it) => (manager && !it.manager ? { ...it, manager } : it));
+    const last = got.at(-1)?.done_at;
+    const complete = !r.next || !last || Date.parse(last) < range.start;
+    if (complete) groupNext.delete(id);
+    else groupNext.set(id, r.next!);
+    const seen = new Set(state.history.map(itemKey));
+    const { [m]: _, ...errors } = state.historyError;
+    set({
+      history: [...state.history, ...got.filter((it) => !seen.has(itemKey(it)))],
+      groupLoading: state.groupLoading.filter((x) => x !== id),
+      groupComplete: complete ? [...state.groupComplete, id] : state.groupComplete,
+      historyError: errors,
+    });
+  } catch (e) {
+    // a manager offline (503) or gone (404) is asked again when the group opens again, without a word
+    const quiet = e instanceof ApiError && (e.status === 503 || e.status === 404);
+    set({ groupLoading: state.groupLoading.filter((x) => x !== id), historyError: quiet ? state.historyError : { ...state.historyError, [m]: errorText(e) } });
+  }
 }
 
 /** Done as the list shows it: the list's done items, then the history's it doesn't have (the list's copy is newer). */
@@ -1642,6 +1716,7 @@ export function useInboxBadge(): number {
 export function resetInboxForTests() {
   state = EMPTY;
   historyNext.clear();
+  groupNext.clear();
   started = false;
   inFlight = null;
   again = false;
