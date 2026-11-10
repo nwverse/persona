@@ -77,6 +77,9 @@ type TaskReview struct {
 	Round   int           `json:"round,omitempty"` // the rework round it started (rework)
 	Checks  []ReviewCheck `json:"checks,omitempty"`
 	Note    string        `json:"note,omitempty"`
+	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
+	// "Please verify" waits for them instead of being passed by the supervisor (acceptance.go, #3240).
+	UserCheck bool `json:"user_check,omitempty"`
 }
 
 type ReviewCheck struct {

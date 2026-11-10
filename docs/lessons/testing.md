@@ -9,8 +9,12 @@
   (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held
   request then falsely labels the later card snapshot as a resurrection. Require an actual request before delivering
   its reply and test a delayed initial snapshot. Streaming projection must pass the active turn and whether live text
-  is drawn, as the real page does. A wake's nonempty work tail does not exempt the previous answer from replacement;
-  cover manual inspection, serialized reload, idle turns and other turn IDs separately.
+  is drawn, as the real page does. A pending wake joins the ordinary execution summary while the previous answer stays
+  in place; only when that turn's next words start streaming does the earlier narration fold into the inspectable work.
+  An idle or other-turn presentation still shows the last answer. Cover the ordered/no-tail shape, manual inspection,
+  serialized reload and other turn IDs separately. When a merge retains the maintained renderer, reconcile tests
+  imported from a competing wake model instead of letting their old tail expectations reintroduce it, and do not treat
+  `hasPendingWake` as proof that new words are streaming (#3169).
 
 - UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
   notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
@@ -829,3 +833,7 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 - Presence tests wait for the existing state notification or report-request counter before checking the result (#2820). A negative observation keeps its entire window and fails immediately on an early result; it does not prove an unobservable internal wait has started. A wall-clock-seeded connection number needs a bounded check of that actual clock boundary, not a fixed startup delay.
 
 - A hosted test can install its app and establish the test-manager session yet never receive a PID from the app-launch request (#2671). Keep that distinct from a test assertion or a later shutdown error. Compare launch options with a passing run before changing them: `wait_for_debugger=1` also occurs in successful XCTest launches. Capture only the owned synthetic app and simulator's launch metadata within the original readiness window, with bounded time and output. An empty or unavailable diagnostic does not establish a cause, and adding diagnostics does not prove the launch fault is repaired.
+
+## Warm allocation measurements need one processor (2026-11-10, #3390)
+
+- Disabling GC preserves `sync.Pool` contents but does not keep a goroutine on the processor whose private pool was warmed. A switch during a byte-allocation measurement can charge a cold JSON encoder's buffer growth to the operation. Measure an explicitly warmed steady state with `GOMAXPROCS(1)` during the window and restore it afterward, as `testing.AllocsPerRun` does. Check warm-up errors and retain the original byte limit; a historical extra-copy implementation measured by the same helper must still fail that limit. This isolates the measurement from processor migration, not from unrelated allocating goroutines: do not run these process-wide measurements in parallel.

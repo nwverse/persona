@@ -18,6 +18,9 @@ func (h *Hub) healthWithSource(w http.ResponseWriter, r *http.Request, sourceOf 
 	if sourceOf(r) != sourcePublic {
 		response["version"], response["features"] = h.version, h.features()
 		response["channel"], response["build"] = h.build.Channel, h.build.Number
+		// The commit it was built from ("-dirty" after it with changes not committed; "" when the build did not say):
+		// a task is deployed only once this contains its PR's merge commit (assistant deploy_check.go, #3205).
+		response["commit"] = h.build.Commit
 		response["protocol"], response["min_app_build"] = proto.Protocol, proto.MinAppBuild
 		response["update"] = map[string]any{"confirmed": h.upd == nil || h.upd.isConfirmed()} // the watchdog waits for this
 	}

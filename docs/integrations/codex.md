@@ -288,6 +288,10 @@ Codex has no terminal hook that can answer on its behalf ("Research" below), so 
 
 Before answering, the node restores the TUI to an answerable state. If it cannot, it presses nothing and reports the reason to the answering user (same error codes as messaging: `input_draft` / `dialog_open` / `prompt_changed`).
 
+Codex 0.166's model/path/warning footer is not draft text, even without a blank separator or shortcuts row.
+The blinking `[ . ]` / `[ ! ] Action Required | ` title prefix is also status, not part of the thread name. A named
+pane that cannot be identified uses neither a stale pane binding nor directory-based rollout guessing.
+
 | On the computer | Behavior |
 | --- | --- |
 | Partially typed input | Refuse to answer and include the draft in the error: Codex has no reliable "save draft and restore after answering" (images and pasted blocks cannot be restored). Ordinary messaging also refuses; herdr's `agent prompt` previously appended directly to the draft and sent it. |

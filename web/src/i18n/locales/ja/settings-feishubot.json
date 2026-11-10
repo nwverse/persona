@@ -17,6 +17,8 @@
   "feature_workbench_detail": "/home で全体をまとめたホームカードをピン留めして呼び出し（常に1枚だけ、自動で更新）、どのカードにもそこへ戻るボタンが付きます。/today で今日、/inbox で受信箱を表示し、/start で権限モードを選べます",
   "feature_only_conclusions_title": "Lark には結論だけ送る",
   "feature_only_conclusions_detail": "メインチャットのタスクの途中経過（ひと区切りの完了・あなた待ち・中断）は単独では送らずやることリストとブリーフィングにだけ残し、結論（完了・できない・あなたの判断が必要）が出たら結論カードをこれまでどおり送ります",
+  "feature_report_steps_title": "実行の細部も Lark に送る",
+  "feature_report_steps_detail": "既定ではタスクの目標に変化があったとき（達成・あなたの判断が必要・行き詰まり）だけ送ります。オンにすると以前のカードに戻り、エージェントがひと区切りするたびの行（段階バーとエージェントの発言）、中断や完了も送ります",
   "feature_agents_title": "エージェントを操作",
   "feature_agents_detail": "/agents でお使いのコンピューター上の Claude Code / Codex を選んで Lark でチャットします。/start で新しく開始します",
   "step_create_app": "Lark 開発者コンソールでカスタムアプリを作成し、「ボット」機能を有効にします",

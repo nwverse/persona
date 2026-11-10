@@ -268,6 +268,8 @@ The sections that are a manager's (whose assistant it is, `ai`, `agents`, `inbox
   (new Agent, to-do dispatch, assistant's agent_start, assistant chats), e.g. `"~/.config/claude-code/profiles/work"` (`~/` is that machine's home). For computers where "claude is signed into a profile directory, not `~/.claude`":
   without it, Persona's claude uses the default directory, which is not logged in and immediately replies `Not logged in · Please run /login` (#1459). Only controls the `claude` launcher;
   aliases / functions in `~/.zshrc` and Persona-managed launchers keep their own settings. This directory is also added automatically to the session-search directories above. The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
+- `machines[].inbox_dir` (optional): this computer's **receive folder**, where files sent to it to keep land (from the phone with `dest=inbox`, and from another computer through `POST /api/v1/files/transfer`), e.g. `"~/Inbox"` (`~/` is that machine's home) or an absolute folder in the home.
+  Omitted means `~/Downloads/Persona`. The node makes it when missing and refuses a folder the phone may not write to (outside the home, `~/.persona`, `~/Library`, key folders, links out of the home: 409 `read_only`), so a typo never creates a folder elsewhere ([file-transfer.md](../protocol/file-transfer.md)). Manual hub.json edits require a hub restart.
 - `machines[].botmux` (optional): false means this computer's node neither lists botmux sessions nor runs botmux (no `botmux observe`, `botmux dashboard current`);
   omitted means the old behavior, listing sessions if botmux is installed (`docs/integrations/engines.md` ("botmux")). The node must also be this version; manual hub.json edits require a hub restart and take effect on reconnect.
   It is now only a default: "Also Show botmux Sessions" in machine details (the web in the page header, iOS under "Engine") is stored per machine in settings (`botmux/<machine id>`) and wins once set (#2575).
@@ -395,9 +397,9 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   before the selection, so a document is deleted only once you set days for its rule or for it; with the defaults none is.
   The knowledge base belongs to the manager, which reads the whole section here (`ai` included: it is the default of its `kb.*` model purposes);
   an assistant run elsewhere (`assistant.external`) reads the `manager.json` on its own machine, and its `extra_dirs` are paths there (`docs/assistant/knowledge.md` ("Who owns what")).
-- `agents.triage`: triage after a round stops ([agent-work.md](../assistant/agent-work.md) ("Switches")). Switches are under **Settings › Session Triage** in the App (stored in the manager's settings, all off by default),
-  and only limits live here: `max_retries` (maximum automatic continuations, default 3), `max_wakes` (maximum wakes, default 6), `settle_seconds` (delay after stopping before triage, default 15);
-  `enabled` / `auto_continue` / `wake` / `decide` are merely initial values if never saved in the App (omitted means off). Triage is done by the manager (assistant process), which reads this section here; for hand edits see **Edits** above.
+- `agents.triage`: triage after a round stops ([agent-work.md](../assistant/agent-work.md) ("Switches")). Switches are under **Settings › Session Triage** in the App (stored in the manager's settings, all off by default but `transient_retry`),
+  and only limits live here: `max_retries` (maximum consecutive automatic continuations after transient errors, default 5), `retry_base_seconds` (the first continuation's backoff, doubled for each next one, default 15), `max_wakes` (maximum wakes, default 6), `settle_seconds` (delay after stopping before triage, default 15);
+  `enabled` / `auto_continue` / `wake` / `decide` / `transient_retry` are merely initial values if never saved in the App (omitted means off, but `transient_retry` on). Triage is done by the manager (assistant process), which reads this section here; for hand edits see **Edits** above.
 - `agents.launcher_health`: launcher health checks and automatic repair ([launcher-health.md](../server/launcher-health.md)): `enabled` (off by default; true enables periodic checks and automatic repair), `interval_minutes` (default 30),
   `repair` (repair Agent: no `skill` means no repair Agent, only CLI upgrades; `machine` defaults to the assistant's computer, `cwd` to home, `launcher` to an available one, `permission` is the permission mode, default `bypassPermissions`).
 - `agents.delegate` (#3029): the assistant answers Agent questions first ([assistant.md](../assistant/assistant.md) ("Assistant answers questions first")). **Off by default**, enabled only with `enabled: true`;
@@ -416,6 +418,16 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
 
   Model selection is elsewhere: **Settings › Model Configuration › Question Delegation** (purpose `agent.delegate`). If never selected, it uses the "Information Filtering" connection with Opus 5.5 (`claude-opus-5-5`);
   change provider or model there, or use `PATCH /api/v1/model-config/purposes/agent.delegate` (`{"revision": <current>, "model": "claude-sonnet-5-5"}`); "Restore Defaults" returns to Opus.
+- `agents.dispatch` (#3253): an Agent hands a subtask to a new Agent on another connected computer and reads the result back ([plan-agent-dispatch.md](../plans/plan-agent-dispatch.md)). **Off by default.**
+  `enabled` (true lists the Agents' `dispatch_start` / `dispatch_read` tools; a dispatched task runs on the target computer's default launcher and model for new Agents, started by an Agent and not by you),
+  `max_active` (how many of one Agent's dispatched tasks may be working at a time, default 3). Work computers and guest conversations never get the tools. Restart the hub after changing it. Example:
+
+  ```json
+  "agents": {
+    "dispatch": { "enabled": true }
+  }
+  ```
+
 - `agents.review` (#2173): the independent review of a supervised task's finished change ([unified-entry.md](../assistant/unified-entry.md) ("Independent review")). **Off by default**, on once `launcher` names a launcher on the working agent's computer (pick one on another model than your agents'; there is no default reviewer).
   `model` and `effort` (optional) override the launcher's own; `permission` is the reviewer's permission mode (default `plan`); `timeout_minutes` bounds one review (default 30). The reviewer works in a disposable copy of the change, so its permission mode is a second guard, not the only one. Example:
 

@@ -169,7 +169,7 @@ class SentShotsTest {
                         }
                         Shot.Empty -> SentContent(SentState(items = emptyList()), SentNow, {}, false, {}, {}, {}, {}, {}, onChat = null)
                         Shot.Filtered -> SentContent(SentState(items = emptyList(), filter = "lark", seen = listOf("mail")), SentNow, {}, false, {}, {}, {}, {}, {}, onChat = null)
-                        Shot.Failed -> SentContent(SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "internal"))), SentNow,
+                        Shot.Failed -> SentContent(SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "upstream"))), SentNow,
                             {}, false, {}, {}, {}, {}, {}, onChat = null)
                         Shot.NoDatabase -> SentContent(SentState(problem = SentText.problem(HubFailure(HubError.Server, "no database", 503, "no_database"))), SentNow,
                             {}, false, {}, {}, {}, {}, {}, onChat = null)
@@ -327,7 +327,7 @@ class SentShotsTest {
     /** The hub's refusals are said in their own words before the usual one; only that one has Retry. */
     @Test fun theRefusalsAreSaidInTheirWordsAndOnlyAFailureHasRetry() {
         // A failure of the first read: the usual words with Retry, and Retry reads again.
-        val failing = FakeSent().apply { fail = HubFailure(HubError.Server, "boom", 500, "internal") }
+        val failing = FakeSent().apply { fail = HubFailure(HubError.Server, "boom", 500, "upstream") }
         var current by mutableStateOf<HubSent>(failing)
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
@@ -430,7 +430,7 @@ class SentShotsTest {
             assertEquals("${refusal.status}", 0, red())
             rule.onAllNodesWithText("重试").assertCountEquals(0)
         }
-        state = SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "internal")))
+        state = SentState(problem = SentText.problem(HubFailure(HubError.Server, "boom", 500, "upstream")))
         assertTrue("a failure is red", red() > 20)
         rule.onNode(hasText("重试") and hasClickAction()).assertExists()
     }

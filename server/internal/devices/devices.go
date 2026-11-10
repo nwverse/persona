@@ -99,6 +99,8 @@ type Devices struct {
 	opts Options
 	logf func(format string, args ...any)
 
+	transfers transfers // computer to computer file transfers running or just over (transfer.go)
+
 	mu    sync.Mutex
 	cfg   devicewire.Config
 	got   bool          // a config came from the hub
@@ -122,12 +124,16 @@ type Devices struct {
 	byID      map[string]*Machine
 	warm      *savedWarm // taken at start, for the machines when they come
 
-	fleet    fleet
-	tailcat  tailcatDialer
-	engines  engineChoices
-	links    linkSet
-	stopping atomic.Bool
-	workers  sync.WaitGroup
+	fleet   fleet
+	tailcat tailcatDialer
+	engines engineChoices
+	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
+	clipboard clipboardSwitches
+	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
+	fileTransfer fileTransferSwitches
+	links        linkSet
+	stopping     atomic.Bool
+	workers      sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]

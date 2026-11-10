@@ -84,10 +84,20 @@ export interface TaskProgress {
   at?: string;
 }
 
-/** The review state that holds now: an accepted or cancelled task the user reopened goes on again. */
+/** Whether its supervisor's acceptance still stands: the latest review accepted it and no review came since. That
+ *  holds even when the hub reopened it because its agent was sent more work (#3156): the task is accepted until a new
+ *  review says otherwise (docs/assistant/todo-status-sop.md, "Accepted tasks"). */
+export function acceptanceStands(todo: { supervision?: Supervision }): boolean {
+  const sup = todo.supervision;
+  return sup?.state === "accepted" && latestReview(sup)?.verdict === "accepted";
+}
+
+/** The review state that holds now: a cancelled task reopened goes on again; an accepted one stays accepted while
+ *  its acceptance stands (acceptanceStands). */
 export function reviewState(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): ReviewState {
   const st = todo.supervision?.state ?? "";
-  if (!todo.done_at && (st === "accepted" || st === "cancelled")) return "";
+  if (!todo.done_at && st === "accepted" && !acceptanceStands(todo)) return "";
+  if (!todo.done_at && st === "cancelled") return "";
   return st;
 }
 
@@ -112,14 +122,17 @@ export function reviewBadge(todo: Pick<Todo, "done_at"> & { supervision?: Superv
   return { label: t("assistant-tasks.review_ongoing"), tone: "muted" };
 }
 
-export type CheckMark = "met" | "missing" | "open";
+export type CheckMark = "met" | "missing" | "open" | "unchecked";
 
 /**
  * Each criterion with how the latest review that judged it found it: met, missing (with its evidence or gap), or
- * open (not reviewed yet). Criteria a review judged that are not in done_when (a task without any) follow.
+ * open (not reviewed yet). Criteria a review judged that are not in done_when (a task without any) follow. Once the
+ * acceptance stands, a criterion no review judged (one added after it, #3156) is "unchecked", not open: nothing waits
+ * on it any more.
  */
 export function checklist(sup: Supervision | undefined): { criterion: string; mark: CheckMark; evidence?: string }[] {
   if (!sup) return [];
+  const settled = acceptanceStands({ supervision: sup });
   const latest = new Map<string, ReviewCheck>();
   for (const r of sup.reviews ?? []) for (const c of r.checks ?? []) latest.set(c.criterion, c);
   const out: { criterion: string; mark: CheckMark; evidence?: string }[] = [];
@@ -127,7 +140,7 @@ export function checklist(sup: Supervision | undefined): { criterion: string; ma
   for (const criterion of sup.done_when ?? []) {
     seen.add(criterion);
     const c = latest.get(criterion);
-    out.push({ criterion, mark: c ? (c.met ? "met" : "missing") : "open", evidence: c?.evidence || undefined });
+    out.push({ criterion, mark: c ? (c.met ? "met" : "missing") : settled ? "unchecked" : "open", evidence: c?.evidence || undefined });
   }
   for (const [criterion, c] of latest) {
     if (!seen.has(criterion)) out.push({ criterion, mark: c.met ? "met" : "missing", evidence: c.evidence || undefined });
@@ -141,9 +154,10 @@ export function latestReview(sup: Supervision | undefined): TaskReview | undefin
   return list[list.length - 1];
 }
 
-/** "2/3": criteria met of all, for a card; "" without criteria. */
+/** "2/3": criteria met of all, for a card; "" without criteria. Criteria left unchecked by a standing acceptance
+ *  are not counted (an accepted task reads "5/5", not "5/8"). */
 export function checkCount(sup: Supervision | undefined): string {
-  const list = checklist(sup);
+  const list = checklist(sup).filter((c) => c.mark !== "unchecked");
   if (list.length === 0) return "";
   return `${list.filter((c) => c.mark === "met").length}/${list.length}`;
 }

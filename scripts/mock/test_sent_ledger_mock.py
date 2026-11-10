@@ -10,7 +10,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sent_ledger_mock as m  # noqa: E402
 
-ROW_KEYS = {"id", "at", "connector", "action", "target", "text", "summary", "origin", "let_through", "message_ref"}
+ROW_KEYS = {"id", "at", "connector", "action", "target", "text", "summary", "origin", "let_through", "message_ref", "recalled_at", "can_recall"}
 
 
 class Fake:
@@ -183,6 +183,44 @@ class Route(unittest.TestCase):
     def test_the_switch_is_there_only_when_MOCK_SENT_is(self):
         self.assertFalse(ask(None, path="/mock/sent")[0])
         self.assertFalse(ask("1", method="POST", path="/mock/sent")[0])
+
+
+def recall(mode, rid, body=b'{"confirm": true}'):
+    with mock.patch.dict(os.environ, {"MOCK_SENT": mode}):
+        h = Fake()
+        return m.route(h, "POST", "/api/v1/connectors/sent/%d/recall" % rid, {}, body), h
+
+
+class Recall(unittest.TestCase):
+    def tearDown(self):
+        m._recalled.clear()
+
+    def test_the_first_page_offers_a_recall_and_shows_a_recalled_row(self):
+        first = {x["id"]: x for x in m.page(m.rows())["items"]}
+        self.assertEqual(sorted(i for i, x in first.items() if x["can_recall"]), [60, 66])
+        self.assertTrue(first[54]["recalled_at"])
+        self.assertFalse(first[54]["can_recall"])
+
+    def test_a_recall_takes_the_row_back_until_the_mode_switches(self):
+        handled, h = recall("1", 66)
+        self.assertTrue(handled)
+        self.assertEqual((h.status, h.json["item"]["id"], h.json["item"]["can_recall"]), (200, 66, False))
+        self.assertTrue(h.json["item"]["recalled_at"])
+        _, h = recall("1", 66)
+        self.assertEqual((h.status, h.json["code"]), (409, "already_recalled"))
+        ask("1", {"mode": ["1"]}, path="/mock/sent")
+        m._now["mode"] = None
+        self.assertTrue(next(x for x in m.rows() if x["id"] == 66)["can_recall"])
+
+    def test_refusals(self):
+        for mode, rid, body, want in (("1", 60, None, (502, "recall_refused")), ("1", 54, None, (409, "already_recalled")),
+                                      ("1", 21, None, (409, "not_recallable")), ("1", 99, None, (404, "not_found")),
+                                      ("1", 66, b"{}", (400, "confirm_required")), ("forbidden", 66, None, (403, "own_device_only")),
+                                      ("nodb", 66, None, (503, "no_database"))):
+            _, h = recall(mode, rid, *([body] if body is not None else []))
+            self.assertEqual((h.status, h.json["code"]), want, (mode, rid))
+        _, h = recall("old", 66)
+        self.assertEqual((h.status, h.json), (404, None))
 
 
 if __name__ == "__main__":

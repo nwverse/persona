@@ -64,7 +64,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @State private var pageFocusRequest = 0
 
     private var offersEnlarge: Bool {
-        !text.isEmpty && ComposerGrowth.offersExpansion(textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
+        ComposerGrowth.showsExpandButton(text: text, focused: focused.wrappedValue, textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
     }
 
     /// Count a trailing newline as the empty line it starts.
@@ -128,6 +128,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     private var expanded: Bool { alwaysOpen || focused.wrappedValue || !text.isEmpty || hasAttachments }
 
     var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("ShellComposerBar")
+        #endif
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 0) {
                 if expanded, let quotes, !quotes.wrappedValue.isEmpty {
@@ -195,6 +198,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             if expanded {
                 HStack(spacing: Theme.Space.xs) {
                     plus
+                    #if os(iOS)
+                    if focused.wrappedValue { dismissKeyboardButton }
+                    #endif
                     Spacer(minLength: Theme.Space.s)
                     if let modesTitle {
                         Menu { modes() } label: { modesLabel(modesTitle) }
@@ -328,6 +334,28 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         sentFromPage = true
         enlarged = false
         send()
+    }
+
+    private var dismissKeyboardButton: some View {
+        Button(action: dismissKeyboard) {
+            ThemedIcon(Theme.Icon.dismissKeyboard)
+                .font(Theme.Font.heading)
+                .fontWeight(.medium)
+                .foregroundStyle(ink)
+                .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Hide Keyboard")
+        .accessibilityIdentifier("shell-composer-dismiss-keyboard")
+        .transition(.opacity)
+    }
+
+    private func dismissKeyboard() {
+        Haptics.tap()
+        if focused.wrappedValue { TypedText.commitFocused(into: $text) }
+        focused.wrappedValue = false
+        Keyboard.dismiss()
     }
     #endif
 
@@ -560,7 +588,14 @@ private struct ComposerPageEditor: View {
             .themedPage()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if focused {
+                        Button(action: dismissPageKeyboard) {
+                            ThemedIcon(Theme.Icon.dismissKeyboard)
+                        }
+                        .accessibilityLabel("Hide Keyboard")
+                        .accessibilityIdentifier("composer-page-dismiss-keyboard")
+                    }
                     Button {
                         commitTyped()
                         collapse()
@@ -604,6 +639,13 @@ private struct ComposerPageEditor: View {
     /// keyboard, never another text field's text.
     private func commitTyped() {
         if focused { TypedText.commitFocused(into: $text) }
+    }
+
+    private func dismissPageKeyboard() {
+        Haptics.tap()
+        commitTyped()
+        focused = false
+        Keyboard.dismiss()
     }
 }
 #endif

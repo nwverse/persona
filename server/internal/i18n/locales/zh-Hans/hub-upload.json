@@ -1,4 +1,6 @@
 {
   "too_large": "文件超过 {mb} MB",
-  "outdated": "{name} 上的 personad 太旧，不能接收文件，需要重新部署"
+  "outdated": "{name} 上的 personad 太旧，不能接收文件，需要重新部署",
+  "transfer_busy": "已有 {n} 个传输在进行，请等其中一个完成",
+  "transfer_invalid": "电脑返回的文件信息无法识别"
 }
