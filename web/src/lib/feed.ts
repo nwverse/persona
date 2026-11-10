@@ -458,7 +458,8 @@ async function readFeedPages(conversation: string) {
   const owner = conversationManager(conversation)
     ?? Object.values(getState().sessions).flat().find((s) => s.session_id === conversation)?.manager
     ?? managerHeaderFor(endpoint);
-  const headers = owner ? { [MANAGER_HEADER]: owner } : undefined;
+  // the default's conversation names none (itemHeaders): one manager gets the requests it always did
+  const headers = itemHeaders(owner);
   for (let n = 0; n < FEED_PAGES; n++) {
     const readingAt = feedRevision;
     const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
