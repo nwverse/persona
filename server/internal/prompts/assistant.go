@@ -164,6 +164,10 @@ type SnapshotTask struct {
 	// accepted; #3124), "" for any other; DoneWhen how many criteria it has.
 	Health   string
 	DoneWhen int
+	// Orphan: why nobody works on an open task any more (error: its agent ended on a model error and is closed;
+	// closed: its agent's tab was closed; offline: its computer is away), "" while an agent is at it or will be woken
+	// (docs/assistant/todos.md "Nobody is working on this").
+	Orphan string
 	// Delivery: how far its finished work was delivered when that is short of live ("stopped at the PR, stuck on 'CI queued'"), ""
 	// otherwise (docs/assistant/todos.md "Delivery").
 	Delivery string
@@ -470,6 +474,7 @@ type SuperviseEntry struct {
 	Last            string             // what its agent said last
 	Link            string             // the task's page ("" when the hub has no public_url)
 	Quiet           bool               // the user was not pushed about it
+	Orphan          string             // orphaned: why nobody works on it (error, closed, offline)
 	Review          *SuperviseReviewed // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
 	Report      string

@@ -23,6 +23,7 @@ const (
 	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
+	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
 )
 
 var (
@@ -54,6 +55,8 @@ type superviseSignal struct {
 	Report      string
 	Evidence    []string
 	Step, Steps int
+	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
+	Orphan string
 }
 
 const (
@@ -81,7 +84,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated: // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigOrphaned: // started: the user waits to hear it
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -238,7 +241,8 @@ func (s *Service) retryDigestLocked(d time.Duration) {
 // watchSignals are what t and its agents show now that the supervisor should hear of, by their state alone: a task
 // waiting for review (told once per review: again after a restart of the assistant, which forgot what it told), an
 // agent waiting for an answer (at once for a quiet task), or working without progress for long. Nothing more for a
-// task waiting for review or for the user, and nothing for one done or not supervised.
+// task waiting for review or for the user, and nothing for one done or not supervised. A task nobody works on any more
+// is told from what the minute pass found (orphanSignal, tasks_orphan.go), since that asks whether its computers answer.
 func watchSignals(t Todo, agents []proto.Session, now time.Time) []superviseSignal {
 	v := t.Supervision
 	if v == nil || t.DoneAt != nil {
@@ -309,6 +313,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		}
 		s.remedyWatch(ctx, t, now) // a failed start's kept tab expired (start_remedy.go)
 		for _, g := range watchSignals(t, s.taskAgents(ctx, t), now) {
+			s.signal(g)
+		}
+		if g, ok := s.orphanSignal(t); ok { // nobody works on it, as the minute pass found (tasks_orphan.go)
 			s.signal(g)
 		}
 	}

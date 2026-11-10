@@ -1,4 +1,4 @@
-📋 督办：你派出去的任务有 9 个要你处理
+📋 督办：你派出去的任务有 12 个要你处理
 （这是 Persona 的督办消息，不是用户发的。这一轮默认折叠在主对话的督办记录中，不会推送给用户：要用户知道的事你用 notify_user 推，要用户决定的用 ask_user 问。）
 <persona-supervision level="triage" />
 
@@ -33,17 +33,30 @@
 6. 任务「整理日志」（todo_9）：重试后 Agent 开起来了，之前没开起来是因为（新标签里的 shell 停在一个提问上）；在 box
    验收标准：派活时没写，按任务本身要的结果判断
 
-7. 任务「修登录崩溃」（todo_1，链接 https://hub.example.com/todos?id=todo_1）：hub 判断做完了，等你验收（PR 已合并）；在 box session_id=a1b2c3d4
+7. 任务「升级依赖」（todo_10）：没有 Agent 在做了：它的 Agent 被模型服务报错打断，之后标签被关掉，hub 不会自己重试（API Error: 400 prompt is too long）；在 box session_id=c3d4e5f6
+   验收标准：CI 通过
+   Agent 最后说的：
+   API Error: 400 prompt is too long
+
+8. 任务「清理旧分支」（todo_11）：没有 Agent 在做了：它的 Agent 的标签已经关闭（用户关的，或闲置太久被关），也没有排定的唤醒；在 box session_id=d4e5f6a7
+   验收标准：派活时没写，按任务本身要的结果判断
+   Agent 最后说的：
+   删了 12 个，还剩 3 个要确认
+
+9. 任务「跑回归」（todo_12）：没有 Agent 在做了：它的 Agent 所在的电脑离线了；在 laptop
+   验收标准：派活时没写，按任务本身要的结果判断
+
+10. 任务「修登录崩溃」（todo_1，链接 https://hub.example.com/todos?id=todo_1）：hub 判断做完了，等你验收（PR 已合并）；在 box session_id=a1b2c3d4
    验收标准：PR 合并到 master；浅色 / 深色截图贴进 PR
    Agent 最后说的：
    修好了，PR https://github.com/o/r/pull/901 已合并
    独立评审（评审员只看了任务要求和改动，看不到 Agent 的推理）：没有阻断问题，1 条非阻断发现
    1. P2 login/view.swift:12 变量名可以更清楚
 
-8. 任务「跑 UI 测试」（todo_4）：35 分钟没有进展（在等编译）
+11. 任务「跑 UI 测试」（todo_4）：35 分钟没有进展（在等编译）
    验收标准：派活时没写，按任务本身要的结果判断
 
-9. 任务「整理文档」（todo_6）：Agent 主动向你汇报：进度
+12. 任务「整理文档」（todo_6）：Agent 主动向你汇报：进度
    验收标准：派活时没写，按任务本身要的结果判断
    它说：
    写完了一半
@@ -55,6 +68,7 @@
 - Agent 主动汇报的：要你拍板的直接回它（agent_send），真要用户定的才问用户；卡住的帮它解开或换个走法；说做完的按它给的证据先核对，hub 判断它停下后再 task_review；只是进度的知道就行，不用回它。
 - 方向错了、在空等（sleep、反复轮询）、反复失败、和别的 Agent 撞车的：用 agent_interrupt 停下它这一轮，then 里写清改成怎么做（已经做了的不会回滚，要撤回就让它自己撤）；只是补一句话不用打断，用 agent_send。
 - 没有进展的：用 agent_read 看它在干什么，卡住了就催一句或换个走法；几个任务抢同一份资源（编译、模拟器）就排好先后告诉它们。
+- 没有 Agent 在做了的：任务还开着，但不会有人自己接着做，三选一。还要做、Agent 的上下文还有用：agent_send 让它接着做（发消息会把关掉的 Agent 在新标签里恢复；因为报错停下的，先看括号里的错误，是上下文超长、模型不可用这类重试也没用的就不要原样继续）。原来的 Agent 用不了了（报错重试无用、电脑离线一时回不来）：task_plan 重新派一个，prompt 里写清做到哪了，再用 task_review cancelled 取消旧的。已经不用做了或其实做完了：核对后 task_review（accepted 或 cancelled）关掉。电脑离线的先看快照里那台电脑是不是回来了，只是暂时离线又不急的可以等，不要反复派。
 - 被打断的：能重试就让它继续（agent_send「继续」）或重新派；重复派了的用 task_review cancelled 取消多余的那个。
 - 没开起来的：先弄清为什么。标签还保留着的，用 task_start_screen 看屏；shell 停在提问上、或 Agent 自己的画面卡住，就用 task_start_keys 按键解开（什么键都可以直接按，reason 写一句为什么），再 task_retry 在同一个标签里重新启动；标签没了或已彻底失败的，判断值得再试就 task_retry 开新标签。每个任务最多重试 3 次，hub 不会自动重试。重试后开起来的，用 notify_user 告诉用户「重试后开起来了」和原因。没开起来的这一轮结束前必须用 notify_user 告诉用户结果，一句话：开起来了；重试后开起来了（原因：…）；或者还是没开起来，原因 + 建议（比如去那台电脑看一下那个标签、更新 node）。不要 silent，也不要 task_review cancelled，除非用户说过不要这个任务了。
 - 做完还有下游的事（部署、关 issue、发 TestFlight）：拆成新任务（task_plan）或安排跟进（schedule_followup），不要只记在对话里。
