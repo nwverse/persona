@@ -768,7 +768,8 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
         <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
       )}
       {it.state && <StatePill state={it.state} />}
-      {!working && !!it.badge && <span data-menu-badge className="flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold whitespace-nowrap text-attention tabular-nums">{it.badge > 99 ? "99+" : it.badge}</span>}
+      {!working && !!it.badge && <span data-menu-badge aria-hidden={it.badgeLabel ? true : undefined} className="flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold whitespace-nowrap text-attention tabular-nums">{it.badge > 99 ? "99+" : it.badge}</span>}
+      {!working && !!it.badge && it.badgeLabel && <span className="sr-only">{it.badgeLabel}</span>}
       {working ? <Spinner size={12} /> : it.hint && <span className="shrink-0 text-[11px] text-ink-3">{it.hint}</span>}
       {it.checked !== undefined && <Icon name="check" size={13} stroke={2.5} className={cx("shrink-0", it.checked ? "text-ink" : "invisible")} />}
       {accel && !working && <span aria-hidden className={cx("w-3.5 shrink-0 text-center text-[11px]", it.danger ? "" : "text-ink-3")}>{accel}</span>}

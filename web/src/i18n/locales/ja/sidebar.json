@@ -146,5 +146,6 @@
   "manage_assistants": "アシスタントを管理…",
   "switched_to": "{name}に切り替えました",
   "switcher_label": "{name}、アシスタントを切り替え",
-  "switcher_label_waiting": "{name}、アシスタントを切り替え。ほかのアシスタントに対応待ちがあります"
+  "switcher_label_waiting": "{name}、アシスタントを切り替え。ほかのアシスタントに対応待ちがあります",
+  "switcher_count": "対応待ち {count} 件"
 }

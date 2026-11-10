@@ -32,6 +32,8 @@ export interface MenuItem {
   tag?: string;
   /** How many things wait behind the row (an assistant's agents and inbox items), as a count at its end; 0: none. */
   badge?: number;
+  /** What a screen reader says for `badge` ("3 things waiting for you"); the number alone without it. */
+  badgeLabel?: string;
   /** The whole row is drawn faded (an offline assistant) yet chosen like any other, unlike `disabled`. */
   dim?: boolean;
   state?: AgentState;

@@ -166,6 +166,10 @@ export function managerError(e: unknown): string {
 
 let roster: ManagerList | null = null;
 let rosterLoad: Promise<void> | null = null;
+// a read asked for while one was out (a `managers` push, a change made here): once more after it, shared by every ask
+// meanwhile, as the hub may have answered the read out before the change it tells about
+let rosterAgain: Promise<void> | null = null;
+let rosterReset = 0; // resetRoster's count: a read asked for before a reset is not made after it
 let rosterWatched = false;
 const rosterListeners = new Set<() => void>();
 
@@ -175,9 +179,19 @@ export const ROSTER_RETRY_MS = 5_000;
 let rosterRetries = 0;
 let rosterRetry: ReturnType<typeof setTimeout> | null = null;
 
-/** Reads the roster again (a `managers` push, the socket's hello); a hub without one stays at none. */
+/** Reads the roster again (a `managers` push, the socket's hello); a hub without one stays at none. Asked while a read
+ *  is out, it reads once more when that one is done, so no push is lost to a read that was already on its way. */
 export function loadRoster(): Promise<void> {
-  rosterLoad ??= listManagers()
+  if (rosterLoad) {
+    const since = rosterReset;
+    rosterAgain ??= rosterLoad.then(() => {
+      if (since !== rosterReset) return;
+      rosterAgain = null;
+      return loadRoster();
+    });
+    return rosterAgain;
+  }
+  rosterLoad = listManagers()
     .then((r) => {
       rosterRetries = 0;
       setRoster({ managers: r.managers ?? [], default: r.default || BUILTIN_MANAGER });
@@ -219,6 +233,8 @@ export function resetRoster() {
   rosterRetry = null;
   rosterRetries = 0;
   rosterLoad = null;
+  rosterAgain = null;
+  rosterReset++;
   roster = null;
 }
 

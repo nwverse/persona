@@ -109,7 +109,7 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
     lead: <AssistantAvatar id={m.id} name={m.name} isDefault={m.id === roster?.default} size={28} status={statusLine(m, now).tone} ring="ring-surface" />,
     // an offline one: the whole row faded (avatar, name and line), still chosen like the others
     dim: !m.online && !m.installing,
-    ...(m.installing ? {} : { radio: true, checked: m.id === current, badge: m.id === current ? 0 : badges[m.id] ?? 0 }),
+    ...(m.installing ? {} : { radio: true, checked: m.id === current, badge: m.id === current ? 0 : badges[m.id] ?? 0, badgeLabel: t("sidebar.switcher_count", { count: badges[m.id] ?? 0 }) }),
     onSelect: () => {
       if (m.installing) void showCode(m);
       else if (m.id !== current) switchAssistant(m, route);
