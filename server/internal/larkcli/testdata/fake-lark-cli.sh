@@ -30,6 +30,8 @@ case "${1:-}" in
       needs_refresh) cat "$base/auth_needs_refresh.json" ;;
       ready) cat "$base/auth_ready.json" ;;
       expiring) cat "$base/auth_expiring.json" ;;
+      rolling) cat "$base/auth_rolling.json" ;;
+      refresh_expiring) cat "$base/auth_refresh_expiring.json" ;;
       *) cat "$base/auth_status.json" ;;
     esac
     exit 0

@@ -43,6 +43,18 @@ func (a AuthStatus) DaysUntilExpiry(now time.Time) int {
 	return days
 }
 
+// RefreshWindowNeedsReminder reports when the rolling refresh-token window is
+// nearly exhausted. A healthy login refreshes that window on user API calls,
+// so its ordinary seven-day deadline is not an expiry warning; only a window
+// with less than one day remaining indicates that refreshes may have stopped.
+func (a AuthStatus) RefreshWindowNeedsReminder(now time.Time) bool {
+	if a.RefreshExpiresAt.IsZero() {
+		return false
+	}
+	remaining := a.RefreshExpiresAt.Sub(now)
+	return remaining > 0 && remaining < 24*time.Hour
+}
+
 // Chat is the stable subset of a shortcut chat item used by Persona.
 type Chat struct {
 	ChatID        string `json:"chat_id"`

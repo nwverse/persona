@@ -14,6 +14,10 @@ import (
 )
 
 func testConnector(t *testing.T, scenario string) *Connector {
+	return testConnectorWithProfile(t, scenario, "example")
+}
+
+func testConnectorWithProfile(t *testing.T, scenario, profile string) *Connector {
 	t.Helper()
 	bin, err := filepath.Abs(filepath.Join("..", "..", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
@@ -24,9 +28,9 @@ func testConnector(t *testing.T, scenario string) *Connector {
 	if scenario == "needs_refresh" || scenario == "ready" {
 		now = time.Date(2026, 11, 10, 6, 0, 0, 0, time.FixedZone("CST", 8*60*60))
 	}
-	return &Connector{runner: adapter.New(adapter.Config{Bin: bin, Profile: "example", Timeout: time.Second, Now: func() time.Time {
+	return &Connector{runner: adapter.New(adapter.Config{Bin: bin, Profile: profile, Timeout: time.Second, Now: func() time.Time {
 		return now
-	}}), now: func() time.Time { return now }}
+	}}), now: func() time.Time { return now }, profile: profile}
 }
 
 func TestManifestAndTools(t *testing.T) {
@@ -50,7 +54,7 @@ func TestManifestAndTools(t *testing.T) {
 }
 
 func TestStatusSuccessAndExpiryReminder(t *testing.T) {
-	c := testConnector(t, "success")
+	c := testConnector(t, "rolling")
 	st := c.Status(context.Background())
 	if st.State != connector.StateOK || st.Account != "Example User" || st.Via != "lark-cli" {
 		t.Fatalf("status = %+v", st)
@@ -59,10 +63,60 @@ func TestStatusSuccessAndExpiryReminder(t *testing.T) {
 		t.Fatalf("unexpected reminder: %q", st.Error)
 	}
 
-	c = testConnector(t, "expiring")
+	c = testConnector(t, "refresh_expiring")
 	st = c.Status(context.Background())
-	if st.State != connector.StateOK || !strings.Contains(st.Error, "3 天") {
+	if st.State != connector.StateOK || !strings.Contains(st.Error, "1 天") ||
+		!strings.Contains(st.Error, "lark-cli --profile example auth login --domain all") {
 		t.Fatalf("expiry status = %+v", st)
+	}
+}
+
+func TestStatusRefreshWindowLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		scenario  string
+		state     string
+		wantError string
+		wantGuide bool
+	}{
+		{name: "healthy rolling login", scenario: "rolling", state: connector.StateOK},
+		{name: "refresh window nearly used", scenario: "refresh_expiring", state: connector.StateOK, wantError: "1 天"},
+		{name: "expired login", scenario: "expired", state: connector.StateNotSignedIn, wantError: "过期", wantGuide: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := testConnectorWithProfile(t, tc.scenario, "").Status(context.Background())
+			if st.State != tc.state {
+				t.Fatalf("state = %q, want %q; status = %+v", st.State, tc.state, st)
+			}
+			if tc.wantError == "" && st.Error != "" {
+				t.Fatalf("unexpected error = %q", st.Error)
+			}
+			if tc.wantError != "" && !strings.Contains(st.Error, tc.wantError) {
+				t.Fatalf("error = %q, want %q", st.Error, tc.wantError)
+			}
+			if tc.wantGuide != (len(st.Guide) == 1) {
+				t.Fatalf("guide = %#v", st.Guide)
+			}
+		})
+	}
+}
+
+func TestLoginGuideUsesConfiguredProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile string
+		command string
+	}{
+		{name: "default profile", command: "lark-cli auth login --domain all"},
+		{name: "named profile", profile: "example", command: "lark-cli --profile example auth login --domain all"},
+		{name: "profile with spaces and non ASCII", profile: "工作 profile", command: "lark-cli --profile '工作 profile' auth login --domain all"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := testConnectorWithProfile(t, "not_logged_in", tc.profile).Status(context.Background())
+			if len(st.Guide) != 1 || !strings.Contains(st.Guide[0], tc.command) {
+				t.Fatalf("guide = %#v, want command %q", st.Guide, tc.command)
+			}
+		})
 	}
 }
 
@@ -97,7 +151,7 @@ func TestStatusCategories(t *testing.T) {
 	c = testConnector(t, "auth_missing_scope")
 	st := c.Status(context.Background())
 	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
-		!strings.Contains(st.Guide[0], "lark-cli auth login --domain all") {
+		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --domain all") {
 		t.Fatalf("missing scope status = %+v", st)
 	}
 }
@@ -106,7 +160,7 @@ func TestStatusUsesRefreshExpiryAndReportsFeatureScopes(t *testing.T) {
 	for _, scenario := range []string{"needs_refresh", "ready"} {
 		st := testConnector(t, scenario).Status(context.Background())
 		if st.State != connector.StateNoPermission || strings.Contains(st.Error, "not signed") || len(st.Guide) != 1 ||
-			!strings.Contains(st.Error, "im:chat:read") || !strings.Contains(st.Guide[0], "lark-cli auth login --domain all") {
+			!strings.Contains(st.Error, "im:chat:read") || !strings.Contains(st.Guide[0], "lark-cli --profile example auth login --domain all") {
 			t.Fatalf("%s status = %+v", scenario, st)
 		}
 	}
