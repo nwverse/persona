@@ -327,9 +327,9 @@ struct ExtensionItemRow: View {
                 .listRowBackground(Color.clear)
                 // Its own page margin lines its first tile up with the rows' words; it scrolls to the section's edges.
                 .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush, bottom: Theme.Space.s, trailing: Theme.Space.flush))
-        // UI version 6's picture is not drawn yet (#827). Until all of version 6 is, the app asks for an older version,
-        // so the hub turns it into older components before it gets here.
-        case .divider, .unknown, .image: EmptyView()
+        // UI version 6's picture (`ExtensionMedia.swift`).
+        case .image(let i): ExtensionImageItem(item: i, model: model)
+        case .divider, .unknown: EmptyView()
         // UI version 4's code-hosting components: a View with them is drawn by the code page (`ExtensionCodePage`, #2961).
         case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: EmptyView()
         }

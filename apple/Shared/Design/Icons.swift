@@ -481,6 +481,8 @@ extension Theme {
         static let pluginMinus = notChecked
         /// A commit (UI version 4's code hosting).
         static let pluginCommit = "circle.and.line.horizontal"
+        /// A picture that could not be loaded (an extension's `image`, its alt text beside it).
+        static let brokenImage = "photo.badge.exclamationmark"
         static let phone = "iphone"
         static let watch = "applewatch"
         static let handoff = "iphone.and.arrow.forward"

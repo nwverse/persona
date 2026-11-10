@@ -18591,6 +18591,8 @@ def plugins_route(handler, p, body):
         return True
     if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/ui/"):
         return mock_showcase(handler, p.rsplit("/", 1)[-1], body)
+    if PLUGINS_MODE and p.startswith("/api/v1/extensions/showcase/-/image/"):
+        return _showcase_image(handler, p.rsplit("/", 1)[-1])
     if p == "/mock/invalidate" and PLUGINS_MODE:
         return mock_invalidate(handler)
     if p == "/mock/controls/reset" and PLUGINS_MODE:
@@ -18625,6 +18627,7 @@ def mock_showcase(handler, ui, body):
     request = json.loads(body) if body else {}
     if ui == "controls":
         return _showcase_controls(handler, view, request)
+    _sign_refs(view)
     if request.get("action"):
         handler.send_json({"toast": "快照测试不执行写操作"})
     else:
@@ -18666,6 +18669,39 @@ def _showcase_controls(handler, view, request):
         if when is not None and bool(c.get("on")) == when:
             c["action"]["confirm"] = words
     handler.send_json({"items": [changed]} if changed else {"view": view})
+    return True
+
+
+# Pictures through the hub (UI version 6's `ui.image`, #827): as the hub does for an app of version 6, every `ref` gets a
+# `path` of the hub's image route (here the token is the ref itself, nothing signed), and the route answers a made-up
+# picture of the ref's shape; `missing` and unknown refs answer 404, to show a picture that does not load.
+_SHOWCASE_PICTURES = {"garden": (320, 240, (86, 150, 92)), "camera.front_door": (480, 270, (88, 104, 128)),
+                      "plant": (240, 240, (64, 160, 110)), "map": (480, 200, (226, 222, 210))}
+
+
+def _sign_refs(obj):
+    if isinstance(obj, list):
+        for x in obj: _sign_refs(x)
+    elif isinstance(obj, dict):
+        ref = obj.get("ref")
+        if isinstance(ref, str) and "path" not in obj and re.fullmatch(r"[A-Za-z0-9_.-]+", ref):
+            obj["path"] = "/api/v1/extensions/showcase/-/image/" + ref
+        for v in obj.values(): _sign_refs(v)
+
+
+def _showcase_image(handler, ref):
+    shape = _SHOWCASE_PICTURES.get(ref)
+    if not shape:
+        handler.send_json({"error": "没有这张图", "code": "not_found"}, 404)
+        return True
+    w, h, (r, g, b) = shape
+    # A soft diagonal light over the ref's color, so cropping and fitting show.
+    lift = lambda c, x, y: min(255, c + (x + y) * 60 // (w + h))
+    data = _png_rgba(w, h, lambda x, y: (lift(r, x, y), lift(g, x, y), lift(b, x, y), 255))
+    handler.send_response(200)
+    handler.send_header("Content-Type", "image/png"); handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "private, max-age=600")
+    handler.end_headers(); handler.wfile.write(data)
     return True
 
 

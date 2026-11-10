@@ -36605,6 +36605,28 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't Load This Picture": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't Load This Picture"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法加载这张图片"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像を読み込めません"
+          }
+        }
+      }
+    },
     "Couldn't accept: %@": {
       "extractionState": "manual",
       "localizations": {

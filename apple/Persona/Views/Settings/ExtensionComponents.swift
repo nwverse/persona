@@ -51,6 +51,18 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
                 .scaledFrame(width: wide ? Theme.Size.box80 : Theme.Size.box50, height: Theme.Size.box50)
                 .clipShape(.rect(cornerRadius: Theme.Radius.badge))
                 .accessibilityHidden(true)
+        } else if let t = row.thumbnail, let path = t.path {
+            // UI version 6: the extension's own picture, served by the hub for this page.
+            let wide = t.aspect == ExtensionThumbnailAspect.wide
+            ExtensionPicture(src: ExtensionImageSource(path: path), model: model, points: wide ? Theme.Size.box80 : Theme.Size.box50)
+                .scaledFrame(width: wide ? Theme.Size.box80 : Theme.Size.box50, height: Theme.Size.box50)
+                .clipShape(.rect(cornerRadius: Theme.Radius.badge))
+                .accessibilityHidden(true)
+        } else if let a = row.avatar, let path = a.path, a.url == nil {
+            ExtensionPicture(src: ExtensionImageSource(path: path), model: model, points: Theme.Size.wellL)
+                .scaledFrame(width: Theme.Size.wellL, height: Theme.Size.wellL)
+                .clipShape(.circle)
+                .accessibilityHidden(true)
         } else if let a = row.avatar, a.url != nil || a.text?.isEmpty == false {
             Group {
                 if let url = a.url.flatMap(Self.image) {

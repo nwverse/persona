@@ -99,14 +99,9 @@ struct ExtensionTileView: View {
         }
     }
 
-    /// Its picture: an https one loaded without the app's credentials; one the hub serves (`ref`, `path`) comes with
-    /// UI version 6's pictures; meanwhile, and while it loads, the plain fill.
-    @ViewBuilder private func picture(_ img: ExtensionImageSource) -> some View {
-        if let s = img.url, let url = ExtensionComponentRowLabel<EmptyView>.image(s) {
-            ExtensionRemoteImage(url: url)
-        } else {
-            Rectangle().fill(Theme.Fill.well)
-        }
+    /// Its picture: an https one, or one the hub serves for the page (`ExtensionPicture`).
+    private func picture(_ img: ExtensionImageSource) -> some View {
+        ExtensionPicture(src: img, model: model, points: Theme.Size.tileRegular, alt: tile.title)
     }
 
     private func toggle(_ c: ExtensionRowControl) -> some View {
