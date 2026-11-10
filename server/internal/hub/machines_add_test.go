@@ -20,6 +20,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apns"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 )
 
 // The ids these tests add (cleared first: the test database outlives a run).
@@ -786,15 +787,19 @@ func TestAComputerUsedAgainMovesToItsManager(t *testing.T) {
 
 // A manager removed after a computer was added to it: one waiting in hub.json goes back to the carrier; one in its own
 // list keeps the manager from being removed until the computers are dropped on purpose, and then goes with it (as any
-// computer in a manager's own list: "Revoking").
+// computer in a manager's own list: "Revoking"), pending no more: its place among the pending, its pairing code and
+// its Persona Link credential go as a rejected one's do.
 func TestAComputerAddedToAManagerThatIsRemoved(t *testing.T) {
 	h, tok, idents, keeper, srv := managersAddHub(t)
+	ctx := context.Background()
 	if c := askCode(t, h, tok, `{"add":{"name":"Onb Away","manager":"`+addAway+`"}}`, 200, ""); c.Manager != addAway {
 		t.Fatalf("away: %+v", c)
 	}
-	if c := askCode(t, h, tok, `{"add":{"name":"Onb Keep","manager":"`+addKeeper+`"}}`, 200, ""); c.Manager != addKeeper || h.keptBy("onb-keep") != addKeeper {
-		t.Fatalf("keeper: %+v", c)
+	kept := askCode(t, h, tok, `{"add":{"name":"Onb Keep","manager":"`+addKeeper+`"}}`, 200, "")
+	if kept.Manager != addKeeper || h.keptBy("onb-keep") != addKeeper {
+		t.Fatalf("keeper: %+v", kept)
 	}
+	keptLink, _ := linkToken(t, h, "onb-keep") // as if its Persona Link had traded a code
 	if idents.owners(t)["onb-keep"] != addKeeper {
 		t.Fatalf("no reservation beside the keeper's list: %v", idents.owners(t))
 	}
@@ -824,4 +829,51 @@ func TestAComputerAddedToAManagerThatIsRemoved(t *testing.T) {
 	if _, reserved := idents.owners(t)["onb-keep"]; reserved {
 		t.Fatalf("its reservation stays: %v", idents.owners(t))
 	}
+	if h.machinePending("onb-keep") || h.pendingCount() != 1 {
+		t.Fatalf("it still takes a pending place: %d pending", h.pendingCount())
+	}
+	rows, err := h.trustStore().PendingMachines(ctx)
+	if err != nil || slices.ContainsFunc(rows, func(p db.PendingMachine) bool { return p.ID == "onb-keep" }) {
+		t.Fatalf("its pending row stays: %v %v", rows, err)
+	}
+	for what, token := range map[string]string{"its Persona Link credential": keptLink, "its pairing code": kept.Token} {
+		if _, ok := h.authenticate(ctx, token); ok {
+			t.Fatalf("%s still works", what)
+		}
+	}
+	if !h.machinePending("onb-away") {
+		t.Fatal("the carrier's pending computer was dropped too")
+	}
+}
+
+// sentPending is the pending list of the last hand-over the hub actually sent manager id.
+func sentPending(t *testing.T, h *Hub, id string) []string {
+	t.Helper()
+	h.devices.mu.Lock()
+	b := h.devices.sent[id]
+	h.devices.mu.Unlock()
+	var cfg devicewire.Config
+	if len(b) > 0 {
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return cfg.Pending
+}
+
+// A keeper slower to put the computer in its own list than the hand-over's 200 ms wait is still told the computer is
+// pending: the hand-over sent while the put was under way had it as the carrier's, and the one after the put has it
+// as the keeper's (else the keeper would give an unconfirmed computer its launchers' keys).
+func TestASlowKeeperIsToldTheComputerIsPending(t *testing.T) {
+	h, tok, _, keeper, _ := managersAddHub(t)
+	keeper.mu.Lock()
+	keeper.putDelay = 500 * time.Millisecond
+	keeper.mu.Unlock()
+	c := askCode(t, h, tok, `{"add":{"name":"Onb Keep","manager":"`+addKeeper+`"}}`, 200, "")
+	if c.Manager != addKeeper || !h.machinePending("onb-keep") || keeper.has("onb-keep") == nil {
+		t.Fatalf("added: %+v", c)
+	}
+	eventually(t, 5*time.Second, "the keeper sent the computer as pending", func() bool {
+		return slices.Contains(sentPending(t, h, addKeeper), "onb-keep")
+	})
 }

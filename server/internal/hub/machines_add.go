@@ -110,6 +110,9 @@ func (h *Hub) addMachineMoving(mc *MachineConfig, by string) error {
 		if err == nil {
 			h.logf("%s: machine %q (%s) added to %s's own list", by, mc.ID, mc.Kind, target)
 			h.setLeaving(mc.ID, false) // added again after a reject (machine_trust.go)
+			// It is target's only from the record putKept wrote: a hand-over sent before (the one markMachinePending
+			// asked for, when the put took longer) gave its pending mark to the carrier, and target must have it.
+			h.devicesConfigChanged()
 			return nil
 		}
 		if !errors.Is(err, errKeeperAway) {

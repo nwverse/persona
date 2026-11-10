@@ -9,8 +9,9 @@ Starts scripts/mock/mock_hub.py on a free port with a HOME of its own (MOCK_EXTE
   one answers 503 assistant_offline;
 - the roster's inbox_needs_you is what the merged inbox lists open under "Needs you" for each online manager, absent
   for an offline or installing one, and follows an item being handled;
-- a computer added with add.manager (MOCK_ADD_COMPUTER=1) is that manager's in the reply and in /machines; a manager the
-  roster lacks is 404 no_manager, one being installed 409 installing, and neither adds a computer.
+- a computer added with add.manager (MOCK_ADD_COMPUTER=1) is that manager's in the reply and in /machines (an offline
+  manager's is not listed until a manager that is online has it); a manager the roster lacks is 404 no_manager, one
+  being installed 409 installing, and neither adds a computer.
 
     python3 scripts/test/test_mock_hub_managers.py
 """
@@ -142,6 +143,17 @@ class MockHubManagersTests(unittest.TestCase):
         status, answer = self.call("POST", "/api/v1/auth/pair-codes", body("Work Box", "assistant"))
         self.assertEqual((status, answer.get("machine"), answer.get("manager"), answer.get("added")), (200, "work-box", "assistant", None), answer)
         self.assertEqual(machines()["work-box"]["manager"], "assistant")
+        # an offline manager's: accepted, but not listed until that manager reports it (the real hub lists what a
+        # manager reports); the same name again for an online one lists it there
+        status, answer = self.call("POST", "/api/v1/auth/pair-codes", body("Home Box", "m-8b04d2"))
+        self.assertEqual((status, answer.get("machine"), answer.get("manager"), answer.get("added")), (200, "home-box", "m-8b04d2", True), answer)
+        self.assertNotIn("home-box", machines())
+        status, answer = self.call("POST", "/api/v1/auth/pair-codes", json.dumps({"add": {"name": "Home Box"}}).encode())
+        self.assertEqual((status, answer.get("machine"), answer.get("manager"), answer.get("added")), (200, "home-box", "m-8b04d2", None), answer)
+        self.assertNotIn("home-box", machines())
+        status, answer = self.call("POST", "/api/v1/auth/pair-codes", body("Home Box", "m-3fa21c"))
+        self.assertEqual((status, answer.get("machine"), answer.get("manager")), (200, "home-box", "m-3fa21c"), answer)
+        self.assertEqual(machines()["home-box"]["manager"], "m-3fa21c")
         before = set(machines())
         for manager, want in (("m-ffffff", (404, "no_manager")), ("m-c1e9f0", (409, "installing"))):
             status, answer = self.call("POST", "/api/v1/auth/pair-codes", body("Nowhere Box", manager))
