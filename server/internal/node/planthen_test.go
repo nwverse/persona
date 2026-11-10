@@ -85,3 +85,24 @@ func TestPlanThenAfterTerminalLeavesAlone(t *testing.T) {
 		}
 	}
 }
+
+// A card answer ends the watch: the hook's answer set the mode, nothing is pressed afterwards.
+func TestPlanThenWatchStopsWhenTheCardAnswers(t *testing.T) {
+	fastPlanThen(t)
+	n, f, _ := herdrNode(t)
+	seedAgents(t, n, f, claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", "/tmp/m", ""))
+	n.state.put(sidA, sessionState{Pane: "w1:p1", Launcher: "claude", Cwd: "/tmp/m", PlanThen: "acceptEdits"})
+	cycleModes(t, f, "w1:p1", "plan")
+	n.planThenAfterTerminal(sidA)() // answered at once
+	cycleModes(t, f, "w1:p1", "auto")
+	f.reset()
+	// Observe the full watch window before asserting that no key was sent.
+	timer := time.NewTimer(planThenWatch + 100*time.Millisecond)
+	defer timer.Stop()
+	<-timer.C
+	for _, c := range f.trace() {
+		if strings.Contains(c, "shift+tab") {
+			t.Fatalf("a key was pressed after the card answered: %v", f.trace())
+		}
+	}
+}

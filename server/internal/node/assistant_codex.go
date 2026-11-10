@@ -43,13 +43,17 @@ type codexConn struct {
 	// (assistantLarkEnvNamed). nil when the id was known at the start.
 	nameGates func(id string)
 
-	mu       sync.Mutex
-	pending  map[int64]chan codexReply
-	asks     map[string]context.CancelFunc // server request id → the phone question waiting for it
-	turnID   string                        // the turn running, "" when idle
-	files    map[string][]string           // fileChange item id → paths, for the approval card
-	closed   bool
-	threadID string
+	mu                  sync.Mutex
+	pending             map[int64]chan codexReply
+	asks                map[string]context.CancelFunc // server request id → the phone question waiting for it
+	turnID              string                        // the turn running, "" when idle
+	files               map[string][]string           // fileChange item id → paths, for the approval card
+	closed              bool
+	threadID            string
+	speedModel          string
+	serviceTier         string
+	serviceTierRevision uint64
+	models              map[string]codexModelEfforts
 }
 
 type codexReply struct {

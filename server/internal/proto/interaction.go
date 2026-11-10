@@ -100,6 +100,15 @@ type Interaction struct {
 	// answers a later card whose keys are all kept by itself: the agent's own session rule dies with its process
 	// (docs/assistant/assistant.md "Always allow in this session"). Absent on Agents sessions' cards.
 	AlwaysKeys []string `json:"always_keys,omitempty"`
+	// AlwaysHonored is the manager's word on whether an answer of "Always allow" on this permission card is kept
+	// (docs/protocol/protocol.md "Always allow"): true when it is (a node's card with AlwaysKeys the manager remembers,
+	// a card of its own that says what it keeps in AlwaysLabel), false when nothing would keep it (the manager's other
+	// cards: the extensions' tools, persona_settings…), so the apps offer only Allow and Deny. Absent (an older manager,
+	// and Agents sessions' cards, whose agent keeps it itself) the apps keep their own rule.
+	AlwaysHonored *bool `json:"always_honored,omitempty"`
+	// ToolTitle is the tool's name for people in the user's language ("iPhone control" for iphone_do), set by the
+	// manager on its own tools' cards only; the apps name the tool with it, else with ToolName as before.
+	ToolTitle string `json:"tool_title,omitempty"`
 	// Delegating: the assistant is deciding whether it may answer this question for the user (agents.delegate,
 	// docs/assistant/assistant.md "Assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
 	// given there wins.

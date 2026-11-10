@@ -120,14 +120,15 @@ type Hub struct {
 	others    managerStates // the other managers' (manager_state.go)
 	moving    moves         // who carries what changing (ownership_moves.go)
 	// userLocale: the user's language, an i18n.Lang (locale.go)
-	userLocale atomic.Value
-	apps       clientApps  // the apps' versions as they last said (client_apps.go)
-	deleted    deletedBook // conversations taken out of the apps' lists (deleted_sessions.go)
-	secret     secretState // secretkey.go
-	devtok     devTokens   // device token lookups (devicetokens.go)
-	public     publicState // TLS identity, listener and advertised addresses (public.go)
-	sends      sendLog     // messages being / just sent, by client_msg_id (send.go)
-	fresh      freshStarts // agents started for a todo without a prompt, until their first message (assistant_todos.go)
+	userLocale   atomic.Value
+	apps         clientApps   // the apps' versions as they last said (client_apps.go)
+	deleted      deletedBook  // conversations taken out of the apps' lists (deleted_sessions.go)
+	secret       secretState  // secretkey.go
+	devtok       devTokens    // device token lookups (devicetokens.go)
+	shareIngress shareIngress // anonymous admission limits; no sharing business state
+	public       publicState  // TLS identity, listener and advertised addresses (public.go)
+	sends        sendLog      // messages being / just sent, by client_msg_id (send.go)
+	fresh        freshStarts  // agents started for a todo without a prompt, until their first message (assistant_todos.go)
 	// ext is what the hub keeps of the extensions, connectors and bots, the manager's (extensions_link.go).
 	ext   extLink
 	admin adminState // the admin UI (admin.go, docs/operations/admin.md)

@@ -1,5 +1,33 @@
 # Lessons: hub / node and networking
 
+## Sharing frontiers and migration lanes (#3604)
+
+- Migration numbers are global across the hub and manager sets, even though their
+  files live in separate directories. Inventory both sets in every worktree;
+  distinct filenames with the same numeric prefix still collide. Renumber only
+  unpublished migrations, never an applied migration or the guard.
+- Future publication needs an immutable enable-window frontier **and** a moving
+  verified scan checkpoint. Using the previous scan's EOF as the window boundary
+  drops a new pending turn when it completes on a later scan. Preserve first-seen
+  eligibility and partial-record EOF evidence while advancing the checkpoint.
+- A raw asynchronous start registration is not successful prompt delivery. Keep
+  the sanitized submission unknown until authoritative evidence resolves it; never
+  publish the original app input as delivered solely because a session ID returned.
+- A database-backed fence does not make nested pool queries safe. Waiting
+  transactions can occupy every connection while the lock holder asks for one more;
+  read ownership through the transaction's connection. Keep node RPCs outside the
+  fence and reject stale results with revision, content-version and frontier CAS.
+  Check creation receipts before fresh RPCs, and do not recapture an unchanged live
+  future setting when applying offline narrowing.
+- A per-publication body limit does not bound an owner list. Never collect all
+  retained sealed bodies to count quotas or render metadata: 1,000 individually
+  valid large rows can exceed process memory. Persist a bounded prepared header
+  and active scalar with the body, count scalars and list headers, and keep the
+  current ownership check on that path.
+- Numeric credentials are still credentials. Exempt only explicit count/flag keys
+  from redaction; `password=123456` is not the same as `max_tokens=4096`. Preserve
+  string quoting when sanitizing serialized arguments.
+
 ## Bubblewrap masks are mount views, not path-denial rules (#2977)
 
 A default-allow agent profile cannot reuse the extension sandbox's whitelist: bind the host root read-write, add

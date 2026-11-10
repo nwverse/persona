@@ -66,5 +66,11 @@
   "meeting_attendance_listener": "旁听",
   "meeting_attendance_participant": "参与",
   "meeting_attendance_footer": "在手机上开始会议录音时预先选中的角色，每次都可以改。旁听时回答只显示在手机屏幕上；参与时还会把回答读出来。回答只用会议资料：之前的纪要、项目进展和各项待办由谁负责。",
-  "meeting_attendance_unconfirmed": "助手未确认这项会议设置，请重新加载后再试。"
+  "meeting_attendance_unconfirmed": "助手未确认这项会议设置，请重新加载后再试。",
+  "agents_title": "Agent 跟进",
+  "agent_tasks": "Persona 开的每个 Agent 都有人跟进",
+  "agent_tasks_hint": "不是从主对话派出去的 Agent 也会挂上一个不打扰的任务，有人验收结果、做完后关掉它；会多花一些模型调用",
+  "archive_closed": "已关闭的会话多久后归档",
+  "archive_closed_hint": "已关闭、身上没有未完成任务的会话，闲置这么多天后移出列表，仍能在已归档里找到；0 表示不自动归档",
+  "archive_closed_unit": "天"
 }
