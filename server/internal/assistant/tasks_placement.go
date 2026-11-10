@@ -169,11 +169,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		params["model"] = t.Model
 	}
 	mode := t.Permission
-	if mode == "" {
-		mode = s.settings(ctx).DefaultPermissionMode
-		if mode == "" {
-			mode = "default"
-		}
+	if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
+		mode = s.taskPermission(ctx, m.ID, nil)
 	}
 	params["permission_mode"] = mode
 	if t.Ultracode != nil && *t.Ultracode {

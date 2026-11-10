@@ -151,6 +151,13 @@ Apple localization checks passed again, including 60 checker tests. Android
 translation/token checks and the documentation path / Go-path / section / wire
 suites passed.
 
+Before delivery, upstream `a226ebe11` was also merged. A concurrent addition to
+the iOS lessons document retains both sections. All 6,152 upstream catalog entries
+and the 12 PR entries were checked unchanged, with upstream ordering preserved.
+The final full Web lane passed install, lint, typecheck, 7,665 tests passed /
+1 skipped, production build and privacy. Apple catalog, Android translation/token
+and documentation checks passed on this integrated tree.
+
 Web is the primary validation for this review. Remaining validation gaps are
 disclosed rather than treated as a blocker to marking the PR ready for review:
 

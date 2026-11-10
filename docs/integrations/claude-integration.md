@@ -33,6 +33,15 @@ Leave other cases blank (multiple launchers share a base URL with no model match
 
 If an older configuration contains `effortLevel: "max"`, the settings page shows the model default and explains that the saved value is not applied. Reading leaves the file untouched. Choose a supported explicit level to replace it, or use the web page's **Reset to default** action to remove it. The node returns `value: null` with `ignored_value: "max"`, so existing mobile clients also display the default and the explanation without an app update. The hub forwards the requested interface language for the effort title and explanation; the web uses its own matching translations.
 
+## Default permission mode
+
+**Settings › Claude Code › Default permission mode** sets `permissions.defaultMode` in the machine's `settings.json`
+(every configuration directory, like the other rows; the rest of the `permissions` object is kept, and a `permissions`
+value that is not an object is refused rather than replaced). It offers Persona's five modes; resetting removes the key.
+Claude Code starts in it when no `--permission-mode` is given: an Agent started from the Agents page with Follow, and,
+through the hub, a planned task the assistant left unset (`docs/assistant/todos.md`, "Permission of a planned task").
+A mode picked when starting an Agent, and the assistant's default permission mode, still come first.
+
 ## Independent ultracode switch (#3427)
 
 ultracode makes Claude orchestrate every substantive task as a multi-Agent workflow, independently of reasoning effort. The server supports the independent-switch semantics from Claude Code `2.1.284` onward. Earlier versions require an upgrade, including `2.1.203–2.1.283`, where ultracode occupied the slider's final position and locked the effort level. Running sessions use the version their transcript recorded since the current process started; new sessions use the computer's Claude version. An unknown version may be tried, but the result must still be read back. The switch is off by default, applies only to the current process, does not remember the user's last choice, and is not automatically re-enabled on resume. It is unavailable for headless assistants, including the main chat.
