@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// Validate checks everything a manifest can be checked for on its own (docs/plans/plan-extensions.md "Fields"). What depends on
+// Validate checks everything a manifest can be checked for on its own (docs/plans/plan-extensions.md "Key decisions"). What depends on
 // the hub (the platform's command, engines, ids other plugins use) is the registry's.
 func (m *Manifest) Validate() error {
 	var errs []error

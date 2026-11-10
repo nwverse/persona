@@ -104,3 +104,28 @@ func TestBusSnapshotWaitsForTheConnection(t *testing.T) {
 		t.Fatal("no snapshot reached the hub after connecting")
 	}
 }
+
+// The hub's own manager offers the hub no compression (bus.Client.Uncompressed): its child, and the built-in manager's
+// service dialing the hub's local address. A manager elsewhere, or one made in the app, compresses as before (a
+// manager's own service is DeployService too, manager/service.go).
+func TestBusHubUncompressedOnTheHubsMachine(t *testing.T) {
+	for _, c := range []struct {
+		deploy, id, hub string
+		want            bool
+	}{
+		{"child", "", "http://127.0.0.1:18660", true},
+		{"child", "", "http://198.51.100.5:18660", true},
+		{DeployService, "", "http://127.0.0.1:18660", true},
+		{DeployService, assistantwire.AssistantID, "http://localhost:18660", true},
+		{DeployService, assistantwire.AssistantID, "http://[::1]:18660", true},
+		{DeployService, assistantwire.AssistantID, "https://203.0.113.7:18661", false},
+		{DeployService, "m_1", "http://127.0.0.1:18660", false},
+		{"external", "", "http://127.0.0.1:18660", false},
+		{"docker", "", "http://127.0.0.1:18660", false},
+	} {
+		b := NewBusHub(BusOptions{ID: c.id, Deploy: c.deploy, Hub: c.hub, Token: "t"})
+		if b.client.Uncompressed != c.want {
+			t.Errorf("%+v: Uncompressed %v", c, b.client.Uncompressed)
+		}
+	}
+}

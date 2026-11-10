@@ -270,6 +270,7 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
                     current.symlink_to(old.name)
                     script = r'''set -eu
 LDFLAGS=fixture
+TAGS=fixture
 PERSONA_HUB_SSH=unused
 is_here() { [ "$MODE" = local ]; }
 state_root() { printf '%s' "$PERSONA_HOME"; }

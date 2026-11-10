@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What the terminal browser's and the sidebar's context menus change on a computer (docs/integrations/terminal.md "Node menu"):
+// What the terminal browser's and the sidebar's context menus change on a computer (docs/integrations/terminal.md "Node menus"):
 // close a tab or a pane, split a pane, rename a tab, run an agent in a plain shell pane, and fetch / pull / push in a
 // pane's directory. The hub lets only a full device call them. Every call names a pane, tab or workspace the host
 // lists; none of them names a directory or a command, so a menu cannot be turned into a way to run anything.

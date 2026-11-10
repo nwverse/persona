@@ -316,7 +316,7 @@ func TestShellFirstWord(t *testing.T) {
 		}
 	}
 	// Whatever shellQuote writes reads back the same, with or without a directory in front.
-	for _, p := range []string{"/a/b", "/a b/c", "/it's/x", "/q\"x/y"} {
+	for _, p := range []string{"/a/b", "/a b/c", "/it's/x", "/q\"x/y", `/back\slash/x`, `/it\'s/x`} {
 		if got := shellFirstWord(shellQuote(p) + " hook"); got != p {
 			t.Errorf("round trip of %q: %q", p, got)
 		}

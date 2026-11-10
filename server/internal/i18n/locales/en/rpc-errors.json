@@ -12,7 +12,8 @@
   "in_doubt": "Delivery cannot be confirmed. Check the result before sending again.",
   "offline": "This computer is offline. Make sure it’s on and connected to the internet and that Persona Link is running, then try again.",
   "nothing_queued": "Nothing is queued for the agent any more.",
-  "send_now_unsupported": "This agent can’t send queued messages now. Update Claude Code, or wait for the queue.",
+  "send_now_unsupported": "This agent can’t send queued messages now. They go to it in order.",
+  "send_now_unrecognized": "Persona doesn’t recognize this Claude Code’s send-now hint, so it pressed nothing. The queued messages still go in order; to send them now, use send-now in the terminal.",
   "not_a_repository": "This folder isn’t in a Git repository.",
   "not_our_worktree": "This folder isn’t a worktree Persona made.",
   "worktree_in_use": "An agent still runs in this worktree. Close it first.",
@@ -31,5 +32,6 @@
   "peer_unreachable": "Couldn’t reach this Claude session’s message channel (it may have just restarted or quit). Try again shortly, or continue it on the computer.",
   "peer_too_long": "The message is too long for the message channel. Split it into shorter messages.",
   "peer_unconfirmed": "The message was handed to this Claude session, but it hasn’t taken it yet: it may be waiting for approval on the computer, or it was dropped as a repeat. Check on the computer before sending it again.",
-  "peer_command": "The message channel only delivers plain messages and doesn’t run slash commands. Type the command on the computer."
+  "peer_command": "The message channel only delivers plain messages and doesn’t run slash commands. Type the command on the computer.",
+  "directory_untypable": "This directory’s name contains a control character, such as a tab or a line break, so the agent can’t be started in it from here. Rename the directory or choose another one."
 }

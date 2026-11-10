@@ -213,7 +213,7 @@ func TestCenterUnreachable(t *testing.T) {
 }
 
 // The headers a hub opens a node stream with mean nothing from outside: a request that carries them is still an app's,
-// and without a credential a member answers it 401 like any other (docs/server/mesh.md "Security boundary").
+// and without a credential a member answers it 401 like any other (docs/server/mesh.md "Security boundaries").
 func TestCenterMemberDropsNodeStreamHeaders(t *testing.T) {
 	box := newMeshNode("uid-box", "box", "s1")
 	lap := newMeshNode("uid-lap", "lap", "s2")

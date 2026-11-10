@@ -63,7 +63,7 @@ export type NavPage = { k: string; to: Route; icon: IconName; label: string; sho
 export function useNavPages() {
   const phase = connPhase(useStore((s) => s.conn), useStore((s) => s.link));
   const machines = useStore((s) => s.machines);
-  // "Terminal" (docs/integrations/terminal.md "Standalone terminals") is there where the hub can list panes
+  // "Terminal" (docs/integrations/terminal.md "Standalone terminal") is there where the hub can list panes
   const terminalPanes = useStore((s) => s.features.includes("terminal_panes"));
   const assistant = useStore((s) => s.assistant);
   const todos = useStore((s) => s.todos);

@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the main conversation still needs (docs/assistant/onboarding.md 4.4, 5.1; docs/protocol/protocol.md「主对话就绪度」): the hub works it
+/// What the main conversation still needs (docs/assistant/onboarding.md 4.4, 5.1; docs/protocol/protocol.md「Main chat readiness」): the hub works it
 /// out (`GET /api/v1/assistant/readiness`, feature `assistant_readiness`) and every client draws the same thing from it —
 /// in `setup` a card over the composer with the first missing step, the send button saying what to do first, example
 /// questions that open local help. Every enum-like field is a String: a newer hub's value decodes and is shown as
@@ -141,7 +141,7 @@ nonisolated struct AssistantReadiness: Codable, Hashable, Sendable {
     static func knows(action id: String?) -> Bool { id.map(knownActions.contains) ?? false }
 }
 
-/// A start or a send the hub refused with a code (docs/assistant/onboarding.md 5.2, docs/protocol/protocol.md「错误体」): drawn as a card
+/// A start or a send the hub refused with a code (docs/assistant/onboarding.md 5.2, docs/protocol/protocol.md「Error body」): drawn as a card
 /// with the hub's words and a button for its code, never a toast. Anything else keeps today's toast.
 nonisolated struct CodedFailure: Hashable, Sendable, Identifiable {
     var code: String

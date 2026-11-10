@@ -1,5 +1,5 @@
 {{- /* The bound conversation's state, told to the voice model as the answer to a 「状态：」 or 「停止：」 delegation
-(docs/assistant/voice.md「状态查询」): never sent to the conversation. What the agent wrote (where it stands, its latest words)
+(docs/assistant/voice.md「Status queries」): never sent to the conversation. What the agent wrote (where it stands, its latest words)
 sits inside <agent_output> after the measured framing. Every branch says whether the work is still going or not. */ -}}
 {{- if eq .Lang "en" -}}
 {{- $to := or .To "the Persona main conversation" -}}

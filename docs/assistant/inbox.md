@@ -13,7 +13,7 @@ Table `inbox_items` and setting `inbox_mutes` are unchanged; no data migration, 
 through hub's model configuration (`app.call models.*`, centralized on the manager side in `assistant/inbox_hub.go`). Every call has a deadline (`timeout_ms`);
 when the manager stops waiting, hub stops too, leaving no queued request. Inbox and translation no longer call models inside hub.
 
-**Sources also belong to the manager** (2026-11-05, moved with connectors; `server/internal/extmgr/inbox.go`, `docs/extensions/extensions.md`, "Ownership"). Source-related mentions of "hub" below now live in the manager, in the same process as the Inbox, without bus handoff. Connectors and plugins collect through `inbox.collect` on a schedule
+**Sources also belong to the manager** (2026-11-05, moved with connectors; `server/internal/extmgr/inbox.go`, `docs/extensions/extensions.md`, "Who owns what"). Source-related mentions of "hub" below now live in the manager, in the same process as the Inbox, without bus handoff. Connectors and plugins collect through `inbox.collect` on a schedule
 (every 2 minutes, connector `changed`, Lark events, mail every 3 minutes) and deliver raw collected data to the manager (bus call `inbox.collected`, once per round: each source's items and capabilities,
 each mail account's latest page, reading at most 4 accounts concurrently and delivering in account order. Failed connector reads still appear in the round with empty `things` and a short `read_error` code (see "Triage status" below); the manager retains their existing items. A mail account that fails to read is left out of `mail.accounts` as before and named in `mail.failed: [{id, email, read_error}]` instead (#1849), so the manager keeps its mail and says it is behind. Each round carries the hub run's `epoch` and round `seq`; delayed rounds older than one already used are discarded). Source operations requested by the manager use
 `app.call inbox.*` through hub: read a mail's full body (translation needs text preserving paragraphs and links), send replies (mail, connectors, or the Lark plugin),
@@ -201,7 +201,7 @@ protocol in `docs/protocol/connector-protocol.md`, "Event grouping").
 ## Moments (2026-11-01)
 
 Relevant Lark Moments activity (formerly Toutiao Circle) also enters the Inbox, via the Lark plugin (formerly hub `inbox_moments.go`): comments on my posts,
-replies to my comments, and mentions of me in posts or comments. Likes and new followers are not items. No feed (`docs/extensions/feishu.md`, "Not a second Lark client"); only activity involving me.
+replies to my comments, and mentions of me in posts or comments. Likes and new followers are not items. No feed (`docs/extensions/feishu.md`, "Persona is not a second Lark"); only activity involving me.
 
 - Source: gateway `moments/notifications?category=message`, collected with Lark every 2 minutes (one call, latest 50 notifications); older than 7 days excluded.
 - **One post per item** (Thread): new comments / replies on the same post merge into its unhandled item; `count` is notification count. Activity after handling opens a new item.

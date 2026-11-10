@@ -2,7 +2,7 @@ import XCTest
 
 /// Scrolling while the hub pushes (2026-11-01, TestFlight 77, the user: 「滚动列表的被迫刷新，影响体验的」). The real hub
 /// pushes some machine's agents every two seconds, nearly half of them in a new order (recorded through a read-only
-/// proxy, docs/archive/apple/live-updates.md「滚动时被迫刷新」). The mock pushes the same kinds at that pace (/mock/churn, one
+/// proxy, docs/archive/apple/live-updates.md「Forced refreshes while scrolling」). The mock pushes the same kinds at that pace (/mock/churn, one
 /// round every 2 s, &real=1: rows that change height, an agent that finishes and starts again, the inbox, a question
 /// that comes and goes, new steps in the open chat) while the test drags and flicks the list; the app watches every
 /// frame of the scroll (`PerfScroll`, `-perfCounts YES`): what is on screen moves with the finger or the glide only.

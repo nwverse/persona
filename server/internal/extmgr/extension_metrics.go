@@ -8,7 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/host"
 )
 
-// How the extensions are running (docs/extensions/extensions.md "How they run", #1857): the hub counts each extension's calls,
+// How the extensions are running (docs/extensions/extensions.md "Runtime status", #1857): the hub counts each extension's calls,
 // errors and latency by method (the HTTP it relays by route), its runs and why they ended, and keeps the last lines of
 // its log. The counts are in 5-minute buckets: 24 hours in memory, each closed bucket written to the database once an
 // hour and kept there 7 days. The admin UI reads them (admin_extensions.go).

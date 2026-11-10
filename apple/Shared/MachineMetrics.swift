@@ -145,7 +145,7 @@ nonisolated enum MetricLevel: Int, Comparable, Sendable {
 }
 
 /// What the dashboard calls out on a machine, worst first: CPU ≥ 75 / 90 %, memory ≥ 80 / 90 %, disk ≥ 80 / 90 %,
-/// load ≥ 1 / 2 per core (docs/server/machines.md「异常」).
+/// load ≥ 1 / 2 per core (docs/server/machines.md「Alerts」).
 nonisolated struct MetricAlert: Hashable, Sendable {
     var label: String
     var level: MetricLevel

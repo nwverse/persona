@@ -1,4 +1,4 @@
-// Inbox events (docs/assistant/inbox.md "Events, handling chain, suggestions"), driven by the fake hub's fixture (scripts/mock/inbox_events.json):
+// Inbox events (docs/assistant/inbox.md "Events and handling chain"), driven by the fake hub's fixture (scripts/mock/inbox_events.json):
 // one item per state. An item without this phase's fields stays where the tier put it.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

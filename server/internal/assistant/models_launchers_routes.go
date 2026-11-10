@@ -443,7 +443,7 @@ func (s *Service) pickMachine(ctx context.Context, has []string, want string) (s
 }
 
 // providerModels is GET /api/v1/model-config/providers/{id}/models: a launcher provider's /model list for Model configuration
-// (docs/assistant/model-config.md "Picking a model in Model configuration"). Model configuration is not one machine's, so the list comes from a machine that has the
+// (docs/assistant/model-config.md "Choosing a model in model configuration"). Model configuration is not one machine's, so the list comes from a machine that has the
 // launcher (pickMachine), and the answer says which. Other providers have no list to ask for: a plugin's comes with
 // it, an API connection has none.
 func (s *Service) providerModels(w http.ResponseWriter, r *http.Request) {

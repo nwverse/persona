@@ -52,7 +52,8 @@ The gateway's `rate_limits.spend_limit` (an amount of money) is not a window and
   - **Each account appears once**: two samples from the same source (Codex / Claude) are the same account if any one window has "the same length and the same reset time (to the second)". The reset time belongs to the account and reads the same on any computer, so no account id is needed and no credentials are touched.
   - For several samples of the same account, each window length takes the window from the **newest sample**, so a computer unused for a long time cannot bring back a 5-hour window that has already rolled over.
   - Samples older than 30 minutes are marked `stale` (sorted last, faded in the UI and labeled "out of date"); windows older than 3 days or past their reset time are dropped.
-  - Accounts with the same name are numbered by id ("Codex Pro", "Codex Pro 2"); the id is a digest of the longest window's length and reset time, stable within a week.
+  - **Every account has its own id** (clients use it as the row key, #1904): a digest of the longest plan window's length and reset time, stable within a week. For an account an account-pool gateway reports, its gateway account id goes into the digest too (two accounts of one gateway are never one, even with the same reset time); for an account whose longest window has no reset time, where it was read does (the computer and its place in that computer's answer, or the gateway account). Neither is sent out, only the digest. Two accounts that still share one (only per-model windows, resetting together) get `-2`, `-3`… in the order of where they were read.
+  - Accounts with the same name are numbered by id ("Codex Pro", "Codex Pro 2"), so the numbering does not depend on which computer answered first.
   - Sorted by the fullest window, highest first.
 
 API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
@@ -191,6 +192,14 @@ Any account-pool gateway that wants to feed usage into the sidebar implements on
 
 `id` is optional (a stable identifier for the account in the gateway, used to guarantee that two accounts are never merged); `label` (`5h`, `7d`, `45m`) is used if its length can be read, otherwise `window_minutes`; `used_percent` is 0–100, kept as sent and clamped when out of range;
 `sampled_at` defaults to the time of reading; each source has at most 500 accounts and each account at most 32 windows; accounts with an empty `provider` are dropped.
+
+### Scheduler capacity view
+
+Besides the sidebar, the same in-memory data feeds Agent scheduling: `devices.CapacitySnapshot` builds a `proto.CapacitySnapshot` of one `ProviderCapacity` per upstream provider
+(known account count, schedulable count, earliest recovery, all-stale flag) from the gateway inventory and the merged windows. A gateway account counts once, from the inventory
+(it is authoritative for the accounts it lists; a sidebar account with a gateway source is skipped); accounts only the computers saw fill the rest, an exhausted plan window making
+one unavailable until its reset. It is read-only like everything here — the call performs no gateway or machine read beyond the windows' own short poll cache — and carries no
+credential or gateway-side account id. How the launcher picker consumes it is in `docs/server/launcher-health.md` ("Capacity-aware notes").
 
 
 ## Who owns this (2026-11-05)

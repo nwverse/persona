@@ -1,6 +1,6 @@
 // A Feishu chat, opened at the item's first new message (docs/assistant/inbox.md: "Opening it: the Feishu chat stops at the item's first new message").
 // Supports native Feishu messaging interactions: direct replies, quoting messages, copying, asking Persona for summary,
-// and reporting seen messages to Feishu (docs/assistant/inbox.md "Seen Feishu messages are reported read when visible", lark-read.ts). The chat's Pins
+// and reporting seen messages to Feishu (docs/assistant/inbox.md, lark-read.ts). The chat's Pins
 // (lark-pins.ts) open over it; a Pin found in the chat replaces the window around it, a reply opens its thread.
 // Like the phone's chat (lib/lark-chat.ts, LarkExtras.tsx): pictures open in the viewer, files download, voice and video
 // play here, a card's buttons press, my messages show who read them, reactions can be put on, an avatar opens the
@@ -453,7 +453,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     if (askingNow.current) return;
     askingNow.current = true;
     setAsking(true);
-    // i18n-ignore: the request to the assistant is a prompt, written in one language (docs/protocol/i18n.md "Prompts")
+    // i18n-ignore: the request to the assistant is a prompt, written in one language (docs/protocol/i18n.md "Platform mechanisms")
     const chatTitle = chat.title || "飞书会话"; // i18n-ignore
     const where = ol ? `，在飞书账号 ${ol}：lark_messages 传 account=${ol}` : ""; // i18n-ignore: prompt
     const prompt = `读取我飞书会话「${chatTitle}」（飞书网关 feedId ${feed}${where}）最近的消息，总结要点，列出需要我回复或处理的事，并给出建议的回复。`; // i18n-ignore: prompt
