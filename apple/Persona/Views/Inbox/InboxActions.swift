@@ -220,7 +220,7 @@ struct InboxDraftSheet: View {
     }
 
     private func load() async {
-        guard let api = model.api?.manager(item.manager) else { return }
+        guard let api = model.api?.manager(model.itemManager(item.manager)) else { return }
         loading = true
         defer { loading = false }
         do {

@@ -40,6 +40,14 @@ object InboxModule {
     @Provides @Singleton fun inboxTrays(owner: InboxDataOwner): AssistantInboxTrays = owner.trays
 }
 
+/** Runs [block] in this scope; the item manager the calling page named ([ManagerPins], [RequestManager]) goes with it. */
+internal suspend fun <T> CoroutineScope.awaitAsCaller(block: suspend CoroutineScope.() -> T): T {
+    val caller = currentCoroutineContext()
+    val managers = (caller[ManagerPins] ?: kotlin.coroutines.EmptyCoroutineContext) +
+        (caller[RequestManager] ?: kotlin.coroutines.EmptyCoroutineContext)
+    return async(managers, block = block).await()
+}
+
 /** Replace all repositories and file owners together when the pairing generation changes. */
 @Singleton
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -140,10 +148,10 @@ class InboxDataOwner @Inject constructor(
             if (active !== data) throw CancellationException("Pairing changed")
             repositories?.takeIf { it.data === data }
         }.filterNotNull().first()
-        return data.coroutineScope.async {
+        return data.coroutineScope.awaitAsCaller {
             check(runtime.scopedData.value === data) { AppText.get(R.string.app_error_switched) }
             block(repositories)
-        }.await()
+        }
     }
 
     val trays = object : AssistantInboxTrays {

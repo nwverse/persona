@@ -9,6 +9,7 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.LarkMomentsComment
 import persona.core.contracts.LarkMomentsCommentsResponse
 import persona.core.contracts.LarkMomentsPost
+import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.domain.inbox.InboxItem
 
 @RunWith(AndroidJUnit4::class)
@@ -36,6 +37,21 @@ class LarkMomentsTest {
         assertNull(LarkMoments.postId("https://applink.feishu.cn/client/moments/detail"))
         assertNull(LarkMoments.postId("https://applink.feishu.cn/client/chat/open?chatId=123"))
         assertNull(LarkMoments.postId("https://example.com/other?postId=123"))
+    }
+
+    @Test
+    fun aPostsHubPicturesNameItsManagerUnlessItIsTheDefault() {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        try {
+            assertEquals("/api/v1/lark/media/k?manager=m-3", LarkMoments.imageUrl("/api/v1/lark/media/k", "m-3"))
+            assertEquals("/api/v1/lark/media/k?size=2&manager=m-3#top", LarkMoments.imageUrl("/api/v1/lark/media/k?size=2#top", "m-3"))
+            assertEquals("/api/v1/lark/media/k", LarkMoments.imageUrl("/api/v1/lark/media/k", "assistant"))
+            assertEquals("/api/v1/lark/media/k", LarkMoments.imageUrl("/api/v1/lark/media/k", null))
+            assertEquals("/api/v1/lark/media/k?manager=m-1", LarkMoments.imageUrl("/api/v1/lark/media/k?manager=m-1", "m-3"))
+            assertEquals("https://cdn.example.com/k.jpg", LarkMoments.imageUrl("https://cdn.example.com/k.jpg", "m-3"))
+        } finally {
+            AssistantManagerChoice.reset()
+        }
     }
 
     @Test
