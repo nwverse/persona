@@ -71,8 +71,8 @@ func cleanReportLine(out string, max int) string {
 			break
 		}
 	}
-	line = strings.Trim(line, "「」『』《》\"'“”`*_# ")
-	line = strings.TrimRight(line, "。.")
+	line = strings.Trim(line, "「」『』《》\"'“”`*_# ") // i18n-ignore: quotes and marks a model wraps its answer in
+	line = strings.TrimRight(line, "。.")          // i18n-ignore: a final full stop in the model's answer
 	return clip(oneLine(line), 2*max)
 }
 
