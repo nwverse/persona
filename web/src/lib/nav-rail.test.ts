@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatLines } from "./turns";
 import type { Item } from "./types";
-import { NAV_RAIL_PREVIEW_MAX, activeNavRailOffset, navRailExcerpt, navRailMark, navRailPreview, navRailTicks, pickActiveTick, planNavRailTicks } from "./nav-rail";
+import { NAV_RAIL_PREVIEW_MAX, activeNavRailOffset, navRailExcerpt, navRailMark, navRailPreview, navRailTicks, planNavRailTicks } from "./nav-rail";
 import { NAV_RAIL_METRICS as M } from "../ui/nav-rail-metrics";
 
 const u = (seq: number, text: string, extra: Partial<Item> = {}): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text, ...extra });
@@ -169,23 +169,6 @@ describe("planNavRailTicks", () => {
       expect(plan.start).toBeLessThanOrEqual(focus);
       expect(plan.start + plan.count).toBeGreaterThan(focus);
     }
-  });
-});
-
-describe("pickActiveTick", () => {
-  const tops = [100, 200, 300, 400];
-  const at = (i: number) => tops[i];
-
-  it("is the last question that started above the threshold", () => {
-    expect(pickActiveTick(4, 250, at)).toBe(1);
-    expect(pickActiveTick(4, 1000, at)).toBe(3);
-  });
-
-  it("the first above the view, without treating missing anchors as already read", () => {
-    expect(pickActiveTick(4, 50, at)).toBe(0);
-    expect(pickActiveTick(4, 250, (i) => (i < 2 ? null : tops[i]))).toBe(2);
-    expect(pickActiveTick(4, 250, (i) => (i === 3 ? null : tops[i]))).toBe(1);
-    expect(pickActiveTick(4, 250, () => null)).toBeNull();
   });
 });
 

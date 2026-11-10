@@ -34,7 +34,7 @@ struct PersonaAvatar: View {
     }
 }
 
-/// The animated dot in the Persona tab's top bar: the persona in a state (docs/apple/persona.md「状态」). A package plays
+/// The animated dot in the Persona tab's top bar: the persona in a state (docs/apple/persona.md「States」). A package plays
 /// the state's frames in a UIImageView (Core Animation swaps them; nothing in the app runs per frame); a built-in
 /// is its PersonaAvatar moving for the state. Both hold still with Reduce Motion and in Low Power Mode.
 struct PersonaDot: View {

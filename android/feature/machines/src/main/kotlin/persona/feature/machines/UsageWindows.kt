@@ -69,12 +69,17 @@ internal fun resetIn(resetsAt: String?, now: Instant, zone: java.time.ZoneId = j
     return if (days > 0) ResetIn.DaysHours(days, hours % 24) else ResetIn.Hours(hours)
 }
 
-/** The accounts worth showing: samples within three days, windows that have not reset, accounts that still have one. */
+/**
+ * The accounts worth showing: samples within three days, windows that have not reset, accounts that still have one; each stale once
+ * its `stale_at` has passed, however long ago the hub said it (#1905: the last answer is kept while refreshes fail, and its own stale
+ * mark was the hub's at that moment).
+ */
 internal fun liveAccounts(accounts: List<UsageAccount>, now: Instant): List<UsageAccount> = accounts.mapNotNull { a ->
     val sampled = parseTime(a.sampledAt)
     if (sampled != null && now.epochSecond - sampled.epochSecond > SAMPLE_MAX_AGE_SECONDS) return@mapNotNull null
     val windows = a.windows.filter { w -> parseTime(w.resetsAt)?.isAfter(now) ?: true }
-    if (windows.isEmpty()) null else a.copy(windows = windows)
+    val stale = a.stale || parseTime(a.staleAt)?.let { !now.isBefore(it) } == true
+    if (windows.isEmpty()) null else a.copy(windows = windows, stale = stale)
 }
 
 /**
@@ -94,6 +99,18 @@ internal fun orderedAccounts(accounts: List<UsageAccount>): List<UsageAccount> =
 internal fun planNote(a: UsageAccount): String {
     val plan = a.plan?.trim().orEmpty()
     return if (plan.isNotEmpty() && !a.name.lowercase().contains(plan.lowercase())) plan else ""
+}
+
+/**
+ * What the gateway could not do (docs/server/usage-windows.md): a key it turned away says where to fix it, since that is not a network
+ * problem (#1902). Null when nothing went wrong or the hub sends a reason this build doesn't know.
+ */
+internal fun problemText(problem: String?): Int? = when (problem) {
+    "rejected" -> R.string.machines_usage_problem_rejected
+    "unreachable" -> R.string.machines_usage_problem_unreachable
+    "failed" -> R.string.machines_usage_problem_failed
+    "error" -> R.string.machines_usage_problem_error
+    else -> null
 }
 
 internal fun isWarn(percent: Double) = percent >= WARN_PERCENT

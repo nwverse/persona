@@ -15,7 +15,7 @@ func TestExtensionOperationRelay(t *testing.T) {
 	h := newTestHub(t)
 	knows := &client{out: make(chan []byte, 4), urlFeatures: map[string]bool{"extension_operations": true}}
 	old := &client{out: make(chan []byte, 4)}
-	h.clients[knows], h.clients[old] = struct{}{}, struct{}{}
+	addTestClient(h, knows, old)
 	seq := func() int64 {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -50,7 +50,7 @@ func TestExtensionOperationPerLanguage(t *testing.T) {
 	clients := make([]*client, len(langs))
 	for i, l := range langs {
 		clients[i] = &client{hub: h, out: make(chan []byte, 4), acceptLang: l, urlFeatures: map[string]bool{extensionOperationsFeature: true}}
-		h.clients[clients[i]] = struct{}{}
+		addTestClient(h, clients[i])
 	}
 	b := []byte(`{"type":"extension_operation","operation":{"id":"op1","kind":"install","error":"SDK error: invalid package","steps":[{"id":"nodes","machines":{"errors":{"example-machine":"SSH diagnostic: refused"}}}]}}`)
 	h.toWanting(extensionOperationsFeature, b)
@@ -73,7 +73,7 @@ func TestExtensionOperationPerLanguage(t *testing.T) {
 func TestExtensionOperationCarriesNoEventSeq(t *testing.T) {
 	h := newTestHub(t)
 	app := &client{hub: h, out: make(chan []byte, 4), urlFeatures: map[string]bool{extensionOperationsFeature: true}}
-	h.clients[app] = struct{}{}
+	addTestClient(h, app)
 	if err := h.relayBroadcastFrom(assistantwire.AssistantID, json.RawMessage(`{"event_seq":999999,"type":"extension_operation","operation":{"event_seq":5,"id":"op1"}}`)); err != nil {
 		t.Fatal(err)
 	}

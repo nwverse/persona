@@ -23,7 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Messages to the bot (docs/extensions/bots.md "How a message travels"), the hub's part: who may talk to it, pairing, and handing
+// Messages to the bot (docs/extensions/bots.md "How a message flows"), the hub's part: who may talk to it, pairing, and handing
 // the owner's messages and card presses to the assistant (feishu.message, feishu.card_action), which does the rest. A
 // message waits for the assistant while it is not connected (a hub start, an assistant restart: toAssistant); one it
 // can't be handed is answered that the assistant can't be reached.

@@ -317,6 +317,7 @@ struct UserBubbleBody: View {
     private var words: some View {
         PathText(text: text, refs: paths, link: layout.on ? Theme.accent : Theme.userBubbleLink)
             .font(Theme.Font.body).lineHeight(.body).foregroundStyle(layout.on ? Color.primary : Theme.userBubbleText)
+            .selectableInLift(text, as: .plain(layout.on ? Color.primary : Theme.userBubbleText)) // #603
             #if os(macOS)
             .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
             #endif
@@ -352,7 +353,7 @@ struct QuoteFlashMark: Equatable {
 }
 
 /// Plain text (a message you sent) with the paths that are there on the conversation's machine as underlined links
-/// (docs/apple/ios.md「文件查看器」); a tap opens the file viewer at the path's line (`PathLinkURL`, the chat's `openURL`). Until
+/// (docs/apple/ios.md「File viewer」); a tap opens the file viewer at the path's line (`PathLinkURL`, the chat's `openURL`). Until
 /// the machine answers, and outside a chat, the text as it is: the same words in the same place.
 struct PathText: View {
     @Environment(AppModel.self) private var model: AppModel?

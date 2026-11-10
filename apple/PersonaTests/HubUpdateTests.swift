@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Settings › hub and the line over the Agents list (docs/operations/hub-update.md「App 里」), against a FakeHub.
+/// Settings › hub and the line over the Agents list (docs/operations/hub-update.md「In the App」), against a FakeHub.
 @MainActor
 struct HubUpdateTests {
     static let available = #"{"version":"v1-202611021500","build":202611021500,"channel":"release","can_update":true,"#

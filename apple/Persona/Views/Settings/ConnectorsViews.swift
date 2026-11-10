@@ -139,7 +139,7 @@ nonisolated struct LarkStatus: Codable, Hashable, Sendable {
     }
 }
 
-/// One of GET /api/v1/connectors: a source the hub reads (GitHub…) and how it is doing (docs/protocol/protocol.md「连接器 API」).
+/// One of GET /api/v1/connectors: a source the hub reads (GitHub…) and how it is doing (docs/protocol/protocol.md「Connector API」).
 /// Feishu and mail are in it too when asked for (`all`): `ConnectorRow` draws them as the rows they always had.
 nonisolated struct HubConnector: Codable, Hashable, Sendable, Identifiable {
     var id: String

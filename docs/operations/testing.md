@@ -77,7 +77,7 @@ for diagnosis. Local entry points without shard options still run complete verif
 
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
-| Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
+| Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
 | Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token checker tests, translations/literals, token ratchet, all-module lint and unit-test variants, debug APK | ubuntu-latest | 8–15 / 15–30 min |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests; synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
@@ -136,6 +136,8 @@ repository runners if present. Do not uninstall machine services or delete their
 
 A test binary never touches the developer's real `~/.persona`: the packages that start Persona processes (`internal/hub`, `internal/assistant`) run through `testhome.Main` in their `TestMain`, with `HOME` set to an empty directory and `PERSONA_HOME` unset, and the run fails if anything created `<HOME>/.persona`. A test that needs state sets `PERSONA_HOME` (`t.Setenv`) to a directory of its own, as the two assistant-process tests in `internal/hub` do. A test started by hand with `go test` used to rewrite the real hub's assistant `manager.json` and `secret.key` (the next run's assistant then never came up); `scripts/test/test-server.sh` runs with a throw-away `HOME` already.
 
+Server packages with database tests call `dbtest.Main` in their `TestMain`: the binary gets a database of its own next to `PERSONA_TEST_DATABASE_URL` and drops it at the end (`docs/lessons/workflow.md`). The databases `dbtest` makes commit asynchronously (`synchronous_commit = off`): a commit is visible to other sessions at once, and only a crash of that Postgres could lose the last ones, so a migration does not wait for a WAL flush per transaction. In `internal/db`, a test that needs a new database with the current schema calls `migratedDatabase(t, sets)`, which copies a template the binary migrated once per set (`dbtest.Template`, `dbtest.Clone`); a test that starts from an older state uses `freshDatabase` and migrates. `open(t)` and `db.TruncateForTest` empty everything their `TRUNCATE ... CASCADE` reaches, but truncate only the tables that have a row (`docs/lessons/testing.md`, "Test database setup"). The CI Postgres and hub databases keep their own settings.
+
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
 Runs only relevant second-scale checks based on git changes, with independent checks in parallel; useful before committing:
@@ -170,8 +172,9 @@ Path mapping:
 | `schema/**` | `scripts/test/test_extension_schema.py`, `scripts/test/test_sdk_bundle.py`, plus `go test ./...` in sdk/go (the same three checks as CI's Extension schema job) |
 | `scripts/test/test_external_service_refs.py`, `scripts/{gen,test}/sdk_bundle*` | The scripts' own tests |
 | `scripts/**` | Select second-scale privacy / PR / schema / refs / bundle / i18n checks by path; when uncertain run PR and schema. Also run changed `scripts/<subdirectory>/test_*.py`, and `test_<name>.py` for changed `<name>.py` / `<name>.sh` scripts (`-`→`_`; `.sh` also checks `test_<name>_sh.py`), from the test directory like CI (#3968). `scripts/hooks/**` also runs `scripts/test/test_privacy_check.py` (it runs the hooks in its temp repositories); `scripts/privacy_check.py` also runs `scripts/release/test_check_bundle_privacy.py` (it imports `privacy_check`) |
-| `docs/**`, any `*.md` | `scripts/test/test_doc_paths.py`, `scripts/test/test_doc_go_paths.py` (quoted paths and CLAUDE.md documentation index), `scripts/test/test_doc_wire.py` (protocol.md and extensions.md list every WebSocket type, feature flag, extension point and manifest field the code has) |
+| `docs/**`, any `*.md` | `scripts/test/test_doc_paths.py`, `scripts/test/test_doc_go_paths.py` (quoted paths and CLAUDE.md documentation index), `scripts/test/test_doc_sections.py` (section names quoted after a doc path match a heading, a **bold** label, an `<a id>` or a list item's opening phrase of that doc; `scripts/test/doc_sections_known.txt` lists the ones left for now and only shrinks), `scripts/test/test_doc_wire.py` (protocol.md and extensions.md list every WebSocket type, feature flag, extension point and manifest field the code has) |
 | `server/internal/{proto,hub,extension}/**`, `schema/extension/manifest.schema.json` | Also `scripts/test/test_doc_wire.py`: these hold the code side of the lists it compares with the docs |
+| `server/**`, `web/src/**`, `web/e2e/**`, `scripts/**`, `sdk/**`, `apple/**`, `android/**`, `integrations/**`, `spec/**`, `schema/**` | Also `scripts/test/test_doc_sections.py`: most of the section names it checks are in code comments there |
 | `apple/**` | `scripts/test/test_apple_l10n.py` (complete String Catalogs and Swift Chinese literals included in catalogs); iOS / macOS builds and tests need a Mac and are reported as skipped |
 | `deploy/docker/**`, `docs/operations/docker.md`, root `Dockerfile` | `scripts/test/test_docker_entrypoint.py` (also checks root `Dockerfile`’s `EXPOSE`) |
 | Other paths | No code checks; list unmapped paths individually |
@@ -188,11 +191,12 @@ Not covered:
 2 seconds after one file change (the same tests through `PersonaTests` took about 140 seconds cold, 45 after one file change, building the whole App and starting a simulator). Run `swift test` before merging package changes;
 it isn't in `PersonaTests`; the Apple CI script runs its SwiftPM tests separately. iOS / Mac / visionOS Apps depend on it, watch/widgets do not.
 
-- Currently included: `Notebook`, `HTMLResources`, `ChatFollow`, `PathRefs` (with `PathRef`, `PathLinkURL`, `PathMarkdown`); batch 2 `DocumentText` (with `TextCompare`), `TableParsing` (`ZipArchive`, `XLSXReader`, `DelimitedParser`, `TableSheet`), `MathMarkdown`, `Links`; pure functions extracted from views: `ConversationTitle`, `DirectoryPath`, `StreamChunks`, `MarkdownHTML`, `APIErrorInfo`, `ZoomMath`, `LarkChangeGate` (views now just call them); batch 3 `AgentSyncPacing` (`AgentSync` fetch timing; `AgentSync.heldUntil` / `workingGap` delegate to it), `ConnectorPrompt` (with `cannotDrawNote`).
+- Currently included: `Notebook`, `HTMLResources`, `ChatFollow`, `PathRefs` (with `PathRef`, `PathLinkURL`, `PathMarkdown`); batch 2 `DocumentText` (with `TextCompare`), `TableParsing` (`ZipArchive`, `XLSXReader`, `DelimitedParser`, `TableSheet`), `MathMarkdown`, `Links`; pure functions extracted from views: `ConversationTitle`, `DirectoryPath`, `StreamChunks`, `StreamRepair`, `MarkdownHTML`, `APIErrorInfo`, `ZoomMath`, `LarkChangeGate` (views now just call them); batch 3 `AgentSyncPacing` (`AgentSync` fetch timing; `AgentSync.heldUntil` / `workingGap` delegate to it), `ConnectorPrompt` (with `cannotDrawNote`); `VoiceRoute` (the voice call's audio route, #3015); `LineDiff` (the chat's Edit / Write diff, #2915).
   Don't move `OpRetry`, `BrowserCookies`, `MachineMetrics` yet: `Shared/APIClient.swift` uses them, so moving would make the watch depend on this package (watchOS 10); assess separately. `Links` and `ConversationTitle` were in `apple/Shared`, but unused by watch/widgets, so moving them didn't add a watch dependency.
 - Moved types and App-used members must be `public` (structs need `public init`); App files using them add `import PersonaKit`. Package tests still use `@testable import PersonaKit`.
 - Assertions needing App types (views, `FilePaths`) stay in `PersonaTests`, also adding `import PersonaKit`.
 - Package code must build with Foundation only: no SwiftUI / UIKit imports, App `Theme` or `AppModel`. Design-system source checks (`TokenRatchetTests`, etc.) don't scan it.
+- On a Mac still on macOS 15 the test bundle builds but does not load (`Symbol not found … built for macOS 26.0 which is newer than running OS`: the package targets macOS 26). Build it for the running system in a separate build folder: `swift test --scratch-path /tmp/personakit-macos15 -Xswiftc -target -Xswiftc arm64-apple-macosx15.0`.
 
 Transcript parsing uses real-sample golden tests (`server/internal/transcript/testdata/`, `fixtures_test.go`): each sample's parse result,
 "incremental read while writing = one full read", and "backward paging has no gaps/duplicates". After parsing changes run `go test ./internal/transcript -run Fixture -update` and review the golden diff.
@@ -253,6 +257,8 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Home greeting follows the simulator's actual time ("Good evening"); status-bar time should be current too, not fixed at 9:41.
 - Dark: `xcrun simctl ui $SIM appearance dark`.
 - `MOCK_TOPBAR=1|3|long`: sub-Agents of the weather-widget session for the chat header's status line (`docs/archive/apple/plan-chat-topbar.md`): `1` one running and one ended (`-openAgent tb1` reads it, with a conversation); `3` three running (`tb3` newest); `long` a sub-Agent title of about 40 characters and a very long tab name (truncation). Add `-holdChromeOpen YES` so the header does not fold before the screenshot.
+- An agent's edits as diffs (#2915, the chat's `DiffView` in `docs/apple/ios.md`): `MOCK_EDIT_DIFF=1` adds MacBook's "Rain hours and the dry threshold" (`macbook/a1f3c2d4-0000-4000-8000-0000000c2915`), one turn with an Edit that changes a word in two lines of a block, a MultiEdit of two pieces, a Write and an Edit of a 56-line switch whose unchanged middle folds (Show All 58 Lines), so the BeautifulUI style's chips read "Edit 4 files +20 −6" over four changed files.
+  The first three also end chats of their own (`…c2916` Edit, `…c2917` MultiEdit, `…c2918` Write), so `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows each diff without scrolling; `scripts/app/personactl.py tap --label-prefix "Show All"` opens the long one.
 - herdr stopped (#1916): `MOCK_HERDR_STOPPED=macbook` stops classic herdr for mock MacBook; Agents shows "MacBook's herdr isn't running" and "Start" at the top.
   `MOCK_HERDR_START=slow|fail|stale`: startup takes 6 seconds / fails (node's reason) / starts but `GET` still reports stopped (old hub). `GET /mock/herdr?stopped=…&start=…` changes it live,
   `/mock/reset` restores environment settings; `starts` counts requests per machine. `-showHerdrStart YES` auto-taps Start once on the first row (capture "Starting…" and failure).
@@ -279,6 +285,8 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   Watch: add `MOCK_INJECTED_WATCH=1` (working main chat listed first), `-openWatchItem session` opens it.
   New conversation layout (#1666, `docs/apple/ios.md` "New conversation layout"): `MOCK_TASKS=1 MOCK_TASKS_REPORTS=1 MOCK_INJECTED=1 MOCK_EXCHANGES=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_AT=5.5` puts a long Persona → task message, the task's long report (a link in its words, two evidence links) and a supervision digest at the bottom.
   `NewChatLayoutTests` checks the headers, folding and Expand, no evidence list, baseline conversation presentation with `-ui.newChatLayout NO`, a held slide along the right edge, and a quick swipe there that only scrolls the list (#2615); `PERSONA_SHOTS` saves folded / expanded / off / the navigator (`-showEdgeScrub 3`).
+  Markdown in a task's words (#2363): add `MOCK_MARKDOWN=1` to put **bold**, `code` and a heading in that message, that report and the release notes receipt (`MOCK_TASKS_AT=19.9`); they render, with no raw marks, in either layout.
+  A renamed task's receipt (#3036): `MOCK_TASK_RENAMED=1` renames the release notes task after its receipt was written; iOS / Mac and Android draw that receipt with the new name ("写本周发布说明"), not the one in the receipt (the web's assistant chats list tasks in the Progress tray, by the to-do's name, and draw no receipts).
   Task answer records (#1231): "Complete network-layer unit tests" has three full question/answer pairs; "Fix widget landscape crash" is an old summary-only record. `MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_AT=23` puts them at bottom; `AnsweredLineTests` (`PERSONA_SHOTS`, collapsed/expanded) opens then collapses them.
   What Persona sent to its tasks' agents (#1542): `MOCK_TASKS=1 MOCK_TASKS_SENT=1 MOCK_TASKS_NO_ASKS=1` adds, at the bottom, a task card whose long hand-off it takes in ("1 instruction sent"), a rework to the widget task as a folded line, and the user's own word to the unit-test task as a bubble; `SentToAgentTests` (`PERSONA_SHOTS`: folded, card list open, line open). With `MOCK_TASKS_AT=1559` the bottom is yesterday's blog-migration card, now a line, with its hand-off as a folded line under it (#1668).
   The hub's notice line (#4305): `MOCK_TASKS=1 MOCK_TASKS_NOTICE=1 MOCK_TASKS_NO_ASKS=1` adds "电脑和模型接好了，定时任务恢复运行，这次是「早报」" as the conversation's last line, small and centered.
@@ -289,7 +297,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Launcher health in New Agent (#1643, `docs/server/launcher-health.md` "In the App"): `MOCK_LAUNCHER_HEALTH=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` gives every computer's launcher list `work_gw` blocked as not in the terminal and `team_gw` blocked on its key (claude checked fine),
   a start that runs `work_gw` fails with the hub's coded sentence, and `macbook/f1643000-0000-4000-8000-000000000001` is a chat that already failed so. `MOCK_LAUNCHER_HEALTH=default` also makes `work_gw` Model Settings' New Agent default.
   `MOCK_LANG=en|ja` writes the hub's start-failure sentence in that language (from the hub's own catalogs; default zh-Hans), for screenshots in that language. With `MOCK_TERMINAL_PANES=1` the computers have free shells for Run Agent Here.
-  iOS / Mac: `-showNewChat YES -openLauncherPicker YES` opens the launcher list once the computer's launchers are in, `-showLauncherHelp <name>` that launcher's help over it (`-openLauncherDetails YES` with Details open); `-openSession macbook/f1643000-…` shows the failed start; with `MOCK_TERMINAL_PANES=1`, `-tab dev -showRunAgentHere macbook` opens Run Agent Here for that computer's first herdr space (`-showRunHereLauncher work_gw` with it picked, since a picker menu's items take no synthesized tap).
+  iOS / Mac: `-showNewChat YES -openLauncherPicker YES` opens the launcher list once the computer's launchers are in, `-showLauncherHelp <name>` that launcher's help over it (`-openLauncherDetails YES` with Details open); `-openSession macbook/f1643000-…` shows the failed start; with `MOCK_TERMINAL_PANES=1`, `-tab dev -showRunAgentHere macbook` opens Run Agent Here for that computer's first herdr space (`-showRunHereLauncher work_gw` with it picked, since a picker menu's items take no synthesized tap); `-tab dev -showPushAsk macbook` asks that space's Git ▸ Push question (#1883). With `MOCK_GIT_READ_FAIL=1`, `-openPane git -showGitReload YES` refreshes a session's Git tab and loads earlier commits once after the first read, both failing (#1889).
   Web: `node web/e2e/launcher-health.mjs <web URL> --shots <dir> [--locale en-US]` against the same mock (wide / 390 × light / dark: the grayed chips and their lines, How to fix, the chat's coded failure, and, with `MOCK_TERMINAL_PANES=1`, the Run agent here menu).
 - MCP forms and links on iOS (#2322, `docs/apple/ios.md` "MCP forms and links"): `MOCK_ELICITATION=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` puts a form and a link on the PR review chat; `GET /mock/hello` returns the last `client_hello`'s `features` / `platform` / `version` and the `X-Persona-Client` of the last `GET /api/v1/interactions`. `TEST_RUNNER_PERSONA_ELICITATION_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/ElicitationCardTests/testFormAndLink` checks that the hello declares the cards with the header's platform and version, the form's order, a bad value blocking Submit, every kind of field in the answer (`GET /mock/resolved`), and the link's Continue waiting for Open Link and the app's link card. Against `MOCK_ELICITATION=unsupported`, `TEST_RUNNER_PERSONA_ELICITATION_UNSUPPORTED_HUB=… -only-testing:PersonaUITests/ElicitationCardTests/testUnsupportedFormDeclinesAndLinkCancels` checks the hand-back note, Decline and Cancel. Answered cards leave the mock: restart it before another run. `TEST_RUNNER_PERSONA_SHOTS=<directory>` and `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE=light|dark` save the screens.
 - MCP form pushes on iOS (#2433, `docs/apple/ios.md` "Data flow", interaction pushes): against `MOCK_ELICITATION=1`, `TEST_RUNNER_PERSONA_ELICITATION_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/ElicitationPushTests` posts what the hub's push looks like (`-showTestNotification elicitation -showTestNotificationIn <machine>/<session>`, category `INTERACTION_ELICITATION`), taps it from the background and finds the conversation open with the form; then launches once more without `-pairURL` so the app registers for pushes, and reads the registration's `features` from `GET /mock/devices` (it skips that part when the simulator gives no APNs token). Run on a `--profile stock` simulator: it answers the notification question.
@@ -317,6 +325,11 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   `GET /mock/say?text=…&user=…&stream=1` pushes replies to all open chats. App `-showScrollState YES` reports list state via accessibility
   `chat.scrollState`: bottom / follows / frozen / arrow / newestShown / withheld… (`visible` draws it). XCUITest misreads inverted-list row positions.
   `testRealHubChats` captures real-hub before/after (`TEST_RUNNER_PERSONA_REAL_PAIR`, etc., skip if absent; only own sessions, opening marks read).
+- Half-written Markdown in a streaming reply (#2916, `docs/apple/ios.md` "Streaming"): `GET /mock/say?preset=repair&stream=1&steps=1&ms=0&upto=<n>`
+  streams that reply into every open chat only to its first n characters and leaves it open there (no transcript line), so a moment can be
+  photographed for as long as needed; the same without `upto` writes it. With the preset as written, `upto` 175 is inside a numbered list
+  item's code fence, 277 a table's header row just ended, 333 a half-written row, 443 an open `**` with half a link in it, 524 inside a
+  ```` ```mermaid ```` fence. A short Persona chat shows it best: `-tab assistant -openAssistant server/b2e4d6f8-0000-4000-8000-000000000002`.
 - Terminal stream: `MOCK_TERMINAL_STREAM=1` (hello `terminal_stream`) sends a fake Claude full frame after subscription, then one frame/second advancing spinner;
   `MOCK_TERMINAL_FIXTURE=apple/PersonaTests/Fixtures/terminal-observe.jsonl` replays real herdr frames (colors, boxed Chinese, emoji, links, 200-character line).
   `-openPane terminal`, `-terminalWrap NO` disables wrapping, `-terminalPages 1` loads one page (mock `/screen/before` gives colored history).
@@ -388,6 +401,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Gap healing (`docs/protocol/protocol.md` ("Item continuity")): `MOCK_GAP=1`, uninstall/reinstall App, `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000001`.
   Starts with 8 rows; writes 6 more after 2 seconds but pushes only last 2 (`from_seq` 12); log should show `items after_seq=8` about 1.5 seconds later,
   work shows "Tool 5". Use timeout-bounded waits, not success-only `until grep`.
+- Hand to AI per source (#2121): `MOCK_INBOX_EVENTS=1 MOCK_EVENT_MUTES=1` gives three events their mute options. The two mail notifications ("构建失败：主分支" and "会议室变更通知") share one sender, so handing one off preselects that target, marked Last time, on the other (`InboxHandOffBarTests`). With `MOCK_INBOX_EVENTS=legacy MOCK_EVENT_MUTES=1` the same two open as plain item pages, and `InboxHandOffSheetTests` checks the Hand to AI sheet the same way.
 - GitHub thread page (#1055): `MOCK_GITHUB_INBOX=1`, `-tab mail -openInboxItem github:review12` opens fictional example-org/example-repo#12:
   header (status/branches/three labels), Markdown description, request-changes/approve reviews, inline comment/reply, three checks (failed test logs), events.
   Comments are in `/mock/sent` and appended to timeline. `github:ci7` (CI failure) isn't a PR, opens hub-collected text. Data: `gh_thread_page` in `mock_hub.py`.
@@ -427,6 +441,7 @@ Except `demo`, only `mbp`, no Agents or other assistant chats (new-user state). 
 (`no_machine`, `machine_pending`, `claude_missing`, `launcher_missing`, `node_unreachable`, `node_outdated`, `assistant_offline`) for each error card;
 `MOCK_BUILTIN_PRESETS=1` only adds built-in providers and `builtin_presets`. In these cases, `MOCK_PROVIDERS=1` Test Connection returns Anthropic's region-block message and `code: "region_blocked"` for keys containing `region` (#4482, text from hub). Like hub, at most 3 pending computers (fourth 429 `too_many_pending`).
 `MOCK_INBOX_SOURCES=none` leaves no Inbox sources (no items/mail accounts, Lark unconfigured, GitHub signed out); combine `zero` for zero-computer/zero-source empty states (#4485, #4480). `mock_scenarios.py` names them `readiness-<scenario>` for live switching.
+For the probe's client boundaries (#1892), `MOCK_READINESS_PROBE_DELAY=<seconds>` delays only `?probe=1`, and `MOCK_READINESS_PROBE_ERROR=<HTTP status>` refuses it with a localized reason. With `MOCK_READINESS=not_logged_in`, run `ReadinessUITests/testTryMessageWaitsForAnAnswerOrShowsFailure` using `TEST_RUNNER_PERSONA_PROBE_EXPECT=slow` and a 35-second delay: the failed probe appears after the old 30-second client timeout, its reason remains beside an enabled Try a message button, and the test checks the elapsed time. Use `TEST_RUNNER_PERSONA_PROBE_EXPECT=error` with `MOCK_READINESS_PROBE_ERROR=502` to check the HTTP failure reason. With `MOCK_READINESS=bad_key`, `TEST_RUNNER_PERSONA_PROBE_EXPECT=model_error` clicks the model row's alternative Try button and requires the 502 reason on that row, not the first-message row. The usual mock-hub and screenshot runner variables apply.
 Gmail sign-in (#2442): `GET /api/v1/mail/oauth/google/config` says `configured: false` and `google/start` answers 400 `google_not_configured` (text contains "not configured"), so the add-Gmail page offers the app-password form; `MOCK_GOOGLE=1` says `configured: true` and `start` answers with a made-up URL, so the page shows Sign In with Google.
 
 iOS add-computer (`AddComputerTests`, #4196): `python3 scripts/mock/mock_scenarios.py --port <port> --control <control port>`,
@@ -601,7 +616,7 @@ The main chat goes through the mock's `POST /api/v1/inbox/{id}/handoff` (#1194; 
 the mock a hub without that route (404). A hand-off whose answer got lost (`POST /mock/fault` lost_receipt) keeps the sheet and says to look in the chat first; sending again goes under
 the same `client_id` (one hand-off in `/mock/sent_to`) and adds how to send it anyway (`testAHandOffThatMayHaveGoneSaysToLookFirst`, light and dark shots in `PERSONA_SHOTS`).
 
-Weak/offline network (`ConnectionTests`, `docs/apple/ios.md` ("Connection state")): `PORT=18760 python3 scripts/mock/mock_hub.py &`,
+Weak/offline network (`ConnectionTests`, `docs/apple/ios.md` ("Connection status")): `PORT=18760 python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18760 xcodebuild test … -only-testing:PersonaUITests/ConnectionTests`: 16-second outage, title unchanged first 8-second grace (`docs/operations/hub-restart.md`), then Connecting,
 restored on return; 0.2-second outage (~1-second reconnect) never changes title. Offline send says Auto-send when connected, received once after recovery,
 even further drops/background (no background reconnect/send until foreground)/App relaunch (disk outbox). Server restart dedup: `TestSendRetryAfterRestartAndRefusal`.
@@ -658,6 +673,7 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
 - Mock: `PORT=18775 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py &` (~130 sessions: platform 3 Needs you / 35 Unread / 12 Working,
   plus mostly/all-idle spaces; `seen` WS or POST changes Unread→Seen, `GET /mock/seen`, `/mock/reset`),
   `TEST_RUNNER_PERSONA_AGENTS_HUB=http://127.0.0.1:18775 TEST_RUNNER_PERSONA_SHOTS=<directory> TEST_RUNNER_PERSONA_STYLE=light … -only-testing:PersonaUITests/AgentsListTests`, repeat dark.
+- `-openDraftsFresh YES` empties every chat's saved draft at launch: `SelectTextTests` read a copy by pasting it into the composer (the runner may not read the app's pasteboard), and a long draft left behind makes the composer tall and moves the chat.
 - `-openAgentsFresh YES` clears remembered filter/grouping/compact/collapse at launch. Tests must change these via UI, not fixed launch args which override saved values.
 - Grouping menu and long-run cap (`AgentsGroupingTests`, #5766): `PORT=<port> MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_GROUPING_HUB=<mock URL>`; each grouping from the capsule beside the quick filters, By Status kept after a restart, Unread's Show all; `TEST_RUNNER_PERSONA_SHOTS=<directory>` + `TEST_RUNNER_PERSONA_SCHEME=light|dark` + `TEST_RUNNER_PERSONA_STYLE=<name>` for the shots.
 - Recent flat mode (`RecentAgentsTests`): ordinary mock (no `MOCK_AGENTS`), `TEST_RUNNER_PERSONA_RECENT_HUB=<mock URL>`,
@@ -698,14 +714,14 @@ Each case records body counts/main-thread time per push (`PERF` logs/attachments
 
 - Mock: `PORT=18797 MOCK_AGENTS=1 MOCK_CHURN=1 python3 scripts/mock/mock_hub.py &`; `GET /mock/churn?n=12&ms=400` pushes n rounds (each machine's session list—working text changes,
   two working Agents alternate newest—machine list, one new step per open chat, reply every 4 rounds). `&steps=N` steps/chat/round; `&final=1` ends turn after pushes (final reply, Working→done); `/mock/churned` progress. `MOCK_CHURN=1` adds first-chat screenshot +5 machines (menu scroll). `&inbox=1` changes Inbox/pending items each round; `&waiting=1` adds waiting Agent,
-  answered next round (badge changes; real hub pushes these continually, session-only tests miss badge-driven rebuilds, `docs/archive/apple/live-updates.md` ("It returned")).
+  answered next round (badge changes; real hub pushes these continually, session-only tests miss badge-driven rebuilds, `docs/archive/apple/live-updates.md` ("It came back")).
 - `TEST_RUNNER_PERSONA_CHURN_HUB=http://127.0.0.1:18797 xcodebuild test … -only-testing:PersonaUITests/LiveUpdateTests`.
 - Run the default navigation: compact iPhone uses the shell; regular-width iPad keeps its sidebar. `launchPersona()` does not choose navigation.
   `LiveUpdateTests`, `ChatFollowTests`, `ScrollUnderPushTests` must preserve these defaults in both styles.
 
 ### Pushes while scrolling (`ScrollUnderPushTests`)
 
-During finger drag/inertia, content only follows finger/inertia despite pushes (`docs/archive/apple/live-updates.md` ("Forced refresh while scrolling")).
+During finger drag/inertia, content only follows finger/inertia despite pushes (`docs/archive/apple/live-updates.md` ("Forced refreshes while scrolling")).
 Drag/fling Agents, Agent chat, Persona chat ~20 seconds while mock follows real cadence: `/mock/churn?n=10&ms=2000&inbox=1&waiting=1&real=1`,
 every 2 seconds. `&real=1` alternates working text between one/two lines and finishes/restarts one Agent every third round (space reorders).
 
@@ -900,12 +916,12 @@ with denial reason/already answered), question then approval, two Plan questions
   `PERSONA_CODEX_COLS=64` also narrow-window runs (`stty cols`, headless splits don't narrow); `PERSONA_CODEX_CASES=a,b` selected cases.
 - Uses own `~/.codex` login, real tiny model calls. Trust writes `~/.codex/config.toml`, rollouts in `~/.codex/sessions`;
   both cleaned on exit. No local Go: cross-build on hub/copy back.
-- `PERSONA_CODEX_DAEMON_BINS="<0.163 codex>"` daemon route (`docs/integrations/codex.md` ("Sessions on daemons")): tests own
+- `PERSONA_CODEX_DAEMON_BINS="<0.163 codex>"` daemon route (`docs/integrations/codex.md` ("Sessions on the daemon")): tests own
   `codex app-server --listen unix://<temporary directory>/app.sock`, restartable child, never active daemon. TUI `--remote … -C <directory> -s read-only`,
   node discovery disabled, only this app-server, fake hub answers/withdraws cards. Async/blocking questions, command/edit/permission approvals, denial reasons,
   computer-first/phone-first/simultaneous answers, restart, draft send; first `PERSONA_CODEX_BINS` (e.g. 0.153) alongside confirms terminal route.
   Permission tests enable `features.request_permissions_tool` in test app-server.
-- Phone start (`TestLiveCodexStart`, `docs/integrations/codex.md` ("Creating from the phone")): real `session.start`, first message quotes/newlines/`$`/backticks/Chinese/thousands of characters.
+- Phone start (`TestLiveCodexStart`, `docs/integrations/codex.md` ("Starting from the phone")): real `session.start`, first message quotes/newlines/`$`/backticks/Chinese/thousands of characters.
   Each daemon binary via `--remote` on own server (app-server route), same with `-c` (terminal route, Connection explanation), first BINS (0.153).
   Each round: reply ≤60 s, correct thread, exact rollout first message, one session/pane,
   correct route, second phone message received after first reply; missing-command launcher errors immediately. Needs local personad (`codex-start`), built by script.
@@ -1190,9 +1206,9 @@ Compare same real pushes before/after hub session-list/Live Activity timing chan
 2. Replay `PERSONA_PUSH_RECORDING=~/push.jsonl go test ./internal/hub -run TestPushReplay -v`: before-recorded/after-generated
    counts/bytes per minute; timestamped Live Activity changes pass through coalescing/throttling, report notifications/hour with App closed and longest island/hub mismatch, fail beyond limits.
 3. Real `broadcastSessions` decides sends, matches byte-comparison results (decode retains fields); parallel incremental App (`sessions_delta`) counted.
-4. Background `AgentSync` fetches: `python3 scripts/diag/agentsync_replay.py ~/push.jsonl`, recorded rev/state (45/min→9/min, `docs/apple/ios.md` ("Background sync")).
+4. Background `AgentSync` fetches: `python3 scripts/diag/agentsync_replay.py ~/push.jsonl`, recorded rev/state (45/min→9/min, `docs/apple/ios.md` ("Information architecture")).
 
-19-minute recording 2026-11-02 (battery investigation, `docs/apple/live-activity.md` ("Push cadence"), `docs/server/server.md` ("Push volume to App")):
+19-minute recording 2026-11-02 (battery investigation, `docs/apple/live-activity.md` ("Push cadence"), `docs/server/server.md` ("Traffic pushed to the app")):
 
 | | Before | After |
 | --- | --- | --- |
@@ -1217,4 +1233,4 @@ xcrun xcresulttool export attachments --path /tmp/shots.xcresult --output-path /
 `PERSONA_FLEET_SAMPLE=current` doesn't launch App, captures current activity (real APNs, `docs/apple/live-activity.md` verification).
 Shared island: `scripts/app/island_peer.sh <simulator udid>` installs sample `apple/IslandPeer` (one "8 min" activity),
 add `TEST_RUNNER_PERSONA_ISLAND_PEER=dev.example.islandpeer`, extra `-shared` coexistence and `-landscape` (sample foreground landscape, Persona alone on island);
-`TEST_RUNNER_PERSONA_FLEET_COUNT=12` changes fake counts to 12 for two/three digits. iPhone 18 Pro/17 Pro differ, screenshot both (`docs/apple/live-activity.md` ("Sharing Dynamic Island with other Apps")).
+`TEST_RUNNER_PERSONA_FLEET_COUNT=12` changes fake counts to 12 for two/three digits. iPhone 18 Pro/17 Pro differ, screenshot both (`docs/apple/live-activity.md` ("Sharing the Dynamic Island with other apps")).

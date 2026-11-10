@@ -677,13 +677,7 @@ func (s *Store) PruneBySource(now time.Time, textDays int, attachmentDays func(s
 	return removed
 }
 
-func oneLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > 200 {
-		s = string(r[:200]) + "…"
-	}
-	return s
-}
+func oneLine(s string) string { return clip(strings.Join(strings.Fields(s), " "), 200) }
 
 // addUnique appends v to list unless it is there already.
 func addUnique(list []string, v ...string) []string {

@@ -11,6 +11,11 @@ var (
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
+// ClaudeDefaultModeSetting is Claude Code's permissions.defaultMode, a key of Settings › Claude Code (node
+// claudeconfig.go): the mode a session started without --permission-mode runs in. The hub reads it for a planned
+// task with no mode of its own (assistant/tasks_permission.go).
+const ClaudeDefaultModeSetting = "permissions.defaultMode"
+
 // Session statuses mirror herdr agent states, plus offline for transcripts with no live agent.
 const (
 	StatusIdle    = "idle"
@@ -86,7 +91,7 @@ type Session struct {
 	TabID       string `json:"tab_id,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"`
 	AgentName   string `json:"agent_name,omitempty"`
-	// CodexRoute: how Persona reaches a Codex in a terminal (docs/integrations/codex.md "Sessions on a daemon") — "app_server" (joined on
+	// CodexRoute: how Persona reaches a Codex in a terminal (docs/integrations/codex.md "Sessions on the daemon") — "app_server" (joined on
 	// the shared app-server: questions, approvals and messages go through its protocol) or "terminal" (its rollout and
 	// screen, keys and typing); CodexRouteNote says why when it is the terminal.
 	CodexRoute     string `json:"codex_route,omitempty"`
@@ -108,6 +113,11 @@ type Session struct {
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
+	// BypassAvailable: this Claude Code can be switched to bypassPermissions (Allow All) while it runs, since it was
+	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
+	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
+	// hooks run under; false while unknown (no hook yet, a node too old to say).
+	BypassAvailable bool `json:"bypass_available,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// Pending means a requested change waits for an idle input box; LostAt asks the client to offer reopening
 	// after a resumed process reset an enabled switch. Reopening or dismissing the notice clears LostAt.
@@ -225,7 +235,7 @@ type Session struct {
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the
 	// last words, as Claude Code writes them ("API Error: …"). The hub keeps it only while the agent is stopped: empty
 	// while it works or when the turn ended normally. The task it works for is interrupted, not done
-	// (docs/assistant/todos.md "How the state is computed", #1516).
+	// (docs/assistant/todos.md "State calculation rules", #1516).
 	TurnError string `json:"turn_error,omitempty"`
 	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
 	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
@@ -272,7 +282,7 @@ type Session struct {
 	Suggestion string `json:"suggestion,omitempty"`
 	// StartError: the start failed (shown in the chat for a while). StartErrorCode is the start's coded refusal
 	// when it was one (claude_missing, launcher_missing…: the code a synchronous start is answered 409 with), with
-	// StartErrorArgs, the refusal's details (launcher, where, missing, pane_shell…, docs/protocol/protocol.md "Errors"):
+	// StartErrorArgs, the refusal's details (launcher, where, missing, pane_shell…, docs/protocol/protocol.md "Error body"):
 	// the hub writes StartError as the sentence for that code in the user's language, and a client offers its remedy.
 	StartError     string            `json:"start_error,omitempty"`
 	StartErrorCode string            `json:"start_error_code,omitempty"`
@@ -298,7 +308,7 @@ type Session struct {
 	// Node.js 22+, no bridge package, no claude); "" when it runs as asked.
 	RuntimeFallback string `json:"runtime_fallback,omitempty"`
 	// Chat, Topic, Dispatched: a botmux session's Feishu chat, its topic's root message and the topics it dispatched
-	// (`botmux dispatch`), for the todos to follow (docs/assistant/todos.md "Following botmux"); stripped by hub like SpawnFrom.
+	// (`botmux dispatch`), for the todos to follow (docs/assistant/todos.md "botmux following"); stripped by hub like SpawnFrom.
 	Chat       string   `json:"chat,omitempty"`
 	Topic      string   `json:"topic,omitempty"`
 	Dispatched []string `json:"dispatched,omitempty"`
@@ -340,6 +350,25 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeShellWaiting: the new tab's shell stopped on a question of its startup files (an update prompt, [Y/n]) before
+	// the start command was typed (#2570). Nothing ran; the tab is kept a while for someone to answer (node/shellsettle.go).
+	CodeShellWaiting = "shell_waiting"
+	// CodeStartLineRejected: the new tab's shell did not take the typed start line, twice (a startup prompt ate its first
+	// characters, #2570). Nothing ran; the tab is closed.
+	CodeStartLineRejected = "start_line_rejected"
+	// CodeDirectoryUntypable: the start's directory has a control character in its name, which a shell's line editor
+	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
+	// the request, not the launcher's fault.
+	CodeDirectoryUntypable = "directory_untypable"
+)
+
+// Codes session.modes refuses with (node/modes.go), the text in the request's language (apierr.Call). 409.
+const (
+	// CodeModesOnComputer: a Claude outside Persona's terminals (Claude's desktop app, another terminal); its mode and
+	// effort change only there. Its row's capabilities say modes: false.
+	CodeModesOnComputer = "modes_on_computer"
+	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
+	CodeModesNotRunning = "modes_not_running"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).

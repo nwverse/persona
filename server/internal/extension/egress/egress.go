@@ -91,7 +91,7 @@ type Proxy struct {
 	// Upstream is the proxy the hub itself goes out through for u (nil, nil: straight). Default: the hub's
 	// environment (HTTPS_PROXY / HTTP_PROXY / NO_PROXY).
 	Upstream func(u *url.URL) (*url.URL, error)
-	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Observability").
+	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Egress").
 	OnDecision func(ext, host string, allowed bool)
 	// LocalAddrs are this machine's addresses (nil: its interfaces); tests replace it.
 	LocalAddrs func() []net.IP
@@ -832,7 +832,8 @@ var metadataIPs = []string{"fd00:ec2::254", "100.100.100.200"}
 
 // dialConfigured reaches an address an extension's settings name: resolved here, every address checked, and the one
 // dialled is the one checked (a name that resolves again to somewhere else is not followed). Through the hub's
-// upstream proxy when it has one, after the same check.
+// upstream proxy when it has one, after the same check, each attempt a CONNECT to one checked address: the proxy
+// never sees the name, so it cannot resolve it again to an address the check refused (#3121).
 func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn, error) {
 	ips, err := p.resolveAll(ctx, host)
 	if err != nil {
@@ -854,7 +855,7 @@ func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn
 		upstream = fromEnvironment
 	}
 	if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
-		return p.connectVia(ctx, up, target)
+		return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.connectVia(ctx, up, target) })
 	}
 	return p.dialResolved(ctx, host, port, ok)
 }

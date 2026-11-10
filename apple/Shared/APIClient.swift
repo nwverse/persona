@@ -49,6 +49,8 @@ nonisolated struct LocalRequest: Sendable {
     var body: Data?
     /// Operation semantics and anonymous caller diagnostics, matching the real request's headers.
     var headers: [String: String] = [:]
+    /// The caller's bound on the real URL request, exposed to transport-level tests.
+    var timeout: TimeInterval = 30
 }
 
 nonisolated struct APIError: LocalizedError, Sendable {
@@ -61,11 +63,38 @@ nonisolated struct APIError: LocalizedError, Sendable {
     var requestID: String?
     /// Structured error details the user has to confirm (e.g. the extensions that depend on it); not logged.
     var details: JSONValue?
+    /// Route context for the one pre-code knowledge refusal; never match diagnostics from unrelated endpoints.
+    var requestPath: String?
     var errorDescription: String? {
-        guard status >= 500, let requestID else { return message }
-        return String(localized: "\(message) (request \(requestID))")
+        let text = businessMessage ?? (code == "internal" && status >= 500
+            ? String(localized: "The service couldn't complete this request. Try again later. (HTTP \(status))") : message)
+        guard status >= 500, let requestID else { return text }
+        return String(localized: "\(text) (request \(requestID))")
     }
-    var code: String? { fields["code"] }
+    var code: String? {
+        let code = fields["code"]
+        let path = requestPath?.split(separator: "?", maxSplits: 1).first.map(String.init)
+        let knowledge = path == "/api/v1/kb" || path?.hasPrefix("/api/v1/kb/") == true || path == "/api/v1/kb-search"
+            || path == "/api/v1/recordings" || path?.hasPrefix("/api/v1/recordings/") == true
+        if knowledge, status == 503, code == "internal", fields["detail"] == "the knowledge base is off" { return "kb_disabled" }
+        return code
+    }
+
+    /// Business codes precede status and free-form server wording. Raw fields remain available for diagnostics.
+    var businessMessage: String? {
+        switch code {
+        case "kb_disabled": String(localized: "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.")
+        case "kb_unavailable": String(localized: "The knowledge base isn't ready yet. Try again shortly.")
+        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings.")
+        case "assistant_offline": String(localized: "The manager is offline or restarting. Try again shortly.")
+        case "node_unreachable":
+            fields["delivered"] == "none"
+                ? String(localized: "This computer is offline: Persona Link isn't running, or the computer is asleep.")
+                : String(localized: "The connection to this computer dropped. Reconnect it and check whether your last action went through before retrying.")
+        case "timeout": String(localized: "The request timed out. Try again later.")
+        default: nil
+        }
+    }
 
     /// The hub's words for a call that ran out of time (Go's context deadline, a node call's timeout).
     static func isTimeoutText(_ message: String) -> Bool {
@@ -120,7 +149,7 @@ nonisolated struct APIClient: Sendable {
     /// interactions and keys it returns. "" = the default group.
     var group: String = ""
     /// The Feishu account (gateway account number) the `/api/v1/lark` requests are about, sent as `ol_account`
-    /// (docs/extensions/feishu.md「多账号」). nil: the hub's own (lark.account).
+    /// (docs/extensions/feishu.md「Multiple accounts」). nil: the hub's own (lark.account).
     var larkAccount: Int?
     /// The manager every request names (`X-Persona-Manager`, docs/protocol/protocol.md "Per-manager routing"): another
     /// manager's extension or connector. nil: none named, so the hub asks the default manager, as before.
@@ -129,7 +158,7 @@ nonisolated struct APIClient: Sendable {
     /// own routes only (`assistantRoute`). nil: the default's, and nothing is named, as before.
     var shownManager: String?
     /// The hub has the extension routes (`features` has `extensions`, #1844): extension requests go to
-    /// /api/v1/extensions and answer with the new keys; an older hub only has /api/v1/plugins (docs/extensions/extensions.md「命名和兼容」).
+    /// /api/v1/extensions and answer with the new keys; an older hub only has /api/v1/plugins (docs/extensions/extensions.md「Naming and compatibility」).
     var extensionsAPI = false
     /// Explicitly advertised by this hub's hello; absent/unknown stays compatible with pre-rename hubs.
     var personaNaming = false
@@ -236,8 +265,14 @@ nonisolated struct APIClient: Sendable {
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
             .merging(routing(path, query)) { _, manager in manager }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
-            let data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
-                                                     body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers))
+            let data: Data
+            do {
+                data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
+                                                     body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers, timeout: timeout))
+            } catch var error as APIError {
+                error.requestPath = path
+                throw error
+            }
             if opID != nil { try Self.checkReceipt(data, status: nil) }
             return data
         }
@@ -255,7 +290,7 @@ nonisolated struct APIClient: Sendable {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, resp) = try await session.data(for: req)
-        let ok = try checked(data, resp, requestID: requestID)
+        let ok = try checked(data, resp, requestID: requestID, path: path)
         if opID != nil { try Self.checkReceipt(ok, status: (resp as? HTTPURLResponse)?.statusCode ?? 0) }
         return ok
     }
@@ -274,13 +309,13 @@ nonisolated struct APIClient: Sendable {
         }
     }
 
-    private func checked(_ data: Data, _ resp: URLResponse, requestID: String) throws -> Data {
+    private func checked(_ data: Data, _ resp: URLResponse, requestID: String, path: String? = nil) throws -> Data {
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
             throw APIError(status: status, message: APIError.message(in: data) ?? HTTPURLResponse.localizedString(forStatusCode: status),
                            fields: APIError.fields(in: data),
                            requestID: (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Request-Id") ?? requestID,
-                           details: try? JSON.decoder.decode(JSONValue.self, from: data))
+                           details: try? JSON.decoder.decode(JSONValue.self, from: data), requestPath: path)
         }
         return data
     }
@@ -305,7 +340,7 @@ nonisolated struct APIClient: Sendable {
         let (data, resp) = try await Self.uncachedSession.data(for: req) // our own cache: URLSession's would hide the 304
         let http = resp as? HTTPURLResponse
         if http?.statusCode == 304 { return (nil, etag) }
-        return (try checked(data, resp, requestID: requestID), http?.value(forHTTPHeaderField: "ETag"))
+        return (try checked(data, resp, requestID: requestID, path: path), http?.value(forHTTPHeaderField: "ETag"))
     }
 
     /// A bounded, staged attachment sent from disk. The fake transport reads it only in tests.
@@ -326,7 +361,7 @@ nonisolated struct APIClient: Sendable {
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         for (name, value) in routing(path, query) { req.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await session.upload(for: req, fromFile: file)
-        return try checked(data, response, requestID: requestID)
+        return try checked(data, response, requestID: requestID, path: path)
     }
 
     nonisolated struct UploadedFile: Codable, Sendable {
@@ -335,7 +370,7 @@ nonisolated struct APIClient: Sendable {
         var size: Int64
     }
 
-    /// Sends a file to the machine's temp directory (docs/protocol/protocol.md「发送文件」), streamed from disk; progress gets
+    /// Sends a file to the machine's temp directory (docs/protocol/protocol.md「Sending files」), streamed from disk; progress gets
     /// the bytes sent so far. Cancelling the task cancels the upload and the machine removes what it wrote.
     /// dest "terminal": a file pasted into a terminal, kept in Persona's own directory (docs/integrations/terminal.md section 18).
     /// dest "dir": into the folder `query` names (dir, cwd, conflict; docs/protocol/protocol.md "Changing files"), under its own name.
@@ -385,7 +420,7 @@ nonisolated struct APIClient: Sendable {
         if !(200..<300).contains(status) {
             let handle = try FileHandle(forReadingFrom: temp)
             defer { try? handle.close() }
-            _ = try checked(handle.read(upToCount: 64 << 10) ?? Data(), response, requestID: requestID)
+            _ = try checked(handle.read(upToCount: 64 << 10) ?? Data(), response, requestID: requestID, path: path)
         }
         try Task.checkCancellation()
         let size = (try FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? NSNumber)?.int64Value ?? 0
@@ -474,7 +509,7 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(State.self, from: await request("PUT", "/api/v1/machines/\(machine)/botmux", body: Body(on: on))).on
     }
 
-    /// Settings › Session Triage (docs/assistant/agent-work.md「开关」): the four switches, all off until the user turns them on. 404 on a hub
+    /// Settings › Session Triage (docs/assistant/agent-work.md「Switches」): the four switches, all off until the user turns them on. 404 on a hub
     /// without the triage, 503 while its assistant is not connected.
     func agentTriage() async throws -> TriageSwitches { try await get("/api/v1/agents/triage", as: TriageSwitches.self) }
     func setAgentTriage(_ switches: TriageSwitches) async throws -> TriageSwitches {
@@ -649,7 +684,7 @@ nonisolated struct APIClient: Sendable {
         var model: String? = nil
         /// The herdr tab's name; nil: the hub makes one from the first message (else agent-<n>).
         var tabName: String? = nil
-        /// Answer at once with the session it is going to be and start it in the background (docs/protocol/protocol.md「新建会话」).
+        /// Answer at once with the session it is going to be and start it in the background (docs/protocol/protocol.md「New session」).
         var async: Bool? = nil
         /// What the tab name is made from when the first message is sent as a message of its own (not `prompt`).
         var nameHint: String? = nil
@@ -777,7 +812,7 @@ nonisolated struct APIClient: Sendable {
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
     /// stays the same on a retry (the node types it once); clearDraft is the computer's draft the user agreed to
     /// clear first.
-    /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「操作回执」).
+    /// opID: the message's op id (the outbox passes its id, the same as clientMsgID: docs/protocol/protocol.md「Operation receipts」).
     func send(_ k: SessionKey, text: String, images: [ImagePayload] = [], launcher: String? = nil, model: String? = nil,
               clientMsgID: String? = nil, clearDraft: String? = nil, todoID: String? = nil, opID: UUID? = nil) async throws {
         try await post(sp(k) + "/messages", body: SendBody(text: HubNaming.outbound(text, canonical: personaNaming), images: images.isEmpty ? nil : images, launcher: launcher,
@@ -844,9 +879,9 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(PairCode.self, from: try await request("POST", "/api/v1/auth/pair-codes", body: Body(web: web)))
     }
 
-    /// The hub lets a signed-in device add a computer (pair-codes `add` / `machine`, docs/protocol/protocol.md「电脑的配对码」).
+    /// The hub lets a signed-in device add a computer (pair-codes `add` / `machine`, docs/protocol/protocol.md「Computer pairing codes」).
     static let machinesAddFeature = "machines_add"
-    /// Machines carry `trust` / `error_code` and take confirm / reject (docs/protocol/protocol.md「电脑的信任」).
+    /// Machines carry `trust` / `error_code` and take confirm / reject (docs/protocol/protocol.md「Computer trust」).
     static let machineTrustFeature = "machine_trust"
 
     /// A computer's pairing code (machine › Add Computer): the app code's fields without `qr`, and the computer's own.
@@ -997,7 +1032,8 @@ nonisolated struct APIClient: Sendable {
 
     /// Gives the agent what waits in its queue now (#6088, Claude Code's own send-now: a command it runs moves to the
     /// background, a reply it writes starts again with the messages). 409 `nothing_queued`, `send_now_unsupported`,
-    /// `send_now_in_doubt`; an older node `node_outdated`. The hub's words for them are in the reader's language.
+    /// `send_now_unrecognized` (#2467), `send_now_in_doubt`; an older node `node_outdated`. The hub's words for them are
+    /// in the reader's language.
     func sendQueuedNow(_ k: SessionKey) async throws {
         try await post(sp(k) + "/queue/send-now", timeout: 30)
     }
@@ -1073,11 +1109,12 @@ nonisolated struct APIClient: Sendable {
         return (try? JSON.decoder.decode(Warm.self, from: data))?.readiness
     }
 
-    /// What the main conversation still needs (docs/protocol/protocol.md「主对话就绪度」). `probe`: also try one word on it
-    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」).
+    /// What the main conversation still needs (docs/protocol/protocol.md「Main chat readiness」). `probe`: also try one word on it
+    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」). The hub may spend 100 s on the check
+    /// and another 12 s on the node's self-check, so a probe waits 130 s rather than the ordinary 30 s read budget.
     func assistantReadiness(probe: Bool = false) async throws -> AssistantReadiness {
         try JSON.decoder.decode(AssistantReadiness.self, from: try await request("GET", "/api/v1/assistant/readiness",
-                                                                                 query: probe ? ["probe": "1"] : [:]))
+                                                                                 query: probe ? ["probe": "1"] : [:], timeout: probe ? 130 : 30))
     }
 
     /// Later: the checklist stops coming up by itself (the card still shows when the readiness gets worse).
@@ -1087,7 +1124,7 @@ nonisolated struct APIClient: Sendable {
 
     // MARK: Assistant schedule, memory (docs/assistant/assistant.md)
 
-    /// Something the assistant does on its own (docs/assistant/assistant.md「定时任务」): once (a follow-up it scheduled), every
+    /// Something the assistant does on its own (docs/assistant/assistant.md「Scheduled tasks」): once (a follow-up it scheduled), every
     /// day at a time (a morning briefing), or every N minutes (a patrol). Runs go into the conversation it came from, else into the
     /// task's own one (the first run starts it, the next ones continue it), with its own launcher / permission mode /
     /// effort (nil = the assistant's defaults); pushed when done.
@@ -1110,7 +1147,7 @@ nonisolated struct APIClient: Sendable {
         var permissionMode: String?
         var effort: String?
         var includesModelSettings = true
-        /// Push When Done (hubs with the task_push feature, docs/assistant/assistant.md「跑完推送」): nil or "" every run's answer is pushed,
+        /// Push When Done (hubs with the task_push feature, docs/assistant/assistant.md「Push after running」): nil or "" every run's answer is pushed,
         /// "asked" only what a run sends with notify_user. Such a task always runs in its own conversation. Sent only when
         /// set: a hub keeps it when left out, and an older hub never gets it.
         var push: String?
@@ -1284,7 +1321,7 @@ nonisolated struct APIClient: Sendable {
         enum CodingKeys: String, CodingKey { case name, content; case updatedAt = "updated_at" }
     }
     struct MemoryBody: Decodable { var files: [MemoryFile] }
-    /// One report in the health space's reports/ (docs/assistant/health.md「体检报告」): an original, its record, or both.
+    /// One report in the health space's reports/ (docs/assistant/health.md「Checkup reports」): an original, its record, or both.
     struct HealthReport: Decodable, Identifiable, Hashable, Sendable {
         var name: String
         var title: String
@@ -1496,7 +1533,7 @@ nonisolated struct APIClient: Sendable {
         /// What this app understands beyond the first version's pushes: `withdraw`, a silent push naming the cards that
         /// are over, whose notifications it then removes (#4349). An older hub ignores it.
         var features: [String]?
-        /// The interface language pushes to this device use (docs/protocol/i18n.md「协议」).
+        /// The interface language pushes to this device use (docs/protocol/i18n.md「Protocol: telling hub the language」).
         var locale: String? = LanguageStore.shared.launched
         enum CodingKeys: String, CodingKey {
             case name, kind, topic, locale, features
@@ -1593,6 +1630,8 @@ extension Error {
         let ns = self as NSError
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut { return true }
         guard let api = self as? APIError else { return false }
+        if api.code == "timeout" { return true }
+        if api.businessMessage != nil { return false }
         return api.status == 504 || APIError.isTimeoutText(api.message)
     }
 

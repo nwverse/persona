@@ -74,6 +74,9 @@ type Hub struct {
 	todoOwnersMu sync.RWMutex
 	todoOwners   map[string]string // todo id -> manager id
 
+	inboxForms   inboxForms   // the inbox lists' items as localized lately (inbox_forms.go)
+	inboxAnswers inboxAnswers // the merged inbox answer, reused while no manager's inbox moved (inbox_answers.go)
+
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
 	sessionsSent map[string][]sentSession
@@ -89,7 +92,7 @@ type Hub struct {
 	// stopping: a planned stop has begun (beginStop, docs/operations/hub-restart.md): what the stop itself causes (machines going
 	// offline, their questions ending) is not news for the apps, which reconnect to the next hub in a moment.
 	stopping atomic.Bool
-	// slot: the hub's edge started this process (hub_edge.go, docs/operations/hub-restart.md "Blue-green switch"); it listens on the edge's
+	// slot: the hub's edge started this process (hub_edge.go, docs/operations/hub-restart.md "Blue-green switching: the hub's edge"); it listens on the edge's
 	// sockets, and an update or a rollback hands over to the next slot instead of exec'ing. nil: the hub listens itself.
 	slot *hubedge.Slot
 	// deltas: the live text of each session's message being generated, as last relayed (machine, session -> text): a

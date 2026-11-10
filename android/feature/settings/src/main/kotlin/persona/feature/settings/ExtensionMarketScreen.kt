@@ -198,13 +198,14 @@ fun ExtensionCatalogPage(
         return
     }
     val res = LocalResources.current
-    val model = remember(extensions, marketId, extensionId, res, manager) {
-        CatalogExtensionModel(extensions, marketId, extensionId, res, manager = manager)
-    }
+    val owner = remember(manager) { ExtensionOwners.of(manager) }
     // Both API names share the same owner for preview, consent, installation and operation progress.
-    PinnedExtension(listOf("extensions", "plugins").flatMap { base ->
+    val api = rememberPinned(extensions, listOf("extensions", "plugins").flatMap { base ->
         listOf(listOf(base, extensionId), listOf(base, "-", "catalog"), listOf(base, "-", "install"), listOf(base, "-", "operations"))
-    }, model.owner)
+    }, owner)
+    val model = remember(api, marketId, extensionId, res, manager) {
+        CatalogExtensionModel(api, marketId, extensionId, res, manager = manager)
+    }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current

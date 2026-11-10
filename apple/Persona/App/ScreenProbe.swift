@@ -1,7 +1,7 @@
 #if DEBUG || PERF_SIGNPOST
 import SwiftUI
 
-/// What the screen shows, for UI tests to check against the hub (docs/apple/ios-state.md「真实性与及时性」): a part of the
+/// What the screen shows, for UI tests to check against the hub (docs/apple/ios-state.md「Truth and timeliness」): a part of the
 /// screen (`area`) exports what it draws (the rows in their order, their states, the counts, the page) as one line of
 /// JSON on a hidden 1×1 element `probe.<area>`, `-probes YES` only. The tests (PersonaUITests/ScreenProbe.swift) read
 /// it and compare it with the hub's own data (`/mock/truth`), and how long a change takes to show.

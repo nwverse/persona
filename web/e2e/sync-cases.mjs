@@ -37,14 +37,12 @@ const BOX = "[data-chat-dock] textarea, [data-new-conversation] textarea";
 
 /** Cases the page does not pass yet: the bug, and what every failure of the case must say. A known case that fails for
  *  another reason, or passes, fails the run: the fixed bug comes off this list, and a new one is not hidden. */
-const KNOWN = {
-  // a reload drops a message the hub accepted until its transcript copy comes (the jsdom consumer never reloads)
-  relaunch_after_accept_before_transcript: { issue: "#2792", because: /m1 shows 0 times|want \[.*"user:pending:Is the museum open on Sunday\?"\]/ },
-};
+const KNOWN = {};
 
 const labels = async (file) => JSON.parse(await readFile(new URL(`../src/i18n/locales/en/${file}.json`, import.meta.url)));
 const interactionsText = await labels("chat-interactions");
 const outboxText = await labels("chat-outboxbubbles");
+const chatText = await labels("chat-chatview");
 
 async function mock(path, body) {
   const r = await fetch(new URL(path, hub), body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -265,6 +263,14 @@ async function playOn(browser, c, devices) {
         } else if (u.relaunch) {
           // the app starts again from what it stored; the case keeps its socket away until the step that opens it
           await d.page.reload({ waitUntil: "domcontentloaded" });
+          // Reload finishes before the app mounts; drive its clock through startup before reading the chat.
+          // Wait for the surface and its initial load, never for the message whose retention this case checks.
+          const surface = c.chat.new ? "[data-new-conversation]" : "[data-chat-scroll]";
+          for (let attempt = 0; attempt < 100; attempt++) {
+            await pass([d.page], 100);
+            if (await d.page.locator(surface).count() && !await d.page.getByText(chatText.loading_chat, { exact: true }).count()) break;
+            if (attempt === 99) throw new Error("the chat did not finish loading after relaunch");
+          }
         } else {
           failures.push(`${where}: ${JSON.stringify(u)} is not something this runner does yet`);
         }

@@ -13,7 +13,7 @@ import persona.core.contracts.api.HubManager
 import persona.core.contracts.api.ManagerRoster
 
 /**
- * "Muted" (docs/assistant/inbox.md "Mute") with several managers (docs/assistant/managers.md "Grouping"): each one's
+ * "Muted" (docs/assistant/inbox.md "Muting") with several managers (docs/assistant/managers.md "Grouping"): each one's
  * mutes are read with it named, under its name, the default first; one that can't be read keeps its place; Unmute goes
  * to the manager whose mute it is and, failing, puts it back there.
  */

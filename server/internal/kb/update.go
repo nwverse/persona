@@ -153,9 +153,13 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	if err := attributeChat(c, src); err != nil {
 		return 0, err
 	}
-	for _, m := range kept {
+	for i, m := range kept {
 		if m.ID != "" {
 			r.IDs[m.ID] = m.At
+			if r.Lines == nil {
+				r.Lines = map[string]messageReceiptLine{}
+			}
+			r.Lines[m.ID] = messageReceiptLine{Hash: receiptLineHash(lines[i].Line), Mine: m.Mine}
 		}
 		e.notePerson(c, src.Name(), m)
 		c.Mine = c.Mine || m.Mine
@@ -247,6 +251,9 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		var segs []RecordingSegment
 		_ = json.Unmarshal(recording["segments.json"], &segs)
 		d.Segments = nonNilSegments(segs)
+		if raw, err := os.ReadFile(e.Store.path(kind, id, "minutes.json")); err == nil && json.Valid(raw) {
+			d.Minutes = raw
+		}
 		if recentChars > 0 {
 			raw := recording["transcript.md"]
 			d.Recent = clip(string(raw), recentChars)

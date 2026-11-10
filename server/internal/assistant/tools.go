@@ -29,10 +29,10 @@ import (
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
 	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
-	"kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
+	"inbox_folders", "inbox_move", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review",
+	"conversation_new", "conversation_send", "task_plan", "task_review", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete"}
 
 // Tools are the assistant's tools (assistant.tools).
@@ -91,7 +91,7 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	// Health stays in the health space (docs/assistant/health.md "Isolation"): it writes nothing to the knowledge base,
+	// Health stays in the health space (docs/assistant/health.md "How directories and memory are isolated"): it writes nothing to the knowledge base,
 	// nor changes or starts what is imported into it (kb_history_status only reads).
 	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
 		if space, _ := s.selfSpace(ctx, self); space == SpaceHealth {
@@ -109,6 +109,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTaskPlanFrom(ctx, machine, self, args)
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
+	case "task_start_screen": // a failed start's kept tab (start_remedy.go)
+		return s.toolTaskStartScreen(ctx, self, args)
+	case "task_start_keys":
+		return s.toolTaskStartKeys(ctx, self, args)
+	case "task_retry":
+		return s.toolTaskRetry(ctx, self, args)
 	case "task_review":
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
@@ -138,6 +144,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolInboxDraft(ctx, self, args)
 	case "inbox_suggest":
 		return s.toolInboxSuggest(ctx, self, args)
+	case "inbox_folders":
+		return s.toolInboxFolders(ctx, args) // inbox_folders.go
+	case "inbox_move":
+		return s.toolInboxMove(ctx, args)
 	case "notify_user":
 		var a struct{ Title, Body string }
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
@@ -148,7 +158,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body, Asked: true})
-		s.channelsPushed(machine, self, a.Title, a.Body) // the Feishu bot and the channels with pushes on (channels.go)
+		// The Feishu bot and the channels with pushes on (channels_handler.go).
+		s.channelsPushed(machine, self, a.Title, a.Body)
 		s.promoteSupervision(self)
 		return "Notification sent.", nil
 	case "conversations_list":

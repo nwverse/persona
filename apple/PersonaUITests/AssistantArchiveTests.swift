@@ -1,6 +1,6 @@
 import XCTest
 
-/// Archiving Persona's conversations (docs/assistant/assistant.md「管理自己的对话」): a conversation in the sidebar swipes left to
+/// Archiving Persona's conversations (docs/assistant/assistant.md「Managing its own conversations」): a conversation in the sidebar swipes left to
 /// Archive (the open drawer leaves the drag to the row), it shows up under Archived, and a swipe there brings it back. In
 /// the shell, on demo data.
 final class AssistantArchiveTests: XCTestCase {

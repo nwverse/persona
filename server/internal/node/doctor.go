@@ -166,12 +166,14 @@ func hookSettings(bin, dir string, assistant bool) map[string]any {
 		return map[string]any{"matcher": matcher, "hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 86400}}}
 	}
 	notify := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 10}}}
+	postQuestion := map[string]any{"matcher": "AskUserQuestion", "hooks": notify["hooks"]}
 	pre := []any{blocking("AskUserQuestion")}
 	if assistant {
 		pre = append(pre, blocking("Bash"))
 	}
 	return map[string]any{"hooks": map[string]any{
 		"PreToolUse":        pre,
+		"PostToolUse":       []any{postQuestion},
 		"PermissionRequest": []any{blocking("*")},
 		"Elicitation":       []any{blocking("*")},
 		"Notification":      []any{notify},
@@ -505,8 +507,8 @@ func configCommands(b []byte) []string {
 }
 
 // shellFirstWord is the program a command line written with shellQuote runs: its first word past the VAR=value ones
-// in front (rootAssign). A word is bare, or single-quoted with each embedded quote closed, backslash-escaped and
-// reopened.
+// in front (rootAssign). A word is bare, or single-quoted with each embedded quote or backslash closed,
+// backslash-escaped and reopened.
 func shellFirstWord(cmd string) string {
 	for rest := strings.TrimSpace(cmd); rest != ""; {
 		var w strings.Builder

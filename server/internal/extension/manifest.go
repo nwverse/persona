@@ -48,7 +48,7 @@ type Manifest struct {
 	ActivationEvents []string                   `json:"activation_events,omitempty"`
 	Contributes      map[string]json.RawMessage `json:"contributes,omitempty"`
 	// OffByDefault are contributions ("<point>/<id>") that start switched off: at install, and at an upgrade for the
-	// ones the version before did not have (docs/extensions/extensions.md "Contribution switches"). A connector's or a bound channel's
+	// ones the version before did not have (docs/extensions/extensions.md "Turning contributions on and off"). A connector's or a bound channel's
 	// switch is not the extension's, so they cannot be listed.
 	OffByDefault []string `json:"off_by_default,omitempty"`
 	// Depends, Exports and ExtensionPack are the extension model (docs/extensions/extensions.md "Dependencies, exports and packs", model.go).

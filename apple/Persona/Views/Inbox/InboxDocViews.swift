@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Feishu documents in the inbox (docs/assistant/inbox.md「云文档」): a sheet / Base / docx that @'d the user or commented to
+// Feishu documents in the inbox (docs/assistant/inbox.md「Docs: mentions in sheets, bases, and documents」): a sheet / Base / docx that @'d the user or commented to
 // them. The rows about the user show with their status columns, each a menu that moves the status in the document;
 // the AI twin's draft can propose moves, made when it is sent.
 

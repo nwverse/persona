@@ -1,6 +1,6 @@
 import Foundation
 
-/// The `brief` item of a morning or evening routine's conversation (docs/protocol/protocol.md "Conversation feed", #2320):
+/// The `brief` item of a morning or evening routine's conversation (docs/protocol/protocol.md "Tasks and the chat feed", #2320):
 /// the fixed part of a run as the hub worked it out when the run started, the same rows as its Lark card. Hubs since the
 /// item (2026-11-07) send different shapes, so every section and field may be missing, a row that can't be read is left
 /// out on its own, and values that may grow (`outcome`, `stage`) stay strings.
@@ -186,9 +186,11 @@ nonisolated extension BriefBody.Row {
     /// the user answers on its card or in the chat.
     enum Take: Hashable, Sendable { case accept, gotIt, recommendation }
 
+    var isDecision: Bool { outcome?.trimmingCharacters(in: .whitespacesAndNewlines) == "decide" }
+
     var take: Take? {
         let outcome = outcome?.trimmingCharacters(in: .whitespaces) ?? ""
-        if outcome == "decide" { return recommend?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? .recommendation : nil }
+        if isDecision { return recommend?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? .recommendation : nil }
         return outcome.isEmpty ? .accept : .gotIt
     }
 }

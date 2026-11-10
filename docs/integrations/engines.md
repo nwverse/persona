@@ -112,7 +112,7 @@ Codex chats not listed in this version. See `docs/plans/plan-orca-support.md` ("
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with Claude not in front, saying "Claude is not in foreground (possibly suspended); nothing sent," or asking to reopen on the computer.
 
-Orca New Agent creates terminals inside already-open Orca workspaces or subdirectories, starting in the selected directory. Unopened Git-repository directories attempt automatic registration; any other directory gets a terminal in the first local Orca workspace that `cd`s there (refused only when Orca has no workspace open). It never takes over an existing terminal.
+Orca New Agent creates terminals inside already-open Orca workspaces or subdirectories, starting in the selected directory. Unopened Git-repository directories attempt automatic registration; any other directory gets a terminal in the first local Orca workspace that `cd`s there (refused only when Orca has no workspace open). The `cd` is typed into the shell's line editor, so a directory whose name holds a control character (a tab, a line break) is refused before any terminal opens (`directory_untypable`). It never takes over an existing terminal.
 Resume of a running session returns it. A Claude session whose agent exited is continued like on herdr (#5548): a new terminal in the Orca workspace holding its directory (the same rules as New Agent), `cd` there, the launcher that started it with `--resume`, then the message. Never a second writer: a session a live claude still has open (Claude's desktop app, another terminal, suspended) is refused (`open_elsewhere`), and so is one whose last pane is still open (its agent may be suspended there; close the pane to resume elsewhere). A session an Orca native chat owns is refused too. Codex, TRAEX and pi sessions are not resumed in Orca. Orca's own `terminal create --agent claude --resume` is not used: it exists only in some Orca builds' CLI, and it starts Orca's claude command, not the session's launcher.
 
 Herdr App New Agent (#2532) opens a terminal the way the app does (the machine's shell, kept, with the app's terminal identity) as a new tab of
@@ -135,6 +135,19 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - Available only when both herdr and herdr-core are detected (can preselect offline, effective on reconnect; if only one exists,
   it works normally while the other list is empty).
 - Orca next to herdr goes through "Host sets" above; there are no more combination options.
+
+## tmux (approvals only)
+
+A Claude Code the user starts by hand in a tmux pane (`tmux new -s work`, then `claude`) is not an engine. It is listed as a session in an ordinary
+terminal and stays read-only, with one exception: its approval can be answered from the app.
+
+Claude Code writes the pane it runs in into its own `sessions/<pid>.json` (`"tmux": "work:@11.%11"`), so no process environment is scanned. When a
+dialog holds that pane (a permission prompt, a question, a picker), the session lists as Needs you and gets a screen card on web, Android and iOS.
+An answer presses the keys in the pane through the tmux command (`server/internal/node/hosttmux.go`, `server/internal/tmux`); a dialog that changed
+since the card was made is refused without a keypress (`prompt_changed`).
+
+Nothing else comes from this host: no spaces, slots, terminal tab, live stream or starting sessions. A message still goes through the session's peer
+inbox when it has one. tmux is added next to whichever engine the machine selected and needs no choice.
 
 ## botmux
 

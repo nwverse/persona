@@ -1,9 +1,8 @@
 # Persona Link: the computer connects to the hub, or the hub connects to the computer
 
-> Naming (#1159): the connection helper is **Persona Link**, and the command is `persona-link`. The installer creates `persona-link` beside `persona-link` as an alias; both names run the same program,
-> and its prompts use whichever name you ran. The executable `~/.persona/bin/persona-link`, download name `persona-link-<os>-<arch>.gz`,
-> systemd unit `persona-link.service`, launchd identity and helper inside the Mac App keep their old names, so this page still says `persona-link` when referring to the program below.
-> Copyable commands from the hub and admin page also still use `persona-link`, because the hub doesn't know that computer's version, and older versions have no `persona-link`.
+> Naming (#1159): the connection helper is **Persona Link**, and the command is `persona-link`. The installer also puts the old command name beside it as an alias; both names run the same program,
+> and its prompts use whichever name you ran. The executable `~/.persona/bin/persona-link`, the download `persona-link-<os>-<arch>.gz`, the systemd unit `persona-link.service`, the launchd identity
+> and the helper inside the Mac App carry the new name; what the old names still reach is in [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md). Copyable commands from the hub and admin page use `persona-link`.
 
 The hub can't reliably SSH into computers such as laptops whose IP and network keep changing. Requested 2026-10-31: no Tailscale or reverse tunnels;
 instead, the client on the computer connects to the hub and reconnects on its own after a disconnect, and the hub reuses that link to talk to its node. No SSH or VPN is needed anywhere along the path.
@@ -590,9 +589,9 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
 - Unit tests: `xcrun swift test --package-path apple/PersonaLink`; the Apple CI packages lane runs them (`scripts/ci/apple.sh`).
 - Local ad-hoc signing (Sign to Run Locally), no hard-coded team.
 - Default bundle id is the placeholder `com.example.persona.link`, overrideable by `mac.link_bundle_id` in `~/.config/persona/config.json` or environment variable
-  `PERSONA_LINK_BUNDLE_ID` (old name `PERSONA_LINK_BUNDLE_ID`).
+  `PERSONA_LINK_BUNDLE_ID`.
 - After building, `vtool` changes the executable's recorded SDK version to the actual SDK used: xcodebuild records Swift packages as deployment target 15.0, making the system draw menu bar panels in the old SDK style
-  ([lessons/macos.md](../lessons/macos.md), "Persona Link's panel looks old").
+  ([lessons/macos.md](../lessons/macos.md), "Persona Link's panel kept the old appearance").
 - `UNIVERSAL=1` also builds Intel.
 
 **System settings**
@@ -832,7 +831,7 @@ Two things to know about a node without systemd:
 | `persona-link pair --listen [<listen address>] [--addr <address>]…` | Passive pairing link (only link on stdout, for piping); default listen `:18663`; can't combine with pairing link or `--machine` |
 | `persona-link mode [active\|passive] [--listen <address>]` | No arguments: display current mode (with passive listen address); supplied mode: switch, retaining both pairings; `--listen` alone changes passive listen address without switching mode |
 | `persona-link node install [--node-bin <path> \| --personad <path>]` / `node switch [--to personad]` / `node status [--json]` / `node uninstall` | Resident node service (Linux systemd `personad-node`, Mac launchd `com.persona.node`); a new one runs `~/.persona/bin/persona-node` when there is one (else personad, and always on a computer that runs a hub or a manager), existing services stay unchanged; `--node-bin` puts the given program in under its own name. `switch` moves an existing service to persona-node (`--to personad`: back), whole or not at all ("The device's program" above). `uninstall` deletes neither program. On Windows the node shares persona-link's task; only `node status` exists |
-| `persona-link discover [--wait <seconds>] [--json]` | Hubs heard on the LAN (mDNS), viewing only, no pairing; listens 3 seconds by default, `--wait` allows decimals up to 60; exit 0 if found, otherwise 1 |
+| `persona-link discover [--wait <seconds>] [--json]` | Hubs heard on the LAN (mDNS), viewing only, no pairing; listens 3 seconds by default, `--wait` allows decimals up to 60; exit 0 if found, otherwise 1; any LAN host can advertise a name, so the text output shows control characters as `<ESC>` / `<U+XXXX>`, one line per hub (`--json` is for scripts and keeps the name as heard: JSON escapes C0 control characters, ESC included, but writes DEL and C1 characters U+0080-U+009F raw, so don't print it on a terminal) |
 | `persona-link run [--parent] [--log <file>]` | Maintain the link in foreground, one JSON status per stdout line (see "Status line"); `--parent` exits on stdin close (used by menu bar App); `--log` writes there (rotates to `<file>.1` at 1 MB), not stderr. Used by systemd and the alternatives under "Without systemd" |
 | `persona-link address add <address>` / `address remove <address>` | Manually add / remove a hub candidate (`https://domain:port`, or just domain), stored in link.json; pairing required before adding. `remove` deletes that entry, manual or hub-provided (the hub may send it again on next connect) |
 | `persona-link name [<new>\|--reset]` | No argument: what the hub calls this computer (with the id when they differ). A name: asks the running, connected persona-link to have the hub rename this computer and prints the hub's answer; `--reset`: back to the id. Exit 1 with the reason when it can't (not running, offline, passive mode, a hub that doesn't rename computers, not confirmed yet, too long); see "The computer's name" |
