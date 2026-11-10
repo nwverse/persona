@@ -252,8 +252,9 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 | 2.5 | Interrupted | A linked active Agent is stopped (`unread` / `idle`) with `turn_error`: model-service failure interrupted the turn (disconnect, overload, rate limit, expired login…), unfinished (#1516); red, **Continue** on the card sends "继续" ("continue"). A subscription usage limit is not this (the next row) |
 | 2.6 | Usage limit | A linked active Agent is stopped with `turn_error_kind` `usage_limit`, and the reset is not known or not more than 10 minutes past. Not red and not Interrupted: "Usage limit · resumes <time>" when the CLI or the hub will continue it, "Usage limit · resets <time>" when nothing will. An older hub that does not send the kind stays Interrupted |
 | 3 | Unread | A linked active Agent is `unread` (task finished, not viewed yet) |
-| 4 | Active | A linked active Agent is `working` (working or starting) |
-| 5 | Follow up | All linked active Agents are stalled (`idle` seen, `offline` not running, or launch failed) |
+| 4 | Active | A linked active Agent is `working` (working or starting) and not waiting (next row) |
+| 4.5 | Waiting | A linked active Agent ended its turn but something brings it back (#3274): only background commands, subagents, Monitors or workflows it started still run (`background_working`), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure for it and wakes it (`work.phase` `blocked`, `work.on` `agent` / `external` / `transient`). Shown 等待中 with what it waits for (`work.line` / `work.wait`); under way like Active in the dock, the board, Today and the brief. The hub's `taskState` sends `waiting` on task cards. On a hub with bounded lists the web reads a task's agents from the list's rows (the Agents window, and `taskRows`: the list's deltas and one exact lookup for an open task's agent outside it), not only from opened chats |
+| 5 | Follow up | All linked active Agents are stalled (`idle` seen, `offline` not running, or launch failed) with nothing to bring them back |
 | 6 | Not started | No linked active Agents |
 
 - To-do list ordering: unfinished first (same state by `created_at` descending), completed collapsed at bottom.

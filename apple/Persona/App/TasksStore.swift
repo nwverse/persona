@@ -180,7 +180,7 @@ final class TasksStore {
     }
 
     func state(_ todo: TodoItem) -> TaskState {
-        let state = TaskState(todo: todo, agents: sessions(todo).map(\.state))
+        let state = TaskState(todo: todo, sessions: sessions(todo))
         // A hub from before #1077 leaves the todo open when the agent did not start; its plan still says why.
         if state == .notStarted, todo.agents.isEmpty, planError(todo) != nil { return .failed }
         return state
@@ -197,6 +197,9 @@ final class TasksStore {
               let error = plan.tasks.first(where: { $0.todoID == todo.id })?.error, !error.isEmpty else { return nil }
         return error
     }
+
+    /// What a waiting task waits for (#3274): the first of its agents that waits to be woken, in its own words.
+    func waitLine(_ todo: TodoItem) -> String? { sessions(todo).lazy.compactMap(\.waitLine).first }
 
     /// The task's agent to open first: the one that waits for the user, then the one working, then the latest.
     func leadSession(_ todo: TodoItem) -> Session? {

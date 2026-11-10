@@ -253,7 +253,9 @@ struct AssistantActionBar: View {
                         open = nil
                         store.detailTask = id
                     } label: {
-                        line(title: todo.title, detail: state.label, waiting: state == .needsYou) {
+                        // a waiting task says what it waits for after its state (#3274)
+                        let waits = state == .waiting ? store.waitLine(todo) : nil
+                        line(title: todo.title, detail: [state.label, waits].compactMap { $0 }.joined(separator: " · "), waiting: state == .needsYou) {
                             TaskMark(state: state)
                         }
                     }
