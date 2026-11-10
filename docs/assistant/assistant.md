@@ -583,11 +583,11 @@ main chat (`ownConversationIfQuiet`: selecting `asked` clears a `session_id` tha
 (`run_session_id`) and a normal completion (`assistantwire.NormalFinish`, based on pushed text: final work explanation or last answer), suppress "Finished"
 but still finish through `settle`. Channel forwarding (Lark, plugin sync and task pushes) skips under the same `quietTaskTurn` rule.
 
-**In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run holds that chat's pushes the way a supervision
-message does (`holdPushes`, the send carries `hold_pushes`): its normal finish is neither pushed nor mirrored to channels (`SupervisedFinish`), until the user or any
-other message speaks there (`releasePushes`). The chat stays the user's: their own turns push as ever. A run that arrives while another turn is on there (or the chat
-waits for the user) does not hold, so that turn's finish is not swallowed; that run is pushed as before. Errors, cut-offs, stuck turns, `notify_user` and escalated asks
-reach the user as ever. The hold is in memory: after a manager restart the next finish pushes.
+**In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run writes `push: "asked"` into its persisted
+message source. A normal completion is quiet when the latest non-queued, non-wake user text has that source (`quietScheduledInput`). The manager also checks that the session
+row and last answer did not change while it read the transcript. Queued user text and background wakes cannot replace the patrol input. When queued text starts its own
+turn, it has no scheduled push mode, so its answer pushes and mirrors as usual. Errors, cut-offs, stuck turns, `notify_user`, and escalated asks reach the user as before.
+A source without `push`, including one from an older manager, keeps the old every-answer behavior.
 
 Cost (own chat): user-authored messages in that chat also don't push on completion. People generally don't chat in task-owned chats; if they do, they're likely viewing the App.
 

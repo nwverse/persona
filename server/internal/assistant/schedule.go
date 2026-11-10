@@ -1456,7 +1456,7 @@ func taskMessageSource(t Task) *proto.MessageSource {
 	if t.Repeat == repeatOnce {
 		kind = proto.SourceFollowup
 	}
-	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label()}
+	return &proto.MessageSource{Kind: kind, ConversationID: t.SessionID, Title: t.label(), Push: t.Push}
 }
 
 func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (proto.Session, error) {
@@ -1498,20 +1498,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
-			// A quiet task's run there holds the conversation's pushes, as a supervision message does, until the
-			// user or anything else speaks there (schedule_push.go). Not while another turn is on there (one the user
-			// started): that turn's finish would go unpushed with it; then this run is pushed as ever.
-			hold := t.pushesOnlyAsked() && (s.supervising(t.SessionID) || !s.sessionBusy(ctx, m.ID, t.SessionID))
-			if hold {
-				params[holdPushesParam] = true
-				s.holdPushes(ctx, t.SessionID) // before the send: a quick turn can end before the call returns
-			}
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params)
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
-			}
-			if err != nil && hold {
-				s.releasePushes(ctx, t.SessionID)
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.MachineID, t.SessionID
