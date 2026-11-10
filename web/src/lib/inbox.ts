@@ -651,7 +651,7 @@ export interface LarkMessage {
   is_read?: boolean;
   badge_count?: number;
   parts?: LarkPart[];
-  reply_to?: { id?: string; sender_name?: string; text?: string; recalled?: boolean; retained?: boolean };
+  reply_to?: { id?: string; sender_name?: string; text?: string; parts?: LarkPart[]; recalled?: boolean; retained?: boolean };
   sending?: boolean;
   failed?: boolean;
   client_id?: string;
