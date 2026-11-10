@@ -138,6 +138,20 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).
 
+### 6. task_briefs and task_brief_todos tables
+A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
+- `task_briefs`: `id` (text, PK), `brief` (jsonb, written once: the owner's message, who started it, goal, `done_when`,
+  `expect_minutes`, `out_of_bounds`), `state` (jsonb: the log of scope changes and overdue marks, the result),
+  `created_at`, `updated_at`. Nothing rewrites `brief`; `done_when` in effect is the brief's as its logged scope changes
+  left it, and a supervised task's `todo_supervision.done_when` carries the same list.
+- `task_brief_todos`: `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE), `brief_id` (FK → `task_briefs(id)`),
+  `continues` (the to-do it took the work over from), `reason`, `linked_at`. A brief's rows in `linked_at` order are its
+  lineage.
+
+`GET /api/v1/todos` carries both on a to-do that has a brief: `brief` (the record, its `log`, `criteria` and
+`expect_minutes_now` in effect, `clock_at`, `due_at`, `overdue_at`, `result`) and `lineage`. A task from before briefs
+gets a reconstructed one lazily.
+
 Link/release semantics:
 - When an Agent is linked to a new to-do and is active on another, the same transaction marks the original association `released` (records `released_at`); the old to-do shows it as "Previously involved".
 - If an Agent previously involved in this to-do is manually linked back, clear `released_at`/`dismissed_at`, and refresh `linked_at` and snapshot information.
@@ -333,6 +347,14 @@ Normal receipts are written before judgment for both supervised and unsupervised
 Nonempty `skip` means automatic flow would not judge this to-do (`not_a_task` manual, `done` completed, `reopened` no new work after reopen), but API still returns model verdict for inspection.
 With **Delivery** enabled (next section), response also has `delivery`; `verdict` may be hub's own `undelivered`.
 
+### Judged against the brief (#3822)
+
+The judge's input names the task's brief (`docs/assistant/unified-entry.md`, "Briefs") when it has one: the owner's
+message that led to the work, verbatim with its day, and the criteria as logged scope changes left them, with the
+dropped ones listed as no longer required. A take-over's notes are a hand-over prompt; the request and the criteria
+are what the work is judged against. When the judge closes a task itself (spot-check reviews), the brief's `result`
+records each criterion as it did for the supervisor's review.
+
 ## Delivery
 
 (#3306, lessons in `docs/lessons/delivery.md`) A code-change task is "done" only when live and tested, not when a PR is opened or merged. Judging only whether an Agent says finished leaves many tasks at "PR opened", "merged but off by default" or "not deployed" while showing Done.
@@ -342,7 +364,7 @@ effective from the next judgment and next dispatched task. When on:
 
 - **State criteria at dispatch**: for non-read-only tasks created by `task_plan`, hub appends delivery criteria to the Agent's first message (dispatch prompt, `prompts/assistant/task_delivery.md`): done = live and tested, with measurements;
   if rules permit self-merge/deploy/enable, finish the whole path; if current user approval is required (merging a repo not owned by user, production deploy, enabling an off-by-default feature, outbound messaging), stop one step before approval and state what needs approval;
-  first try to resolve CI/other-person/environment blocks yourself; if impossible, state where and who can unblock. Fixed last line: `交付：<已上线并实测 | 停在 PR | 已合未上线 | 默认关待启用 | 不涉及上线>；卡点：…；谁来解：…` ("Delivery: <live and tested | at PR | merged, not live | off by default, awaiting enablement | no deployment involved>; blocker: …; who can resolve: …"). Read-only tasks omit it.
+  first try to resolve CI/other-person/environment blocks yourself; if impossible, state where and who can unblock. Fixed last line: `交付：<已上线并实测 | 停在 PR | 已合未上线 | 默认关待启用 | 不涉及上线>；卡点：…；谁来解：…` ("Delivery: <live and tested | at PR | merged, not live | off by default, awaiting enablement | no deployment involved>; blocker: …; who can resolve: …"). Read-only tasks omit it. While the triage's `closeout` switch is on the prompt also asks for a closeout, and the line is then the one just before that block instead of the last (`docs/assistant/agent-work.md`, "Closeout"); the line is read wherever it stands in the reply.
 - **Judge one more thing**: the "Automatic completion" model also returns `delivery` (`live` / `pr` / `merged` / `off` / `none`), `gate` (blocking gate), `unblock` (`user` / `agent` / `other`), taking the Agent's line as authoritative unless contradicted by the body.
   If model omits it, use Agent's line; if neither exists, `none`. If `live` (or not judged) but reply mentions a PR without deployment or TestFlight build-number wording, treat as `pr` / `merged`, unless the Agent's line says live.
 - **`live` needs evidence** (#3205): a `live` the judge (or the Agent's line) gives is checked against the running hub; the hub's commit not containing the PR's merge commit (or the check failing) makes it `merged` with the gate "等部署…" / "等确认部署…" (`docs/assistant/todo-status-sop.md` "Deployed needs evidence").
@@ -461,7 +483,7 @@ Something the owner raises in the main conversation and wants an answer to is a 
 - **Never closes on its own**: the hub's judge ("Automatic completion"), a review or cancellation, a failed start, `todo_complete` and `PATCH {"done": true}` (an app, an extension) all leave it open (the PATCH answers 409, the tool says to report instead). The store refuses each of them for `kind = concern`, and memory refuses a row that would close one without `done_by = reported`. Reopened (`PATCH {"done": false}`, `todo_reopen`), it needs another report; deleting it stays the owner's choice.
 - **Extensions**: `todo.changed` carries `kind: "concern"` (created, reopened, closed by its report), and each report is a `todo.decision` with `source: "reported"`, so a work-log extension can keep the concern in its record and show its answer.
 - `todo_list {kind: "concern"}` lists the open concerns; `todo_list` / `todo_get` mark them `concern`.
-- Clients: `kind` is on the to-do's JSON (left out for others), `done_by` `reported` on a closed one; clients that do not know them show it as a to-do. The SOP rule (an open concern sits in Working while a task of it runs, else in Other open, labelled Concern and not folded) is on the hub (`todo_triage.go`: never shelvable, #3610, so a leader's stuck report and the counts see it right); the clients follow with W1 / I1 / A1 (#3582), and the shared fixtures with them. Until the secretary's prompt (P1) the main conversation records and reports concerns only when told to.
+- Clients: `kind` is on the to-do's JSON (left out for others), `done_by` `reported` on a closed one; clients that do not know them show it as a to-do. The SOP rule (an open concern sits in Working while a task of it runs, else in Other open, labelled Concern and not folded) is on the hub (`todo_triage.go`: never shelvable, #3610, so a leader's stuck report and the counts see it right); the clients follow with W1 / I1 / A1 (#3582), and the shared fixtures with them. The secretary's prompt (P1, #3609) has the main conversation record a concern whenever the owner raises one, and report it only after telling the owner the outcome.
 
 ## Questions nobody answered
 
@@ -610,16 +632,16 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 #2029. The to-dos page switches between the list and a calendar (List | Calendar at its top, kept per device; the calendar's Day | Week | Month too). The calendar shows the to-dos that have a due date, from the same list the page already has: `GET /api/v1/todos` returns them all, so switching needs no request and works offline from the cache.
 
 - **Where a to-do goes**: due at a moment (`due_at`) on the time axis of the day and the week, the block's top edge at that moment. A due moment is not a span, so every block is the same height (about 50 minutes, a tap target). Due on a day (`due_date`, a day in the user's time zone) in the All Day row above the axis, on that day on every device. Blocks that would overlap sit side by side; on a phone's week, whose columns are a few characters wide, they become one block that says how many and opens their day.
-- **The month**: each day shows up to three lines (all-day first, then by time), or two and "+N" (phone) / "N more" (iPad, Mac). Tapping a day opens it in the day view.
+- **The month**: each day shows up to three lines (all-day first, then by time), or two and "+N" (phone) / "N more" (iPad, Mac). Tapping a day opens it in the day view; on Android, which has only the month so far, a sheet lists that day's to-dos (state, when, flag and bell), a tap on one opens it.
 - **Looks as in the list**: the bar and the dot are the state's color (needs you, working, done unread, not started); overdue is red, before the state; done is faded and struck through (Show Done, in the calendar's options, hides them, per device); a flag for high priority and a bell while a reminder is still to be pushed, as on the row. A reminder is not drawn on its own: it is not something to do, and would show the to-do twice. The moment is a red line on today.
 - **Without a due date**: not on the calendar; a bar under it says how many and goes back to the list.
-- **Moving around**: Today, previous / next, and on iOS a sideways swipe; the day view has the week's strip (a dot for each open to-do, a few) to pick a day; a day of the week, or of the month, opens that day.
-- **Where a week starts**: on the system's or browser's first day of the week, the same for the day's strip, the week and the month. Apple: the first weekday the user chose (Language & Region), else Monday in Simplified Chinese or on the Chinese mainland (Apple's data still says Sunday there; current CLDR and the browsers say Monday), else the region's (`TodoCalendar.userCalendar`). Web: `Intl.Locale` week info for the browser's language (`zh-CN` Monday, `en-US` Sunday); a browser without it goes by the language's region (`weekStartDay`).
+- **Moving around**: Today, previous / next, and on iOS and Android a sideways swipe; the day view has the week's strip (a dot for each open to-do, a few) to pick a day; a day of the week, or of the month, opens that day.
+- **Where a week starts**: on the system's or browser's first day of the week, the same for the day's strip, the week and the month. Apple: the first weekday the user chose (Language & Region), else Monday in Simplified Chinese or on the Chinese mainland (Apple's data still says Sunday there; current CLDR and the browsers say Monday), else the region's (`TodoCalendar.userCalendar`). Web: `Intl.Locale` week info for the browser's language (`zh-CN` Monday, `en-US` Sunday); a browser without it goes by the language's region (`weekStartDay`). Android: the region of the app's language (the web's CLDR table; a language without a region goes by its usual one, `zh` → CN, Monday; `weekStart` in `core:domain`).
 - **Making one**: tapping the empty axis offers a new to-do due there (snapped to the half hour; the All Day row: that day), only its title to type (`TodoQuickAddSheet`; the reminder, priority and notes are set on its page). The page's "+" in the calendar makes one due on the day shown. `POST /api/v1/todos` takes `due_at` / `due_date` with the title.
 - **Moving one** (#2045; the web so far): drag a to-do on the axis of the day or the week to another time (its top edge snaps to the quarter hour) or another day's column, onto a day's All Day row (due that day, all day), or in the month onto another day (the same time there; an all-day one stays all day). While it is dragged, where it would land shows with the time; letting go saves it at once (`PATCH /api/v1/todos/{id}` with `due_at` or `due_date`, either replacing the other), and a failed save puts it back and says why. A mouse drags after a few pixels of movement, so a click still opens the to-do; a touch drags after a press held still (350 ms), so a swipe still scrolls and turns pages; Escape puts it back. The drop rules are pure in `web/src/lib/todo-calendar.ts` (`dropOnAxis`, `dropOnDay`, `dropPatch`).
-- **Not yet**: dragging on iOS / Mac (#2045); Android (#2046, the month first).
+- **Not yet**: dragging on iOS / Mac (#2045); Android's day and week, making one on the calendar and dragging (#2046 is the month).
 - **What it draws**: entries, not to-dos (`CalendarEntry`: a source, a title, a start, an optional end, all day or not, the state's look). A to-do is one source (`TodoEntrySource`); the phone's calendar events can be another later (read on the device with EventKit, drawn with their length), and the layout (`TodoCalendar`: the days of a mode, lanes, clusters, what a month's day fits, where a tap lands) needs no change for it. A source is asked for the days shown (`entries(in:)`), so once the hub pages its to-dos the calendar can ask it for a range (`due_from` / `due_to` on `GET /api/v1/todos`, written as `todo_list`'s `due_after` / `due_before`).
-- **Code**: `apple/Shared/TodoCalendar.swift` (pure, `TodoCalendarTests`), `apple/Persona/Views/Todos/Calendar/` (the views; the Mac's to-dos page shows the opened to-do beside the calendar), tokens in `Theme.CalendarGrid`. Checked by `TodoCalendarTests` (iOS UI, mock hub).
+- **Code**: `apple/Shared/TodoCalendar.swift` (pure, `TodoCalendarTests`), `apple/Persona/Views/Todos/Calendar/` (the views; the Mac's to-dos page shows the opened to-do beside the calendar), tokens in `Theme.CalendarGrid`. Checked by `TodoCalendarTests` (iOS UI, mock hub). Android: `core/domain/.../tasks/TodoCalendar.kt` (pure, `TodoCalendarTest`), `feature/agents/.../TodoCalendar.kt` (the month and the day's sheet), tokens in `CalendarTokens`, shots `TodoCalendarShotsTest`.
 
 ## List filter and sort
 

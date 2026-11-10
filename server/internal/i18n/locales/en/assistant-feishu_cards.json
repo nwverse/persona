@@ -53,6 +53,7 @@
   "pick_machine_dir": "Pick a computer and enter a directory",
   "starting": "Starting…",
   "start_form_opening": "Opening the start form",
+  "start_form_failed": "Couldn't open the start form: {error}",
   "card_expired": "This card has expired",
   "card_withdrawn": "This card was withdrawn",
   "already_handled": "Already handled",

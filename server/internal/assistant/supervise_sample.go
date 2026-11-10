@@ -163,7 +163,8 @@ func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, reviewFeedBody{Title: t.Title, Verdict: reviewAccepted, Note: note, Checks: checks})
+		result := s.recordBriefResult(ctx, t, checks, nil, reviewerJudge, reviewAccepted)
+		_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, reviewFeedBody{Title: t.Title, Verdict: reviewAccepted, Note: note, Checks: checks, Result: result})
 		if cur, ok := s.todoNow(t.ID); ok && closed {
 			s.askConclusion(ctx, cur, conclusionInput{Outcome: outcomeDone, Reason: reason, Note: note, Checks: checks,
 				Verified: supervisorVerified(cur)}) // checked by the judge: told, not left for the owner (#3356)

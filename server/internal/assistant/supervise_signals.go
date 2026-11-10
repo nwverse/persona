@@ -26,6 +26,9 @@ const (
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
 	sigAsk         = "ask"         // its agent's card came to the supervisor before the user (ask_route.go)
+	// sigLeaderStuck: a leader's task is stuck (leader_reports.go): the main conversation says so in one line, no push
+	// (the owner's ruling after H1, #3609). Detail is the direction's name and where it is stuck.
+	sigLeaderStuck = "leader_stuck"
 )
 
 var (
@@ -322,7 +325,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
 	s.askTick(now) // cards held past their time go up a rung (ask_route.go)
 	routed := s.routedSessions()
-	for _, t := range s.todosOf(ctx, "*") {
+	tasks := s.todosOf(ctx, "*")
+	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
+	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
@@ -336,6 +341,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if g, ok := s.orphanSignal(t); ok { // nobody works on it, as the minute pass found (tasks_orphan.go)
 			s.signal(g)
 		}
+		s.briefClock(ctx, t, now) // past its brief's clock with no end (task_brief_scope.go)
 	}
 	b := &s.supervise
 	b.mu.Lock()

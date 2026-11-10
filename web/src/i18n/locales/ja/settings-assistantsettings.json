@@ -59,5 +59,18 @@
   "default_permissions_unset": "未設定（従来の動作）",
   "task_models": "タスクのモデル",
   "main_chat_model": "メインチャットのモデル",
-  "default_permissions_unconfirmed": "アシスタントがこの権限設定を確認できませんでした。再読み込みしてからお試しください。"
+  "default_permissions_unconfirmed": "アシスタントがこの権限設定を確認できませんでした。再読み込みしてからお試しください。",
+  "meetings_title": "会議",
+  "meeting_attendance": "会議での Persona",
+  "meeting_attendance_off": "オフ",
+  "meeting_attendance_listener": "聞き手",
+  "meeting_attendance_participant": "参加者",
+  "meeting_attendance_footer": "スマートフォンで会議の録音を始めるときに、あらかじめ選ばれる Persona の役割です。毎回変更できます。聞き手のときは回答をスマートフォンの画面に表示し、参加者のときは読み上げもします。回答には会議の資料（これまでの議事録、プロジェクトの進捗、各 ToDo の担当者）だけを使います。",
+  "meeting_attendance_unconfirmed": "アシスタントがこの会議の設定を確認できませんでした。再読み込みしてからお試しください。",
+  "agents_title": "エージェントのフォロー",
+  "agent_tasks": "Persona が開始したすべてのエージェントをフォローする",
+  "agent_tasks_hint": "メインチャット以外から開始したエージェントにも通知なしのタスクが付き、結果の確認と完了後のクローズが行われます。モデルの呼び出しが増えます",
+  "archive_closed": "閉じたセッションをアーカイブするまで",
+  "archive_closed_hint": "閉じていて未完了のタスクがないセッションは、この日数だけ動きがないと一覧から外れ、アーカイブ済みに残ります。0 でオフ",
+  "archive_closed_unit": "日"
 }

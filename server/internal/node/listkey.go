@@ -43,6 +43,9 @@ func listKeySized(list []proto.Session, size int) string {
 		w.quote(s.SpaceID, '/')
 		w.quote(s.SpaceKind, '\n')
 		writeUltracodeKey(&w, s)
+		if s.ServiceTier != "" || len(s.ServiceTiers) > 0 {
+			fmt.Fprintf(&w.b, "speed:%q/%v\n", s.ServiceTier, s.ServiceTiers)
+		}
 		// A completed background scan can discover a fallback without a new transcript revision or status.
 		if s.ModelFallback != nil || s.TurnErrorCode != "" {
 			fmt.Fprintf(&w.b, "model-fallback:%+v/%q\n", s.ModelFallback, s.TurnErrorCode)
@@ -204,6 +207,9 @@ func (w *keyWriter) caps(c *proto.SessionCapabilities) {
 		w.b.WriteString("<nil>")
 	} else {
 		w.b.WriteString(strconv.FormatBool(*c.Modes))
+	}
+	if c.Model != nil {
+		w.b.WriteString(" model=" + strconv.FormatBool(*c.Model))
 	}
 	w.b.WriteByte('}')
 }

@@ -42,6 +42,7 @@ func (h *Manager) subscriptionUI(w http.ResponseWriter, r *http.Request) {
 		By:        subscriptions.Actor{ID: actorOf(ctx), Name: p.Name},
 		Name:      h.subscriptionConnectorName,
 		Native:    h.subscriptionNative,
+		Drafts:    h.subscriptionDrafts(),
 	}
 	res, err := subscriptionsui.Handle(ctx, h.subs, env, subscriptionsui.Request{State: in.State, Action: in.Action, Values: in.Values})
 	switch {
@@ -97,4 +98,15 @@ func (h *Manager) subscriptionNative(service string) string {
 		}
 	}
 	return ""
+}
+
+// subscriptionDrafts keeps the model drafts the pages start (#2040); one that finishes redraws the pages on every app,
+// as an extension's invalidate does for its own.
+func (h *Manager) subscriptionDrafts() *subscriptionsui.Drafts {
+	h.subDraftsOnce.Do(func() {
+		h.subDrafts = subscriptionsui.NewDrafts(func() {
+			h.broadcast(map[string]any{"type": "extension_ui", "extension": subscriptionsui.PagesID, "invalidate": true})
+		})
+	})
+	return h.subDrafts
 }

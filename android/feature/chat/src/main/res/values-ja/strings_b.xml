@@ -4,6 +4,7 @@
     <string name="chat_api_error_retry">再試行</string>
     <string name="chat_api_error_request_id">リクエストID</string>
     <string name="chat_api_error_copy_request_id">リクエストIDをコピー</string>
+    <string name="chat_api_error_session">セッション</string>
     <string name="chat_api_error_copy_session">セッションをコピー</string>
     <string name="chat_api_error_time">時刻</string>
     <string name="chat_api_error_copy_raw">原文をコピー</string>
@@ -62,8 +63,10 @@
     <string name="chat_chrome_notice_verify">確認</string>
     <string name="chat_chrome_notice_dismiss">閉じる</string>
     <string name="chat_chrome_rename_text">タブ名はherdrに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
+    <string name="chat_chrome_rename_text_tern">タブ名はTernに同期されます。セッション名はClaudeの/renameを使うので、Macのclaude --resumeでも表示されます。</string>
     <string name="chat_chrome_save">保存</string>
     <string name="chat_chrome_tab_name">タブ名（herdr tab）</string>
+    <string name="chat_chrome_tab_name_tern">タブ名（Tern tab）</string>
     <string name="chat_chrome_session_name">セッション名</string>
     <string name="chat_chrome_delete">削除</string>
     <string name="chat_chrome_peers_title">同じスペースのエージェント</string>

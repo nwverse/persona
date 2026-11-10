@@ -67,6 +67,13 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		if t.Title == "" || t.Prompt == "" || t.Cwd == "" {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
 		}
+		t.Brief = nil // the hub's (planBriefs below), never the tool call's
+		t.Goal, t.OutOfBounds = clip(oneLine(t.Goal), 300), cleanDoneWhen(t.OutOfBounds)
+		t.Continues, t.ContinuesWhy = strings.TrimSpace(t.Continues), clip(oneLine(t.ContinuesWhy), 300)
+		t.StartedWhy = clip(oneLine(t.StartedWhy), 300)
+		if err := briefRequired(t); err != nil && !(s.briefsOptional && t.Continues == "") {
+			return "", fmt.Errorf("task %d (%s): %w", i+1, t.Title, err)
+		}
 		if t.Model != "" && !proto.ValidModelID(t.Model) { // it goes to the agent as --model (#1644)
 			return "", fmt.Errorf("task %d: model %q is not a model id: %s", i+1, t.Model, proto.ModelIDRule)
 		}
@@ -125,6 +132,9 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		if err := s.reusableTodo(sessionID, t.ReuseTodo, false); err != nil {
 			return "", fmt.Errorf("task %d: %v", i+1, err)
 		}
+	}
+	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
+		return "", err
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
