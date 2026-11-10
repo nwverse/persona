@@ -252,12 +252,6 @@ export function receiptState(it: FeedItem): "done" | "failed" | "interrupted" {
   return parseAPIError(field(it, "summary")) ? "interrupted" : "done";
 }
 
-/** The task's name on its receipt (#3036): its to-do's title now, so a rename shows on every receipt as on the card and
- *  lines beside it; the receipt's own title (the name when it was written) once the to-do is gone; else undefined. */
-export function receiptTitle(it: FeedItem, todo: Pick<Todo, "title"> | undefined): string | undefined {
-  return todo?.title?.trim() || field(it, "title") || undefined;
-}
-
 /** One question of an answered card and what the user answered. */
 export interface AnsweredItem {
   question: string;
