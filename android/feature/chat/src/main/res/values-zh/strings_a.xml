@@ -415,6 +415,9 @@
     <string name="chat_work_thought">思考</string>
     <string name="chat_content_copy">复制</string>
     <string name="chat_content_show_all">展开全部</string>
+    <string name="chat_content_copied">已拷贝</string>
+    <string name="chat_content_quote_more">展开全部</string>
+    <string name="chat_content_quote_less">收起</string>
     <string name="chat_content_full_text">全文</string>
     <string name="chat_content_image">对话图片</string>
     <plurals name="chat_content_collapse_steps">
