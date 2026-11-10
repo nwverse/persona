@@ -4,6 +4,10 @@
 
 A task panel embeds its selected Agent's `ChatView`, but its header menu used the task's route for **Open in new window**. Build that destination from the same selected machine/session pair passed to the chat, including after switching Agents and before the session roster arrives. Only a task panel without an Agent opens the task page; the chat's separate linked-task action retains its own destination. Regress the real side panel, chat header and menu together, not only a route helper.
 
+## Fixture display labels can match a deployment's private values (#3552)
+
+Generic fixture IDs are not enough: a display name can still match a configured machine identifier and block the mandatory prebuild privacy scan on another machine. Use neutral test labels, and update their expected summaries and click targets together without changing IDs or assertions. Keep privacy checks enabled; do not exempt a configured value just to make a fixture pass.
+
 ## Ancestor package metadata can break Vite config loading (#3301)
 
 When Vite/esbuild reports invalid `package.json` content outside the checkout, inspect the exact reported ancestor: the web package can be valid while package-scope resolution reads a broken parent file. A successful Go build does not prove that the bundled web build or deployment succeeded. Do not change application code or overwrite another worker's shared file just to silence this error.
