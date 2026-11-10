@@ -15,6 +15,15 @@ Sending files to your computers to keep, and between them, over the connections 
 
 The app side (share sheet "Send to <computer>", "Send file to computer", "Save to phone / Send to another computer" in the file preview, Shortcuts) is separate work on top of these endpoints.
 
+## The switch: off until turned on
+
+Every feature that writes files to a computer is off by default. Each computer has a **file transfer** switch (`internal/devices/transfer_settings.go`), off until the user turns it on:
+
+- Kept by the manager in the settings table under `machine_file_transfer` (`{"<machine id>": true}`), like the clipboard switch. A machine that is not listed is off, and so is every machine while the settings cannot be read (it fails closed; the manager reads them again at most every 10 s, so a switch turned off elsewhere takes effect within that).
+- `GET /api/v1/machines/{mid}/file-transfer/settings` → `{enabled, inbox?}`; `PUT` the same path with `{"enabled": bool}` → the same. Only a full device changes it (answer-only devices and extension tokens never reach it). The machine object carries it as `file_transfer: {enabled, inbox?}`, where `inbox` is the receive folder (hub.json `inbox_dir`, else `~/Downloads/Persona`) while it is on; a manager from before the switch sends no `file_transfer`, which clients and the hub read as off.
+- While it is off: a `dest=inbox` upload to the machine is 403 `file_transfer_disabled` before the node hears of it (the hub checks the switch as the machine's manager last reported it), and a transfer from or to the machine is 403 `file_transfer_disabled` with `machine` naming it. A transfer running when either end is turned off stops at its next chunk (`failed`, `code: file_transfer_disabled`) and the target's partial file is removed.
+- Not affected: chat attachments (`files` without `dest`), the terminal's paste, health reports, the file browser's `dest=dir` uploads and edits, and previews / downloads (`file`, `file/download`, thumbnails). These have their own rules and keep working with the switch off.
+
 ## Receive folder
 
 - One per computer: hub.json `machines[].inbox_dir` ([config.md](../operations/config.md)), default `~/Downloads/Persona` (`proto.DefaultInboxDir`). The client never names it: a `dir` sent with `dest=inbox` is ignored, so a device can only put files where the owner configured.
@@ -45,6 +54,7 @@ app ◀─ file_transfer events ───────── hub ◀─ ws.broadc
 - **Checks before 202**: both machines are known; the source can read the file (its own errors pass through: missing, iCloud, keys); the size is within the limit; the target's node knows `dest=inbox` (it must echo `dest`; an older one that ignores it and opens the file in its temp directory has that upload aborted) and accepts the receive folder. So a request that cannot work is refused synchronously, and a 202 means bytes are flowing.
 - **Who may**: only a full device the person signed in with. Answer-only devices (the watch) are 403 by the device-role allowlist; extension tokens have no scope for these routes, and the manager checks the role the hub passes on (`X-Persona-Role`) again. A transfer is always a person's explicit action in an app.
 - **Same machine**: allowed (`from` and `to` the same): a copy into the receive folder.
+- **Across trust levels**: allowed. A transfer between a computer marked `trust: work` and a personal one, in either direction, is not refused (user decision, 2026-11-10): it is always a person's explicit action, and both ends must have the switch on. Agents and extensions cannot start one.
 - **Linked hubs**: a computer reached through a member hub is carried by the primary's manager like any other, so it can be either end; that path is not verified yet.
 
 ### State, events and restarts
@@ -65,4 +75,4 @@ app ◀─ file_transfer events ───────── hub ◀─ ws.broadc
 - The app entries listed above; real-device transfers of up to 1 GB.
 - Starting from a computer (Mac "Send to phone"): needs a node → hub notification and a push.
 - Machines behind a linked member hub.
-- Receive folder in the apps' settings (hub.json only for now).
+- Receive folder in the apps' settings (hub.json only for now), and the switch in the apps (the API is there).
