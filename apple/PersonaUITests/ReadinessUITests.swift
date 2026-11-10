@@ -74,30 +74,36 @@ final class ReadinessUITests: XCTestCase {
     }
 
     /// A probe that outlasts the old 30 s client timeout still gets the hub's result; an HTTP failure stays beside the
-    /// checklist's Try button instead of ending silently. Run with MOCK_READINESS=not_logged_in and
-    /// PERSONA_PROBE_EXPECT=slow|error.
+    /// checklist button that started it. Run slow / error with MOCK_READINESS=not_logged_in, or model_error with bad_key.
+    /// PERSONA_PROBE_EXPECT=slow|error|model_error.
     @MainActor func testTryMessageWaitsForAnAnswerOrShowsFailure() throws {
         let env = ProcessInfo.processInfo.environment
-        guard let expected = env["PERSONA_PROBE_EXPECT"], ["slow", "error"].contains(expected) else {
-            throw XCTSkip("needs PERSONA_PROBE_EXPECT=slow|error and the matching mock probe delay / error")
+        guard let expected = env["PERSONA_PROBE_EXPECT"], ["slow", "error", "model_error"].contains(expected) else {
+            throw XCTSkip("needs PERSONA_PROBE_EXPECT=slow|error|model_error and the matching mock probe delay / error")
         }
         let app = try launch(fresh: true, tab: "settings")
         let entry = app.descendants(matching: .any)["settings.checklist"].firstMatch
         XCTAssertTrue(entry.waitForExistence(timeout: 20), "no checklist in Settings:\n\(app.debugDescription)")
         entry.tap()
-        let row = app.descendants(matching: .any)["checklist.first_message"].firstMatch
+        let rowID = expected == "model_error" ? "model" : "first_message"
+        let row = app.descendants(matching: .any)["checklist.\(rowID)"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no Try a message row:\n\(app.debugDescription)")
         let tryButton = row.buttons["试一句"].firstMatch
         XCTAssertTrue(tryButton.waitForExistence(timeout: 5), "no Try a message:\n\(app.debugDescription)")
         let began = Date.now
         tryButton.tap()
 
-        let result = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "试了一句，没成功")).firstMatch
+        let result = row.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "试了一句，没成功")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: expected == "slow" ? 50 : 15),
-                      "the probe ended without its \(expected) outcome:\n\(app.debugDescription)")
+                      "the probe ended without its \(expected) outcome beside the button that started it:\n\(app.debugDescription)")
         let reason = expected == "slow" ? "Not logged in" : "mock 探针没有回答"
-        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", reason)).firstMatch.exists,
-                      "the probe's failure reason is missing")
+        XCTAssertTrue(row.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", reason)).firstMatch.exists,
+                      "the probe's failure reason is missing from \(rowID)")
+        if expected == "model_error" {
+            let first = app.descendants(matching: .any)["checklist.first_message"].firstMatch
+            XCTAssertFalse(first.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", reason)).firstMatch.exists,
+                           "another row must not claim the model row's failure")
+        }
         if expected == "slow" {
             XCTAssertGreaterThan(Date.now.timeIntervalSince(began), 30, "the mock really outlasted the old client timeout")
         }

@@ -81,9 +81,10 @@ struct OnboardingChecklistView: View {
                     .padding(.top, Theme.Space.l)
                     VStack(spacing: Theme.Space.s) {
                         ForEach(OnboardingChecklistModel.rows(readiness)) { row in
-                            ChecklistRow(row: row, busy: row.id == "first_message" && store.probing,
-                                         probe: row.id == "first_message" ? store.probe : nil,
-                                         probeError: row.id == "first_message" ? store.probeError : nil) { action in
+                            let ownsProbe = store.probeStep == row.id
+                            ChecklistRow(row: row, busy: ownsProbe && store.probing,
+                                         probe: ownsProbe ? store.probe : nil,
+                                         probeError: ownsProbe ? store.probeError : nil) { action in
                                 run(action, row: row)
                             }
                         }
@@ -142,7 +143,7 @@ struct OnboardingChecklistView: View {
 
     private func run(_ action: String, row: OnboardingChecklistModel.Row) {
         if action == "test_assistant" {
-            Task { await store.refresh(api: model.api, probe: true) }
+            Task { await store.refresh(api: model.api, probe: true, probeStep: row.id) }
             return
         }
         let machine = row.machine.flatMap { id in model.machines.first { $0.id == id }?.name } ?? readiness?.machine?.name
@@ -189,6 +190,7 @@ private struct ChecklistRow: View {
                             Button { run(a) } label: { Text(t).font(Theme.Font.secondaryStrong).lineLimit(1).minimumScaleFactor(0.8) }
                                 .buttonStyle(.borderless)
                                 .foregroundStyle(Theme.accent)
+                                .disabled(busy)
                         }
                     }
                     .padding(.top, Theme.Space.xs)
