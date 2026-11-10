@@ -691,9 +691,12 @@ nonisolated extension APIClient {
         var views: [String: ExtensionAssistantView]?
         var viewActions: [String: ExtensionViewAction]?
         var viewBlocks: [String]?
+        /// nil: legacy hub; empty: the frozen recovery window is complete.
+        var nextCursor: String?
 
         enum CodingKeys: String, CodingKey {
             case items, plans, views
+            case nextCursor = "next_cursor"
             case viewActions = "view_actions"
             case viewBlocks = "view_blocks"
         }
@@ -724,10 +727,15 @@ nonisolated extension APIClient {
     }
 
     /// A conversation's feed after `since` (nil: all of it), with the plans its `plan` items name.
-    func feed(conversation: String, since: Date? = nil) async throws -> FeedResponse {
+    func feed(conversation: String, since: Date? = nil, cursor: String? = nil) async throws -> FeedResponse {
         let id = conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))) ?? conversation
-        var query: [String: String] = [:]
-        if let since { query["since"] = Self.feedTime.string(from: since) }
+        var query: [String: String]
+        if let cursor {
+            query = ["cursor": cursor]
+        } else {
+            query = ["paginate": "1"]
+            if let since { query["since"] = Self.feedTime.string(from: since) }
+        }
         return try await get("/api/v1/assistant/conversations/\(id)/feed", query: query)
     }
 

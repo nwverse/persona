@@ -44855,6 +44855,14 @@
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "无法恢复草稿：%@" } }
       }
     },
+    "Task updates aren't fully loaded. Refresh to continue.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Task updates aren't fully loaded. Refresh to continue." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "タスクの更新をすべて読み込めませんでした。再読み込みして続けてください。" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "任务更新尚未完整载入，请刷新后继续。" } }
+      }
+    },
     "Draft dismissed. Nothing was sent.": {
       "extractionState": "manual",
       "localizations": {
