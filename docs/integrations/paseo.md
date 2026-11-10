@@ -154,12 +154,12 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
   - If Paseo does not finish creation within 25 seconds, return the session row first and keep waiting in the background.
   - **Agent MCP tools** (#3655): the bridge reads the node's `mcp.json` (the one terminal Agents load) at each creation and puts its stdio servers (`personad mcp`) into the request's `config.mcpServers`.
     The tool list is the hub's, as for terminal Agents: it decides per computer (personal machine: phone, connector and agent tools; work machine: agent tools only), and the bridge adds no filter.
-    Each server's environment gets `PERSONA_SESSION_ID` set to that Agent's own `persona.session` label (`paseo-<agent id>`), not the provider's session ID, so `report_to_supervisor` and the other
+    Each server's environment gets `PERSONA_SESSION_ID` set to that Agent's own `persona.session` label (`paseo-<uuid>`, from the first Paseo agent ID of that start), not the provider's session ID, so `report_to_supervisor` and the other
     tools resolve the same task link as for terminal Agents. Paseo keeps `mcpServers` when it reloads the Agent. If `mcp.json` is missing or has no stdio server, the Agent is created without the tools and the bridge logs why.
     Only new Agents are given them: taken-over sessions (`import_agent`) and Agents created in Paseo itself are left as they are.
     A provider that takes no MCP servers makes Paseo 0.13 refuse the creation (`Provider '<name>' does not support MCP servers`). The bridge then creates the Agent again, once, without `mcpServers`,
-    as before this feature, and logs it; no other creation error is retried. The retry has a new Paseo agent ID but the same Persona session ID (`persona.session` label, `PERSONA_SESSION_ID`) as the first request,
-    so the row the phone already got stays the Agent's. By Paseo 0.13.2's code each creation request leaves a record under `creations/` in its home that claims its agent ID; the refused request's record stays (failed, no Agent registered), which is why the retry cannot reuse the ID. The bridge does not clean it up.
+    as before this feature, and logs it; no other creation error is retried. The retry simply uses a new Paseo agent ID, but keeps the same Persona session ID (`persona.session` label, `PERSONA_SESSION_ID`) as the first request,
+    so the row the phone already got stays the Agent's. Paseo keeps a record of each creation request under `creations/` in its home; the refused request's record stays (failed, no Agent registered), and the bridge does not clean it up.
 - **Take over**: use Paseo's `import_agent`, choosing the provider used by the most recent Agent running Claude Code on that computer.
   Set the `persona.session` label to the original session ID; archived Paseo Agents are restored.
 

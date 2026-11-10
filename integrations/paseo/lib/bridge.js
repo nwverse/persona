@@ -658,8 +658,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // the tools' PERSONA_SESSION_ID and the listed session are all it, whichever Paseo agent ends up holding it.
     let agentId = randomUUID()
     const sessionId = `${RUNTIME}-${agentId}`
-    // One creation request. A Paseo agent id is used for one only: Paseo keeps a record of a failed creation under its
-    // agent id, and another request for the same id would meet it.
+    // One creation request, under a Paseo agent id of its own (the retry's is new; the Persona session stays).
     const attempt = (withTools) => {
       const mcpServers = withTools ? personaMcpServers(options.mcpConfig, sessionId, log) : undefined
       const req = { agentId, config: mcpServers ? { ...config, mcpServers } : config, labels: { [SESSION_LABEL]: sessionId } }
