@@ -128,6 +128,8 @@ type Service struct {
 	fbot       feishuBook        // feishu.go
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
+	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
+	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
@@ -177,6 +179,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.reporterRoutes()
+	s.directionRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()
@@ -272,6 +275,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if source != nil {
 				p["message_source"] = source
 				p["text"] = prompts.MessageSourceText(text, source)
+			}
+		}
+	}
+	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
+		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
+		if name, _ := p["launcher"].(string); name != "" {
+			if err := s.launcherScopeErr(ctx, device, name); err != nil {
+				return err
 			}
 		}
 	}
@@ -436,6 +447,7 @@ func (s *Service) publish(ctx context.Context) {
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
 		s.logf("assistant: snapshot: %v", err)
 	}
+	s.directionsSoon() // a leader, its title or its tasks may have changed (directions.go)
 }
 
 func (s *Service) Resync(ctx context.Context) { s.publish(ctx) }
@@ -467,6 +479,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
+	}
+	directions, ok := s.directionViews(ctx)
+	snap.Partial = snap.Partial || !ok
+	leadersAt := s.settings(ctx).MachineID // a leader conversation is on the assistant's machine
+	for id, d := range directions {
+		view(id, leadersAt).Direction = d
 	}
 	snap.Tasks = s.taskViews(ctx)
 	snap.Partial = snap.Partial || snap.Tasks == nil

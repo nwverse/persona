@@ -12,6 +12,7 @@ import { useMailAccounts } from "../../lib/mail";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick } from "../../lib/router";
+import { openedItemState } from "../../lib/inbox-nav";
 import { useInboxSources } from "../../lib/inbox-sources";
 import { type Manager } from "../../lib/managers";
 import { scoped, useScope, useScoped } from "../../lib/current-assistant";
@@ -671,7 +672,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
       ) : off ? (
         <div inert className="flex gap-3 rounded-[14px] p-3">{head}</div>
       ) : (
-        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} aria-current={selected ? "page" : undefined} className="flex gap-3 rounded-[14px] p-3 outline-offset-[-2px]">{head}</a>
+        <a href={href(to)} onClick={(e) => onLinkClick(e, to, openedItemState())} aria-current={selected ? "page" : undefined} className="flex gap-3 rounded-[14px] p-3 outline-offset-[-2px]">{head}</a>
       )}
       {(first || draft || working || mark) && (
         <div inert={picking} className={cx("-mt-1 flex flex-col gap-2 pr-3 pb-3", pick ? "pl-[92px]" : "pl-[64px]")}>

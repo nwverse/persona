@@ -194,3 +194,35 @@ func TestAssistantLauncherPickerUsesTargetMachine(t *testing.T) {
 		t.Fatalf("picker used the current assistant's machine instead of the target: %v", names)
 	}
 }
+
+func TestAssistantLauncherMessagesProviderScope(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.sessions["other"] = nil
+	f.launcherList = []proto.Launcher{{Name: "claude", Source: "zshrc"}}
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{
+		Name: "restricted-messages", Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: "restricted-default",
+		Share: shareSelected, ScopeMachines: []string{"other"},
+	}})
+	if p := purposeOf(t, s, "assistant"); slices.Contains(p.ProviderIDs, "launcher.restricted-messages") {
+		t.Fatal("assistant purpose accepted a provider outside its machine scope")
+	}
+	for _, machine := range []string{"server", "other"} {
+		r := request(s, http.MethodGet, "/api/v1/machines/"+machine+"/launchers?purpose=assistant", "")
+		if r.Code != http.StatusOK {
+			t.Fatalf("%s picker: %d %s", machine, r.Code, r.Body.String())
+		}
+		var out struct {
+			Launchers []ConfiguredLauncher `json:"launchers"`
+		}
+		if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		found := slices.ContainsFunc(out.Launchers, func(l ConfiguredLauncher) bool { return l.Name == "restricted-messages" })
+		if found != (machine == "other") {
+			t.Fatalf("%s picker ignored provider scope: %+v", machine, out.Launchers)
+		}
+	}
+	if change, err := s.setLauncher(context.Background(), json.RawMessage(`"restricted-messages"`)); err == nil || change != nil {
+		t.Fatalf("out-of-scope provider prepared a setting change: change=%+v err=%v", change, err)
+	}
+}

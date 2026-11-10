@@ -174,7 +174,9 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 		return nil, err
 	}
 	hidden := s.hiddenLaunchers(ctx)
-	managed := s.storedLaunchers(ctx)
+	// Only the providers in this computer's scope: one out of it is not named to the node, whose own launcher by
+	// that name (if any) is what runs there.
+	managed := slices.DeleteFunc(slices.Clone(s.storedLaunchers(ctx)), func(m storedLauncher) bool { return !s.usableOn(ctx, m, machine) })
 	out := make([]proto.Launcher, 0, len(res.Launchers)+len(managed))
 	for _, envelope := range res.Launchers {
 		l := proto.Launcher(envelope)
@@ -211,7 +213,7 @@ func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]Con
 	stored := s.storedLaunchers(ctx)
 	allowed := map[string]bool{}
 	for _, v := range s.modelProviders(ctx) {
-		if name, ok := strings.CutPrefix(v.ID, "launcher."); ok && !v.Hidden && modelProviderCompatible(p, v, stored) {
+		if name, ok := strings.CutPrefix(v.ID, "launcher."); ok && !v.Hidden && s.modelProviderCompatible(p, v, stored) {
 			allowed[name] = true
 		}
 	}
@@ -229,7 +231,7 @@ func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]Con
 	}
 	// Ordinary Agent lists omit direct API providers; Messages providers are already sent to nodes as launchers.
 	for _, l := range stored {
-		if l.Kind == "api" && allowed[l.Name] && !seen[l.Name] {
+		if l.Kind == "api" && allowed[l.Name] && !seen[l.Name] && s.usableOn(ctx, l, machine) {
 			out = append(out, ConfiguredLauncher{Launcher: proto.Launcher{Name: l.Name, BaseURL: l.BaseURL, Model: l.Model, Source: "persona"}, AgentType: "claude"})
 		}
 	}
