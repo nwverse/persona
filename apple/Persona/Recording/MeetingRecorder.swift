@@ -28,6 +28,7 @@ import UserNotifications
         guard !started else { return }
         started = true
         RecordingActivity.shared.start()
+        MinutesRelay.shared.start()
         capture.onInterruptionNotResumed = { MeetingRecorder.notifyPaused() }
         // A call that ended while the app was away (or never said so): coming back carries on, unless another app's audio
         // (a VoIP call without CallKit, still going) holds the route: taking the session would cut into that call.
@@ -144,11 +145,12 @@ import UserNotifications
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "recording-paused", content: content, trigger: nil))
     }
 
-    /// A watch recording's first segment or end arrived: one made during a calendar event is that meeting's (the watch
-    /// has no calendar). Recordings already named or tagged stay as they are.
+    /// A watch recording's first segment or end arrived: one made during a calendar event is that meeting's, named after
+    /// it (the watch has no calendar); a meeting started on the watch keeps being one without an event. Recordings
+    /// already named or matched stay as they are.
     static func tagWatchRecording(_ id: UUID, at date: Date) {
-        guard let entry = RecordingLibrary.shared.entry(id), entry.meeting == nil, entry.title.isEmpty,
-              let meeting = MeetingCalendar.meeting(at: date) else { return }
+        guard let entry = RecordingLibrary.shared.entry(id), entry.meeting?.eventID == nil, entry.meeting?.title == nil,
+              entry.title.isEmpty, let meeting = MeetingCalendar.meeting(at: date) else { return }
         RecordingLibrary.shared.change(id) { entry in
             entry.title = meeting.title ?? ""
             entry.meeting = meeting
