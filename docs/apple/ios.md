@@ -616,11 +616,12 @@ One App for iPhone and iPad (`TARGETED_DEVICE_FAMILY` 1,2). Previously only 1, g
 
 ## Home-screen quick actions (#3199)
 
-Long-press the Persona icon: "New chat", "Agents", "Inbox" (`Persona/App/QuickActions.swift`), aligned with Android shortcuts and web manifest shortcuts. Set `shortcutItems` once at launch, identical for everyone, not updated with state.
+Long-press the Persona icon: the last two conversations opened on this device, then "New chat" and "Inbox" (`Persona/App/QuickActions.swift`). The system shows four at most, so "Agents" is not among them since #2191 (the tab bar has it).
 
-- Navigation only: Agents switches to Agents, Inbox pushes onto the assistant, New chat follows the drawer's New chat route (`ShellState.show(.newConversation)`), returning already-pushed pages such as Inbox to the root. Without hub pairing, remain on Welcome.
+- **Recently opened** (#2191, `Persona/App/RecentChats.swift`): every chat that comes on screen (`AppModel.visibleSession`, an Agent's or a Persona conversation) goes first in a list of ten `SessionKey.path`s kept in `StateCache` (`recent-chats`; keys only, never a title or a message; never sent to a hub). The rules are shared with the web's ⌘K (`spec/fixtures/recents/README.md`). The menu lists the newest two the app still has, title and "computer · folder" (or "Persona"), with `Theme.Icon.recent`; tapped, it opens like a notification (`AppModel.open`). `shortcutItems` is set at launch, when a new conversation is opened and when the app goes to the background (the titles as they are then).
+- Navigation only: Inbox pushes onto the assistant, New chat follows the drawer's New chat route (`ShellState.show(.newConversation)`), returning already-pushed pages such as Inbox to the root. Without hub pairing, remain on Welcome.
 - If the App is open or backgrounded, use the scene delegate's `windowScene(_:performActionFor:)`; on cold launch the item comes through scene connectionOptions. `QuickActionSceneDelegate` handles only these two entry points; SwiftUI still manages the window.
-- `QuickActionsTests` long-presses the home-screen icon and taps all three items. Cold launch is untested: SpringBoard launch cannot pass demo-mode arguments. Each simulator return to the home screen waits about 60 seconds for SpringBoard idle; the whole test takes about 7 minutes.
+- `QuickActionsTests` opens a demo chat, long-presses the home-screen icon, finds that chat on the menu (and no Agents) and taps it, then Inbox and New chat; `RecentChatsTests` runs the shared fixture. Cold launch is untested: SpringBoard launch cannot pass demo-mode arguments. Each simulator return to the home screen waits about 60 seconds for SpringBoard idle; the whole test takes about 7 minutes.
 
 ## Share to Persona (#4586)
 

@@ -32,9 +32,10 @@ shows them first (`web/src/lib/recent-chats.ts`) and the iPhone's home screen me
 
 ## An entry
 
-A string, the conversation's key: `s:<machine>/<session>` for an Agent's conversation, `j:<session>` for one of Persona's.
-`<machine>` is the client's machine key, as for a setup above. Only keys are kept, never a title or a message; on the
-device, per hub; never sent to the hub or synced.
+A string, the conversation's key as the client keys it; the rules compare keys only. The web: `s:<machine>/<session>`
+for an Agent's conversation, `j:<session>` for one of Persona's (⌘K's row keys). Apple: `SessionKey.path`
+(`[<hub group>|]<machine>/<session>`, a Persona conversation as well). Only keys are kept, never a title or a message;
+on the device, per hub; never sent to the hub or synced.
 
 ## Rules
 
