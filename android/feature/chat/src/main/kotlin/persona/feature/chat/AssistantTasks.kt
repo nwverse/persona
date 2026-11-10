@@ -117,6 +117,8 @@ internal class AssistantTaskHost(
     /** Original records remain inspectable from Progress, never discarded by the conversation projection. */
     val backgroundRecords: List<persona.core.domain.lines.ChatLine> = emptyList(),
     val onOpenBackground: (() -> Unit)? = null,
+    /** The conversation's own manager (its session row), for a plan's Start / Don't start; null: not known. */
+    val manager: String? = null,
 ) {
     /** Each session's first card ([firstBySession]). */
     val cards: Map<SessionKey, persona.core.contracts.Interaction> by lazy { pending.firstBySession() }
@@ -465,18 +467,18 @@ internal fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JButton(if (plan.tasks.size > 1) pluralStringResource(R.plurals.chat_tasks_plan_start_count, plan.tasks.size, plan.tasks.size)
-                    else stringResource(R.string.chat_tasks_plan_start), { host.tasks.startPlan(plan, remember, host.onError) },
+                    else stringResource(R.string.chat_tasks_plan_start), { host.tasks.startPlan(plan, remember, host.onError, manager = host.manager) },
                     Modifier.weight(1f), size = JButtonSize.Medium, loading = plan.id in busy)
                 JButton(stringResource(R.string.chat_plan_edit), { editing = true }, kind = JButtonKind.Secondary, size = JButtonSize.Medium,
                     enabled = plan.id !in busy)
-                JButton(stringResource(R.string.chat_tasks_plan_dismiss), { host.tasks.dismissPlan(plan, host.onError) }, kind = JButtonKind.Secondary, size = JButtonSize.Medium,
+                JButton(stringResource(R.string.chat_tasks_plan_dismiss), { host.tasks.dismissPlan(plan, host.onError, host.manager) }, kind = JButtonKind.Secondary, size = JButtonSize.Medium,
                     enabled = plan.id !in busy)
             }
         }
     }
     // The sheet closes when the started plan comes back; a failed start leaves it open with its edits (#5312).
     if (editing) PlanEditSheet(plan, host, onDismiss = { editing = false }, starting = plan.id in busy) { edits ->
-        host.tasks.startPlan(plan, remember, host.onError, edits)
+        host.tasks.startPlan(plan, remember, host.onError, edits, host.manager)
     }
 }
 
