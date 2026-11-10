@@ -14,7 +14,8 @@ import (
 // archived with the archive the apps use (agent_archives.go): reversible, nothing is deleted, it is listed under
 // Archived, and a message to it restores and resumes it as ever.
 //
-// Never archived (autoArchivable): a session still running in a tab, or working, starting or with background work; one
+// Never archived (autoArchivable): a session still in a host (a pane or an engine host, whatever state the host
+// reads), or working, starting or with background work; one
 // with a card waiting or queued input; one the manager is to wake or continue (session_work); one linked to an open
 // to-do; an assistant conversation; a review's reviewer; a subagent's row; a session another tool owns (its archive
 // would also move it in that tool); with no to-do, one whose last words ask the user something.
@@ -84,9 +85,24 @@ func (s *Service) sessionLinks() sessionLinks {
 	return l
 }
 
-// sessionClosed: c's tab is gone: it runs in no host, and only its transcript is listed.
+// sessionClosed: c's tab is gone: it runs in no host (no pane, no engine host), is not working or starting, and only
+// its transcript is listed.
+//
+// The status does not say so. A closed session often reads `interrupted`, not `offline`: when a node restarts, it
+// marks the offline rows Persona had started in a pane before that boot as interrupted, so the apps offer "Continue"
+// (node interrupted.go), and the mark stays until a message resumes the session. The unified state has no case for
+// that status, so those rows read `unknown` (agentState, fleet.go). A row can also keep the `idle` or `unknown` its
+// host last said after the pane went. So `unknown` means "the host cannot tell" only while there is a host or a pane.
+//
+// A session another tool lists (SourceKind) never has a pane of ours: it is closed only when that tool says offline.
 func sessionClosed(c proto.Session) bool {
-	return c.Status == proto.StatusOffline && c.PaneID == ""
+	if c.PaneID != "" || c.Host != "" || c.Starting {
+		return false
+	}
+	if c.Status == proto.StatusWorking || c.Status == proto.StatusBlocked || c.State == proto.StateWorking {
+		return false
+	}
+	return c.SourceKind == "" || c.Status == proto.StatusOffline
 }
 
 // wakePending: the manager is to act on c by itself (a wake to check, a "Continue"), or c waits on something the
@@ -106,7 +122,7 @@ func autoArchivable(c proto.Session, now time.Time, idle time.Duration, onOpenTo
 		return false
 	case !sessionClosed(c) || c.UpdatedAt.IsZero():
 		return false
-	case agentCloseBusy(c) || c.State == proto.StateUnknown:
+	case agentCloseBusy(c):
 		return false // working, starting, a card waiting, queued input, background work
 	case wakePending(c):
 		return false

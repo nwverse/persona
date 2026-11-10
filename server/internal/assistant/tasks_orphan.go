@@ -62,8 +62,8 @@ func agentGone(a orphanAgent, now time.Time) string {
 	switch {
 	case c.Assistant || c.Starting:
 		return ""
-	case c.Status != proto.StatusOffline:
-		return "" // open in a tab: stopped or working, the task's other states say which
+	case !sessionClosed(c):
+		return "" // in a host (stopped or working, the task's other states say which), or working
 	case c.State == proto.StateNeedsYou || c.PendingInteractions > 0 || len(c.Queued) > 0:
 		return "" // a card waits for the user, or input waits to go in
 	case wakePending(c) || usageLimitWaiting(c, now):

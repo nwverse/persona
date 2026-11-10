@@ -32,6 +32,25 @@ func TestAgentGone(t *testing.T) {
 		{"computer offline", func(a *orphanAgent) { a.reachable = false }, orphanOffline},
 		{"no longer listed", func(a *orphanAgent) { a.listed = false }, orphanClosed},
 		{"open in a tab, stopped", func(a *orphanAgent) { a.c.Status, a.c.PaneID = proto.StatusIdle, "w1:p1" }, ""},
+		{"in a host without a pane", func(a *orphanAgent) { a.c.Status, a.c.State, a.c.Host = proto.StatusIdle, proto.StateIdle, "paseo" }, ""},
+		{"state unknown in a pane", func(a *orphanAgent) {
+			a.c.Status, a.c.State, a.c.PaneID = proto.StatusUnknown, proto.StateUnknown, "w1:p1"
+		}, ""},
+		// Closed is no host and no pane, whatever the status says (sessionClosed).
+		{"hostless, interrupted / unknown", func(a *orphanAgent) { a.c.Status, a.c.State = proto.StatusInterrupted, proto.StateUnknown }, orphanClosed},
+		{"hostless, idle / idle", func(a *orphanAgent) { a.c.Status, a.c.State = proto.StatusIdle, proto.StateIdle }, orphanClosed},
+		{"hostless, unknown / unknown", func(a *orphanAgent) { a.c.Status, a.c.State = proto.StatusUnknown, proto.StateUnknown }, orphanClosed},
+		{"hostless, interrupted, after a model error", func(a *orphanAgent) {
+			a.c.Status, a.c.State, a.c.TurnError = proto.StatusInterrupted, proto.StateUnknown, "API Error: 400 invalid request"
+		}, orphanError},
+		{"hostless, interrupted, a wake is due", func(a *orphanAgent) {
+			a.c.Status, a.c.State = proto.StatusInterrupted, proto.StateUnknown
+			a.c.Work = &proto.WorkState{Phase: proto.WorkDone, WakeAt: &wake}
+		}, ""},
+		{"hostless, interrupted, a continue is pending", func(a *orphanAgent) {
+			a.c.Status, a.c.State, a.c.TurnError = proto.StatusInterrupted, proto.StateUnknown, "overloaded"
+			a.c.Work = &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, WakeAt: &wake}
+		}, ""},
 		{"working", func(a *orphanAgent) { a.c.Status, a.c.State = proto.StatusWorking, proto.StateWorking }, ""},
 		{"starting", func(a *orphanAgent) { a.c.Starting = true }, ""},
 		{"assistant conversation", func(a *orphanAgent) { a.c.Assistant = true }, ""},
