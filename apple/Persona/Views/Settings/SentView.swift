@@ -3,7 +3,7 @@ import SwiftUI
 // Settings › Connectors › Records sent as you (#5278, docs/extensions/connectors.md "Sent as the user"): what Persona wrote in the user's name through the
 // connectors, newest first. A row has the connector, where it went, how long ago, the first lines of what it said, how the
 // gate let it through (orange where the user did not decide) and the chat that asked, which opens. A row opens a sheet with
-// every field and the whole text. Load Earlier follows `next`; the chips (Lark and the connectors the loaded rows show)
+// every field and the whole text, and Recall… when the hub can take the message back (#3219). Load Earlier follows `next`; the chips (Lark and the connectors the loaded rows show)
 // filter by connector. The logic and the words are in SentModel.swift; the web page is SentSettings.tsx.
 
 /// The badge of how a send was let through: neutral, or orange where the user did not decide.
@@ -43,7 +43,7 @@ struct SentView: View {
         .macRefreshes { await page.load() } // ⌘R: no pull to refresh on the Mac
         #endif
         .sheet(item: $detail) { item in
-            SentDetailSheet(item: item, openChat: openChat)
+            SentDetailSheet(opened: item, page: page, openChat: openChat)
         }
     }
 
@@ -191,6 +191,10 @@ private struct SentRow: View {
 
             FlowLayoutRow(spacing: Theme.Space.s) {
                 SentBadge(allowed: allowed)
+                if item.recalledAt != nil {
+                    Chip(text: String(localized: "Recalled"), look: .neutral, shrinks: true)
+                        .accessibilityIdentifier("sent.recalled.\(item.id)")
+                }
                 if !origin.extensionID.isEmpty {
                     Chip(text: String(localized: "Extension-reported"), look: .neutral, shrinks: true)
                     Text(origin.extensionID).font(Theme.Font.code).foregroundStyle(.secondary).lineLimit(1)
@@ -233,15 +237,22 @@ private struct SentFact<Value: View>: View {
 }
 
 /// One send in full: when, the action, every field of the target, how it was let through (the rule, the card), the chat, the
-/// message id when there is one and the whole text, which can be copied.
+/// message id when there is one, when it was recalled, the whole text, which can be copied, and Recall when the hub can take
+/// the message back.
 private struct SentDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
-    var item: SentItem
+    /// The row as it was when the sheet opened; the sheet follows the list's copy of it (a recall changes it).
+    var opened: SentItem
+    var page: SentModel
     var openChat: (String, String) -> Void
     /// The copy button says Copied for a moment: in the sheet itself, as the app's toast can sit under a sheet on the Mac.
     @State private var copied = false
+    @State private var askingRecall = false
+
+    private var item: SentItem { page.items?.first { $0.id == opened.id } ?? opened }
 
     var body: some View {
+        let item = self.item
         let name = SentText.connectorName(item.connector)
         let fields = SentText.targetFields(item.target)
         let allowed = SentText.allowedBy(item.letThrough)
@@ -307,7 +318,14 @@ private struct SentDetailSheet: View {
                             Text(item.messageRef).font(Theme.Font.code).textSelection(.enabled)
                         }
                     }
+                    if let recalled = item.recalledAt {
+                        SentFact(title: String(localized: "Recalled")) {
+                            Text(recalled.formatted(date: .abbreviated, time: .standard)).font(Theme.Font.body)
+                        }
+                        .accessibilityIdentifier("sent.detail.recalledAt")
+                    }
                 }
+                recallSection(item, name: name)
                 Section {
                     if item.text.isEmpty {
                         Text("No text recorded").foregroundStyle(.secondary)
@@ -340,6 +358,13 @@ private struct SentDetailSheet: View {
                 }
             }
             .themedPage()
+            // The row's id is the sheet's own (`opened`): the alert never rereads a selection that may have gone.
+            .alert("Recall this message?", isPresented: $askingRecall) {
+                Button("Cancel", role: .cancel) {}
+                Button("Recall", role: .destructive) { Task { await page.recall(opened.id) } }
+            } message: {
+                Text("It is taken back through \(name) and removed for everyone who can see it. This can't be undone.")
+            }
             .navigationTitle(name)
             #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -362,6 +387,34 @@ private struct SentDetailSheet: View {
         .presentationDragIndicator(.visible)
         #endif
         .accessibilityIdentifier("sent.detail")
+    }
+
+    /// Recall…: only when the hub says the message can be taken back (or a recall of it just failed, to keep its reason),
+    /// asked once in an alert, then `confirm: true` goes to the hub.
+    @ViewBuilder private func recallSection(_ item: SentItem, name: String) -> some View {
+        let error = page.recallError?.id == item.id ? page.recallError?.text : nil
+        if item.recalledAt == nil, item.canRecall || error != nil {
+            let busy = page.recalling == item.id
+            Section {
+                if item.canRecall {
+                    Button(role: .destructive) { askingRecall = true } label: {
+                        HStack(spacing: Theme.Space.m) {
+                            Label("Recall…", systemImage: Theme.Icon.undo).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if busy { ProgressView() }
+                        }
+                    }
+                    .modifier(SettingsButtonLook())
+                    .tint(Theme.danger)
+                    .disabled(page.recalling != nil)
+                    .accessibilityIdentifier("sent.detail.recall")
+                }
+                if let error {
+                    Text(error).font(Theme.Font.label).foregroundStyle(Theme.danger)
+                        .accessibilityIdentifier("sent.detail.recall.error")
+                }
+            }
+        }
     }
 
     /// Copied goes back to Copy Text after a moment (a method: a multi-line closure in the modifier chain slows the type-check).

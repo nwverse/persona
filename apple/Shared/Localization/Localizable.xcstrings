@@ -216,6 +216,50 @@
         }
       }
     },
+    "It is taken back through %@ and removed for everyone who can see it. This can't be undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It is taken back through %@ and removed for everyone who can see it. This can't be undone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 経由で取り消され、表示できるすべての人から削除されます。元に戻せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将通过 %@ 撤回，所有能看到它的人都将看不到它，且无法恢复。"
+          }
+        }
+      }
+    },
+    "It isn't known whether the message was removed. Try again to check." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It isn't known whether the message was removed. Try again to check."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージが削除されたかどうか分かりません。もう一度試して確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不确定消息是否已被删除。可以再试一次确认。"
+          }
+        }
+      }
+    },
     "Key Points" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -572,6 +616,28 @@
         }
       }
     },
+    "Only one of your own devices with full access can recall a message." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only one of your own devices with full access can recall a message."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージを取り消せるのは、フルアクセスを持つ自分のデバイスだけです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有你自己的、拥有完整权限的设备才能撤回消息。"
+          }
+        }
+      }
+    },
     "Open Questions" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -647,6 +713,72 @@
         "en": { "stringUnit": { "state": "translated", "value": "Pending deletions have not been removed from Knowledge yet." } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "待删除内容尚未从知识库移除。" } },
         "ja": { "stringUnit": { "state": "translated", "value": "削除待ちの内容は、まだナレッジから削除されていません。" } }
+      }
+    },
+    "Recall" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recall"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回"
+          }
+        }
+      }
+    },
+    "Recall this message?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recall this message?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージを取り消しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回这条消息？"
+          }
+        }
+      }
+    },
+    "Recall…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recall…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取り消す…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回…"
+          }
+        }
       }
     },
     "Record a Meeting" : {
@@ -977,6 +1109,28 @@
         "ja": { "stringUnit": { "state": "translated", "value": "このコンピューターとの接続が切れました。再接続して、直前の操作が反映されたか確認してから再試行してください。" } }
       }
     },
+    "The connector is off, signed out or offline. Turn it on or sign in, then try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The connector is off, signed out or offline. Turn it on or sign in, then try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コネクタがオフ、未サインイン、またはオフラインです。オンにするかサインインしてから再試行してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接器已关闭、未登录或离线。请打开或登录后再试。"
+          }
+        }
+      }
+    },
     "The hub is turning the transcript into key points, decisions, action items and open questions." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1022,6 +1176,28 @@
         "en": { "stringUnit": { "state": "translated", "value": "The manager is offline or restarting. Try again shortly." } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "管理者不在线或正在重启，请稍后重试。" } },
         "ja": { "stringUnit": { "state": "translated", "value": "マネージャーはオフラインか再起動中です。しばらくしてから再試行してください。" } }
+      }
+    },
+    "The message was not recalled: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message was not recalled: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メッセージは取り消されませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息没有撤回：%@"
+          }
+        }
       }
     },
     "The minutes couldn't be written." : {
@@ -1078,12 +1254,144 @@
         }
       }
     },
+    "This hub runs without a database, so it can't recall messages." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub runs without a database, so it can't recall messages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブはデータベースなしで動作しているため、メッセージを取り消せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 没有数据库，不能撤回消息。"
+          }
+        }
+      }
+    },
+    "This hub's version can't recall messages. Update the hub and try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub's version can't recall messages. Update the hub and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブのバージョンはメッセージの取り消しに対応していません。ハブを更新してから再試行してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 的版本还不能撤回消息。请升级 hub 后再试。"
+          }
+        }
+      }
+    },
     "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.": {
       "extractionState": "manual",
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "This manager has turned off the knowledge base. Enable it in the manager configuration to use it." } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "此管理者已关闭知识库。请在管理者配置中启用后使用。" } },
         "ja": { "stringUnit": { "state": "translated", "value": "このマネージャーのナレッジは無効です。利用するにはマネージャーの設定で有効にしてください。" } }
+      }
+    },
+    "This message can't be recalled." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This message can't be recalled."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージは取り消せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息不能撤回。"
+          }
+        }
+      }
+    },
+    "This message is too old to recall now." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This message is too old to recall now."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージは送信から時間が経ちすぎているため、取り消せません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息发出太久，已不能撤回。"
+          }
+        }
+      }
+    },
+    "This message was already recalled." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This message was already recalled."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージはすでに取り消されています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息已经撤回过了。"
+          }
+        }
+      }
+    },
+    "This record is no longer on the hub." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This record is no longer on the hub."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この記録はハブにもうありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "hub 上已没有这条记录。"
+          }
+        }
       }
     },
     "To Start" : {
