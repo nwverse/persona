@@ -2319,7 +2319,7 @@ if "nas" in MANAGED_MACHINES and any(m["id"] == "nas" for m in MACHINES) and not
                          "备份改成增量了。", seen_at=ago(minutes=190)))
 # hub-assistant_link.offline (zh-Hans): what the hub puts in an offline manager's computers' error
 MANAGER_OFFLINE_ERROR = "助手暂时连不上，稍后再试"
-MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2"}
+MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2", "lark:f2:200": "m-3fa21c", "mail:acc1:t4:504": "m-3fa21c"}
 # extensions / plugins / connectors of the other managers: by position among the ones not built in. The built-ins
 # (source "builtin": cua, ego, imessage, voice…) are every manager's own, as each one's extmgr adds them (extensions.go
 # AddBuiltin), so the merged list has them once per installed manager.

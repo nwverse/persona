@@ -148,6 +148,7 @@ class MockHubManagersTests(unittest.TestCase):
         for mid in ("assistant", "m-3fa21c"):
             self.assertEqual(managers[mid].get("inbox_needs_you"), counts.get(mid, 0), mid)
         self.assertGreater(managers["assistant"]["inbox_needs_you"], 0)
+        self.assertGreater(managers["m-3fa21c"]["inbox_needs_you"], 0)  # the other manager's badge has something to show
         for mid in ("m-8b04d2", "m-c1e9f0"):  # offline, installing
             self.assertNotIn("inbox_needs_you", managers[mid], mid)
         mine = next(x for x in items if x["manager"] == "assistant" and needs_you(x))
