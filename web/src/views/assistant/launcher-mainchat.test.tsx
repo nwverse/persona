@@ -32,8 +32,8 @@ import { t } from "../../i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const session = { machine_id: "devbox", session_id: "s-main-chat", assistant: true, agent: "claude" } as unknown as Session;
-const key = "devbox/s-main-chat";
+const session = { machine_id: "workstation", session_id: "s-main-chat", assistant: true, agent: "claude" } as unknown as Session;
+const key = "workstation/s-main-chat";
 let host: HTMLDivElement;
 let root: Root;
 
@@ -80,7 +80,7 @@ describe("Persona chat launcher menu", () => {
   });
 
   it("drops the new-conversation page's pick the menu no longer offers", async () => {
-    Object.assign(getState(), { assistant: { machine_id: "devbox", launcher: "claude", conversations: [] } });
+    Object.assign(getState(), { assistant: { machine_id: "workstation", launcher: "claude", conversations: [] } });
     pickLauncher(NEW_CONVERSATION, "codex-gw");
     await act(async () => root.render(<StarterLauncherChip />));
     expect(pickedLauncher(NEW_CONVERSATION)).toBeUndefined();
@@ -90,7 +90,7 @@ describe("Persona chat launcher menu", () => {
   });
 
   it("shows the launcher's own model, not the old one, for a conversation moved off a launcher it no longer offers", async () => {
-    Object.assign(getState(), { assistant: { machine_id: "devbox", launcher: "gw-claude", conversations: [] } });
+    Object.assign(getState(), { assistant: { machine_id: "workstation", launcher: "gw-claude", conversations: [] } });
     const side = { ...session, session_id: "s-side", launcher: "cc-relay", model: "kimi" } as unknown as Session;
     await act(async () => root.render(<AssistantLauncherChip session={side} />));
     await act(async () => host.querySelector<HTMLButtonElement>(`button[title="${t("assistant-assistantchat.launcher_chip_title")}"]`)!.click());

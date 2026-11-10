@@ -89,6 +89,9 @@ type Service struct {
 	// running is Run's context: it ends when the service stops (runCtx).
 	running atomic.Pointer[context.Context]
 
+	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
+	interrupts interruptBook
+
 	titles    titleBook     // titles.go
 	prefs     settingsBook  // profile.go
 	main      mainBook      // start.go

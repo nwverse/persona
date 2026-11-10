@@ -512,8 +512,8 @@ func TestFeishuPermissionCardOffersAlwaysOnlyWhereItWorks(t *testing.T) {
 	}
 }
 
-// planCardMarkdown is the plan's Markdown block on its card (the card's first Markdown element).
-func planCardMarkdown(t *testing.T, c *feishubot.Card) string {
+// cardMarkdown is a card's first Markdown element: the text it draws first.
+func cardMarkdown(t *testing.T, c *feishubot.Card) string {
 	t.Helper()
 	var m struct {
 		Body struct {
@@ -540,7 +540,7 @@ func TestFeishuPlanCardClipClosesItsCodeBlock(t *testing.T) {
 	ctx := i18n.With(context.Background(), i18n.En)
 	note := i18n.T(i18n.En, "assistant-feishu_cards.plan_clipped")
 	planCard := func(plan string) string {
-		return planCardMarkdown(t, s.interactionCard(ctx, proto.Interaction{ID: "ix_plan", Kind: proto.IxPlan, Plan: plan}))
+		return cardMarkdown(t, s.interactionCard(ctx, proto.Interaction{ID: "ix_plan", Kind: proto.IxPlan, Plan: plan}))
 	}
 	line := strings.Repeat("step ", 19) + "done\n" // 100 runes
 	// prose is n runes of whole lines.
