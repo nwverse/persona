@@ -171,6 +171,8 @@ type Node struct {
 	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
 	recoveries     map[string]*assistantTurnRecovery
 	recoveryClosed bool
+	// adoptedFailures: failures a handover carried here, resumed once this connection's session state is loaded.
+	adoptedFailures []adoptedFailure
 
 	// runtimes: agent runtimes without a terminal, connected on runtime.sock (runtimes.go); runtimeSock overrides the
 	// socket path (tests).
@@ -395,6 +397,7 @@ func (n *Node) startState(ctx context.Context, adopted []*assistantProc) {
 			close(n.stateMissed)
 		}
 		n.resumeAssistants(adopted)
+		n.resumeAdoptedFailures(ok)
 		if !ok && n.reloadState(ctx) {
 			n.ultracodeStateReloaded() // stored observations read in again; what was seen meanwhile of Persona's sessions written
 			close(n.stateReady)
