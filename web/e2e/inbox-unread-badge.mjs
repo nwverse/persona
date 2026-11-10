@@ -27,7 +27,10 @@ try {
       const make = (id, read, done = false) => ({ id, source: "mail", account: "example", account_name: "Example mail", kind: "mail", title: id,
         preview: "Synthetic message", tier: "action", read, count: 1, updated_at: "2026-11-10T08:00:00Z",
         ...(done ? { done_at: "2026-11-10T09:00:00Z" } : {}), mail: { account_id: "example", uids: [1] } });
-      let items = [make("Unread pending example", false), make("Read pending example", true), make("Read completed example", true, true)];
+      let items = [make("Unread pending example", false), make("Read pending example", true), make("Read completed example", true, true),
+        { ...make("Unread FYI example", false), tier: "fyi" },
+        { ...make("Unread noise example", false), tier: "noise" },
+        { ...make("Unread working example", false), status: "working" }];
       let socket;
       const writes = [];
       await context.route("**/api/v1/**", async (route) => {
@@ -39,7 +42,7 @@ try {
           writes.push({ path, method: request.method(), data });
           assert.equal(path, "/mail/messages/example/1/flags", "read must never file or hide an item");
           assert.equal(data.seen, true);
-          items = items.map((it) => ({ ...it, read: true }));
+          items = items.map((it) => it.id === "Unread pending example" ? { ...it, read: true } : it);
           body = { ok: true };
         } else if (path === "/inbox") body = { items };
         else if (path.startsWith("/mail/messages/")) body = { message: { uid: 1, subject: "Unread pending example", text: "Synthetic message body", seen: false, from: { email: "sender@example.com" } } };
@@ -72,7 +75,9 @@ try {
       await readResponse;
       await page.waitForFunction(() => [...document.querySelectorAll('a[href$="/inbox"]')].some((el) => el.textContent.trim() === "Inbox"));
       assert.equal(await nav.innerText(), "Inbox");
-      assert.equal(items.filter((it) => !it.done_at).length, 2);
+      assert.equal(items.filter((it) => !it.done_at).length, 5);
+      assert.equal(items.filter((it) => !it.done_at && it.tier === "action" && !it.status).length, 2);
+      assert.equal(items.filter((it) => !it.done_at && !it.read).length, 3);
       assert.equal(writes.length, 1);
       await page.screenshot({ path: join(values.out, `${theme}-read-zero.png`) });
       await page.reload();
@@ -80,7 +85,8 @@ try {
       assert.equal(await nav.innerText(), "Inbox");
       assert.equal(writes.length, 1, "reload must not file anything");
       await page.screenshot({ path: join(values.out, `${theme}-reload.png`) });
-      results.push({ theme, badgeBefore: 1, badgeAfterRead: 0, badgeAfterReload: 0, pendingItems: 2, completionWrites: 0, writes });
+      results.push({ theme, badgeBefore: 1, badgeAfterRead: 0, badgeAfterReload: 0,
+        needsYouItems: 2, retainedOpenItems: 5, unreadExcludedItems: 3, completionWrites: 0, writes });
     } finally { await context.close(); }
   }
   writeFileSync(join(values.out, "results.json"), JSON.stringify(results, null, 2) + "\n");

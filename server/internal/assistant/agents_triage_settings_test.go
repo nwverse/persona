@@ -4,15 +4,77 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
+type delayedTriageSettingsStore struct {
+	*memStore
+	started chan struct{}
+	resume  chan struct{}
+	first   atomic.Bool
+}
+
+func (st *delayedTriageSettingsStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	ok, err := st.memStore.Setting(ctx, key, out)
+	if key == triageSettingKey && st.first.CompareAndSwap(false, true) {
+		close(st.started)
+		select {
+		case <-st.resume:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	return ok, err
+}
+
+func TestTriageSettingsDelayedReadKeepsCompletedPut(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	st := &delayedTriageSettingsStore{memStore: &memStore{}, started: make(chan struct{}), resume: make(chan struct{})}
+	resume := sync.OnceFunc(func() { close(st.resume) })
+	defer resume()
+	s := newServiceOn(t, newFakeHub(), st)
+	type result struct {
+		switches TriageSwitches
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		sw, err := s.readTriageSwitches(ctx)
+		done <- result{sw, err}
+	}()
+	select {
+	case <-st.started:
+	case <-ctx.Done():
+		t.Fatal("initial settings read did not start")
+	}
+	want := TriageSwitches{Enabled: true, AutoContinue: true, Wake: true, Decide: true, ToolLoop: true}
+	status, body := serveJSON(t, s, "PUT", "/api/v1/agents/triage", "en",
+		`{"enabled":true,"auto_continue":true,"wake":true,"decide":true,"tool_loop":true}`)
+	assertTriageSettingsJSON(t, status, body, want)
+	resume()
+	select {
+	case got := <-done:
+		if got.err != nil || got.switches != want {
+			t.Fatalf("delayed read = %+v, error %v; want completed PUT %+v", got.switches, got.err, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("initial settings read did not finish")
+	}
+	status, body = serveJSON(t, s, "GET", "/api/v1/agents/triage", "en", "")
+	assertTriageSettingsJSON(t, status, body, want)
+}
+
 func assertTriageSettingsJSON(t *testing.T, status int, body map[string]any, want TriageSwitches) {
 	t.Helper()
-	if status != http.StatusOK || len(body) != 5 || body["enabled"] != want.Enabled ||
-		body["auto_continue"] != want.AutoContinue || body["wake"] != want.Wake || body["decide"] != want.Decide || body["tool_loop"] != want.ToolLoop {
+	if status != http.StatusOK || len(body) != 7 || body["enabled"] != want.Enabled ||
+		body["auto_continue"] != want.AutoContinue || body["wake"] != want.Wake || body["decide"] != want.Decide || body["tool_loop"] != want.ToolLoop || body["closeout"] != want.Closeout ||
+		body["closeout_ask"] != want.CloseoutAsk {
 		t.Fatalf("triage settings: %d %v, want 200 %+v", status, body, want)
 	}
 }

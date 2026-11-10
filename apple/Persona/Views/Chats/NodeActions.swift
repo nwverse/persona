@@ -72,6 +72,12 @@ nonisolated struct PaneGitResult: Decodable, Sendable {
     var message: String?
 }
 
+/// What `panes/agent` answers: the session it started in the pane (`docs/protocol/protocol.md`).
+nonisolated struct PaneAgentResult: Decodable, Sendable {
+    var sessionID: String?
+    enum CodingKeys: String, CodingKey { case sessionID = "session_id" }
+}
+
 extension APIClient {
     func terminalPanes(machine: String) async throws -> TerminalPanes {
         try await get("/api/v1/machines/\(machine)/panes", as: TerminalPanes.self)
@@ -80,14 +86,20 @@ extension APIClient {
     /// One of the node menu's routes, `POST /machines/{mid}/<path>`; only allowlisted fields and boolean flags reach the node.
     @discardableResult
     func nodeAction<Body: Encodable & Sendable>(machine: String, _ path: String, _ body: Body, timeout: TimeInterval = 40, opID: UUID? = nil) async throws -> Data {
-        try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        do {
+            return try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        } catch var error as APIError {
+            if error.status == 502 && error.code == "internal" { error.showsNodeReason = true }
+            throw error
+        }
     }
 }
 
 // MARK: - What the menus offer
 
 nonisolated enum NodeMenu {
-    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core and botmux are not asked.
+    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core, Tern and botmux are not
+    /// asked.
     static func canChange(hostKind: String?) -> Bool { hostKind == "herdr" }
 
     /// The pane items of an agent row: a live herdr pane the app may drive.
@@ -196,6 +208,13 @@ nonisolated enum NodeMenu {
 
     /// Only the agents a launcher starts without a first message: Claude Code (a Codex start needs one).
     static func launchableHere(_ l: Launcher) -> Bool { (l.agent ?? "").isEmpty || l.agent == "claude" }
+
+    /// The chat of the agent Run Agent Here started on `machine`, from what `panes/agent` answered: it opens the way New
+    /// Session opens the one it starts (#3287). nil when the answer names no session: the list stays in front.
+    static func startedChat(_ answer: Data, on machine: MachineRef) -> SessionKey? {
+        let id = (try? JSON.decoder.decode(PaneAgentResult.self, from: answer))?.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return id.isEmpty ? nil : SessionKey(group: machine.group, machineID: machine.id, sessionID: id)
+    }
 }
 
 // MARK: - Doing it
@@ -562,11 +581,14 @@ struct RunAgentHereSheet: View {
         Task {
             defer { busy = false }
             do {
-                try await api.nodeAction(machine: group.machineID, "panes/agent", ["pane": pane, "launcher": name], timeout: 130)
+                let answer = try await api.nodeAction(machine: group.machineID, "panes/agent", ["pane": pane, "launcher": name], timeout: 130)
                 model.toast = Toast(String(localized: "Started \(name) in the pane"), style: .success)
                 Haptics.success()
                 dismiss()
                 await model.refresh()
+                // Into the new agent's chat (#3287), as New Worktree's sheet opens the one it starts: after the refresh,
+                // so the chat comes up with its title and its computer.
+                if let started = NodeMenu.startedChat(answer, on: group.machineRef) { model.open(started) }
             } catch {
                 failure = String(localized: "Failed to start: \(error.shown ?? error.localizedDescription)")
                 Haptics.error()

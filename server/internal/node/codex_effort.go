@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // Thinking effort of a Codex thread Persona drives through its app-server (docs/integrations/codex.md "Thinking effort"): a session listed
@@ -33,8 +35,9 @@ var codexEffortLevels = []string{"minimal", "low", "medium", "high", "xhigh", "m
 
 // codexModelEfforts is what model/list says about a model's efforts.
 type codexModelEfforts struct {
-	levels []string // weakest first; empty: it takes none
-	def    string   // what it runs with when the thread sets none
+	levels []string            // weakest first; empty: it takes none
+	def    string              // what it runs with when the thread sets none
+	tiers  []proto.ServiceTier // native model/list speed choices
 }
 
 // codexEffortThread is the app-server thread of a Codex session the phone drives through the protocol (sendCodex): a
@@ -75,6 +78,19 @@ func (c *codexRemote) defaultEffort(model string) string {
 func (c *codexRemote) loadModels() {
 	ctx, cancel := context.WithTimeout(c.ctx, 20*time.Second)
 	defer cancel()
+	models, err := readCodexModels(ctx, c.wire.call)
+	if err != nil {
+		c.n.logf("codex %s: model/list: %v; threads offer every effort level", c.spec.ID, err)
+		return
+	}
+	c.mu.Lock()
+	c.models = models
+	c.mu.Unlock()
+	c.n.notifyCodex()
+}
+
+// Both external and Persona-owned app-servers advertise the same model metadata.
+func readCodexModels(ctx context.Context, call func(context.Context, string, any, any) error) (map[string]codexModelEfforts, error) {
 	models := map[string]codexModelEfforts{}
 	cursor := ""
 	for page := 0; page < 20; page++ {
@@ -84,18 +100,18 @@ func (c *codexRemote) loadModels() {
 		}
 		var res struct {
 			Data []struct {
-				Model   string `json:"model"`
-				ID      string `json:"id"`
-				Default string `json:"defaultReasoningEffort"`
+				Model   string              `json:"model"`
+				ID      string              `json:"id"`
+				Default string              `json:"defaultReasoningEffort"`
+				Tiers   []proto.ServiceTier `json:"serviceTiers"`
 				Efforts []struct {
 					Effort string `json:"reasoningEffort"`
 				} `json:"supportedReasoningEfforts"`
 			} `json:"data"`
 			NextCursor *string `json:"nextCursor"`
 		}
-		if err := c.wire.call(ctx, "model/list", params, &res); err != nil {
-			c.n.logf("codex %s: model/list: %v; threads offer every effort level", c.spec.ID, err)
-			return
+		if err := call(ctx, "model/list", params, &res); err != nil {
+			return nil, err
 		}
 		for _, m := range res.Data {
 			e := []string{}
@@ -106,7 +122,7 @@ func (c *codexRemote) loadModels() {
 			}
 			for _, k := range []string{m.Model, m.ID} {
 				if k != "" {
-					models[k] = codexModelEfforts{levels: e, def: m.Default}
+					models[k] = codexModelEfforts{levels: e, def: m.Default, tiers: m.Tiers}
 				}
 			}
 		}
@@ -115,10 +131,7 @@ func (c *codexRemote) loadModels() {
 		}
 		cursor = *res.NextCursor
 	}
-	c.mu.Lock()
-	c.models = models
-	c.mu.Unlock()
-	c.n.notifyCodex()
+	return models, nil
 }
 
 // codexEffortNow is the effort a thread is shown with: the phone's choice still waiting for a turn/start, else what

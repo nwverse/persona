@@ -373,10 +373,17 @@ var paseoBridgeCommand = func(ctx context.Context, rh *RuntimeHost) (*exec.Cmd, 
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(js.Path, filepath.Join(dir, "paseo", "bridge.mjs"), "--socket", rh.path, "--paseo-home", home)
+	cmd := exec.Command(js.Path, paseoBridgeArgs(dir, rh.path, home)...)
 	cmd.Env = js.env(append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path))
 	cmd.Dir = dir
 	return cmd, nil
+}
+
+// paseoBridgeArgs is the bridge's command line after the JavaScript runtime. The node's mcp.json (beside the runtime
+// socket) is what the bridge gives each new Agent as its Persona tools.
+func paseoBridgeArgs(dir, socket, home string) []string {
+	return []string{filepath.Join(dir, "paseo", "bridge.mjs"), "--socket", socket, "--paseo-home", home,
+		"--mcp-config", filepath.Join(filepath.Dir(socket), "mcp.json")}
 }
 
 // runPaseoBridge runs the bridge once, until it exits or ctx ends (then it is stopped: SIGTERM to its group, SIGKILL

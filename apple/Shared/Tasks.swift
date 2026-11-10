@@ -53,6 +53,40 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// How an interrupted receipt's task was dealt with, as the hub worked it out (#3834; docs/protocol/protocol.md
+/// "Tasks and the chat feed").
+nonisolated enum InterruptResolution: String, Codable, Hashable, Sendable {
+    case pending, cancelled, rerouted, resumed, accepted, done
+}
+
+/// Interruptions with the same cause in one chat within ten minutes, as their first receipt carries them (#3834).
+nonisolated struct InterruptBatch: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable, Sendable {
+        var receipt: String
+        var todoID: String
+        var title: String
+        var resolution: String
+        enum CodingKeys: String, CodingKey { case receipt, todoID = "todo_id", title, resolution }
+        /// A resolution this build doesn't know reads as handled, not as pending.
+        var resolved: InterruptResolution { InterruptResolution(rawValue: resolution) ?? .done }
+    }
+    var cause: String
+    var machine: String?
+    var total: Int
+    var pending: Int
+    var resolved: Int
+    var tasks: [Entry]
+}
+
+/// How the chat draws an interrupted receipt: `hidden` inside its batch's head, `batch` the head of several,
+/// `resolved` one dealt with (a grey line), `pending` still to deal with (the red card).
+nonisolated enum InterruptLook: Equatable, Sendable {
+    case hidden
+    case batch(InterruptBatch)
+    case resolved(InterruptResolution)
+    case pending
+}
+
 /// An item the hub inserted into an assistant conversation; drawn among the transcript's lines by `at`.
 nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
@@ -115,6 +149,18 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     /// An interrupted receipt's raw error (the API error that cut the turn off); older hubs put it in `summary`.
     var receiptError: String? { string("error") }
     var summary: String? { string("summary") }
+    /// How the chat draws an interrupted receipt, from what the hub worked out (#3834): nil from a hub before it.
+    var interruptLook: InterruptLook? {
+        guard kind == .receipt, turnInterrupted, let raw = string("resolution"),
+              let resolution = InterruptResolution(rawValue: raw) else { return nil }
+        if let group = string("group"), !group.isEmpty, group != id { return .hidden }
+        if case .object(let o)? = body, let b = o["batch"],
+           let data = try? JSONEncoder().encode(b), let batch = try? JSONDecoder().decode(InterruptBatch.self, from: data),
+           batch.tasks.count > 1 {
+            return .batch(batch)
+        }
+        return resolution == .pending ? .pending : .resolved(resolution)
+    }
     var pr: String? { string("pr") }
     var machine: String? { string("machine") }
     /// `routed`: what the user said straight to the task; `message`: the message itself.
@@ -503,6 +549,72 @@ nonisolated enum WatchInteractions {
     }
 }
 
+/// A small, value-only snapshot of the work a tray row shows. It does not carry transcripts or subscribe to every session.
+nonisolated struct AssistantTrayActivity: Hashable, Sendable {
+    struct Workflow: Hashable, Sendable {
+        var title: String
+        var phase: String?
+        var counts: String?
+        var startedAt: Date? = nil
+    }
+
+    var backgroundTasks = 0
+    var subagents = 0
+    var workflows: [Workflow] = []
+    var workflowCount = 0
+    /// An older complete response may say background work runs without listing its kind.
+    var reportedBackgroundWork = false
+
+    var isActive: Bool { backgroundTasks > 0 || subagents > 0 || workflowCount > 0 || reportedBackgroundWork }
+
+    init() {}
+
+    init(sessions: [Session]) {
+        var seen = Set<SessionKey>()
+        for session in sessions where seen.insert(session.key).inserted {
+            let background = session.background ?? []
+            // Fresh bounded-summary counts, including omitted zeros, win over retained chat arrays (#3588).
+            if session.listWaiting != nil || session.listBackgroundTasksCount != nil {
+                let count = max(0, session.listRunningWorkflows ?? 0)
+                let agents = max(0, session.listRunningSubagents ?? 0)
+                workflowCount += count
+                subagents += agents
+                backgroundTasks += max(0, session.listBackgroundTasksCount ?? ((session.listBackgroundCount ?? 0) - count - agents))
+                if count > 0, let run = session.listWorkflowProgress, run.isRunning {
+                    workflows.append(Workflow(title: run.title, phase: run.phaseLabel, counts: run.counts, startedAt: run.startedAt))
+                }
+                continue
+            }
+            reportedBackgroundWork = reportedBackgroundWork || (session.backgroundWorking && !session.backgroundWaiting)
+            let runs = session.runningWorkflows
+            let workflowMarkers = background.filter { task in
+                task.isWorkflow && !(session.workflows ?? []).contains { run in
+                    (run.id == task.runID || run.taskID == task.id) && !run.isRunning
+                }
+            }
+            let count = max(runs.count, session.listRunningWorkflows ?? 0, workflowMarkers.count)
+            workflowCount += count
+            workflows += runs.map { Workflow(title: $0.title, phase: $0.phaseLabel, counts: $0.counts, startedAt: $0.startedAt) }
+            let listedAgents = session.subagents ?? []
+            let backgroundAgents = background.filter { task in
+                task.isAgent && !listedAgents.contains { $0.id == task.id && !$0.running }
+            }
+            let agentIDs = Set(listedAgents.filter(\.running).map(\.id) + backgroundAgents.map(\.id))
+            subagents += max(agentIDs.count, session.listRunningSubagents ?? 0)
+            if session.background != nil {
+                backgroundTasks += background.filter { !$0.isWorkflow && !$0.isAgent }.count
+            } else {
+                // Bounded lists include compatibility workflow markers in background_count too.
+                backgroundTasks += max(0, (session.listBackgroundCount ?? 0) - count)
+            }
+        }
+        workflows = workflows.enumerated().sorted { a, b in
+            let first = a.element.startedAt ?? .distantPast, second = b.element.startedAt ?? .distantPast
+            return first != second ? first > second : a.offset < b.offset
+        }.map(\.element)
+    }
+}
+
 /// An agent going on (Needs You / Working) as the main conversation's dock shows it after the tasks (#1113): the ones the user
 /// opened on the Agents page, which no conversation's task stands for. Made from the Agents page's session list, so
 /// it follows the agents without a poll of its own.
@@ -514,23 +626,29 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
     var since: Date?
     /// The todo it works for, as the hub tags the session (a task's, or one made by hand).
     var todoID: String?
+    var activity: AssistantTrayActivity
+    var backgroundWaiting: Bool
 
     var id: SessionKey { key }
     var isWaiting: Bool { state == .needsYou }
 
-    init(key: SessionKey, title: String, state: AgentState, since: Date? = nil, todoID: String? = nil) {
+    init(key: SessionKey, title: String, state: AgentState, since: Date? = nil, todoID: String? = nil,
+         activity: AssistantTrayActivity = .init(), backgroundWaiting: Bool = false) {
         self.key = key
         self.title = title
         self.state = state
         self.since = since
         self.todoID = todoID
+        self.activity = activity
+        self.backgroundWaiting = backgroundWaiting
     }
 
     /// The agents going on in a session list (Persona's own conversations are not agents): waiting for the user
     /// first, then the newest. Only what a pill shows goes in, so it changes when a pill would.
     @MainActor static func going(_ sessions: [Session]) -> [DockAgent] {
         sessions.filter { !$0.assistant && ($0.state == .needsYou || $0.state == .working) }
-            .map { DockAgent(key: $0.key, title: $0.displayTitle, state: $0.state, since: $0.stateSince, todoID: $0.todo?.id) }
+            .map { DockAgent(key: $0.key, title: $0.displayTitle, state: $0.state, since: $0.stateSince, todoID: $0.todo?.id,
+                             activity: AssistantTrayActivity(sessions: [$0]), backgroundWaiting: $0.waitsToBeWoken) }
             .sorted { a, b in
                 if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
                 if a.since != b.since { return (a.since ?? .distantPast) > (b.since ?? .distantPast) }

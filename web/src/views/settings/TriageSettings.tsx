@@ -60,7 +60,7 @@ export function TriageSettings({ onModel }: { onModel?: () => void }) {
       setBusy(false);
     }
   };
-  const flip = (k: "enabled" | "auto_continue" | "wake" | "decide" | "tool_loop" | "reply_reminder") => (on: boolean) => sw && change({ ...sw, [k]: on });
+  const flip = (k: "enabled" | "auto_continue" | "wake" | "decide" | "tool_loop" | "closeout" | "reply_reminder") => (on: boolean) => sw && change({ ...sw, [k]: on });
   const off = !sw?.enabled;
 
   return (
@@ -112,6 +112,10 @@ export function TriageSettings({ onModel }: { onModel?: () => void }) {
           </Row>
           <Row label={t("settings-triagesettings.tool_loop")} hint={t("settings-triagesettings.tool_loop_hint")} wrapHint>
             <Switch on={sw.tool_loop === true} onChange={flip("tool_loop")} disabled={busy || off} label={t("settings-triagesettings.tool_loop")} />
+          </Row>
+          {/* Ask for a closeout (#3612): off when the hub does not send it, like tool_loop */}
+          <Row label={t("settings-triagesettings.closeout")} hint={t("settings-triagesettings.closeout_hint")} wrapHint>
+            <Switch on={sw.closeout === true} onChange={flip("closeout")} disabled={busy || off} label={t("settings-triagesettings.closeout")} />
           </Row>
           {/* no model call, so it works with the triage off */}
           <Row label={t("settings-triagesettings.reply_reminder")} hint={t("settings-triagesettings.reply_reminder_hint", { minutes: sw.reply_reminder_minutes || REPLY_REMINDER_MINUTES })}>

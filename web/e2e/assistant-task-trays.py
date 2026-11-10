@@ -157,7 +157,9 @@ def run(args):
                     expect(needs_entry).to_have_attribute("aria-expanded", "false")
                     expect(bar.locator("section")).to_have_count(0)
                     needs_entry.blur()
-                    page.locator("[data-dispatch-hint]").click()
+                    # #3700: the dispatched line names the plan's tasks, each opening its own task (dispatched-line.py), not this tray
+                    expect(page.locator("[data-dispatch-hint] [data-dispatched-task]")).to_have_count(len(TITLES))
+                    running_entry.click()
                     expect(running_entry).to_have_attribute("aria-expanded", "true")
                     expect(running_entry).to_have_class(re.compile(r"\bbg-ink\b"))
                     assert running_entry.evaluate("e => e.getBoundingClientRect().height") == boxes[1]["h"]
