@@ -841,10 +841,17 @@ final class LiveConnection {
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
     /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
+    /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
+    /// card_compat.go), which every build before the ring draws.
     nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
-        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : [])
+        let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : []) + (chatApps.contains(client.platform) ? [cardRingFeature] : [])
     }
+
+    /// The client_hello feature that says this app draws ```persona-card rings (#3068).
+    nonisolated static let cardRingFeature = "persona_card_ring"
 
     func send(_ object: [String: Any]) {
         if let local {

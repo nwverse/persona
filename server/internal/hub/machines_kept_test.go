@@ -260,6 +260,8 @@ type fakeKeeper struct {
 	stop context.CancelFunc
 	mu   sync.Mutex
 	list map[string]json.RawMessage
+	// putDelay is how long a put takes (a slow manager); set it under mu.
+	putDelay time.Duration
 }
 
 func connectKeeper(t *testing.T, h *Hub, srv *httptest.Server, id string, list ...json.RawMessage) *fakeKeeper {
@@ -281,6 +283,12 @@ func connectKeeper(t *testing.T, h *Hub, srv *httptest.Server, id string, list .
 	f.peer.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
 		var ref devicewire.MachineRef
 		var put devicewire.MachinePut
+		if method == devicewire.MethodMachinesPut {
+			f.mu.Lock()
+			delay := f.putDelay
+			f.mu.Unlock()
+			time.Sleep(delay)
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		switch method {

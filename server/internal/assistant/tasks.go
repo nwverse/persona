@@ -153,14 +153,16 @@ type tasksState struct {
 	// recoverBefore excludes starts admitted by this service before its background loops begin.
 	recoverBefore time.Time
 	// completionMu serializes a resumed turn with committing an earlier judgment.
-	completionMu sync.Mutex
+	completionMu   sync.Mutex
+	planApprovalMu sync.Mutex // serialize pending-plan snapshots without nesting fleet and todo locks
 	// Without a store (unit tests) plans and the feed live here.
 	plans map[string]*TaskPlan
 	feed  map[string][]FeedItem
 	// working: when one of a task's agents last started a turn; receipted: when its last receipt went out. A
 	// receipt is due when the task settles after working since the last one.
-	working   map[string]time.Time
-	receipted map[string]time.Time
+	working      map[string]time.Time
+	receipted    map[string]time.Time
+	stageReplies map[SessionRef][2]string // task id and last snippet; unchanged list rows do not repeat stage work
 	// awaitingAnswer remembers a stopped status whose transcript still ends in a tool.
 	awaitingAnswer map[SessionRef]bool
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent

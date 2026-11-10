@@ -492,18 +492,7 @@ func todoLine(t Todo, now time.Time, loc *time.Location) string {
 	if t.Project != "" {
 		fmt.Fprintf(&b, " · project %s", t.Project)
 	}
-	if t.DueAt != nil {
-		fmt.Fprintf(&b, " · due %s", t.DueAt.In(loc).Format(toolTimeLayout))
-	} else if d, err := time.Parse(dayLayout, t.DueDate); err == nil {
-		fmt.Fprintf(&b, " · due %s (the whole day)", d.Format("2006-01-02 Mon"))
-	}
-	if by, ok := t.dueBy(loc); ok && t.DoneAt == nil {
-		if t.overdue(now, loc) {
-			fmt.Fprintf(&b, " (overdue, %s)", ago(by))
-		} else {
-			fmt.Fprintf(&b, " (%s)", until(by))
-		}
-	}
+	b.WriteString(todoDue(t, now, loc))
 	if t.RemindAt != nil {
 		fmt.Fprintf(&b, " · remind %s", t.RemindAt.In(loc).Format(toolTimeLayout))
 		if t.RemindedAt != nil {
@@ -518,6 +507,24 @@ func todoLine(t Todo, now time.Time, loc *time.Location) string {
 	}
 	if active > 0 {
 		fmt.Fprintf(&b, " · %d agent(s) on it", active)
+	}
+	return b.String()
+}
+
+// todoDue is todoLine's due date, with how far off (or overdue) it is while the todo is open; "" when it has none.
+func todoDue(t Todo, now time.Time, loc *time.Location) string {
+	var b strings.Builder
+	if t.DueAt != nil {
+		fmt.Fprintf(&b, " · due %s", t.DueAt.In(loc).Format(toolTimeLayout))
+	} else if d, err := time.Parse(dayLayout, t.DueDate); err == nil {
+		fmt.Fprintf(&b, " · due %s (the whole day)", d.Format("2006-01-02 Mon"))
+	}
+	if by, ok := t.dueBy(loc); ok && t.DoneAt == nil {
+		if t.overdue(now, loc) {
+			fmt.Fprintf(&b, " (overdue, %s)", ago(by))
+		} else {
+			fmt.Fprintf(&b, " (%s)", until(by))
+		}
 	}
 	return b.String()
 }
