@@ -17,6 +17,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -167,14 +169,15 @@ class ReplyComposer(
         }
     }
 
-    fun send(mailTarget: MailReplyTarget? = null) {
+    /** [context]: the sending page's (its manager pins), as the composer is shared by every page of the target. */
+    fun send(mailTarget: MailReplyTarget? = null, context: CoroutineContext = EmptyCoroutineContext) {
         val current = state.value
         if (current.loading || current.sending || current.draft.text.isBlank()) return
         if (current.delivery in setOf(ReplyDelivery.Queued, ReplyDelivery.WaitingForNetwork, ReplyDelivery.Verifying)) return
         if (current.delivery in setOf(ReplyDelivery.Unknown, ReplyDelivery.NeedsConfirmation)) { verify(); return }
         val text = current.draft.text
         mutableState.value = current.copy(sending = true, error = null, sent = false, delivery = ReplyDelivery.Sending, targetChanged = false)
-        scope.launch {
+        scope.launch(context) {
             var submitted = false
             try {
                 writes.withLock {

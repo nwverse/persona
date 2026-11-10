@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// The assistant's cards in a reply (docs/extensions/extensions.md「助手的卡片」): a ```persona-view block holds a View or one
+/// The assistant's cards in a reply (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」): a ```persona-view block holds a View or one
 /// component, a ```persona-card block (#886, the older way) one card that becomes components by the rules every app
 /// shares (`sdk/go/wire/personacard.go`). Both are drawn by the renderer the extensions' views are drawn by, with nothing
 /// to use (no actions, fields, search, filter or more); links open as usual. Anything the app cannot draw (unknown,

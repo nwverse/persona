@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Things the assistant did on the phone in a second (docs/assistant/unified-entry.md「派发」, done in a second): a reminder or an event it added
+// Things the assistant did on the phone in a second (docs/assistant/unified-entry.md「Dispatch: express intent, do not choose a project」, done in a second): a reminder or an event it added
 // is drawn as its result under the turn's work line, with Undo, instead of hiding in "Tools N".
 
 /// A reminder or an event a tool call added, read from the call's result.

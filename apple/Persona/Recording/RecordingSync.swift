@@ -4,7 +4,7 @@ import Observation
 import UIKit
 #endif
 
-/// The hub's side of a recording (docs/protocol/protocol.md「录音同步」, #3235): what `PUT /api/v1/recordings/{id}` takes.
+/// The hub's side of a recording (docs/protocol/protocol.md「Recording sync」, #3235): what `PUT /api/v1/recordings/{id}` takes.
 /// Text only: the audio never leaves the device.
 nonisolated struct RecordingUpload: Encodable, Sendable {
     struct Bookmark: Encodable, Sendable { var at: Double; var label = "" }

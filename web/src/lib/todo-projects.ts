@@ -74,8 +74,3 @@ export function projectChoices(list: TodoProject[], current?: string): TodoProje
   if (current && !out.some((p) => p.slug === current)) out.unshift({ slug: current, name: current, long: false });
   return out;
 }
-
-/** For tests: forget the list. */
-export function resetTodoProjects() {
-  set([]);
-}

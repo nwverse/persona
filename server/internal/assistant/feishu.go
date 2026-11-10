@@ -449,7 +449,7 @@ func (s *Service) claimBotMessage(id string) (bool, error) {
 	if !b.loaded {
 		return false, errBotUnread
 	}
-	if id == "" || containsString(b.st.Seen, id) {
+	if id == "" || slices.Contains(b.st.Seen, id) {
 		return false, nil
 	}
 	b.st.Seen = append(b.st.Seen, id)
@@ -458,15 +458,6 @@ func (s *Service) claimBotMessage(id string) (bool, error) {
 }
 
 var errBotUnread = errors.New("the chat's state could not be read")
-
-func containsString(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
 
 func (s *Service) setBotCurrent(t botTarget) {
 	b := &s.fbot

@@ -53,6 +53,7 @@ vi.mock("../assistant/Tasks", () => ({
   FeedLineView: () => null,
   QuickResultCard: () => null,
   RouteChip: () => null,
+  AssistantActionBar: () => null,
   TaskDock: () => null,
   TaskQuestions: () => null,
 }));

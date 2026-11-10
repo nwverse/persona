@@ -29,6 +29,8 @@ import persona.core.contracts.api.ExtensionField
 import persona.core.contracts.api.ExtensionManagement
 import persona.core.contracts.api.ExtensionSecret
 import persona.core.contracts.api.ExtensionUiPlace
+import persona.core.contracts.api.ManagerPins
+import persona.core.contracts.api.pinned
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.LocalDetailKey
@@ -40,6 +42,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -149,19 +153,18 @@ fun ExtensionPage(
     onUpgrade: ((String, String) -> Unit)? = null,
     /** Just installed and not signed in (`next: auth`, #4507): its sign-in starts once the page knows it. */
     startSignIn: Boolean = false,
-    /** Whose extension it is (several managers); null: the default's. Its requests name it while the page is open. */
+    /** Whose extension it is (several managers); null: the default's. The requests this page makes name it. */
     manager: String? = null,
 ) {
     val owner = remember(extensions, extensionId, manager) { ExtensionOwners.of(manager) }
-    PinnedExtension(extensionId, owner)
-    PinnedExtension(listOf(listOf("extensions", "-", "catalog"), listOf("extensions", "-", "upgrades"),
-        listOf("plugins", "-", "catalog"), listOf("plugins", "-", "upgrades")), owner)
     if (extensions == null) {
         JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_ext_demo_none)) } }
         return
     }
+    val api = rememberPinned(extensions, extensionPrefixes(extensionId) + listOf(listOf("extensions", "-", "catalog"),
+        listOf("extensions", "-", "upgrades"), listOf("plugins", "-", "catalog"), listOf("plugins", "-", "upgrades")), owner)
     val res = LocalResources.current
-    val model = remember(extensions, extensionId, res, owner) { ExtensionModel(extensions, extensionId, res, owner) }
+    val model = remember(api, extensionId, res, owner) { ExtensionModel(api, extensionId, res, owner) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
@@ -175,8 +178,8 @@ fun ExtensionPage(
     LaunchedEffect(model) { model.load() }
     // Its sign-in (#4507): the hub's pushes, and the steps a sheet shows.
     LaunchedEffect(model) { model.watchAuth() }
-    val signIn = remember(extensions, extensionId) {
-        ConnectorSignInModel({ step, values -> extensions.authStep(extensionId, step, values) }, { model.setAuth(extensions.authLogout(extensionId)) })
+    val signIn = remember(api, extensionId) {
+        ConnectorSignInModel({ step, values -> api.authStep(extensionId, step, values) }, { model.setAuth(api.authLogout(extensionId)) })
     }
     val signInState by signIn.state.collectAsState()
     var signOutError by remember { mutableStateOf<String?>(null) }
@@ -200,7 +203,7 @@ fun ExtensionPage(
     }
     val contributed = detail?.takeIf { it.extension.enabled ?: true }?.extension?.contributes.orEmpty()["connectors"].orEmpty()
     val roster = LocalManagerRoster.current
-    PinnedExtension(contributed.map { listOf("connectors", it) }, owner)
+    val connectorPins = remember(contributed, owner) { ManagerPins.of(contributed.map { listOf("connectors", it) }, owner) }
     var hubConnectors by remember(connectors, extensionId, manager) { mutableStateOf<List<HubConnector>>(emptyList()) }
     LaunchedEffect(connectors, contributed, owner) {
         if (connectors == null || contributed.isEmpty()) return@LaunchedEffect
@@ -232,7 +235,7 @@ fun ExtensionPage(
                 if (connectors != null) connectorInbox(hubConnectors, onConnector) { c, on ->
                     scope.launch {
                         try {
-                            val changed = connectors.setConnectorFeed(c.id, "inbox", on)
+                            val changed = withContext(connectorPins ?: EmptyCoroutineContext) { connectors.setConnectorFeed(c.id, "inbox", on) }
                             hubConnectors = hubConnectors.map { if (it.id == changed.id) changed else it }
                         } catch (e: CancellationException) { throw e } catch (e: Exception) {
                             feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
@@ -617,20 +620,16 @@ private fun ExtensionSecretSheet(
 internal fun persona.core.contracts.api.ManagerRoster?.ownerOrDefault(manager: String?): String =
     manager?.takeIf { it.isNotBlank() } ?: this?.defaultManagerId ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
 
+/** An extension's own requests' paths (`extensions/<id>/…`, `plugins/<id>/…` on an older hub). */
+internal fun extensionPrefixes(extensionId: String) = listOf(listOf("extensions", extensionId), listOf("plugins", extensionId))
+
 /**
- * While an extension's page is open, its requests (`extensions/<id>/…`, `plugins/<id>/…` on an older hub) name [manager]:
- * the same id may be installed under several managers (each one's built-ins, docs/assistant/managers.md), and the default's own
- * keep going to it elsewhere.
+ * [extensions] naming [manager] on its requests under [prefixes] (segments under /api/v1), for an extension's page to hand
+ * its models: the same id may be installed under several managers (each one's built-ins, docs/assistant/managers.md), and
+ * the default's own keep going to it elsewhere. Only the requests made through it are pinned.
  */
 @Composable
-internal fun PinnedExtension(extensionId: String, manager: String?) =
-    PinnedExtension(listOf(listOf("extensions", extensionId), listOf("plugins", extensionId)), manager)
-
-/** Requests under each of [prefixes] (segments under /api/v1) name [manager] while this is shown. */
-@Composable
-internal fun PinnedExtension(prefixes: List<List<String>>, manager: String?) {
-    DisposableEffect(prefixes, manager) {
-        val release = persona.core.contracts.api.AssistantManagerChoice.pin(prefixes, manager)
-        onDispose { release() }
-    }
+internal fun rememberPinned(extensions: ExtensionManagement, prefixes: List<List<String>>, manager: String?): ExtensionManagement {
+    val pins = remember(prefixes, manager) { ManagerPins.of(prefixes, manager) }
+    return remember(extensions, pins) { extensions.pinned(pins) }
 }

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -184,7 +183,7 @@ func moveFiles(home string, logf func(string, ...any)) {
 }
 
 // moveConfig takes the manager's sections out of the hub.json in hubDir into its manager.json, once
-// (managerconf.Move), says what it did, and reads the configuration the extensions, connectors and bots run with
+// (managerconf.MoveExcept), says what it did, and reads the configuration the extensions, connectors and bots run with
 // (extmgr.LoadConfig), which run hands on as it is. A failed move, or a configuration that does not read, is an error
 // the manager does not start with: it would run without its sections, the user's gate rules (lark_gate,
 // connector_gate) among them, and the node would fall back to its own, which let every read through. Whatever starts
@@ -337,7 +336,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		stop()
 		<-keyDone
 	}()
-	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects the computers").
+	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects to computers").
 	var bh *BusHub
 	var svc *Service
 	var ext *extmgr.Manager
@@ -498,7 +497,7 @@ func readHubConfig() (hubConfig, error) {
 func externalHub(deploy, listen string) (hub, fingerprint string, err error) {
 	hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
 	if hub == "" {
-		hub = localHubURL(listen)
+		hub = managerconf.LocalHubURL(listen)
 	}
 	if deploy == "child" {
 		return hub, "", nil
@@ -515,18 +514,6 @@ func externalHub(deploy, listen string) (hub, fingerprint string, err error) {
 		return "", "", fmt.Errorf("PERSONA_ASSISTANT_FINGERPRINT pins an https hub, and PERSONA_ASSISTANT_HUB is %q", hub)
 	}
 	return hub, fingerprint, nil
-}
-
-// localHubURL is the hub on this machine, from its listen address.
-func localHubURL(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return "http://127.0.0.1:18660"
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return "http://" + net.JoinHostPort(host, port)
 }
 
 // errorTee is the manager process's log writer: lines go to stderr, and its error lines become the manager's error

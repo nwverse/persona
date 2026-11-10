@@ -1,6 +1,7 @@
 package persona.core.data
 
 import androidx.room.Room
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import org.junit.After
@@ -12,6 +13,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import persona.core.contracts.HubScope
+import persona.core.contracts.ImagePayload
 import persona.core.contracts.Item
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.SessionKey
@@ -68,5 +70,61 @@ class SessionItemsCacheTest {
         // A session shrinking under budget evicts nothing.
         cache.save(c, chat.take(1))
         assertEquals(listOf("c", "d"), cached().map { it.first }.sorted())
+    }
+
+    /**
+     * A save writes only what changed and leaves what deleting the session and inserting the window left: the same rows,
+     * cursor and sizes. The reference clears the session before each save, so every row is inserted as before.
+     */
+    @Test fun savesWriteOnlyChangedRowsAndLeaveWhatTheFullRewriteLeft() = runBlocking {
+        val reference = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), ItemsDatabase::class.java).build()
+        try {
+            val diff = SessionItemsCache(database, scope)
+            val full = SessionItemsCache(reference, scope)
+            val session = SessionKey("m", "a")
+            database.openHelper.writableDatabase.apply {
+                execSQL("CREATE TEMP TABLE written(id TEXT)")
+                execSQL("CREATE TEMP TRIGGER count_written AFTER INSERT ON items BEGIN INSERT INTO written VALUES (new.id); END")
+            }
+            fun turn(n: Int, answer: String = "answer $n") = listOf(Item("u$n", n * 10, role = "user", kind = "text", text = "q$n"),
+                Item("a$n", n * 10 + 1, role = "assistant", kind = "text", text = answer))
+            fun image(data: String, seq: Int = 42) = Item("img", seq, role = "assistant", kind = "image",
+                image = ImagePayload(data = data, width = 4, height = 4))
+            val more = Item("n3", 32, role = "assistant", kind = "text", text = "more")
+            val edited = turn(3, "answer 3, edited") + more
+            // More than one delete's worth of ids leave together in "empty".
+            val steps = (1..1000).map { Item("t$it", 100 + it, role = "assistant", kind = "thinking", text = "step $it") }
+            // (step, items, rows the diff writes); the window is the last two turns.
+            val sequence = listOf(
+                Triple("first", turn(1) + turn(2) + turn(3), 4),
+                Triple("append", turn(1) + turn(2) + turn(3) + more, 1),
+                Triple("edit", turn(1) + turn(2) + edited, 1),
+                Triple("same", turn(1) + turn(2) + edited, 0),
+                Triple("slide", turn(2) + edited + turn(4), 2),
+                Triple("image", edited + turn(4) + image("AAAA"), 1),
+                // The original bytes are not cached: other bytes leave the row as it was.
+                Triple("image bytes", edited + turn(4) + image("BBBB"), 0),
+                Triple("moved", edited + turn(4) + image("BBBB", seq = 45), 1),
+                Triple("long turn", turn(4) + turn(5) + steps, 1002),
+                Triple("empty", emptyList(), 0),
+                Triple("again", turn(6), 2),
+            )
+            for ((step, items, writes) in sequence) {
+                val snapshot = CachedChat(items, "h1", items.maxOfOrNull { it.seq } ?: 0, step == "slide")
+                database.openHelper.writableDatabase.execSQL("DELETE FROM written")
+                diff.save(session, snapshot)
+                reference.items().clear(scope.path, session.machineId, session.sessionId)
+                full.save(session, snapshot)
+                suspend fun ItemsDatabase.state() = Triple(
+                    items().observe(scope.path, session.machineId, session.sessionId).first(),
+                    items().cursor(scope.path, session.machineId, session.sessionId)?.copy(accessed_at = 0),
+                    items().sizes(scope.path).map { it.session to it.bytes })
+                assertEquals(step, reference.state(), database.state())
+                assertEquals(step, full.ledgerTotal, diff.ledgerTotal)
+                val written = database.openHelper.writableDatabase.query("SELECT count(*) FROM written")
+                    .use { it.moveToFirst(); it.getInt(0) }
+                assertEquals("$step rows written", writes, written)
+            }
+        } finally { reference.close() }
     }
 }

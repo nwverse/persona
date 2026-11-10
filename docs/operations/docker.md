@@ -121,7 +121,7 @@ On first start (no `hub.json` in `data/` yet), the entry script writes a `hub.js
 | `machines` | `[]` | The image has no herdr or Claude Code; computers are all added from outside |
 
 Other notes:
-- `PERSONA_PUBLIC_URL` can also be a VPN address, or an HTTPS address from the NAS's built-in reverse proxy. The reverse proxy must forward WebSocket Upgrade / Connection, disable response buffering, and use a longer read timeout (`docs/server/server.md` ("Lightweight hub and pre-deploy checks")).
+- `PERSONA_PUBLIC_URL` can also be a VPN address, or an HTTPS address from the NAS's built-in reverse proxy. The reverse proxy must forward WebSocket Upgrade / Connection, disable response buffering, and use a longer read timeout (`docs/server/server.md` ("Lightweight hub and predeployment checks")).
 - Ports: 18660 is HTTP, 18662 is TLS; compose maps both to all NAS addresses by default. The TLS port's host port must stay 18662 (that's what the hub tells the App); to expose it on only one address, write `PERSONA_TLS_PORT=<NAS LAN address>:18662`. If 18662 is already taken on the NAS, `docker compose up` reports a port conflict: give the hub a different `public.tls_listen` port and map it the same way.
 - `PUID` / `PGID`: the container starts as root, changes the `persona` user to this uid / gid (any other user in the image with the same uid is removed first, or ssh would find that user's home directory), hands every file in `data/` it doesn't own to it (e.g. an old `~/.persona` copied in with sudo), then drops privileges;
   `docker compose exec hub personad …` also runs as this user, so the files it creates don't belong to root. It can't be 0. Don't set the user with compose's `user:`:
@@ -253,7 +253,7 @@ A new image doesn't change how the built-in manager runs on an existing install.
 
 ### Reverse proxy on the same machine
 
-The hub treats its own container's gateway as public internet ([network.md](network.md) ("Source checks and reverse proxies")): plaintext requests from the internet get `403 tls_required` and can't use the main token.
+The hub treats its own container's gateway as public internet ([network.md](network.md) ("Source classification and reverse proxies")): plaintext requests from the internet get `403 tls_required` and can't use the main token.
 With the two common ways of setting up a reverse proxy on a NAS, the source seen by the hub becomes the gateway, so connect as follows:
 
 - **Proxy in another container** (Caddy, nginx, Nginx Proxy Manager…): don't reach the hub through the host-mapped port (`<NAS address>:18660`). The proxy container is on a different
@@ -324,7 +324,7 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
   so it can't tell "same subnet" and is relaxed to any private address. But connections forwarded by Docker's userland proxy (docker-proxy) all show up as the gateway address (`172.x.0.1`),
   including ones from the internet (IPv6 requests when Docker has no IPv6, requests forwarded by a reverse proxy on the host), so the gateway never counts as LAN. On Linux, LAN computers come in through
   iptables DNAT, the container sees their real address, and they can open it as usual. The App's API works the same way: requests from the gateway are treated as internet (can't use the main token; plaintext APIs return `403 tls_required`),
-  see [network.md](network.md) ("Source checks and reverse proxies").
+  see [network.md](network.md) ("Source classification and reverse proxies").
 - **Docker Desktop / OrbStack**: the forwarding source may be the gateway, or a public-looking address provided by gvisor. Find the real peer as in "Plaintext connections on Docker Desktop / OrbStack" above; for local trial only, bind the port to `127.0.0.1` and put the actual source in `PERSONA_ADMIN_CIDRS`. The API allowlist needs `security.trusted_cidrs` separately.
 - **`loopback`** inside a container means the container itself: for uses like `docker compose exec hub wget -qO- http://127.0.0.1:18660/admin`; rarely useful.
 - **`any`** requires the hub to have TLS on (`public.tls_listen` in `data/hub.json`; the `hub.json` written on first start already has it, and compose maps 18662; older installs need to add it).
@@ -335,7 +335,7 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
 
 1. On the old machine, stop the hub (`systemctl --user stop personad`) and export the database:
    `docker exec persona-postgres pg_dump -U persona -Fc persona > persona.dump`, and the built-in manager's database in the same server: `docker exec persona-postgres pg_dump -U persona -Fc persona_manager > persona_manager.dump`. Both together are the hub's data ([managers.md](../assistant/managers.md) ("The built-in manager's database")); one without the other loses the manager's data or the hub's.
-2. Copy the actual runtime directory (the new default is `~/.persona`; existing deployments may still use the compatibility directory `~/.persona`) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
+2. Copy the actual runtime directory (`~/.persona` by default; an older deployment may still keep it under the old name: [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md)) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
    change it to `ssh` or `tailcat`). Leave `database_url` alone (the environment variable overrides it).
 3. `docker compose up -d postgres`, then import: `docker compose exec -T postgres pg_restore -U persona -d persona --clean --if-exists < persona.dump` (and the manager's: `docker compose exec -T postgres createdb -U persona persona_manager`, then the same `pg_restore -d persona_manager < persona_manager.dump`),
    then `docker compose up -d`. The token is unchanged; paired phones only need the address changed to the new one (or scan again).

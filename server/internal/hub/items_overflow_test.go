@@ -60,7 +60,7 @@ func TestSubscribeByAbsorbedAliasHearsThePushes(t *testing.T) {
 	})
 	h.devices.absorbed = map[string]string{"alias": "canonical"}
 	c := &client{out: make(chan []byte, 16), subs: map[[2]string]bool{}}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	h.onClientMessage(context.Background(), c, []byte(`{"type":"subscribe","machine_id":"alias","session_id":"s1"}`))
 	h.itemsToSubscribers("canonical", "s1", []proto.Item{{ID: "i1", Seq: 1, Role: "assistant", Kind: proto.KindText, Text: "live"}}, itemSpan{History: "h1"}, false)
 	deadline := time.After(2 * time.Second)

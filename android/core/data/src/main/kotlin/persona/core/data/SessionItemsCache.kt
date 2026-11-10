@@ -25,6 +25,7 @@ class SessionItemsCache(
     private val ledgerLock = Mutex()
     internal var onRelease: () -> Unit = {}
     internal fun activeSessions(): Set<SessionKey> = synchronized(active) { active.keys.toSet() }
+    internal val ledgerTotal: Long? get() = ledger.total
 
     override suspend fun retain(session: SessionKey) = database.withTransaction {
         synchronized(active) { active[session] = (active[session] ?: 0) + 1 }
@@ -98,8 +99,18 @@ class SessionItemsCache(
         }
         ledgerTransaction {
             val dao = database.items()
-            dao.clear(scope.path, session.machineId, session.sessionId)
-            dao.insert(rows)
+            // The same rows as deleting the session and inserting the window, written as a difference: a streaming
+            // update changes an item or two of a window of hundreds, and rewriting every row went to the WAL each time.
+            val stored = dao.stored(scope.path, session.machineId, session.sessionId).associateBy { it.id }
+            val kept = rows.mapTo(HashSet()) { it.id }
+            stored.keys.filter { it !in kept }.chunked(DELETE_CHUNK).forEach {
+                dao.delete(scope.path, session.machineId, session.sessionId, it)
+            }
+            val changed = rows.filter { row ->
+                val old = stored[row.id]
+                old == null || old.seq != row.seq || old.part != row.part || old.json != row.json
+            }
+            if (changed.isNotEmpty()) dao.insert(changed)
             if (rows.isEmpty()) dao.clearCursor(scope.path, session.machineId, session.sessionId)
             else dao.putCursor(SessionCursorRow(scope.path, session.machineId, session.sessionId,
                 snapshot.history, snapshot.covered, snapshot.hasMore == true || start > 0,
@@ -111,6 +122,11 @@ class SessionItemsCache(
     }
 
     private fun part(item: Item): Int = item.id.substringAfterLast('#').toIntOrNull() ?: 0
+
+    private companion object {
+        /** Ids per [ItemsDao.delete]: with its three key variables, under SQLite's 999 before 3.32 (API 30). */
+        const val DELETE_CHUNK = 900
+    }
 }
 
 /**

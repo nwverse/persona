@@ -1,6 +1,6 @@
 import Foundation
 
-// How the socket comes back after a drop without the app noticing (docs/operations/hub-restart.md「客户端容忍短时间断线」, #1634):
+// How the socket comes back after a drop without the app noticing (docs/operations/hub-restart.md「Clients tolerate short disconnects」, #1634):
 // when to retry, how long the titles keep saying nothing while it does, and where the hub's numbered broadcasts left
 // off, so a reconnect replays only what was missed instead of fetching everything again. Pure: LiveConnection drives
 // it, the tests drive it directly (the web's src/lib/reconnect.ts is the same rules).
@@ -34,7 +34,7 @@ nonisolated struct LinkDrop: Equatable, Sendable {
     }
 }
 
-/// Where this app is in the hub's numbered broadcasts (`event_stream`, `event_seq`; docs/protocol/protocol.md「事件续传」):
+/// Where this app is in the hub's numbered broadcasts (`event_stream`, `event_seq`; docs/protocol/protocol.md「Event resume」):
 /// kept across reconnects, forgotten with another hub or pairing (not on disk: a relaunch fetches everything anyway).
 nonisolated struct EventCursor: Equatable, Sendable {
     var stream = ""
@@ -102,7 +102,7 @@ nonisolated struct FrameMeta: Equatable, Sendable {
 
 // MARK: Writes through a gap
 
-/// Writes that survive a hub restart (docs/operations/hub-restart.md「写操作排队、幂等重放」): one op id per logical operation, sent
+/// Writes that survive a hub restart (docs/operations/hub-restart.md「Queued writes, idempotent replay」): one op id per logical operation, sent
 /// as `X-Persona-Op-Id`, so the hub does it once however often it arrives; a request that died on the way goes again with
 /// the same id, for up to `limit`, before the caller shows its failure.
 nonisolated enum OpRetry {
