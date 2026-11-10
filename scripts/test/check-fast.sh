@@ -51,6 +51,8 @@
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
 #                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
 #                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#   server/**, web/src/**, web/e2e/**, scripts/**, sdk/**, apple/**, android/**, integrations/**, spec/**, schema/**
+#                              also test_doc_sections.py: it reads the code comments there too (its SOURCE_DIRS)
 #   server/internal/{proto,hub,extension}/**, schema/extension/manifest.schema.json
 #                              also test_doc_wire.py: the code side of those wire lists
 #   apple/**                   scripts/test/test_apple_l10n.py (String Catalogs, Chinese Swift literals); the iOS/macOS
@@ -744,6 +746,11 @@ else
       # The code side of the wire lists test_doc_wire.py compares with the docs.
       server/internal/proto/*|server/internal/hub/*|server/internal/extension/*|schema/extension/manifest.schema.json)
         script_test_add scripts/test/test_doc_wire.py ;;
+    esac
+    # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
+    case "$f" in
+      server/*|web/src/*|web/e2e/*|scripts/*|sdk/*|apple/*|android/*|integrations/*|spec/*|schema/*)
+        script_test_add scripts/test/test_doc_sections.py ;;
     esac
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
     # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp

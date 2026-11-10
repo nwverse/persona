@@ -41,6 +41,18 @@ def ci_is_suite():
     return module.is_suite
 
 
+def section_check_dirs():
+    """The directories test_doc_sections.py scans besides the Markdown files."""
+    saved = list(sys.path)  # the module puts scripts/test on sys.path to import test_doc_paths
+    try:
+        spec = importlib.util.spec_from_file_location("doc_sections", ROOT / "scripts/test/test_doc_sections.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = saved
+    return [name for name in module.SOURCE_DIRS if not name.endswith(".md")]
+
+
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
 class CheckFastScriptsTests(unittest.TestCase):
     def setUp(self):
@@ -245,6 +257,19 @@ class CheckFastScriptsTests(unittest.TestCase):
                 self.git("clean", "-fdq", "--", path.split("/", 1)[0])
                 self.assertEqual(1, code, out)
                 self.assertIn("FAIL     scripts/test/test_doc_wire.py", out)
+                self.assertNotIn("test_doc_paths.py", out)
+
+    def test_a_change_where_the_section_check_reads_runs_it(self):
+        # Most names test_doc_sections.py checks are in code comments, so a change under any of its SOURCE_DIRS runs it.
+        self.break_suite("test_doc_sections.py")
+        for directory in section_check_dirs():
+            path = f"{directory}/sample.txt"
+            with self.subTest(path=path):
+                self.write(path, "changed\n")
+                code, out = self.check_fast(path=self.toolchain_without_node_and_go())
+                (self.repo / path).unlink()
+                self.assertEqual(1, code, out)
+                self.assertIn("FAIL     scripts/test/test_doc_sections.py", out)
                 self.assertNotIn("test_doc_paths.py", out)
 
     def test_an_apple_change_runs_the_l10n_suite(self):

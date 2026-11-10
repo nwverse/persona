@@ -190,8 +190,8 @@ class DocSectionTests(unittest.TestCase):
         misses = unresolved(ROOT, repository_sources(), git_files(ROOT, "*.md"))
         new, stale = compare(misses, read_known(KNOWN))
         self.assertEqual([], [f"{s}:{n}: {w} \"{name}\"" for s, n, w, name in new],
-                         "these names match no heading, **bold** label or <a id> of the doc: change each to the "
-                         "section's current heading, or drop the name and keep the path")
+                         "these names match no heading, **bold** label, <a id> or list item's opening phrase of the "
+                         "doc: change each to the section's current heading, or drop the name and keep the path")
         self.assertEqual([], ["\t".join(entry) for entry in stale],
                          f"these entries resolve now or are gone: delete them from {KNOWN.relative_to(ROOT)}")
 
