@@ -237,15 +237,19 @@ list of the do's steps from there; one answer covers the do, though a step the r
   manager never hands it to the model.
 - An id resumes one waiting step of one conversation, once. A newer do in that conversation, an expired wait
   (`Pending`) or a node restart discards it, and the call answers that nothing was sent.
-- No step touches or types into Persona's own app on the phone (`Rules.SelfApps`, bundle ids the hub sends with each
-  call, never written in code, compared ignoring case and spaces; `Rules.SelfNames` for a front app reported without a
-  bundle id), where approval cards and their buttons appear, and launching it is refused; leaving it (home, another
-  app) is fine.
+- No step touches or types into Persona's own app on the phone, where approval cards and their buttons appear, and
+  launching it is refused; leaving it (home, another app) is fine. The app in front is Persona's when its bundle id is
+  in `Rules.SelfApps` **or** its whole name is in `Rules.SelfNames` (both compared ignoring case and surrounding
+  spaces), so the rule holds while no bundle id is known; another app with the same name is refused too (fail closed).
+  The node starts with `SelfNames: ["Persona"]`, the public product name, and adds bundle ids at run time: those of
+  the apps the device's own `list_apps` names like that (read per device at most hourly, a minute after a failure;
+  an unreadable list leaves the name rule), and any the call sends (`self_apps` / `self_names`). Bundle ids are never
+  written in code, fixtures, logs or docs, and the rules only ever grow.
 
 ## Not covered yet
 
-- The manager filling in `self_apps` / `self_names` from what the hub knows of Persona's app; until it does, the
-  rule has nothing to match.
+- The manager sending `self_apps` / `self_names` (what the iPhone app reports of itself when it consents); until it
+  does, the node's name rule and the device's app list are what keep the automation out of Persona's app.
 - Notification banners from Persona shown over another app are not recognized as Persona's own UI; only the app in
   front is.
 - Real-device checks of the bridge's roles and labels against the identity rules, the 30% threshold and the 400 ms

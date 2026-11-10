@@ -31,7 +31,8 @@ const (
 type Rules struct {
 	// SelfApps are the bundle ids of Persona's apps on the phone (from config; app identities never appear in code).
 	SelfApps []string
-	// SelfNames are those apps' names, for a front app the bridge names without a bundle id.
+	// SelfNames are those apps' names (the whole name, case aside): a front app with one of them is Persona's
+	// whatever its bundle id, so the rule holds while no bundle id is known.
 	SelfNames []string
 	// Words add labels, per kind, to the built-in ones (lowercase; a label matches when it is the phrase or starts
 	// with it).
@@ -128,11 +129,10 @@ func (r Rules) words(k Sensitivity) []string {
 	return append(append([]string(nil), builtinWords[k]...), r.Words[k]...)
 }
 
+// self says whether a is Persona's own app: its bundle id is one of SelfApps or its name, whole, is one of SelfNames.
+// Either is enough, so the rule holds with no bundle id known; another app of the same name is refused too.
 func (r Rules) self(a App) bool {
-	if a.BundleID != "" {
-		return listed(r.SelfApps, a.BundleID)
-	}
-	return a.Name != "" && listed(r.SelfNames, a.Name)
+	return a.BundleID != "" && listed(r.SelfApps, a.BundleID) || a.Name != "" && listed(r.SelfNames, a.Name)
 }
 
 // listed compares ids and names as people write them: case and surrounding spaces aside.

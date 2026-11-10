@@ -171,10 +171,16 @@ one `iphonectl.Controller` for the node process, [iphone-control.md](iphone-cont
   their code, marked `NotSent` when the session or the code says nothing was written and `MaybeSent` when the session
   says the operation was handed over and its answer lost, whatever the code; the core never counts such an input as
   refused and never sends it again.
+- **Persona's own app**: the core never operates an app named `Persona` (its public display name, the node's default
+  `SelfNames`). Per device, the node also reads `list_apps` (at most hourly, a minute after a failure, within 5 s of the
+  call) and adds the bundle ids of apps with a name in `SelfNames` to the core's `SelfApps`, so launching it by bundle id
+  is refused as well. The ids stay in memory; an unreadable list leaves the name rule. What a call sends in `self_apps`
+  / `self_names` only adds to them.
 - **Checked against a simulator**: `go test -tags iphonesimlive -run TestLiveIPhoneSimulator ./internal/node` with
   `PERSONA_IPHONE_SIM=<udid>` and `PERSONA_IPHONE_SIM_HOME`, the state directory where the bridge is installed and
   `personad iphone pair <udid>` wrote the record: status, a look (elements and a screenshot), a do with `confirm` that
-  waits for approval and runs only when resumed with `approved`, and a step refused in an app named in `self_apps`.
+  waits for approval and runs only when resumed with `approved`, an approval replaced by a newer do that no longer
+  resumes (`not_pending`, nothing sent), and a step refused in an app named in `self_apps`.
   Not verified on a real device.
 - **Notes**: the computer's note, each phone's and a job's error are fixed Simplified Chinese strings chosen by the
   bridge's or the session's code (`iphoneNotes`); the hub translates them by their original from its catalog

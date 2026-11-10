@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/iphonectl"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -22,6 +24,15 @@ import (
 type iphoneControl struct {
 	once sync.Once
 	c    *iphonectl.Controller
+
+	mu     sync.Mutex
+	listed map[string]iphoneAppsRead // by device: when its apps were last read for Persona's own
+}
+
+// iphoneAppsRead is one device's last read of its apps for Persona's own: when, and whether it answered.
+type iphoneAppsRead struct {
+	at time.Time
+	ok bool
 }
 
 func (d *iphoneControl) controller() *iphonectl.Controller {
@@ -29,10 +40,65 @@ func (d *iphoneControl) controller() *iphonectl.Controller {
 	return d.c
 }
 
-// iphoneRules are the rules the core starts with. Persona's own apps come with the calls (proto.IPhoneCall.SelfApps):
-// the hub knows them, the node has no config of its own that does.
+// iphoneSelfNames is Persona's app as the iPhone names it: the product's public display name. A front app with this
+// name is never operated, whatever its bundle id, so the rule holds before any bundle id is known.
+var iphoneSelfNames = []string{"Persona"}
+
+// iphoneRules are the rules the core starts with: Persona's app by its name. Its bundle ids are added as they become
+// known: from each device's own app list (selfApps) and from the calls (proto.IPhoneCall.SelfApps); the core only
+// ever adds to them.
 func iphoneRules() iphonectl.Rules {
-	return iphonectl.Rules{}
+	return iphonectl.Rules{SelfNames: slices.Clone(iphoneSelfNames)}
+}
+
+// How often a device's apps are read again for Persona's own, after an answer and after none, and how long a read
+// may take of a call.
+const (
+	iphoneAppsFresh = time.Hour
+	iphoneAppsRetry = time.Minute
+	iphoneAppsWait  = 5 * time.Second
+)
+
+// selfApps are the bundle ids of the apps on device named like Persona's (names: iphoneSelfNames and the call's),
+// read with its own list_apps at most once in iphoneAppsFresh (iphoneAppsRetry after a failure), so a launch of it by
+// bundle id is refused too. Nil when not due or the list can't be read: the name rule still holds. The ids stay in
+// memory only (the core keeps them); they are never logged.
+func (d *iphoneControl) selfApps(ctx context.Context, device string, w *iphonectl.Wire, names []string) []string {
+	now := time.Now()
+	d.mu.Lock()
+	last, seen := d.listed[device]
+	again := iphoneAppsRetry
+	if last.ok {
+		again = iphoneAppsFresh
+	}
+	due := !seen || now.Sub(last.at) >= again
+	if due {
+		if d.listed == nil {
+			d.listed = map[string]iphoneAppsRead{}
+		}
+		d.listed[device] = iphoneAppsRead{at: now} // one read at a time: a call meanwhile goes on without it
+	}
+	d.mu.Unlock()
+	if !due {
+		return nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, iphoneAppsWait)
+	defer cancel()
+	apps, err := w.ListApps(lctx, device)
+	if err != nil {
+		return nil
+	}
+	d.mu.Lock()
+	d.listed[device] = iphoneAppsRead{at: time.Now(), ok: true}
+	d.mu.Unlock()
+	names = append(slices.Clone(iphoneSelfNames), names...)
+	var out []string
+	for _, a := range apps {
+		if a.BundleID != "" && slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(strings.TrimSpace(n), strings.TrimSpace(a.Name)) }) {
+			out = append(out, a.BundleID)
+		}
+	}
+	return out
 }
 
 // Run is one look or do: the core answers within the call's context whatever the bridge does, so a failure of the
@@ -41,8 +107,9 @@ func iphoneRules() iphonectl.Rules {
 // pending), saying nothing was sent, in the core's words.
 func (d *iphoneControl) Run(ctx context.Context, r iphoneRun) (iphoneOutcome, error) {
 	w := &iphonectl.Wire{Call: iphoneWireCall(r.Bridge), TempDir: r.TempDir}
+	self := append(slices.Clone(r.SelfApps), d.selfApps(ctx, r.Device, w, r.SelfNames)...)
 	resp := d.controller().Handle(ctx, w, iphonectl.Request{Device: r.Device, Session: r.Session, Op: r.Op, Args: r.Args,
-		Approved: r.Approved, Confirm: r.Confirm, SelfApps: r.SelfApps, SelfNames: r.SelfNames})
+		Approved: r.Approved, Confirm: r.Confirm, SelfApps: self, SelfNames: r.SelfNames})
 	if resp.Refused != "" {
 		return iphoneOutcome{}, iphoneErr(resp.Refused, strings.TrimSpace(resp.Text), proto.IPhoneNotSent)
 	}

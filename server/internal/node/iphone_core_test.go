@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -23,9 +24,15 @@ type bridgePhone struct {
 	fakeIPhones
 	inline bool             // answer screenshots inline rather than in out_file
 	fail   map[string]error // the session's error for an op
+	tree   string           // ax_tree's answer ("" bridgePhoneTree)
+	apps   string           // list_apps's answer ("" bridgePhoneApps)
 	mu     sync.Mutex
 	ops    []string
 }
+
+const bridgePhoneApps = `{"apps":[{"bundle_id":"com.example.shop","name":"Shop","type":"user"},
+  {"bundle_id":"com.example.persona-build","name":"Persona","type":"user"},
+  {"bundle_id":"com.example.notes","name":"Persona Notes","type":"user"}]}`
 
 const bridgePhoneTree = `{
   "app": {"bundle_id": "com.example.shop", "name": "Shop"},
@@ -60,7 +67,9 @@ func (b *bridgePhone) Call(_ context.Context, device, op string, args json.RawMe
 	case "device_info":
 		return json.RawMessage(bridgePhoneInfo), nil
 	case "ax_tree":
-		return json.RawMessage(bridgePhoneTree), nil
+		return json.RawMessage(cmp.Or(b.tree, bridgePhoneTree)), nil
+	case "list_apps":
+		return json.RawMessage(cmp.Or(b.apps, bridgePhoneApps)), nil
 	case "screenshot":
 		png, _ := base64.StdEncoding.DecodeString(onePixelPNG)
 		var a struct {
@@ -77,6 +86,19 @@ func (b *bridgePhone) Call(_ context.Context, device, op string, args json.RawMe
 		return json.RawMessage(`{"mime":"image/png","width":1,"height":1}`), nil
 	}
 	return json.RawMessage(`{}`), nil
+}
+
+// count is how many times op was sent.
+func (b *bridgePhone) count(op string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, o := range b.ops {
+		if o == op {
+			n++
+		}
+	}
+	return n
 }
 
 // inputs are the operations that change the phone, in order.
@@ -330,5 +352,95 @@ func TestIPhoneWireCallKeepsTheCode(t *testing.T) {
 	call = iphoneWireCall(func(ctx context.Context, _ string, _ json.RawMessage) (json.RawMessage, error) { return nil, ctx.Err() })
 	if _, err := call(cancelled, "tap", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("the context's error: %v", err)
+	}
+}
+
+// doSteps runs one do and returns its steps' results.
+func doSteps(t *testing.T, params string) []iphonectl.StepResult {
+	t.Helper()
+	res, err := iphoneCall(context.Background(), json.RawMessage(params))
+	if err != nil {
+		t.Fatalf("%s: %v", params, err)
+	}
+	var out iphonectl.DoResult
+	if err := json.Unmarshal(res.Output, &out); err != nil {
+		t.Fatalf("%s: %s", params, res.Output)
+	}
+	return out.Steps
+}
+
+func refusedAsPersonas(s []iphonectl.StepResult) bool {
+	return len(s) == 1 && s[0].Delivery == iphonectl.DeliveryNotSent && strings.Contains(s[0].Detail, "Persona's own app")
+}
+
+// With no bundle id known (the list unreadable, none in the call), an app named Persona in front is still never
+// touched.
+func TestIPhoneCoreKeepsOutOfAnAppNamedPersonaWithNoBundleID(t *testing.T) {
+	b := newBridgePhone()
+	b.tree = strings.Replace(bridgePhoneTree, `{"bundle_id": "com.example.shop", "name": "Shop"}`, `{"bundle_id": "com.example.unknown", "name": "Persona"}`, 1)
+	b.fail = map[string]error{"list_apps": &rpc.Error{Code: "unsupported", Message: "no apps"}}
+	useCore(t, b)
+	if _, err := iphoneCall(context.Background(), json.RawMessage(`{"session":"s1","op":"look","args":{"screenshot":false}}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []string{`{"action":"tap","target":{"label":"Search"}}`, `{"action":"type","text":"x"}`,
+		`{"action":"key","key":"return"}`, `{"action":"swipe","direction":"up"}`} {
+		if s := doSteps(t, `{"session":"s1","op":"do","args":{"steps":[`+step+`]}}`); !refusedAsPersonas(s) {
+			t.Errorf("%s: %+v", step, s)
+		}
+	}
+	if len(b.inputs()) != 0 {
+		t.Fatalf("operated it: %v", b.inputs())
+	}
+}
+
+// The device's own app list gives Persona's bundle id, so launching it is refused too; the list is read once, and
+// an app whose name only starts with Persona is not taken for it.
+func TestIPhoneCoreLearnsPersonasBundleIDFromTheDevice(t *testing.T) {
+	b := newBridgePhone()
+	useCore(t, b)
+	if _, err := iphoneCall(context.Background(), json.RawMessage(`{"session":"s1","op":"look","args":{"screenshot":false}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if s := doSteps(t, `{"session":"s1","op":"do","args":{"steps":[{"action":"launch","app":"com.example.persona-build"}]}}`); !refusedAsPersonas(s) {
+		t.Fatalf("launch: %+v", s)
+	}
+	if s := doSteps(t, `{"session":"s1","op":"do","args":{"steps":[{"action":"launch","app":"com.example.notes"}]}}`); len(s) != 1 || s[0].Delivery != iphonectl.DeliverySent {
+		t.Fatalf("another app: %+v", s)
+	}
+	if n := b.count("list_apps"); n != 1 {
+		t.Fatalf("list_apps %d times", n)
+	}
+	if got := strings.Join(b.inputs(), ","); got != "launch_app" {
+		t.Fatalf("inputs %s", got)
+	}
+
+	// A list that can't be read is tried again a while later, without failing the call.
+	b = newBridgePhone()
+	b.fail = map[string]error{"list_apps": &rpc.Error{Code: "timeout", Message: "slow"}}
+	useCore(t, b)
+	for range 2 {
+		if _, err := iphoneCall(context.Background(), json.RawMessage(`{"session":"s1","op":"look","args":{"screenshot":false}}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := b.count("list_apps"); n != 1 {
+		t.Fatalf("retried at once: %d", n)
+	}
+}
+
+// What the call names (from the manager) only adds: a name the device list matches, and a bundle id.
+func TestIPhoneCoreAddsTheCallsSelfApps(t *testing.T) {
+	b := newBridgePhone()
+	useCore(t, b)
+	ctx := context.Background()
+	if _, err := iphoneCall(ctx, json.RawMessage(`{"session":"s1","op":"look","args":{"screenshot":false},"self_names":["Persona Notes"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if s := doSteps(t, `{"session":"s1","op":"do","args":{"steps":[{"action":"launch","app":"com.example.notes"}]}}`); !refusedAsPersonas(s) {
+		t.Fatalf("named by the call: %+v", s)
+	}
+	if s := doSteps(t, `{"session":"s1","op":"do","args":{"steps":[{"action":"launch","app":"com.example.persona-build"}]}}`); !refusedAsPersonas(s) {
+		t.Fatalf("the default name dropped: %+v", s)
 	}
 }

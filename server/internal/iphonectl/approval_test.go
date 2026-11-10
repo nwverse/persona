@@ -148,6 +148,19 @@ func TestPersonasOwnAppIsNeverOperated(t *testing.T) {
 	if v := named.Check(Step{Action: ActTap}, Touch{}, number(nil, snapshot{App: App{Name: "Persona"}})); v.Refused == "" {
 		t.Error("Persona named without a bundle id is operated")
 	}
+	// No bundle id known at all: the name alone keeps every touch out, whatever the bundle id in front.
+	for _, front := range []App{{BundleID: "com.example.unknown", Name: "Persona"}, {BundleID: "com.example.unknown", Name: " persona "}} {
+		scr := number(nil, snapshot{App: front, Elements: []Element{el("button", "Approve", 0, 0, 100, 40)}})
+		for _, st := range []Step{{Action: ActTap}, {Action: ActType, Text: "y"}, {Action: ActKey, Key: "return"}, {Action: ActSwipe, Direction: "up"}} {
+			if v := named.Check(st, Touch{Target: &scr.Elements[0]}, scr); v.Refused == "" {
+				t.Errorf("%s in %+v with SelfApps empty: %+v", st.Action, front, v)
+			}
+		}
+	}
+	// The whole name only: an app whose name merely starts with it is not Persona's.
+	if v := named.Check(Step{Action: ActTap}, Touch{}, number(nil, snapshot{App: App{BundleID: "com.example.other", Name: "Persona Notes"}})); v.Refused != "" {
+		t.Errorf("a longer name: %+v", v)
+	}
 	// Leaving it is fine.
 	if v := testRules.Check(Step{Action: ActButton, Button: "home"}, Touch{}, scr); v.Refused != "" || len(v.Needs) != 0 {
 		t.Errorf("home: %+v", v)

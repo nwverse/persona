@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/iphonectl"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The iphone program end to end against a simulator paired with this node (docs/extensions/iphone-bridge.md,
@@ -110,6 +112,29 @@ func TestLiveIPhoneSimulator(t *testing.T) {
 		t.Fatalf("the typed text is not on the screen:\n%s", after.Text)
 	}
 	t.Logf("look after:\n%s", after.Text)
+
+	// A newer do on the phone while a step waits for approval replaces it: the old approval id resumes nothing.
+	waiting := call(proto.IPhoneCall{Op: "do", Confirm: true, Args: json.RawMessage(`{"steps":[{"action":"key","key":"backspace"}]}`)})
+	if !waiting.NeedsApproval || waiting.ApprovalID == "" {
+		t.Fatalf("no approval asked: %s", waiting.Text)
+	}
+	call(proto.IPhoneCall{Op: "do", Args: json.RawMessage(`{"steps":[{"action":"wait","ms":100}]}`)})
+	raw, _ := json.Marshal(proto.IPhoneCall{Device: udid, Session: "live", Op: "do", Approved: waiting.ApprovalID, TimeoutMS: 120_000})
+	_, err := builtinCall(ctx, "iphone", "call", raw, nil)
+	code, sent := "", ""
+	var rerr *rpc.Error
+	if errors.As(err, &rerr) {
+		var d proto.IPhoneErrorData
+		_ = json.Unmarshal(rerr.Data, &d)
+		code, sent = rerr.Code, d.Sent
+	}
+	t.Logf("resume of a replaced approval: code=%s sent=%s: %v", code, sent, err)
+	if code != "not_pending" || sent != proto.IPhoneNotSent {
+		t.Fatalf("the replaced approval still resumes: %v", err)
+	}
+	if again := call(proto.IPhoneCall{Op: "look", Args: json.RawMessage(`{"screenshot":false}`)}); !strings.Contains(again.Text, `= "Wi-Fi"`) {
+		t.Fatalf("the field changed:\n%s", again.Text)
+	}
 
 	// Persona's own app as the hub names it (here Settings stands in for it): no step operates it.
 	self := call(proto.IPhoneCall{Op: "do", SelfApps: []string{"com.apple.Preferences"},
