@@ -90,5 +90,10 @@
   "larkcli_profile_auto": "跟随机器人的应用（推荐）",
   "larkcli_profile_not_logged_in": "未登录",
   "larkcli_profile_no_app": "没有应用 ID",
-  "larkcli_profile_configured": "已由 manager.json 固定；请在那里修改 lark.cli.profile。"
+  "larkcli_profile_using": "使用：{name}",
+  "larkcli_profile_change": "更改",
+  "larkcli_profile_done": "收起",
+  "larkcli_profile_auto_short": "跟随机器人的应用",
+  "larkcli_profile_default": "lark-cli 默认配置",
+  "larkcli_profile_fixed": "{name}（由配置文件指定）"
 }
