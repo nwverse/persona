@@ -96,7 +96,10 @@ func TestPlanThenWatchStopsWhenTheCardAnswers(t *testing.T) {
 	n.planThenAfterTerminal(sidA)() // answered at once
 	cycleModes(t, f, "w1:p1", "auto")
 	f.reset()
-	time.Sleep(planThenWatch + 100*time.Millisecond)
+	// Observe the full watch window before asserting that no key was sent.
+	timer := time.NewTimer(planThenWatch + 100*time.Millisecond)
+	defer timer.Stop()
+	<-timer.C
 	for _, c := range f.trace() {
 		if strings.Contains(c, "shift+tab") {
 			t.Fatalf("a key was pressed after the card answered: %v", f.trace())

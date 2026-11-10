@@ -62,6 +62,8 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		} else if ok {
 			s.botNote(ctx, messageID, acceptedNote(l, &ask))
+		} else { // not this round that waits: answered as its button answers (feishu_card_actions.go), not swallowed
+			s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
 		}
 		return true
 	}
