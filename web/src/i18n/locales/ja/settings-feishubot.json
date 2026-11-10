@@ -90,5 +90,10 @@
   "larkcli_profile_auto": "ボットのアプリに従う（推奨）",
   "larkcli_profile_not_logged_in": "未ログイン",
   "larkcli_profile_no_app": "アプリ ID なし",
-  "larkcli_profile_configured": "manager.json で固定されています。そこで lark.cli.profile を変更してください。"
+  "larkcli_profile_using": "使用中：{name}",
+  "larkcli_profile_change": "変更",
+  "larkcli_profile_done": "閉じる",
+  "larkcli_profile_auto_short": "ボットのアプリに合わせる",
+  "larkcli_profile_default": "lark-cli の既定プロファイル",
+  "larkcli_profile_fixed": "{name}（設定ファイルで指定）"
 }

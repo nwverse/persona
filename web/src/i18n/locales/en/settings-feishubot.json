@@ -90,5 +90,10 @@
   "larkcli_profile_auto": "Follow the bot's app (recommended)",
   "larkcli_profile_not_logged_in": "not signed in",
   "larkcli_profile_no_app": "no app id",
-  "larkcli_profile_configured": "Fixed by manager.json; change lark.cli.profile there."
+  "larkcli_profile_using": "Using: {name}",
+  "larkcli_profile_change": "Change",
+  "larkcli_profile_done": "Done",
+  "larkcli_profile_auto_short": "the bot's app",
+  "larkcli_profile_default": "lark-cli's default profile",
+  "larkcli_profile_fixed": "{name} (set in the config file)"
 }

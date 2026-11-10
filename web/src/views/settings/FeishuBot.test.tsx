@@ -232,6 +232,11 @@ describe("Feishu bot dialog", () => {
       },
     }));
 
+    // The profile in use is shown under the account; the select opens behind "Change".
+    expect(document.body.textContent).toContain(t("settings-feishubot.larkcli_profile_using", { name: "example" }));
+    expect(document.querySelector(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)).toBeNull();
+    const change = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.larkcli_profile_change"))!;
+    await act(async () => change.click());
     const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)!;
     expect([...select.options].map((option) => option.textContent)).toEqual([
       t("settings-feishubot.larkcli_profile_auto"),
@@ -247,7 +252,7 @@ describe("Feishu bot dialog", () => {
     await act(async () => calls.status[1].resolve(saved({ larkcli: { ...saved().larkcli!, mode: "chosen", choice: "other", profiles: [] } })));
   });
 
-  it("disables the lark-cli profile choice when manager.json fixes it", async () => {
+  it("shows the profile manager.json fixes, with no way to change it", async () => {
     const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
     connectorList.value = [larkcli];
     await open(saved({
@@ -260,9 +265,9 @@ describe("Feishu bot dialog", () => {
         profiles: [{ name: "fixed", app_id: "cli_fixed", user: "Example User", token_status: "valid" }],
       },
     }));
-    const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)!;
-    expect(select.disabled).toBe(true);
-    expect(document.body.textContent).toContain(t("settings-feishubot.larkcli_profile_configured"));
+    expect(document.body.textContent).toContain(t("settings-feishubot.larkcli_profile_using", { name: t("settings-feishubot.larkcli_profile_fixed", { name: "fixed" }) }));
+    expect([...document.querySelectorAll("button")].some((b) => b.textContent === t("settings-feishubot.larkcli_profile_change"))).toBe(false);
+    expect(document.querySelector(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)).toBeNull();
   });
 
   it("hides the permission button without a link and re-reads the connector on recheck", async () => {
