@@ -21,13 +21,14 @@
       "required": ["channel", "chat_id", "thread_id", "title"]
     },
     "TodoChangedEvent": {
-      "description": "event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed to start), or the thread it is bound to changed. Changes within about a second of each other are told once, as the to-do is at the end of them. title, thread and done are as after the change (the last ones for a deleted to-do); thread is left out when the to-do has none, done unless the to-do is done (closed, or its task failed to start). Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the to-do again if it matters.",
+      "description": "event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed to start), its supervisor, or the thread it is bound to changed. Changes within about a second of each other are told once, as the to-do is at the end of them. title, thread and done are as after the change (the last ones for a deleted to-do); thread is left out when the to-do has none, done unless the to-do is done (closed, or its task failed to start). supervisor is the conversation that supervises it (the main conversation or a leader, see leaders.schema.json), left out when none does; a change of supervisor (the task moved to another leader) sends it too. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the to-do again if it matters.",
       "type": "object",
       "properties": {
         "id": {"type": "string"},
         "title": {"type": "string"},
         "thread": {"$ref": "#/$defs/TodoEventThread"},
         "done": {"type": "boolean"},
+        "supervisor": {"type": "string"},
         "what": {"type": "string", "enum": ["created", "updated", "deleted"]}
       },
       "required": ["id", "title", "what"]
