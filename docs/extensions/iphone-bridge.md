@@ -197,9 +197,9 @@ ready event.
 
 The bridge always asks the phone for PNG (iOS 18.7.3 refuses "jpeg", error 4864) and converts to JPEG itself when asked: scaled down
 first, then encoded, tens of milliseconds for a full screen on this computer. `timing_ms` says where the time went: `capture` is the
-phone producing the image, `convert` the bridge's part, `stream_open` whether the input display stream was running then. Captures
-sometimes take much longer on the phone (18 s right after `button home` on iOS 27.0, while the stream was open): this is how to find out
-why.
+phone producing the image, `convert` the bridge's part, `stream_open` whether the input display stream was running then. On iOS 27.0
+the conversion stays under 40 ms; the capture takes about 0.7 s when no display stream ran recently, and 3–6 s within a few seconds of
+one (see "Open questions").
 
 | Arg | Default | Meaning |
 | --- | --- | --- |
@@ -432,11 +432,12 @@ phone has run against one only where the table says so:
 | `list_apps` | checked on that iPhone through the installation service: 121 user apps, 329 in all, under a second (CoreDevice's list never answered there) |
 | `terminate_app` | checked on that iPhone: Settings (pid 12411) ended in 3 s, a second call answered `terminated: false`, the screenshot showed the home screen, and the next launch got a new pid (12460). The request that ends it on that iPhone is `killPid:` (`how: "kill"`). Before the fix, `killPid:` with the pid as a plain integer was accepted but ended nothing while the bridge reported success |
 | Input on iOS 27.0 (iPhone17,1, 402 × 874 points), in one running `serve` session | **checked**: `tap` on Settings' search field 0.7 s (the field activated and the keyboard came up), `keys "wifi"` 0.1 s (typed, results shown), `swipe up` 0.3 s (keyboard dismissed), `button home` (home screen). The Dynamic Island shows a screen-sharing indicator while the stream is open |
-| Input from a one-shot `call` (or the node's `personad iphone call`) on iOS 27.0 | answered `{}` but did nothing before the fix above (the stream stopped right away); **the fix is not yet checked on the phone** |
+| Input from a one-shot `call` (or the node's `personad iphone call`) on iOS 27.0 | **checked**: `personad iphone call <udid> tap` on Settings' search field answered `{}` in 2 s and the field activated with the keyboard up; the bridge's own `call` with `button home` (2.3 s) went to the home screen. Before the fix the same tap answered `{}` and did nothing (the stream stopped right away) |
 | `long_press`, `drag`, `lock` and the volume buttons, coordinates in landscape | **not verified on a real device** |
 | Input below iOS 27 | not available: an iOS 18.7.3 iPhone itself refused the display stream with CoreDevice error 9021 ("Remote control requires iOS 27.0 or later"); input answers `unsupported` up front there |
-| Other operations on iOS 27.0 (iPhone17,1) | `launch_app` 0.1 s, `terminate_app` (`how: "kill"`, then `false`), `list_apps` 58 user apps in 0.2 s, `screenshot` PNG about 1 s (once 18 s after `button home`; JPEG at 500 px about 5 s), `device_info` (input, screenshot, apps `true`) |
-| Developer Mode off at pairing (iOS 27.0) | pairing succeeded, then connecting failed with `device socket io failed` and there was no Bonjour advertisement; now reported as above, **not yet checked on the phone** |
+| Other operations on iOS 27.0 (iPhone17,1) | `launch_app` 0.1 s, `terminate_app` (`how: "kill"`, then `false`), `list_apps` 58 user apps in 0.2 s, `device_info` (input, screenshot, apps `true`) |
+| `screenshot` on iOS 27.0 | works; conversion 16–40 ms. Capture about 0.7 s when no display stream ran in the last few seconds, 3–6 s soon after one (`timing_ms`: 6180 ms with `stream_open: false` about a second after a previous call's stream stopped; 4587 and 3259 ms with the stream open right after `button home`); once 18 s before `timing_ms` existed |
+| Developer Mode off at pairing (iOS 27.0) | pairing succeeded, then connecting failed with `device socket io failed` and there was no Bonjour advertisement. The `developer_mode` field, the `pair` hint and `developer_mode_off` are **not verified on a real device** (nobody turned Developer Mode off to try) |
 | `usb-list` | checked on a real iPhone (iPhone13,4, iOS 18.7.3, trusting the computer): it lists the phone with its name |
 | `pair` over USB (consent prompt, `altIRK`) | checked on that iPhone while it already trusted the computer: it answered the pairing request with pairing data straight away, without asking its user, and the record was written (0600). The first try panicked there (exit code 101): the library asked the bridge for the PIN and got an empty one; the bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error. Not verified: the Trust prompt on a phone that doesn't trust the computer yet, and the path where the phone asks its user to allow the pairing (`awaitingUserConsent`) |
 | `match` against a real advertisement | checked on that iPhone against its `_remotepairing._tcp` advertisement on the USB network interface (port 49152, TXT `identifier`, `authTag`, `ver`, `minVer`, `flags`): it answered `true`. An advertisement over Wi-Fi not verified |
@@ -453,6 +454,8 @@ phone has run against one only where the table says so:
 - **Typing with a non-English input method**: `keys` sends hardware keyboard events, which the phone's current input method interprets
   (a Chinese keyboard composes). A reliable way to type plain text regardless (switching the input method, or the pasteboard plus a paste
   shortcut) is not known yet; the bridge doesn't try.
-- **Slow captures**: one screenshot took 18 s right after `button home` on iOS 27.0; `timing_ms` is there to find out whether the open
-  display stream or the capture service is the cause.
+- **Slow captures**: on iOS 27.0 a screenshot's capture takes about 0.7 s when no display stream ran recently, but 3–6 s within a few
+  seconds of one, open or just stopped (and once 18 s). The conversion is not the cause. Whether the phone's capture service waits for
+  the stream to wind down, and whether waiting or stopping the stream first would help, is not known; the bridge doesn't change
+  anything for it yet.
 - **Signing request over HTTPS**: needs the library to let the caller choose the address or send the body itself.
