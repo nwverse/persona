@@ -6,6 +6,7 @@ import type { PluggableList } from "unified";
 import { clickLink, linkHref, linkRoute, prefetchLink } from "../lib/links";
 import { fileDownloadURL } from "../lib/api";
 import { isMachineRef, resolveRef } from "../lib/files";
+import { useLinkManager } from "../lib/manager-choice";
 import { openPanel } from "../lib/panel";
 import remarkMath from "remark-math";
 import { copyText, toast } from "./atoms";
@@ -332,12 +333,13 @@ export function markdownUrl(url: string): string {
   return linkRoute(url).kind === "session" ? url : defaultUrlTransform(url);
 }
 
-// A link opens where it belongs (lib/links.ts): Feishu documents in the side panel, conversations in place, pages in
-// a new tab. ⌘ / Ctrl / middle click is always the browser's new tab.
+// A link opens where it belongs (lib/links.ts): Feishu documents in the side panel (read as the chat's manager),
+// conversations in place, pages in a new tab. ⌘ / Ctrl / middle click is always the browser's new tab.
 // `line`: a path a message names at a line (src/a.ts:12, PathLinks.tsx) opens there.
 function Link({ href, children, mid, cwd, line, title: hover }: { href?: string; children?: React.ReactNode; mid?: string; cwd?: string; line?: number; title?: string }) {
   const title = textOf(children).trim();
   const path = mid && href && isMachineRef(href) ? resolveRef(cwd ?? "", href) : "";
+  const manager = useLinkManager();
   return (
     <a
       href={path && mid ? fileDownloadURL(mid, path, cwd, { inline: true }) : href ? linkHref(href) : undefined}
@@ -348,9 +350,9 @@ function Link({ href, children, mid, cwd, line, title: hover }: { href?: string;
         if (path && mid && !e.defaultPrevented && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
           e.preventDefault();
           openPanel({ kind: "file", mid, path, cwd, line });
-        } else clickLink(e, href, title && title !== href ? title : undefined);
+        } else clickLink(e, href, title && title !== href ? title : undefined, manager);
       }}
-      onPointerEnter={() => prefetchLink(href)}
+      onPointerEnter={() => prefetchLink(href, manager)}
     >
       {children}
     </a>
@@ -436,6 +438,9 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
 // keeps its width, scroll and margin (styles.css passes the prose edge rule through). The button is out of the
 // table, so a copy does not pick it up as a cell, and it stays put while a wide table scrolls. It is the control's
 // own 24px, not the 44px touch pad: it sits on a cell, and that pad would take the tap meant for a corner link.
+// The first placement is the ResizeObserver's first report (after layout, before paint), not a read in the effect: that
+// read laid out every table's exchange when a long chat opened, the ones skipped off screen too (#2905). A table in a
+// skipped exchange is placed when the exchange is drawn; the button only shows on hover, so it is there before it is seen.
 function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"table">) {
   const tableRef = useRef<HTMLTableElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -451,8 +456,10 @@ function TableBlock({ children, ref: _ref, ...rest }: React.ComponentProps<"tabl
       button.style.top = `calc(${table.offsetTop}px + 0.375rem)`;
       button.style.right = `calc(${gap}px + 0.375rem)`;
     };
-    place();
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") {
+      place();
+      return;
+    }
     const obs = new ResizeObserver(place);
     obs.observe(table);
     if (button.parentElement) obs.observe(button.parentElement);

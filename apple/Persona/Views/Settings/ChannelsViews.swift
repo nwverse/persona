@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-// Settings › Channels (docs/extensions/channels.md「界面」): the list and one channel's page; the Channels row on Settings; the line on a
+// Settings › Channels (docs/extensions/channels.md「UI」): the list and one channel's page; the Channels row on Settings; the line on a
 // connector's page that says it is a channel; the 「来自 …」 under a message and the mark beside a conversation's title.
 
 /// A channel's mark: its brand's (Lark), else a symbol of its kind in the accent color.

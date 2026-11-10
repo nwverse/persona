@@ -325,6 +325,13 @@ final class Dictation {
 
     /// Starts listening; `update` gets the whole transcript so far. Returns what went wrong, if it could not start.
     func start(update: @escaping (String) -> Void) async -> String? {
+        #if DEBUG
+        // `-showDictationSample "<words>"`: hears these words, one every beat, instead of the microphone (simulators
+        // may have none), for screenshots and recordings of the composer's mic.
+        if let sample = UserDefaults.standard.string(forKey: "showDictationSample"), !sample.isEmpty {
+            return startSample(sample, update: update)
+        }
+        #endif
         #if os(iOS) || os(visionOS)
         guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
         #endif
@@ -373,6 +380,24 @@ final class Dictation {
         }
         return nil
     }
+
+    #if DEBUG
+    private func startSample(_ sample: String, update: @escaping (String) -> Void) -> String? {
+        guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
+        self.update = update
+        isListening = true
+        listeningRun = UUID(); let run = listeningRun
+        let words = sample.split(separator: " ").map(String.init)
+        Task { @MainActor [weak self] in
+            for count in 1...max(1, words.count) {
+                try? await Task.sleep(for: .milliseconds(350))
+                guard let self, self.listeningRun == run else { return }
+                self.update?(words.prefix(count).joined(separator: " "))
+            }
+        }
+        return nil
+    }
+    #endif
 
     func stop() {
         guard RecordingMicrophone.shared.release(microphoneOwner) else { return }

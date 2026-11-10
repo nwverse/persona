@@ -79,7 +79,9 @@ class PersonaIdentifiersTest(unittest.TestCase):
         self.assertIn('if (PairingInput.isLink(url)) PairingInput.parse(url) else null', helper)
         pairing_input = (ROOT / 'android/feature/settings/src/main/kotlin/persona/feature/settings/PairingInput.kt').read_text()
         self.assertIn('fun isLink(value: String): Boolean = Pairing.isLink(value)', pairing_input)
-        self.assertIn('if (isLink(address)) return parse(address)', pairing_input)
+        link_return = 'if (isLink(address)) return parse(address)'
+        self.assertIn(link_return, pairing_input)
+        self.assertLess(pairing_input.index(link_return), pairing_input.index('val url = withScheme(address.trim())'))
         pairing = (ROOT / 'android/core/domain/src/main/kotlin/persona/core/domain/Pairing.kt').read_text()
         self.assertIn('const val scheme = "persona"', pairing)
         self.assertIn('fun isLink(text: String): Boolean = ProtocolCompatibility.isAppLink(text)', pairing)
@@ -136,12 +138,20 @@ class PersonaIdentifiersTest(unittest.TestCase):
             self.assertRegex(source, r'^package persona\.',)
             self.assertNotRegex(source, rf'class {name}(?:\([^\n]*\))?\s*:\s*persona\.[\w.]*{name}\(')
 
-    def test_saved_route_type_names_and_tab_keys_stay_stable(self):
+    def test_saved_route_type_names_stay_stable(self):
         source = (ROOT / 'android/core/navigation/src/main/kotlin/persona/core/navigation/Routes.kt').read_text()
         for name in ('InboxItem', 'LarkConversation', 'Interaction'):
             self.assertIn(f'@SerialName("persona.core.navigation.RouteSource.{name}")', source)
-        self.assertIn('enum class AppTab { Persona, Agents, Inbox, Settings }', source)
-        self.assertIn('@SerialName("persona.core.navigation.ChatRoute")', source)
+        for name in ('AssistantRoute', 'AgentsRoute', 'InboxRoute', 'SettingsRoute', 'ChatRoute'):
+            self.assertIn(f'@SerialName("persona.core.navigation.{name}")', source)
+
+    def test_primary_tab_keys_and_retired_shell_state(self):
+        source = (ROOT / 'android/core/navigation/src/main/kotlin/persona/core/navigation/Routes.kt').read_text()
+        self.assertIn('enum class AppTab { Persona, Agents }', source)
+        # Tabs are saved in ShellPosition; retired tab values discard the old shell instead of migrating it.
+        position = (ROOT / 'android/app/src/main/java/persona/android/navigation/ShellPosition.kt').read_text()
+        self.assertIn('coerceInputValues = false', position)
+        self.assertIn('.getOrDefault(ShellPosition())', position)
 
 
 if __name__ == '__main__':

@@ -8,7 +8,7 @@ struct FileScope: Hashable, Sendable {
     var cwd: String
 }
 
-/// Which paths mentioned in conversations are there on their machine (docs/apple/ios.md「文件查看器」), so only those are
+/// Which paths mentioned in conversations are there on their machine (docs/apple/ios.md「File viewer」), so only those are
 /// linked: a message may name another machine's file (the hub's ~/.persona/…), or one since deleted, and tapping it
 /// only said it could not be opened. Asked in batches (GET /api/v1/machines/{mid}/stat) a moment after rows appear,
 /// remembered per machine + directory + path. Until the answer comes, and when none can come (a node from before

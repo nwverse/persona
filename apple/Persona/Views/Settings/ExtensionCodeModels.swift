@@ -1,6 +1,6 @@
 import Foundation
 
-// The pure parts of the code-hosting components (#2961, docs/extensions/extensions.md「UI 版本 4」): a diff's lines numbered from
+// The pure parts of the code-hosting components (#2961, docs/extensions/extensions.md「UI version 4: code hosting」): a diff's lines numbered from
 // its hunks, the two sides paired for the side-by-side look, and a file tree built from full paths. No views here;
 // the renderer (ExtensionCodeViews.swift) draws what these work out, and the tests check them on their own.
 

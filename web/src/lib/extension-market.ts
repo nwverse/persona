@@ -1,4 +1,4 @@
-// Extension markets (docs/extensions/extensions.md "Extension markets"): markets the hub reads (an index persona-extensions.json on a site or a GitHub
+// Extension markets (docs/extensions/extensions.md "Extension marketplace"): markets the hub reads (an index persona-extensions.json on a site or a GitHub
 // repository), their catalog, and installing, upgrading and removing from it. A full-rights device may: the package is
 // pinned by the index's sha256 and nothing installs before the user has seen what it may do (the preview's
 // permissions digest). The admin UI has the same routes under /api/v1/admin/extensions/-/ (its api.ts), the same words
@@ -6,7 +6,7 @@
 import { api, enc, pastHub } from "./api";
 import { itemHeaders } from "./manager-choice";
 import { extRoot, listOf } from "./extension-api";
-import { changed, type HubExtensionDetail, type ExtensionPermission } from "./extensions";
+import { changed, type HubExtension, type HubExtensionDetail, type ExtensionPermission } from "./extensions";
 import { previewConsent, type DependencyState, type PackMember } from "./extension-model";
 import { t } from "../i18n";
 
@@ -157,6 +157,19 @@ export const uninstallExtension = (id: string, keepData = false, cascade = false
 export function marketOf(origin?: string): string {
   const m = /^market:([^/]+)\//.exec(origin ?? "");
   return m ? m[1] : "";
+}
+
+/**
+ * How many of `manager`'s installed extensions upgrade from its market `id`: removing the market stops their upgrades
+ * (docs/extensions/extensions.md "Auto-upgrade", #1895). The hub's merged list names every item's manager; another
+ * manager's copies are left out, since a market's id is the same wherever its address is registered, and an item
+ * without one is the manager's (a list from one manager). null when the hub does not say (one from before `market`: a
+ * market extension without it).
+ */
+export function upgradingFrom(id: string, list: Pick<HubExtension, "manager" | "auto_upgrade" | "market">[], manager: string): number | null {
+  const own = list.filter((e) => (e.manager ?? manager) === manager);
+  if (own.some((e) => e.auto_upgrade !== undefined && !e.market)) return null;
+  return own.filter((e) => e.market === id).length;
 }
 
 /**

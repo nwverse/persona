@@ -307,7 +307,8 @@ internal fun LazyListScope.usageWindows(accounts: List<UsageAccount>, now: Insta
 @Composable
 private fun UsageAccountCard(a: UsageAccount, now: Instant) {
     val palette = PersonaTheme.palette
-    val sources = listOfNotNull(stringResource(R.string.machines_usage_source_local).takeIf { a.local }) + a.sources
+    // The computers that read it by name; never "this computer", which reads as the phone in hand (#1907).
+    val sources = a.machines.ifEmpty { listOfNotNull(stringResource(R.string.machines_usage_source_local).takeIf { a.local }) } + a.sources
     val plan = planNote(a)
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
@@ -318,10 +319,7 @@ private fun UsageAccountCard(a: UsageAccount, now: Instant) {
         }
         val line = listOfNotNull(plan.takeIf { it.isNotEmpty() }, sources.takeIf { it.isNotEmpty() }?.joinToString(" · ")).joinToString(" · ")
         if (line.isNotEmpty()) Text(line, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        when (a.problem) {
-            "unreachable" -> Text(stringResource(R.string.machines_usage_problem_unreachable), style = PersonaTheme.type.caption, color = palette.cautionText)
-            "error" -> Text(stringResource(R.string.machines_usage_problem_error), style = PersonaTheme.type.caption, color = palette.cautionText)
-        }
+        problemText(a.problem)?.let { Text(stringResource(it), style = PersonaTheme.type.caption, color = palette.cautionText) }
         a.windows.forEach { WindowRow(it, now) }
     }
 }

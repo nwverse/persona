@@ -11,7 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
-// The HTML sandbox's own rules (docs/assistant/assistant-views.md "Security boundaries every client must verify"). These check what the app sets and
+// The HTML sandbox's own rules (docs/assistant/assistant-views.md "Security boundaries each platform must verify"). These check what the app sets and
 // takes; they are not the acceptance: Robolectric's WebView runs no page, makes no request and follows no link, so
 // none of the network, navigation or loop cases is observed here (AssistantHtml.kt says what is still to be done).
 @RunWith(AndroidJUnit4::class)

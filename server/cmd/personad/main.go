@@ -64,15 +64,15 @@ const usage = `usage:
   personad supervise [--manager-only [--hub <hub address>]]
                            the hub and the built-in manager side by side in one container, each started again when it
                            stops (the hub image runs it; docs/operations/docker.md)
-  personad voice            the built-in voice extension: the hub runs it (hub.json extensions, docs/extensions/extensions.md「内置语音扩展」)
+  personad voice            the built-in voice extension: the hub runs it (hub.json extensions, docs/extensions/extensions.md "Built-in voice extension")
   personad extension …      extensions on the hub's machine: list, install, upgrade, rollback, enable, disable, config,
-                           secret, uninstall, markets (docs/extensions/extensions.md「命令行」; personad extension for the details;
+                           secret, uninstall, markets (docs/extensions/extensions.md "Command line"; personad extension for the details;
                            also personad ext …, and personad plugin … as before)
 ` + nodecmd.SysmonUsage + `
   personad release manifest|check-next …
-                           the publisher's release manifest and checks (scripts/release/publish.sh, docs/operations/hub-update.md「发布」)
+                           the publisher's release manifest and checks (scripts/release/publish.sh, docs/operations/hub-update.md "Public publishing")
   personad update-watch <pending>
-                           the watchdog the hub starts over its own update (docs/operations/hub-update.md「回滚」)
+                           the watchdog the hub starts over its own update (docs/operations/hub-update.md "Updating")
   personad version [-v]     the version; -v adds the channel and build number`
 
 func main() {

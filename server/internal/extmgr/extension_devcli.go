@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -160,7 +161,7 @@ func fingerprint(dir string, only ...string) string {
 			}
 			return nil
 		}
-		if len(only) > 0 && !containsString(only, name) {
+		if len(only) > 0 && !slices.Contains(only, name) {
 			return nil
 		}
 		if info, err := d.Info(); err == nil {
@@ -169,13 +170,4 @@ func fingerprint(dir string, only ...string) string {
 		return nil
 	})
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-func containsString(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

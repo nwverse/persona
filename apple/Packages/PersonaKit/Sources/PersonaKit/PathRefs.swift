@@ -1,6 +1,6 @@
 import Foundation
 
-/// A path a message names (docs/apple/ios.md「文件查看器」), with the line it points at: `path:12`, `path:12:5`,
+/// A path a message names (docs/apple/ios.md「File viewer」), with the line it points at: `path:12`, `path:12:5`,
 /// `path:12-20` (the first line), `path#L12`. The same rules as the web's `web/src/lib/path-refs.ts`.
 public nonisolated struct PathRef: Hashable, Sendable {
     /// Where it is in the text (UTF-16): the path and its line.

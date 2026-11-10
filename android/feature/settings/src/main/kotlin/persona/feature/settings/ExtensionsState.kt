@@ -13,6 +13,7 @@ import persona.core.contracts.api.ExtensionDetail
 import persona.core.contracts.api.ExtensionField
 import persona.core.contracts.api.ExtensionHasDependents
 import persona.core.contracts.api.ExtensionManagement
+import persona.core.contracts.api.unpinned
 import persona.core.contracts.api.ExtensionNodeState
 import persona.core.contracts.api.ExtensionPermission
 import persona.core.contracts.api.ExtensionUpgrade
@@ -146,7 +147,9 @@ internal object ExtensionText {
 
     /** The "Upgrades" group's line under a newer version: what happens to it (the web's upgradeDetail). */
     fun upgradeDetail(res: Resources, u: ExtensionUpgrade): String = when (u.state) {
-        "needs_permission" -> morePermissions(res, u.addedPermissions.orEmpty())
+        // A rename is confirmed for the ID change, not for permissions (#2511).
+        "needs_permission" -> if (u.renameTo != null) u.detail?.takeIf { it.isNotBlank() } ?: res.getString(R.string.settings_ext_upgrade_rename, u.id, u.renameTo)
+            else morePermissions(res, u.addedPermissions.orEmpty())
         "waiting_idle" -> res.getString(R.string.settings_ext_upgrade_waiting_idle)
         "available" -> res.getString(R.string.settings_ext_upgrade_available)
         "off" -> res.getString(R.string.settings_ext_upgrade_off)
@@ -368,9 +371,9 @@ internal data class ExtensionListState(
 internal object ExtensionChanges {
     private val changes = MutableSharedFlow<ExtensionManagement>(extraBufferCapacity = 8)
 
-    fun changed(api: ExtensionManagement) { changes.tryEmit(api) }
+    fun changed(api: ExtensionManagement) { changes.tryEmit(api.unpinned) }
 
-    fun of(api: ExtensionManagement): Flow<Unit> = changes.filter { it === api }.map { }
+    fun of(api: ExtensionManagement): Flow<Unit> = changes.filter { it === api.unpinned }.map { }
 }
 
 /**
@@ -483,7 +486,9 @@ internal class ExtensionModel(
             val catalog = api.catalog(market = market, refresh = true)
             val source = catalog.markets.firstOrNull { it.id == market }
             if (source == null || !source.error.isNullOrBlank()) throw IllegalStateException(res.getString(R.string.settings_extension_market_unavailable))
+            // A renamed extension is in its market under its new ID (#2511).
             val candidate = catalog.extensions.firstOrNull { it.market == market && it.id == id }
+                ?: catalog.extensions.firstOrNull { it.market == market && it.renameFrom == id }
                 ?: throw IllegalStateException(res.getString(R.string.settings_extension_market_missing))
             val loaded = run { api.extension(id) }
             mutable.update { it.copy(loadFailed = !loaded) }

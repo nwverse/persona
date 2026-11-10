@@ -13,6 +13,7 @@ func TestDataSecretName(t *testing.T) {
 		"relay-tunnel.token", "devices.json.migrated", "mail_accounts.json.1",
 		"secret.key", "secret.key.bak", "handles.key~", "hub.key-old", "private.pem", "certificate.crt",
 		"edge.token", "edge.token.bak", "edge.secret", "edge.password", "db-password.token",
+		"hub.json.tmp-12345", // the copy a rewrite renames into place (managerconf.WriteFileAtomic)
 	}
 	for _, name := range secret {
 		if !DataSecretName(name) {

@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import PersonaKit
 
-// An extension's sign-in (docs/extensions/extensions.md「登录（auth）」, #4507): the hub asks the extension's program for its
+// An extension's sign-in (docs/extensions/extensions.md「Sign-in」, #4507): the hub asks the extension's program for its
 // status and passes the steps of a sign-in on (the connectors' Prompt: fields, a device code, a QR code); what the
 // sign-in yields stays with the program. Only with a hub that says `extension_auth`; an older hub's extension shows
 // 「还没登录」 in its warnings and its own sign-in page (`auth.page`), which this app then lists as any other page.

@@ -239,7 +239,7 @@
     {
       "name": "plain_text",
       "description": "普通的话不认。",
-      "source": "docs/protocol/protocol.md「Persona 注入的消息」",
+      "source": "docs/protocol/protocol.md「Messages injected by Persona」",
       "input": {
         "text": "帮我看看这个 PR"
       },

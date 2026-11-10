@@ -14,6 +14,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
@@ -272,7 +275,7 @@ internal fun ChatLineContent(
                         images = userPictures(userImages, session, loader))
                 }
             }
-            "reply" -> line.row.item?.item?.let { MessageContent(it, false, textUpdates[it.id]) }
+            "reply" -> line.row.item?.item?.let { MessageContent(it, false, textUpdates[it.id], boxed = true) }
             "thinking" -> if (!style.hideThoughts) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
             "image" -> line.row.item?.item?.let { ChatPicture(session, it, loader) }
             "recap" -> line.row.item?.item?.let { RecapLine(listOf(it)) }
@@ -288,14 +291,34 @@ internal fun ChatLineContent(
         }
         is ChatLine.Work -> Column(Modifier.fillMaxWidth()) {
             // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary.
-            val now by rememberNow(1_000, enabled = line.live)
-            WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }), line.open,
-                { onToggle(line.id) }, running = line.live) {}
+            if (style.compactToolSummary) AssistantWorkSummary(line, onToggle)
+            else {
+                val now by rememberNow(1_000, enabled = line.live)
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }), line.open,
+                    { onToggle(line.id) }, running = line.live) {}
+            }
         }
         is ChatLine.Step -> WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
+    }
+}
+
+@Composable
+private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
+    val state = stringResource(if (line.open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
+    val label = pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools)
+    val spoken = stringResource(persona.core.designsystem.R.string.designsystem_with_state, label, state)
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { onToggle(line.id) }
+        .then(Modifier.semantics { stateDescription = state; contentDescription = spoken })
+        .padding(vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        JIcon(if (line.open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true,
+            size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
+        Text(label,
+            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

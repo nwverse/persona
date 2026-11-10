@@ -14,14 +14,15 @@ import (
 
 // Formatting for tool results and the hub's logs, the same the hub writes with (one copy, internal/textfmt).
 var (
-	clip       = textfmt.Clip
-	oneLine    = textfmt.OneLine
-	firstLine  = textfmt.FirstLine
-	planTitle  = textfmt.PlanTitle
-	ago        = textfmt.Ago
-	short      = textfmt.Short
-	agentLabel = textfmt.AgentLabel
-	stateNames = textfmt.StateNames
+	clip          = textfmt.Clip
+	oneLine       = textfmt.OneLine
+	firstLine     = textfmt.FirstLine
+	firstNonEmpty = textfmt.FirstNonEmpty
+	planTitle     = textfmt.PlanTitle
+	ago           = textfmt.Ago
+	short         = textfmt.Short
+	agentLabel    = textfmt.AgentLabel
+	stateNames    = textfmt.StateNames
 )
 
 // transcriptText is a conversation's recent items for a model to read (agent_read, conversation_read): the

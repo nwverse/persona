@@ -23,10 +23,6 @@ type planTaskIn struct {
 	TodoID string `json:"todo_id"`
 }
 
-func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
-	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
-}
-
 // toolTaskPlanFrom is task_plan from the conversation sessionID running on machine (where its attachments are).
 func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID string, args json.RawMessage) (string, error) {
 	var in struct {
@@ -47,6 +43,7 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		return "", fmt.Errorf("at most 8 tasks in one plan")
 	}
 	reused := map[string]bool{}
+	modes := map[string]string{} // each computer's Claude Code default mode, read once for this plan
 	for i := range a.Tasks {
 		t := &a.Tasks[i]
 		t.normalizeReadonlyPermission()
@@ -57,12 +54,6 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
 		t.Model = strings.TrimSpace(t.Model)
 		t.Permission = strings.TrimSpace(t.Permission)
-		if t.Permission == "" {
-			t.Permission = s.settings(ctx).DefaultPermissionMode
-			if t.Permission == "" {
-				t.Permission = "default"
-			}
-		}
 		if err := t.normalizeMachinePolicy(); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
@@ -108,6 +99,10 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 					return "", fmt.Errorf("task %d: %w", i+1, err)
 				}
 			}
+		}
+		// Unset: settled on the computer it lands on, so the card shows what will run (tasks_permission.go).
+		if t.Permission == "" {
+			t.Permission = s.taskPermission(ctx, t.Machine, modes)
 		}
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {

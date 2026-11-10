@@ -285,7 +285,7 @@ final class LiveUpdateTests: XCTestCase {
     }
 
     // The Agents badge in the shell is the hub's: a question coming adds
-    // one within 2 s, its answer takes it off again (docs/apple/ios-state.md「第 3 步」: counted in the model, published
+    // one within 2 s, its answer takes it off again (docs/apple/ios-state.md「Step 3」: counted in the model, published
     // when the number changes).
     @MainActor func testTheAgentsBadgeIsTheHubs() {
         launch()

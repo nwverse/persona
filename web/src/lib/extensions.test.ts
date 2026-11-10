@@ -3,7 +3,7 @@ import { ApiError } from "./api";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import {
   checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, extensionDetail,
-  machineStatus, extensionState, extensionTone, readNumber, runNote, same, secretState, setAt, setExtensionConfig, setExtensionEnabled, setExtensionSecret, sourceText,
+  machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setAt, setExtensionConfig, setExtensionEnabled, setExtensionSecret, sourceText,
   stateLine, valueAt, morePermissions, extensionUpgrades, setExtensionAutoUpgrade, setExtensionUpgrades, upgradeAction, upgradeDetail, upgradeNote,
   type HubExtension, type ExtensionField, type ExtensionUpgrade, nodeProgramStatus, exitText, saveFooter, channelOf, sandboxEgress, sandboxState,
 } from "./extensions";
@@ -117,6 +117,18 @@ describe("草稿", () => {
     expect(same([1, { a: 2 }], [1, { a: 2 }])).toBe(true);
     expect(same([1], { 0: 1 })).toBe(false);
   });
+  it("puts only the edits back on a newer configuration, field by field inside a group", () => {
+    const base = { mode: "safe", proxy: { host: "a.example.com", port: 80 }, every: 30, tags: ["x"] };
+    const draft = { mode: "safe", proxy: { host: "b.example.com", port: 80 }, every: 30, tags: [] };
+    const typed = { every: { text: "30", integer: true }, limit: { text: "1a", integer: true } };
+    const fresh = { mode: "fast", proxy: { host: "a.example.com", port: 8080 }, every: 120, tags: ["x", "y"] };
+    // host and the cleared tags are the user's; mode, port and every (typed, but as it was) follow the hub; "1a" is still being typed
+    expect(rebaseDraft({ base, draft, typed }, fresh)).toEqual({
+      draft: { mode: "fast", proxy: { host: "b.example.com", port: 8080 }, every: 120 },
+      typed: { limit: { text: "1a", integer: true } },
+    });
+    expect(rebaseDraft({ base, draft: base, typed: {} }, fresh).draft).toBe(fresh);
+  });
   it("reads numbers as typed", () => {
     expect(readNumber(" 30 ", true)).toEqual({ value: 30 });
     expect(readNumber("", true)).toEqual({});
@@ -222,7 +234,7 @@ describe("an extension's machine switches", () => {
   });
 });
 
-describe("auto-upgrade (docs/extensions/extensions.md「自动升级」)", () => {
+describe("auto-upgrade (docs/extensions/extensions.md「Auto-upgrade」)", () => {
   const up = (state: string, extra: Partial<ExtensionUpgrade> = {}): ExtensionUpgrade => ({ id: "p", market: "m1", from: "1.0.0", to: "1.1.0", state, ...extra });
 
   it("says what happens to a newer version, and what the user does about it", () => {

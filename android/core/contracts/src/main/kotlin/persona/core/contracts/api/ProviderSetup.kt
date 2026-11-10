@@ -170,8 +170,11 @@ data class ProviderPreset(
     /** One of the hub's own (`plugin: "builtin"`), not an extension's. */
     val builtin: Boolean get() = extension == BUILTIN
 
-    /** The hub's test speaks Messages only: a Responses API cannot be tested. */
-    val testable: Boolean get() = !(kind == "api" && api == "responses")
+    /** Claude Code needs a Messages endpoint; Responses and Chat Completions serve only the hub's direct-API calls. */
+    val runsClaude: Boolean get() = kind != "api" || api.isNullOrEmpty() || api == "messages"
+
+    /** The hub's key test supports Messages, Responses and Chat Completions (an empty protocol means Messages). */
+    val testable: Boolean get() = api.isNullOrEmpty() || api == "messages" || api == "responses" || api == "chat"
 
     /** "Where to get a key": the signup page when it is a web address. */
     val signupLink: String? get() = signupUrl?.trim()?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
