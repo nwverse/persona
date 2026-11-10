@@ -32,10 +32,12 @@ export function ReviewBadge({ todo, className }: { todo: Todo; className?: strin
   );
 }
 
-const MARK: Record<CheckMark, { icon: "check" | "x" | "clock"; className: string; label: () => string }> = {
+const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
   met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
   missing: { icon: "x", className: "text-red", label: () => t("assistant-tasks.review_missing") },
   open: { icon: "clock", className: "text-ink-3", label: () => t("assistant-tasks.review_open") },
+  // added after the acceptance, which still stands (#3156): nothing waits on it
+  unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
 };
 
 /** The task's criteria, each as its latest review found it, and what the supervisor said last. */

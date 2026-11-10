@@ -1,6 +1,6 @@
 import { formatDate, t } from "../i18n";
 import { noteItemManager } from "./manager-choice";
-import { reviewState, type Supervision } from "./supervision";
+import { acceptanceStands, reviewState, type Supervision } from "./supervision";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
 import { parseAPIError, retryable } from "./api-errors";
@@ -206,8 +206,21 @@ export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
 }
 
-/** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did. */
+/** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
+ *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks"). */
+export function acceptedAtRest(todo: Todo, status: TodoStatus): boolean {
+  return !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
+}
+
+/** The status a row draws its tone and mark from: Done for an accepted task at rest, else its own. */
+export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
+  return acceptedAtRest(todo, status) ? "done" : status;
+}
+
+/** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
+ *  (or accepted and nothing runs again). */
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
+  if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }

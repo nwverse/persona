@@ -1966,6 +1966,68 @@ if os.environ.get("MOCK_TODO_OFFLINE") == "1" and not MOCK_MACHINES:
     SESSIONS.append(sess("nas", "a1f3c2d4-0000-4000-8000-0000000000b1", "备份照片库", "/home/me/backup", "unknown",
                          "unknown", "backup", 1, "1", 1, 180, "开始同步照片库。"))
 
+
+# MOCK_TODO_TRIAGE=1 (#3156, docs/assistant/todo-status-sop.md): a long-running hub's to-do list. A few to-dos really move;
+# most are old agent records nobody touched for days, one accepted task was reopened when its agent got more work (eight
+# criteria, the accepted review judged five), an old PR still waits to merge, and two pairs are the same piece of work.
+def _triage_fixture():
+    tr = []
+
+    def agent(sid, title, cwd, state, minutes, last, machine="macbook", **kw):
+        status = {"working": "working", "needs_you": "blocked", "unread": "done", "idle": "idle"}[state]
+        space = cwd.rstrip("/").rsplit("/", 1)[-1]
+        SESSIONS.append(sess(machine, sid, title, cwd, status, state, space, 7, "1", 1, minutes, last, **kw))
+        return {"machine_id": machine, "session_id": sid, "linked_at": ago(minutes=minutes + 30), "released_at": None,
+                "title": title, "cwd": cwd, "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def todo(tid, title, minutes, agents=(), **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 600),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": list(agents)}
+        t.update(kw)
+        tr.append(t)
+
+    def sid(n):
+        return f"c3d5e7f9-0000-4000-8000-{n:012d}"
+
+    todo("tr_inbox", "收件箱分拣加批量操作", 4, [agent(sid(1), "收件箱批量操作", "/Users/me/code/persona", "working", 4,
+         "批量标记已处理的接口写好了，正在补单测。")],
+         supervision={"supervisor": "conv_demo", "done_when": ["批量标记已处理", "单测覆盖"], "state": "", "round": 0, "reviews": [],
+                      "progress": {"kind": "progress", "step": 3, "steps": 5, "text": "写单测", "at": ago(minutes=4)}})
+    todo("tr_migrate", "数据库升级到 18", 12, [agent(sid(2), "数据库升级", "/home/me/code/shop-api", "needs_you", 12,
+         "要不要先在备份库上演练一遍？", pending=1)])
+    accepted_at = ago(hours=5)
+    done_when = ["网关能按账号池转发请求", "额度窗口按重置时间合并", "设置页能添加网关", "单测覆盖转发和合并",
+                 "部署到 hub 后实测", "网页侧边栏显示额度条", "iOS 机器页显示额度", "文档写清楚接入方式"]
+    todo("tr_gateway", "账号池网关第一阶段", 180, [agent(sid(3), "账号池网关", "/Users/me/code/persona", "idle", 180,
+         "追加的三项也做完了。")], reopened_at=ago(hours=4),
+         supervision={"supervisor": "conv_demo", "done_when": done_when, "state": "accepted", "round": 1,
+                      "reviews": [{"at": accepted_at, "verdict": "accepted", "note": "前五项都有证据，验收通过。",
+                                   "checks": [{"criterion": c, "met": True, "evidence": "见 PR 描述"} for c in done_when[:5]]}],
+                      "updated_at": accepted_at})
+    todo("tr_search_pr", "设置页加搜索", 60 * 24 * 6, [agent(sid(4), "设置页搜索", "/Users/me/code/persona", "idle", 60 * 24 * 6,
+         "PR 已经开好了，等合并。")], stage="review", pr_url="https://github.com/example/app/pull/31",
+         delivery={"state": "pr", "gate": "等你批准合并", "unblock": "user", "at": ago(days=6)})
+    todo("tr_push_fix", "修复 #412 推送丢失", 50, [agent(sid(5), "推送丢失", "/Users/me/code/persona", "unread", 50,
+         "修好了：重连后补拉漏掉的推送，单测已加。")])
+    todo("tr_push_test", "#412 推送丢失：补回归测试", 60 * 30, [agent(sid(6), "推送回归测试", "/Users/me/code/persona", "idle",
+         60 * 30, "回归测试写完了。")])
+    todo("tr_follow", "整理本周会议纪要", 120, [agent(sid(7), "会议纪要", "/Users/me/work", "idle", 120, "纪要初稿放在知识库里了。")])
+    stale = [("排查 node 内存上涨", "/Users/me/code/persona", 3), ("试一下新的启动器", "/Users/me/workspace", 4),
+             ("清理旧的构建缓存", "/Users/me", 5), ("看一下日志轮转", "/home/me/work", 7), ("调研新引擎", "/Users/me/workspace", 9),
+             ("修 Android 深色模式的边框", "/Users/me/code/persona", 11)]
+    for i, (title, cwd, days) in enumerate(stale):
+        todo(f"tr_stale_{i}", title, 60 * 24 * days, [agent(sid(20 + i), title, cwd, "idle", 60 * 24 * days, "先到这里。")])
+    tr.append({"id": "tr_deployed", "title": "网页加载提速", "notes": "", "done_at": ago(hours=1), "created_at": ago(days=1),
+               "updated_at": ago(hours=1), "origin": "conv_demo", "done_by": "review", "done_reason": "验收通过",
+               "delivery": {"state": "live", "at": ago(hours=1)}, "spaces": [], "agents": [],
+               "supervision": {"supervisor": "conv_demo", "done_when": ["首屏少于 1 秒"], "state": "accepted", "round": 0,
+                               "reviews": [{"at": ago(hours=1), "verdict": "accepted",
+                                            "checks": [{"criterion": "首屏少于 1 秒", "met": True}]}]}})
+    return tr
+
+
+if os.environ.get("MOCK_TODO_TRIAGE") == "1":
+    TODOS_INIT.extend(_triage_fixture())
 TODOS = copy.deepcopy(TODOS_INIT)
 
 
@@ -3820,27 +3882,33 @@ if os.environ.get("MOCK_ASK_LONG") == "1":
                 for n in range(1, 9)]},
             {"question": "整理完发给谁？", "header": "发送", "multi_select": True, "options": [
                 {"label": "组里"}, {"label": "老板"}, {"label": "只给我"}]}]})
-# MOCK_ASK_LONG=perm: the main conversation waits on a Feishu permission card instead, its command a very long
-# `python3 -c …` script: the card is taller than the dock on every width, its buttons must still be reachable.
+# A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
+# every width, so its buttons have to stay reachable.
+def _long_lark_cmd(verb):
+    return "python3 -c \"import json, subprocess\n" + "".join(
+        "r%d = subprocess.run(['lark-cli', 'im', 'messages', '%s', '--chat-id', 'oc_example_%d', '--page-size', '50'], capture_output=True, text=True)\nprint(json.dumps(json.loads(r%d.stdout)['items'][:5], ensure_ascii=False, indent=2))\n" % (n, verb, n, n)
+        for n in range(1, 13)) + "\""
+
+
+def _long_lark_card(ix_id, machine, session, title, tool, verb, minutes, **extra):
+    cmd = _long_lark_cmd(verb)
+    return {"id": ix_id, "machine_id": machine, "session_id": session, "session_title": title, "kind": "permission",
+            "created_at": ago(minutes=minutes), "expires_at": later(minutes=29), "tool_name": tool, "summary": cmd,
+            "tool_input": {"command": cmd}, **extra}
+
+
+# MOCK_ASK_LONG=perm: the main conversation waits on a long Feishu permission card instead.
 if os.environ.get("MOCK_ASK_LONG") == "perm":
-    _long_cmd = "python3 -c \"import json, subprocess\n" + "".join(
-        "r%d = subprocess.run(['lark-cli', 'im', 'messages', 'list', '--chat-id', 'oc_example_%d', '--page-size', '50'], capture_output=True, text=True)\nprint(json.dumps(json.loads(r%d.stdout)['items'][:5], ensure_ascii=False, indent=2))\n" % (n, n, n)
-        for n in range(1, 13)) + "\""
-    INTERACTIONS.append({
-        "id": "ix_perm_long", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
-        "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "mcp__lark__run",
-        "summary": _long_cmd, "tool_input": {"command": _long_cmd}})
-# MOCK_ASK_LONG=agent: the same long Feishu permission card on an agent's chat (the tests session on the MacBook), whose
-# cards a phone folds under the composer (PendingCards) rather than in the main chat's tray.
+    INTERACTIONS.append(_long_lark_card("ix_perm_long", "server", ASK1, "Persona", "mcp__lark__run", "list", 1))
+# MOCK_ASK_LONG=agent: two long Feishu permission cards on an agent's chat (the tests session on the MacBook) and no
+# other card there, whose cards a phone and a side panel fold under the composer (PendingCards): the first open, the
+# second behind "1 more".
 if os.environ.get("MOCK_ASK_LONG") == "agent":
-    _long_cmd = "python3 -c \"import json, subprocess\n" + "".join(
-        "r%d = subprocess.run(['lark-cli', 'im', 'messages', 'list', '--chat-id', 'oc_example_%d', '--page-size', '50'], capture_output=True, text=True)\nprint(json.dumps(json.loads(r%d.stdout)['items'][:5], ensure_ascii=False, indent=2))\n" % (n, n, n)
-        for n in range(1, 13)) + "\""
     INTERACTIONS[:] = [x for x in INTERACTIONS if x["session_id"] != TESTS]
-    INTERACTIONS.append({
-        "id": "ix_perm_long_agent", "machine_id": "macbook", "session_id": TESTS, "session_title": "补齐网络层的单元测试",
-        "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
-        "tool_name": "mcp__lark__run", "summary": _long_cmd, "tool_input": {"command": _long_cmd}})
+    for _ix_id, _tool, _verb, _minutes in (("ix_perm_long_agent", "mcp__lark__run", "list", 2),
+                                           ("ix_perm_long_agent_2", "mcp__lark__send", "send", 1)):
+        INTERACTIONS.append(_long_lark_card(_ix_id, "macbook", TESTS, "补齐网络层的单元测试", _tool, _verb, _minutes,
+                                            cwd="/Users/me/code/weather"))
 
 if os.environ.get("MOCK_SETTINGS_INPUT"):
     INTERACTIONS.append({
@@ -4206,6 +4274,8 @@ MOCK_INTERACTIONS = INTERACTIONS + [
      "tool_name": "Bash", "tool_use_id": "toolu_check",
      "tool_input": {"command": "python3 -m unittest discover", "description": "验证格式转换与元数据保留"}},
 ]
+if os.environ.get("MOCK_ASK_LONG") == "agent":  # only the two long cards on the tests session (see above)
+    MOCK_INTERACTIONS = [x for x in MOCK_INTERACTIONS if x["session_id"] != TESTS or x["id"].startswith("ix_perm_long_agent")]
 # MOCK_SCRIPT_ASK=1: a card on no session (#4059), as `personad ask` run outside herdr sends it (session_id empty).
 if os.environ.get("MOCK_SCRIPT_ASK") == "1":
     MOCK_INTERACTIONS.insert(0, {"id": "ix_script_ask", "machine_id": "macbook", "session_id": "",
@@ -17103,7 +17173,7 @@ def features():
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
-MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent 同一张授权卡在 MacBook 上补测试的 Agent 对话里（手机和侧边面板）")
+MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
 MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装码过期了还没装的（码已过期，可以拿新的安装码），和一个过期超过 7 天的（像 hub 一样不在名册里）")
