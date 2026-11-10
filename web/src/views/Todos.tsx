@@ -872,8 +872,12 @@ function TodoListControls({
           <Icon name="x" size={10} stroke={2.4} />
         </button>
       )}
-      <span data-testid="todos-filter" data-filter={filter} data-sort={sort} className="contents">
-        <IconButton icon="filter" label={t("todos.filter_label")} onClick={menu.open} active={Boolean(menu.anchor) || filter !== "all" || sort !== "recent"} />
+      {/* a dot while the filter or the order is not the default, as iOS fills its mark: the list is not as it was */}
+      <span data-testid="todos-filter" data-filter={filter} data-sort={sort} className="relative inline-flex shrink-0">
+        <IconButton icon="filter" label={t("todos.filter_label")} onClick={menu.open} active={Boolean(menu.anchor)} />
+        {(filter !== "all" || sort !== "recent") && (
+          <span data-testid="todos-filter-changed" aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-accent" />
+        )}
       </span>
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align="right" width={224} items={items} />}
     </>

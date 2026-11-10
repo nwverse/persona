@@ -78,6 +78,7 @@ const menuRow = (label: string) => [...document.querySelectorAll<HTMLElement>("[
 describe("the To-dos list's filter and sort", () => {
   it("filters to This week from the menu, says what waits outside it, and the chip clears it", async () => {
     expect(host.querySelector("[data-testid=todos-filter-chip]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-filter-changed]")).toBeNull();
     await act(async () => host.querySelector<HTMLElement>("[data-testid=todos-filter] button")!.click());
     await act(async () => menuRow("本周")!.click());
     await flush();
@@ -101,5 +102,8 @@ describe("the To-dos list's filter and sort", () => {
     const open = titles().filter((x) => x === "Back up the photos" || x === "Renew the domain");
     expect(open).toEqual(["Back up the photos", "Renew the domain"]);
     expect(localStorage.getItem("persona.todos.sort")).toBe("priority");
+    // not the default order: the button says so, with no filter on
+    expect(host.querySelector("[data-testid=todos-filter-changed]")).not.toBeNull();
+    expect(host.querySelector("[data-testid=todos-filter-chip]")).toBeNull();
   });
 });
