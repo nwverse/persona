@@ -270,7 +270,7 @@ func TestLegacyListStreams(t *testing.T) {
 		h.listSessions(w, r)
 		size = w.n
 	})
-	if per > 68<<10 {
+	if per > 68<<10 && !raceEnabled {
 		t.Fatalf("a %d-byte whole list allocates %d bytes", size, per)
 	}
 }
