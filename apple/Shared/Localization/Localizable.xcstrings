@@ -1,6 +1,29 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Couldn’t switch to “%@” on the hub: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t switch to “%1$@” on the hub: %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub で「%1$@」に切り替えられませんでした：%2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能在 hub 上换成「%1$@」：%2$@"
+          }
+        }
+      }
+    },
     "Last time [Inbox Hand-Off]" : {
       "localizations" : {
         "en" : {
@@ -75035,6 +75058,29 @@
       },
       "extractionState" : "manual"
     },
+    "Not read this round; the list may be incomplete" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not read this round; the list may be incomplete"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今回は読み取れませんでした。一覧が不完全な可能性があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一轮没读到，列表可能不全"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Not Running [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -83381,6 +83427,28 @@
       },
       "extractionState" : "manual"
     },
+    "Pending" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pending"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要対応"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待处理"
+          }
+        }
+      }
+    },
     "Pending Answers" : {
       "localizations" : {
         "en" : {
@@ -86713,6 +86781,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Progress" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Progress"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進捗"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进度"
+          }
+        }
+      }
     },
     "Project" : {
       "comment" : "Memory kind",
