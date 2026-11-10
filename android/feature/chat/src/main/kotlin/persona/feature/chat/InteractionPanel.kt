@@ -225,6 +225,8 @@ internal fun InteractionForm(
                     enabled = editable && password.isNotEmpty())
             } else {
                 // The options read as "n of total"; "Say it in the chat instead" is a separate button, not one of them.
+                // A multi-select dialog ticks these and sends them together with the submit row, below.
+                val multi = interaction.dialog?.multi == true
                 val plain = options.filter { it.kind != ScreenOptionKind.Chat }
                 fun positionOf(option: ParsedScreenOption) = plain.indexOfFirst { it === option } + 1 to plain.size
                 options.forEach { option ->
@@ -234,13 +236,18 @@ internal fun InteractionForm(
                     // The terminal's "chat about this" hands the question back to the conversation (iOS "Say it in the chat instead").
                     if (option.kind == ScreenOptionKind.Chat) JButton(stringResource(R.string.chat_screen_chat_instead), { act(AnswerAction.ScreenOption, value) },
                         kind = JButtonKind.Secondary, size = JButtonSize.Small, icon = PhIcons.ChatCircle, enabled = allowed)
-                    else {
+                    // A multi-select dialog's free text is its field in the body, not a row to tick.
+                    else if (!(multi && option.kind == ScreenOptionKind.TypeSomething)) {
                         val display = AnswerBuilder.display(option.label)
                         DecisionOption(numberedOption(option.key, display.text), { act(AnswerAction.ScreenOption, value) },
-                            detail = option.detail, recommended = display.recommended, selected = draft.option == option.key, enabled = allowed,
-                            position = positionOf(option), fullText = full)
+                            detail = option.detail, recommended = display.recommended,
+                            selected = if (multi) option.key in draft.selected else draft.option == option.key,
+                            enabled = allowed, multiSelect = multi, position = positionOf(option), fullText = full)
                     }
                 }
+                if (multi) JButton(interaction.dialog?.submit?.takeIf(String::isNotBlank)
+                    ?: stringResource(R.string.chat_question_submit), { act(AnswerAction.ScreenSubmit) },
+                    enabled = enabled(AnswerAction.ScreenSubmit))
             }
         }
     }

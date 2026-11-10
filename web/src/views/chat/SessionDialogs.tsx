@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
-import { BYPASS_MODE, BYPASS_WARNING, effortOptions, effortTitle, modeTitle, renameBody, switchableModes } from "../../lib/session-actions";
+import { BYPASS_MODE, BYPASS_WARNING, canSwitchToBypass, effortOptions, effortTitle, modeTitle, renameBody, switchableModes } from "../../lib/session-actions";
 import { canSwitchModel, onModelPicker } from "../../lib/model-switch";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
 import { href, navigate, parse, showsSession } from "../../lib/router";
@@ -320,7 +320,16 @@ export function ModeChips({ session, effortOnly, assistant, withInfo }: { sessio
           side="top"
           width={300}
           header={t("chat-sessiondialogs.permission_mode")}
-          items={switchableModes(assistant || session.assistant, session.agent).map((m) => ({ key: m.id, label: m.title, detail: m.detail, radio: true, checked: mode === m.id, onSelect: () => void set({ permission_mode: m.id }) }))}
+          items={switchableModes(assistant || session.assistant, session.agent, canSwitchToBypass(session)).map((m) => ({
+            key: m.id,
+            label: m.title,
+            detail: m.detail,
+            radio: true,
+            checked: mode === m.id,
+            // an agent switched to "Allow all" while it runs (#1379): in red, and asked again first
+            ...(m.id === BYPASS_MODE && mode !== BYPASS_MODE && !(assistant || session.assistant || session.agent === "agy") ? { danger: true, confirm: t("chat-sessiondialogs.bypass_confirm"), confirmDetail: BYPASS_WARNING } : {}),
+            onSelect: () => void set({ permission_mode: m.id }),
+          }))}
         />
       )}
       {effortMenu.anchor && !withModel && (

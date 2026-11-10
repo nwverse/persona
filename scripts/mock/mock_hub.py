@@ -722,6 +722,12 @@ for _s in SESSIONS:
         if _tokens:
             _s.update(context_tokens=_tokens, context_window=_window)
 
+# MOCK_BYPASS_AVAILABLE=1 (#1379): the widget agent's Claude was started with --dangerously-skip-permissions, so Allow All
+# is in its mode cycle and the apps offer it while it runs (Session.bypass_available).
+if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
+    for _s in SESSIONS:
+        if _s["session_id"] == WIDGET: _s["bypass_available"] = True
+
 # MOCK_STALE_DONE=1 (#2069): the widget session as the hub listed it while herdr said done through a turn the phone
 # started (status done, state idle, its activity still moving): the Agents list before the node's fix.
 if os.environ.get("MOCK_STALE_DONE") == "1":
@@ -3027,6 +3033,22 @@ if os.environ.get("MOCK_QUOTE") == "1":
            "> 2. **照片同步脚本**（Mac Studio）的计划写好了，等你批准。\n> 3. 韩梅梅在飞书问你**周五的发布能不能赶上**，她下午要和客户确认。\n\n第二件先放一放，周五前提醒我。"),
         it("assistant", "text", 2.2, text="好，周四下午提醒你看照片同步脚本的计划。"),
     ]
+# MOCK_COMMENTS=1: a review sent from the web (#151): the widget chat's newest message leads with two `Code comment N`
+# blocks and an `Element comment N` block (docs/protocol/protocol.md "Quote and comment blocks at the start of messages"),
+# then its summary; the iOS bubble draws the blocks as cards (MessageComments, CommentBubbleTests).
+if os.environ.get("MOCK_COMMENTS") == "1":
+    ITEMS[WIDGET] = ITEMS[WIDGET] + [
+        it("user", "text", 0.6, text="\n".join([
+            "> Code comment 1", "> File: Shared/Forecast.swift:7", "> Diff: branch since 4f2a9c1", "> ```diff", "> +let city: String?", "> ```", "> ",
+            "> 城市名用可选的吧，老缓存里没有这个字段", "",
+            "> Code comment 2", "> File: Shared/Forecast.swift:30-31", "> Diff: branch since 4f2a9c1", "> ```diff", ">  return cached", "> +?? last", "> ```", "> ",
+            "> 解析失败时回退到上次的缓存，别让小组件空着", "",
+            "> Element comment 3", "> Page: http://localhost:5173/settings", "> Element: button.save",
+            "> Component: SaveButton (src/settings/SaveButton.tsx:14)", "> Text: Save", "> ```html", '> <button class="save">Save</button>', "> ```", "> ",
+            "> 改成整行宽的主按钮", "",
+            "整体可以，改完这三处再提交。"])),
+        it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
+    ]
 # MOCK_TASKS=1: the unified entry (docs/assistant/unified-entry.md, #930). The main conversation dispatches tasks: a started plan
 # of two (the widget fix working, the unit tests waiting for an answer — ix_tests), a read-only one that finished with a
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
@@ -4598,11 +4620,18 @@ def node_action(h, p, body):
         tab = {"w1:p2": "w1:t2", "w1:p3": "w1:t2"}.get(src, "w1:t1" if ws == "w1" else ws + ":t1")
         SPLIT_PANES[mid].append({"pane": "%s:p%d" % (ws, n), "terminal": "pane:%s:p%d" % (ws, n), "tab_id": tab, "workspace_id": ws, "title": "zsh", "cwd": "/home/me/persona"})
     elif area == "panes" and verb == "git":
+        # as the hub answers a node's coded refusal (#1888): a 409 in the request's language, the node's words as detail
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+        lang = readiness_mock.lang_of(h.headers.get("Accept-Language", ""))
+        def refuse(code, words):
+            return h.send_json({"error": readiness_mock.t(lang, "rpc-errors." + code, reason=words), "code": code, "delivered": "none", "detail": words}, 409)
         if body.get("workspace_id") == "w2" or str(body.get("pane", "")).startswith("w2:"):
-            return h.send_json({"error": "不是 Git 仓库"}, 400)
+            return refuse("not_a_repository", "the folder is not in a Git repository")
         if body.get("op") == "push":
-            return h.send_json({"error": "推送失败（不会强制推送）：git push: ! [rejected] main -> main (fetch first)"}, 409)
-        return h.send_json({"op": body.get("op"), "message": "已是最新" if body.get("op") == "pull" else "已获取远端更新"})
+            return refuse("push_rejected", "git push: ! [rejected] main -> main (fetch first) (nothing was forced)")
+        outcome, message = ("up_to_date", "Already up to date") if body.get("op") == "pull" else ("fetched", "Fetched")
+        return h.send_json({"op": body.get("op"), "outcome": outcome, "message": message})
     elif area == "panes" and verb == "agent":
         time.sleep(0.6)
     return h.send_json({})
@@ -11805,6 +11834,9 @@ def bump(what, session=None):
 # /mock/say?drop=1: the reply is written and the session list moves, but its push never reaches the page (#3139).
 # /mock/say?preset=markdown: a long reply whose blocks change height as they render (a code block, a table, a list),
 # for StreamingScrollTests: streamed at the hub's pace it shows whether the chat holds still while it grows.
+# /mock/say?preset=repair: what a streamed reply leaves half-written (#2916): a code fence in a numbered list's item, a
+# table arriving row by row, an open **bold** with half a link in it, a ```mermaid fence. &upto=<n> stops the stream after
+# its first n characters and leaves it open (no transcript line), so each moment can be photographed for as long as needed.
 SAY_PRESETS = {
     "markdown": """先说结论：三台机器上的服务都能拿到凭据，但有两处要改配置。下面按顺序列出来。
 
@@ -11850,6 +11882,32 @@ service:
 3. 两边都改完后，我再跑一遍检查，把结果发你。
 
 有问题随时说。""",
+    "repair": """Here is what I found in the release checklist. Two steps:
+
+1. Build the example service with the release flags:
+
+   ```sh
+   make build TARGET=example-service
+   ./scripts/check.sh --strict
+   ```
+
+2. Compare the timings with last week's run:
+
+| Step | Last week | This week |
+| --- | --- | --- |
+| Build | 42 s | 31 s |
+| Tests | 18 s | 12 s |
+| Upload | 9 s | 9 s |
+
+The upload is **no longer the slow step; see [the build notes](https://example.com/build-notes)** for the numbers.
+
+```mermaid
+graph TD
+  A[Build] --> B[Tests]
+  B --> C[Upload]
+```
+
+Tell me if you want the upload sped up too.""",
 }
 
 
@@ -12013,10 +12071,11 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
-    transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139)."""
+    transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
+    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten."""
     import time
     for send, subscribed in list(LIVE):
         for sid in list(subscribed):
@@ -12031,9 +12090,12 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
                     ITEMS[sid] = ITEMS[sid] + asked
                     send({"type": "items", "machine_id": mid, "session_id": sid, "items": asked, **span(asked, before)})
                     user = None
+                shown = text[:upto] if upto > 0 else text
                 for k in range(1, steps + 1):
                     time.sleep(ms / 1000)
-                    send({"type": "delta", "machine_id": mid, "session_id": sid, "text": text[:len(text) * k // steps]})
+                    send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:len(shown) * k // steps]})
+                if upto > 0:
+                    continue  # still being written: a later /mock/say carries it on (or writes it)
                 if late:
                     # As a real hub can: the turn's end clears the stream before the transcript line is read (&late=ms).
                     send({"type": "delta", "machine_id": mid, "session_id": sid, "text": ""})
@@ -13028,6 +13090,8 @@ def _gateway_upgrade(state):
 
 
 _gateway_upgrade(os.environ.get("MOCK_PLUGIN_UPGRADE", "needs_permission"))
+# As it starts, for /mock/reset: a test that installs the update (ExtensionMarketTests, #2988) leaves the next one 1.0.0.
+_GATEWAY_START = copy.deepcopy(PLUGINS["example-gateway"])
 
 
 def upgrades_route(handler, p, req):
@@ -14239,7 +14303,8 @@ class H(BaseHTTPRequestHandler):
             # the file was rewritten: docs/protocol/protocol.md "Continuity of items"); /mock/reset puts mock-1 back.
             if q.get("history", [""])[0]: HISTORY_NOW["token"] = q["history"][0]
             args = (SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None, q.get("stream", ["0"])[0] == "1",
-                    int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1")
+                    int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
+                    int(q.get("upto", ["0"])[0]))
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
@@ -14404,6 +14469,9 @@ class H(BaseHTTPRequestHandler):
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
             NET["delay"], PAGING["on"] = float(os.environ.get("MOCK_DELAY", "0")), False
             HISTORY_NOW["token"] = HISTORY
+            # ExtensionMarketTests' update installed (#2988): example-gateway at 1.0.0 again, its newer version waiting.
+            PLUGINS.pop("example-gateway-next", None); _UPGRADE_WHILE_ON.pop("example-gateway", None)
+            PLUGINS["example-gateway"] = copy.deepcopy(_GATEWAY_START)
             for m in MACHINES:
                 m["engine"] = "herdr"
                 if m["id"] == "lab":
@@ -17968,6 +18036,9 @@ if READINESS or BUILTIN_PRESETS:
         return f + [x for x in extra if x not in f]
 
 READY = {"sc": readiness_mock.SCENARIOS.get(READINESS, {}) if READINESS else {}, "dismissed": False}
+# Optional probe boundaries for #1892: exceed Apple's old 30 s timeout, or refuse the try with an HTTP error.
+READINESS_PROBE_DELAY = float(os.environ.get("MOCK_READINESS_PROBE_DELAY", "0"))
+READINESS_PROBE_ERROR = int(os.environ.get("MOCK_READINESS_PROBE_ERROR", "0"))
 READY_MAIN = "b2e4d6f8-0000-4000-8000-0000000000aa"
 if READINESS:
     _sc = READY["sc"]
@@ -18108,7 +18179,15 @@ if READINESS or BUILTIN_PRESETS:
             return True
         if p == "/api/v1/assistant/readiness" and method == "GET":
             q = parse_qs(urlparse(handler.path).query).get("probe", [""])[0]
-            handler.send_json(ready_state(handler, q in ("1", "true")))
+            probing = q in ("1", "true")
+            if probing and READINESS_PROBE_DELAY:
+                time.sleep(READINESS_PROBE_DELAY)
+            if probing and READINESS_PROBE_ERROR:
+                words = {"zh-Hans": "mock 探针没有回答", "en": "The mock probe did not answer",
+                         "ja": "モックプローブが応答しませんでした"}[lang]
+                handler.send_json({"error": words, "code": "probe_failed", "retryable": True}, READINESS_PROBE_ERROR)
+                return True
+            handler.send_json(ready_state(handler, probing))
             return True
         if p == "/api/v1/assistant/readiness/dismiss" and method == "POST":
             try:
@@ -18161,6 +18240,7 @@ MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|ba
                  "主对话就绪度的场景（#287，docs/operations/testing.md「Readiness scenarios」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
                  "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
                  "MOCK_BUILTIN_PRESETS=1 只加内置供应商预设")
+MOCK_HELP.append("MOCK_READINESS_PROBE_DELAY=<秒> / MOCK_READINESS_PROBE_ERROR=<HTTP 状态>  延迟或拒绝 ?probe=1（#1892，超过旧 30 秒客户端超时 / 显示失败）")
 
 # MOCK_ULTRACODE=1 (#3428, docs/protocol/protocol.md "Claude Code ultracode"): the hub has the `ultracode` feature and the agents show
 # each state of Claude Code's session-only switch: on (the widget, working; its chat has the node's "on" notice), a request

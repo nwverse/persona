@@ -352,7 +352,9 @@ function QuestionCard({ ix }: { ix: Interaction }) {
             onKeyDown={(e) => e.key === "Enter" && !composing(e.nativeEvent) && (last ? all && void send() : answered(qi) && setQi(qi + 1))}
             placeholder={t("chat-interactions.custom_placeholder")}
             aria-label={t("chat-interactions.custom_answer")}
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
+            // focused in a box that scrolls, it lands clear of the card's sticky answer row below and of a sticky title
+            // above (the assistant's Pending tray), rather than under either
+            className="min-w-0 flex-1 scroll-my-14 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-3"
           />
         </label>
       </div>

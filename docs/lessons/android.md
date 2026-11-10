@@ -478,3 +478,7 @@ An update card can retain metadata for hours. A content-addressed file on disk i
 Separate metadata, download, verification, permission and installer failures. Log the stage and exception class without transport messages that could contain credentials. Returning from unknown-source settings requires checking the actual grant before continuing; a result code alone does not establish permission. A committed PackageInstaller session only proves handoff, never installation success. A signing receipt or publication message also does not prove the online verifier ran: retain and inspect its terminal result.
 
 - A renderer version bump also changes negative fixtures: a newly supported field, chart or icon can no longer stand for an unknown value. Assert its concrete v6 meaning and retain a separate unknown-value rejection case; keep the advertised device version pinned to the delivered contract (#828).
+
+## Preserve business failures at the HTTP boundary (#1915)
+
+Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where the response's request path is still known. Keep disabled/read-only recovery non-retryable and map shared feedback by code, not an arbitrary server sentence. Knowledge list/search/detail and edit feedback must agree. Preserve request IDs for reports; resource checks do not prove that JVM tests, native rendering or all-style screenshots passed.

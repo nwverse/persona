@@ -435,6 +435,12 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
   Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
   (`splitPush`), or give each link its own row.
+- A `.sheet` or `.task` that belongs to a whole `List` page goes on the `List`, never on its rows (2026-11-10, #2988). Modifiers on a `Group` of
+  sections go to every section: an extension page's Update sheet was presented five times over, and once it rose the whole Settings sheet (the
+  shell's) closed under it. Moving it to the first section (#2547) still failed on a long page: that row is lazily built and taken down once it
+  scrolls off, so Review tapped at the bottom closed Settings the same way, and its `.task(id:)` ran again every time the row came back. A page
+  made of a child view's rows puts its page-wide modifiers in a `ViewModifier` the page applies to its `List` (`ExtensionSettingsPageWork`).
+  Test it with the largest text, which pushes the first rows off screen.
 - If `x` in `NavigationPath([x])` is `AnyHashable`, the recorded type is `AnyHashable` and a concrete `navigationDestination(for:)` cannot match,
   producing a yellow warning. Append concrete types (`SettingsView.openDebugPage`).
 - `NavigationSplitView` detail pages use destinations registered in the sidebar and are built in its environment. Put detail environment values
@@ -1585,6 +1591,21 @@ A worktree's display name and its Agents' conversation names are different comma
   Ask Claude and Give an Agent a Task still send messages from a locked phone; changing that is a separate decision.
 - An entry that never shows the plan in full approves plans in `acceptEdits`, never `bypassPermissions`.
 
+## A caret written into streamed Markdown lands in whatever block is open (2026-11-10, #2916)
+
+- `StreamingText` appended ` ▍` to the block being written. Inside an open fence it was a line of code, in a table a cell's text; on a
+  line that closes a fence or a `$$` block (`` ``` ▍``, `$$ ▍`) it kept the line from closing it, and `$$x$$ ▍` was no longer a formula.
+  Ask where the text ends (`StreamRepair.end`) before writing anything after it.
+- What is added to close a block goes in that block's container: a closing fence or a table's delimiter row written at
+  column 0 under a list item's indented fence or header ended the item, and cmark-gfm drew an empty code block under the
+  list (or the rows as a paragraph). Indent it as the line that opened the block, and check the result with cmark-gfm.
+- A render queue chained from unstructured `Task`s is not cancelled with the view's `.task`: each half-written ```mermaid source of a
+  streaming reply was drawn in turn. Jobs with their own waiters and a cancellation handler let one nobody waits for be dropped
+  (`MarkdownRenderer`). Keep MarkdownUI's inline image loads uncancelled: `InlineText` stores whatever a cancelled load returns, and
+  `MathInlineImages` returns the TeX source as a picture on an error.
+- Keys that change at every delta in a shared memo that empties itself when full (`TextMemo`) wipe everyone else's entries every few
+  seconds; give them their own small memo (`StreamTail`).
+
 ## `difference(from:)` can need memory in the square of the changes (2026-11-10, #2915)
 
 - The standard library's Myers diff keeps every step's frontier in the older runtimes: on macOS 15.6, two sides of
@@ -1602,3 +1623,7 @@ A worktree's display name and its Agents' conversation names are different comma
   "nothing new" or "no earlier commits". Keep the quiet path only for the automatic live refresh; a read the user started
   says it failed over what stays shown (a notice with Retry, or the button itself turning into Try Again). Decide it in a
   small pure type (`GitReadFailure`) so a test pins which case is quiet.
+
+## Configuration refusals are not retryable connection failures (#1915)
+
+HTTP failures live in `Shared/APIClient.swift`, not PersonaKit's model-response `APIErrorInfo`. Classify business codes before status or timeout wording. A background sync must pause on disabled/read-only configuration without discarding uploads or deletion intent; another local save cannot repair that configuration. Reopen/foreground can explicitly recheck. Do not continue writes after failed reconciliation, and do not acknowledge a remote deletion from an unsupported 404. Keep the list's pending-delete explanation durable across relaunch.

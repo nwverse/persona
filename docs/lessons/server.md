@@ -1596,3 +1596,7 @@ When server tests read a shared fixture outside `server/`, include it in `script
 relative path and create its remote parent directory. The inbox list tests read `scripts/mock/inbox_events.json`;
 copying only the Go module left them failing on the test machine. Extend the fake remote launcher test to read the
 staged fixture from the package directory, check refreshed contents, and reject a missing source before Go starts.
+
+## A node error without a code reads as "the hub is down" (2026-11-10, #1888)
+
+A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` has no code, so `apierr.Call` treats it as `internal` and the hub answers 502 with the generic `rpc-errors.failed` summary; the real reason survives only in `detail`, which no client shows. Web words every 502 as "the hub can't respond right now", iOS and Android show "The request could not be completed": a dirty worktree or a missing upstream looked like a broken hub. A refusal the user can act on goes out as `refusal(code, english message, data)`, its code goes into `rpcFailureKeys` with a summary in every `rpc-errors` locale (name `{reason}` there to keep git's or the program's own words), and the hub then answers a 409 in the client's language. Success texts follow the same rule: answer a code (`outcome`) the clients put into their own strings, and keep an English `message` for older clients.

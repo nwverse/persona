@@ -609,9 +609,13 @@ data class Question(
 
 @KeepGeneratedSerializer
 @Serializable(with = DialogOptionSerializer::class)
-data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null)
+data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null,
+    /** Ticked at the computer (a multi-select box) when the dialog was read. */
+    @SerialName("checked") val checked: Boolean = false)
 
-/** A terminal dialog the hub parsed (server/internal/screen); answer with Resolution.option. */
+/** A terminal dialog the hub parsed (server/internal/screen). One answer shape for both: a single-choice dialog
+ *  answers with [Resolution.option]; a multi-select one ([multi]) ticks options and sends them all in
+ *  [Resolution.options], its free text in [Resolution.text]. */
 @KeepGeneratedSerializer
 @Serializable(with = ScreenDialogSerializer::class)
 data class ScreenDialog(
@@ -620,6 +624,10 @@ data class ScreenDialog(
     @SerialName("detail") val detail: String? = null,
     @SerialName("options") val options: List<DialogOption> = emptyList(),
     @SerialName("rev") val rev: String = "",
+    /** Options are checkboxes, sent together by the submit row, instead of one answer on tap. */
+    @SerialName("multi") val multi: Boolean = false,
+    /** The submit row's own label ("Submit", or "Next" when another question follows). */
+    @SerialName("submit") val submit: String? = null,
 )
 
 /** Something a permission card asks to fill in before approving (`proto.Field`, a password); see [Interaction.fields]. */

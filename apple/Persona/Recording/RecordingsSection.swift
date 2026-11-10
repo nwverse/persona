@@ -307,7 +307,7 @@ struct RecordingDetailView: View {
     var body: some View {
         Group {
             if let entry = library.entry(id) { ScrollViewReader { proxy in content(entry, proxy: proxy) } } else {
-                EmptyStateView(symbol: Theme.Icon.recording, title: String(localized: "Recording Deleted"), message: String(localized: "This recording and its text in Knowledge have both been deleted."))
+                EmptyStateView(symbol: Theme.Icon.recording, title: String(localized: "Recording Deleted"), message: String(localized: "Deleted from this device. Removal from Knowledge may still be pending."))
             }
         }
         .themedPage()
@@ -320,7 +320,7 @@ struct RecordingDetailView: View {
                 transcription.cancel(id)
                 do { try sync.delete(id); dismiss() } catch { failure = String(localized: "The recording wasn't deleted. Try again later.") }
             }
-        } message: { Text("The audio on this device and the text in Knowledge will both be deleted.") }
+        } message: { Text("The audio on this device will be deleted now. Its text in Knowledge is removed after sync succeeds; if Knowledge is off or read-only, that deletion stays pending.") }
         .alert("Couldn't Finish", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK [Recordings Section de32e2]") { failure = nil }.lineLimit(1)
         } message: { Text(failure ?? "") }
