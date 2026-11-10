@@ -22,6 +22,7 @@ fun MailTransport.pinned(pins: ManagerPins?): MailTransport =
 private class PinnedExtensionManagement(val source: ExtensionManagement, private val pins: ManagerPins) :
     ExtensionManagement by source {
     override suspend fun extensions() = withContext(pins) { source.extensions() }
+    override suspend fun subscriptionSummary() = withContext(pins) { source.subscriptionSummary() }
     override suspend fun listing() = withContext(pins) { source.listing() }
     override suspend fun extension(id: String) = withContext(pins) { source.extension(id) }
     override suspend fun setEnabled(id: String, enabled: Boolean, cascade: Boolean) = withContext(pins) { source.setEnabled(id, enabled, cascade) }
