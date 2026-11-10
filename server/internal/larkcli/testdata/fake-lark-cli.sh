@@ -66,7 +66,8 @@ case "${1:-}" in
       cat <<'JSON'
 [
   {"name":"example","appId":"cli_example","brand":"feishu","user":"Example User","tokenStatus":"valid"},
-  {"name":"other","appId":"cli_other","brand":"lark","user":"","tokenStatus":"signed_out"}
+  {"name":"other","appId":"cli_other","brand":"lark","user":"","tokenStatus":"signed_out"},
+  {"name":"persona","appId":"cli_example","brand":"feishu","user":"Example User","tokenStatus":"valid"}
 ]
 JSON
       exit 0
