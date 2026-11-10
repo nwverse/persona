@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## A completed task's omitted ask must clear the partial store merge (#3038)
+
+`putTodo` merges partial records. A completed to-do response omits `ask`, so passing it directly leaves the old decision card in the attention tray until another list read. Explicitly clear the returned optional ask when applying completion, invalidate earlier list reads with `todosAsked.forget()`, then refresh the list. Regress a delayed pre-completion read followed by a failed refresh: an accepted write must not roll back. Admit completion and recommendation acceptance through one synchronous guard: disabling buttons after a React render does not block mixed actions in the same event batch. Regress successful completion with JSON-omitted optional fields, not an object containing `ask: undefined`. Offer direct completion only on the live Pending row, never a historical briefing snapshot that may describe an earlier run.
+
 ## Shared wire projections need one property declaration (#2947)
 
 Two independently merged features can add the same optional field to an interface without a text conflict. Keep one declaration backed by the shared wire type, including its compatibility with unknown values; an older inline union can disagree with the extracted type and break the production TypeScript build. Derived projections such as a brief's acceptance row should reference that shared field type too, rather than maintain another narrower union. Run the normal build on the integrated branch: focused runtime tests alone do not detect duplicate interface properties.
@@ -94,6 +98,10 @@ The web's `turns=2` initial page and two-turn cache deliberately preserve a smal
 ## Render-count tests must separate store pushes from live clocks (#1989)
 
 A Profiler counts every commit beneath it, including status clocks and deferred mount work unrelated to the store update under test. Drain mount timers before taking the baseline, keep time fixed during the measured push sequence, and explicitly flush the real store's batched notifications inside `act`. Freezing timers without delivering those notifications can make a zero-redraw test pass vacuously: retain all negative assertions and add a positive control proving a current-conversation update still redraws and changes the DOM. Clear timers and restore real time after unmounting each test.
+
+## A scroll handler sets state only when its answer changes (#2998)
+
+A handler that runs on every scroll event (each frame of snap scrolling or a smooth `scrollBy`) and every `ResizeObserver` report must not call `setState` with a new object each time: `Object.is` never matches, so the component and all its children render on every frame (an extension carousel rendered its tiles once per scroll event). Returning the previous state from an updater is not enough either: React skips that render only while the component has no pending work, so a same-state resize report still rendered once and the next real change rendered twice. Keep what is shown in a ref and skip `setState` when nothing changed (`Carousel` in `web/src/views/extensions/ViewBody6.tsx`). Count `<Profiler>` commits for unchanged scrolls, unchanged resize reports and one real change (`web/src/views/extensions/ViewBody6.renders.test.tsx`).
 
 ## Streamed stat grids need the same text bounds as snapshots (#1703)
 
@@ -590,6 +598,8 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 
 - Global `prefers-reduced-motion` rules in `styles.css` reduce CSS animation / transition duration to 1 ms, but cannot control explicit JS `scrollTo({ behavior: "smooth" })` / `scrollIntoView({ behavior: "smooth" })`.
   All scripted scrolling must use `scrollBehavior()` (`src/ui/stream/motion.ts`, reuses `prefersReducedMotion`), not duplicate `matchMedia` strings.
+- Since 2026-11-10 (#2998) `src/ui/stream/scroll-motion.test.ts` enforces it: it scans `web/src` and fails on `behavior: "smooth"`, an inline `reduce ? "auto" : "smooth"`, or a scroller styled `scroll-behavior: smooth` / `scroll-smooth` (that one animates `"auto"` too) anywhere outside `motion.ts`.
+  Pick the target before scrolling: `a?.scrollIntoView() ?? b?.scrollIntoView()` runs both, since `scrollIntoView` returns `undefined`, and the second scroll wins (diff review's open-threads button always went to the first thread).
 
 ## Reduced motion and busy indicators (2026-11-05, #3475)
 
@@ -699,6 +709,18 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 - On the first commit a child's `useLayoutEffect` runs before React attaches its parent's ref, so a child that reads `parentRef.current` there gets `null` and the column renders without its width. Pass the column's `id` (`useId`) and look it up with `document.getElementById` instead.
 - Modules mocked by `AppShellRenders.test` (for example `views/SidePanel`) expose only the exports the mock defines, so a new shell component that imports a constant from such a module fails with `No "X" export is defined on the mock`. Shared layout constants (`CHAT_MIN`, `PANEL_MIN`) belong in `lib/layout.ts`.
 
+## Rows that keep their memo across pushes (2026-11-10, #2914)
+
+- `memo` helps only when the row's props keep their identity. A value rebuilt on every push (the "By to-do" tree from `buildTodoTree`, the rail's ticks from the chat lines) breaks it even when nothing changed. Share the rebuilt value with the previous one (`shareTree`, `stabilizeLines`), or cache the result per input object in a `WeakMap`. Store the parts the result was read from next to it and check them, because callers and tests can change a line in place.
+- A prop that every row receives but only one row uses (the open row's key, the list of computers) re-renders all of them when it changes. Pass the open row's key only to the branch that holds it ("" elsewhere), and pass a lookup that keeps its identity while the labels it returns stay the same.
+- A shortcut on text must give the same result as the full pass. `navRailExcerpt` reads only the head of a long answer, and only when no comment or link runs past the cut. Its test compares it with the whole-text excerpt on random Markdown; removing either check must make that test fail.
+- `querySelectorAll` on the chat scroller searches every message's markup. The line wrappers (`[data-line]`) are direct children of `[data-chat-content]`, so read those children instead.
+
+## A chart hover redraws its crosshair, not its lines (#2998)
+
+- A hover moment that several charts share re-renders whatever owns it on every `pointermove`. The machine page kept it in the page component, so each move rendered the page, the now tiles and all four charts, and every chart built each `points` string again (two `toFixed` a point, about 360 points a range): 20 moves cost 20 page renders and 71,505 `toFixed` calls. Keep the moment in the smallest component that renders everything following it (`Charts` in `views/machines/MachineDetail.tsx`), and draw what does not depend on it as `memo` layers (`YGrid` / `Lines` in `MetricChart.tsx`, `ThroughputLayers` / `HitRateLine` in `UsageSection.tsx`).
+- A memo holds only on stable props: memoized series, formatters at module level (an inline `(v) => ...` is new every render), primitives instead of a fresh `{ value, label }`, and memoized derived arrays (`kinds` filtered on each render recomputed the usage chart's layers on every move). Pin it in jsdom by counting `Number.prototype.toFixed` calls or renders over 20 moves, and compare the SVG markup before and after the change to show the look did not move.
+
 ## Manual mail drafts belong to their manager and item (#1252)
 
 - The merged Inbox can contain the same item id under two managers. Scope retained drafts and the live form's React key to both owner and item; resolve an omitted owner to the roster default so explicit and implicit default stamps share one draft. The mail body's open-reply key also needs the owner, or switching managers can leave the previous reply template open. Exercise late send failures after unmount while another owner's same-id draft is open, and verify recipients, account and reply headers as well as text through mocked sends.
@@ -715,6 +737,10 @@ A saved credential and an empty input are different from explicitly removing tha
 ## Pairing fallback needs an unsupported-route response (#1916)
 
 A successful token check does not prove the subsequent device-token exchange succeeded: a redeemed pairing code can still read during its grace period. Keep the legacy credential only when the exchange returns 404 for an old hub. Authentication refusal, server failure and transport failure must reject sign-in without replacing browser credentials. Both opened and pasted links should classify a 401 by status, not by the exact error sentence returned by the hub.
+
+## A gateway status is not an outage diagnosis (#1915)
+
+Classify stable business codes before generic status messages, including in toast folding. A 503 can mean disabled knowledge, an unready index or a disconnected manager; it does not prove the hub or a computer is down. Keep old-hub compatibility at the REST boundary, requiring the route, status, code and exact known diagnostic together. Retain diagnostics on the error object, not inside business messages, and exercise the rendered page through the real decoder.
 
 ## An op receipt keeps the hub's answer and the digest covers the body (#2459)
 

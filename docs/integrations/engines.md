@@ -136,6 +136,19 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
   it works normally while the other list is empty).
 - Orca next to herdr goes through "Host sets" above; there are no more combination options.
 
+## tmux (approvals only)
+
+A Claude Code the user starts by hand in a tmux pane (`tmux new -s work`, then `claude`) is not an engine. It is listed as a session in an ordinary
+terminal and stays read-only, with one exception: its approval can be answered from the app.
+
+Claude Code writes the pane it runs in into its own `sessions/<pid>.json` (`"tmux": "work:@11.%11"`), so no process environment is scanned. When a
+dialog holds that pane (a permission prompt, a question, a picker), the session lists as Needs you and gets a screen card on web, Android and iOS.
+An answer presses the keys in the pane through the tmux command (`server/internal/node/hosttmux.go`, `server/internal/tmux`); a dialog that changed
+since the card was made is refused without a keypress (`prompt_changed`).
+
+Nothing else comes from this host: no spaces, slots, terminal tab, live stream or starting sessions. A message still goes through the session's peer
+inbox when it has one. tmux is added next to whichever engine the machine selected and needs no choice.
+
 ## botmux
 
 [botmux](https://github.com/deepcoldy/botmux) maps each Lark topic to a Claude Code / Codex / compatible CLI session in its own tmux. It is not an engine:
