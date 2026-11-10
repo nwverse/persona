@@ -3,7 +3,7 @@
 // then 7+ days and 1+ month), the source order (the chips'), one group means none.
 import { describe, expect, it } from "vitest";
 import type { InboxItem } from "./inbox";
-import { doneGroups, groupBySource, openAtFirst, sectionGroups, sourceKey, timeKey } from "./inbox-groups";
+import { dayGroupCounts, doneGroups, groupBySource, openAtFirst, sectionGroups, sortTimeKeys, sourceKey, timeKey, timeRange } from "./inbox-groups";
 
 // Mon 9 Nov 2026, 15:00 local
 const now = new Date(2026, 10, 9, 15, 0).getTime();
@@ -73,5 +73,27 @@ describe("groups", () => {
     expect(openAtFirst("action", "lark")).toBe(true);
     expect(openAtFirst("noise", "mail:acc1")).toBe(true);
     expect(["just", "today", "yesterday", "week"].map((k) => openAtFirst("done", k))).toEqual([true, true, false, false]);
+  });
+});
+
+describe("Done's groups from the hub's day counts (#2969)", () => {
+  it("a group's range holds exactly its own moments: its start and its last moment are in it, its end is not", () => {
+    for (const key of ["yesterday", "d:2026-11-07", "d:2026-11-03", "week"]) {
+      const { start, end } = timeRange(key, now);
+      expect(timeKey(new Date(start).toISOString(), now)).toBe(key);
+      expect(timeKey(new Date(end - 1).toISOString(), now)).toBe(key);
+      expect(timeKey(new Date(end).toISOString(), now)).not.toBe(key);
+    }
+    expect(timeRange("today", now)).toEqual({ start: new Date(2026, 10, 9).getTime(), end: Infinity });
+    expect(timeRange("month", now)).toEqual({ start: -Infinity, end: new Date(2026, 9, 11).getTime() });
+    expect(timeKey(new Date(timeRange("month", now).end - 1).toISOString(), now)).toBe("month");
+  });
+
+  it("each day's count goes to its group; Just now (the list's) comes off Today", () => {
+    // 2 Nov is 7 days back (7+ days), 11 Oct 29 (still 7+ days), 10 Oct 30 (1+ month)
+    const counts = dayGroupCounts({ "2026-11-09": 5, "2026-11-08": 3, "2026-11-04": 2, "2026-11-02": 7, "2026-10-12": 1, "2026-10-11": 1, "2026-10-10": 4, "2026-09-01": 6 }, now, 2);
+    expect(Object.fromEntries(counts)).toEqual({ just: 2, today: 3, yesterday: 3, "d:2026-11-04": 2, week: 9, month: 10 });
+    expect(Object.fromEntries(dayGroupCounts({ "2026-11-09": 2 }, now, 2))).toEqual({ just: 2 }); // all of today is just now
+    expect(sortTimeKeys(["month", "d:2026-11-04", "just", "week", "yesterday", "today", "week"], now)).toEqual(["just", "today", "yesterday", "d:2026-11-04", "week", "month"]);
   });
 });

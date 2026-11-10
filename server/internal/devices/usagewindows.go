@@ -297,11 +297,15 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 		acct.Sources, acct.Machines = uniqueSorted(sources), uniqueSorted(machines)
 		acct.Ref, acct.Origin = firstOf(members, func(m proto.UsageAccount) string { return m.Ref }), firstOf(members, func(m proto.UsageAccount) string { return m.Origin })
 		acct.ID = usageAccountID(acct)
-		if len(newest.Sources) > 0 && !newest.Local {
-			acct.Stale = newest.Stale || now.Sub(acct.SampledAt) > usageGatewayStaleAfter
-		} else {
-			acct.Stale = now.Sub(acct.SampledAt) > usageHubStaleAfter
+		gateway := len(newest.Sources) > 0 && !newest.Local
+		after := usageHubStaleAfter
+		if gateway {
+			after = usageGatewayStaleAfter
 		}
+		// stale now (a gateway may say so itself), and when it will be if nothing newer comes (#1905)
+		acct.Stale = now.Sub(acct.SampledAt) > after || gateway && newest.Stale
+		staleAt := acct.SampledAt.Add(after)
+		acct.StaleAt = &staleAt
 		out = append(out, acct)
 	}
 

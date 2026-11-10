@@ -89,7 +89,8 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 }
 
 // normalizeRuntimeSessions keeps the sessions a runtime may list (valid ids, once each) and fills what the apps expect:
-// the agent and its label, the space kind (the runtime's id).
+// the agent and its label, the space kind (the runtime's id). It works in place: the rows kept are list's first ones,
+// in list's own array, the rest cleared, so list is the caller's to give up.
 func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Session {
 	h.mu.Lock()
 	rt, agent, label, caps, daemon := h.hello.Runtime, h.hello.Agent, h.hello.Name, h.hello.Caps, h.daemon != ""
@@ -104,7 +105,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 	if !caps.Send {
 		readOnly = label + " 没有开放从手机发消息"
 	}
-	seen := map[string]bool{}
+	seen := make(map[string]bool, len(list))
 	panes := map[string]string{}
 	defer func() {
 		h.mu.Lock()
@@ -116,7 +117,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		}
 		h.mu.Unlock()
 	}()
-	out := make([]proto.Session, 0, len(list))
+	out := list[:0] // row i is written at or before i, after it was read
 	for _, s := range list {
 		if !runtimeIDRe.MatchString(s.SessionID) || seen[s.SessionID] {
 			continue
@@ -167,6 +168,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		runtimeWork(&s)
 		out = append(out, s)
 	}
+	clear(list[len(out):]) // the rows left out hold no strings
 	return out
 }
 

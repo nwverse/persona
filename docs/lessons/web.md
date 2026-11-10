@@ -78,6 +78,10 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 
 - A contiguous reconnect replay can still be incomplete when its final batch carries `more_after`. Follow that flag on pushed batches as well as HTTP pages, continuing from the updated contiguous coverage cursor through the existing gap-fill timer; do not wait for another push to reveal a gap.
 
+## A poll that keeps its last answer must still redraw on failure (#1905)
+
+- `useUsageWindows` keeps the last answer when a refresh fails, and the bars judge its age (`stale_at`) at render time. A failure that sets nothing renders nothing, so kept numbers would stay "fresh" until something else redrew the sidebar. On failure it hands back a copy of what it keeps (`kept.slice()`): every consumer renders again once per poll and judges with the time now. Anything judged against the clock needs a clock or a render, not only new data.
+
 ## State updaters stay pure under StrictMode (#1165)
 
 - Keep React state updaters free of mutations to refs. Echo matching claims transcript IDs, so do it in the effect, then pass captured IDs and a timestamp into a pure pending-message filter. Exercise sending and transcript delivery under StrictMode to catch double-invocation failures.
