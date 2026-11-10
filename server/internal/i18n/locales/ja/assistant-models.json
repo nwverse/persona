@@ -19,6 +19,7 @@
   "name_assistant_route": "新しいチャットの振り分け",
   "name_agent_title": "エージェントのタブ名",
   "name_todo_title": "ToDo のタイトル",
+  "name_meeting_answer": "出席した会議での回答",
   "name_schedule": "定期タスク",
   "group_default": "デフォルトのモデル",
   "group_agents": "Agents",

@@ -314,7 +314,7 @@
             "every",
             "asked"
           ],
-          "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something (it then runs in its own conversation, not this one). Omit to keep an existing task's"
+          "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something or a standing loop (a patrol, a daily round). Continuing this conversation, a run's answer is then not pushed or sent to channels; from Main chat it runs in its own conversation instead. Omit to keep an existing task's"
         },
         "until": {
           "type": [
@@ -2136,6 +2136,56 @@
         "report": {
           "type": "string",
           "description": "what you told the user of its outcome, as you said it in this reply (at most 4000 characters)"
+        }
+      }
+    }
+  },
+  {
+    "name": "direction_name",
+    "description": "Name a direction (a leader conversation, one of assistant.leaders, current or ended): main conversation only. The name is what the app and the work-log extension show for the direction, so make it short and plain, the way the user calls that line of work (「Persona 产品」「基建」), never a conversation title with a date or kind in it. An empty name takes yours away: the direction then shows its knowledge-base project's name, else its conversation title without the date and kind. Whoever names it last, the user in the app or you, that name shows.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the leader conversation's id (persona_settings get assistant.leaders, conversations_list)"
+        },
+        "name": {
+          "type": "string",
+          "description": "the direction's name, at most 40 characters; empty to clear it"
+        }
+      }
+    }
+  },
+  {
+    "name": "leader_progress",
+    "description": "Report your direction's progress to the user's work log: leader conversations only (assistant.leaders). Write at the goal level, not the process: what was reached, what is being done now and where it is stuck, what the user has to do, with links to the evidence (merged PR, deployed and checked page, document). Send one when a task of yours was reached and at each report cycle (your scheduled check-in, or the end of a day's work on the direction); not after every step, and never only to say you are still working. It does not message the user: it becomes a progress line of your direction in the work-log extension's card, and the latest one is kept on the direction. What needs the user's decision now still goes by task_review needs_user.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "reached": {
+          "type": "string",
+          "description": "what was reached since the last report, one sentence (Chinese unless the user writes otherwise); empty when nothing was"
+        },
+        "doing": {
+          "type": "string",
+          "description": "what is being done now and, if stuck, where and on what; one sentence"
+        },
+        "needs_you": {
+          "type": "string",
+          "description": "what the user has to do (decide, verify, give access), with where; empty when nothing"
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string"
+          },
+          "description": "evidence links: PRs, deployed pages, documents; the first is shown first"
         }
       }
     }

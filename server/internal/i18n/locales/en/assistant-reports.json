@@ -86,5 +86,8 @@
   "leader_decision_why": "Needs your decision: {task}. {why}",
   "leader_stuck_waiting": "Stuck for over a day, waiting on you: {task}",
   "leader_stuck_stopped": "Stuck for over a day, stopped unfinished: {task}",
-  "leader_plan_waiting": "Plan waiting for your Start: {tasks}"
+  "leader_plan_waiting": "Plan waiting for your Start: {tasks}",
+  "progress_reached": "Reached: {text}",
+  "progress_doing": "Doing: {text}",
+  "progress_needs_you": "Needs you: {text}"
 }
