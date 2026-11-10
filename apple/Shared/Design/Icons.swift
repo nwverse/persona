@@ -54,6 +54,10 @@ extension Theme {
         static let supervised = "checkmark.diamond"
         /// A criterion a review found missing (the met one is `done`, one not reviewed yet `time`).
         static let unmet = close
+        /// A criterion added after an acceptance that still stands: no review judged it, none waits on it (#3156).
+        static let notChecked = "minus"
+        /// Bring a shelved to-do back to its section (To-dos › Shelved › Restore, #3206).
+        static let restoreShelved = unarchive
         /// A supervised task's agent reported to Persona (a question, a block, a finish; #5112).
         static let reported = "arrow.up.message"
         static let recurring = "repeat"
@@ -383,6 +387,10 @@ extension Theme {
         static let pointerCenter = "scope"
         /// The Mac's clipboard and the phone's, both ways.
         static let clipboard = "clipboard"
+        /// Send Clipboard: the phone's clipboard to a computer (#3064).
+        static let clipboardSend = "arrow.up.doc.on.clipboard"
+        /// Get Clipboard: a computer's clipboard onto the phone.
+        static let clipboardGet = "square.and.arrow.down.on.square"
         /// How to use it (Help).
         static let help = "questionmark.circle"
         /// I'm Done: the Mac handed back to the agent.

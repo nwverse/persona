@@ -2,12 +2,12 @@ package assistant
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -483,11 +483,11 @@ func rateLimitError(text string) bool {
 var (
 	// userErrorStatus: HTTP statuses a "Continue" cannot fix: a bad request (400), sign-in or permission (401, 403),
 	// a request too large (413).
-	userErrorStatus = regexp.MustCompile(`\b(400|401|403|413)\b`)
+	userErrorStatus = lazyre.New(`\b(400|401|403|413)\b`)
 	// transientStatus: HTTP statuses of a service failing for a moment: a timeout (408), a rate limit (429), a server
 	// error (500, 502, 503, 504) or overloaded (529).
-	transientStatus = regexp.MustCompile(`\b(408|429|500|502|503|504|529)\b`)
-	rateLimitStatus = regexp.MustCompile(`\b429\b`)
+	transientStatus = lazyre.New(`\b(408|429|500|502|503|504|529)\b`)
+	rateLimitStatus = lazyre.New(`\b429\b`)
 	userErrorWords  = []string{"failed to authenticate", "oauth token has expired", "invalid api key", "not logged in", "please run /login",
 		"issue with the selected model", "permission_error", "authentication_error", "credit balance", "billing",
 		"ssl certificate", "self-signed certificate", "certificate verif",
@@ -504,7 +504,8 @@ var (
 // riskyWords mark a next step the manager must not set off itself (docs/assistant/agent-work.md "Safety boundary"): it is only ever a
 // card.
 var riskyWords = []string{"push", "deploy", "部署", "发布", "上线", "merge", "合并", "合入", "发消息", "回复", "评论", "testflight",
-	"release", "推送", "推到", "comment", "发版", "提审", "send"}
+	"release", "推送", "推到", "comment", "发版", "提审", "send",
+	"发送", "删除", "delete", "购买", "付费", "续费", "充值", "生产", "production"} // i18n-ignore: matched against what the agent said
 
 func risky(texts ...string) bool {
 	for _, t := range texts {

@@ -159,7 +159,7 @@ struct StreamRepairTests {
     }
 
     @Test func cutsTrailingSpacesBeforeAnAddedCloser() {
-        // `**重要 **` would leave the closer unclosing.
+        // Bold text followed by a space would leave the added closer unclosing.
         #expect(repair("这是 **重要 ") == "这是 **重要**")
     }
 

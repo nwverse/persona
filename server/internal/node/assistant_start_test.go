@@ -168,19 +168,11 @@ func TestAssistantSendRestartsForNewInstructions(t *testing.T) {
 	}
 	idle := func(p *assistantProc) {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
+		waitFor(t, "the turn to end", func() bool {
 			p.mu.Lock()
-			busy := p.busy
-			p.mu.Unlock()
-			if !busy {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("the turn did not end")
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
+			defer p.mu.Unlock()
+			return !p.busy
+		})
 	}
 	first := proc()
 	idle(first)

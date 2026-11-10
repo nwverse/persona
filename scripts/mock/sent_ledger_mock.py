@@ -8,14 +8,19 @@ MOCK_SENT=empty    a ledger with nothing in it
 MOCK_SENT=nodb     503 no_database: a hub running without a database
 MOCK_SENT=forbidden 403: a device without full access
 MOCK_SENT=old      404 with no code: a hub from before the ledger (Go's mux answers an unknown path in plain text)
-GET /mock/sent?mode=<one of them> switches a running mock to that state (no mode: says the current one)
+GET /mock/sent?mode=<one of them> switches a running mock to that state (no mode: says the current one) and forgets recalls
+
+Recall (#3219, extmgr/sent_recall_route.go): `can_recall` is true on a row with a message_ref sent within a day (the
+hub's default window), row 54 is already recalled, and POST /api/v1/connectors/sent/{id}/recall with {"confirm": true}
+takes back row 66 (the mock remembers it until the next /mock/sent?mode=) and answers row 60 with 502 recall_refused.
 
 `before` / `limit` / `connector` as the hub reads them (extmgr/sent_ledger.go sentRoutes, db.SentAsUsers): rows newest
 first by id, those with an id below `before`, at most `limit` (default 50, at most 200, 400 below 1), `next` the id to
 ask for the page after this one and null on the last. Nothing here is real: the names are placeholders, the machine
 and conversation ids are the ones mock_hub.py's fixtures have so a row's chat link opens something. Standard library
-only, no state: mock_hub.py calls route(); test_sent_ledger_mock.py pins the shapes.
+only, no state but the recalls: mock_hub.py calls route(); test_sent_ledger_mock.py pins the shapes.
 """
+import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -33,6 +38,9 @@ AGENT_CHAT = {"machine_id": "macbook", "session_id": "a1f3c2d4-0000-4000-8000-00
 
 
 _now = {"mode": None}  # GET /mock/sent?mode=…: what a running mock answers instead of MOCK_SENT
+_recalled = {}  # row id -> recalled_at, from POST …/recall since the last mode switch
+RECALL_WINDOW = 24 * 60  # minutes: extmgr sentRecallHours
+RECALLED_ID, REFUSED_ID = 54, 60  # already recalled; the other side refuses
 
 
 def mode():
@@ -99,12 +107,19 @@ def rows(now=None):
         k = i % len(tpl)
         connector, action, target, text, summary, origin, through, ref = tpl[0 if k == LONG_AT and i != LONG_AT else k]
         minutes = 3 + i * 37 + i * i * 9  # a few minutes ago, out to about a month
+        at = now - timedelta(minutes=minutes)
+        recalled = _recalled.get(SIZE - i) or (_iso(at + timedelta(minutes=5)) if SIZE - i == RECALLED_ID else None)
         out.append({
-            "id": SIZE - i, "at": (now - timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z"), "connector": connector,
+            "id": SIZE - i, "at": _iso(at), "connector": connector,
             "action": action, "target": target, "text": text, "summary": summary, "origin": origin, "let_through": through,
-            **({"message_ref": ref} if ref else {}),
+            **({"message_ref": ref} if ref else {}), **({"recalled_at": recalled} if recalled else {}),
+            "can_recall": bool(ref) and not recalled and minutes < RECALL_WINDOW,
         })
     return out
+
+
+def _iso(t):
+    return t.isoformat().replace("+00:00", "Z")
 
 
 def page(items, before=0, limit=DEFAULT_LIMIT, connector=""):
@@ -135,7 +150,36 @@ def _plain_404(h):
     h.wfile.write(body)
 
 
-def route(h, method, p, q):
+def _recall(h, m, p, body):
+    """POST /api/v1/connectors/sent/{id}/recall as sent_recall_route.go answers it (codes and statuses: recallStatus)."""
+    if m == "old":
+        return _plain_404(h)
+    if m == "forbidden":
+        return h.send_json({"error": "a message can only be taken back on your own device", "code": "own_device_only"}, 403)
+    if m == "nodb":
+        return h.send_json({"error": "no database: there is no ledger", "code": "no_database"}, 503)
+    try:
+        confirm = json.loads(body or b"{}").get("confirm") is True
+    except (ValueError, AttributeError):
+        confirm = False
+    if not confirm:
+        return h.send_json({"error": 'send {"confirm": true} once the user agreed', "code": "confirm_required"}, 400)
+    rid = p[len("/api/v1/connectors/sent/"):-len("/recall")]
+    row = next((r for r in ([] if m == "empty" else rows()) if str(r["id"]) == rid), None)
+    if row is None:
+        return h.send_json({"error": "no such row in the ledger", "code": "not_found"}, 404)
+    if row.get("recalled_at"):
+        return h.send_json({"error": "this message was taken back already", "code": "already_recalled", "item": row}, 409)
+    if not row["can_recall"]:
+        code = "too_old" if row.get("message_ref") else "not_recallable"
+        return h.send_json({"error": "this message can't be taken back", "code": code}, 409)
+    if row["id"] == REFUSED_ID:
+        return h.send_json({"error": "examplechat: the chat no longer lets you remove this message", "code": "recall_refused"}, 502)
+    _recalled[row["id"]] = _iso(datetime.now(timezone.utc))
+    h.send_json({"ok": True, "item": dict(row, recalled_at=_recalled[row["id"]], can_recall=False)})
+
+
+def route(h, method, p, q, body=b""):
     """GET /api/v1/connectors/sent?before=&limit=&connector= (q: the parsed query). True when it answered; False for any
     other request, and for this one when MOCK_SENT is not set. GET /mock/sent?mode=<one of MODES> switches the running
     mock to another state (so one hub can show every state); it says the mode it is in (an unknown one: 400)."""
@@ -146,9 +190,13 @@ def route(h, method, p, q):
         else:
             if want is not None:
                 _now["mode"] = want
+                _recalled.clear()
             h.send_json({"mode": mode()})
         return True
     m = mode()
+    if m and method == "POST" and p.startswith("/api/v1/connectors/sent/") and p.endswith("/recall"):
+        _recall(h, m, p, body)
+        return True
     if not m or p != "/api/v1/connectors/sent" or method != "GET":
         return False
     if m == "old":

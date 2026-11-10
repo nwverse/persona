@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -247,6 +248,13 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 		go func() {
 			if b.client.Wait(ctx) == nil {
 				svc.Resync(context.WithoutCancel(ctx))
+			}
+		}()
+		// The inbox's "Needs you" count, which the hub keeps of this connection only (inbox_store.go): what is stored
+		// is read now if nothing read it yet, so the roster has the number before the first round.
+		go func() {
+			if b.client.Wait(ctx) == nil && svc.inboxReady(context.WithoutCancel(ctx)) == nil {
+				svc.tellInboxNeedsYou()
 			}
 		}()
 		// The conversations the channels follow (channels_handler.go).
@@ -844,4 +852,33 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		return fmt.Errorf("unknown event")
 	}
 	return nil
+}
+
+// HubBuild is what the running hub says it is: its version and the commit it was built from (GET /api/v1/health, from
+// where the assistant reaches it; a public address does not say either, which reads as "").
+func (b *BusHub) HubBuild(ctx context.Context) (version, commit string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(b.opts.Hub, "/")+"/api/v1/health", nil)
+	if err != nil {
+		return "", "", err
+	}
+	c := b.opts.HTTPClient
+	if c == nil {
+		c = &http.Client{Timeout: 10 * time.Second}
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("health answered %d", resp.StatusCode)
+	}
+	var h struct {
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&h); err != nil {
+		return "", "", err
+	}
+	return h.Version, h.Commit, nil
 }
