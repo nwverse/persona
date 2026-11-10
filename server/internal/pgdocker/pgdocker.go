@@ -21,6 +21,12 @@ import (
 // Image is the Postgres image the containers run.
 const Image = "postgres:18-alpine"
 
+// ServerArgs follow Image in docker run: the container's command, postgres with the settings Persona's databases
+// get beyond PostgreSQL's defaults. wal_compression=lz4 compresses the full page images that are most of the WAL of a
+// write to a random page (about half of its bytes), for a little CPU; Image is built with lz4. scripts/deploy/db.sh
+// passes the same, and compose resolves its own (docs/operations/docker.md "Disk writes").
+var ServerArgs = []string{"postgres", "-c", "wal_compression=lz4"}
+
 // User and Database are the role and database a container is made with.
 const (
 	User     = "persona"
@@ -88,6 +94,7 @@ func (c *Container) Create(ctx context.Context, password string) error {
 	args := []string{"run", "-d", "--name", c.Name, "--restart", "unless-stopped",
 		"-p", fmt.Sprintf("127.0.0.1:%d:5432", c.Port), "-v", c.Volume + ":/var/lib/postgresql",
 		"-e", "POSTGRES_USER=" + c.user(), "-e", "POSTGRES_PASSWORD", "-e", "POSTGRES_DB=" + c.database(), Image}
+	args = append(args, ServerArgs...)
 	if out, err := c.Run(ctx, []string{"POSTGRES_PASSWORD=" + password}, "docker", args...); err != nil {
 		return &StepError{Step: "run", Output: FirstLine(string(out))}
 	}
