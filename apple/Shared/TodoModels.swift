@@ -52,12 +52,22 @@ nonisolated extension TodoItem {
     }
 
     /// The state's label for this todo: "Auto-completed" for one the hub closed (docs/assistant/todos.md), "Accepted" /
-    /// "Canceled" for one its supervisor closed after a review (#3124).
+    /// "Canceled" for one its supervisor closed after a review (#3124), "Accepted" too for one accepted and at rest again.
     func statusLabel(_ state: TaskState) -> String {
+        if acceptedAtRest(state) { return String(localized: "Accepted") }
         guard state == .done else { return state.todoLabel }
         if reviewDone { return supervision?.state == "cancelled" ? String(localized: "Canceled") : String(localized: "Accepted") }
         return autoDone ? String(localized: "Auto-completed") : state.todoLabel
     }
+
+    /// An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it
+    /// running or asking now: it reads Accepted, not Follow Up (#3156, docs/assistant/todo-status-sop.md "Accepted tasks").
+    func acceptedAtRest(_ state: TaskState) -> Bool {
+        doneAt == nil && acceptanceStands && (state == .followup || state == .unread || state == .notStarted)
+    }
+
+    /// The state a row draws its tone and mark from: Done for an accepted task at rest, else its own.
+    func shownState(_ state: TaskState) -> TaskState { acceptedAtRest(state) ? .done : state }
 
     /// Why the hub closed it, when it did.
     var autoDoneReason: String? {

@@ -67,6 +67,8 @@ type acceptAsk struct {
 	Reversible bool      `json:"reversible,omitempty"`
 	DueAt      time.Time `json:"due_at,omitzero"`
 	ByDefault  bool      `json:"by_default,omitempty"`
+	// ByAssistant: a deployed task the supervising assistant accepted itself, not a big feature (ownerVerifies, #3205).
+	ByAssistant bool `json:"by_assistant,omitempty"`
 }
 
 // acceptPostWindow is how long after an ask its card that did not go out (the bot's status could not be read, the send
@@ -178,7 +180,38 @@ func (s *Service) askAcceptance(t Todo, machine, session, reply string) {
 	b.mu.Unlock()
 	a := s.acceptLines(ctx, t, machine, session, reply)
 	a.MachineID, a.SessionID, a.AskedAt, a.Earlier = machine, session, time.Now().UTC(), earlier
+	if !s.ownerVerifies(t) {
+		s.assistantAccepts(ctx, t, a)
+		return
+	}
 	s.postAsk(ctx, t, a)
+}
+
+// ownerVerifies: deployed task t is the owner's to try (a big feature: a high-priority todo). Any other deployed task
+// is checked and accepted by the supervising assistant (assistantAccepts), so the owner is not asked for each one
+// (#3205): its "Please verify" card is not posted, and nothing waits for the owner.
+func (s *Service) ownerVerifies(t Todo) bool {
+	return t.Priority == "high" || s.ownerVerifiesAll
+}
+
+// assistantAccepts keeps ask a, which task t claimed in the book, card-less and accepted by the supervising assistant
+// (ByAssistant): its stage moves to verified as when the owner passes it.
+func (s *Service) assistantAccepts(ctx context.Context, t Todo, a acceptAsk) {
+	a.NoCard, a.ByAssistant = true, true
+	b := &s.accept
+	b.mu.Lock()
+	if c := b.asks[t.ID]; c != nil && c.AskedAt.IsZero() {
+		a.Earlier = c.Earlier
+	}
+	b.asks[t.ID] = &a
+	s.saveAcceptLocked(ctx)
+	b.mu.Unlock()
+	if ok, err := s.acceptTry(ctx, t.ID, ""); err != nil || !ok {
+		s.logf("task %s: accepted by the assistant: %v %v", t.ID, ok, err)
+		s.askChanged(ctx)
+		return
+	}
+	s.logf("task %s: deployed, accepted by the supervising assistant (not a big feature: the owner is not asked)", t.ID)
 }
 
 // postAsk posts the card of ask a, which task t claimed in the book, when the bot can, and keeps a in the claim's place;
@@ -535,12 +568,17 @@ func (s *Service) acceptLoop(ctx context.Context) {
 	defer tick.Stop()
 	due := time.NewTicker(decisionSweepEvery) // decisions past their deadline (decision_deadline.go)
 	defer due.Stop()
+	// The held tasks' deploys, every minute (cheap: the hub's health; GitHub only once the hub's commit changed).
+	deploys := time.NewTicker(time.Minute)
+	defer deploys.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-due.C:
 			s.goSweepDecisionDeadlines(time.Now())
+		case <-deploys.C:
+			s.sweepDeploys(time.Now()) // held tasks whose deploy landed (deploy_check.go)
 		case <-tick.C:
 			now := time.Now()
 			s.retryAcceptance(now)
