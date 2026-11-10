@@ -1639,7 +1639,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Machine details (Agents, 1 / 6 / 24 hour charts, system info, launchers) | Yes | #297 | |
 | "Computer use" in machine details (toggle, install Cua Driver, permissions, remembered app approvals, Screen Sharing) | Yes | #1326, #1489 | |
 | "Browser (ego lite)" in machine details (toggle, install, first-time setup guide, readiness, browser sign-in) | Yes | #2979 | |
-| Live screen from machine details (iOS "VNC") | Yes | #3247 | The top bar's "View screen" opens the web `/screen/<machine>` in a new tab (an in-App WebView on iOS); shown while the Mac is online, `cua` or `ego` is on for it and Screen Sharing answers, whatever Cua Driver's state |
+| Live screen from machine details (iOS "VNC") | Yes | #3247 | The top bar's "View screen" opens the web `/screen/<machine>` in a new tab (an in-App WebView on iOS); shown while the Mac is online, `cua` or `ego` is on for it and Screen Sharing answers, whatever Cua Driver's state. iOS keeps VNC inside the two sections; the web puts it in the top bar because either extension opens the screen, so it belongs to neither section, and one page-level entry does not move with Cua Driver's state |
 | Empty state of the machine list, refresh failure notice | Yes | #2979 | Also shown when data already exists, saying it is showing the previous data |
 | Load charts, per-core bar chart on Linux | Yes | #433 | |
 | Subscription usage (Codex / Claude 5-hour and weekly windows, pace hints) | Yes | #2432 | Two thin bars at the bottom of the sidebar that open a popover; on the machines page on iOS, at the bottom of the section column on Mac (#2889); Android lists all accounts and windows at the top of the machine monitoring page (#3038) |
