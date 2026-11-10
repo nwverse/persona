@@ -5,13 +5,24 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // goalFeatures are the bot's switches as a new install has them: reports on, the execution steps off (#3218).
 var goalFeatures = FeishuFeatures{Main: true, Cards: true, Reports: true}
+
+// waitReportQueue waits for the scheduled report send to finish, including batches that produce no card.
+func waitReportQueue(t *testing.T, s *Service) {
+	t.Helper()
+	waitFor(t, "the report queue", func() bool {
+		s.reports.sending.Lock()
+		defer s.reports.sending.Unlock()
+		s.reports.mu.Lock()
+		defer s.reports.mu.Unlock()
+		return s.reports.timer == nil && len(s.reports.pending) == 0
+	})
+}
 
 // By default a task's turns are not pushed: a finished turn (whatever the agent said, a merged PR, "收工"), an
 // interruption and a closing by the judge are execution steps.
@@ -20,11 +31,11 @@ func TestGoalReportsSkipExecutionSteps(t *testing.T) {
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "好的，收工。https://github.com/o/r/pull/901 已合并，临时 worktree 清掉了", 0)
-	time.Sleep(6 * testReportDelay)
+	waitReportQueue(t, s)
 	s.taskReport(todo, reportInterrupted, "box", [2]string{"box", "s1"}, "模型服务断开", nil)
-	time.Sleep(6 * testReportDelay)
+	waitReportQueue(t, s)
 	s.taskClosedReport(todo, "做完了")
-	time.Sleep(6 * testReportDelay)
+	waitReportQueue(t, s)
 	if got := posts(); len(got) != 0 {
 		t.Fatalf("execution steps pushed:\n%s", strings.Join(got, "\n---\n"))
 	}
@@ -43,7 +54,7 @@ func TestGoalReportsDecisionIsItsOwnCard(t *testing.T) {
 	f.answerApp(AppInteractions, InteractionsGet, func(json.RawMessage) (any, error) { return map[string]any{"ok": true, "interaction": ix}, nil })
 	s.taskReport(todo, reportNeeds, "box", [2]string{"box", "s1"}, noticeAsk(ix), &ix)
 	waitFor(t, "the question's card", func() bool { return len(posts()) == 1 })
-	time.Sleep(4 * testReportDelay)
+	waitReportQueue(t, s)
 	got := posts()
 	if len(got) != 1 || !strings.Contains(got[0], `"a":"ix"`) || strings.Contains(got[0], "📋") {
 		t.Fatalf("posts:\n%s", strings.Join(got, "\n---\n"))
@@ -74,7 +85,7 @@ func TestGoalReportsStuckSaysGoalNowEvidence(t *testing.T) {
 	for i := 0; i < reportStuckAfter-1; i++ {
 		s.taskReport(todo, reportInterrupted, "box", [2]string{"box", "s1"}, "模型服务断开", nil)
 	}
-	time.Sleep(6 * testReportDelay)
+	waitReportQueue(t, s)
 	if n := len(posts()); n != 1 {
 		t.Fatalf("%d posts before the %dth cut", n, reportStuckAfter)
 	}
@@ -87,12 +98,12 @@ func TestGoalReportsStuckSaysGoalNowEvidence(t *testing.T) {
 		}
 	}
 	s.taskReport(todo, reportInterrupted, "box", [2]string{"box", "s1"}, "模型服务断开", nil) // the 4th: told already
-	time.Sleep(6 * testReportDelay)
+	waitReportQueue(t, s)
 	s.taskReport(todo, reportDone, "box", [2]string{"box", "s1"}, "好了", nil) // resets the count
 	for i := 0; i < reportStuckAfter-1; i++ {
 		s.taskReport(todo, reportInterrupted, "box", [2]string{"box", "s1"}, "模型服务断开", nil)
 	}
-	time.Sleep(6 * testReportDelay)
+	waitReportQueue(t, s)
 	if n := len(posts()); n != 2 {
 		t.Fatalf("%d posts, want 2:\n%s", n, strings.Join(posts(), "\n---\n"))
 	}
