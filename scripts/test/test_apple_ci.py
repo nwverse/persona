@@ -212,6 +212,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
                 'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
+                'simulator-launch.status.txt',
             })
             self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
             self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())

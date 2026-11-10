@@ -150,6 +150,10 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         for call in calls:
             self.assertIn("CODE_SIGNING_ALLOWED=YES", call)
             self.assertEqual(call[call.index("-derivedDataPath") + 1], str(self.output / "ios-tests"))
+        context = json.loads((self.output / "simulator-readiness-context.json").read_text())
+        self.assertEqual(context["udid"], NEW)
+        self.assertEqual(context["bundle_id"], "org.example.persona.ci")
+        self.assertEqual(set(context), {"udid", "bundle_id", "started_at"})
         sim_calls = (self.root / "calls").read_text()
         self.assertNotIn("simctl bootstatus", sim_calls)
         self.assertEqual([line for line in sim_calls.splitlines() if "simctl boot " in line],

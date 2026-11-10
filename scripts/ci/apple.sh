@@ -179,6 +179,9 @@ PY
   IOS_TESTS=("${IOS_COMMON[@]}" -destination "platform=iOS Simulator,id=$SIM" -destination-timeout 120)
   # Xcode owns boot, installation and test-host launch. The existing hosted suite
   # and its strict result check must both finish inside the readiness deadline.
+  CI_BUNDLE_ID=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["bundle_id"])' "$PERSONA_CONFIG")
+  python3 "$CI_ROOT/scripts/ci/apple_launch_diagnostics.py" \
+    --record "$OUTPUT/simulator-readiness-context.json" --udid "$SIM" --bundle-id "$CI_BUNDLE_ID"
   ci_run 'Verify hosted iOS test readiness' 900 bash -c '
     set -euo pipefail
     checker="$1"; bundle="$2"; log="$3"; shift 3
@@ -190,7 +193,6 @@ PY
 
   # The real EventKit round-trip uses only this disposable simulator's store.
   # TCC grants can precede installation of the synthetic CI app.
-  CI_BUNDLE_ID=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["bundle_id"])' "$PERSONA_CONFIG")
   # On a just-booted stock simulator the grant waits for the device's own services: 54.5 s on a passing hosted run,
   # over 60 s on a failing one (#1402). A single attempt with room to spare; a hang still ends the lane.
   # A successful Xcode test can leave its destination shut down. Start only our device if needed;
