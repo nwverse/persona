@@ -1,4 +1,5 @@
 {
+  "share": "Share…",
   "forked": "Branched to a new chat",
   "fork_failed": "Couldn't branch: {error}",
   "session_unavailable": "This conversation isn't available right now. Try again in a moment, or start a new chat.",
@@ -85,5 +86,26 @@
   "connecting": "Connecting…",
   "connecting_placeholder": "Connecting… you can start typing",
   "session_gone": "Unavailable",
-  "session_gone_placeholder": "This conversation is no longer available"
+  "session_gone_placeholder": "This conversation is no longer available",
+  "closeout_label": "Closeout",
+  "closeout_own_claim": "The agent's own report",
+  "closeout_status_done": "Done",
+  "closeout_status_not_done": "Not done",
+  "closeout_status_blocked": "Blocked",
+  "closeout_blocked_on": "Blocked on: {waiting}",
+  "closeout_did": "What changed",
+  "closeout_artifacts": "Artifacts",
+  "closeout_merged": "Merged",
+  "closeout_deployed": "Deployed",
+  "closeout_verified": "Verified",
+  "closeout_missing": "Still needs",
+  "closeout_yes": "Says yes",
+  "closeout_no": "Says no",
+  "closeout_not_said": "Not said",
+  "closeout_confirmed": "Hub confirmed",
+  "closeout_unchecked": "Not checked by the hub",
+  "closeout_found_merged_yes": "Hub found it merged",
+  "closeout_found_merged_no": "Hub found it isn't merged",
+  "closeout_found_deployed_yes": "Hub found it deployed",
+  "closeout_found_deployed_no": "Hub found it isn't deployed"
 }

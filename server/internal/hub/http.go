@@ -45,6 +45,7 @@ func (h *Hub) routes() http.Handler {
 	h.machineTrustRoutes(api)
 	h.machineRenameRoutes(api)
 	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_routes.go)
+	h.sharingRoutes(api)
 	h.fileRoutes(api)
 	h.gitRoutes(api)
 	h.agentSettingsRoutes(api)
@@ -92,7 +93,7 @@ func (h *Hub) routes() http.Handler {
 	h.runtimeCLIRoutes(api)
 	// What the center serves: its own apps' requests and those the members pass on (peer_http.go), whose source the
 	// member judged (no gate here for them). A member passes everything but its own few routes on (memberForward).
-	centerAPI := h.auth(h.extensionAPIs(jsonRouteErrors(api), api))
+	centerAPI := h.centerSharing(h.auth(h.extensionAPIs(jsonRouteErrors(api), api)))
 	h.mesh.centerAPI.Store(centerAPI)
 	appAPI := h.gate(h.memberForward(centerAPI))
 	h.busRoutes(mux)
@@ -100,7 +101,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
 	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
-	return h.outerLayers(h.plaintextLoopbackOnly(jsonRouteErrors(mux)))
+	return h.outerLayers(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux))))
 }
 
 // outerLayers are what every request goes through around the routes, outermost first: the auth layer's marks
@@ -364,6 +365,11 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 
 // loggedPath is a request's path as the log may show it: an install code in /i/<code> (a credential) is masked.
 func loggedPath(p string) string {
+	for _, prefix := range []string{"/share/", publicSharePrefix} {
+		if strings.HasPrefix(p, prefix) {
+			return prefix + "<capability>"
+		}
+	}
 	if rest, ok := strings.CutPrefix(p, installScriptPath); ok {
 		code, tail, _ := strings.Cut(rest, "/")
 		if code != "" {
@@ -728,6 +734,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeBodyErr(w, err, err)
 		return
 	}
+	r = h.captureHumanSubmission(r, p.Prompt)
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
@@ -1403,6 +1410,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			h.mu.Lock()
 			c.runtimeCLI, c.sim, c.name, c.since = true, msg.Simulator, msg.DeviceName, time.Now()
 			h.mu.Unlock()
+			h.noteClientAppSimulator(c, msg.Simulator)
 			return
 		}
 		deviceID := msg.DeviceID
@@ -1421,6 +1429,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			c.phoneToolNames[tool.Name] = true
 		}
 		h.mu.Unlock()
+		h.noteClientAppSimulator(c, msg.Simulator)
 		if strings.HasPrefix(c.device, "pair_") {
 			// A pairing token is traded for a device token within seconds and the phone registers again under it:
 			// calls still reach this connection, but nothing is saved under a credential about to disappear.
