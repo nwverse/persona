@@ -78,6 +78,7 @@ async function verify(theme, width) {
   const summary = chat.locator("[data-work-group] > button").first();
   const card = chat.locator("[data-subagent-card]");
   const shot = async (state) => {
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-work-group] .grid[style]")].every((element) => !element.style.willChange));
     assert.deepEqual(errors, [], "no page exceptions");
     assert.equal(await page.locator("vite-error-overlay").count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "no horizontal overflow");
