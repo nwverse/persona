@@ -130,6 +130,38 @@ func iphoneCallErr(t *testing.T, err error) (code, sent string) {
 const readyInfo = `{"name":"Phone","product_type":"iPhone16,2","os_version":"18.1","locked":false,"developer_mode":true,"ddi_mounted":true,
   "capabilities":{"screenshot":true,"ax_tree":true,"input":true,"apps":true}}`
 
+// A real iPhone has no element tree (only the simulator's bridge reads one): it is operated from the screenshot, by
+// coordinates, every input asking the user. So it is ready with screenshot and input; the tree's absence is a
+// capability, not a note (#3891). One without remote input (iOS before 27) still is not, nor is a locked one.
+func TestIPhoneReadyWithoutElementTree(t *testing.T) {
+	const real = `{"name":"Phone","product_type":"iPhone17,1","os_version":"27.0","locked":false,
+  "capabilities":{"screenshot":true,"input":true,"apps":true,"ax_tree":false},"notes":{"ax_tree":"unsupported"}}`
+	f := &fakeIPhones{installed: true, links: []iphoneLink{
+		{ID: "real", Paired: true, State: "connected"},
+		{ID: "old", Paired: true, State: "connected"},
+		{ID: "locked", Paired: true, State: "connected"},
+	}, info: map[string]string{
+		"real": real,
+		"old": `{"locked":false,"capabilities":{"screenshot":true,"input":false,"apps":true,"ax_tree":false},
+  "notes":{"input":"unsupported","ax_tree":"unsupported"}}`,
+		"locked": strings.Replace(real, `"locked":false`, `"locked":true`, 1),
+	}}
+	useIPhones(t, f, nil)
+	byID := map[string]proto.IPhoneDevice{}
+	for _, d := range iphoneStatus(context.Background()).Devices {
+		byID[d.ID] = d
+	}
+	if d := byID["real"]; !d.Ready || d.Note != "" || !d.Connected || d.Capabilities["ax_tree"] || !d.Capabilities["input"] {
+		t.Fatalf("a real iPhone without an element tree: %+v", d)
+	}
+	if d := byID["old"]; d.Ready || d.Note != iphoneNotes["unsupported"] {
+		t.Fatalf("no remote input: %+v", d)
+	}
+	if d := byID["locked"]; d.Ready || !d.Locked || d.Note != iphoneNotes["locked"] {
+		t.Fatalf("locked: %+v", d)
+	}
+}
+
 func TestIPhoneStatusSaysWhatIsMissing(t *testing.T) {
 	ctx := context.Background()
 	useIPhones(t, &fakeIPhones{}, nil)
