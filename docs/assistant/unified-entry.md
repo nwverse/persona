@@ -298,6 +298,39 @@ Off by default: with no leaders, everything above is unchanged and only the main
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools; the main chat and leaders are not limited.
 - **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
 
+#### Asks go to the supervisor first (#3589)
+
+Only with leaders configured (`assistant.leaders` not empty); without them every card goes to the user as above.
+Code: `server/internal/assistant/ask_route.go`.
+
+- **What goes up**: a card raised by an agent of a supervised task (not waiting for the user, not closed): a question
+  (not `ask_user`, not a form or a password card), a tool permission or a plan. Terminal dialogs read off the screen
+  and the conversations' own cards stay the user's. The card is shown on the apps marked `delegating` (an answer given
+  there still wins) and rings nothing: no push, no bot card, no Persona Link notification.
+- **Who gets it**: the task's supervisor as an `ask` entry in its "📋 督办" message (its leader; the main chat when the
+  main chat supervises it or the leader's conversation is gone), with the card's `interaction_id`, what it asks and the
+  task's decisions in effect. Concurrent cards of one task are one entry. The agent's `needs_you` signal is not sent
+  while its card is on its way up.
+- **What the supervisor does**: answers a question that is the agent's own call with `interaction_answer` (with
+  `reason`); the answer is kept as the task's decision (`source: agent`, the supervisor's conversation). What the user
+  must decide — a permission or a plan (no conversation approves them, "No answering approvals on the user's behalf"),
+  a red line, a goal change, a conflict with a decision already made — goes up with `ask_escalate {todo_id, reason,
+  recommend}`: every card of the task the user has not been told of rings at once, as one push (the first card pushes;
+  the others go to the apps and channels without one), each carrying `delegate.reason` / `delegate.recommend`. Only the
+  task's supervisor and the main chat may. A leader's escalation adds an `escalated` entry to the main chat with the
+  cards, the reason and the recommendation, so it does not ask again.
+- **Answers**: the user's answers go to the agents as any card's; a question's is kept as every card's is
+  (`source: card`), and an escalated permission or plan becomes a `card` decision too ("Allow …" → "Allowed"), so a
+  later card cannot quietly go the other way.
+- **Nothing hangs**: a card not handled within 5 minutes (`askHoldFor`) goes up a rung: from a leader to the main chat
+  (its entry marked as raised), from the main chat to the user (all of the task's cards reaching the user then ring
+  as one, without supervisor context).
+- **Limits**: the route lives on the pending card. A held card shown again without it (after a manager restart, or a
+  Codex card listed again once its node reconnected) is on the apps without a push; the supervisor still hears of it
+  through the task's `needs_you` signal, and `ask_escalate` takes it. A card the assistant is deciding on for the user
+  (agents.delegate) is not escalated: that decision tells the user itself. `ask_escalate` refuses without leaders. Cards raised after an escalation go to the supervisor again rather than joining the
+  escalated push.
+
 **Directions and reports up (#3484, #3485).** Each leader has a record, `assistant.directions` (`directions.go`): the kb
 project it is filed under, who filed it, since when, and when it ended (it left `assistant.leaders`; nothing is
 deleted). Extensions granted `leaders.read` are told each change once (`leader.changed`), and the hub reports from the
