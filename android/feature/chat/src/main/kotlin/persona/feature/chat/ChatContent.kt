@@ -80,7 +80,9 @@ internal fun chatMarkdown(text: String) = ChatLinks.markdown(MathMarkdown.rewrit
  *
  * One parse per id and text: a caller that asks while a parse of the same id and text is under way (the page's prewarm
  * and the row it warms, say) waits for that one. The parse runs in the cache's own [scope], so a caller that leaves (a
- * row scrolled away, a prewarm restarted) does not cancel it for the others or lose its work.
+ * row scrolled away, a prewarm restarted) does not cancel it for the others or lose its work. Nor does the last caller
+ * to leave: the cache keeps no count of who waits, so a parse runs to the end and is kept even when nobody waits for it
+ * any more. That costs little, since a streaming reply parses only its tail.
  *
  * A streaming reply parses from its last settled block on ([ChatMarkdownStream]); once it ends, its final text is parsed
  * whole and kept under the same id.
@@ -147,7 +149,10 @@ internal class ChatMarkdownCache(
         val markdown = chatMarkdown(parse.text)
         val (result, whole) = if (parse.whole) parseWhole(markdown) to true else streams.parse(parse.id, markdown)
         synchronized(this) {
-            entries[parse.id] = Entry(parse.text, result, whole)
+            // A delta's tail parse that ends after the stream's whole parse of the same text keeps the whole one, which
+            // the next caller would otherwise parse again.
+            val entry = entries[parse.id]
+            if (whole || entry == null || !entry.whole || entry.text != parse.text) entries[parse.id] = Entry(parse.text, result, whole)
             trim()
         }
         return result
@@ -335,6 +340,7 @@ internal fun ChatPicture(session: SessionKey, item: Item, loader: ImageLoader, a
 /** [userImages] renders neighboring user-image rows in the same bubble; hide those rows with [imagesInUserBubble].
  * [workRunning] comes from the parent work group's live flag; [lastWorkStep] ends its timeline connector; [plan] is the
  * group's plan ([latestPlan]): its TodoWrite is the full plan card, with earlier updates retained as ordinary steps.
+ * [waiting]: the turn waits on you ([turnWaitsOnYou]); a running work line then reads "Waiting for you".
  */
 @Composable
 internal fun ChatLineContent(
@@ -350,6 +356,7 @@ internal fun ChatLineContent(
     lastWorkStep: Boolean = false,
     plan: LinePlan? = null,
     showSourceLabel: Boolean = true,
+    waiting: Boolean = false,
 ) {
     val res = LocalResources.current
     when (line) {
@@ -382,9 +389,12 @@ internal fun ChatLineContent(
             // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary.
             if (style.compactToolSummary) AssistantWorkSummary(line, onToggle)
             else {
-                val now by rememberNow(1_000, enabled = line.live)
-                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }), line.open,
-                    { onToggle(line.id) }, running = line.live) {}
+                // Waiting on you, the turn stays the live one (it folds and opens as while it runs), but its line says it
+                // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
+                val waits = waiting && line.live
+                val now by rememberNow(1_000, enabled = line.live && !waits)
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
+                    { onToggle(line.id) }, running = line.live && !waits) {}
             }
         }
         is ChatLine.Step -> WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)

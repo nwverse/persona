@@ -3,8 +3,9 @@
 
 Build web first. Run with a loopback production preview URL and --shots <directory>.
 The test covers wide/narrow light/dark, the entries' capsule size and selected state, stable live task rows,
-every open task in Progress (a stopped one too) with the closed ones folded, plans waiting for Start under their own
-To start entry, decisions and draft sends.
+every open task in Progress (a stopped one too) with the shelved and the closed ones folded, plans waiting for Start under
+their own To start entry only, decisions and draft sends; and the main conversation's Progress count equal to the To-dos
+page's "Not done" (#3331).
 """
 import argparse
 import copy
@@ -23,6 +24,11 @@ PLAN = {"id": "demo-plan", "conversation": MAIN, "created_at": AT, "state": "sta
 OPEN_PLAN = {"id": "demo-next-plan", "conversation": MAIN, "created_at": AT, "state": "open", "tasks": [{"title": "Prepare the next demo", "prompt": "Prepare a synthetic demo", "machine": "demo", "cwd": "/demo/project"}]}
 SESSIONS = [{"machine_id": "demo", "session_id": MAIN, "title": "Persona", "state": "idle", "status": "idle", "cwd": "/demo", "updated_at": AT, "started_by_persona": True, "capabilities": {"send": True, "interrupt": True}}] + [{"machine_id": "demo", "session_id": f"worker-{i}", "title": title, "state": ["working", "working", "needs_you", "unread", "idle"][i], "status": ["working", "working", "needs_you", "unread", "idle"][i], "cwd": "/demo/project", "updated_at": AT, "agent": "claude", "plan": {"done": 3, "total": 4, "current": "Run the remaining checks"}} for i, title in enumerate(TITLES)]
 TODOS = [{"id": f"demo-task-{i}", "title": title, "origin": MAIN, "plan_id": PLAN["id"], "created_at": AT, "updated_at": AT, "agents": [{"machine_id": "demo", "session_id": f"worker-{i}", "linked_at": AT}], "pr_url": f"https://github.com/example/demo/pull/{2801 + i}", "supervision": {"supervisor": MAIN, "state": "accepted" if i == 3 else "needs_user" if i == 2 else "", "progress": {"kind": "blocked" if i == 2 else "progress", "step": i + 1, "steps": 5, "text": "Waiting for a decision" if i == 2 else "Run the demo checks", "at": AT}}, **({"done_at": AT} if i == 3 else {})} for i, title in enumerate(TITLES)]
+# #3331: a task with no move for 48 hours and nothing running is shelved (folded, not counted, as on the To-dos page); the
+# main conversation watches every to-do, one another conversation handed out too.
+STALE = "2026-11-07T08:00:00Z"
+TODOS += [{"id": "demo-stale", "title": "Old investigation", "origin": MAIN, "created_at": STALE, "updated_at": STALE},
+          {"id": "demo-elsewhere", "title": "Task from another chat", "origin": "demo-other", "created_at": AT, "updated_at": AT}]
 ITEMS = [{"id": "demo-user", "seq": 1, "role": "user", "kind": "text", "text": "Simplify the conversation and dispatch the work.", "ts": AT}, {"id": "demo-answer", "seq": 2, "role": "assistant", "kind": "text", "text": "I split the work into separate tasks. Decisions stay in Pending; each task has one live row in Progress.", "ts": AT}]
 FEED = [{"id": "demo-plan-event", "conversation": MAIN, "at": AT, "kind": "plan", "ref": PLAN["id"]}] + [{"id": f"demo-task-event-{i}", "conversation": MAIN, "at": AT, "kind": "task", "ref": f"demo-task-{i}"} for i in range(len(TITLES))] + [{"id": "demo-review-event", "conversation": MAIN, "at": AT, "kind": "review", "ref": "demo-task-3", "body": {"verdict": "accepted", "note": "Synthetic acceptance result"}}, {"id": "demo-report-event", "conversation": MAIN, "at": AT, "kind": "report", "ref": "demo-task-0", "body": {"kind": "progress", "text": "Synthetic progress report"}}, {"id": "demo-receipt", "conversation": MAIN, "at": AT, "kind": "receipt", "ref": "demo-task-3", "body": {"state": "done", "title": TITLES[3], "summary": "Synthetic completion receipt"}}, {"id": "demo-draft", "conversation": MAIN, "at": AT, "kind": "message", "ref": "demo-draft-ref", "body": {"sender": "Demo sender", "chat": "Demo group", "text": "When are the checks ready?", "draft": "The demo checks are ready for review."}}]
 CARD_METADATA = [{"id": f"plan:demo-plan:{i}", "plan_id": PLAN["id"], "index": i, "todo_id": f"demo-task-{i}", "at": AT, "updated_at": AT, "state": "working"} for i in range(len(TITLES))]
@@ -117,7 +123,8 @@ def run(args):
                     entries = bar.locator("[data-tray-entry]")
                     expect(entries).to_have_count(4)
                     assert entries.evaluate_all("es => es.map(e => e.dataset.trayEntry)") == ["pending", "start", "progress", "agents"]
-                    # every open task: 4 of the plan's (one is closed) and the plan task waiting for Start
+                    # the To-dos page's rule: 4 of the plan's (one is closed) and the other chat's; the shelved one and the
+                    # plan task waiting for Start are not counted
                     expect(bar.locator('[data-tray-entry="progress"]')).to_have_text("Progress5")
                     expect(bar.locator('[data-tray-entry="start"]')).to_have_text("To start1")
                     boxes = entries.evaluate_all("""es => es.map(e => { const box = e.getBoundingClientRect(); const style = getComputedStyle(e);
@@ -149,9 +156,12 @@ def run(args):
                     pending_entry.blur()
                     page.locator("[data-dispatch-hint]").click()
                     expect(bar.locator("[data-task-slot]")).to_have_count(5)
-                    # what needs the user first, then the plan task waiting for Start; the stopped task is listed too
+                    # what needs the user first; the stopped task is listed too; the plan waiting for Start is To start's only
                     expect(bar.locator("[data-task-slot]").first).to_have_attribute("data-task-slot", "plan:demo-plan:2")
-                    expect(bar.locator('[data-task-slot="plan:demo-next-plan:0"]')).to_contain_text("Waiting for your Start")
+                    expect(bar.locator('[data-task-slot="plan:demo-next-plan:0"]')).to_have_count(0)
+                    expect(bar.locator('[data-task-slot="task:demo-elsewhere"]')).to_have_count(1)
+                    expect(bar.locator('[data-task-slot="task:demo-stale"]')).to_have_count(0)
+                    expect(bar.locator("[data-progress-shelved]")).to_have_text("Shelved 1")
                     expect(bar.locator('[data-task-slot="plan:demo-plan:4"] [data-task-mark="follow_up"]')).to_have_count(1)
                     expect(bar.locator('[data-task-slot="plan:demo-plan:3"]')).to_have_count(0)
                     expect(bar.locator("[data-progress-closed]")).to_have_text("Closed 1")
@@ -182,8 +192,11 @@ def run(args):
                     expect(row.locator('[role="progressbar"]')).to_have_count(0)
                     expect(bar.locator('[data-task-slot="plan:demo-plan:3"] .text-green')).to_have_count(1)
                     capture("accepted-live")
-                    # a tap on the plan task waiting for Start opens To start, where Start is one click away
-                    bar.locator('[data-task-slot="plan:demo-next-plan:0"]').click()
+                    bar.locator("[data-progress-shelved]").click()
+                    expect(bar.locator('[data-task-slot="task:demo-stale"]')).to_have_count(1)
+                    capture("shelved-unfolded")
+                    # the plan waiting for Start is in To start, where Start is one click away
+                    bar.locator('[data-tray-entry="start"]').click()
                     start_entry = bar.locator('[data-tray-entry="start"]')
                     expect(start_entry).to_have_attribute("aria-expanded", "true")
                     expect(bar.get_by_text("Prepare the next demo", exact=False)).to_be_visible()
@@ -216,7 +229,18 @@ def run(args):
                     page.locator("[data-progress-closed][aria-expanded=true]").click()
                     capture("progress-open-only")
                     assert not any("message" in path for path, _ in writes), writes
-                    print(f"PASS {width} {theme}: real app; every open task in Progress; To start; real count meter; Pending/Agents; draft not sent", flush=True)
+                    # the To-dos page's header counts the same: 4 open (the accepted one is closed now)
+                    progress_count = int(re.sub(r"\D", "", progress_entry.inner_text()))
+                    page.goto(args.url.rstrip("/") + "/todos")
+                    header = page.get_by_text(re.compile(r"^\d+ open · ")).first
+                    # a phone-wide page hides the line (max-sm:hidden); it is there all the same
+                    expect(header).to_be_attached()
+                    open_count = int(re.match(r"(\d+) open", header.text_content()).group(1))
+                    assert open_count == progress_count == 4, (open_count, progress_count, header.text_content())
+                    print(f"  Progress {progress_count} = To-dos page \"{header.text_content()}\"", flush=True)
+                    page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                    page.screenshot(path=str(shots / f"{width}-{theme}-todos.png"))
+                    print(f"PASS {width} {theme}: real app; Progress by the To-dos page's rule; To start; real count meter; Pending/Agents; draft not sent", flush=True)
                     context.close()
         finally:
             browser.close()

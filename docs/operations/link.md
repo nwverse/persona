@@ -154,6 +154,8 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 - **node is unchanged**: all features live in `personad node`. This computer needs a resident node (installed together under "Install the node service" above; separately, use `persona-link node install`
   or `scripts/deploy/node-launchd.sh install`); persona-link forwards streams only to its socket `~/.persona/node-attach.sock`. This is the same path that SSH-started `node --stdio` forwarded to
   (`internal/node/attach.go`). Writing a systemd / launchd service for the resident node is packaging, not functionality: the service contents match those written by `scripts/deploy/node-launchd.sh`.
+  Because the resident node runs in the user's login session, features that need that session live there too, such as
+  sharing the computer's clipboard with the phone ([clipboard.md](clipboard.md)).
 - **hub and manager** (since 2026-11-04 computers belong to the manager, [machines.md](../server/machines.md), "Who connects to computers"):
   - This computer is kind `link` in hub.json; nobody SSHs into it;
   - Persona Link still connects to the hub address; after authenticating, the hub forwards the connection unchanged to the manager (`devices.accept` + `GET /api/v1/bus/relay`, preserving individual messages and close codes);

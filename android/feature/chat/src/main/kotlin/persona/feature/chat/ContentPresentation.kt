@@ -397,8 +397,14 @@ internal fun toolPresentation(res: Resources, item: Item): ToolPresentation {
  */
 internal fun WorkItem.Folded.stepCount(): Int = item.fold?.let { it.tools + it.thoughts } ?: 1
 
-/** A single execution summary: current action, step count and elapsed time while running, result counts when done. */
-internal fun workSummary(res: Resources, line: ChatLine.Work, recordedDuration: Long?, now: Instant? = null): String {
+/**
+ * A single execution summary: current action, step count and elapsed time while running, result counts when done.
+ * [waiting]: the turn waits on you (a question, a plan or a permission to answer, [turnWaitsOnYou]), so a running line says
+ * what the header says, "Waiting for you", with no time: nothing is at work.
+ */
+internal fun workSummary(res: Resources, line: ChatLine.Work, recordedDuration: Long?, now: Instant? = null,
+    waiting: Boolean = false): String {
+    if (line.live && waiting) return res.getString(R.string.chat_chrome_status_needs_you)
     val count = line.steps.sumOf { if (it is WorkItem.Folded) it.stepCount() else 1 }
     if (line.live) {
         val current = line.steps.lastOrNull()

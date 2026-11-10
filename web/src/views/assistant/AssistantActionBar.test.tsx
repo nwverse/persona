@@ -247,12 +247,11 @@ describe("Assistant task progress trays", () => {
       expect(entry("start").querySelector("[aria-hidden]")?.classList).toContain("bg-attention");
       // not counted twice: Pending stays empty
       expect(entry("pending").textContent).toBe(t("assistant-tasks.tray_pending"));
-      // Progress lists the waiting tasks too, and a tap on one opens To start
+      // Progress counts what the To-dos page counts (#3331): the plan's tasks are no to-dos yet, so only To start has them
       act(() => entry("progress").click());
-      expect(entry("progress").textContent).toBe(`${t("assistant-tasks.tray_progress")}3`);
-      const planned = host.querySelector<HTMLButtonElement>('[data-task-slot="plan:tray-open-plan:0"]')!;
-      expect(planned.textContent).toContain(t("assistant-tasks.plan_waiting"));
-      act(() => planned.click());
+      expect(entry("progress").textContent).toBe(`${t("assistant-tasks.tray_progress")}1`);
+      expect(host.querySelector('[data-task-slot="plan:tray-open-plan:0"]')).toBeNull();
+      act(() => entry("start").click());
       expect(entry("start").getAttribute("aria-expanded")).toBe("true");
       expect(host.querySelector("section")?.textContent).toContain("Diet card");
       expect(host.querySelector("section")?.textContent).toContain("Fix the supervisor");

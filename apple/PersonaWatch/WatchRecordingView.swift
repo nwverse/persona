@@ -11,6 +11,9 @@ struct WatchRecordingView: View {
     @State private var transfer = WatchRecordingTransfer.shared
     /// Starts in the app's UI language; the button cycles through the three the recorder supports.
     @State private var locale = WatchRecordingView.defaultLocale
+    @State private var confirmingRolling = false
+    @AppStorage("recording.rollingConsent") private var rollingConsent = false
+    @AppStorage(WatchSync.phoneRollingKey) private var phoneRolling = false
 
     private static var defaultLocale: String {
         switch LanguageStore.shared.launched {
@@ -49,11 +52,20 @@ struct WatchRecordingView: View {
                     }
                     .buttonStyle(.bordered)
                     .recordingPrimaryGesture()
+                    if phoneRolling {
+                        Button {
+                            if rollingConsent { Task { await capture.start(locale: locale, rolling: true) } }
+                            else { confirmingRolling = true }
+                        } label: {
+                            Label("Rolling", systemImage: Theme.Icon.recurring).lineLimit(1)
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 } else if capture.state == .starting {
                     ProgressView(String(localized: "Waiting for microphone access")).font(Theme.Font.secondary)
                     Button("Cancel") { capture.cancelStarting() }.lineLimit(1)
                 } else {
-                    Text(capture.state == .paused ? String(localized: "Paused") : String(localized: "Recording · keeps going with your wrist down"))
+                    Text(recordingStatus)
                         .font(Theme.Font.caption).foregroundStyle(.secondary)
                     HStack(spacing: Theme.Space.s) {
                         Button { capture.togglePause() } label: {
@@ -62,6 +74,9 @@ struct WatchRecordingView: View {
                         }
                         Button { capture.addMark() } label: { Label("Bookmark", systemImage: Theme.Icon.pin).labelStyle(.iconOnly) }
                             .recordingPrimaryGesture()
+                        if capture.rolling {
+                            Button { capture.eraseRecent() } label: { Label("Erase 10m", systemImage: Theme.Icon.delete).labelStyle(.iconOnly) }
+                        }
                     }
                     Button { capture.stop(); transfer.pump(force: true) } label: {
                         Label("Stop & Save", systemImage: Theme.Icon.interrupt).lineLimit(1)
@@ -75,7 +90,7 @@ struct WatchRecordingView: View {
                 ForEach(Array(library.entries.filter { $0.source == .watch }.prefix(10))) { entry in
                     VStack(alignment: .leading, spacing: Theme.Space.xs) {
                         Text(entry.displayTitle).font(Theme.Font.secondaryMedium).lineLimit(2)
-                        Text("\(RecordingFormat.clock(entry.duration)) · \(transfer.pending(entry.id) == 0 && entry.endDelivered ? String(localized: "Sent to iPhone") : String(localized: "Waiting to send"))")
+                        Text("\(entry.isRolling ? String(localized: "Rolling") + " · " : "")\(RecordingFormat.clock(entry.duration)) · \(transfer.pending(entry.id) == 0 && entry.endDelivered ? String(localized: "Sent to iPhone") : String(localized: "Waiting to send"))")
                             .font(Theme.Font.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,6 +107,22 @@ struct WatchRecordingView: View {
             startedMeeting = true
             await capture.start(locale: locale, meeting: RecordingMeeting())
         }
+        .confirmationDialog("Rolling recording", isPresented: $confirmingRolling) {
+            Button("Start Rolling") {
+                rollingConsent = true
+                Task { await capture.start(locale: locale, rolling: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Keeps the last 6 hours on this watch and your iPhone. Audio stays on your devices. Ask others before recording them.")
+        }
+    }
+
+    private var recordingStatus: String {
+        if capture.state == .paused { return String(localized: "Paused") }
+        return capture.rolling
+            ? String(localized: "Rolling · keeps the last 6 hours")
+            : String(localized: "Recording · keeps going with your wrist down")
     }
 }
 

@@ -19,6 +19,9 @@ struct PersonaApp: App {
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
+                    #if os(iOS)
+                    if ShortcutCallbacks.shared.handle(url) { return } // a shortcut Persona ran came back (#2283)
+                    #endif
                     if MetaGlasses.shared.handle(url) { return } // the Meta AI app's callback (docs/apple/meta-glasses.md)
                     #if os(iOS)
                     if let link = FleetLink.session(url) { // tapped the Live Activity
@@ -73,6 +76,8 @@ struct PersonaApp: App {
                 model.retryRegistry() // launched in the background before the first unlock: the pairing reads now
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
+                // Rolling recordings expire even when no segment arrives and the recording page stays closed.
+                RecordingRollingKeeper.shared.schedule()
                 LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces }
                 // The home screen icon in step with the Avatar and Light & Dark (a scheme from a launch argument, a switch the system
                 // cut short, the old App Icon setting); nothing happens when it already is, so no alert.
@@ -83,7 +88,13 @@ struct PersonaApp: App {
                     await WorkoutReports.shared.refresh(model: model)
                     #endif
                 }
+                #if os(iOS)
+                ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
+                #endif
             } else if new == .background {
+                #if os(iOS)
+                ClipboardOfferWatcher.shared.left()
+                #endif
                 // A suspended app's socket looks alive to the hub until it times out, and phone_* calls sent to it hang.
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).

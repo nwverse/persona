@@ -68,6 +68,13 @@ class AppUpdateState(
 
     fun permissionRequired() { mutable.update { it.copy(message = R.string.settings_update_allow_unknown) } }
 
+    internal fun pendingInstallationCancelled() {
+        mutable.update {
+            if (!it.installing && it.message in setOf(R.string.settings_update_install_failed, R.string.settings_update_verified))
+                it.copy(message = null) else it
+        }
+    }
+
     fun startInstall(action: suspend (AppUpdate) -> Unit) {
         installScope.launch { install(action) }
     }

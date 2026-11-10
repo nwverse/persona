@@ -21,11 +21,34 @@ import (
 type AgentsConfig struct {
 	Triage   TriageConfig   `json:"triage,omitzero"`
 	Delegate DelegateConfig `json:"delegate,omitzero"`
+	// Dispatch is manager.json agents.dispatch: an agent handing a subtask to another connected computer
+	// (docs/plans/plan-agent-dispatch.md).
+	Dispatch DispatchConfig `json:"dispatch,omitzero"`
 	// LauncherHealth is manager.json agents.launcher_health: checking each machine's launchers (docs/server/launcher-health.md).
 	LauncherHealth LauncherHealthConfig `json:"launcher_health,omitzero"`
 	// Review is manager.json agents.review: the independent reviewer of a supervised task's finished change (#2173,
 	// docs/assistant/unified-entry.md "Independent review").
 	Review ReviewConfig `json:"review,omitzero"`
+}
+
+// DispatchConfig is manager.json agents.dispatch: the agents' dispatch_start / dispatch_read tools. Off unless Enabled
+// is true: a dispatched task runs an agent on another computer on its model, started by an agent and not by the user.
+type DispatchConfig struct {
+	// Enabled: off unless true.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxActive: how many dispatched tasks of one agent may be working at a time. Default 3.
+	MaxActive int `json:"max_active,omitempty"`
+}
+
+// On: the switch, off unless set true.
+func (c DispatchConfig) On() bool { return c.Enabled != nil && *c.Enabled }
+
+// Limit is MaxActive, 3 when unset.
+func (c DispatchConfig) Limit() int {
+	if c.MaxActive <= 0 {
+		return 3
+	}
+	return c.MaxActive
 }
 
 // ReviewConfig is manager.json agents.review: when a supervised task's agent is judged done, a reviewer agent started
