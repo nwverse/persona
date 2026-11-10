@@ -229,6 +229,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if err := s.applyModel(ctx, purpose, params); err != nil {
 		return proto.Session{}, err
 	}
+	if params["launch"] != "headless" {
+		return proto.Session{}, badRequest(fmt.Errorf("purpose %q requires headless launch for assistant.send", purpose))
+	}
 	used, _ := params["launcher"].(string)
 	var res struct {
 		SessionID string `json:"session_id"`

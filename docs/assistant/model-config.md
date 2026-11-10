@@ -28,6 +28,46 @@ The home page has five category rows and a separate **Lark /agent** row, showing
 
 The original `/launchers` API remains. New connections have `kind` of `launcher` or `api`; omitted on legacy entries, it still means launcher. Messages-protocol API connections (`api` empty or `messages`) can also be selected for the main chat and Agents: node starts claude with their address and key (#2455; see `docs/integrations/claude-integration.md` for environment variables). Responses and Chat Completions connections support only direct calls; `finishModel` refuses to treat them as launchers. Chat Completions can be configured manually, while extension provider declarations accept only Messages and Responses. Legacy API connections (`ai`, `inbox.*_ai`, `kb.ai`, in the manager's `manager.json` since 2026-11-06, in `hub.json` before) appear as compatibility sources; authentication-file paths and values are not returned to clients.
 
+## Execution form
+
+`ModelPurpose.launch` is a read-only value derived from the purpose's `kind` and ID or parent, not from its provider.
+It is returned by the model-configuration list and detail endpoints, never stored in a binding, and rejected in PUT/PATCH.
+
+| Purpose | `kind` | `launch` | Execution |
+| --- | --- | --- | --- |
+| `assistant`, `schedule`, `task.*`, `inbox.agent`, `lark.agent` | `launcher` | `headless` | Background process, without a terminal panel |
+| `agent.new` | `launcher` | `engine` | Interactive Agent in the target computer's terminal host |
+| `kb`, `inbox.triage`, `agent.delegate`, other API purposes, `extension.*` | `api` | omitted | HTTP requests sent directly by the assistant |
+| `plugin.*` | `plugin` | omitted | The plugin's own model service |
+
+Non-launcher purposes always have an empty launch value, even if their parent is a launcher.
+`applyModel` overwrites any caller-supplied `launch` in node-call params. `startOn` requires `headless` before
+`assistant.send`; a new `AgentStartParams` requires `engine` before `session.start`. Existing launcher, model, effort,
+runtime, permission and resume choices are unchanged.
+
+The web page groups purposes by `(kind, launch)`: **Persona chats · Background process**, **Agents · Interactive**,
+**Background processing · Direct API**, then **Extensions** (only when installed; extensions' own API purposes stay here).
+These groups describe execution, not inheritance levels. Lark /agent sits alongside the main chat in the background-process
+group, with **Inherits the Agents model · Runs as a background process** when following Agents, or **Separately configured**
+when overridden. Its reset action still says **Follow Agents**. Only **New agent** sits in the interactive group.
+Scheduled tasks follow the main chat's category; this presentation does not add independent task settings.
+
+Each row's neutral execution chip has a fixed form and a backend that follows the effective provider and runtime:
+`Background process · claude -p`, `Background process · codex app-server`, `Background process · Agent SDK`,
+`Interactive · herdr · claude`, or `Direct API · Messages` / `Responses` / `Chat`.
+The terminal host is a computer setting, not a provider property: only a purpose bound to a known computer shows its
+configured default host; `agent.new` says **By machine**. The editor previews backend changes before saving.
+
+The trailing **?** expands an inline explanation on desktop hover, keyboard focus or click (including touch).
+Click pins or closes it; Escape or a click outside dismisses it. This stays inside the settings card so long explanations
+remain readable on narrow screens and at larger text sizes, without nesting a help button inside the edit button.
+The explanation covers environment, configuration directories, compatible providers, typical uses and the current backend:
+headless processes use the assistant's working directory and the launcher's environment/configuration;
+interactive Agents use the target computer's terminal host environment and launcher configuration;
+direct API purposes use provider connections/credentials and no terminal or Claude/Codex profile;
+plugins use their own environment, configuration and credentials.
+**Unverified** means launcher execution on the target computer has not been confirmed, not that a paid model request succeeded or failed.
+
 ## Editing and inheritance
 
 Each category shows both “In Effect” and “Model Settings”:

@@ -58,6 +58,7 @@ type ModelPurpose struct {
 	Name          string       `json:"name"`
 	Group         string       `json:"group"`
 	Kind          string       `json:"kind"`
+	Launch        string       `json:"launch,omitempty"` // derived from the purpose, never stored or edited
 	Parent        string       `json:"parent,omitempty"`
 	MachineID     string       `json:"machine_id,omitempty"`
 	Override      ModelBinding `json:"override"`
@@ -69,6 +70,31 @@ type ModelPurpose struct {
 	Fields        []string     `json:"fields"`
 	ProviderIDs   []string     `json:"provider_ids"`
 	Runtimes      []string     `json:"runtimes,omitempty"` // assistant only: the runtimes it can run on
+}
+
+// launch is the purpose's execution form, independent of its provider or runtime.
+// API and plugin purposes never launch a process, even when their parent does.
+func (p ModelPurpose) launch() string {
+	if p.Kind != "launcher" {
+		return ""
+	}
+	for _, id := range []string{p.ID, p.Parent} {
+		switch id {
+		case "assistant", "schedule", "inbox.agent", "lark.agent":
+			return "headless"
+		case "agent.new":
+			return "engine"
+		}
+		if strings.HasPrefix(id, "task.") {
+			return "headless"
+		}
+	}
+	return ""
+}
+
+func (p ModelPurpose) withLaunch() ModelPurpose {
+	p.Launch = p.launch()
+	return p
 }
 
 var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate"}
@@ -249,7 +275,7 @@ func (s *Service) modelPurposeDef(ctx context.Context, id string) (ModelPurpose,
 					p.MachineID = m
 				}
 			}
-			return p, nil
+			return p.withLaunch(), nil
 		}
 	}
 	if strings.HasPrefix(id, "task.") {
@@ -259,12 +285,12 @@ func (s *Service) modelPurposeDef(ctx context.Context, id string) (ModelPurpose,
 		}
 		for _, t := range tasks {
 			if id == "task."+t.ID {
-				return ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: t.MachineID}, nil
+				return (ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: t.MachineID}).withLaunch(), nil
 			}
 		}
 	}
 	if p, ok := s.extensionPurposeDef(ctx, id); ok { // an extension's own (model_rpc.go)
-		return p, nil
+		return p.withLaunch(), nil
 	}
 	if strings.HasPrefix(id, "plugin.") {
 		for _, p := range s.voicePlugins(ctx) {
