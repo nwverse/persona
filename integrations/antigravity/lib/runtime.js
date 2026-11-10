@@ -202,6 +202,13 @@ export function createAgyRuntime(options = {}) {
     return configuredMode()
   }
 
+  function configuredModel() {
+    const value = readAgySettings().model
+    if (typeof value !== 'string' || !value.trim()) return undefined
+    const model = value.trim()
+    return catalog.find((entry) => entry.id === model || entry.name === model)?.id || model
+  }
+
   function configuredMode() {
     const cfg = readAgySettings()
     if (cfg.toolPermission === 'always-proceed' || cfg.agentMode === 'bypassPermissions') {
@@ -491,11 +498,14 @@ export function createAgyRuntime(options = {}) {
       archived.add(rawId)
       const probe = { text: '' }
       checkTurns.set(rawId, probe)
+      if (session.models?.availableModels) publishModels(session.models.availableModels)
+      const model = configuredModel()
+      if (model) await acp.call('session/set_model', { sessionId: rawId, modelId: model }, remaining())
       await acp.call('session/set_mode', { sessionId: rawId, modeId: 'default' }, remaining())
       const result = await acp.call('session/prompt', { sessionId: rawId, prompt: [{ type: 'text', text: params.prompt }] }, remaining())
       if (result?.stopReason !== 'end_turn') throw new Error(`Antigravity availability check ended with ${result?.stopReason || 'no stop reason'}`)
       if (!probe.text.trim()) throw new Error('Antigravity availability check returned no answer')
-      return { ok: true, agent: RUNTIME, model: session.models?.currentModelId, answer: probe.text.trim().slice(0, 400), millis: Date.now() - started }
+      return { ok: true, agent: RUNTIME, model: model || session.models?.currentModelId, answer: probe.text.trim().slice(0, 400), millis: Date.now() - started }
     } finally {
       if (rawId) {
         await acp.cancel(rawId)
@@ -553,7 +563,7 @@ export function createAgyRuntime(options = {}) {
     try {
       await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
       await applySessionOptions(rawId, {
-        model: params.model,
+        model: params.model || configuredModel(),
         permission_mode: params.permission_mode || configuredMode(),
         effort: params.effort,
       })

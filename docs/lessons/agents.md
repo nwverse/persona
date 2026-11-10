@@ -760,3 +760,9 @@ An SSH node and a local companion can have different credential access. A model 
 the companion do not make a login-shell health probe authenticated. Opt into runtime-owned checks, bound inference and
 cleanup, deny probe tools, and hide transcripts whose temporary probe workspace has been removed. Preserve a real
 workspace sharing the probe prefix while it still exists.
+
+## AGY ACP can ignore the configured initial model (#3817)
+
+Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
+IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
+explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
