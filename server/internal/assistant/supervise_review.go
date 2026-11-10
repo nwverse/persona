@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -37,6 +36,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		// accepted: the owner is still to look at the result themselves (a UI change someone has to see); without it the
 		// supervisor's acceptance passes the task's "Please verify" (#3240).
 		UserCheck bool `json:"user_check"`
+		// needs_user's decision (#3804, decision.go): why only the owner can decide, the options (the recommended first,
+		// each with what it leads to) and what waiting costs.
+		WhyOwner      string           `json:"why_owner"`
+		Options       []DecisionOption `json:"options"`
+		CostOfWaiting string           `json:"cost_of_waiting"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -55,17 +59,28 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.Verdict == reviewRework && a.Note == "" && !slices.ContainsFunc(a.Checks, func(c ReviewCheck) bool { return !c.Met }) {
 		return "", fmt.Errorf("rework: say what is missing (a check that is not met, or note)")
 	}
+	// A needs_user is a decision the owner can answer, or it is refused (#3804). A rework past its rounds becomes one
+	// too, so it may carry the decision; whether it has to is known once the task is read (below).
+	var decision reviewDecision
+	decided := false
+	if a.Verdict == reviewNeedsUser || a.Verdict == reviewRework && (a.WhyOwner != "" || len(a.Options) > 0) {
+		d, err := readDecision(a.WhyOwner, a.Reason, a.Recommend, a.CostOfWaiting, a.Options)
+		if err != nil {
+			return "", err
+		}
+		decision, decided = d, true
+	}
 	deadline, err := parseDeadline(a.Deadline, time.Now())
 	switch {
 	case err != nil:
 		return "", err
 	case deadline.IsZero():
-	case a.Verdict != reviewNeedsUser:
+	case !decided:
 		return "", fmt.Errorf("deadline applies to needs_user only")
-	case strings.TrimSpace(a.Recommend) == "":
-		return "", fmt.Errorf("deadline: give recommend, the option taken by default when it passes")
 	case a.Reversible == nil:
 		return "", fmt.Errorf("deadline: say whether the recommendation can be undone (reversible); deleting, sending to other people, spending money and production changes cannot")
+	case *a.Reversible && neverDefault(decision.WhyOwner):
+		return "", fmt.Errorf("deadline: a decision whose why_owner is %s is never taken by default: reversible must be false (the user is only reminded at the deadline)", decision.WhyOwner)
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return "", err
@@ -82,6 +97,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new task for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
+	}
+	if err := restated(t, a.Verdict, decision); err != nil {
+		return "", err
+	}
+	if a.Verdict == reviewRework && !decided && t.Supervision != nil && t.Supervision.Round >= maxReworkRounds {
+		return "", reworkOverError(t.ID)
 	}
 	checks := make([]ReviewCheck, 0, len(a.Checks))
 	for _, c := range a.Checks {
@@ -101,7 +122,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if !ledger && (verdict == reviewRework || verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is not supervised: send what is missing to its agent with agent_send, or ask the user in your answer", t.ID)
 	}
-	over := false
+	over, refused := false, false
 	var v Supervision
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
@@ -111,9 +132,17 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				v.Supervisor = t.Origin
 			}
 			if verdict == reviewRework && v.Round >= maxReworkRounds {
+				if !decided {
+					refused = true // another rework took the last round meanwhile: nothing is written
+					return false
+				}
 				verdict, over = reviewNeedsUser, true
 			}
 			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note, UserCheck: a.UserCheck}
+			if verdict == reviewNeedsUser {
+				r.WhyOwner, r.Reason, r.Recommend = decision.WhyOwner, decision.Reason, decision.Recommend
+				r.Options, r.CostOfWaiting = decision.Options, decision.CostOfWaiting
+			}
 			if verdict == reviewRework {
 				v.Round++
 				r.Round = v.Round
@@ -129,13 +158,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if err != nil {
 		return "", err
 	}
+	if refused {
+		return "", reworkOverError(t.ID)
+	}
 	if verdict == reviewRework || verdict == reviewNeedsUser || a.UserCheck || a.Outcome == outcomeCannot {
 		s.setTaskStageKind(ctx, t.ID, "unverified", "", "", false)
 	}
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigOrphaned} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigOrphaned, sigRecheck, sigUndecidable, sigOwnerCannot} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	b.mu.Unlock()
@@ -203,15 +235,24 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Tell the user the result in a line or two "+
 			"if they are waiting for it, and hand out or schedule anything that follows (deploy, TestFlight, closing an issue).", t.ID), nil
 	case reviewNeedsUser:
-		conclusion.Outcome, conclusion.Recommend = outcomeDecide, a.Recommend
-		if !deadline.IsZero() {
-			conclusion.Deadline, conclusion.Reversible = deadline, *a.Reversible
+		conclusion.Outcome, conclusion.Reason, conclusion.Recommend, conclusion.Decision = outcomeDecide, decision.Reason, decision.Recommend, decision
+		reversible := false
+		switch {
+		case !deadline.IsZero():
+			reversible = *a.Reversible
+		case !neverDefault(decision.WhyOwner):
+			// A default and a date (#3804): one that can be undone takes its recommendation after a day unless the review
+			// set its own deadline.
+			deadline, reversible = time.Now().Add(decisionDefaultAfter).UTC(), true
 		}
-		if over && a.Reason == "" { // the note is the rework asked for, written to the agent: not the owner's question
-			conclusion.Reason, conclusion.Note = i18n.T(s.botLang(ctx), "assistant-reports.verdict_over", i18n.Args{"rounds": maxReworkRounds}), ""
+		if !deadline.IsZero() {
+			conclusion.Deadline, conclusion.Reversible = deadline, reversible
+		}
+		if over { // the note is the rework asked for, written to the agent: not the owner's question
+			conclusion.Note = ""
 		}
 		if !isMain && s.isLeader(ctx, v.Supervisor) { // a leader's: the main conversation hears of it too (supervise_leader.go)
-			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), a.Recommend)
+			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), decision.Recommend)
 		}
 		carded := s.askConclusion(ctx, t, conclusion)
 		// A recommendation is also pushed to their phone, whose OK takes it (todo_ask.go), with the bot on or off. The hub
@@ -220,7 +261,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		pushed := ""
 		switch {
 		case deadline.IsZero():
-		case *a.Reversible:
+			pushed = " It is never taken by default (" + decision.WhyOwner + "): the hub raises it to the user again once a day, and hands it " +
+				"back to you after a day to confirm its facts still hold."
+		case reversible:
 			pushed = fmt.Sprintf(" If the user has not answered by %s, the hub takes the recommendation by default (it goes to the agent and is "+
 				"recorded on the to-do as taken at the deadline). Their answer on the card, the push or the to-do ends that; if they answer you "+
 				"anywhere else (in this chat), review the task with their decision (task_review) before then, or the recommendation is still taken.",
@@ -404,4 +447,39 @@ func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, 
 		return "", err
 	}
 	return "sent to the agent", nil
+}
+
+// reworkOverError refuses a rework past maxReworkRounds that states no decision: the task goes to the owner only as a
+// decision they can answer (#3804), so the supervisor states one, or closes it.
+func reworkOverError(id string) error {
+	return fmt.Errorf("task %s was sent back %d times already: a third rework goes to the user, and only as a decision they can "+
+		"answer. Review it needs_user with why_owner, reason (what is to be decided: how it should go on), recommend, options "+
+		"(2 to 4, each {label, leads_to}: one more round, taking it as it is, dropping it) and cost_of_waiting; or accept it as it "+
+		"is (accepted), or end it (cancelled)", id, maxReworkRounds)
+}
+
+// restated checks a needs_user against what the owner answered the task's decision before (decision.go): after "You
+// decide" the same question is not asked again, and one that cannot be undone or that others will see comes back only
+// as a plain approval (two options: go ahead or not).
+func restated(t Todo, verdict string, d reviewDecision) error {
+	v := t.Supervision
+	if verdict != reviewNeedsUser || v == nil || len(v.Reviews) == 0 {
+		return nil
+	}
+	prev := v.Reviews[len(v.Reviews)-1]
+	if prev.Verdict != reviewNeedsUser || prev.OwnerResponse != respondDecideYourself {
+		return nil
+	}
+	if neverDefault(prev.WhyOwner) {
+		if len(d.Options) != 2 {
+			return fmt.Errorf("the user answered this decision \"You decide\", and it cannot be taken for them (%s): restate it as a "+
+				"plain approval with exactly two options (go ahead, or not), each leads_to spelling out the consequence", prev.WhyOwner)
+		}
+		return nil
+	}
+	if strings.EqualFold(d.Reason, prev.Reason) {
+		return errors.New("the user answered this decision \"You decide\": don't ask them the same thing again. Decide it, tell the " +
+			"task's agent (agent_send) and say in a line what you assumed. " + decisionElse)
+	}
+	return nil
 }

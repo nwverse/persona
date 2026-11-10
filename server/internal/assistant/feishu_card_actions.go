@@ -43,7 +43,20 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 		// The hub checked the owner pressed it; marking a task verified approves nothing.
 		ok, err := false, error(nil)
 		ask, _ := s.askCopy(a.Str("id"))
-		if at := a.Str("asked_at"); at != "" { // a button of a briefing card: it accepts the round it was asked in (briefing.go)
+		if resp := a.Str("resp"); resp != "" { // "I can't answer this": to its supervisor, nothing taken (decision.go)
+			if s.ownCard(a.Str("id"), a.Context.MessageID) {
+				ok, err = s.ownerCannotAnswer(ctx, a.Str("id"), "", resp)
+			}
+			ask.Response = resp
+		} else if opt := a.Str("opt"); opt != "" { // an option of the decision other than the recommended one
+			if s.ownCard(a.Str("id"), a.Context.MessageID) {
+				ok, err = s.chooseOption(ctx, a.Str("id"), "", opt)
+			}
+			ask.Chosen = opt
+			if opt == ask.Recommend {
+				ask.Chosen = "" // the recommended one: taken as OK takes it
+			}
+		} else if at := a.Str("asked_at"); at != "" { // a button of a briefing card: it accepts the round it was asked in (briefing.go)
 			ok, err = s.acceptTryFromBrief(ctx, a.Str("id"), at)
 		} else {
 			ok, err = s.acceptTry(ctx, a.Str("id"), a.Context.MessageID)

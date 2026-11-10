@@ -352,6 +352,9 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 		doneWhen, expect := cleanDoneWhen(h.task.DoneWhen), max(0, min(h.task.ExpectMinutes, 24*60))
 		v, _, err := s.updateSupervision(ctx, h.todo.ID, func(v *Supervision) bool {
 			v.Supervisor = h.self
+			if n := len(v.Reviews); n > 0 && v.Reviews[n-1].OwnerResponse == respondNotAsked {
+				v.Reviews[n-1].HoldReleased = true // the supervisor sent its agent on: follow-ups go again (decision.go)
+			}
 			if len(doneWhen) > 0 {
 				v.DoneWhen = doneWhen
 			}

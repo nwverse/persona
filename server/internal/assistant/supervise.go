@@ -80,6 +80,21 @@ type TaskReview struct {
 	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
 	// "Please verify" waits for them instead of being passed by the supervisor (acceptance.go, #3240).
 	UserCheck bool `json:"user_check,omitempty"`
+	// A needs_user review's decision (#3804, decision.go): why only the owner can decide, what is to be decided, the
+	// option recommended, the options (the recommended first) and what waiting costs.
+	WhyOwner      string           `json:"why_owner,omitempty"`
+	Reason        string           `json:"reason,omitempty"`
+	Recommend     string           `json:"recommend,omitempty"`
+	Options       []DecisionOption `json:"options,omitempty"`
+	CostOfWaiting string           `json:"cost_of_waiting,omitempty"`
+	// RestateAt: when the hub handed this needs_user back to its supervisor because the owner could not answer it
+	// (undecidable, or owner_cannot_answer): told once.
+	RestateAt time.Time `json:"restate_at,omitzero"`
+	// OwnerResponse: the fixed answer the owner gave its decision (decide_yourself, not_what_i_asked, explain_first)
+	// and when; HoldReleased: after not_what_i_asked, the supervisor sent the task's agent on again.
+	OwnerResponse   string    `json:"owner_response,omitempty"`
+	OwnerResponseAt time.Time `json:"owner_response_at,omitzero"`
+	HoldReleased    bool      `json:"hold_released,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -98,6 +113,7 @@ func (v *Supervision) clone() *Supervision {
 	for i, r := range v.Reviews {
 		out.Reviews[i] = r
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
+		out.Reviews[i].Options = slices.Clone(r.Options)
 	}
 	if out.DoneWhen == nil {
 		out.DoneWhen = []string{}

@@ -72,6 +72,21 @@ type acceptAsk struct {
 	ByDefault  bool      `json:"by_default,omitempty"`
 	// ByAssistant: a deployed task the supervising assistant accepted itself, not a big feature (ownerVerifies, #3205).
 	ByAssistant bool `json:"by_assistant,omitempty"`
+	// A decision's own (#3804, decision.go). WhyOwner: why only the owner can decide; Options: what they choose from, the
+	// recommended first, each with what it leads to; CostOfWaiting: what waiting costs. From and Stands are the hub's:
+	// where the task came from and where it stood when the decision was asked. RecheckAt: when it went back to its
+	// supervisor for having waited long; RaisedAt: when one never taken by default was last raised to the owner again;
+	// Response: the fixed answer the owner gave instead of an option (ownerResponses).
+	WhyOwner      string           `json:"why_owner,omitempty"`
+	Options       []DecisionOption `json:"options,omitempty"`
+	CostOfWaiting string           `json:"cost_of_waiting,omitempty"`
+	From          *askFrom         `json:"from,omitempty"`
+	Stands        string           `json:"stands,omitempty"`
+	RecheckAt     time.Time        `json:"recheck_at,omitzero"`
+	RaisedAt      time.Time        `json:"raised_at,omitzero"`
+	Response      string           `json:"response,omitempty"`
+	// Chosen: the option the owner chose when it was not the recommended one.
+	Chosen string `json:"chosen,omitempty"`
 }
 
 // acceptPostWindow is how long after an ask its card that did not go out (the bot's status could not be read, the send
@@ -178,6 +193,11 @@ func (s *Service) askAcceptanceRound(t Todo, machine, session, reply string, aga
 	var earlier []string
 	if old := b.asks[t.ID]; old != nil && (old.AskedAt.IsZero() || !old.Conclusion) && !acceptAskStale(old, t) &&
 		!(again && !old.AskedAt.IsZero() && !old.AcceptedAt.IsZero()) {
+		b.mu.Unlock()
+		return
+	} else if old != nil && decisionOpen(old, t) {
+		// A decision waits for the owner: a turn that says "deployed" meanwhile does not take its place (#3804). Once it
+		// is settled, the next deployed turn asks.
 		b.mu.Unlock()
 		return
 	} else if old != nil {
@@ -308,15 +328,25 @@ func (s *Service) assistantAccepts(ctx context.Context, t Todo, a acceptAsk) {
 	b.mu.Lock()
 	if c := b.asks[t.ID]; c != nil && c.AskedAt.IsZero() {
 		a.Earlier = c.Earlier
+	} else if c != nil && decisionOpen(c, t) {
+		b.mu.Unlock() // a decision was asked while this one was being written: it stands (#3804)
+		return
 	}
+	// Accepted as it is kept, in one write: a decision asked a moment later must not be what a second look at the book
+	// accepts (acceptTry takes a decision's recommendation).
+	a.AcceptedAt = time.Now().UTC()
 	b.asks[t.ID] = &a
-	s.saveAcceptLocked(ctx)
-	b.mu.Unlock()
-	if ok, err := s.acceptTry(ctx, t.ID, ""); err != nil || !ok {
-		s.logf("task %s: accepted by the assistant: %v %v", t.ID, ok, err)
+	if err := s.saveAcceptErrLocked(ctx); err != nil {
+		a.AcceptedAt = time.Time{} // kept only in memory it would wait again after a restart: not accepted
+		b.mu.Unlock()
+		s.logf("task %s: accepted by the assistant: %v", t.ID, err)
 		s.askChanged(ctx)
 		return
 	}
+	cp := a
+	b.mu.Unlock()
+	s.askChanged(ctx)
+	s.taskVerified(ctx, t.ID, cp)
 	s.logf("task %s: deployed, accepted by the supervising assistant (not a big feature: the owner is not asked)", t.ID)
 }
 
@@ -341,12 +371,24 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 		a.NoCard = true
 	}
 	posted := a.MessageID != "" // read before a is shared: a retry may set its card once the book has it
+	// The ask is kept whether or not the caller still waits: a tool call given up on while the bot's status was read
+	// must not leave it in memory only, gone with the next restart (#3804).
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	b.mu.Lock()
 	if c := b.asks[t.ID]; c != nil && c.AskedAt.IsZero() {
 		a.Earlier = c.Earlier // the claim's: it also has a card of the round before that a retry posted meanwhile
+	} else if c != nil && !a.Conclusion && decisionOpen(c, t) {
+		// A decision was asked while this "Please verify" was being written: it stands, and this card is dead (#3804).
+		if a.MessageID != "" {
+			c.Earlier = lastOf(append(slices.Clone(c.Earlier), a.MessageID), acceptEarlierMost)
+			s.saveAcceptLocked(sctx)
+		}
+		b.mu.Unlock()
+		return false
 	}
 	b.asks[t.ID] = &a
-	s.saveAcceptLocked(ctx)
+	s.saveAcceptLocked(sctx)
 	b.mu.Unlock()
 	s.askChanged(ctx) // it waits for the owner now: the apps and the board
 	return posted
@@ -562,7 +604,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.logf("task %s: acceptance reopen: %v", id, err)
 		}
 	}
-	if _, err := s.routeToTask(ctx, t.Origin, id, msg); err != nil {
+	if _, err := s.relayToTask(ctx, t.Origin, id, msg, nil); err != nil {
 		s.logf("task %s: acceptance to agent: %v", id, err)
 		s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}), media))
 		return true
@@ -977,6 +1019,13 @@ func acceptAskEnded(a *acceptAsk, t Todo) bool {
 		return a.Outcome == outcomeDecide && (t.DoneAt != nil || t.Supervision.state(t) != reviewNeedsUser)
 	}
 	return t.DoneAt != nil && t.DoneBy != db.DoneByAuto && !(t.DoneBy == db.DoneByReview && t.Supervision.state(t) == reviewAccepted)
+}
+
+// decisionOpen says a is a decision still waiting for the owner on task t as the caller read it: asked, not answered,
+// not from before the to-do's latest reopen. t may be a moment old (its review state is not asked: the decision's
+// review is what made it needs_user).
+func decisionOpen(a *acceptAsk, t Todo) bool {
+	return decideAsk(a) && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() && t.DoneAt == nil && !acceptAskStale(a, t)
 }
 
 // acceptAskStale says an ask belongs to an earlier round: the todo was reopened (PATCH done:false, change feedback

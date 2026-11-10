@@ -344,6 +344,7 @@ For tasks dispatched from the main chat (`internal/assistant/tasks_follow.go`), 
 - Wait duration: median / p90 from turn end to user action (viewed, replied, answered a card), split by "Done", "Waiting for your decision", and "Not triaged";
 - Automatic continuation: number sent and proportion followed by normal completion; wakeups: count and proportion completed after waking;
 - Cards: created, answered, wait before answer, and removed (because you replied directly).
+- Decisions the owner could not answer (#3804): `owner_cannot_answer` is `{"<supervisor conversation>": {"decide_yourself": n, "not_what_i_asked": n, "explain_first": n}}`, one count per fixed answer the owner gave a supervised task's decision instead of an option (work event `owner_cannot_answer`), so a conversation that keeps asking what the owner cannot answer shows (`docs/assistant/todos.md`, "Decisions the owner can answer").
 
 Pre-launch baseline (evening of 2026-11-04, non-assistant sessions on the hub): 5 unread (4 within 24 hours), with a median wait already around 10 minutes.
 
