@@ -18,6 +18,7 @@
   "name_assistant_title": "チャットのタイトル",
   "name_agent_title": "エージェントのタブ名",
   "name_todo_title": "ToDo のタイトル",
+  "name_subscription_recipe": "購読レシピの下書き",
   "name_schedule": "定期タスク",
   "group_default": "デフォルトのモデル",
   "group_agents": "Agents",

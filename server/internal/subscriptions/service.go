@@ -64,6 +64,10 @@ type Options struct {
 	Clock   Clock
 	// Features are the later stages that are in.
 	Features Features
+	// Model drafts recipes (Generate); nil answers no_model.
+	Model Model
+	// Language is the name of the language the model writes its note in: the request's, else the user's.
+	Language func(ctx context.Context) string
 }
 
 // Clock is time for the runner: tests drive it.
@@ -123,6 +127,9 @@ func New(o Options) *Service {
 	}
 	if o.Clock == nil {
 		o.Clock = realClock{}
+	}
+	if o.Language == nil {
+		o.Language = func(context.Context) string { return "English" }
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
 		busy: map[string]bool{}, asked: map[string]bool{}, wake: make(chan struct{}, 1)}
@@ -596,15 +603,7 @@ func preview(m mapped, fresh bool) Preview {
 
 // refused is the API error for a recipe that did not pass check.
 func refused(dr DryRun) *Error {
-	p := dr.Error
-	for _, ch := range dr.Checks {
-		if p == nil && ch.Error != nil {
-			p = ch.Error
-		}
-	}
-	if p == nil {
-		p = &Problem{CodeDryRunFailed, "The dry run did not pass."}
-	}
+	p := problemOf(dr)
 	e := errorf(statusOf(p.Code), p.Code, p.Message)
 	e.DryRun = &dr
 	return e
@@ -614,6 +613,9 @@ func refused(dr DryRun) *Error {
 func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subscription, error) {
 	if in.Connector == "" || in.Source == "" {
 		return Subscription{}, errorf(http.StatusBadRequest, CodeBadRequest, "connector and source are required")
+	}
+	if !slices.Contains([]string{"", OriginUser, OriginModel}, in.RecipeOrigin) || in.RecipeOrigin != "" && in.Recipe == nil {
+		return Subscription{}, errorf(http.StatusBadRequest, CodeBadRequest, "recipe_origin is user or model, with a recipe")
 	}
 	c, ok := s.o.Connectors.Find(ctx, in.Connector)
 	if !ok {
@@ -627,6 +629,9 @@ func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subsc
 	origin := OriginExtension
 	if in.Recipe != nil {
 		origin = OriginUser
+		if in.RecipeOrigin == OriginModel {
+			origin = OriginModel
+		}
 	}
 	srcMin := intOr(t.source.MinIntervalSeconds)
 	sub := Subscription{ID: newID(), Connector: c.ID, Extension: c.Extension, Source: t.source.ID, SourceName: t.source.Name,
@@ -648,6 +653,37 @@ func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subsc
 
 var dailyRE = lazyre.New(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
+// scheduleFor is the interval and daily time a recipe in mode would run at on sub, for check: its own while the mode
+// stays, else the mode's default (-1) and, for a snapshot, the default daily time.
+func scheduleFor(sub Subscription, mode string) (int, string) {
+	if mode == sub.Recipe.Mode {
+		return sub.IntervalSeconds, sub.DailyAt
+	}
+	if mode == wire.ConnectorSubscriptionModeSnapshot {
+		return -1, defaultDailyAt
+	}
+	return -1, ""
+}
+
+// withRecipe is sub with a recipe that passed check (t, dr) from origin: its run state starts over, and a new mode
+// takes that mode's default schedule. The switches, label and rules stay.
+func withRecipe(sub Subscription, t target, dr DryRun, origin string, now time.Time) Subscription {
+	next := sub
+	next.Recipe, next.Tool, next.RecipeOrigin, next.RecipeAt = t.recipe, t.recipe.Tool, origin, now
+	next.ToolFingerprint, next.WeakDedup, next.Shape = fingerprint(t.tool), dr.WeakDedup, dr.Shape
+	next.SourceMin, next.MaxCallsPerHour = intOr(t.source.MinIntervalSeconds), intOr(t.source.MaxCallsPerHour)
+	next.RunState, next.Error, next.FailCount, next.FailingSince, next.ShapeMisses = StateOK, nil, 0, nil, 0
+	if t.recipe.Mode != sub.Recipe.Mode {
+		next.SnapshotHash = ""
+		next.IntervalSeconds = defaultIntervalOf(t.recipe.Mode, next.SourceMin)
+		next.DailyAt = ""
+		if t.recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
+			next.DailyAt = defaultDailyAt
+		}
+	}
+	return next
+}
+
 // Update changes a subscription made at p.Revision.
 func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Subscription, error) {
 	cur, err := s.o.Store.GetSubscription(ctx, id)
@@ -657,14 +693,8 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	if cur == nil {
 		return Subscription{}, notFound("subscription")
 	}
-	conflict := func(c *Subscription) *Error {
-		e := errorf(http.StatusConflict, CodeConflict, "the subscription was changed meanwhile")
-		v := shown(*c)
-		e.Current = &v
-		return e
-	}
 	if p.Revision != cur.Revision {
-		return Subscription{}, conflict(cur)
+		return Subscription{}, conflictWith(cur)
 	}
 	next, prev := *cur, cur.Revision
 	now := s.now()
@@ -674,13 +704,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		if !ok {
 			return Subscription{}, errorf(http.StatusServiceUnavailable, CodeNotConnected, "the connector is not registered")
 		}
-		interval, daily := cur.IntervalSeconds, cur.DailyAt
-		if p.Recipe.Mode != cur.Recipe.Mode {
-			interval, daily = -1, ""
-			if p.Recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
-				daily = defaultDailyAt
-			}
-		}
+		interval, daily := scheduleFor(*cur, p.Recipe.Mode)
 		if p.IntervalSeconds != nil {
 			interval = *p.IntervalSeconds
 		}
@@ -691,18 +715,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		if !dr.OK {
 			return Subscription{}, refused(dr)
 		}
-		next.Recipe, next.Tool, next.RecipeOrigin, next.RecipeAt = t.recipe, t.recipe.Tool, OriginUser, now
-		next.ToolFingerprint, next.WeakDedup, next.Shape = fingerprint(t.tool), dr.WeakDedup, dr.Shape
-		next.SourceMin, next.MaxCallsPerHour = intOr(t.source.MinIntervalSeconds), intOr(t.source.MaxCallsPerHour)
-		next.RunState, next.Error, next.FailCount, next.FailingSince, next.ShapeMisses = StateOK, nil, 0, nil, 0
-		if t.recipe.Mode != cur.Recipe.Mode {
-			next.SnapshotHash = ""
-			next.IntervalSeconds = defaultIntervalOf(t.recipe.Mode, next.SourceMin)
-			next.DailyAt = ""
-			if t.recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
-				next.DailyAt = defaultDailyAt
-			}
-		}
+		next = withRecipe(next, t, dr, OriginUser, now)
 		changed = append(changed, "recipe")
 	}
 	if p.Label != nil {
@@ -772,7 +785,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		if err != nil || c == nil {
 			return Subscription{}, notFound("subscription")
 		}
-		return Subscription{}, conflict(c)
+		return Subscription{}, conflictWith(c)
 	}
 	s.o.Audit(ctx, next.Connector, "subscription_updated", by, map[string]any{"subscription": id, "fields": changed})
 	s.o.Changed(shown(next), false)

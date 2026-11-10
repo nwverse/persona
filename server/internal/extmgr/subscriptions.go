@@ -7,8 +7,11 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
@@ -44,8 +47,51 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 				"state": s.State, "removed": removed})
 		},
 		Logf: h.logf,
+		// Drafting recipes (#2040): the assistant holds the keys and the purpose subscription.recipe.
+		Model:    subscriptionModel{h},
+		Language: func(ctx context.Context) string { return h.contextLang(ctx).Name() },
+		Features: subscriptions.Features{Generate: true},
 	})
 	go h.subs.Run(ctx)
+}
+
+// subscriptionModel makes the drafting calls on the purpose subscription.recipe, through the assistant
+// (models.purpose_complete): the manager never holds a model's key.
+type subscriptionModel struct{ h *Manager }
+
+// subscriptionModelWait bounds one drafting call, its second try for the schema included.
+const subscriptionModelWait = 60
+
+func (m subscriptionModel) JSON(ctx context.Context, c subscriptions.ModelCall) (json.RawMessage, error) {
+	turns := make([]assistantwire.ModelMessage, len(c.Turns))
+	for i, t := range c.Turns {
+		turns[i] = assistantwire.ModelMessage{Role: t.Role, Content: t.Content}
+	}
+	var out assistantwire.ModelCompleteResult
+	err := m.h.callAssistant(ctx, assistantwire.MethodModelsPurposeComplete, assistantwire.PurposeComplete{
+		Purpose: assistantwire.PurposeSubscriptionRecipe,
+		Params: assistantwire.ModelCompleteParams{System: c.System, Messages: turns, MaxTokens: c.MaxTokens, JSONSchema: c.Schema,
+			TimeoutSeconds: subscriptionModelWait, Label: c.Label},
+	}, &out)
+	var re *rpc.Error
+	switch {
+	case errors.As(err, &re) && re.Code == assistantwire.CodeModelUnavailable:
+		return nil, subscriptions.ErrNoModel
+	case errors.As(err, &re) && re.Code == assistantwire.CodeModelPaused:
+		var p assistantwire.ModelPause
+		_ = json.Unmarshal(re.Data, &p)
+		e := &subscriptions.Error{Status: http.StatusServiceUnavailable, Code: subscriptions.CodeModelFailed,
+			Message: "The model's connection is held for now; try again later."}
+		if until, perr := time.Parse(time.RFC3339, p.Until); perr == nil {
+			e.RetryAfter = max(1, time.Until(until).Seconds())
+		}
+		return nil, e
+	case err != nil:
+		return nil, err
+	case len(out.JSON) == 0:
+		return nil, errors.New("the reply has no JSON")
+	}
+	return out.JSON, nil
 }
 
 // Subscriptions is the service, for the declarative pages (#2041) and tests; nil before the manager runs.
@@ -172,6 +218,24 @@ func (h *Manager) subscriptionRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, s)
 	}))
+	// Drafting a recipe with the model (#2040): {id} regenerates and saves the subscription; "-" drafts for
+	// {connector, source} and writes nothing.
+	api.HandleFunc("POST /api/v1/subscriptions/{id}/generate", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, by subscriptions.Actor) {
+		in := subscriptions.GenerateRequest{}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&in); err != nil && !errors.Is(err, io.EOF) { // a body is optional
+			writeErrCode(w, http.StatusBadRequest, subscriptions.CodeBadRequest, err)
+			return
+		}
+		if id := r.PathValue("id"); id != "-" {
+			in.ID, in.Connector, in.Source = id, "", ""
+		}
+		out, err := h.subs.Generate(r.Context(), in, by)
+		if err != nil {
+			writeSubscriptionErr(w, err)
+			return
+		}
+		writeJSON(w, out)
+	}))
 	api.HandleFunc("POST /api/v1/subscriptions/{id}/run", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, by subscriptions.Actor) {
 		s, err := h.subs.RunNow(r.Context(), r.PathValue("id"), by)
 		if err != nil {
@@ -230,6 +294,9 @@ func writeSubscriptionErr(w http.ResponseWriter, err error) {
 	}
 	if e.RetryAfter > 0 {
 		body["retry_after"] = e.RetryAfter
+	}
+	if e.Draft != nil {
+		body["recipe"] = e.Draft
 	}
 	writeErrorBody(w, e.Status, body)
 }

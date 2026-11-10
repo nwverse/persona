@@ -56,6 +56,8 @@ const (
 	CodeCallFailed       = "call_failed"
 	CodeShapeChanged     = "shape_changed"
 	CodeToolChanged      = "tool_changed"
+	CodeNoModel          = "no_model"     // drafting: no model is set up for it
+	CodeModelFailed      = "model_failed" // drafting: the model's call failed
 )
 
 // Problem is a code and one English sentence. Clients localize the code; the sentence never carries source content.
@@ -260,12 +262,14 @@ type Filter struct {
 	Extension string
 }
 
-// CreateRequest makes a subscription: with no recipe, the source's first own one.
+// CreateRequest makes a subscription: with no recipe, the source's first own one. RecipeOrigin says a given recipe
+// is a model's draft taken as it was (model); otherwise it is the user's.
 type CreateRequest struct {
-	Connector string  `json:"connector"`
-	Source    string  `json:"source"`
-	Recipe    *Recipe `json:"recipe,omitempty"`
-	Label     string  `json:"label,omitempty"`
+	Connector    string  `json:"connector"`
+	Source       string  `json:"source"`
+	Recipe       *Recipe `json:"recipe,omitempty"`
+	RecipeOrigin string  `json:"recipe_origin,omitempty"`
+	Label        string  `json:"label,omitempty"`
 }
 
 // Patch changes a subscription made at Revision; nil fields stay as they are.
@@ -296,6 +300,8 @@ type Error struct {
 	RetryAfter float64       `json:"retry_after,omitempty"`
 	DryRun     *DryRun       `json:"-"`
 	Current    *Subscription `json:"-"`
+	// Draft is a model's draft that did not pass, as far as it got: the pages start the manual editor from it.
+	Draft *Recipe `json:"-"`
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
