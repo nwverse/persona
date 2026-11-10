@@ -213,7 +213,9 @@ struct TodoTriageTests {
             todo("accepted", agents: ["old"]) { $0.supervision = acceptedReopened() },
             todo("quiet") { $0.quiet = true },
         ], lookup: lookup, now: now, quiet: false)
-        #expect([r.open, r.shelved, r.finished] == [1, 1, 2])
+        #expect(r.open == 1)
+        #expect(r.shelved == 1)
+        #expect(r.finished == 2)
     }
 
     @Test func relatedKeysIgnoreCaseSpacesPunctuationAndATrailingSlash() {
