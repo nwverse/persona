@@ -407,10 +407,14 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	}
 	n.notePanes(unknown)
 	n.mu.Unlock()
+	var fallbacks []host.Agent
 	for _, a := range family {
 		id := n.piSession(a)
 		if id == "" {
 			id = otherSession(a) // nothing reported its session yet: the pane is the row, terminal only (pi.go)
+			if id != "" {
+				fallbacks = append(fallbacks, a)
+			}
 		}
 		if id != "" {
 			if _, taken := m[id]; !taken {
@@ -418,6 +422,7 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			}
 		}
 	}
+	n.noteFamilyPanes(fallbacks)
 	for _, a := range opencode {
 		id := n.opencodeSession(a)
 		if id == "" {
