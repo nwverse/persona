@@ -4,6 +4,7 @@ import { contextWrapped } from '../../runtime-sdk/lib/compat.js'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createRuntime, interactionId, page, snippet, summaryOf } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
@@ -245,6 +246,23 @@ export function createAgyRuntime(options = {}) {
     return `agy:${rawId}`
   }
 
+  function readConversationStates() {
+    const path = join(agyDir, 'conversation_summaries.db')
+    if (!existsSync(path)) return new Map()
+    let db
+    try {
+      db = new DatabaseSync(path, { readOnly: true })
+      db.exec('PRAGMA query_only = 1; PRAGMA busy_timeout = 50')
+      const rows = db.prepare('SELECT conversation_id, status, not_fully_idle, killed, step_count FROM conversation_summaries').all()
+      return new Map(rows.map((row) => [row.conversation_id, row]))
+    } catch {
+      // A missing or unavailable native summary cannot establish that a text reply ended the turn.
+      return new Map()
+    } finally {
+      db?.close()
+    }
+  }
+
   function syncTranscriptAppend(rawId) {
     const pid = toPersonaId(rawId)
     const bDir = brainDirOf(rawId)
@@ -266,6 +284,7 @@ export function createAgyRuntime(options = {}) {
 
   async function listSessions() {
     const { convs, cwdByConv } = readCacheMetadata()
+    const states = readConversationStates()
     const brainRoot = join(agyDir, 'brain')
     const seenIds = new Set(Object.keys(convs))
     if (existsSync(brainRoot)) {
@@ -317,7 +336,7 @@ export function createAgyRuntime(options = {}) {
       const steps = readTranscriptSteps(brainDirOf(rawId), false)
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
-      let status = running ? 'working' : transcriptStatus(steps)
+      let status = running ? 'working' : transcriptStatus(steps, Date.now(), states.get(rawId))
       if (!hasTranscript && completedTurns.has(pid) && !running) status = 'done'
       const title =
         sessionTitles.get(rawId) ||
