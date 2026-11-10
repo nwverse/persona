@@ -52,11 +52,4 @@ describe("lark-cli's watched documents", () => {
     expect(saved).toEqual([{ inbox_all_chats: ["oc_example"], documents: ["https://example.feishu.cn/docx/doc_example"], wiki_spaces: [], owned_all_comments: false, triage_rules: "" }]);
     expect(host.textContent).toContain("https://example.feishu.cn/docx/doc_example");
   });
-
-  it("turns on every comment for documents I own", async () => {
-    const sw = host.querySelector<HTMLElement>('[role="switch"][aria-label="我拥有的文档收全部评论"]')!;
-    expect(sw.getAttribute("aria-checked")).toBe("false");
-    await act(async () => sw.click());
-    expect(saved).toEqual([{ inbox_all_chats: ["oc_example"], documents: [], wiki_spaces: [], owned_all_comments: true, triage_rules: "" }]);
-  });
 });

@@ -840,10 +840,6 @@ function LarkCLIDocuments({ options, onSaved }: { options: LarkCLIInboxOptions; 
     <Group title={t("settings-hubconnector.lark_docs")} footer={t("settings-hubconnector.lark_docs_footer")}>
       <LinkList label={t("settings-hubconnector.lark_docs_links")} placeholder={t("settings-hubconnector.lark_docs_link_placeholder")} values={o.documents} disabled={saving} onChange={(documents) => void save({ ...o, documents })} />
       <LinkList label={t("settings-hubconnector.lark_docs_spaces")} placeholder={t("settings-hubconnector.lark_docs_space_placeholder")} values={o.wiki_spaces} disabled={saving} onChange={(wiki_spaces) => void save({ ...o, wiki_spaces })} />
-      <Row label={t("settings-hubconnector.lark_docs_owned")} hint={t("settings-hubconnector.lark_docs_owned_sub")} wrapHint>
-        {saving && <Spinner />}
-        <Switch on={o.owned_all_comments} disabled={saving} label={t("settings-hubconnector.lark_docs_owned")} onChange={(v) => void save({ ...o, owned_all_comments: v })} />
-      </Row>
       {error && <p className="px-4 py-2.5 text-[12px] text-red">{error}</p>}
     </Group>
   );
