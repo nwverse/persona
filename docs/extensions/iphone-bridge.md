@@ -145,7 +145,7 @@ sent to the phone: an invalid one never leaves half a gesture.
 | `disconnected` | `serve`: the link dropped during this operation; whether an input operation reached the phone is unknown |
 | `timeout` | `timeout_ms` passed |
 | `trust_pending`, `not_found` | `pair` only: tap Trust on the phone and retry; no such phone on USB |
-| `internal` | Anything else |
+| `internal` | Anything else, including a panic in the bridge or a library it uses: every command catches it and fails as above, exit code 1, `message` saying what panicked and where (`the bridge failed unexpectedly: … (idevice-0.1.68/src/…:518)`), never exit code 101 with a backtrace |
 
 ## Coordinates
 
@@ -349,9 +349,9 @@ End with Ctrl-D: `serve` stops the runner and exits 0.
 
 ## Verification status
 
-No iPhone was available while this was written. Every unit test runs against stand-ins: the request / answer / error framing, argument
-checks, `call` and `serve` (with a fake phone), coordinate mapping, key tables, screenshot conversion, the record file. Nothing that talks
-to a phone has run against one:
+Most of this was written without an iPhone. Every unit test runs against stand-ins: the request / answer / error framing, argument
+checks, `call` and `serve` (with a fake phone), coordinate mapping, key tables, screenshot conversion, the record file. What talks to a
+phone has run against one only where the table says so:
 
 | Part | Status |
 | --- | --- |
@@ -361,7 +361,9 @@ to a phone has run against one:
 | `screenshot`, its rotation in landscape | not verified on a real device |
 | `list_apps`, `launch_app`, `terminate_app` | not verified on a real device |
 | Input gate (display stream), touch coordinates and rotation, keys, buttons | not verified on a real device |
-| `usb-list`, `pair` over USB (consent prompt, `altIRK`), `match` against a real advertisement | not verified on a real device; `usb-list` answered `[]` from a Mac's usbmuxd with no phone attached, `match` is unit-tested against the library's tag function |
+| `usb-list` | checked on a real iPhone (iPhone13,4, iOS 18.7.3, trusting the computer): it lists the phone with its name |
+| `pair` over USB (consent prompt, `altIRK`) | not verified on a real device yet. First try on that iPhone: it already trusted the computer and answered the pairing request with pairing data straight away instead of asking its user, so the library asked the bridge for the PIN, got an empty one and panicked (exit code 101). The bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error |
+| `match` against a real advertisement | not verified on a real device; unit-tested against the library's tag function |
 | `ax_tree` | `unsupported` |
 | Simulator backend: pair, `device_info`, `screenshot`, apps, `ax_tree` (with a system alert), tap, `keys` (ASCII and Chinese), swipe, `button home`, `serve`, runner cleanup after exit and after `kill -9` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
