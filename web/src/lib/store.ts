@@ -1238,9 +1238,10 @@ const assistantByManager = new Map<string, AssistantInfo>();
 /** The assistant page asked for: "" the default's (no header goes, whichever manager the default turns out to be),
  *  else the manager picked on it. */
 const pageOf = () => chosenManager() ?? "";
-/** Where the page's answer is kept: under its manager once the roster's default is known; "" before (the default's,
- *  whose id is not known yet), moved under the default's id when it is. */
-const cacheKey = () => (defaultKnown() ? shownManager() : "");
+/** Where the page's answer is kept: under its manager, the one picked (kept across reloads, so it may be there before
+ *  the roster is read) or the default once the roster said which that is; "" before (the default's, whose id is not
+ *  known yet), moved under the default's id when it is. */
+const cacheKey = () => chosenManager() ?? (defaultKnown() ? defaultManager() : "");
 
 // The manager whose page is drawn (null: the default's, before the roster said which that is).
 let drawnPage = { page: pageOf(), manager: null as string | null };

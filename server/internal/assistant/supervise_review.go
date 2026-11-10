@@ -129,6 +129,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if err != nil {
 		return "", err
 	}
+	if verdict == reviewRework || verdict == reviewNeedsUser || a.UserCheck || a.Outcome == outcomeCannot {
+		s.setTaskStageKind(ctx, t.ID, "unverified", "", "", false)
+	}
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()

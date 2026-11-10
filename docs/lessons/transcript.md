@@ -101,6 +101,22 @@ Tests need the system row followed by a real-shaped synthetic assistant error, p
 an out-of-window record. A new error code alone does not change old clients' error buttons: document that client work
 and the item-cache version bump separately.
 
+## Subagent peer reports are nonterminal tool output (#3378)
+
+A peer display name such as `general-purpose` does not prove a subagent relationship. Associate `origin.from` /
+`senderTaskId` with the actual Agent/Task launch receipt or explicit notification call ID before normalizing its
+reports. A launch receipt and an interim SendMessage are `task.status: running`, not completed merely because
+`kind` is `tool_result`. Keep every result item, not just the last per call; status-only completion pointers do not
+replace the report. Seed launches, peer origins and terminal status across cold windows and incremental catch-up.
+When historical user text becomes tool output at the same item ID, change the opaque history version so existing
+client caches cannot preserve the old standalone peer card. Full-text reparse also needs the call association for
+hidden handback lines. Validate both the bounded preview and the full report, not only a short fixture.
+
+A report card is only mounted inside manually opened work. Load it on that intent rather than enlarging the cold
+first screen for everyone. Keep the same component, disclosure state and running-summary bar; verify manual opening
+in a real browser as well as mounted tests. A later main merge can consume prior bundle headroom: compare against
+unmodified main and reduce eager code, never raise the first-screen budget for the report feature.
+
 ## A tail window may contain no words at all (2026-11-04, #1163)
 
 When listing offline sessions, the node reads only the last 384 KB of a transcript (`quickTail`) to get its title and last words. Claude Code now writes an entire `api-request-blob` on one transcript line, 300–500 KB per line;
