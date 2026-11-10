@@ -16977,44 +16977,12 @@
       },
       "extractionState": "manual"
     },
-<<<<<<< HEAD
-    "Also renames this session in Tern." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Also renames this session in Tern."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ternのこのセッション名も変更します。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "同时改 Tern 里这个 session 的名字。"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Also renames this workspace in herdr." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Also renames this workspace in herdr."
-=======
     "Also renames this workspace in herdr.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Also renames this workspace in herdr."
->>>>>>> origin/main
           }
         },
         "ja": {
@@ -117462,44 +117430,12 @@
       },
       "extractionState": "manual"
     },
-<<<<<<< HEAD
-    "Tab name (Tern tab)" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tab name (Tern tab)"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "タブ名（Ternのタブ）"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "标签名（Tern tab）"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Tab name (herdr tab)" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tab name (herdr tab)"
-=======
     "Tab name (herdr tab)": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Tab name (herdr tab)"
->>>>>>> origin/main
           }
         },
         "ja": {
@@ -119356,44 +119292,12 @@
       },
       "extractionState": "manual"
     },
-<<<<<<< HEAD
-    "Terminals in Tern" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Terminals in Tern"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ternのターミナル"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tern 里的终端"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Terminals in the desktop app" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Terminals in the desktop app"
-=======
     "Terminals in the desktop app": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Terminals in the desktop app"
->>>>>>> origin/main
           }
         },
         "ja": {
@@ -126037,44 +125941,12 @@
       },
       "extractionState": "manual"
     },
-<<<<<<< HEAD
-    "The tab name syncs to Tern. The session name uses Claude's /rename, so claude --resume on the Mac shows it too." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The tab name syncs to Tern. The session name uses Claude's /rename, so claude --resume on the Mac shows it too."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "タブ名はTernに同期されます。セッション名はClaudeの /renameを使うため、Macのclaude --resumeでも表示されます。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "标签名同步到 Tern；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too."
-=======
     "The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too."
->>>>>>> origin/main
           }
         },
         "ja": {
@@ -153248,6 +153120,98 @@
           "stringUnit": {
             "state": "translated",
             "value": "经 App 内的隧道连 SSH 服务器，不走这台设备自己的网络。它不是系统 VPN，设备上的 VPN（比如 Tailscale）照常工作。服务器指纹照样校验。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "The tab name syncs to Tern. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The tab name syncs to Tern. The session name uses Claude's /rename, so claude --resume on the Mac shows it too."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タブ名はTernに同期されます。セッション名はClaudeの /renameを使うため、Macのclaude --resumeでも表示されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "标签名同步到 Tern；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Terminals in Tern": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminals in Tern"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ternのターミナル"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tern 里的终端"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Also renames this session in Tern.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Also renames this session in Tern."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ternのこのセッション名も変更します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时改 Tern 里这个 session 的名字。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Tab name (Tern tab)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tab name (Tern tab)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タブ名（Ternのタブ）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "标签名（Tern tab）"
           }
         }
       },
