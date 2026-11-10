@@ -93,7 +93,7 @@ internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: Assist
         TrayProgress(bound[todo.id] ?: "todo:${todo.id}", todo.title, todo = todo,
             done = done, cancelled = cancelled, blocked = blocked,
             stopped = !done && !cancelled && !blocked && (state == TaskState.Unread || state == TaskState.Followup),
-            text = if (done || cancelled) completedText else todo.ask?.verdict ?: report?.takeIf { reportIsCurrent }?.text?.takeIf(String::isNotBlank) ?: plan?.current?.takeIf(String::isNotBlank)
+            text = if (done || cancelled) completedText else todo.ask?.verdict ?: report?.takeIf { reportIsCurrent }?.rowText?.takeIf(String::isNotBlank) ?: plan?.current?.takeIf(String::isNotBlank)
                 ?: todo.startError?.takeIf(String::isNotBlank) ?: lead?.attentionReason?.takeIf(String::isNotBlank)
                 ?: lead?.activity?.takeIf(String::isNotBlank) ?: lead?.lastText?.takeIf(String::isNotBlank),
             completed = countedReport?.step ?: countedPlan?.done, total = countedReport?.steps ?: countedPlan?.total,
