@@ -3,6 +3,8 @@
 The Inbox tab is Persona's information entry point: Lark messages and mail from all email accounts share **one list**, grouped into items. AI triages first; people see only the conclusions.
 (Requested direction 2026-10-27: no group-by-group browsing, no second Lark client; see `docs/extensions/feishu.md`.)
 
+Navigation badges count unread open inbox entries across pending sections; read-but-pending items remain in their sections and keep their completion state. Android counts each native conversation once using its reconciled source receipts, plus unread non-conversation items. Web and Apple count inbox items. Zero keeps the existing hidden-badge behavior. The roster's `inbox_needs_you` and the home page's pending count retain their separate meaning: open items requiring action, including ones already read. A receipt can precede the next item-list update, so Android's badge reads `InboxConversations` rather than only the cached item flags.
+
 ## Ownership: the manager owns the Inbox (2026-11-04)
 
 The Inbox belongs to the **manager** (assistant process `personad assistant`; `docs/assistant/assistant.md`, "Boundary with hub"): items and their state (pre-admission triage,
