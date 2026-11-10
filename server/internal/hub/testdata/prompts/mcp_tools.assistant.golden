@@ -314,7 +314,7 @@
             "every",
             "asked"
           ],
-          "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something (it then runs in its own conversation, not this one). Omit to keep an existing task's"
+          "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something or a standing loop (a patrol, a daily round). Continuing this conversation, a run's answer is then not pushed or sent to channels; from Main chat it runs in its own conversation instead. Omit to keep an existing task's"
         },
         "until": {
           "type": [

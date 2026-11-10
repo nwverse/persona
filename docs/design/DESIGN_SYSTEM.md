@@ -261,7 +261,7 @@ The Glass style relies on Liquid Glass and has no shadow. The vendored Beautiful
 | `keyboard` | interpolating spring (`:662`) | |
 | Needs-you breath | 1 s, scale 1.2 | the only attention loop |
 
-The composer and attach panel own about 40 more one-off tokens (Telegram-derived). Web: 150 ms state, 220 ms glide, 300 ms collapse, one easing curve, no springs. Android live values are 160/320 ms and differ from the generated 250/300 (DS-11).
+The composer and attach panel own about 40 more one-off tokens (Telegram-derived). Web: 150 ms state, 220 ms glide, 300 ms collapse, one easing curve, no springs. Web sidebar group folds use `--sidebar-fold-open` / `--sidebar-fold-close` (250 / 200 ms) and `--sidebar-fold-open-ease` / `--sidebar-fold-close-ease`, shared by the clipped, fully visible content and its chevron. Android live values are 160/320 ms and differ from the generated 250/300 (DS-11).
 
 Reduce Motion:
 
@@ -405,6 +405,15 @@ Search may take query operators and scopes; they live inside the search field.
 Assistant avatar: a disc with the first character of the assistant's name. The default assistant's is the AI purple; any other takes one of five hues (blue, green, orange, pink, indigo, in that order) by the sum of its id's UTF-8 bytes modulo 5, so every client colors the same assistant alike. A status mark sits at its foot (online green, offline neutral, installing orange) and, on the sidebar's head only, a mark at its head when another assistant has something waiting. Web: `web/src/ui/AssistantAvatar.tsx` with the `--ai` and `--hue-*` tokens. The letter is sized by the disc, not by the system's text size, so it never outgrows it. Android: `JManagerAvatar` (the status mark's ring is cut out of the disc, so the surface behind shows around it), with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows (an offline one's row faded with `HomeTokens.assistantOfflineAlpha`). Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
 
 The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
+
+Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
+Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
+The subtitle, not another icon vocabulary, explains what is running and its counts/phase; only a real wait with no
+background activity keeps the clock. Needs you and completion precedence stay unchanged. The compact Session
+projection and cross-platform rules are in `docs/assistant/unified-entry.md`, "Background activity in In progress".
+This is a requested status correction, not a new style or setting; the existing reduced-motion behavior applies.
+Workflow phase text may ellipsize, but the done/started count stays visible; simultaneous command/subagent counts
+use another subtitle line rather than pushing the workflow count out of the row.
 
 ### 3.9 Empty states
 

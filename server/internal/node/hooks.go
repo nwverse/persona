@@ -587,9 +587,16 @@ func (n *Node) notifyHookEvent(in hookInput, stopSig string, reportOnly bool) {
 	_ = n.peer.Notify("hook.event", hookEventParams(in, stopSig, reportOnly))
 }
 
-// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca pane only where the set enables Orca).
+// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca or Tern pane only where the set enables
+// that host: both name the pane in every terminal of theirs, driven or not).
 func paneKindOK(n *Node, pane string) bool {
-	return host.ParsePane(pane).Kind != host.Orca || n.hostEnabled(proto.EngineOrca)
+	switch host.ParsePane(pane).Kind {
+	case host.Orca:
+		return n.hostEnabled(proto.EngineOrca)
+	case host.Tern:
+		return n.hostEnabled(proto.EngineTern)
+	}
+	return true
 }
 
 // hookEventParams is hook.event's params for what a hook saw.
@@ -602,7 +609,23 @@ func hookEventParams(in hookInput, stopSig string, reportOnly bool) map[string]a
 	if reportOnly {
 		p["report_only"] = true
 	}
+	if in.HookEventName == "UserPromptSubmit" {
+		p["prompt_source"] = promptSource(in.Prompt) // never the prompt itself: the apps see the event too
+	}
 	return p
+}
+
+// promptSource says who a UserPromptSubmit's prompt is from, for the manager (a meeting's batch is not the user's own
+// message: docs/assistant/meeting-minutes.md "Feeding the attending session"): the kind of message source it carries
+// (meeting, conversation, task…), "notification" for a background task reporting back, else "user".
+func promptSource(prompt string) string {
+	if src := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: prompt}); src != nil && src.Kind != "" {
+		return src.Kind
+	}
+	if strings.Contains(prompt, "<task-notification>") {
+		return "notification"
+	}
+	return "user"
 }
 
 // reportedEvent: what a global report-only hook (globalhooks.go) may tell the hub; the tools are the cards.

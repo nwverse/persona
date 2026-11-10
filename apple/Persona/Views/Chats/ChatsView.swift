@@ -238,6 +238,19 @@ struct ChatsView: View {
     private func barMoved(_ y: ClosedRange<CGFloat>) {}
     #endif
     @State private var showNew = false
+    /// New Session's sheet: RootView's on iOS, which outlives the tree a fold or an unfold builds again (#2836: the sheet
+    /// closed with what was typed in it), this page's elsewhere.
+    @Environment(\.newAgentShown) private var hostedNewSession
+    private var newSession: Binding<Bool> { hostedNewSession ?? $showNew }
+    @Environment(\.shownTree) private var shownTree
+    @Environment(\.builtTree) private var builtTree
+    /// This page's tree is not the one the window shows: one built before, on its way out after a fold or an unfold (or a
+    /// new look), which lives on a moment (#2836). The chats asked for are the shown tree's page's to open, and what the
+    /// app remembers is left alone: this page took the chat the new one opened again, and opened it where no one saw it.
+    private var leaving: Bool {
+        guard let builtTree, let shown = shownTree?.tree else { return false }
+        return shown !== builtTree
+    }
     #if os(iOS)
     @State private var personalEntry = PersonalAgentEntryModel()
     private var showsPersonalEntry: Bool { personalEntry.isAvailable(for: model.api) }
@@ -285,7 +298,7 @@ struct ChatsView: View {
         let _ = searching
         SplitNavigation(path: pushing, listKey: "agents.list", destinations: AgentsDestinations(), pageSwitch: pageTabSwitch) {
             AgentsList(path: $path, spaceAt: $spaceAt, query: $query, searching: $searching,
-                       searchedBeforePush: $searchedBeforePush, showNew: $showNew, menuActions: menuActions, ownsTop: ownsTop,
+                       searchedBeforePush: $searchedBeforePush, showNew: newSession, menuActions: menuActions, ownsTop: ownsTop,
                        showsPersonalEntry: showsPersonalEntry, beginSearch: beginSearch)
                 #if os(iOS) || os(visionOS)
                 .environment(header)
@@ -328,7 +341,7 @@ struct ChatsView: View {
                             }
                         }
                         ToolbarItem(placement: .topBarTrailing) {
-                            Button { showNew = true } label: { Label("New Session [Chats View 58e21b]", systemImage: Theme.Icon.compose) }
+                            Button { newSession.wrappedValue = true } label: { Label("New Session [Chats View 58e21b]", systemImage: Theme.Icon.compose) }
                         }
                     }
                 }
@@ -339,7 +352,7 @@ struct ChatsView: View {
                     if shell == nil { // always on the Mac: its window is not the phone's shell
                         HStack(spacing: Theme.Space.s) {
                             MacTitleRowButton(String(localized: "Personal Agents"), symbol: Theme.Icon.personalAgents) { openFromList(PersonalAgentsRoute()) }
-                            MacTitleRowButton(String(localized: "New Session [Chats View 58e21b]"), symbol: Theme.Icon.compose) { showNew = true }
+                            MacTitleRowButton(String(localized: "New Session [Chats View 58e21b]"), symbol: Theme.Icon.compose) { newSession.wrappedValue = true }
                         }
                         .padding(.trailing, Theme.Space.l)
                         .frame(height: Theme.Size.macToolbarHeight)
@@ -357,7 +370,7 @@ struct ChatsView: View {
                 .onChange(of: path.isEmpty && !searching, initial: true) { _, root in shell?.workAtRoot = root }
                 .onChange(of: path) { _, p in
                     spaceAt = spaceAt.filter { $0.key < p.count }
-                    if p.isEmpty { AppModel.rememberChat(nil); model.chatSwitched = [:] } // back at the list: next launch starts here
+                    if p.isEmpty, !leaving { AppModel.rememberChat(nil); model.chatSwitched = [:] } // back at the list: next launch starts here
                 }
                 .onChange(of: model.openChat, initial: true) { _, key in
                     // Not before the list is on screen: a push into a stack whose root has not appeared yet built the
@@ -380,18 +393,18 @@ struct ChatsView: View {
                     // until #2836, 2026-11-04) starts at the list: open the chat that was open, as a launch does
                     // (AppModel.init). Back at the list it is forgotten (rememberChat(nil) above). A turn later: the
                     // split of the tree going away empties the paths as it goes, and a push made in the same update
-                    // did not show.
+                    // did not show. The old tree's page, living on a moment, leaves it to this one (`leaving`).
                     // Still the same chat a turn later: going back runs onAppear before onChange(path) forgets it (#1868).
                     // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
                     if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
                        let v = AppModel.rememberedChat {
                         DispatchQueue.main.async {
-                            if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, AppModel.rememberedChat == v {
+                            if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, AppModel.rememberedChat == v, !leaving {
                                 model.openChat = SessionKey(path: v)
                             }
                         }
                     }
-                    if model.debugShowNewChat { model.debugShowNewChat = false; showNew = true }
+                    if model.debugShowNewChat { model.debugShowNewChat = false; newSession.wrappedValue = true }
                     #if DEBUG
                     // `-openMachinePage <machine id>` (with `-tab dev`): that machine's projects.
                     if path.isEmpty, let m = UserDefaults.standard.string(forKey: "openMachinePage") { openFromList(MachineRoute(id: m)) }
@@ -421,7 +434,7 @@ struct ChatsView: View {
                     // Fades with the field coming up into its row (`AgentsTopBarFade`), from the same animation. Gone
                     // once the field is up (`compact`: set when the rise ends, cleared before the way down): faded out,
                     // its controls were still in the accessibility tree over the field, ☰ found there and tappable.
-                    AgentsTopBar(shell: shell, menuActions: menuActions) { showNew = true }
+                    AgentsTopBar(shell: shell, menuActions: menuActions) { newSession.wrappedValue = true }
                         .equatable()
                         .searchTraceMark("topbar")
                         .onGeometryChange(for: ClosedRange<CGFloat>.self) { g in
@@ -433,7 +446,7 @@ struct ChatsView: View {
                         .accessibilityHidden(searching)
                         .transition(.opacity)
                 } else if let shell, path.isEmpty, !searching, searchedBeforePush == nil {
-                    AgentsTopBar(shell: shell, menuActions: menuActions) { showNew = true }
+                    AgentsTopBar(shell: shell, menuActions: menuActions) { newSession.wrappedValue = true }
                         .equatable()
                         .transition(.opacity)
                 }
@@ -464,7 +477,8 @@ struct ChatsView: View {
     }
 
     private func pushOpenChat() {
-        guard let key = model.openChat else { return }
+        guard let key = model.openChat, !leaving else { return }
+        spaceAt = [:] // the chat is the first page now, no space page under anything (as `openFromList`)
         path = NavigationPath([key])
         #if DEBUG
         // `-openOverSpace YES` with `-openSession`: the chat on its space's page, a page under it (its ‹, #1337).
@@ -556,7 +570,7 @@ struct ChatsView: View {
     /// open search closes first. The chat the path held is forgotten: the path does not pass through empty on the way,
     /// and a rebuilt list or the next launch would bring that chat back over this conversation.
     private func pushOpenPersonalAgent() {
-        guard let session = model.openPersonalAgent else { return }
+        guard let session = model.openPersonalAgent, !leaving else { return }
         var under = NavigationPath()
         under.append(PersonalAgentsRoute())
         under.append(session)
@@ -4093,9 +4107,9 @@ struct SpaceMenuItems: View {
 }
 
 extension View {
-    /// The rename prompt for a space (herdr workspace): one name.
+    /// The rename prompt for a space (a herdr workspace, a Tern session): one name.
     func renameSpaceAlert(_ group: Binding<SpaceGroup?>) -> some View { modifier(RenameSpaceAlert(group: group)) }
-    /// The rename prompt for an agent: its herdr tab and its Claude session name.
+    /// The rename prompt for an agent: its herdr or Tern tab and its Claude session name.
     func renameSessionAlert(_ session: Binding<Session?>) -> some View { modifier(RenameSessionAlert(session: session)) }
 }
 
@@ -4113,7 +4127,7 @@ private struct RenameSpaceAlert: ViewModifier {
                     if let g = group { Task { await model.renameSpace(g, to: name) } }
                 }
             } message: {
-                Text("Also renames this workspace in herdr.")
+                Text(SpaceRenameForm.note(group))
             }
             .onChange(of: group?.id) { _, _ in name = group?.name ?? "" }
     }
@@ -4128,7 +4142,7 @@ private struct RenameSessionAlert: ViewModifier {
     func body(content: Content) -> some View {
         content
             .alert("Rename [Chats View 0d0cba]", isPresented: Binding(get: { session != nil }, set: { if !$0 { session = nil } })) {
-                if let session, SessionRenameForm.showsTab(session) { TextField(String(localized: "Tab name (herdr tab)"), text: $tab) }
+                if let session, SessionRenameForm.showsTab(session) { TextField(SessionRenameForm.tabField(session), text: $tab) }
                 TextField(String(localized: "Session name"), text: $title)
                 Button("Cancel", role: .cancel) {}
                 Button("Save") {
@@ -4139,7 +4153,7 @@ private struct RenameSessionAlert: ViewModifier {
                 }
             } message: {
                 if let session, SessionRenameForm.showsTab(session) {
-                    Text("The tab name syncs to herdr. The session name uses Claude's /rename, so claude --resume on the Mac shows it too.")
+                    Text(SessionRenameForm.tabNote(session))
                 }
             }
             .onChange(of: session?.id) { _, _ in

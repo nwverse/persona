@@ -1,5 +1,14 @@
 # Lessons: Android
 
+## Large-font screenshots need Compose density, not just configuration (#3588)
+
+Setting `LocalConfiguration.fontScale` alone can leave the rendered Compose text at the original size. Override
+`LocalDensity` with the same font scale, assert that default/large pixels differ, and inspect the real page's capture.
+A decorative mark inside a clickable row may be merged into that row's semantics: assert its test tag with the
+unmerged tree, not by dropping the visual assertion. With a frozen Compose clock, a Robolectric `performScrollTo`
+can keep waiting for a choreographer frame and fill the trace-recording heap; keep the requested rows visible in a
+bounded real-page fixture and test state transitions on the same row instead of hiding the failure with more heap.
+
 ## Snapshot subscriptions are not page visibility
 
 The shell, badges and floating capsule can collect a repository snapshot without its page being visible. Do not use subscriber

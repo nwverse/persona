@@ -319,11 +319,11 @@ Chat page:
   Goal, workflow and port rows are unchanged (phase 1, `docs/archive/apple/plan-chat-topbar.md` Q1); ③ at most one status line (`HeaderStatusLine`, `chat.status-line`): while reading a sub-Agent "👁 Viewing sub-Agent · title (read-only)",
   the way back stays the footer's Return to main Agent (`SubagentFooter`); otherwise one running "spinner Sub-Agent title ›" opens it, several "spinner N sub-Agents running · newest title ›" open All sub-Agents;
   no line when none runs (ended / nested ones from the work row's View sub-Agent and ⋯ › All sub-Agents (N)). The Main Agent / sub-Agent strip remains only on the Mac and in hosted headers (#3255).
-  Formerly title, companion bar, tabs and activity each had a row. Files/Terminal/Git in top-right ⋯; Files ⋯ › Return to chat; collapsed slim bar has Back, location, small loop/background marks.
+  Formerly title, companion bar, tabs and activity each had a row. Files/Terminal/Git in top-right ⋯; Files ⋯ › Return to chat; collapsed slim bar has Back, the session's title (the open header's, as the web and Android show it, #3631), small loop/background marks.
   Former left-swipe Files became left-swipe Quote 2026-11-04 (#1058); that day Files first had a standalone folder left of ⋯, then moved into menu at user request (#1205).
 - Header auto-collapse (Agents, like Safari toolbar): custom
   `ChromeHeader` (system navigation hidden), floating above list; **finger tracking**: drag toward newer messages slides bar upward by same distance and fades,
-  slim Back + "● app › leader · Chat" fades in during latter half; dragging toward history restores it. Release never stays halfway: collapse at latest,
+  slim Back + "●" and the session's title fade in during latter half; dragging toward history restores it. Release never stays halfway: collapse at latest,
   otherwise snap nearest end (`.smooth`, 0.3 s). Following new content also collapses after user has touched list; tap slim bar / switch tabs expands.
   After 3 idle seconds (`ChatView.chromeIdleSeconds`: no list/header touch, info card closed, no sheet/menu), auto-collapse; header interaction (swiping Agents), expand and tab switch reset timer.
   Invisible layer excluded from accessibility: expanded has no slim bar, collapsed hides full layer while keeping measurement, VoiceOver/tests find one Back (`ChatHeaderTests`).
@@ -565,8 +565,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     The simulators take no snapshots in another width (a trip to the home screen keeps the sheet on the open Duo simulator without the fix too): that the hold works on the way to the background is checked on a real iPhone Duo open.
     `-swapTreeAt` alone flips only `RootView`'s choice (the tree swap above); with `-swapTreeAway YES` the whole app's width class flips instead, from above `RootView` (`TreeSwapFlip`), while the app counts as away,
     and the pages report they never saw it change (`probe.tree-inner`, `TreeSwapAwayTests`).
-    A real fold or unfold while the app is active still builds the tree again, and the pages' own width class changes with it: an open New Agent sheet and Health's uploads under way are lost then,
-    and in a simulation that flips the pages too the Agents page did not open its chat again (#2836, open).
+    A real fold or unfold while the app is active still builds the tree again, the pages' own width class with it (`-swapTreeWhole YES` flips the whole app's while it is active, `TreeSwapFoldTests`).
+    What must outlive it is kept above the tree: `RootView` presents the Agents page's New Agent sheet (`\.newAgentShown`; the Mac keeps its own), and `AppModel` holds Health's report uploads
+    per hub group (`healthReportUploads`), as #2626 keeps a chat's attachments. The tree on its way out lives on a moment after the swap (about two seconds on an iPad simulator), and its Agents page
+    took the chat the new page asked for again, opening it where no one saw it: each tree `RootView` builds has a `BuiltTree` of its own, `ShownTree` holds the shown one, and a page
+    of another tree (on its way out) leaves the chats asked for, and the remembered chat, to the shown tree's page (#2836).
   - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
     `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
