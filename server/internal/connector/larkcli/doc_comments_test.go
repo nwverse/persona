@@ -291,6 +291,9 @@ func TestOwnedAllCommentsCoversRecentOwnDocumentsWithoutAWatchList(t *testing.T)
 		log, _ := os.ReadFile(logPath)
 		return strings.Count(string(log), what)
 	}
+	if got := count("--doc-types doc,docx,sheet,bitable,file,slides,wiki"); got != 1 {
+		t.Fatalf("owned documents listed without the commentable types (%d)", got)
+	}
 	if got := count("doc_old"); got != 0 {
 		t.Fatalf("a document untouched for months was read %d times", got)
 	}

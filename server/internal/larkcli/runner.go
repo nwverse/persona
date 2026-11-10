@@ -530,7 +530,8 @@ type OwnedDocument struct {
 // OwnedDocuments lists documents the user owns, most recently edited first, one page of at most 20 (`drive +search
 // --mine --sort edit_time`). next is the token for the following page, empty at the end.
 func (r *Runner) OwnedDocuments(ctx context.Context, pageToken string) (docs []OwnedDocument, next string, err error) {
-	args := []string{"drive", "+search", "--mine", "--sort", "edit_time", "--page-size", "20"}
+	// Only types whose comments lark-cli can list: folders and mind notes would only fail every read.
+	args := []string{"drive", "+search", "--mine", "--sort", "edit_time", "--page-size", "20", "--doc-types", commentableDocTypes}
 	if pageToken != "" {
 		args = append(args, "--page-token", pageToken)
 	}
@@ -574,6 +575,9 @@ func (r *Runner) OwnedDocuments(ctx context.Context, pageToken string) (docs []O
 	}
 	return docs, next, nil
 }
+
+// commentableDocTypes are the drive search types `drive +list-comments` accepts (lark-cli 1.0.99).
+const commentableDocTypes = "doc,docx,sheet,bitable,file,slides,wiki"
 
 // stripHighlight drops the search's <em> marks from a title.
 func stripHighlight(s string) string {

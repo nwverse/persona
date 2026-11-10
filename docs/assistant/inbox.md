@@ -125,7 +125,7 @@ The title, quoted passage (or “Whole document”), latest matching comment tex
 one Inbox item per thread (`kind: "doc"`). A comment that mentions the user by open_id is included, as is a later reply
 when the user has written in that thread; resolved threads are skipped. The connector never replies or changes a comment.
 With `owned_all_comments` (off by default; "All comments on documents I own" in Settings), the user's own documents need
-no watch list: every 30 minutes the connector lists the documents the user owns (`drive +search --mine --sort edit_time`),
+no watch list: every 30 minutes the connector lists the documents the user owns (`drive +search --mine --sort edit_time`, only types whose comments can be listed, so no folders),
 keeps those edited or opened in the last 30 days, at most 50, and reads each one's comments every 10 minutes (the first
 reads spread over that interval). On those, and on watched documents the user owns (owner read once with `drive metas
 batch_query`), every new comment and reply from someone else comes in, mention or not. A comment that mentions the user
