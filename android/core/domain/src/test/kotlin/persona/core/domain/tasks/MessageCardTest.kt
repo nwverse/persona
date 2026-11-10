@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -68,10 +69,40 @@ class MessageCardTest {
 
     private class Api(val gate: CompletableDeferred<Unit>, var items: List<FeedItem>, val page: Int = 500) : TasksApi {
         val replies = mutableListOf<Triple<String, String, String?>>()
+        val dismissals = mutableListOf<Pair<String, String>>()
+        val undos = mutableListOf<Pair<String, String>>()
+        var dismissGate: CompletableDeferred<Unit>? = null
+        var undoGate: CompletableDeferred<Unit>? = null
+        var feedGate: CompletableDeferred<Unit>? = null
+        var dismissError: Throwable? = null
+        var undoError: Throwable? = null
         override suspend fun todos() = emptyList<Todo>()
         // As the hub: after `since`, only items made later and cards sent later (filed_at is worked out on each read, no event).
-        override suspend fun feed(conversation: String, since: String?) =
-            FeedResponse((if (since == null) items else items.filter { (it.at ?: "") > since || (it.field("sent_at") ?: "") > since }).take(page))
+        override suspend fun feed(conversation: String, since: String?): FeedResponse {
+            val response = FeedResponse((if (since == null) items else items.filter { (it.at ?: "") > since || (it.field("sent_at") ?: "") > since }).take(page))
+            feedGate?.await()
+            return response
+        }
+        override suspend fun dismissMessage(cardId: String, draft: String): persona.core.contracts.api.MessageDraftDismissal {
+            dismissals += cardId to draft
+            dismissGate?.await()
+            dismissError?.let { throw it }
+            val old = items.single { it.id == cardId }
+            assertEquals(old.field("draft"), draft)
+            val updated = old.copy(body = JsonObject((old.body as JsonObject) + mapOf(
+                "dismissed_at" to JsonPrimitive("2026-11-11T10:00:00Z"), "dismissal_id" to JsonPrimitive("dismissal-one"))))
+            items = items.map { if (it.id == cardId) updated else it }
+            return persona.core.contracts.api.MessageDraftDismissal(updated, "dismissal-one")
+        }
+        override suspend fun undoDismissMessage(cardId: String, dismissalId: String): FeedItem {
+            undos += cardId to dismissalId
+            val old = items.single { it.id == cardId }
+            undoGate?.await()
+            undoError?.let { throw it }
+            val updated = old.copy(body = JsonObject((old.body as JsonObject) - setOf("dismissed_at", "dismissal_id")))
+            items = items.map { if (it.id == cardId) updated else it }
+            return updated
+        }
         override suspend fun startPlan(id: String, remember: Boolean): TaskPlan = error("unused")
         override suspend fun dismissPlan(id: String): TaskPlan = error("unused")
         override suspend fun retryTask(todoId: String): Todo = error("unused")
@@ -150,6 +181,110 @@ class MessageCardTest {
         api.items = listOf(old, card(), later)
         store.load("c1")
         assertTrue(store.feeds.value["c1"]!!.single { it.id == "m1" }.canSend)
+    }
+
+    @Test fun dismissalKeepsTheTaskAndOtherDraftsAndSurvivesReload() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Work is in progress"))
+        val sibling = card("m2", mapOf("draft" to "New progress"))
+        val task = FeedItem("task", "c1", kind = "task", ref = "todo-one")
+        val api = Api(CompletableDeferred(Unit), listOf(original, sibling, task))
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        var receipt: persona.core.contracts.api.MessageDraftDismissal? = null
+        val errors = mutableListOf<Throwable>()
+        store.dismissMessage(original, { errors += it }) { receipt = it }
+        runCurrent()
+        assertEquals(listOf("m1" to "Work is in progress"), api.dismissals)
+        assertTrue(api.replies.isEmpty())
+        assertFalse(store.feeds.value["c1"]!!.first { it.id == "m1" }.canSend)
+        assertEquals(sibling, store.feeds.value["c1"]!!.first { it.id == "m2" })
+        assertEquals(task, store.feeds.value["c1"]!!.first { it.id == "task" })
+        store.load("c1", whole = true); runCurrent()
+        val fresh = TasksStore(api, Connection(), backgroundScope)
+        fresh.load("c1"); runCurrent()
+        assertFalse(fresh.feeds.value["c1"]!!.first { it.id == "m1" }.canSend)
+        store.undoDismissMessage(receipt!!, { errors += it }); runCurrent()
+        assertEquals(listOf("m1" to "dismissal-one"), api.undos)
+        assertEquals(original, store.feeds.value["c1"]!!.first { it.id == "m1" })
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test fun sendAndDismissShareTheBusyGuardAndLaterUsesCardIdentity() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original draft"))
+        val sibling = card("m2", mapOf("draft" to "Next update"))
+        val api = Api(CompletableDeferred(Unit), listOf(original, sibling))
+        api.dismissGate = CompletableDeferred()
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        val errors = mutableListOf<Throwable>()
+        store.dismissMessage(original, { errors += it }) { }
+        store.dismissMessage(original, { errors += it }) { }
+        store.sendMessage(original, "Edited reply", { errors += it })
+        runCurrent()
+        assertEquals(listOf("m1" to "Original draft"), api.dismissals)
+        assertTrue(api.replies.isEmpty())
+        api.dismissGate!!.complete(Unit); runCurrent()
+        assertTrue(store.busy.value.isEmpty())
+        store.putOff(sibling.id)
+        assertEquals(setOf("m2"), store.later.value)
+        assertTrue(original.ref !in store.later.value)
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test fun dismissAndUndoFailuresKeepOnlyTheirCurrentDraftState() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original draft"))
+        val api = Api(CompletableDeferred(Unit), listOf(original))
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        val errors = mutableListOf<Throwable>()
+        api.dismissError = IllegalStateException("Dismiss refused")
+        store.dismissMessage(original, { errors += it }) { error("failed dismissal offered Undo") }
+        runCurrent()
+        assertEquals(listOf(original), store.feeds.value["c1"])
+        assertTrue(store.busy.value.isEmpty())
+        api.dismissError = null
+        var receipt: persona.core.contracts.api.MessageDraftDismissal? = null
+        store.dismissMessage(original, { errors += it }) { receipt = it }; runCurrent()
+        api.undoError = IllegalStateException("Draft superseded")
+        store.undoDismissMessage(receipt!!, { errors += it }); runCurrent()
+        assertFalse(store.feeds.value["c1"]!!.single().canSend)
+        assertTrue(store.busy.value.isEmpty())
+        assertEquals(2, errors.size)
+    }
+
+    @Test fun readsCapturedBeforeDismissAndUndoCannotResurrectOrRedismiss() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original draft"))
+        val api = Api(CompletableDeferred(Unit), listOf(original))
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        api.feedGate = CompletableDeferred()
+        store.load("c1", whole = true); runCurrent()
+        var receipt: persona.core.contracts.api.MessageDraftDismissal? = null
+        store.dismissMessage(original, { throw it }) { receipt = it }; runCurrent()
+        api.feedGate!!.complete(Unit); runCurrent()
+        assertFalse(store.feeds.value["c1"]!!.single().canSend)
+        api.feedGate = CompletableDeferred()
+        store.load("c1", whole = true); runCurrent()
+        store.undoDismissMessage(receipt!!, { throw it }); runCurrent()
+        api.feedGate!!.complete(Unit); runCurrent()
+        assertEquals(original, store.feeds.value["c1"]!!.single())
+    }
+
+    @Test fun aLateUndoReceiptDoesNotOverwriteNewProgress() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original draft"))
+        val api = Api(CompletableDeferred(Unit), listOf(original))
+        val connection = Connection()
+        val store = TasksStore(api, connection, backgroundScope)
+        store.load("c1"); runCurrent()
+        var receipt: persona.core.contracts.api.MessageDraftDismissal? = null
+        store.dismissMessage(original, { throw it }) { receipt = it }; runCurrent()
+        api.undoGate = CompletableDeferred()
+        store.undoDismissMessage(receipt!!, { throw it }); runCurrent()
+        val progress = card(extra = mapOf("draft" to "New progress must stay"))
+        connection.events.emit(persona.core.contracts.AssistantFeedEvent(item = progress))
+        runCurrent()
+        api.undoGate!!.complete(Unit); runCurrent()
+        assertEquals(progress, store.feeds.value["c1"]!!.single())
     }
 
     @Test fun aDraftWithABlankIsNotSent() {

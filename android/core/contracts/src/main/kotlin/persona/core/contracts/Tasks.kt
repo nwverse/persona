@@ -85,8 +85,11 @@ data class FeedItem(
      */
     val filedAt: String? get() = if (sent != null) null else field("filed_at")?.takeIf(String::isNotEmpty)
 
-    /** `message`: the card still offers its draft to send (neither sent nor filed elsewhere). */
-    val canSend: Boolean get() = sent == null && filedAt == null
+    /** `message`: this particular draft was dismissed without sending or closing its task. */
+    val dismissedAt: String? get() = field("dismissed_at")?.takeIf(String::isNotEmpty)
+
+    /** `message`: the card still offers its draft to send. */
+    val canSend: Boolean get() = sent == null && filedAt == null && dismissedAt == null
 
     /**
      * `answered`: every question of the card with the user's answer in full, newlines kept (#1231). A record from

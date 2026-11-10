@@ -97,6 +97,60 @@ class HttpTasksApiTest {
         }
     }
 
+    @Test fun dismissAndUndoCarryExactDraftAndTokenWithCapturedManager() = runBlocking {
+        val choice = persona.core.contracts.api.AssistantManagerChoice
+        choice.choose(null, "assistant-one", "assistant")
+        choice.noteItem(listOf("assistant", "conversations", "conversation-one"), "assistant-one")
+        try {
+            MockWebServer().use { server ->
+                val api = api(server)
+                val original = "  Original draft\nNo edits  "
+                val body = kotlinx.serialization.json.buildJsonObject { put("draft", kotlinx.serialization.json.JsonPrimitive(original)) }
+                val item = persona.core.contracts.FeedItem("card/one", "conversation-one", kind = "message", ref = "inbox-one", body = body)
+                val json = persona.core.contracts.JsonCodec.encodeToString(persona.core.contracts.FeedItem.serializer(), item)
+                server.enqueue(MockResponse().setBody("{\"items\":[$json]}"))
+                api.feed("conversation-one", null); server.takeRequest()
+                choice.pick("assistant-two")
+                val dismissed = item.copy(body = kotlinx.serialization.json.JsonObject(body + mapOf(
+                    "dismissed_at" to kotlinx.serialization.json.JsonPrimitive("2026-11-11T10:00:00Z"),
+                    "dismissal_id" to kotlinx.serialization.json.JsonPrimitive("receipt-one"))))
+                val dismissedJson = persona.core.contracts.JsonCodec.encodeToString(persona.core.contracts.FeedItem.serializer(), dismissed)
+                server.enqueue(MockResponse().setBody("{\"item\":$dismissedJson,\"dismissal_id\":\"receipt-one\"}"))
+                val receipt = api.dismissMessage(item.id, original)
+                assertEquals(dismissed, receipt.item)
+                assertEquals("receipt-one", receipt.dismissalId)
+                val request = server.takeRequest()
+                assertEquals("POST", request.method)
+                assertEquals("/api/v1/assistant/feed/card%2Fone/dismiss", request.requestUrl?.encodedPath)
+                assertEquals("assistant-one", request.requestUrl?.queryParameter("manager"))
+                assertEquals(kotlinx.serialization.json.buildJsonObject { put("draft", kotlinx.serialization.json.JsonPrimitive(original)) }.toString(), request.body.readUtf8())
+                server.enqueue(MockResponse().setBody("{\"item\":$json}"))
+                assertEquals(item, api.undoDismissMessage(item.id, receipt.dismissalId))
+                val undo = server.takeRequest()
+                assertEquals("POST", undo.method)
+                assertEquals("/api/v1/assistant/feed/card%2Fone/undo-dismiss", undo.requestUrl?.encodedPath)
+                assertEquals("assistant-one", undo.requestUrl?.queryParameter("manager"))
+                assertEquals("{\"dismissal_id\":\"receipt-one\"}", undo.body.readUtf8())
+            }
+        } finally { choice.reset(); choice.forgetItems() }
+    }
+
+    @Test fun draftDismissalAndUndoKeepConflictAndMissingErrors() = runBlocking {
+        MockWebServer().use { server ->
+            val api = api(server)
+            for (status in listOf(409, 404)) {
+                server.enqueue(MockResponse().setResponseCode(status).setBody("{\"error\":\"Draft unavailable\"}"))
+                try { api.dismissMessage("card", "Original draft"); fail("dismissal was not refused") }
+                catch (error: HubFailure) { assertEquals(status, error.status) }
+                server.takeRequest()
+                server.enqueue(MockResponse().setResponseCode(status).setBody("{\"error\":\"Draft unavailable\"}"))
+                try { api.undoDismissMessage("card", "receipt"); fail("undo was not refused") }
+                catch (error: HubFailure) { assertEquals(status, error.status) }
+                server.takeRequest()
+            }
+        }
+    }
+
     @Test fun aProjectGoesOnAndOffATodoByItsEscapedName() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"ok":true,"linked":2}"""))

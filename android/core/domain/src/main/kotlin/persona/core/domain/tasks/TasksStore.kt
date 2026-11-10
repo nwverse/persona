@@ -79,6 +79,8 @@ class TasksStore(
     private val _plans = MutableStateFlow<Map<String, TaskPlan>>(emptyMap())
     val plans: StateFlow<Map<String, TaskPlan>> = _plans.asStateFlow()
     private val _feeds = MutableStateFlow<Map<String, List<FeedItem>>>(emptyMap())
+    private val feedLock = Any()
+    private val feedVersions = mutableMapOf<String, Long>()
     val feeds: StateFlow<Map<String, List<FeedItem>>> = _feeds.asStateFlow()
     private val _taskCards = MutableStateFlow<Map<String, List<persona.core.contracts.AssistantTaskCard>>>(emptyMap())
     val taskCards: StateFlow<Map<String, List<persona.core.contracts.AssistantTaskCard>>> = _taskCards.asStateFlow()
@@ -87,7 +89,7 @@ class TasksStore(
     /** Conversation → the task the next message goes straight to ("Say to 'xx'"). */
     val routes = MutableStateFlow<Map<String, String>>(emptyMap())
     val busy = MutableStateFlow<Set<String>>(emptySet())
-    /** Message cards (inbox item ids) put off with "Later". */
+    /** Message card ids put off with "Later"; another draft for the same inbox item remains visible. */
     val later = MutableStateFlow<Set<String>>(emptySet())
     /** Conversation → when the Today card was last asked for, and the day of the card the hub gave (null while asking). */
     private val todayAsked = HashMap<String, Pair<Instant, LocalDate?>>()
@@ -287,6 +289,7 @@ class TasksStore(
                 unsent >= 0 -> held.take(unsent).lastOrNull { it.at != held[unsent].at }?.at // reads are after `since`: skip ties
                 else -> held.lastOrNull()?.at
             }
+            val versions = synchronized(feedLock) { feedVersions.toMap() }
             runCatching { api.feed(conversation, since) }.onSuccess { res ->
                 if (res.plans.isNotEmpty()) _plans.update { it + res.plans }
                 res.taskCards?.takeIf { it.isNotEmpty() }?.let { cards ->
@@ -303,7 +306,7 @@ class TasksStore(
                     }
                 }
                 cards.snapshot(conversation, res.views, res.viewActions, res.viewBlocks)
-                received(res.items, conversation)
+                received(res.items, conversation, versions)
                 loaded.update { it + conversation }
             }
         }
@@ -352,17 +355,23 @@ class TasksStore(
         }
     }
 
-    private fun received(items: List<FeedItem>, conversation: String? = null) {
+    private fun received(items: List<FeedItem>, conversation: String? = null, readVersions: Map<String, Long>? = null) = synchronized(feedLock) {
+        // A response captured before a write or live update cannot resurrect a dismissed draft or undo an Undo.
+        val current = items.filter { readVersions == null || readVersions[it.id] == feedVersions[it.id] }
         // A live card's creation item carries the card as it was then: drawn even if its assistant_view was missed.
-        items.filter { it.kind == "view" }.forEach { item ->
+        current.filter { it.kind == "view" }.forEach { item ->
             ((item.body as? JsonObject)?.get("view"))?.let { cards.view(item.conversation, it) }
+        }
+        current.forEach { item ->
+            val old = _feeds.value[item.conversation].orEmpty().firstOrNull { it.id == item.id }
+            if (old != item) feedVersions[item.id] = (feedVersions[item.id] ?: 0L) + 1L
         }
         _feeds.update { feeds ->
             var next = conversation?.let { if (it in feeds) feeds else feeds + (it to emptyList()) } ?: feeds
-            for ((c, list) in items.groupBy { it.conversation }) next = next + (c to AssistantLines.merge(next[c].orEmpty(), list))
+            for ((c, list) in current.groupBy { it.conversation }) next = next + (c to AssistantLines.merge(next[c].orEmpty(), list))
             next
         }
-        if (items.any { it.kind == "task" || it.kind == "receipt" }) reloadTodos()
+        if (current.any { it.kind == "task" || it.kind == "receipt" }) reloadTodos()
     }
 
     fun tasksOf(conversation: String): List<Todo> = _todos.value.filter { it.origin == conversation }
@@ -498,7 +507,41 @@ class TasksStore(
         }
     }
 
-    fun putOff(itemId: String) = later.update { it + itemId }
+    fun putOff(cardId: String) = later.update { it + cardId }
+
+    fun dismissMessage(card: FeedItem, onError: (Throwable) -> Unit, onDismissed: (persona.core.contracts.api.MessageDraftDismissal) -> Unit) {
+        val latest = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id } ?: card
+        val original = card.field("draft") ?: return
+        if (latest.kind != "message" || !latest.canSend || latest.field("draft") != original) return
+        act(card.id, onError) {
+            val dismissal = api.dismissMessage(card.id, original)
+            check(dismissal.item.id == card.id && dismissal.item.conversation == card.conversation)
+            synchronized(feedLock) {
+                val current = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id } ?: card
+                if (current.field("draft") == original && current.sent == null && current.filedAt == null) {
+                    received(listOf(dismissal.item))
+                    onDismissed(dismissal)
+                }
+            }
+        }
+    }
+
+    fun undoDismissMessage(dismissal: persona.core.contracts.api.MessageDraftDismissal, onError: (Throwable) -> Unit) {
+        val card = dismissal.item
+        val captured = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id } ?: return
+        if (captured.field("dismissal_id") != dismissal.dismissalId || captured.sent != null || captured.filedAt != null) return
+        act(card.id, onError) {
+            val restored = api.undoDismissMessage(card.id, dismissal.dismissalId)
+            check(restored.id == card.id && restored.conversation == card.conversation)
+            synchronized(feedLock) {
+                val current = _feeds.value[card.conversation]?.firstOrNull { it.id == card.id }
+                if (current == captured) {
+                    later.update { it - card.id }
+                    received(listOf(restored))
+                }
+            }
+        }
+    }
 
     companion object {
         /** The [busy] key of a task's "Retry". */

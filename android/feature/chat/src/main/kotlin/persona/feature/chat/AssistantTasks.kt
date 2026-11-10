@@ -241,7 +241,7 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
         }
         "today" -> TodayCard(item, host, todos)
-        "message" -> if (item.ref != null && item.ref !in later) MessageCard(item, host, todos)
+        "message" -> if (item.ref != null && item.id !in later && item.dismissedAt == null) MessageCard(item, host, todos)
         // A live card: drawn where it was created, as the hub's latest version of it (docs/assistant/assistant-views.md "Live cards").
         "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
     }
@@ -765,8 +765,10 @@ private fun TodayCard(item: FeedItem, host: AssistantTaskHost, todos: List<Todo>
 // ── message cards ──
 
 @Composable
-private fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<Todo>) {
-    val itemId = item.ref ?: return
+internal fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<Todo>, enabled: Boolean = true) {
+    if (item.ref == null || item.dismissedAt != null) return
+    val feedback = persona.core.designsystem.LocalAppFeedback.current
+    val resources = androidx.compose.ui.platform.LocalContext.current.resources
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     var draft by remember(item.id) { mutableStateOf(item.field("draft").orEmpty()) }
     val sent = item.sent
@@ -808,11 +810,24 @@ private fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
             if (blank != null) Text(stringResource(R.string.chat_tasks_message_blank, blank), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.danger.text)
             if (filed) Text(stringResource(R.string.chat_tasks_message_filed), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-            else if (item.canSend) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.chat_tasks_send), { host.tasks.sendMessage(item, draft, host.onError) }, Modifier.weight(1f), size = JButtonSize.Medium,
-                    enabled = blank == null && draft.isNotBlank(), loading = item.id in busy)
-                JButton(stringResource(R.string.chat_tasks_later), { host.tasks.putOff(itemId) }, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
-            }
+            else if (item.canSend) persona.core.designsystem.DraftDecisionButtons(
+                send = persona.core.designsystem.JAction(stringResource(R.string.chat_tasks_send),
+                    onClick = { host.tasks.sendMessage(item, draft, host.onError) }, enabled = enabled && blank == null && draft.isNotBlank()),
+                later = persona.core.designsystem.JAction(stringResource(R.string.chat_tasks_later),
+                    onClick = { host.tasks.putOff(item.id) }, enabled = enabled),
+                dismiss = persona.core.designsystem.JAction(stringResource(R.string.chat_tasks_dismiss_draft), onClick = {
+                    host.tasks.dismissMessage(item, host.onError) { dismissal ->
+                        feedback?.notice(resources.getString(R.string.chat_tasks_draft_dismissed),
+                            persona.core.designsystem.FeedbackAction(resources.getString(R.string.chat_tasks_undo_draft)) {
+                                host.tasks.undoDismissMessage(dismissal, host.onError)
+                            })
+                    }
+                }, enabled = enabled),
+                busy = item.id in busy,
+                sendModifier = Modifier.testTag("assistant-draft-send-${item.id}"),
+                laterModifier = Modifier.testTag("assistant-draft-later-${item.id}"),
+                dismissModifier = Modifier.testTag("assistant-draft-dismiss-${item.id}"),
+            )
         }
     }
 }

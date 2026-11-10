@@ -6,6 +6,14 @@ The review timeout does not invalidate the hub's later operation receipt. Includ
 compare-and-set sources for a confirmed successful receipt, without resending the message or accepting an unknown
 outcome. Keep discarded messages outside that source set so a lookup that finishes later cannot undo the user's choice.
 
+## Reply-draft dismissal is a card decision, not task completion (#3743)
+
+Use the feed card's id and its exact original `body.draft` for dismissal; edited text belongs only to Send. Never mark the
+Inbox item done, remove the task or close its Agent to hide a draft. Later is local and card-scoped too, so new progress on
+the same source item remains visible. Apply the hub's complete returned item, rather than merging body fields: Undo removes
+`dismissed_at` and `dismissal_id`. Fence reads captured before a mutation, and reject a late Undo receipt when newer progress
+already changed that card. Retain its captured assistant manager across selection changes. Use the shell's existing Undo
+snackbar, with only Send primary; large-text and narrow action groups stack primary-first through `DraftDecisionButtons`.
 
 ## Large-font screenshots need Compose density, not just configuration (#3588)
 

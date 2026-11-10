@@ -5,6 +5,9 @@ import persona.core.contracts.FeedResponse
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 
+/** A confirmed card-scoped dismissal, retaining the token required for a lightweight Undo. */
+data class MessageDraftDismissal(val item: FeedItem, val dismissalId: String)
+
 /** Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and the chat feed"). */
 interface TasksApi {
     /** Exact metadata for a bound agent, independent of the Agents list filter and page. */
@@ -51,6 +54,11 @@ interface TasksApi {
      * the card ([card], the card's id: sent once per card however many taps or devices).
      */
     suspend fun inboxReply(itemId: String, text: String, card: String? = null)
+
+    /** Dismiss only the displayed message card, checking its exact original draft on the hub. */
+    suspend fun dismissMessage(cardId: String, draft: String): MessageDraftDismissal = error("Draft dismissal unavailable")
+    /** Undo only this dismissal; the hub rejects a sent, filed or superseded draft. */
+    suspend fun undoDismissMessage(cardId: String, dismissalId: String): FeedItem = error("Draft dismissal undo unavailable")
 
     /**
      * The features the hub these requests go to said in its last hello (`assistant_views`, `assistant_html_bridge`);
