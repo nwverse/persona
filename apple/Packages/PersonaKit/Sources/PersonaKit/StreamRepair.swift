@@ -3,14 +3,14 @@ import Foundation
 /// The block of a streaming reply still being written (`StreamChunks.split`'s tail), made whole for the moment before
 /// it is parsed (#2916; a port of the web's `repairStreamingMarkdown`, web/src/ui/stream/repair.ts). Half a delimiter
 /// showed raw and then flipped the structure when its other half came (`**bold` to bold, `[link](` to a link), so:
-/// - an open code fence is closed with its own marker; its opening line is held back until its info string is whole,
-///   and a half-written closing run until it closes;
+/// - an open code fence is closed with its own marker, indented as its opener; its opening line is held back until its
+///   info string is whole, and a half-written closing run until it closes;
 /// - a table's half-written last row is held back until its line ends, and a header row gets its delimiter row
-///   before it arrives;
+///   (indented as the header) before it arrives;
 /// - a last line of nothing but block markers (`-`, `1.`, `#`, `>`, `---`, `**`) is held back: it would draw as an
 ///   empty item or heading, or turn the line above into a heading, and then snap;
-/// - on the last line, `**`, `*`, `_`, `~~` and a code span left open are closed, and a half-written link or image
-///   shows as its text.
+/// - on the last line, `**`, `*`, `~~` and a code span left open are closed (not `_`: see `InlineRepair`), and a
+///   half-written link or image shows as its text.
 /// Only the last line is cut or added to (a closing fence goes after it), so every line before it, and every block
 /// already finished, stays byte for byte what it was. Inside an open `$$` block nothing changes; where it cannot be
 /// sure, it changes nothing. Only while streaming: the finished text is drawn as written.
@@ -33,7 +33,9 @@ public nonisolated enum StreamRepair {
         guard let lastLine = x.lines.last else { return md }
         let last = x.lines.count - 1
         if let open = x.fence {
-            let marker = String(repeating: open.fence.character, count: open.fence.count)
+            // Indented as its opener: a fence in a list item is closed in that item. At column 0 the closer ended the
+            // item and opened an empty fence under the list.
+            let marker = x.indent(x.lines[open.line]) + String(repeating: open.fence.character, count: open.fence.count)
             if !x.endsWithNewline {
                 // A language is not guessed from half its name; a half-written closing run is not a line of code.
                 if open.line == last { return x.string(0..<lastLine.lowerBound) }
@@ -45,7 +47,7 @@ public nonisolated enum StreamRepair {
         // A formula being written is TeX, not Markdown; a line that just closed a block is whole.
         if x.mathOpen || x.closedLast != nil { return md }
         if let table = x.repairTable() { return table }
-        if x.inTable { return md }
+        if x.table != nil { return md }
         // A line ended by a newline is finished: what it left open is most likely meant literally.
         guard !x.endsWithNewline else { return md }
         if x.markersOnly(lastLine) { return x.string(0..<lastLine.lowerBound) }
@@ -60,7 +62,7 @@ public nonisolated enum StreamRepair {
         if x.mathOpen { return .math }
         if !x.endsWithNewline, let closed = x.closedLast { return closed }
         if !x.endsWithNewline, let last = x.lines.last, MathMarkdown.display(x.trimmed(last)) != nil { return .math }
-        if x.inTable { return .table }
+        if x.table != nil { return .table }
         return .text
     }
 
@@ -177,48 +179,82 @@ private nonisolated struct Scan {
         return n
     }
 
+    /// The spaces and tabs a line starts with.
+    func indent(_ r: Range<Int>) -> String {
+        var i = r.lowerBound
+        while i < r.upperBound, s[i] == " " || s[i] == "\t" { i += 1 }
+        return string(r.lowerBound..<i)
+    }
+
     // MARK: Tables
 
-    /// Whether the end is in a table: the last block starts with a pipe row (after a heading, maybe) and a delimiter
-    /// row (whole or half-written) under it, or is a header row whose line has ended (`repairTable` adds its delimiter).
-    var inTable: Bool {
-        guard let h = header else { return false }
-        if h == lines.count - 1 { return endsWithNewline && Self.isClosedPipeRow(trimmed(lines[h])) }
-        return Self.isDelimiterish(trimmed(lines[h + 1]))
+    struct Table {
+        /// Its header row.
+        let header: Int
+        /// Whether a whole delimiter row is under it. If not, the end is on the header row, its line ended, or on the
+        /// delimiter row being written, and `repairTable` writes that row.
+        let divided: Bool
     }
 
-    /// The last block's first pipe row: its first line, or the line after a heading that starts it.
-    private var header: Int? {
-        guard blockStart < lines.count else { return nil }
-        var h = blockStart
-        if Self.isHeading(trimmed(lines[h])), h + 1 < lines.count { h += 1 }
-        let t = trimmed(lines[h])
-        guard t.hasPrefix("|"), !Self.isDelimiterish(t) else { return nil }
-        return h
-    }
-
-    /// A table's half-written last row held back (as the web, #5602), or a header row given its delimiter row early.
-    func repairTable() -> String? {
+    /// The table the end is in, read close enough to cmark-gfm: a delimiter row with a pipe under a header row of as
+    /// many cells, the header starting the last block or ending a paragraph (not as a lazy line of a list item or a
+    /// quote), and every line after it a row until one starts another block. Without a delimiter row yet, a header row
+    /// starting with a pipe, not under another pipe row (prose with pipes in it), is taken as one.
+    var table: Table? {
         let last = lines.count - 1
-        if !endsWithNewline, trimmed(lines[last]).hasPrefix("|") {
-            var i = last - 1
-            while i >= 0 {
-                let t = trimmed(lines[i])
-                if t.contains("|"), Self.isDivider(t) { return string(0..<lines[last].lowerBound) }
-                if !t.hasPrefix("|") { break }
-                i -= 1
+        guard blockStart <= last else { return nil }
+        // Up from the end through the rows to a delimiter row under its header.
+        var i = last
+        while i > blockStart, !Self.startsNonTableBlock(trimmed(lines[i])) {
+            let t = trimmed(lines[i]), head = trimmed(lines[i - 1])
+            if t.contains("|"), Self.isDivider(t), !head.isEmpty, !Self.isDelimiterish(head), !Self.startsNonTableBlock(head),
+               Self.cells(head) == Self.cells(t), !continuesLazily(i - 1) {
+                return Table(header: i - 1, divided: true)
             }
+            i -= 1
         }
-        guard let h = header else { return nil }
+        let h = endsWithNewline ? last : last - 1
+        guard h >= blockStart else { return nil }
         let head = trimmed(lines[h])
-        let row = "|" + String(repeating: " --- |", count: Self.cells(head))
-        if endsWithNewline, h == last, Self.isClosedPipeRow(head) { return string(0..<s.count) + row }
-        if !endsWithNewline, h == last - 1 {
-            let t = trimmed(lines[last])
-            guard Self.isDelimiterish(t), !(Self.isDivider(t) && Self.cells(t) == Self.cells(head)) else { return nil }
-            return string(0..<lines[last].lowerBound) + row
+        guard head.hasPrefix("|"), !Self.isDelimiterish(head), !continuesLazily(h),
+              h == blockStart || !trimmed(lines[h - 1]).hasPrefix("|") else { return nil }
+        let ok = h == last ? Self.isClosedPipeRow(head) : Self.isDelimiterish(trimmed(lines[last]))
+        return ok ? Table(header: h, divided: false) : nil
+    }
+
+    /// A table's half-written last row held back (as the web, #5602), or a header row given its delimiter row early
+    /// (indented as the header, so a table in a list item stays in it).
+    func repairTable() -> String? {
+        guard let table else { return nil }
+        let last = lines.count - 1
+        if table.divided {
+            guard !endsWithNewline, last > table.header + 1, trimmed(lines[last]).hasPrefix("|") else { return nil }
+            return string(0..<lines[last].lowerBound)
         }
-        return nil
+        let head = lines[table.header]
+        let row = indent(head) + "|" + String(repeating: " --- |", count: Self.cells(trimmed(head)))
+        if table.header == last { return string(0..<s.count) + row }
+        return string(0..<lines[last].lowerBound) + row
+    }
+
+    /// Whether line `i`, with no blank line above it in its block, only continues the paragraph of a list item or a
+    /// quote above it (a lazy line): it is less indented than that item's text, or under a quote.
+    private func continuesLazily(_ i: Int) -> Bool {
+        for j in stride(from: i - 1, through: blockStart, by: -1) {
+            let t = trimmed(lines[j])
+            if Self.isHeading(t) { return false }
+            if t.hasPrefix(">") { return true }
+            if Self.startsListItem(t) { return columns(lines[i]) < contentColumn(lines[j]) }
+        }
+        return false
+    }
+
+    /// The column a list item's text starts at: after its marker and the one to four spaces after it.
+    private func contentColumn(_ r: Range<Int>) -> Int {
+        let t = trimmed(r)
+        let marker = t.first.map { "-+*".contains($0) } == true ? 1 : t.prefix(while: { $0.isASCII && $0.isNumber }).count + 1
+        let gap = t.dropFirst(marker).prefix(while: { $0 == " " }).count
+        return columns(r) + marker + ((1...4).contains(gap) ? gap : 1)
     }
 
     /// A row that starts and ends with a pipe: likely a table's header (a pipe at the start alone may be prose).
@@ -289,9 +325,10 @@ private nonisolated struct Scan {
     }
 
     /// Whether the line begins a block of its own: a list item, a quote, a heading or a table row.
-    static func startsBlock(_ t: String) -> Bool {
-        startsListItem(t) || t.hasPrefix(">") || isHeading(t) || t.hasPrefix("|")
-    }
+    static func startsBlock(_ t: String) -> Bool { startsNonTableBlock(t) || t.hasPrefix("|") }
+
+    /// A list item, a quote or a heading: what ends a table, and what is not one's header.
+    static func startsNonTableBlock(_ t: String) -> Bool { startsListItem(t) || t.hasPrefix(">") || isHeading(t) }
 
     private static let markers: Set<Unicode.Scalar> = Set("#-=*+_>|`~:[]".unicodeScalars)
 
@@ -478,8 +515,10 @@ private nonisolated struct InlineRepair {
 
         var closers = code?.closer ?? ""
         // Innermost first, only the last line's, each only when it is the one opener of its kind (two `**` openers
-        // are a `**注意：**后文` that cmark does not pair either), and only when text follows it.
-        for o in openers.reversed() {
+        // are a `**注意：**后文` that cmark does not pair either), and only when text follows it. Never `_` (as the web):
+        // in a coding reply it is far more often `src/_app.tsx` or `_private` than emphasis, and closing it set the rest
+        // of the line in italics until the line ended. It is still read, so what it pairs with stays paired.
+        for o in openers.reversed() where o.c != "_" {
             guard o.at >= lastLo, !mixed.contains(o.c),
                   openers.count(where: { $0.c == o.c && $0.n == o.n }) == 1,
                   followedByText(o.at + o.n, before: cut, code: code?.at, link: link) else { break }

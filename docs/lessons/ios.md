@@ -1528,6 +1528,9 @@ A worktree's display name and its Agents' conversation names are different comma
 - `StreamingText` appended ` ▍` to the block being written. Inside an open fence it was a line of code, in a table a cell's text; on a
   line that closes a fence or a `$$` block (`` ``` ▍``, `$$ ▍`) it kept the line from closing it, and `$$x$$ ▍` was no longer a formula.
   Ask where the text ends (`StreamRepair.end`) before writing anything after it.
+- What is added to close a block goes in that block's container: a closing fence or a table's delimiter row written at
+  column 0 under a list item's indented fence or header ended the item, and cmark-gfm drew an empty code block under the
+  list (or the rows as a paragraph). Indent it as the line that opened the block, and check the result with cmark-gfm.
 - A render queue chained from unstructured `Task`s is not cancelled with the view's `.task`: each half-written ```mermaid source of a
   streaming reply was drawn in turn. Jobs with their own waiters and a cancellation handler let one nobody waits for be dropped
   (`MarkdownRenderer`). Keep MarkdownUI's inline image loads uncancelled: `InlineText` stores whatever a cancelled load returns, and

@@ -69,6 +69,15 @@ struct StreamRepairTests {
         #expect(repair("```\n-") == "```\n-\n```")
     }
 
+    @Test func closesAFenceInTheListItemItOpenedIn() {
+        // At column 0 the closer would end the item and open an empty fence under the list.
+        #expect(repair("1. 安装依赖：\n\n   ```bash\n   npm install") == "1. 安装依赖：\n\n   ```bash\n   npm install\n   ```")
+        #expect(repair("1. 安装依赖：\n   ```bash\n   npm install\n") == "1. 安装依赖：\n   ```bash\n   npm install\n   ```")
+        #expect(repair("- 运行：\n  ~~~\n  make") == "- 运行：\n  ~~~\n  make\n  ~~~")
+        // a half-written closing run too
+        #expect(repair("- 运行：\n  ```\n  make\n  ``") == "- 运行：\n  ```\n  make\n  ```")
+    }
+
     // MARK: Tables
 
     @Test func givesATableHeaderItsDelimiterRowEarly() {
@@ -78,9 +87,37 @@ struct StreamRepairTests {
         #expect(repair("## 结果\n| a | b | c |\n") == "## 结果\n| a | b | c |\n| --- | --- | --- |")
         // a whole delimiter row is kept as written (its alignment)
         #expect(repair("| a | b |\n| :-- | --: |") == "| a | b |\n| :-- | --: |")
-        // a pipe at the start of a line of prose is not a header
+        // a pipe at the start of a line of prose is not a header, nor is a pipe row under another
         #expect(repair("| 不是表格\n") == "| 不是表格\n")
-        #expect(repair("前文\n| a | b |\n") == "前文\n| a | b |\n")
+        #expect(repair("| x |\n| a | b |\n") == "| x |\n| a | b |\n")
+    }
+
+    @Test func findsATableRightUnderAParagraphLine() {
+        // cmark-gfm ends the paragraph at a header row with its delimiter row under it.
+        #expect(repair("**结果：**\n| a | b |\n") == "**结果：**\n| a | b |\n| --- | --- |")
+        #expect(repair("**结果：**\n| a | b |\n| --") == "**结果：**\n| a | b |\n| --- | --- |")
+        #expect(repair("**结果：**\n| a | b |\n| --- | --- |\n| 1") == "**结果：**\n| a | b |\n| --- | --- |\n")
+        #expect(StreamRepair.end(of: "**结果：**\n| a | b |\n| --- | --- |\n| 1") == .table)
+        #expect(StreamRepair.end(of: "**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n") == .table)
+        // a row without pipes is a row too, until a line starts another block
+        #expect(StreamRepair.end(of: "| a | b |\n| --- | --- |\nfoo") == .table)
+        #expect(StreamRepair.end(of: "| a | b |\n| --- | --- |\n- 项") == .text)
+    }
+
+    @Test func keepsATableInTheListItemItIsIn() {
+        #expect(repair("- 项\n\n  | a | b |\n") == "- 项\n\n  | a | b |\n  | --- | --- |")
+        #expect(repair("1. 项\n   | a | b |\n   | -") == "1. 项\n   | a | b |\n   | --- | --- |")
+        #expect(repair("- 项\n  | a | b |\n  | --- | --- |\n  | 1") == "- 项\n  | a | b |\n  | --- | --- |\n")
+        #expect(StreamRepair.end(of: "- 项\n  | a | b |\n  | --- | --- |\n  | 1") == .table)
+    }
+
+    @Test func findsNoTableInALazyLine() {
+        // Less indented than the item's text, or under a quote, a pipe row only continues that paragraph (cmark-gfm).
+        #expect(repair("- 项\n| a | b |\n") == "- 项\n| a | b |\n")
+        #expect(repair("- a\n  - b\n  | x |\n") == "- a\n  - b\n  | x |\n")
+        #expect(repair("> 引用\n| a | b |\n") == "> 引用\n| a | b |\n")
+        #expect(repair("- 项\n| a | b |\n| --- | --- |\n| 1") == "- 项\n| a | b |\n| --- | --- |\n| 1")
+        #expect(StreamRepair.end(of: "- 项\n| a | b |\n| --- | --- |\n| 1") == .text)
     }
 
     // MARK: Block markers
@@ -103,8 +140,7 @@ struct StreamRepairTests {
 
     // MARK: Inlines
 
-    @Test func closesUnderscoreStrikethroughAndCodeSpans() {
-        #expect(repair("an _emph") == "an _emph_")
+    @Test func closesStrikethroughAndCodeSpans() {
         #expect(repair("这 ~~删除") == "这 ~~删除~~")
         #expect(repair("这 ~~删除~") == "这 ~~删除~~") // half its closer
         #expect(repair("请运行 `swift te") == "请运行 `swift te`")
@@ -120,6 +156,16 @@ struct StreamRepairTests {
     @Test func cutsTrailingSpacesBeforeAnAddedCloser() {
         // `**重要 **` would leave the closer unclosing.
         #expect(repair("这是 **重要 ") == "这是 **重要**")
+    }
+
+    @Test func neverClosesAnUnderscore() {
+        // Closed, it set the rest of the line in italics until the line ended; the finished text has none (as the web).
+        #expect(repair("修改 src/_app.tsx 后重启") == "修改 src/_app.tsx 后重启")
+        #expect(repair("改了 _utils.py 里的函数") == "改了 _utils.py 里的函数")
+        #expect(repair("an _emph") == "an _emph")
+        // what it pairs with still pairs, and what is open around it is still closed
+        #expect(repair("**粗 _x") == "**粗 _x**")
+        #expect(repair("_a_ 和 *b") == "_a_ 和 *b*")
     }
 
     @Test func leavesWordsAndURLsWithMarkersInThem() {
@@ -177,6 +223,16 @@ struct StreamRepairTests {
         | 文件 | 改动 |
         | --- | :-: |
         | a.swift | 刷新 |
+
+        1. 安装依赖：
+
+           ```bash
+           npm install
+           ```
+        **结果：**
+        | 项 | 值 |
+        | --- | --- |
+        | b | 2 |
 
         ```swift
         let a = "**"
