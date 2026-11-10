@@ -37,6 +37,9 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val connectionState: Flow<ConnectionState> get() = flowOf(ConnectionState.Connecting)
     val preferences: Flow<InboxPreferences> get() = flowOf(InboxPreferences())
     suspend fun savePreferences(value: InboxPreferences) = Unit
+    /** Where Hand to AI last sent each source's items (#2121, [InboxHandOffMemory]): the group's own, latest first. */
+    val handOffMemory: Flow<List<HandOffMemoryEntry>> get() = flowOf(emptyList())
+    suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) = Unit
     suspend fun refreshNow() = refresh()
     suspend fun askPersona(itemId: String, action: InboxAiAction) {
         error("Persona entry is not connected")
