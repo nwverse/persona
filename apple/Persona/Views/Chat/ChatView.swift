@@ -3624,7 +3624,16 @@ struct ChatView: View {
             model.composerFocus = key // ready to type the reply, as in Telegram
         }
         if menu.swipeQuotes != (style == .dev) { menu.swipeQuotes = style == .dev }
-        menu.edit = { [model, key] text in model.drafts[key] = text }
+        // A message that led with comments puts them back over the box as cards, the words in it (iOS; the web does the same).
+        menu.edit = { [model, key] text in
+            if let split = MessageComments.inBubble(text) {
+                model.composerComments[key] = split.comments
+                model.drafts[key] = [split.quote.map { $0.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n") }, split.rest]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+            } else {
+                model.drafts[key] = text
+            }
+        }
         menu.fork = { [model, key] itemID in
             Task {
                 guard let new = await model.fork(key, at: itemID), model.session(key)?.assistant != true else { return }
@@ -4079,11 +4088,13 @@ struct Composer: View, Equatable {
 
     private var canSend: Bool {
         allowsSend && !videos.busy && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !videos.ready.isEmpty
-            || !(model.composerContexts[key] ?? []).isEmpty)
+            || !(model.composerContexts[key] ?? []).isEmpty || !(model.composerComments[key] ?? []).isEmpty)
     }
 
     /// Something rides along besides the text (photos, videos, quotes): the bar opens and sends without text.
-    private var hasAttachments: Bool { !images.isEmpty || !videos.items.isEmpty || !(model.composerContexts[key] ?? []).isEmpty }
+    private var hasAttachments: Bool {
+        !images.isEmpty || !videos.items.isEmpty || !(model.composerContexts[key] ?? []).isEmpty || !(model.composerComments[key] ?? []).isEmpty
+    }
 
     /// Claude in a herdr pane takes `/model`; Codex and TRAEX pick theirs in a full-screen menu the phone cannot drive.
     private var canPickModel: Bool {
@@ -4219,6 +4230,10 @@ struct Composer: View, Equatable {
         Binding(get: { model.composerContexts[key] ?? [] }, set: { model.composerContexts[key] = $0.isEmpty ? nil : $0 })
     }
 
+    private var comments: Binding<[MessageComment]> {
+        Binding(get: { model.composerComments[key] ?? [] }, set: { model.composerComments[key] = $0.isEmpty ? nil : $0 })
+    }
+
     /// The notes over the box, the attachments and the box itself (`body` adds what happens around them). In a voice
     /// call the voice bar takes the box's place (docs/assistant/voice.md 6.2); what goes with a typed message waits, kept.
     private var composerStack: some View {
@@ -4302,6 +4317,12 @@ struct Composer: View, Equatable {
                 if !images.isEmpty {
                     ComposerImages(images: imagesBinding) { editingIndex = $0 } // a tap marks it up before sending
                 }
+                #if os(iOS)
+                if !(model.composerComments[key] ?? []).isEmpty {
+                    CommentCardsRow(comments: comments)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                #endif
                 // In the stack, not over it: the composer sits in its own hosting controller, which takes no touches
                 // outside its bounds (#518).
                 let slash = slashRows
@@ -4450,6 +4471,13 @@ struct Composer: View, Equatable {
             let have = contexts.wrappedValue
             contexts.wrappedValue += ContextRef.samples.filter { s in !have.contains { $0.url == s.url } } // the task may run again
         }
+        #if os(iOS)
+        .task { // `-showSampleComments YES`: a review's two code comments and a page's element over the box (#151, screenshots)
+            guard UserDefaults.standard.bool(forKey: "showSampleComments") else { return }
+            try? await Task.sleep(for: .seconds(3))
+            if comments.wrappedValue.isEmpty { comments.wrappedValue = MessageComment.samples }
+        }
+        #endif
         .task { // `-openSlashMenu YES`: "/" in the box and its list open, for screenshots
             guard UserDefaults.standard.bool(forKey: "openSlashMenu") else { return }
             try? await Task.sleep(for: .seconds(4))
@@ -4704,16 +4732,21 @@ struct Composer: View, Equatable {
         if videos.busy { return holdForVideos() }
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let ctx = model.composerContexts[key] ?? []
+        let comments = model.composerComments[key] ?? []
         let files = videos.ready
-        guard !t.isEmpty || !images.isEmpty || !files.isEmpty || !ctx.isEmpty else { return }
-        // Picked page excerpts ride along as <persona-context> tags before what was typed, videos as <persona-file> after.
-        let body = AttachedFile.message(t.isEmpty ? (images.isEmpty ? (files.isEmpty ? String(localized: "See the context above.") : String(localized: "Please look at the image [Assistant View a3e0a0]")) : String(localized: "Please look at the image [Assistant View 5ad878]")) : t, files: files)
+        guard !t.isEmpty || !images.isEmpty || !files.isEmpty || !ctx.isEmpty || !comments.isEmpty else { return }
+        // Picked page excerpts ride along as <persona-context> tags before what was typed, comments as `> ` blocks
+        // after them (the web's order), videos as <persona-file> after the text. Comments alone need no words.
+        let alone = t.isEmpty && images.isEmpty && files.isEmpty && !comments.isEmpty
+        let typed = alone ? "" : t.isEmpty ? (images.isEmpty ? (files.isEmpty ? String(localized: "See the context above.") : String(localized: "Please look at the image [Assistant View a3e0a0]")) : String(localized: "Please look at the image [Assistant View 5ad878]")) : t
+        let body = MessageComments.message(comments, text: AttachedFile.message(typed, files: files))
         let message = ctx.isEmpty ? body : ctx.map(\.xml).joined(separator: "\n") + "\n\n" + body
         // Routed to a task ("Tell “xx”"): straight to its agent, not to Persona (docs/assistant/unified-entry.md「指向谁」).
         // Not with videos: they are on this conversation's machine, the task's agent may be on another.
         if images.isEmpty, files.isEmpty, key.group == (model.hub?.group ?? ""), TasksStore.shared.sendRouted(key.sessionID, text: message) {
             if raw == text { text = "" }
             model.composerContexts[key] = nil
+            model.composerComments[key] = nil
             return
         }
         // On screen at once; the request runs in the background (a failure turns the bubble into "Resend").
@@ -4722,6 +4755,7 @@ struct Composer: View, Equatable {
         images = []
         videos.sent()
         model.composerContexts[key] = nil
+        model.composerComments[key] = nil
     }
 
     /// A send while a video is still on its way: nothing goes; what was typed goes back in the box (the prompt bar

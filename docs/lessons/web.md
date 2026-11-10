@@ -54,6 +54,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - A flex child with `overflow-hidden` has a `min-height:auto` of 0, so flex squeezes it below its content when the box above the input is full. The card's footer (the answer buttons) then sits below the fold, and a receipt can be squeezed to a fraction of its content. Give every card in that box `shrink-0`, not only the one that was reported (`Card`, `AnsweredCard`, `DelegatedCard`).
 - An `overflow-hidden` ancestor makes itself the scroll container that `position: sticky` refers to, so a sticky footer inside it never sticks to the outer scroller. Use `overflow-clip`: it clips to the rounded corners the same way but is not a scroll container. The sticky offset also has to cancel the scroller's padding (`-bottom-1` for the dock's `p-1`), or the body shows under the footer.
 - jsdom has no layout; check it in a browser with `scripts/test/web_card_actions_e2e.py`, which asserts the button row's box is inside the viewport and the dock's visible area.
+- The assistant's Pending tray is itself the scroller, so cards inside it must not open a second scroll box (`PendingCards narrow`): the sticky answer row then sticks to the inner box and sits below the tray's fold. The action bar holding the tray also has to `shrink` with the dock (`min-h-0`), or on a short window it stands taller than the dock and the card's answer row ends up under the composer (#3083). Check with `web/e2e/ask-card-dock.mjs`.
 
 ## A native select's arrow ignores the field's padding (#2314)
 
@@ -76,6 +77,10 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 ## Pushed batches follow more_after too (#1118)
 
 - A contiguous reconnect replay can still be incomplete when its final batch carries `more_after`. Follow that flag on pushed batches as well as HTTP pages, continuing from the updated contiguous coverage cursor through the existing gap-fill timer; do not wait for another push to reveal a gap.
+
+## A poll that keeps its last answer must still redraw on failure (#1905)
+
+- `useUsageWindows` keeps the last answer when a refresh fails, and the bars judge its age (`stale_at`) at render time. A failure that sets nothing renders nothing, so kept numbers would stay "fresh" until something else redrew the sidebar. On failure it hands back a copy of what it keeps (`kept.slice()`): every consumer renders again once per poll and judges with the time now. Anything judged against the clock needs a clock or a render, not only new data.
 
 ## State updaters stay pure under StrictMode (#1165)
 
@@ -737,6 +742,10 @@ A saved credential and an empty input are different from explicitly removing tha
 ## Pairing fallback needs an unsupported-route response (#1916)
 
 A successful token check does not prove the subsequent device-token exchange succeeded: a redeemed pairing code can still read during its grace period. Keep the legacy credential only when the exchange returns 404 for an old hub. Authentication refusal, server failure and transport failure must reject sign-in without replacing browser credentials. Both opened and pasted links should classify a 401 by status, not by the exact error sentence returned by the hub.
+
+## A gateway status is not an outage diagnosis (#1915)
+
+Classify stable business codes before generic status messages, including in toast folding. A 503 can mean disabled knowledge, an unready index or a disconnected manager; it does not prove the hub or a computer is down. Keep old-hub compatibility at the REST boundary, requiring the route, status, code and exact known diagnostic together. Retain diagnostics on the error object, not inside business messages, and exercise the rendered page through the real decoder.
 
 ## An op receipt keeps the hub's answer and the digest covers the body (#2459)
 

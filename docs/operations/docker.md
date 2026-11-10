@@ -259,6 +259,16 @@ A new image doesn't change how the built-in manager runs on an existing install.
   `network_mode: host` (and remove `ports`).
 - The hub is HTTP by default and should only be reached on the internal network, over VPN, or behind an HTTPS reverse proxy. Don't expose 18660 directly to the internet.
 
+### SSH tunnel to a hub on the same host
+
+The iOS and macOS apps can reach the hub through an SSH server ([network.md](network.md#经-ssh-隧道连-hub直连不通时的后备)). When that server is the Docker host itself and the tunnel target is a port compose publishes (`127.0.0.1:18660`), the connection reaches the container through docker-proxy, and the hub sees it come from the container's gateway: public, as above. The tunnel is plaintext, so every request through it gets `403 tls_required`, although **Test connection and save** succeeds; the hub logs `api: plaintext from <gateway>, this container's gateway …` (at most every 10 minutes). To let the tunnel in:
+
+1. Publish both ports on loopback only, so that nothing but the host itself reaches the gateway through them: `PERSONA_PORT=127.0.0.1:18660` and `PERSONA_TLS_PORT=127.0.0.1:18662` in `.env`, then `docker compose up -d`.
+2. Find the gateway of the hub's network: `docker network inspect jarvis_default --format '{{(index .IPAM.Config 0).Gateway}}'` (the compose project is `jarvis` unless `PERSONA_COMPOSE_PROJECT` names another). To keep it from changing when the network is recreated, give the network a fixed `subnet` in `compose.yaml` (`networks: default: ipam: config: [{subnet: …}]`).
+3. Add it as a single address to `security.trusted_cidrs` in `data/hub.json` (`"<gateway>/32"`; keep existing entries), then `docker compose restart hub`.
+
+Trusting the gateway lets in whatever reaches the published ports: with them on `127.0.0.1` that is the host's own processes, the SSH server among them, and `permitopen` limits each tunnel key to that port. Don't do this while the ports are published on other addresses: what docker-proxy relays from there (IPv6 when Docker's IPv6 is off, the internet included) comes from the gateway too. The admin UI under `PERSONA_ADMIN_ACCESS=lan` follows `security.trusted_cidrs` as well ([admin.md](admin.md) ("Docker bridge network")).
+
 ### Reverse proxy on the same machine
 
 The hub treats its own container's gateway as public internet ([network.md](network.md) ("Source classification and reverse proxies")): plaintext requests from the internet get `403 tls_required` and can't use the main token.

@@ -180,8 +180,8 @@ struct UserBubble: View, Equatable {
             if !shown.isEmpty || !quotes.isEmpty {
                 HStack {
                     Spacer(minLength: 48)
-                    UserBubbleBody(quotes: quotes, text: shown, paths: d.pathRefs)
-                        .messageLongPress(id: item.id) { UserBubbleBody(quotes: quotes, text: shown, paths: d.pathRefs) }
+                    UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
+                        .messageLongPress(id: item.id) { UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead) }
                 }
             }
             if let openFile { FileChips(paths: d.chips, open: openFile) }
@@ -349,9 +349,12 @@ struct PendingBubble: View {
                     }
                     .accessibilityLabel("Failed to send. Resend or delete.")
                 }
-                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: shown)
+                let split = MessageComments.inBubble(shown)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
                     .opacity(msg.state == .failed || msg.state == .waiting ? 0.6 : 1)
-                    .messageLongPress(id: msg.id.uuidString) { UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: shown) }
+                    .messageLongPress(id: msg.id.uuidString) {
+                        UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                    }
             }
             if msg.state == .waiting {
                 Text("Sends when connected").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
@@ -998,7 +1001,7 @@ struct RecapDrawer: View {
     }
 }
 
-/// The assistant's answer while it is still being generated, with a blinking caret.
+/// The assistant's answer while it is still being generated, with a caret after its words (`StreamTail`).
 struct StreamingText: View {
     var text: String
 
@@ -1015,12 +1018,31 @@ struct StreamingText: View {
                 StreamChunk(text: chunk).equatable()
                     .padding(.top, i == 0 ? 0 : StreamChunks.gap(after: parts.done[i - 1], before: chunk))
             }
-            Markdown(MarkdownMemo.content(parts.tail + " ▍"))
+            Markdown(StreamTail.content(parts.tail))
                 .markdownTheme(.persona)
                 .padding(.top, parts.done.last.map { StreamChunks.gap(after: $0, before: parts.tail) } ?? 0)
         }
         .markdownSoftBreakMode(.lineBreak) // as the finished reply (`AssistantText`)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The block of a streaming reply still being written, as it is drawn (#2916): made whole for the moment
+/// (`StreamRepair`: no `**` or half a link showing raw and then snapping), with the caret only where it is prose (inside a
+/// code fence, a table or a formula it was drawn as code, a cell or TeX), and an unfinished ```mermaid or ```math fence as
+/// plain code until it closes (a half-written diagram was sent to the renderer at every draw: a spinner, or "Couldn't draw
+/// this"). Only this block changes; the finished ones (`StreamChunk`) are drawn as before.
+nonisolated enum StreamTail {
+    /// Its own small memo: a tail is a new text at every delta, and in `MarkdownMemo` they filled it every half minute
+    /// and wiped the finished replies' entries with them.
+    private static let memo = TextMemo<MarkdownContent>(limit: 32)
+
+    static func content(_ tail: String) -> MarkdownContent {
+        memo(tail) { tail in
+            var shown = StreamRepair.repair(StreamRepair.plainOpenFence(tail) { RenderedFence.kind($0) != nil })
+            if StreamRepair.end(of: tail) == .text { shown += " ▍" }
+            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(shown))))
+        }
     }
 }
 
@@ -1152,7 +1174,11 @@ nonisolated struct UserRowText {
     let refs: [ContextRef]
     let text: String   // without the context tags
     let cardSource: AssistantActionSource.Parsed?
-    let shown: String  // without the image notes and the files' tags
+    let shown: String  // without the image notes and the files' tags (what Copy and Edit take)
+    /// The bubble's words: `shown` without the comment blocks it led with, drawn as cards (`comments`, `lead`).
+    let words: String
+    let comments: [MessageComment]
+    let lead: String?
     let images: [String]
     /// The files sent with it (videos), drawn as cards.
     let attached: [AttachedFile]
@@ -1168,13 +1194,20 @@ nonisolated struct UserRowText {
         text = parsed.rest
         let shown = UserBubble.display(parsed.rest)
         self.shown = shown
+        let split = MessageComments.inBubble(shown)
+        let words = split?.rest ?? shown
+        self.words = words
+        comments = split?.comments ?? []
+        lead = split?.quote
         let images = UserBubble.imagePaths(parsed.rest)
         self.images = images
         let sent = AttachedFile.parse(parsed.rest)
         attached = sent.files
-        let files = FilePaths.find(in: sent.rest).filter { !images.contains($0) }
+        // The comments' files are on their cards: the chips are the ones the words name.
+        let named = split == nil ? sent.rest : (MessageComments.split(sent.rest)?.rest ?? sent.rest)
+        let files = FilePaths.find(in: named).filter { !images.contains($0) }
         self.files = files
-        let found = PathRefs.find(in: shown)
+        let found = PathRefs.find(in: words)
         pathRefs = found
         let inline = PathRefs.unique(found, limit: 40)
         let linked = Set(inline)
