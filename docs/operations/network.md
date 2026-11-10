@@ -248,6 +248,28 @@ After pairing failures, Android Connection diagnostics shows the latest attempt:
 
 Public plaintext APIs default to `403 tls_required`, except `GET /api/v1/health`. This refusal happens after the request arrives and cannot retract an already-plaintext token; clients must choose the protocol before requesting.
 
+## Behind Cloudflare Access
+
+Use this when hub is published on a public hostname through Cloudflare Tunnel with Cloudflare Access in front, so phones reach it over the internet without a system VPN (#3502). Access answers requests without credentials with a `302` to its login page. Browsers (web app) handle the login themselves; the iOS and Android apps instead send an Access **service token** as the `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers. No hub changes.
+
+**Cloudflare dashboard**:
+
+1. Zero Trust › Access › Service Auth › Service Tokens › create a token. Copy the **Client ID** and **Client Secret**; the secret is shown only once.
+2. In hub's Access application, add a policy with Action **Service Auth** that includes that service token. Keep the existing login policy so browsers still work.
+3. WebSocket must pass through the tunnel (`/api/v1/ws`). Cloudflare Tunnel allows it by default; don't turn it off.
+
+**In the app**: the values belong to one paired hub. Enter them on the pairing screen under "Cloudflare Access" **before** pairing (otherwise the first pairing request is already redirected), or later in Settings › hub, where they can also be changed or cleared. The secret is stored like hub token (iOS keychain, Android encrypted storage), shown masked, and never written to logs or diagnostics.
+
+- Both headers go on every request to that hub: REST, WebSocket, port forwarding, media players, pairing and token exchange, notification actions and, on iOS, extensions and widgets that call hub directly.
+- They go **only** to that hub's own origin, never to other hubs, mesh peers, redirect targets or third-party URLs.
+
+**When Access blocks the app** (redirect to the `cloudflareaccess.com` login, its HTML login page, or a `403` from Access), the app does not follow the redirect and shows a specific error instead of a generic connection failure:
+
+- no token set: "This hub is behind Cloudflare Access and needs a service token";
+- token set: "Cloudflare Access rejected the service token" (wrong or revoked token, or no Service Auth policy includes it).
+
+**Warning: `cloudflared` on hub's machine makes internet traffic loopback.** The tunnel connects to hub from `127.0.0.1`, so hub treats every public request as local: the main token works, the admin UI skips `admin.access`, and authentication failures are not throttled ([PROXY protocol](#proxy-protocol) lists the effects). Hub never trusts `Cf-Connecting-IP` or other forwarded headers. Configure `security.proxy_protocol` and `security.trusted_cidrs` as described in [Source classification and reverse proxies](#source-classification-and-reverse-proxies); PROXY protocol helps only when the hop that connects to hub sends a PROXY header carrying the real client address. If yours can't, Access is the only thing in front of hub, so keep its policies tight.
+
 <a id="经-ssh-隧道连-hub直连不通时的后备"></a>
 
 ## Connecting to hub through SSH (fallback when direct access fails)
