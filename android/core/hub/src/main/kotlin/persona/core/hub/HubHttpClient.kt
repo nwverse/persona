@@ -162,6 +162,27 @@ internal fun managerHeaderFor(url: HttpUrl, hubId: String?, method: String = "GE
     return apiSegments(url)?.let { choice.itemHeader(it, hubId) }
 }
 
+/**
+ * Cloudflare Access answered instead of the hub: a redirect to its login (`*.cloudflareaccess.com` or `/cdn-cgi/access/`),
+ * or a 401 / 403 of Cloudflare's own that is not the hub's JSON and names Access. The hub never redirects and always
+ * answers errors in JSON, so neither can be the hub's.
+ */
+fun isCloudflareAccessBlock(response: Response): Boolean {
+    if (response.isRedirect) {
+        val location = response.header("Location")?.let { response.request.url.resolve(it) } ?: return false
+        return location.host.endsWith(".cloudflareaccess.com") || location.encodedPath.startsWith("/cdn-cgi/access/")
+    }
+    if (response.code != 401 && response.code != 403) return false
+    if (response.header("WWW-Authenticate")?.contains("Cloudflare-Access", ignoreCase = true) == true) return true
+    if (response.header("Server")?.equals("cloudflare", ignoreCase = true) != true) return false
+    if (response.header("Content-Type")?.contains("json", ignoreCase = true) == true) return false
+    val body = runCatching { response.peekBody(16 * 1024).string() }.getOrNull() ?: return false
+    return body.contains("cloudflareaccess.com", ignoreCase = true) || body.contains("Cloudflare Access", ignoreCase = true)
+}
+
+/** Same scheme, host and port: the origin a Cloudflare Access token belongs to. */
+internal fun HttpUrl.sameOrigin(other: HttpUrl) = scheme == other.scheme && host == other.host && port == other.port
+
 /** How TLS pins are keyed: the host as OkHttp hands it to the hostname verifier, and the port. */
 internal fun tlsKey(host: String, port: Int) = "${host.lowercase()}:$port"
 
@@ -211,6 +232,13 @@ class HubHttpClient(
         expectedPins.keys.retainAll(keys.keys)
         expectedPins.putAll(keys)
     }
+
+    /**
+     * The Cloudflare Access service token a request to [HttpUrl] carries (docs/operations/network.md "Behind Cloudflare
+     * Access"): the owner's answer for one of its paired hub's own HTTPS origins, null for anything else. Asked per
+     * request, so a token saved in settings, or an origin the hub lists later, takes effect at once.
+     */
+    @Volatile var access: (HttpUrl) -> persona.core.contracts.api.HubAccess? = { null }
 
     /** The pin the endpoint at [url] presented in its last TLS handshake. */
     internal fun seenPin(url: HttpUrl): String? = seenPins[tlsKey(url.host, url.port)]
@@ -268,7 +296,20 @@ class HubHttpClient(
                     val authority = url.toString().substringAfter("://").substringBefore('/')
                     builder.url(url.newBuilder().host(peer.hostAddress!!).build()).header("Host", authority)
                 }
-                chain.proceed(builder.build())
+                // Only on HTTPS and only to the hub the owner names for this origin: redirects are not followed, so the
+                // headers never reach the Access login page or any other host.
+                val token = if (url.isHttps) access(url) else null
+                token?.let {
+                    builder.header(persona.core.contracts.api.HubAccess.ClientIdHeader, it.clientId)
+                        .header(persona.core.contracts.api.HubAccess.ClientSecretHeader, it.clientSecret)
+                }
+                val response = chain.proceed(builder.build())
+                if (isCloudflareAccessBlock(response)) {
+                    val status = response.code
+                    response.close()
+                    throw HubFailure(if (token != null) HubError.AccessRejected else HubError.AccessRequired, status = status)
+                }
+                response
             }
             .addNetworkInterceptor { chain ->
                 // Inspect the actual peer before sending headers, including after DNS resolution.

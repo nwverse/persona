@@ -592,6 +592,8 @@ type TaskDone struct {
 	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
 	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
 	Checks bool
+	// Language: the user's language for the reason, which the apps show on the task ("" for Chinese, the prompt's own).
+	Language string
 }
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }

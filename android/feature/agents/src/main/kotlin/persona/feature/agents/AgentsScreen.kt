@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -106,6 +107,7 @@ internal fun AgentsScreen(
     var menu by remember { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val homeChrome = LocalHomeChrome.current != null
+    val firstPageIncomplete = !page.loaded && page.list.groups.isEmpty()
     var newAgent by rememberSaveable { mutableStateOf(false) }
     var historyMachine by rememberSaveable { mutableStateOf<String?>(null) }
     var historySession by rememberSaveable { mutableStateOf<String?>(null) }
@@ -288,6 +290,14 @@ internal fun AgentsScreen(
                     JSearchField(settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
                 }
             }
+            if (firstPageIncomplete) item("initial-state") {
+                if (page.pagination.failed) JNotice(
+                    text = stringResource(persona.core.designsystem.R.string.designsystem_load_failed),
+                    modifier = Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs),
+                    actionLabel = stringResource(persona.core.designsystem.R.string.designsystem_retry),
+                    onAction = model::refresh,
+                ) else JLoading()
+            }
             if (groups.size > 1) item("groups") {
                 GroupFilterRow(groups, page.groupCounts, group, model::group)
             }
@@ -306,7 +316,8 @@ internal fun AgentsScreen(
             }
             if (homeChrome) item("grouping") {
                 Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
-                    JChip(page.preferences.grouping.label, onClick = { menu = true }, icon = PhIcons.Folder)
+                    JChip(stringResource(R.string.agents_grouping_current, page.preferences.grouping.label),
+                        onClick = { menu = true }, icon = PhIcons.Folder, role = Role.Button, trailingIcon = PhIcons.CaretDown)
                 }
             }
             // "botmux" (web #2786): show or hide botmux's sessions in this list, kept on this phone.
@@ -353,7 +364,7 @@ internal fun AgentsScreen(
                 }
             }
             if (page.preferences.range != AgentRange.History) item("request-history") {
-                JTextButton(stringResource(R.string.agents_requests_history), { allRequests = true })
+                JRow(stringResource(R.string.agents_requests_history), onClick = { allRequests = true })
             }
             if (page.settings.quick == AgentQuickFilter.Unread && page.list.unreadShown.isNotEmpty()) item("mark-read") {
                 // The same set iOS counts and marks: the list's unread ids, whichever groups (or none) draw them.
@@ -480,7 +491,7 @@ internal fun AgentsScreen(
                     }
                 }
             }
-            if (page.pagination.paged) item("sessions-pagination", contentType = "pagination") {
+            if (page.pagination.paged && !firstPageIncomplete) item("sessions-pagination", contentType = "pagination") {
                 Column(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.m), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(stringResource(R.string.agents_page_loaded, page.sessions.size, page.pagination.total),
                         style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)

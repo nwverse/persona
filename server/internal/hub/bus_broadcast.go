@@ -44,7 +44,7 @@ var managerMessageTypes = map[string]bool{
 	// its extensions' manager
 	"agents": true, "agents.prefs": true, "inbox": true, "mail_accounts": true, "messaging": true,
 	"extension_auth": true, "extension_operation": true, "extension_ui": true, "plugin_ui": true,
-	"extension_upgrade": true, "plugin_upgrade": true,
+	"extension_upgrade": true, "plugin_upgrade": true, "subscription": true,
 	// its devices
 	"file_transfer": true,
 }

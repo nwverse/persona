@@ -258,7 +258,7 @@ internal class AgentsViewModel(
             Unit
         })
     }, groupListCounts) { projected, status, _, metadata ->
-        if (!status.paged) projected.copy(pagination = status)
+        if (!status.paged) projected.copy(loaded = status.loaded, pagination = status)
         else {
             val counts = status.counts
             val machineCounts = status.machineCounts
