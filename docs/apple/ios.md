@@ -853,6 +853,28 @@ Below Assistant, the same four toggles as web and Android (`GET / PUT /api/v1/ag
 master switch and Triage model (opens model configuration `agent.triage`), followed by cards for decisions, automatically continuing after errors, and scheduled wake-ups; disabled while the master switch is off.
 Changes save immediately; failure restores the old value and explains why at the top; old hubs (404) show only unsupported. `TriageSettingsModel` / `TriageSettingsView`, shared with Mac.
 
+## Knowledge selection (Settings › Knowledge Selection, #2217)
+
+Below Connectors, iPhone and iPad only: the same document the web edits in Settings → Knowledge selection (`GET / PUT /api/v1/kb/selection`, stored on the
+hub; what each rule and per-item setting means is in `docs/assistant/knowledge.md` ("Selection")).
+
+- **Layout**: the chats and documents with a setting of their own first (they come before every rule), then the chat rules and the document rules, one
+  section per priority level. A rule's row shows On / Off or its days and opens its options in a sheet (store what matches, days for text and attachments,
+  whether an @all counts for mentions, the messages kept around your own); a level's menu in its header moves the level up or down, merges a rule into the
+  level above, or gives a rule of a shared level one of its own.
+- **Per-item settings**: Add Chat… / Add Document… list what the knowledge base already has (`/api/v1/kb/chats`, `/api/v1/kb/docs`); picking one reads
+  its detail for the source identity (`meta.source` with `meta.source_id` for a chat, `meta.id` for a document) and opens its setting: Don't Read, the
+  rules (a chat: only mentions and your own messages), or Store Everything with optional days. Mail, issues and pull requests are refused (always stored),
+  and so is an entry without a recorded source. Chats a connector has not stored anything of yet are added on the web (`/api/v1/kb/selection/candidates`).
+- **Saving**: there is no Save for the page. A change shows at once, then the page reads the hub's document again, applies the change to that (edits name
+  rules and items, never positions, so another device's change in between is kept) and puts the whole document; a failed save puts the old value back and
+  says why at the top. A hub without the route (404) and a document with a version or field this app does not know (`KBSelection.read` compares what it
+  would send back with what it received) both show a notice and nothing to edit. History import settings (`history`) are sent back as read.
+- **Code**: `KBSelection` (`apple/Shared/KnowledgeSelection.swift`), `KnowledgeSelectionModel` and `KnowledgeSelectionView`
+  (`apple/Persona/Views/Settings/`), `KnowledgeSelectionTests`. Screenshots: the mock hub answers the routes (`MOCK_KB_SELECTION=missing|future|fail` for
+  an old hub, an unknown field and a refused save); `-tab settings -openKnowledgeSelection YES` opens the page, `rule`, `chat` or `doc` instead of `YES`
+  with that sheet up. Demo Mode keeps the document in memory.
+
 ## Translation (Settings › Translation, 2026-10-31)
 
 With Automatic translation enabled, content not in the target language (Simplified Chinese by default) translates automatically; you can switch back to the original anytime.
