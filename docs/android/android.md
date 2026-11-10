@@ -50,7 +50,12 @@ The latter is not a home-layout toggle and is not a reason to remove Android's I
 
 The existing **Assistant / Agents** home tabs do not change. Above the Assistant composer, the old All/task/Agent chip
 strip becomes three single-line actions, ordered **Pending**, **Progress**, **Agents**. Tapping opens a bounded, scrollable
-tray upward and flips its arrow; opening another closes the first. The bar is absent on the Agents page.
+tray upward and selects its entry; opening another closes the first. The bar is absent on the Agents page.
+
+The entries are the same short filter chips as the old All / task chips (#2956): `AssistantTrayEntry` draws a `JChip`, so
+height (36 dp), the style's chip radius, 12 dp side padding, `labelSmall` text, the `micro` count and the selected fill
+all come from `JChipTokens` and `JChip` rather than a second copy. They sit content-width at the leading edge and scroll
+sideways when a large font no longer fits them. The open tray is the chip's selected state; there is no arrow.
 
 - **Pending:** orange dot/count; one row per decision, with Approve or Review and an Approve all header. Bulk approval
   takes only explicitly approvable permissions/plans, respects the session's approval capability and never chooses an
