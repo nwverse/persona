@@ -279,6 +279,11 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 		j++
 	}
 	clear(out[j:])
+	if j == 0 {
+		// No row kept is nil, as the list always was: sessions.changed and sessions.list say null, not [], and the manager
+		// takes [] from a sessions.list as a list emptied (devices.go), null as none given.
+		return nil
+	}
 	out = out[:j]
 	sortNewestFirst(out)
 	return out

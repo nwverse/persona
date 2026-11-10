@@ -1,9 +1,11 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +96,24 @@ func TestSessionsChangedBytesAreJSONMarshal(t *testing.T) {
 		}
 		if want := `{"event":"sessions.changed","params":` + string(params) + "}\n"; string(got[len(got)-1]) != want {
 			t.Fatalf("list %d: wrote\n%s\nwant\n%s", i, got[len(got)-1], want)
+		}
+	}
+}
+
+// A node with no session, or none its scope keeps, lists null, not [], as it always did: the manager takes [] from a
+// sessions.list as its list emptied and null as no list given (devices.go).
+func TestSessionListOfNoneSendsNull(t *testing.T) {
+	for _, rows := range []int{0, 5} {
+		n := runtimeListNode(t, rows)
+		if rows > 0 { // every row outside the scope
+			n.sessionScope = &nodeSessionScope{dir: "/nowhere", claude: filepath.Join(n.home, ".claude"), codex: filepath.Join(n.home, ".codex")}
+		}
+		w := &wireRec{}
+		n.peer = rpc.New("n", w)
+		n.sendSessions(n.sessionList(context.Background(), false))
+		got := w.changed()
+		if want := `{"event":"sessions.changed","params":{"sessions":null}}` + "\n"; len(got) != 1 || string(got[0]) != want {
+			t.Errorf("%d rows, none kept: wrote %q, want %q", rows, got, want)
 		}
 	}
 }

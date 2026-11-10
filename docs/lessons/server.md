@@ -1450,7 +1450,9 @@ A connector that folds several notifications into one thread (GitHub CI failures
   rows, 63% of a node's allocation under churn. Size one slice from the last list, have the sources append into it
   (`runtimeRegistry.appendSessions`, `appendOffline`), and filter in place with a write index behind the read index
   (`out[j] = *s`, `clear` the tail). Run anything that reads the whole list, such as `resolveCodexHierarchy`, before
-  the filter drops rows: a subagent finds its project through a parent the keep pass may drop.
+  the filter drops rows: a subagent finds its project through a parent the keep pass may drop. A presized slice is
+  never nil, but a list that kept no row was: return nil then, or the wire says `[]` for `null`, and the manager takes
+  `[]` from a `sessions.list` as its list emptied (`TestSessionListOfNoneSendsNull`).
 - A stable sort of large structs moves each one many times (`sort.SliceStable` and `slices.SortStableFunc` both do
   insertion and rotation passes): 250 us of a 300-row list. Sort the positions with the same comparator, then follow
   each cycle of the permutation once (`sortNewestFirst`, 50 us); ties keep their order because the positions sort
