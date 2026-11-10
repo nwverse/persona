@@ -8,6 +8,11 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 
 ## Checks
 
+A runtime can opt into `caps.check` and answer `launchers.check` in its own authentication context. This keeps availability
+checks consistent with its normal sessions when the node's SSH login shell has different credentials or keyring access.
+The node passes the existing check prompt and a temporary workspace, removes that workspace afterward, and preserves
+runtime errors. Shell launchers, managed launchers and older runtimes keep their existing shell-based checks.
+
 - It reuses "Test availability" (`docs/integrations/launchers.md`): the node's `launchers.check` runs `claude -p … --max-turns 1` / `codex exec` once in an empty directory, with a 90-second timeout, spending a few tokens.
 - **The check leaves nothing behind** (#2959): it runs with `--no-session-persistence` (Codex: `--ephemeral`), and removes the empty projects directory Claude Code keeps for its temp directory even so; a CLI without the flag is retried without it. A check a hundred times a day used to leave that many transcripts, filling the 80 newest offline sessions the session list keeps and pushing the user's Agents out of it. The list also skips the check's transcripts on its own — its temp directory is gone, which is what tells them from the user's own work in a directory with a similar name (an older node's name included) — and only sessions it lists count toward the 80: one in a blocked directory or a wordless probe no longer takes a slot.
 - **Headless availability is not interactive readiness** (#3345): the check runs with the target launcher's environment and Agent directory (`machines[].claude_start_dir`, default `~/.claude`; a launcher can explicitly select its own), never a `CLAUDE_CONFIG_DIR` inherited from the node service. It does not require `hasCompletedOnboarding`: a private assistant profile that has only run headlessly can answer normally without that interactive-only flag.

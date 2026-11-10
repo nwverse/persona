@@ -46,10 +46,17 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 		return proto.LauncherCheck{Error: err.Error()}
 	}
 	defer os.RemoveAll(dir)
+	prompt := prompts.RenderLauncherCheck()
+	if _, managed := n.managedLauncher(name); !managed {
+		if _, runtime := n.runtimeLauncherModels(name); runtime {
+			if result, handled := n.runtimeLauncherCheck(ctx, name, dir, prompt); handled {
+				return result
+			}
+		}
+	}
 	if agent == "claude" {
 		defer n.removeCheckProject(dir)
 	}
-	prompt := prompts.RenderLauncherCheck()
 	// The flag that keeps the run off the disk goes between before and after: a transcript per check, a hundred a day on
 	// each computer, filled the newest offline sessions the list keeps and pushed the user's own Agents out (#2959).
 	before, noSave, after := ` -p `+shellQuote(prompt)+` --output-format json --max-turns 1`, "--no-session-persistence", ""

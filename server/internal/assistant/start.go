@@ -590,6 +590,7 @@ func (s *Service) startRoutes() {
 			guestTools, in.ReportTasks = in.Guest.Tools, false // it hands nothing out
 		}
 		origin, ref := requestOrigin(r, in.Purpose)
+		sentence := in.Prompt // as the owner wrote it, for the route (route.go)
 		if in.Guest == nil {
 			in.Prompt = s.withWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
@@ -603,6 +604,10 @@ func (s *Service) startRoutes() {
 		}
 		if in.ReportTasks && !in.Main {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)
+		}
+		// The owner's New chat: is it a direction? In the background; nothing waits for it (route.go).
+		if origin == OriginUser && !in.Main && in.Guest == nil && in.Space == "" && in.Purpose == "" && !in.ReportTasks {
+			go s.routeNewChat(sess.MachineID, sess.SessionID, sentence)
 		}
 		apierr.WriteJSON(w, map[string]any{"session": sess})
 	})

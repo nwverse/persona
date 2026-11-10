@@ -314,7 +314,7 @@
             "every",
             "asked"
           ],
-          "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something (it then runs in its own conversation, not this one). Omit to keep an existing task's"
+          "description": "every (default for a new task): each run's answer is pushed to the user; asked: only what a run sends with notify_user, for a task that watches something or a standing loop (a patrol, a daily round). Continuing this conversation, a run's answer is then not pushed or sent to channels; from Main chat it runs in its own conversation instead. Omit to keep an existing task's"
         },
         "until": {
           "type": [
@@ -790,7 +790,7 @@
   },
   {
     "name": "interaction_answer",
-    "description": "Answer another agent's question for the user, in their place, when they said what to answer or told you to decide. Only a question can be answered this way: a tool permission, a plan and a terminal dialog are theirs to decide in the app, and the assistant's own question is never answered by itself. Every question must be answered by its own wording, with the option labels it offers; free text is not accepted (the user answers that in the app, or you use agent_send). A multi-select takes an array of labels.",
+    "description": "Answer another agent's question for the user, in their place, when they said what to answer or told you to decide. Only a question can be answered this way: a tool permission, a plan and a terminal dialog are theirs to decide in the app, and the assistant's own question is never answered by itself. Every question must be answered by its own wording, with the option labels it offers; free text is not accepted (the user answers that in the app, or you use agent_send). A multi-select takes an array of labels. A card a 督办 message handed you before the user (a task you supervise) is yours to answer when it is the agent's own call: give reason, and the answer is kept as the task's decision; what the user must decide goes to them with ask_escalate.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -828,6 +828,35 @@
               }
             ]
           }
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional: in a sentence, why this answer (kept with the task's decision when a 督办 message handed you the card)"
+        }
+      }
+    }
+  },
+  {
+    "name": "ask_escalate",
+    "description": "Hand the cards a task's agents wait on to the user, when a 督办 message gave them to you first and the user must decide: a tool permission or a plan (no conversation approves those), or a question that is irreversible, seen by other people, changes the goal or goes against a decision already made on the task. Every card of the task the user has not been told of goes to them at once, as one reminder, with your reason and recommendation on it; their answers go straight to the agents and are kept as the task's decisions. Only the task's supervisor and the main conversation can. A leader's escalation is told to the main conversation too, so don't ask the user the same thing again yourself.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "todo_id",
+        "reason"
+      ],
+      "properties": {
+        "todo_id": {
+          "type": "string",
+          "description": "the task's todo id (todo_…), from the 督办 message"
+        },
+        "reason": {
+          "type": "string",
+          "description": "in a sentence, in the user's language: what they are to decide and why it is theirs"
+        },
+        "recommend": {
+          "type": "string",
+          "description": "the option you recommend, in a line (an option's label when there is one)"
         }
       }
     }
@@ -1589,13 +1618,17 @@
   },
   {
     "name": "task_plan",
-    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.",
+    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why. From the main conversation, supervisor hands the whole plan to a leader conversation (one of assistant.leaders): its tasks are that leader's to supervise and review, as if it had handed them out; leave it out to supervise them yourself.",
     "input_schema": {
       "type": "object",
       "required": [
         "tasks"
       ],
       "properties": {
+        "supervisor": {
+          "type": "string",
+          "description": "optional, main conversation only: the id of the leader conversation (assistant.leaders) whose direction this work belongs to; it supervises the tasks instead of you. Leave it out for work of no direction or of your own"
+        },
         "tasks": {
           "type": "array",
           "minItems": 1,
@@ -2103,6 +2136,56 @@
         "report": {
           "type": "string",
           "description": "what you told the user of its outcome, as you said it in this reply (at most 4000 characters)"
+        }
+      }
+    }
+  },
+  {
+    "name": "direction_name",
+    "description": "Name a direction (a leader conversation, one of assistant.leaders, current or ended): main conversation only. The name is what the app and the work-log extension show for the direction, so make it short and plain, the way the user calls that line of work (「Persona 产品」「基建」), never a conversation title with a date or kind in it. An empty name takes yours away: the direction then shows its knowledge-base project's name, else its conversation title without the date and kind. Whoever names it last, the user in the app or you, that name shows.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the leader conversation's id (persona_settings get assistant.leaders, conversations_list)"
+        },
+        "name": {
+          "type": "string",
+          "description": "the direction's name, at most 40 characters; empty to clear it"
+        }
+      }
+    }
+  },
+  {
+    "name": "leader_progress",
+    "description": "Report your direction's progress to the user's work log: leader conversations only (assistant.leaders). Write at the goal level, not the process: what was reached, what is being done now and where it is stuck, what the user has to do, with links to the evidence (merged PR, deployed and checked page, document). Send one when a task of yours was reached and at each report cycle (your scheduled check-in, or the end of a day's work on the direction); not after every step, and never only to say you are still working. It does not message the user: it becomes a progress line of your direction in the work-log extension's card, and the latest one is kept on the direction. What needs the user's decision now still goes by task_review needs_user.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "reached": {
+          "type": "string",
+          "description": "what was reached since the last report, one sentence (Chinese unless the user writes otherwise); empty when nothing was"
+        },
+        "doing": {
+          "type": "string",
+          "description": "what is being done now and, if stuck, where and on what; one sentence"
+        },
+        "needs_you": {
+          "type": "string",
+          "description": "what the user has to do (decide, verify, give access), with where; empty when nothing"
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string"
+          },
+          "description": "evidence links: PRs, deployed pages, documents; the first is shown first"
         }
       }
     }

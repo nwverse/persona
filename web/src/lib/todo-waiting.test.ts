@@ -62,6 +62,16 @@ describe("a task's agents outside the opened chats (#3274)", () => {
     expect(withTaskRows(() => undefined, { [id]: outside })("m", "new")).toBe(outside);
   });
 
+  it("same-state summaries replace old workflow progress and clear finished background work", () => {
+    const flow = { task_id: "wf", status: "running", running: true, phase: "Review", agents_done: 4, agents_started: 6 };
+    const detail = row("bg", "working", { rev: 5, background_working: true, workflows: [flow] });
+    const listed = { ...detail, rev: 6, waiting: true, background_tasks_count: 0, workflows: undefined,
+      running_workflows: 1, workflow_progress: { ...flow, agents_done: 5 } };
+    expect(taskSessionLookup({ sessions: { m: [detail] }, sessionSummaries: [listed], taskRows: {} })("m", "bg")).toBe(listed);
+    const finished = { ...listed, rev: 7, background_working: false, running_workflows: 0, workflow_progress: undefined };
+    expect(taskSessionLookup({ sessions: { m: [detail] }, sessionSummaries: [finished], taskRows: {} })("m", "bg")).toBe(finished);
+  });
+
   it("a closed chat's old complete row does not hide the list's newer state", () => {
     const old = row("bg", "idle", { rev: 5, subagents: [] });
     const now = { ...background, rev: 5 };
