@@ -24,5 +24,5 @@ badge. These cases pin what that number counts, so the places and the clients ag
 - Run: `AgentsNeedsYouFixtureTests` in `apple/PersonaTests` (iOS: the section, its filter and the tab's badge) and
   `cd android && ./gradlew :core:domain:test --tests '*AgentsNeedsYouFixtureTest*'` (Android: the tab's badge; its
   "Needs your decision" section counts decisions, one per card, under a name of its own). The web app's Agents badge
-  counts sessions in Needs you without quiet tasks' agents but does not replay these cases yet: it keeps muted agents
-  and leaves out cards on no session.
+  counts sessions in Needs you without quiet tasks' agents by a rule of its own, which Persona Link's summary shares
+  (spec/fixtures/attention): it counts muted agents and no card on no session, so it does not replay these cases.
