@@ -339,9 +339,17 @@ type pkg struct{ path, dir, platform string }
 // node on Windows (docs/operations/windows.md).
 var platforms = []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64"}
 
-// buildTags are the tag sets the server is built with: the release builds' public, and none (the Docker image,
-// scripts/deploy/deploy.sh). A `// +build` line still counts, so a file can differ between them.
-var buildTags = []string{"", "public"}
+// buildTags are the tag sets the server is built with: none (go build, the tests) and server/build-tags.txt (the
+// release, the Docker image, scripts/deploy/deploy.sh), its public marker alone too. A `// +build` line still counts,
+// so a file can differ between them.
+func buildTags(t *testing.T) []string {
+	t.Helper()
+	b, err := os.ReadFile("../build-tags.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{"", "public", strings.TrimSpace(string(b))}
+}
 
 // localDir is the template that prints a package's directory when its code is local: the main module's, or a module's
 // put in place by a directory. The standard library and published modules print nothing (their directories can be
@@ -373,8 +381,9 @@ func deps(t *testing.T, dir string, tests bool) []pkg {
 	}
 	type build struct{ platform, tags string }
 	var builds []build
+	tagSets := buildTags(t)
 	for _, platform := range platforms {
-		for _, tags := range buildTags {
+		for _, tags := range tagSets {
 			builds = append(builds, build{platform, tags})
 		}
 	}
