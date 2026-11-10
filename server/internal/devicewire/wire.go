@@ -377,6 +377,11 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
 	"PUT /api/v1/machines/{mid}/claude-live-replies",
+	// Sharing the machine's clipboard with the phone (#3064, internal/devices clipboard.go).
+	"GET /api/v1/machines/{mid}/clipboard",
+	"PUT /api/v1/machines/{mid}/clipboard",
+	"GET /api/v1/machines/{mid}/clipboard/settings",
+	"PUT /api/v1/machines/{mid}/clipboard/settings",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every

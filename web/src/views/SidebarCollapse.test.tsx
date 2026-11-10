@@ -283,18 +283,41 @@ describe("the main conversation: the column's first row, Persona with the app's 
     await flush();
   };
 
-  it("offers a labeled New chat at the top and an icon in the rail, only with an assistant", async () => {
-    const newChat = () => host.querySelector<HTMLAnchorElement>('a[href="/persona/new"]');
+  it("offers New chat in「Persona 对话」, not above the main chat, and an icon in the rail, only with an assistant (#3231)", async () => {
+    const newChats = () => [...host.querySelectorAll<HTMLAnchorElement>('a[href="/persona/new"]')];
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    expect(newChat()).toBeNull();
+    expect(newChats()).toEqual([]);
     await load();
-    expect(newChat()!.textContent).toBe("新对话");
-    expect(newChat()!.closest("[data-sidebar-rows]")).toBeNull();
+    // one entry, a labeled row: the first of the Persona chats group, after the main chat and the pages
+    expect(newChats()).toHaveLength(1);
+    const row = newChats()[0];
+    expect(row.textContent).toBe("新对话");
+    expect(block("Persona 对话").contains(row)).toBe(true);
+    const chatRows = [...block("Persona 对话").querySelectorAll("a")];
+    expect(chatRows[0]).toBe(row);
+    expect(chatRows.some((a) => a.textContent?.includes("整理周报"))).toBe(true);
+    const all = [...host.querySelectorAll("a")];
+    expect(all.indexOf(row)).toBeGreaterThan(all.indexOf(mainRow()));
+    expect(host.querySelector("[data-sidebar-sticky]")!.contains(row)).toBe(false);
+    // folded, the group's title carries the same entry as an icon with its name
+    act(() => button("Persona 对话")!.click());
+    await flush();
+    const icon = newChats().find((a) => !a.closest("[inert]"))!;
+    expect(icon.getAttribute("aria-label")).toBe("新对话");
+    expect(icon.getAttribute("title")).toBe("新对话");
+    expect(icon.closest(".group\\/sec")).not.toBeNull();
+    act(() => button("Persona 对话")!.click());
+    await flush();
+    expect(newChats().filter((a) => !a.closest("[inert]"))).toEqual([row]);
+    // the open new chat page lights the row
+    act(() => root.render(<Sidebar route={{ name: "persona-new" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+    expect(newChats()[0].getAttribute("aria-current")).toBe("page");
     act(() => root.render(<SidebarRail route={{ name: "persona-new" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    expect(newChat()!.getAttribute("aria-label")).toBe("新对话");
-    expect(newChat()!.getAttribute("aria-current")).toBe("page");
+    expect(newChats()[0].getAttribute("aria-label")).toBe("新对话");
+    expect(newChats()[0].getAttribute("aria-current")).toBe("page");
   });
 
   it("is the first row, above the pages, with the app's mark, a 主对话 mark, a line under it, and nowhere else", async () => {
