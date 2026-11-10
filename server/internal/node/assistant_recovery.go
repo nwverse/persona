@@ -110,6 +110,12 @@ func (n *Node) cancelAssistantRecovery(id string) {
 // True means the caller must keep the turn working: publishing the error now would let a scheduled run fail (and rerun
 // the whole task) before recovery ends.
 func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result string, kinds ...string) bool {
+	return n.recoverAssistantResultFor(p, nil, failed, result, kinds...)
+}
+
+// recoverAssistantResultFor optionally requires the recovery that captured a pending result to still own the session.
+// That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
+func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
 	if len(kinds) > 0 && kinds[0] == proto.TurnErrorUsageLimit {
 		return false // a subscription reset has its own continuation; an immediate retry cannot spend it back
 	}
@@ -130,7 +136,7 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 	p.mu.Unlock()
 
 	n.mu.Lock()
-	if n.procs[p.id] != p {
+	if n.procs[p.id] != p || (expected != nil && n.recoveries[p.id] != expected) {
 		n.mu.Unlock()
 		return false
 	}
@@ -178,6 +184,18 @@ func nextAssistantModel(list proto.LauncherModels, current string, used map[stri
 		return "", false
 	}
 	at := -1
+	if current == "" {
+		for _, m := range list.Models {
+			if m.Default || m.ID == "default" {
+				// A failed request may never emit message_start. Resolve the default to avoid selecting its own alias again.
+				current = m.Resolved
+				if current == "" && m.ID != "default" {
+					current = m.ID
+				}
+				break
+			}
+		}
+	}
 	for i, m := range list.Models {
 		if current != "" && (m.ID == current || m.Resolved == current) {
 			at = i
@@ -186,7 +204,8 @@ func nextAssistantModel(list proto.LauncherModels, current string, used map[stri
 	}
 	for i := at + 1; i < len(list.Models); i++ {
 		m := list.Models[i]
-		if m.Default || m.ID == "" || m.ID == "default" || !proto.ValidModelID(m.ID) || used[m.ID] || (m.Resolved != "" && used[m.Resolved]) {
+		if m.Default || m.ID == "" || m.ID == "default" || !proto.ValidModelID(m.ID) || m.ID == current ||
+			(m.Resolved != "" && (m.Resolved == current || used[m.Resolved])) || used[m.ID] {
 			continue
 		}
 		return m.ID, true
@@ -213,6 +232,18 @@ var assistantRecoveryModels = func(ctx context.Context, n *Node, launcher string
 	return n.launcherModels(ctx, launcher, "", false)
 }
 
+// assistantRecoverySend is the ordinary assistantSend recovery path, replaceable by a deterministic process handoff test.
+var assistantRecoverySend func(context.Context, *Node, *assistantProc, string, string, modelExecution) error
+
+func init() {
+	assistantRecoverySend = sendAssistantRecovery
+}
+
+func sendAssistantRecovery(ctx context.Context, n *Node, p *assistantProc, launcher, cwd string, execution modelExecution) error {
+	_, err := n.assistantSend(ctx, p.id, cwd, launcher, prompts.RenderModelRetry(), nil, "", "", execution)
+	return err
+}
+
 func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, launcher, cwd string, execution modelExecution, current string, same bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -231,22 +262,35 @@ func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, 
 		execution = assistantExecutionForModel(execution, list, next)
 		r.used[next] = true
 	}
-	_, err := n.assistantSend(withAssistantRecovery(ctx, r, !same), p.id, cwd, launcher, prompts.RenderModelRetry(), nil, "", "", execution)
+	err := assistantRecoverySend(withAssistantRecovery(ctx, r, !same), n, p, launcher, cwd, execution)
 	var pending *assistantPendingFailure
+	var currentProc *assistantProc
 	n.mu.Lock()
 	if n.recoveries[p.id] == r {
 		r.running = false
 		pending, r.pending = r.pending, nil
+		currentProc = n.procs[p.id]
 	}
 	n.mu.Unlock()
 	if err == nil {
 		if pending != nil {
-			n.recoverAssistantResult(p, true, pending.text, pending.kinds...)
+			// A model switch replaces assistantProc. Its first result may already be pending when the send returns;
+			// retry that current process, not the old process that started this recovery attempt.
+			if currentProc != nil && n.recoverAssistantResultFor(currentProc, r, true, pending.text, pending.kinds...) {
+				return
+			}
+			if currentProc == nil {
+				currentProc = p
+			}
+			n.finishAssistantRecovery(currentProc, r)
 		}
 		return
 	}
 	n.logger.Printf("assistant %s: model recovery did not start: %v", p.id[:8], err)
-	n.finishAssistantRecovery(p, r)
+	if currentProc == nil {
+		currentProc = p
+	}
+	n.finishAssistantRecovery(currentProc, r)
 }
 
 // finishAssistantRecovery publishes the exhausted or undeliverable recovery's final idle state. Its transcript keeps

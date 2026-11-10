@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -168,6 +170,21 @@ func TestNextAssistantModelFollowsLauncherOrderOnce(t *testing.T) {
 	}
 }
 
+func TestNextAssistantModelResolvesAnUnreportedDefault(t *testing.T) {
+	list := proto.LauncherModels{Models: []proto.AgentModel{
+		{ID: "default", Default: true, Resolved: "primary-model"},
+		{ID: "primary-model"},
+		{ID: "fallback-model"},
+	}}
+	if got, ok := nextAssistantModel(list, "", map[string]bool{}); !ok || got != "fallback-model" {
+		t.Fatalf("an unreported default selected %q %v, want the genuinely different fallback-model", got, ok)
+	}
+	codex := proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model", Default: true}, {ID: "fallback-model"}}}
+	if got, ok := nextAssistantModel(codex, "", nil); !ok || got != "fallback-model" {
+		t.Fatalf("a native default model selected %q %v, want fallback-model", got, ok)
+	}
+}
+
 func TestAssistantFallbackEffortFollowsTheNextModel(t *testing.T) {
 	list := proto.LauncherModels{Models: []proto.AgentModel{{ID: "supports", Efforts: []string{"high", "max"}}, {ID: "limited", Efforts: []string{"low", "high"}}, {ID: "unknown"}}}
 	for _, tc := range []struct {
@@ -288,5 +305,42 @@ func TestAssistantFallbackNeverKillsUnknownOrRunningBackgroundTasks(t *testing.T
 				t.Fatal("the old process was stopped without a proven empty background inventory")
 			}
 		})
+	}
+}
+
+func TestAssistantPendingFailureUsesTheReplacementProcess(t *testing.T) {
+	n := assistantNode(t)
+	const id = "11111111-2222-3333-4444-555555555555"
+	old := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "primary-model"}, tasksObserved: true}
+	n.procs[id] = old
+	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true}, running: true}
+	n.recoveries = map[string]*assistantTurnRecovery{id: r}
+
+	models := assistantRecoveryModels
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model"}, {ID: "fallback-model"}}}, nil
+	}
+	send := assistantRecoverySend
+	var calls atomic.Int32
+	assistantRecoverySend = func(_ context.Context, n *Node, p *assistantProc, _, _ string, execution modelExecution) error {
+		call := calls.Add(1)
+		if call == 1 {
+			replacement := &assistantProc{id: p.id, agent: "claude", launcher: p.launcher, model: execution, busy: true, tasksObserved: true}
+			n.mu.Lock()
+			n.procs[p.id] = replacement
+			n.mu.Unlock()
+			// The replacement's first result arrives before its recovery send has returned.
+			n.recoverAssistantResult(replacement, true, "API Error: safeguards flagged this message")
+		}
+		return nil
+	}
+	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
+	n.runAssistantRecovery(old, r, "claude", old.cwd, old.model, "primary-model", false)
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("the replacement's pending failure was dropped: %d recovery send(s), want 2", got)
 	}
 }
