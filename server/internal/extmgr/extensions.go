@@ -549,7 +549,8 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 	}
-	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
+	ps.forgetAuth(c.ID)        // another version, removed, switched, set up again: ask again
+	ps.forgetSecretWords(c.ID) // a provider's references may name other things now
 	switch c.Kind {
 	case "removed", "upgraded", "rolled_back": // only the version installed now keeps its packages for computers
 		keep := ""
@@ -979,7 +980,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			s.StartEnv = func() []string { return identity.Environment(start()) }
 		}
 		if !s.RPC { // no initialize to carry them
-			secrets, err := ps.reg.Secrets(ctx, id)
+			secrets, err := ps.programSecrets(ctx, id)
 			if err != nil {
 				return s, err
 			}
@@ -990,7 +991,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 	}
 	builtin := p.Record.Source == extension.SourceBuiltin
 	s.Init = func(ctx context.Context) (extension.InitializeParams, error) {
-		secrets, err := ps.reg.Secrets(ctx, id)
+		secrets, err := ps.programSecrets(ctx, id)
 		if err != nil {
 			return extension.InitializeParams{}, err
 		}

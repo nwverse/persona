@@ -81,6 +81,10 @@ func TestMain(m *testing.M) {
 		serveSecretProviderExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "secretuser" {
+		serveSecretUserExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "ui" {
 		serveUIExtensionForTest()
 		return

@@ -225,3 +225,134 @@ func TestSecretProviders(t *testing.T) {
 		t.Fatalf("switched off: %v", err)
 	}
 }
+
+// serveSecretUserExtensionForTest is an extension with a secret "key": it writes the secrets its initialize brought
+// to USER_OUT (one JSON line a start) and checks a new key (settings_check), refusing any with "refuse" in it.
+func serveSecretUserExtensionForTest() {
+	out := os.Getenv("USER_OUT")
+	_ = pserve.Serve(context.Background(), os.Stdin, os.Stdout, pserve.Program{ID: "example-user", Version: "1.0.0",
+		Init: func(_ context.Context, p extension.InitializeParams, _ *pserve.Hub) (map[string]any, error) {
+			if f, err := os.OpenFile(out, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+				b, _ := json.Marshal(p.Secrets)
+				_, _ = f.Write(append(b, '\n'))
+				_ = f.Close()
+			}
+			return nil, nil
+		},
+		Namespaces: map[string]pserve.Handler{
+			"settings": func(_ context.Context, method string, params json.RawMessage) (any, error) {
+				var in struct {
+					Secrets map[string]string `json:"secrets"`
+				}
+				_ = json.Unmarshal(params, &in)
+				if strings.Contains(in.Secrets["key"], "refuse") {
+					return map[string]any{"ok": false, "error": "the gateway refused " + in.Secrets["key"]}, nil
+				}
+				return map[string]any{"ok": true}, nil
+			}}})
+}
+
+func secretUserPackage(t *testing.T, out string) string {
+	dir := t.TempDir()
+	self, _ := os.Executable()
+	_ = os.MkdirAll(filepath.Join(dir, "bin"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "bin", "user"), []byte("#!/bin/sh\nPERSONA_TEST_PLUGIN=secretuser exec "+self+" \"$@\"\n"), 0o755)
+	manifest := fmt.Sprintf(`{"manifest_version": 1, "id": "example-user", "name": "Example User", "version": "1.0.0",
+		"engines": {"plugin_protocol": 1}, "runtime": {"command": {%q: "bin/user"}, "env": {"USER_OUT": %q}},
+		"activation_events": ["on_startup"], "settings_check": true,
+		"contributes": {"ui": [{"id": "page", "title": "Gateway", "placement": "extension_page"}]},
+		"secrets": [{"name": "key", "title": "Gateway key", "required": true}]}`, runtime.GOOS+"-"+runtime.GOARCH, out)
+	_ = os.WriteFile(filepath.Join(dir, extension.ManifestFile), []byte(manifest), 0o644)
+	return dir
+}
+
+// A reference saved as another extension's secret: resolved each time that extension starts, shown as "From …",
+// listed by its provider, and the extension waits for its provider when that is off.
+func TestSecretReferencesInExtensionSecrets(t *testing.T) {
+	h, store := extensionTestHub(t)
+	mux := h.routes()
+	master := h.cfg.Token
+	install := func(dir string) {
+		t.Helper()
+		c, pv := call(t, mux, "POST", "/api/v1/plugins/-/preview", master, `{"source": "dir:`+dir+`"}`)
+		if c != 200 {
+			t.Fatalf("preview %s: %d %v", dir, c, pv)
+		}
+		if c, body := call(t, mux, "POST", "/api/v1/plugins/-/install", master, fmt.Sprintf(`{"preview_id": %q, "permissions_digest": %q}`, pv["preview_id"], pv["permissions_digest"])); c != 200 {
+			t.Fatalf("install %s: %d %v", dir, c, body)
+		}
+	}
+	calls := filepath.Join(t.TempDir(), "calls.jsonl")
+	starts := filepath.Join(t.TempDir(), "starts.jsonl")
+	install(secretProviderPackage(t, "example-vault", "exv", calls))
+	install(secretUserPackage(t, starts))
+	status := func() string {
+		_, d := call(t, mux, "GET", "/api/v1/extensions/example-user/-/", master, "")
+		return fmt.Sprint(d["status"], d["needs_setup"])
+	}
+	if s := status(); !strings.Contains(s, "needs_setup") {
+		t.Fatalf("no key yet: %s", s)
+	}
+
+	put := func(body string) (int, map[string]any) {
+		return call(t, mux, "PUT", "/api/v1/extensions/example-user/-/secrets/key", master, body)
+	}
+	if c, _ := put(`{"value": "x", "reference": "exv://Example/item/ok"}`); c != 400 {
+		t.Fatalf("a value and a reference: %d", c)
+	}
+	if c, body := put(`{"reference": "nop://Example/item/ok"}`); c != 400 || !strings.Contains(fmt.Sprint(body), "nop://") {
+		t.Fatalf("a scheme no extension supplies: %d %v", c, body)
+	}
+	if c, body := put(`{"reference": "https://example.com/key"}`); c != 400 {
+		t.Fatalf("an address is not a reference: %d %v", c, body)
+	}
+	if c, body := put(`{"reference": "exv://Example/item/ok"}`); c != 200 {
+		t.Fatalf("saved: %d %v", c, body)
+	}
+	waitLong(t, "started with the value", func() bool {
+		raw, _ := os.ReadFile(starts)
+		return strings.Contains(string(raw), `"key":"`+secretValueForTest+`"`)
+	})
+
+	_, d := call(t, mux, "GET", "/api/v1/extensions/example-user/-/", master, "")
+	shown := fmt.Sprint(d["secrets"])
+	if !strings.Contains(shown, "exv://Example/item/ok") || !strings.Contains(shown, "Example Vault") || !strings.Contains(shown, "Item › ok · vault Example") ||
+		strings.Contains(shown, secretValueForTest) || strings.Contains(shown, "hint") {
+		t.Fatalf("the field reads From Example Vault: the reference and what it names, never the value: %s", shown)
+	}
+	_, pd := call(t, mux, "GET", "/api/v1/extensions/example-vault/-/", master, "")
+	if users := fmt.Sprint(pd["secret_users"]); !strings.Contains(users, "example-user") || !strings.Contains(users, "Gateway key") || !strings.Contains(users, "exv://Example/item/ok") {
+		t.Fatalf("the provider lists who uses its references: %s", users)
+	}
+
+	// Checked as the value it stands for, now that it runs: a refused one is not saved.
+	if c, body := put(`{"reference": "exv://Example/item/missing"}`); c != 400 || strings.Contains(fmt.Sprint(body), secretValueForTest) {
+		t.Fatalf("a reference that does not resolve is not saved: %d %v", c, body)
+	}
+
+	// The provider off: the extension waits for it; on again: it runs.
+	if c, _ := call(t, mux, "PUT", "/api/v1/extensions/example-vault/-/enabled", master, `{"enabled": false}`); c != 200 {
+		t.Fatalf("switch the provider off: %d", c)
+	}
+	waitLong(t, "waiting for its provider", func() bool { return strings.Contains(status(), "exv://") })
+	if c, _ := call(t, mux, "PUT", "/api/v1/extensions/example-vault/-/enabled", master, `{"enabled": true}`); c != 200 {
+		t.Fatalf("switch the provider on: %d", c)
+	}
+	waitLong(t, "running again", func() bool { return !strings.Contains(status(), "needs_setup") })
+
+	var setRef, resolved bool
+	for _, a := range store.audits() {
+		if strings.Contains(string(a.detail), secretValueForTest) {
+			t.Fatalf("an audit row carries the value: %s %s", a.action, a.detail)
+		}
+		if a.plugin == "example-user" && a.action == "secret_set" && strings.Contains(string(a.detail), `"reference":"exv://Example/item/ok"`) {
+			setRef = true
+		}
+		if a.plugin == "example-vault" && a.action == "secret_resolved" && a.actor == "settings" && strings.Contains(string(a.detail), `"id":"example-user"`) {
+			resolved = true
+		}
+	}
+	if !setRef || !resolved {
+		t.Fatalf("saving the reference and each resolution are recorded: set %v resolved %v", setRef, resolved)
+	}
+}

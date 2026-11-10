@@ -97,13 +97,18 @@ func (ps *extensions) settingsCheck(ctx context.Context, p *extension.Extension,
 	if !p.Record.Enabled || hp == nil || hp.proc == nil {
 		return settingsCheckFailed{i18n.T(lang, "hub-extension_settings.check_not_running")}
 	}
+	// A reference among them is checked as the value it stands for (saving one is the owner's approval).
+	secrets, err := ps.resolveStored(ctx, id, secrets)
+	if err != nil {
+		return settingsCheckFailed{secretRefError(err, lang)}
+	}
 	cctx, cancel := context.WithTimeout(ctx, settingsCheckTimeout)
 	defer cancel()
 	var out struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	err := hp.proc.Call(cctx, "settings.check", map[string]any{"config": config, "secrets": secrets}, &out)
+	err = hp.proc.Call(cctx, "settings.check", map[string]any{"config": config, "secrets": secrets}, &out)
 	switch {
 	case cctx.Err() != nil && ctx.Err() == nil:
 		return settingsCheckFailed{i18n.T(lang, "hub-extension_settings.check_timeout", i18n.Args{"seconds": int(settingsCheckTimeout / time.Second)})}
