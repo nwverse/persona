@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -176,6 +177,47 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	// Defense behind the node hook: question-text-keyed answers could not be kept apart on a duplicate card.
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
+	}
+	// Plan mode enforces a read-only task's launch constraint; it is not a request to become writable.
+	// Deny before registering a card, so the agent can return its findings without a workflow approval.
+	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" {
+		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
+			var plans []*TaskPlan
+			if todo.PlanID != "" {
+				plan, err := s.loadPlan(ctx, todo.PlanID)
+				if err != nil {
+					return proto.Resolution{}, err
+				}
+				plans = append(plans, plan)
+			} else if st := s.store(); st != nil {
+				// A reused topic to-do has no PlanID; its plan carries the binding instead.
+				rows, err := st.TaskPlans(ctx, todo.Origin)
+				if err != nil {
+					return proto.Resolution{}, err
+				}
+				for _, row := range rows {
+					plans = append(plans, planFromRow(row))
+				}
+			} else {
+				s.tasks.mu.Lock()
+				for _, plan := range s.tasks.plans {
+					if plan.Conversation == todo.Origin {
+						cp := *plan
+						cp.Tasks = append([]PlanTask(nil), plan.Tasks...)
+						plans = append(plans, &cp)
+					}
+				}
+				s.tasks.mu.Unlock()
+			}
+			for _, plan := range plans {
+				for _, task := range plan.Tasks {
+					if task.TodoID == todo.ID && task.Readonly {
+						approve := false
+						return proto.Resolution{Approve: &approve, Feedback: prompts.RenderReadonlyTaskPlanExit()}, nil
+					}
+				}
+			}
+		}
 	}
 	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
