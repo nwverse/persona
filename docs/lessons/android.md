@@ -486,3 +486,5 @@ Separate metadata, download, verification, permission and installer failures. Lo
 ## Preserve business failures at the HTTP boundary (#1915)
 
 Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where the response's request path is still known. Keep disabled/read-only recovery non-retryable and map shared feedback by code, not an arbitrary server sentence. Knowledge list/search/detail and edit feedback must agree. Preserve request IDs for reports; resource checks do not prove that JVM tests, native rendering or all-style screenshots passed.
+
+- A committed PackageInstaller session may remain sealed after its confirmation page disappears, including across an APK upgrade. Only its installer UID can abandon it. Offer an explicit, confirmed recovery action from Settings even when no newer APK is available; recheck ownership, package and the confirmed session IDs before cancellation. Do not cancel a new session that appeared after confirmation or clear pairing data to recover an installer task.
