@@ -480,6 +480,8 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
   Writes still need valid JSON without `\u0000` in a string, as with jsonb: computing `source` refuses them (`docs/lessons/server.md`, "Inbox rows as json").
   A server built without lz4, or a Postgres before 14, gets the same rewrite with the default compression. The migration also adds `jsonb_typeof(json)`, so the
   done page of a build from before it still runs if a hub goes back to that build (`docs/operations/hub-restart.md`); it can be dropped once no such build can run.
+  The start read (`InboxItems`) has no `ORDER BY` (the manager keys the items by id) and hands each row to the manager straight from the driver's buffer,
+  where it is decoded; the rows are never collected as bytes first. A read that fails midway takes nothing in, as before.
 - Read elsewhere (Lark / another mail client): mark `read`; non-Needs you items become done (`done_by=read`). Needs you remains open, but unread count becomes zero and me / everyone mention flags clear (no longer unread mentions). Rule-tiered items are retiered using current rules after reading; no longer Needs you means done.
   Already-read open items with remaining unread count or stale rule tiers (read before a rule change) are reconciled next round (#798).
 - A reply by me in Lark (latest chat message is mine, newer than the item) handles it (`done_by=replied`).

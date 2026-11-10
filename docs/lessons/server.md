@@ -1543,6 +1543,11 @@ pending count to drop, pass with the rule deleted.
   page still runs, makes `jsonb_typeof('…')` or `jsonb_typeof($1)` with an unknown-typed argument fail in the whole
   database (`function jsonb_typeof(unknown) is not unique`). Every existing call passes a typed value; new SQL casts
   the argument (`$1::jsonb`) until a later migration drops the shim, once no pre-0471 build can run.
+- **The start read decodes from the driver's buffer, so an inbox type must not keep its input.** `InboxItems` hands
+  each row as `rows.RawValues()[0]`, which the next row overwrites. `encoding/json` copies every string and
+  `json.RawMessage` it keeps, so `InboxItem` holds none of the buffer; a custom `UnmarshalJSON` on any type inside it
+  must copy what it keeps too, or the items loaded share bytes the driver reuses. `TestInboxItemsAllocationBudget`
+  fails if the read starts copying rows again (6 allocations per 200-row read; collecting the rows took 616).
 
 ## Optional filesystem labels must not gate inventory (2026-11-10, #2750)
 
