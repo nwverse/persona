@@ -273,7 +273,7 @@ The Glass style relies on Liquid Glass and has no shadow. The vendored Beautiful
 | `state` / `standard` | snappy 0.25 s (`:613`) | a state change snaps |
 | `layout` | smooth 0.3 s (`:614`) | a layout change glides |
 | `expand` | smooth 0.4 s (`:620`) | |
-| `reveal` / `conceal` | easeOut 0.28 s / easeIn 0.2 s (`:635`) | |
+| `reveal` / `conceal` | easeOut 0.28 s / easeIn 0.2 s (`:635`) | `reveal`: what opens in the chat fades in over all its space (`.unfolding`); `conceal`: a menu or an inbox event fading away. What closes in the chat goes at once, its space with it (#3005) |
 | `drawer(velocity:)` | interpolating spring 0.32 s, no bounce (`:650`) | drawer and pager |
 | `springBack` | spring 0.3 s, bounce 0.25 (`:654`) | |
 | `keyboard` | interpolating spring (`:662`) | |
@@ -450,7 +450,7 @@ Links open inside the app in a card that fills the screen. Dragged down to 0.6 i
 
 ### 4.7 Tool execution collapsed (super rule 2)
 
-Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
+Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. Opened by hand, a step (and the summary itself) changes in place: the tapped row stays under the finger, what opens fades in, what closes goes at once, and the list holds still while the turn goes on (new steps, the answer, the next turn, the footer under the list changing) until the user scrolls, taps ↓ or sends (`toggleInPlace`, `ChatFollow.toggledRow`, #3005). iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
 ## 5. Content
 
