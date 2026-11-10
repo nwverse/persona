@@ -17,6 +17,9 @@ import {
   feedNotice,
   getFeedState,
   receiptState,
+  interruptLook,
+  type InterruptBatch,
+  type InterruptResolution,
   isToday,
   sentByPersona,
   later,
@@ -39,7 +42,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { runningWorkflows, workflowCounts, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -250,7 +253,7 @@ export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: 
   return (lead && interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)) ?? interactions.find(mine);
 }
 
-/** What a waiting task needs, in a line (#3301): "Asking you: which framework?", "Needs permission: swift test", "Plan to approve", the words
+/** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Needs your permission: swift test", "Plan awaiting approval", the words
  *  the to-dos page's agent rows use; undefined without a card. */
 export function taskAsk(ix: Interaction | undefined): string | undefined {
   if (!ix) return undefined;
@@ -465,6 +468,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
   const workflow = status === "working" || status === "waiting" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
   // what its agent last told Persona (report_to_supervisor): while the task is open
   const reported = status !== "done" && status !== "failed" ? progressLine(todo.supervision) : undefined;
+  // nobody is working on it (#3618): the hub's finding and why, ahead of what its agent last reported
+  const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
   // its agent's own task list (#5302), unless a report to Persona came after it: the report says more
   const plan = status !== "done" && status !== "failed" && planShown(lead, todo.supervision) ? planLine(lead) : "";
   return (
@@ -506,6 +511,12 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
             <span data-plan-line title={planLabel(lead)} aria-label={planLabel(lead)} className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
               <Icon name="list" size={11} stroke={2.2} className="shrink-0" />
               <span className="truncate tabular-nums">{plan}</span>
+            </span>
+          )}
+          {orphan && (
+            <span data-orphaned-line className="flex min-w-0 items-center gap-1 text-[12px] text-orange">
+              <Icon name="warning" size={11} stroke={2.2} className="shrink-0" />
+              <span className="truncate"><span className="font-medium">{orphan.lead}</span>{orphan.reason && <span className="text-ink-3"> · {orphan.reason}</span>}</span>
             </span>
           )}
           {reported && (
@@ -638,6 +649,8 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     // the dispatched tasks themselves, each opening its own task (its Agent's chat), never the whole In progress tray (#3700)
     if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint tasks={plan.tasks.map((task) => ({ todo: task.todo_id, title: task.title }))} /> : null;
     if (item.kind === "task") return planned ? null : <DispatchHint tasks={[{ todo: item.ref, title }]} />;
+    // an interrupted receipt the hub worked out stays as its record (#3834): one card for a batch, a grey line once handled
+    if (item.kind === "receipt" && interruptLook(item)) return <ReceiptCard item={item} />;
     if (item.kind === "review" || item.kind === "receipt" || item.kind === "report") return null;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
   }
@@ -736,8 +749,88 @@ export function AnsweredLine({ item, title, onOpenTask }: { item: FeedItem; titl
 
 function ReceiptCard({ item }: { item: FeedItem }) {
   const state = receiptState(item);
+  const look = interruptLook(item);
+  if (look?.kind === "hidden") return null;
+  if (look?.kind === "batch") return <InterruptBatchCard batch={look.batch} />;
+  if (look?.kind === "resolved") return <InterruptHandledLine todoId={item.ref} title={field(item, "title") ?? t("assistant-tasks.task_fallback")} resolution={look.resolution} />;
   if (state === "interrupted") return <InterruptedReceipt item={item} />;
   return <OutcomeReceipt item={item} failed={state === "failed"} />;
+}
+
+/** The words for how an interrupted task was dealt with, as the hub said (#3834). */
+function resolutionLabel(r: InterruptResolution): string {
+  return t(`assistant-tasks.interrupt_resolution_${r}`);
+}
+
+/** The words for what cut a batch off (the hub's `cause`; one it doesn't know reads as a model service error). */
+function causeLabel(cause: string): string {
+  const known = ["model_error", "rate_limited", "auth", "model_route", "no_output"];
+  return t(`assistant-tasks.interrupt_cause_${known.includes(cause) ? cause : "model_error"}`);
+}
+
+/** An interrupted task that was dealt with since (#3834): a grey line, its result in words; it opens the task. */
+function InterruptHandledLine({ todoId, title, resolution }: { todoId?: string; title: string; resolution: Exclude<InterruptResolution, "pending"> }) {
+  const known = useStore((s) => s.todos.some((x) => x.id === todoId));
+  const text = t("assistant-tasks.interrupt_handled", { title, result: resolutionLabel(resolution) });
+  const body = (
+    <>
+      <Icon name="info" size={13} className="shrink-0" />
+      <span className="min-w-0 truncate">{text}</span>
+    </>
+  );
+  return known && todoId ? (
+    <button type="button" data-interrupt="handled" onClick={() => openTask(todoId)} className="flex max-w-full items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
+      {body}
+    </button>
+  ) : (
+    <div data-interrupt="handled" className="flex max-w-full items-center gap-1.5 self-start text-[13px] text-ink-2">{body}</div>
+  );
+}
+
+/** Several tasks one outage cut off (#3834): one card, its cause, how many are handled and how many still pending; it
+ *  opens to each task and its result. Red only while one is pending. */
+export function InterruptBatchCard({ batch }: { batch: InterruptBatch }) {
+  const [open, setOpen] = useState(false);
+  const todos = useStore((s) => s.todos);
+  const pending = batch.pending > 0;
+  const cause = causeLabel(batch.cause);
+  const title = batch.machine
+    ? t("assistant-tasks.interrupt_batch_title_on", { machine: batch.machine, cause, count: batch.total })
+    : t("assistant-tasks.interrupt_batch_title", { cause, count: batch.total });
+  const counts = pending ? t("assistant-tasks.interrupt_batch_counts", { resolved: batch.resolved, pending: batch.pending }) : t("assistant-tasks.interrupt_batch_all");
+  return (
+    <div data-interrupt="batch" data-pending={pending || undefined} className={cx("flex flex-col rounded-card", pending ? "bg-red-tint" : "bg-field")}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex items-start gap-3 p-4 text-left">
+        <Icon name="info" size={18} stroke={2.4} className={cx("shrink-0", pending ? "text-red" : "text-ink-3")} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className={cx("text-[14.5px] font-semibold", !pending && "text-ink-2")}>{title}</div>
+          <div className="text-[13px] text-ink-2">{counts}</div>
+        </div>
+        <Icon name="chevronRight" size={14} stroke={2.2} className="mt-1 shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : "none" }} />
+      </button>
+      <Collapse open={open} lazy>
+        <div className="flex flex-col gap-0.5 px-3 pb-3" data-testid="interrupt-batch-tasks">
+          {batch.tasks.map((task) => {
+            const known = todos.find((x) => x.id === task.todo_id);
+            const waiting = task.resolution === "pending";
+            return (
+              <button
+                key={task.receipt}
+                type="button"
+                disabled={!known}
+                onClick={() => known && openTask(known.id)}
+                className="flex min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left text-[13px] enabled:hover:bg-hover"
+              >
+                <span className="min-w-0 flex-1 truncate">{known?.title || task.title}</span>
+                <span className={cx("shrink-0 whitespace-nowrap", waiting ? "font-medium text-red" : "text-ink-2")}>{resolutionLabel(task.resolution)}</span>
+                {known && <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" />}
+              </button>
+            );
+          })}
+        </div>
+      </Collapse>
+    </div>
+  );
 }
 
 /** A task the model service cut off (#1516): red, why in words, "Continue" while it is still cut off; once its agent went on,
@@ -933,7 +1026,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
 // ── Today ──
 
 /** The "Today" card's "Needs you" row's lines under its title (#4478), one per task, each truncated on its own: what its task
- *  waits on ("Asking you: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
+ *  waits on ("Has a question: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
  *  has no card) and "N more" past them. A card just answered here is not one it waits on (answeredLookup). */
 const TODAY_WAITING_MAX = 3;
 function todayWaitingLines(s: State, waiting: { id: string; title: string }[]): string[] {
@@ -1253,9 +1346,12 @@ function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetad
   // stopped and not done: the hub's completion check says why (#3180); an agent's open question or waiting line says more
   const why = ask || waits ? undefined : stoppedReason(todo, state);
   const stopped = why === undefined ? undefined : why ? t("assistant-tasks.progress_stopped_reason", { reason: why }) : t("assistant-tasks.progress_stopped");
+  // nobody is working on it (#3618): said ahead of why it stopped and of its agent's last report
+  const orphan = todo && !ask ? orphanedLine(todo) : undefined;
+  const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : liveLine ?? waits ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : liveLine ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>

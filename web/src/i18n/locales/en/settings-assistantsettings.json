@@ -77,5 +77,11 @@
   "recordings_footer": "Recordings older than this leave the knowledge base, and the phone deletes its own copies, audio included. Meeting minutes are kept forever by default, until you delete them. You can choose a number of days after the meeting instead, never fewer than the recording’s.",
   "recordings_footer_with_minutes": "Recordings older than this leave the knowledge base together with their meeting minutes, and the phone deletes its own copies, audio included.",
   "retention_unconfirmed": "The assistant did not confirm this retention. Reload before trying again.",
-  "forever": "Forever"
+  "forever": "Forever",
+  "agents_title": "Agent follow-up",
+  "agent_tasks": "Follow up every agent Persona starts",
+  "agent_tasks_hint": "Agents started outside the main chat also get a quiet task with a supervisor, which checks the result and closes them when done. Uses extra model calls",
+  "archive_closed": "Archive closed sessions after",
+  "archive_closed_hint": "A closed session with no open task leaves the lists after this many idle days and stays under Archived. 0 turns it off",
+  "archive_closed_unit": "days"
 }

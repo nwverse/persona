@@ -75,5 +75,11 @@
   "recordings_footer": "超过此天数的录音会从知识库移除，手机也会删除本地副本（包括音频）。会议纪要默认永久保留，直到你删除。也可设置为会议后的指定天数，但不会短于录音的保留时间。",
   "recordings_footer_with_minutes": "超过这个天数的录音会连同会议纪要一起从知识库删除，手机也会删掉自己的那份（包括音频）。",
   "retention_unconfirmed": "助手没有确认这个保留期限。请刷新后再试。",
-  "forever": "永久保留"
+  "forever": "永久保留",
+  "agents_title": "Agent 跟进",
+  "agent_tasks": "Persona 开的每个 Agent 都有人跟进",
+  "agent_tasks_hint": "不是从主对话派出去的 Agent 也会挂上一个不打扰的任务，有人验收结果、做完后关掉它；会多花一些模型调用",
+  "archive_closed": "已关闭的会话多久后归档",
+  "archive_closed_hint": "已关闭、身上没有未完成任务的会话，闲置这么多天后移出列表，仍能在已归档里找到；0 表示不自动归档",
+  "archive_closed_unit": "天"
 }

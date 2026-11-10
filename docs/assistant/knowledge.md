@@ -162,6 +162,7 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
    `#t` for the latest archived message time, `#f` / `#h` for unfilled gaps; on UIDVALIDITY change, restart from the newest page and only take messages later than `#t`; before 2026-11-03 it was `mail-cursors.json`, used as fallback when the new file is absent).
    Connectors (`docs/plans/plan-connectors.md`, implementing `connector.Archive`) read chats with new messages "since last time" by cursor every 10 minutes,
    with cursor `cursors/<connector>.json` and chat id `<connector>-<chat>`. Older history comes in separately ("History import", step 5).
+   Source subscriptions (#2039) are read the same way, one archive per subscription with "Add to knowledge base" on (`connectors.changes` with the subscription's id, a cursor on its held items; [subscriptions.md](../extensions/subscriptions.md) "Destinations").
    - **GitHub**: only PRs / issues involving me (`involves:@me`, last 30 days initially), not entire repositories.
    - One PR / issue per chat, `github-<owner>-<repo>-<number>` (`kind` is `pr` / `issue`), in this order: description (starts with `【标题】`, "[Title]"); comments; reviews (`（review）批准了`, "(review) approved"); inline comments ("(file:line)…").
    - Bots are marked `(bot)`. Each entry is at most 4000 characters. Skip the round when the request quota is low.

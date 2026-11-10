@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -213,10 +214,11 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                 LazyColumn(Modifier.heightIn(max = minOf(maximumHeight, AssistantTrayTokens.maximumHeight)),
                     contentPadding = PaddingValues(bottom = Tokens.Space.s)) {
                     item {
-                        JSectionHeader(stringResource(tray.label), trailing = stringResource(R.string.chat_tray_items, when (tray) {
+                        val count = when (tray) {
                             AssistantTray.NeedsYou -> needsCount
                             AssistantTray.Running -> entries.running.size
-                        }), action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
+                        }
+                        JSectionHeader(stringResource(tray.label), trailing = pluralStringResource(R.plurals.chat_tray_items, count, count), action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
                             JTextButton(stringResource(R.string.chat_tray_approve_all), { onApprove(approvals) },
                                 enabled = enabled && !busy, modifier = Modifier.testTag("assistant-approve-all"))
                         }) else if (tray == AssistantTray.Running) ({
@@ -238,7 +240,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                 val approval = trayApproval(request, bySession[GroupKeys.rawKey(request.sessionKey)])
                                 Box(Modifier.testTag(tag)) {
                                     TrayDecisionRow(title, request.headline.shown, if (approval != null) R.string.chat_tray_approve else R.string.chat_tray_review,
-                                        "assistant-decision-${request.id}", enabled && !busy) {
+                                        "assistant-decision-${request.id}", enabled && !busy, onOpen = { onReview(request) }) {
                                         if (approval != null) onApprove(listOf(request to approval)) else onReview(request)
                                     }
                                 }
@@ -247,21 +249,22 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                 val approval = trayApproval(request, bySession[GroupKeys.rawKey(request.sessionKey)])
                                 TrayDecisionRow(request.sessionTitle ?: bySession[GroupKeys.rawKey(request.sessionKey)]?.displayTitle ?: request.headline.shown,
                                     request.headline.shown, if (approval != null) R.string.chat_tray_approve else R.string.chat_tray_review,
-                                    "assistant-decision-${request.id}", enabled && !busy) {
+                                    "assistant-decision-${request.id}", enabled && !busy, onOpen = { onReview(request) }) {
                                     if (approval != null) onApprove(listOf(request to approval)) else onReview(request)
                                 }
                             }
                             items(plansWaiting, key = { it.key }) { entry ->
                                 val plan = entry.plan
                                 TrayDecisionRow(plan.tasks.joinToString(stringResource(R.string.chat_tasks_list_separator)) { it.title },
-                                    stringResource(R.string.chat_tray_plan_review), R.string.chat_tray_review, "assistant-plan-${plan.id}", enabled && plan.id !in taskBusy) { onPlan(plan) }
+                                    stringResource(R.string.chat_tray_plan_review), R.string.chat_tray_review, "assistant-plan-${plan.id}", enabled && plan.id !in taskBusy,
+                                    onOpen = { onPlan(plan) }) { onPlan(plan) }
                             }
                             items(deciding, key = { it.key }) { entry ->
                                 val todo = entry.todo
                                 val row = progressByTodo[todo.id]
                                 if (todo.ask?.outcome == "decide") TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
                                 else TrayDecisionRow(todo.title, todo.ask?.verdict ?: row?.text.orEmpty(), R.string.chat_tray_review,
-                                    "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled) { openTask(host, todo) }
+                                    "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
                             }
                             if (drafts.isNotEmpty()) item { JSectionHeader(stringResource(R.string.chat_tray_drafts)) }
                             items(drafts, key = { "draft:${it.id}" }) { draft ->
@@ -354,8 +357,9 @@ internal val AssistantTray.tag get() = when (this) {
 }
 
 @Composable
-private fun TrayDecisionRow(title: String, subtitle: String, action: Int, tag: String, enabled: Boolean, onClick: () -> Unit) {
-    JRow(title, subtitle = subtitle, subtitleLines = 1, chevron = false,
+private fun TrayDecisionRow(title: String, subtitle: String, action: Int, tag: String, enabled: Boolean,
+    onOpen: (() -> Unit)? = null, onClick: () -> Unit) {
+    JRow(title, subtitle = subtitle, subtitleLines = 1, chevron = false, onClick = onOpen.takeIf { enabled },
         leading = { AssistantTrayMark(AssistantTrayTone.Pending) }, trailing = {
             JButton(stringResource(action), onClick, Modifier.testTag(tag), kind = JButtonKind.Secondary,
                 size = JButtonSize.Small, enabled = enabled)
@@ -432,7 +436,7 @@ private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null,
             val done = row.completed; val total = row.total
             if (!row.done && !row.cancelled) {
                 val counted = done != null && total != null && total > 0
-                if (counted) Text(stringResource(R.string.chat_tray_steps, done, total),
+                if (counted) Text(pluralStringResource(R.plurals.chat_tray_steps, total, done, total),
                     style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1)
                 val fraction = if (counted) done!!.toFloat() / total!! else if (row.plan != null) 0f else null
                 // a stopped task draws only a real count: nothing runs, so no indeterminate bar (#3576)

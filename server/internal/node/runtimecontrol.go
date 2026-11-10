@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -122,12 +123,19 @@ func (h *runtimeConn) setLaunchers(list []runtimeLauncher) {
 }
 
 // runtimeLauncherModels is launchers.models for a runtime's launcher: the models it said (none: an empty list, the
-// form offers no choice); false for a launcher no runtime offers, or the login shell's of that name.
+// form offers no choice); false for a launcher no runtime runs (runtimeOf).
 func (n *Node) runtimeLauncherModels(name string) (proto.LauncherModels, bool) {
-	if shellLauncherNames()[name] {
-		return proto.LauncherModels{}, false
-	}
-	h := n.runtimes.launcherRuntime(name)
+	return launcherModelsOf(n.runtimeOf(name), name)
+}
+
+// agyRuntimeModels is the Antigravity runtime's own launcher models, which a managed launcher named agy does not hide:
+// what a managed Antigravity launcher starts (startRuntime) and offers.
+func (n *Node) agyRuntimeModels() (proto.LauncherModels, bool) {
+	return launcherModelsOf(n.runtimes.launcherRuntime("agy"), "agy")
+}
+
+// launcherModelsOf is runtime h's advertisement for its launcher name; false without a runtime.
+func launcherModelsOf(h *runtimeConn, name string) (proto.LauncherModels, bool) {
 	if h == nil {
 		return proto.LauncherModels{}, false
 	}
@@ -199,6 +207,9 @@ func (n *Node) startOnEngineRuntime(ctx context.Context, p runtimeStartParams) (
 	if p.Resume != "" {
 		return n.takeOverInRuntime(ctx, h, p)
 	}
+	// The engine runs every start with a provider of its own: one it has by the launcher's name (a managed launcher made
+	// from it carries the same configuration), else its default (shell_launcher). A managed launcher's own settings
+	// apply only where personad launch runs it (runtimeStart), never inside the engine.
 	if _, own := h.launcherNamed(p.Launcher); !own && p.Launcher != "" {
 		p.Shell = true
 	}
@@ -290,4 +301,33 @@ func (n *Node) liveRuntimeModels(ctx context.Context, name string, refresh bool,
 		out.Models = []proto.AgentModel{}
 	}
 	return out, nil
+}
+
+// runtimeLauncherCheck opts into the runtime's authenticated availability probe. A refused probe never falls back to
+// the login shell, whose credentials may be different. Older runtimes keep the existing shell check.
+func (n *Node) runtimeLauncherCheck(ctx context.Context, name, cwd, prompt string) (proto.LauncherCheck, bool) {
+	h := n.runtimes.launcherRuntime(name)
+	if h == nil {
+		return proto.LauncherCheck{}, false
+	}
+	h.mu.Lock()
+	supported := h.hello.Caps.Check
+	h.mu.Unlock()
+	if !supported {
+		return proto.LauncherCheck{}, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
+	defer cancel()
+	start := time.Now()
+	var result proto.LauncherCheck
+	if err := h.peer.Call(ctx, "launchers.check", map[string]any{"launcher": name, "cwd": cwd, "prompt": prompt}, &result); err != nil {
+		result = proto.LauncherCheck{Error: err.Error()}
+	}
+	launcher, _ := h.launcherNamed(name)
+	result.Agent = launcher.Agent
+	if result.Agent == "" {
+		result.Agent = h.agent()
+	}
+	result.Millis = int(time.Since(start).Milliseconds())
+	return result, true
 }

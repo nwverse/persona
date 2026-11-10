@@ -753,3 +753,26 @@ Native model availability changes independently of Persona releases. Discover th
 settings and session metadata for defaults and current values. A fixed catalog hides new models and invents labels for
 external sessions. Treat ACP configuration responses and notifications as authoritative, publish acknowledged partial
 changes, and propagate failures. Native `auto` is distinct from full permission bypass.
+
+## Runtime availability checks need the runtime's authentication context (#3790)
+
+An SSH node and a local companion can have different credential access. A model list and session start succeeding in
+the companion do not make a login-shell health probe authenticated. Opt into runtime-owned checks, bound inference and
+cleanup, deny probe tools, and hide transcripts whose temporary probe workspace has been removed. Preserve a real
+workspace sharing the probe prefix while it still exists.
+
+## AGY ACP can ignore the configured initial model (#3817)
+
+Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
+IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
+explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+
+## Codex speed has separate native metadata (#3865)
+
+Reasoning effort and speed are independent. Read `serviceTiers` rather than deriving Fast support from a model name,
+and keep the advertised native ID. `thread/read` omits speed even when `thread/resume` and settings notifications
+report it. Preserve acknowledged speed through metadata refreshes, show missing state as unknown, and use a dedicated
+node RPC so an older node cannot silently ignore a billable setting in `session.modes`.
+
+Persona-owned Codex conversations use a separate stdio connection. Share catalog parsing across both transports and
+include the owned connection in session projection, setting routing and native notifications.
