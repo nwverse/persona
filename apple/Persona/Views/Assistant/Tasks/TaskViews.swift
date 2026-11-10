@@ -346,7 +346,7 @@ struct PlanEditSheet: View {
 
 // MARK: - Task card
 
-/// A task card used in details: its mark, title, time, where it runs, what its agent says now.
+/// A task's full card: its mark, title, time, where it runs, what its agent says now.
 struct TaskCard: View {
     var todoID: String
     var conversation: String

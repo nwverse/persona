@@ -16,26 +16,9 @@ struct DispatchedTaskLinks: View {
                 }
                 ForEach(tasks) { task in
                     if let id = task.todoID {
-                        Button { open(id) } label: {
-                            HStack(spacing: Theme.Space.s) {
-                                Text(tasks.count == 1 ? String(localized: "Dispatched: \(task.title)") : task.title)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text("Open [Dispatched Task]")
-                                    .foregroundStyle(Theme.accent)
-                                    .lineLimit(1)
-                                    .fixedSize()
-                                ThemedIcon(Theme.Icon.disclosure)
-                                    .foregroundStyle(.tertiary)
-                                    .accessibilityHidden(true)
-                            }
-                            .font(Theme.Font.captionStrong)
-                            .padding(.horizontal, Theme.Space.m)
-                            .scaledFrame(minHeight: Theme.Size.tapTarget)
-                            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                            .contentShape(.rect)
+                        TaskOpenButton(title: tasks.count == 1 ? String(localized: "Dispatched: \(task.title)") : task.title) {
+                            open(id)
                         }
-                        .buttonStyle(.plain)
                         .accessibilityIdentifier("dispatch.task.\(id)")
                     } else {
                         Text(task.title)

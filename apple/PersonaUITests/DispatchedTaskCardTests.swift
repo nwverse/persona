@@ -17,14 +17,30 @@ final class DispatchedTaskCardTests: XCTestCase {
     @MainActor private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", url, "-holdChromeOpen", "YES", "-tab", "assistant", "-dev.openChat", "",
+        app.launchArguments = ["-pairURL", url, "-holdChromeOpen", "YES", "-ui.scheme", "system", "-tab", "assistant", "-dev.openChat", "",
                                "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]
         app.launchPinned()
         XCTAssertTrue(app.buttons["action-bar.running"].waitForExistence(timeout: 20), app.debugDescription)
         return app
     }
 
+    /// The icon confirmation is a SpringBoard window, not part of the app's accessibility tree. Dismiss only that
+    /// informational confirmation; never automatically answer a permission request for this screenshot fixture.
+    @MainActor private func dismissIconConfirmation() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        guard alert.waitForExistence(timeout: 1) else { return }
+        let iconText = alert.staticTexts.matching(NSPredicate(format: "label CONTAINS '图标' OR label CONTAINS[c] 'icon'")).firstMatch
+        guard iconText.exists else { return }
+        for label in ["好", "OK"] where alert.buttons[label].exists {
+            alert.buttons[label].tap()
+            XCTAssertTrue(alert.waitForNonExistence(timeout: 5), "icon confirmation stayed over the screenshot")
+            return
+        }
+    }
+
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
+        dismissIconConfirmation()
         guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
         let appearance = ProcessInfo.processInfo.environment["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/iphone-\(appearance)-\(name).png"))
