@@ -2,10 +2,16 @@
 // Carried over from #1974 (by @tzh476): the idle pages preload when the browser is idle, the others as a link to them
 // is reached, a failed load is asked again, and a chunk that comes in draws its page at once.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Suspense, type ComponentType } from "react";
+import { startTransition, Suspense, type ComponentType } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { lazyPage, preloadPages } from "./lazy-page";
+
+// Waits a few turns of the event loop for `el` to show `until`, and returns what it shows.
+async function turns(el: Element, until: string) {
+  for (let i = 0; i < 20 && el.innerHTML !== until; i++) await new Promise((r) => setTimeout(r, 0));
+  return el.innerHTML;
+}
 
 describe("lazyPage", () => {
   afterEach(() => vi.useRealTimers());
@@ -75,14 +81,32 @@ describe("lazyPage", () => {
     expect(renderToStaticMarkup(tree)).toBe("<p>loading</p>");
     const el = document.createElement("div");
     const root = createRoot(el);
-    const turns = async (until: string) => {
-      for (let i = 0; i < 20 && el.innerHTML !== until; i++) await new Promise((r) => setTimeout(r, 0));
-      return el.innerHTML;
-    };
     root.render(tree);
-    expect(await turns("<p>loading</p>")).toBe("<p>loading</p>");
+    expect(await turns(el, "<p>loading</p>")).toBe("<p>loading</p>");
     arrive(() => <p>page</p>);
-    expect(await turns("<p>page</p>")).toBe("<p>page</p>"); // not 300 ms later, when React would reveal a retry
+    expect(await turns(el, "<p>page</p>")).toBe("<p>page</p>"); // not 300 ms later, when React would reveal a retry
+    root.unmount();
+  });
+
+  it("draws a page whose chunk came in after the render that mounted it and before its commit", async () => {
+    let arrive!: (p: ComponentType) => void;
+    const Lazy = lazyPage(() => new Promise<ComponentType>((r) => (arrive = r)), { idle: true });
+    preloadPages({ requestIdleCallback: (run) => (run(), 1), cancelIdleCallback: () => {} }); // on its way
+    // A slow sibling makes React yield in the middle of a transition (Markdown, highlight and lazy-plugin mount in
+    // one), after LazyPage drew nothing: the chunk comes in then, before the commit.
+    let slow = true;
+    const Slow = () => {
+      if (slow) {
+        slow = false;
+        arrive(() => <p>page</p>);
+        for (const end = performance.now() + 30; performance.now() < end; );
+      }
+      return <i />;
+    };
+    const el = document.createElement("div");
+    const root = createRoot(el);
+    startTransition(() => root.render(<Suspense fallback={<p>loading</p>}><Lazy /><Slow /></Suspense>));
+    expect(await turns(el, "<p>page</p><i></i>")).toBe("<p>page</p><i></i>");
     root.unmount();
   });
 });

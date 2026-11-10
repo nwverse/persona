@@ -47,8 +47,12 @@ export function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>
     const server = useSyncExternalStore(still, () => false, () => true);
     const [held, hold] = useState(false);
     const [, arrived] = useReducer((n: number) => n + 1, 0);
+    const drawn = page !== null;
     useLayoutEffect(() => {
       if (!page) hold(true);
+      // The chunk came in after the render that mounted it drew nothing and before its commit (React can yield in
+      // between, in a transition or a Suspense retry): nothing else would draw it, and the fallback never showed.
+      else if (!drawn) arrived();
     }, []);
     useEffect(() => {
       // not a layout effect: the fallback hiding this page runs those down, and this one has to see the chunk come in
