@@ -26,9 +26,10 @@ func TestTagsFileInSync(t *testing.T) {
 }
 
 // maxTailscalePackages bounds the tailscale.com and github.com/tailscale packages the three programs link on
-// linux/amd64 with the tags: 169 when the tags came in (189 without them), plus 3%. Keeping another feature, or a
-// new import that pulls one back, goes over it. Raise it only for a tailscale.com bump, and say so in the PR.
-const maxTailscalePackages = 174
+// linux/amd64 with the tags and CGO_ENABLED=0, as they are built: 168 when the tags came in (188 without them), plus
+// 3%. Keeping another feature, or a new import that pulls one back, goes over it. Raise it only for a tailscale.com
+// bump, and say so in the PR.
+const maxTailscalePackages = 173
 
 // unlinked are the omitted features the tags most visibly keep out: tsweb (debug pages and varz, whose init alone took a
 // third of personad's start before the tags), the web client UI and tailcat's SSH server.
@@ -43,7 +44,7 @@ func TestProgramsLinkOnlyTheTailscaleSubset(t *testing.T) {
 	cmd := exec.Command(goBin, "list", "-deps", "-tags", Tags(), "-f", "{{.ImportPath}}",
 		"./cmd/personad", "./cmd/persona-manager", "./cmd/persona-node")
 	cmd.Dir = "../.."
-	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
+	cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 	out, err := cmd.Output()
 	if err != nil {
 		msg := ""
