@@ -257,8 +257,8 @@ extension MacAttention {
                                   content: MacAttention.content(s, state, interaction: interactions.first { $0.sessionKey == s.key }, hushed: hushed),
                                   trigger: nil)
         }
-        // One banner per new card, identified by the card's uid: answering removes
-        // the card and a later card (a different uid) pings again, even for the same agent.
+        // One banner per new card, identified by the card's uid: answering removes the card and a later card
+        // (a different uid) pings again, even for the same agent.
         requests += cards.compactMap { ix -> UNNotificationRequest? in
             guard let s = MacAttention.session(for: ix, in: sessions) else { return nil }
             return UNNotificationRequest(identifier: MacAttention.identifier(ix),
