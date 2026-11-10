@@ -26,8 +26,8 @@ func htmlToolInput() string {
 }
 
 // A tool input of HTML reaches the apps no longer than it was written, and as the same value: no hop on the way (the
-// transcript's clip, the node's rpc reply and push, the hub's page, full item and push) writes < > & as six bytes each
-// (#2907). It went out at 160,011 bytes for these 61,011.
+// transcript's clip, the node's rpc reply and push, the hub's page, full item, push and subscribe backlog) writes
+// < > & as six bytes each (#2907). It went out at 160,011 bytes for these 61,011.
 func TestItemsKeepHTMLCharactersOnTheWire(t *testing.T) {
 	in := htmlToolInput()
 	line := `{"type":"assistant","uuid":"a1","timestamp":"2026-11-10T12:00:00Z","message":{"id":"m","role":"assistant",` +
@@ -75,6 +75,17 @@ func TestItemsKeepHTMLCharactersOnTheWire(t *testing.T) {
 		checkToolInput(t, "push", firstToolInput(t, "push", b), in)
 	case <-time.After(10 * time.Second):
 		t.Fatal("no push reached the client")
+	}
+
+	// The catch-up a subscribe starts with: how an app first gets a session's recent items.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	h.sendBacklog(ctx, c, m, "s1", 0)
+	select {
+	case b := <-c.out:
+		checkToolInput(t, "backlog", firstToolInput(t, "backlog", b), in)
+	default:
+		t.Fatal("no backlog reached the client")
 	}
 }
 

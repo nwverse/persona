@@ -487,16 +487,25 @@ func (f *File) ensureAfter(afterSeq int) {
 
 // findOlder finds an item that is not among the parsed ones in the lines not parsed yet, parsing back only to the last
 // of them that names its line: the uuid or Codex item id before the id's "#<n>", quoted as JSON writes it (a Codex
-// FileChange's "<id>-<n>" is named by "<id>"), or the seq of a "line<seq>" id. A line that names it without holding
-// it (a child's parentUuid, a call's output) sends the search further back. An id no line names loads nothing: a
-// stale or mistyped one used to parse the whole file under the lock and keep all of it. Callers hold f.mu.
+// FileChange's "<id>-<n>" is named by "<id>"), or the seq of a "line<seq>" id unless that Claude line has a uuid
+// (its items are named by the uuid). A line that names it without holding it (a child's parentUuid, a call's output)
+// sends the search further back. An id no line names loads nothing: a stale or mistyped one used to parse the whole
+// file under the lock and keep all of it. Callers hold f.mu.
 func (f *File) findOlder(id string) (proto.Item, bool) {
 	if f.base == 0 || f.win == nil || id == "" {
 		return proto.Item{}, false
 	}
+	fh, err := os.Open(f.Path)
+	if err != nil {
+		return proto.Item{}, false
+	}
+	defer fh.Close()
 	stem := uuidOf(id)
 	if rest, ok := strings.CutPrefix(stem, "line"); ok {
 		if n, err := strconv.Atoi(rest); err == nil && n > 0 && strconv.Itoa(n) == rest {
+			if n <= f.base && !f.win.codex && claudeLineUUID(fh, f.win.starts, n) != "" {
+				return proto.Item{}, false // a stale id: a rewind or a replaced file moved its line
+			}
 			f.ensureAfter(n - 1)
 			return f.item(id)
 		}
@@ -505,11 +514,6 @@ func (f *File) findOlder(id string) (proto.Item, bool) {
 	if i := strings.LastIndexByte(stem, '-'); i > 0 && i < len(stem)-1 && strings.Trim(stem[i+1:], "0123456789") == "" {
 		needles = append(needles, quoteID(stem[:i]))
 	}
-	fh, err := os.Open(f.Path)
-	if err != nil {
-		return proto.Item{}, false
-	}
-	defer fh.Close()
 	for f.base > 0 && f.win != nil {
 		line := lastMention(fh, f.win.starts, f.win.starts[f.base], needles)
 		if line == 0 {
@@ -525,6 +529,25 @@ func (f *File) findOlder(id string) (proto.Item, bool) {
 		}
 	}
 	return proto.Item{}, false
+}
+
+// claudeLineUUID is the uuid of line n (1-based, starts as in window) when it is a Claude line, which names its items
+// by it; "" when it has none, is a Codex line or cannot be read.
+func claudeLineUUID(fh *os.File, starts []int64, n int) string {
+	if n < 1 || n >= len(starts) {
+		return ""
+	}
+	data := make([]byte, starts[n]-starts[n-1])
+	if _, err := fh.ReadAt(data, starts[n-1]); err != nil && err != io.EOF {
+		return ""
+	}
+	var e struct {
+		UUID string `json:"uuid"`
+	}
+	if isCodexLine(data) || unmarshalLine(data, &e) != nil {
+		return ""
+	}
+	return e.UUID
 }
 
 // quoteID is an id as a JSON string in a transcript line (ids are plain ASCII; the escaping is for odd ones).

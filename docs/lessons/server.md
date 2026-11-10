@@ -1520,9 +1520,10 @@ A connector that folds several notifications into one thread (GitHub CI failures
   escaping off at one hop changes nothing while an earlier one still escapes, so the clip (`transcript.marshalPlain`,
   which `jsonLen` measures with too), every rpc line (`rpc.marshal`, `encodeLine`) and the hub's item bodies and pushes
   (`marshalItems`, `writeItemsJSON`) leave them as they are. U+2028 and U+2029 are still escaped, as encoding/json does.
-- Prove it end to end, not per encoder: parse a line, send it over real rpc lines, read the page, the full item and the
-  push, and check that `tool_input` is no longer than it was written and holds the same value
-  (`TestItemsKeepHTMLCharactersOnTheWire`); putting back any one escaping hop fails it.
+- Prove it end to end, not per encoder: parse a line, send it over real rpc lines, read the page, the full item, the
+  push and a subscribe's backlog, and check that `tool_input` is no longer than it was written and holds the same value
+  (`TestItemsKeepHTMLCharactersOnTheWire`). A call's params carry no items and are pinned in the rpc package
+  (`TestCallKeepsHTMLCharacters`). Putting back any one escaping hop fails one of the two.
 
 ## Transport source is not pane origin (#994)
 

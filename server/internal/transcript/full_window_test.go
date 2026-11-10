@@ -9,9 +9,9 @@ import (
 )
 
 // windowedClaude writes a Claude transcript of 4,000 lines whose first one is a long question (cut on pages, so Full
-// reads it again) and opens it by its end with a 4 KiB window. Every line names the one before as its parent, so
-// a uuid is also found in the line after the one that holds it.
-func windowedClaude(t *testing.T) (*File, string) {
+// reads it again) and opens it by its end with a 4 KiB window. Every line but line bare (0: none) has a uuid and
+// names the one before as its parent, so a uuid is also found in the line after the one that holds it.
+func windowedClaude(t *testing.T, bare int) (*File, string) {
 	t.Helper()
 	windowBytes = 4 << 10
 	first := strings.Repeat("the first question ", 2000) + "end" // 38 KB: past pageTextLen
@@ -19,6 +19,10 @@ func windowedClaude(t *testing.T) (*File, string) {
 	fmt.Fprintf(&b, `{"type":"user","uuid":"q0","timestamp":"2026-11-10T10:00:00Z","message":{"role":"user","content":%q}}`+"\n", first)
 	parent := "q0"
 	for i := 1; i < 4000; i++ {
+		if i+1 == bare {
+			fmt.Fprintf(&b, `{"type":"assistant","timestamp":"2026-11-10T10:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"answer %d"}]}}`+"\n", i)
+			continue
+		}
 		id := fmt.Sprintf("a%d", i)
 		fmt.Fprintf(&b, `{"type":"assistant","uuid":%q,"parentUuid":%q,"timestamp":"2026-11-10T10:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"answer %d"}]}}`+"\n", id, parent, i)
 		parent = id
@@ -39,11 +43,12 @@ func windowedClaude(t *testing.T) (*File, string) {
 
 // Full of an id no line holds (a stale id after the history token changed, a mistyped one) used to parse every
 // window back to line 1 under the file's lock and keep all 4,000 items: now no line names it, and nothing loads.
+// Lines 1 and 5 have a uuid, which names their items, so "line1#0" and "line5#0" are stale (from before a rewind).
 func TestFullOfUnknownIDLoadsNothing(t *testing.T) {
 	defer func(w int64) { windowBytes = w }(windowBytes)
-	f, _ := windowedClaude(t)
+	f, _ := windowedClaude(t, 0)
 	base, items := f.base, len(f.items)
-	for _, id := range []string{"nope#0", "nope", "nope-3#1", "fold:a1#0", `odd"id#0`, "line999999#0", ""} {
+	for _, id := range []string{"nope#0", "nope", "nope-3#1", "fold:a1#0", `odd"id#0`, "line999999#0", "line5#0", "line1#0", ""} {
 		if _, err := f.Full(id); err == nil || err.Error() != "no item "+id {
 			t.Fatalf("Full(%q): %v", id, err)
 		}
@@ -57,7 +62,7 @@ func TestFullOfUnknownIDLoadsNothing(t *testing.T) {
 // whole, and an item in the middle loads only the lines from it on.
 func TestFullOfOldItemStillFound(t *testing.T) {
 	defer func(w int64) { windowBytes = w }(windowBytes)
-	f, first := windowedClaude(t)
+	f, first := windowedClaude(t, 0)
 	mid, err := f.Full("a2000#0")
 	if err != nil || mid.Text != "answer 2000" || mid.Seq != 2001 {
 		t.Fatalf("Full of a middle item: %+v, %v", mid, err)
@@ -73,9 +78,9 @@ func TestFullOfOldItemStillFound(t *testing.T) {
 		t.Fatalf("base %d after Full of line 1", f.base)
 	}
 	// A line without a uuid is named by its seq.
-	g, _ := windowedClaude(t)
-	if got, err := g.Full("line5#0"); err == nil {
-		t.Fatalf("line 5 has a uuid, yet Full(line5#0) gave %+v", got)
+	g, _ := windowedClaude(t, 5)
+	if got, err := g.Full("line5#0"); err != nil || got.Text != "answer 4" || got.Seq != 5 {
+		t.Fatalf("Full(line5#0) of a line without a uuid: %+v, %v", got, err)
 	}
 	if g.base > 4 {
 		t.Fatalf("Full(line5#0) did not parse back to line 5: base %d", g.base)
