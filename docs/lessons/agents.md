@@ -217,6 +217,10 @@ A new herdr tab's tty is in canonical mode until zsh's line editor takes it, and
 
 In a herdr pane whose shell sources a file (sh family, fish), a start now writes its whole command to a 0600 `agent-start-*.sh` in the node's directory and types only `. '<file>'`. The shell sources the file, so aliases and functions used as launchers still work, and the file deletes itself first. When the pane refuses the line, the start closes the tab it made and returns `terminal_not_ready` (503, `retryable: true`, `delivered: none`). `TestHerdrStartTypesAShortLine` checks the worst case. Not covered: Orca panes and herdr's restore (`claudeResumeArgv`) still type the full command.
 
+## A pane's shell may be fish: quote for it too (2026-11-10, #2867)
+
+What the node quotes for a pane is parsed by the user's own shell: the start file runs through `source` in fish, and Orca types `cd -- <cwd>` and the command into the terminal. fish still takes `\'` and `\\` as escapes inside single quotes, so the POSIX quoting of the first message `a\';touch PWNED;#` kept the quotes open in fish and ran `touch`. `shellQuote` (`server/internal/node/node.go`) now puts each backslash outside the quotes (`'\\'`), where the sh family and fish read it alike, as the SSH deploy already did after the same finding (`docs/lessons/server.md`). `TestShellQuoteReadsBackInRealShells` reads such words back in every installed shell, fish included. No quoting makes a control character safe on a typed line (a tab completes and closes the quoted word), so Orca refuses a directory whose name holds one before it opens a terminal.
+
 ## Allowing one command for an Agent (2026-11-04, #1300)
 
 - **A skill's `allowed-tools` makes launching the skill itself an approval** (immediately denied under `-p`), so it doesn't save a card, and a fixed SKILL.md can't carry per-computer paths.
