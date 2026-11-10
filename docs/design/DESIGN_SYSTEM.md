@@ -511,7 +511,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 
 - **Home**: the bottom of the session page. A request that blocks the Agent stays visible there until it is answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). Several read "1 of 3", one open at a time; any can be folded to answer later.
 - **One count, per session**: the Agents list's Needs you section, its Needs you filter and the tab's badge count the sessions that wait for the user, each once, its requests in its row oldest first, the way `docs/assistant/managers.md` ("Counts") counts an assistant's waiting agents (principle 4). The Inbox's Agent section and the Assistant's composer entries open the same requests; the composer's entries count tasks (`docs/assistant/unified-entry.md`).
-- **Card text**: the title names the request and what happens next, in one wording per kind of request on every client (#3690 picks the words). The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
+- **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
@@ -581,6 +581,17 @@ Full glossary: `docs/protocol/i18n.md`. Languages: en, zh-Hans, ja. Apple string
 | Pending request | Needs You | its session's pending area | the thing wanted: the plan's title, the command or the question |
 | Inbox item | message, mail | the Inbox | the sender or group, and a summary |
 | Computer | computer | the Machines page | the user's name for it |
+
+Request titles, the same on every client and screen that names a pending request (cards, list rows, the Inbox, the chat panel's label, the hub's push titles). iOS writes them in title case, the web, Android and the hub in sentence case. A notification may put the agent's name in front; a label that cannot name the agent reads "Has a question" (在问你, 質問があります). The line under a title says what is asked (the command, the plan's title, the question) and keeps its own words.
+
+| Request | en | zh-Hans | ja |
+| --- | --- | --- | --- |
+| Plan | Plan awaiting approval | 计划等你审批 | プランの承認待ち |
+| Tool or command | Needs your permission; {agent} needs your permission | 需要你授权；{agent} 需要你授权 | 許可が必要です；{agent}に許可が必要です |
+| Question | {agent} has a question (Claude by default, Persona for its own) | {agent} 在问你 | {agent}から質問があります |
+| Terminal prompt | Terminal needs you | 终端等你处理 | ターミナルで対応が必要です |
+| MCP form, MCP link | MCP form needs you; MCP link needs you | MCP 表单等你填写；MCP 链接等你确认 | MCPフォームの入力待ち；MCPリンクの確認待ち |
+| Anything else | Needs you | 需要你 | 要対応 |
 
 - A session's title is its top-bar title and its row's first line.
 - Primary screens (list rows, top-bar titles, the Assistant home and notifications) never show raw model IDs, session IDs, paths or engine names (herdr, Orca, Paseo); this is principle 2 applied to Agent work. A row may name the model by its short name.

@@ -52,7 +52,7 @@ func TestPushLanguagePerDevice(t *testing.T) {
 	title := func(l i18n.Lang) any {
 		return interactionPayloadIn(l, ix, "box")["aps"].(map[string]any)["alert"].(map[string]any)["title"]
 	}
-	if title(i18n.ZhHans) != "Codex 需要你授权" || title(i18n.En) != "Codex needs permission" {
+	if title(i18n.ZhHans) != "Codex 需要你授权" || title(i18n.En) != "Codex needs your permission" {
 		t.Fatalf("titles %v / %v", title(i18n.ZhHans), title(i18n.En))
 	}
 	if interactionPayload(ix, "box")["aps"].(map[string]any)["alert"].(map[string]any)["title"] != "Codex 需要你授权" {

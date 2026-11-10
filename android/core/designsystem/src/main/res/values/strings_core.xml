@@ -16,7 +16,7 @@
     <string name="designsystem_core_fleet_all_done">All caught up</string>
     <string name="designsystem_core_fleet_permission_waiting">Waiting for your approval</string>
     <string name="designsystem_core_fleet_permission_detail">Approve: %1$s</string>
-    <string name="designsystem_core_fleet_plan_waiting">Plan waiting for approval</string>
+    <string name="designsystem_core_fleet_plan_waiting">Plan awaiting approval</string>
     <string name="designsystem_core_fleet_plan_detail">Plan: %1$s</string>
     <string name="designsystem_core_fleet_question_waiting">Asking you</string>
     <string name="designsystem_core_fleet_item_working">Working</string>
@@ -315,14 +315,14 @@
     <string name="designsystem_core_mail_outlook">Outlook · Microsoft account</string>
     <string name="designsystem_core_mail_gmail">Gmail · Google account</string>
     <string name="designsystem_core_mail_lark">Lark Mail</string>
-    <string name="designsystem_core_headline_question">%1$s has a question for you</string>
-    <string name="designsystem_core_headline_elicitation">An MCP form is waiting for you</string>
+    <string name="designsystem_core_headline_question">%1$s has a question</string>
+    <string name="designsystem_core_headline_elicitation">MCP form needs you</string>
     <string name="designsystem_core_headline_permission">Wants to use %1$s</string>
     <string name="designsystem_core_headline_permission_detail">Wants to use %1$s: %2$s</string>
     <string name="designsystem_core_headline_agent_permission">%1$s wants to use %2$s</string>
     <string name="designsystem_core_headline_agent_permission_detail">%1$s wants to use %2$s: %3$s</string>
     <string name="designsystem_core_headline_secret_run">Run on %1$s with your password</string>
-    <string name="designsystem_core_headline_screen">A dialog in the terminal needs you</string>
+    <string name="designsystem_core_headline_screen">Terminal needs you</string>
     <string name="designsystem_core_headline_needs_you">Needs you</string>
     <string name="designsystem_core_ask_question">Asking you</string>
     <string name="designsystem_core_ask_permission">Needs permission</string>
