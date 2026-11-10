@@ -212,7 +212,7 @@ Apple has no shadow tokens. Shadows are inline literals:
 | Message action bar | black 0.25, r10, y4 | `apple/Persona/Views/Chat/MessageMenu.swift:461` |
 | Drawer card | black 0.18, r24 | `apple/Persona/Views/Assistant/AssistantSidebar.swift:350` |
 
-The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`). Android has four literals. See DS-08.
+The Glass style relies on Liquid Glass and has no shadow. The vendored BeautifulUI package has real elevation tokens that Persona does not read. Web has seven shadow tokens (`web/src/styles.css:68-74`) plus `--shadow-knob` for the switch knob. Android has four literals. See DS-08.
 
 ### 2.7 Motion
 
@@ -329,6 +329,13 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - `SystemPasteButton` (`apple/Persona/DesignSystem/ClipboardButtons.swift`) wraps the system `PasteButton` for anything that sends what is on the phone's clipboard: a capsule in the accent with the system's own icon and word. Why not `.themedButton`: only the system Paste button reads the clipboard without iOS asking "Allow Paste?" first (the tap is the permission), and the system draws it, so it can be tinted and shaped but not restyled. Place it beside a themed button that does the same thing by reading the clipboard, with one line saying it sends without the prompt (the computer page's Clipboard section, #3064).
 - Web buttons are 32 px tall (hit area expanded on touch). Android: Large 48, Medium 40, Small 32 dp (DS-06).
 
+### 3.7.1 Switches (web)
+
+- One component: `Switch` in `web/src/ui/atoms.tsx`; the assistant pages' `Switch` (`web/src/views/assistant/parts.tsx`) wraps it and only stops the click from reaching the row under it. Pages never draw their own knob and track.
+- Look, iOS-style (#3675): 38 x 22 track, `--switch-on` (iOS green, `#34c759` light, `#30d158` dark) or `--switch-off` (translucent grey, 20% light, 32% dark, so the off track shows on every background); an 18 px white knob with `--shadow-knob`, a soft drop shadow with no ring. The knob never takes `shadow-btn`, whose 1 px ring reads as an outline on the track.
+- Focus: the `switch` class rounds the focus outline to the pill and offsets it 2 px; it shows on keyboard focus only (`:focus-visible`), never after a click. Forced colors draw the track border and knob in system colors.
+- Why green and not the accent: an on/off switch reads as iOS's, and one color on every page; the accent stays for selection and links. Pill-shaped chips that toggle a mode (botmux, find bar's match case) are not switches of this kind.
+
 ### 3.8 Chips, badges, avatars, marks
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
@@ -362,6 +369,16 @@ use another subtitle line rather than pushing the workflow count out of the row.
 | Chat API failure | `APIErrorCard` with details and Retry |
 
 Toasts: error, success or info; one slot, so a new toast replaces the old. Duration 2.5 s, 4 s for errors, 5 s with an action (`apple/Persona/DesignSystem/Toasts.swift:57`). Drawn in a pass-through window and announced to VoiceOver. About 255 call sites. Loading and error shapes are inconsistent across screens (DS-15, DS-16). Web toasts are dark capsules at the bottom (2.8 / 5.2 / 6 s). Android uses Snackbar, per-feature hosts and system Toast (DS-25).
+
+### 3.11 Code blocks, inline code and quotes in replies
+
+Drawn as Telegram draws them (#2984), with one look on every platform: the web and Android so far; iPhone / iPad (#3209) adds its sources here when it lands. The frozen Mac keeps its hover Copy and plain quotes. There was no component for these: replies used the Markdown renderer's defaults (a plain code box with Copy on hover, a thin bar).
+
+| Piece | Look | Interaction | Source |
+| --- | --- | --- | --- |
+| Code block | a title bar on top with the fence's language (none when it names none) and Copy (icon and word); the code under it in the monospaced font on the code well (web `--inset`, Android `JCodeBlock`'s), scrolling sideways | Copy takes the whole block, with the "Copied" notice (and the success haptic on Android). Copy's hit area is the touch size (web `touch-hit`, 44 px) | web `CodeBar` (`web/src/ui/ReplyBlocks.tsx`), `CodeBlock` (`web/src/ui/Markdown.tsx`); Android `CodeBar` (`android/feature/chat/src/main/kotlin/persona/feature/chat/ReplyBlocks.kt`) in `JCodeBlock`'s `header` slot (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/Lists.kt`), so every style's box holds the bar |
+| Inline code | the body's color on its gray (Android `sunken`), monospaced | a click or tap copies it ("Copied"); on the web so do Enter or Space when it is focused; a click ending a drag that selected words doesn't. Blue is kept for what opens: code inside a link (a path that opens the file) is the link's | web `copyInlineCode`, `rehypeLinkedCode`; Android `copyingCode` (a `LinkAnnotation.Clickable` styled as code) |
+| Quote | the accent bar on a faint accent card (web `--accent` at 8%, Android `accentSoft`), a quote mark at the top end | longer than about four lines it folds with its end faded; a click or tap opens it, its chevron (at the touch size) folds it again. A reply still being written never folds its quotes | web `ReplyQuote`, `ReplyStreaming`; Android `ReplyQuote`, `LocalReplyStreaming` |
 
 ## 4. Interaction patterns
 

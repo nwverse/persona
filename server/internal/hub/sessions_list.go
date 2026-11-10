@@ -314,6 +314,10 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		out.Work = &proto.WorkState{Phase: s.Work.Phase, On: s.Work.On, Line: rowText(s.Work.Line, 180),
 			Wait: rowText(s.Work.Wait, 180), Then: rowText(s.Work.Then, 180), WakeAt: s.Work.WakeAt, ResetsAt: s.Work.ResetsAt,
 			Attempts: s.Work.Attempts, Max: s.Work.Max, Deferred: s.Work.Deferred, Agent: s.Work.Agent}
+		if c := s.Work.Closeout; c != nil { // the row's part of it: where it stands, not the account of what it did
+			out.Work.Closeout = &proto.Closeout{Status: c.Status, Merged: c.Merged, Deployed: c.Deployed,
+				Waiting: rowText(c.Waiting, 180), Missing: rowText(c.Missing, 180), Checked: c.Checked}
+		}
 	}
 	if s.Todo != nil {
 		out.Todo = &proto.TodoRef{ID: s.Todo.ID, Title: rowText(s.Todo.Title, 256)}

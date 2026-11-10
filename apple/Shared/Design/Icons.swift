@@ -134,6 +134,8 @@ extension Theme {
         /// One step turns into the next (a setting's example: before → after, a timeline).
         static let becomes = "arrow.forward"
         static let gitBranch = "arrow.triangle.branch"
+        /// Review an Agent's changes (#151): the session's ⋯ and the Git pane's button.
+        static let reviewChanges = "doc.text.magnifyingglass"
         /// The spaces a host nests under another (Orca's child worktrees,「N 个子项」, #3075).
         static let childSpaces = "square.3.layers.3d.down.right"
         /// A notification that needs attention, in a workspace or from a background task.
