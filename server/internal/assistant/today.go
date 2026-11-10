@@ -142,12 +142,13 @@ func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedIte
 			}
 		}
 	}
-	if cal := s.snapshotCalendar(ctx, now); cal != nil {
+	live := s.connectorSnapshots(ctx) // one ask for the meetings and the chats
+	if cal := snapshotCalendar(live, now); cal != nil {
 		for _, e := range cal.Events {
 			body.Meetings = append(body.Meetings, todayMeeting{Start: e.Start, End: e.End, Title: e.Title})
 		}
 	}
-	if chats := s.snapshotChats(ctx); chats != nil {
+	if chats := snapshotChats(live); chats != nil {
 		for _, c := range chats.AtMe {
 			body.AtMe = append(body.AtMe, todayChat{Name: c.Name, Unread: c.Unread, Preview: c.Preview})
 		}

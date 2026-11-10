@@ -432,6 +432,10 @@ data class Session(
     @SerialName("background_count") val backgroundCountHint: Int? = null,
     @SerialName("running_subagents") val runningSubagents: Int? = null,
     @SerialName("running_workflows") val runningWorkflowsCount: Int? = null,
+    /** Independent shell/Monitor count, excluding workflows and subagents. */
+    @SerialName("background_tasks_count") val backgroundTasksCount: Int? = null,
+    /** Newest running workflow; bounded list metadata without its agent or phase arrays. */
+    @SerialName("workflow_progress") val workflowProgress: Workflow? = null,
     @SerialName("background_working") val backgroundWorking: Boolean? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
