@@ -150509,6 +150509,98 @@
           }
         }
       }
+    },
+    "Connect Through %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect Through %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@経由で接続"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "经%@连接"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Couldn't reach %@:%@ through the in-app tunnel (%@). Check that the tunnel is signed in and that this server can be reached from the tunnel's network." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't reach %@:%@ through the in-app tunnel (%@). Check that the tunnel is signed in and that this server can be reached from the tunnel's network."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "トンネル経由で%1$@:%2$@に接続できません（%3$@）。トンネルにサインインしているか、トンネル側のネットワークからこのサーバーにアクセスできるかを確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "经内网隧道连不上 %1$@:%2$@（%3$@）。检查隧道是否已登录，以及隧道那边的网络能不能访问这台服务器。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "No paired hub has an in-app tunnel to reach the SSH server through" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No paired hub has an in-app tunnel to reach the SSH server through"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ペアリング済みのハブにトンネルがないため、SSHサーバーに接続できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有哪台已配对的 hub 带内网隧道，没法经它连 SSH 服务器"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Reaches the SSH server through the in-app tunnel instead of this device's own network. It isn't a system VPN, so a VPN on this device (such as Tailscale) keeps working. The server's fingerprint is still checked." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reaches the SSH server through the in-app tunnel instead of this device's own network. It isn't a system VPN, so a VPN on this device (such as Tailscale) keeps working. The server's fingerprint is still checked."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスのネットワークではなく、アプリ内のトンネル経由でSSHサーバーに接続します。システムVPNではないため、このデバイスのVPN（Tailscaleなど）はそのまま使えます。サーバーのフィンガープリントは引き続き確認されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "经 App 内的隧道连 SSH 服务器，不走这台设备自己的网络。它不是系统 VPN，设备上的 VPN（比如 Tailscale）照常工作。服务器指纹照样校验。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     }
   },
   "version" : "1.0"
