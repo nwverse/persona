@@ -106,6 +106,12 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	text, isText := p["text"].(string)
+	if isText {
+		r = h.captureHumanSubmission(r, text)
+	}
+	for _, reserved := range []string{"creation_id", "incarnation", "caller", "submission", "share_authority"} {
+		delete(p, reserved)
+	}
 	var start freshStart
 	fresh := false
 	if isText && strings.TrimSpace(text) != "" && !answerOnly(r) {

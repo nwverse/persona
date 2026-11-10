@@ -147,9 +147,18 @@ final class TasksStore {
             return
         }
         var list = feeds[conversation] ?? []
-        let have = Set(list.map(\.id))
-        let new = items.filter { !have.contains($0.id) }
-        guard !new.isEmpty else { return }
+        let have = Dictionary(list.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // One it has whose body changed (an interrupted receipt the hub resolved, #3834) takes the new body, as on the
+        // web and Android.
+        var changed = false
+        for item in items {
+            if let i = have[item.id], list[i].body != item.body {
+                list[i] = item
+                changed = true
+            }
+        }
+        let new = items.filter { have[$0.id] == nil }
+        guard !new.isEmpty || changed else { return }
         list += new
         list.sort { ($0.at, $0.id) < ($1.at, $1.id) }
         feeds[conversation] = list

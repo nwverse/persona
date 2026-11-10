@@ -360,7 +360,16 @@
     <string name="settings_src_messages_read_failed">读不到信息的状态：%1$s</string>
     <string name="settings_src_messages_save_failed">没改成：%1$s</string>
     <string name="settings_src_messages_delete_failed">没删成：%1$s</string>
-    <string name="settings_src_messages_deleted">已删除 %1$d 个会话、%2$d 个人、%3$d 件收件箱条目</string>
+    <string name="settings_src_messages_deleted">已删除 %1$s、%2$s、%3$s</string>
+    <plurals name="settings_src_messages_deleted_chats">
+        <item quantity="other">%1$d 个会话</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_people">
+        <item quantity="other">%1$d 个人</item>
+    </plurals>
+    <plurals name="settings_src_messages_deleted_inbox">
+        <item quantity="other">%1$d 件收件箱条目</item>
+    </plurals>
     <string name="settings_src_messages_guide_header">在 %1$s 上打开权限</string>
     <string name="settings_src_messages_that_mac">那台 Mac</string>
     <string name="settings_src_messages_recheck">重新检查</string>

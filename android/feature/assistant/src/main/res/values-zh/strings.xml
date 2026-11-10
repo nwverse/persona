@@ -126,6 +126,7 @@
     <string name="assistant_needs_you_header">现在要你处理的事</string>
     <string name="assistant_source_lark">飞书</string>
     <string name="assistant_source_mail">邮件</string>
+    <string name="assistant_needs_you_agent">Agent</string>
     <string name="assistant_pair_first">请先配对 hub</string>
     <plurals name="assistant_show_all_recent">
         <item quantity="other">查看全部 %1$d 个</item>
