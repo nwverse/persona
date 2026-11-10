@@ -729,8 +729,8 @@ struct AnsweredLine: View {
 }
 
 /// A message about one of the conversation's tasks, with the reply the AI twin drafted from the task's progress
-/// (docs/assistant/unified-entry.md「Message cards link to tasks」): who said what, the task (live), the draft, Send / Edit / Later. Once
-/// the message was handled elsewhere (#4797) the draft stays as plain text with no buttons: the hub would refuse it.
+/// (docs/assistant/unified-entry.md「Message cards link to tasks」): who said what, the task (live), the draft and its actions.
+/// A per-card dismissal leaves the work open; handled messages keep their reply as plain text without Send.
 struct MessageCard: View {
     var item: FeedItem
     var itemID: String

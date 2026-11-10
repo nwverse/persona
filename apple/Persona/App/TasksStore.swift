@@ -25,8 +25,8 @@ final class TasksStore {
     /// A task or an agent picked on the board, opened when the board has gone down.
     var openAfterBoard: String?
     var openAgentAfterBoard: SessionKey?
-    /// Message cards (inbox item ids) put off with Later, the ones sent from their card, and the ones whose Send the hub
-    /// refused as handled elsewhere (409 inbox_item_done).
+    /// Feed card IDs put off with Later, sent here, or refused as handled elsewhere (409 inbox_item_done).
+    /// A new draft with the same Inbox reference has its own decision state.
     private(set) var laterMessages: Set<String> = []
     private(set) var sentMessages: Set<String> = []
     private(set) var filedMessages: Set<String> = []
@@ -258,6 +258,13 @@ final class TasksStore {
               let api = injected ?? feedAPIs[card.conversation] else { return }
         let ticket = beginMessage(card.id)
         defer { endMessage(card.id, generation: ticket) }
+        // Keep the Inbox's optimistic filing, saved failed reply and item-wide Send lock on the existing path.
+        if injected == nil, let item = cardItem(itemID, conversation: card.conversation) {
+            let sent = await InboxStore.shared.send(item, text: text, card: card.id)
+            guard generation == ticket else { return }
+            if sent { sentMessages.insert(card.id) } else { InboxStore.shared.reload() }
+            return
+        }
         do {
             try await api.inboxReply(itemID, text: text, card: card.id)
             guard generation == ticket else { return }

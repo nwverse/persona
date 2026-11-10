@@ -31,7 +31,10 @@ final class MessageCardStateUITests: XCTestCase {
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/message-card-\(appearance)-\(name).png"))
     }
 
-    @MainActor func testTheCardSaysWhereItsReplyStands() throws {
+    @MainActor func testTheCardSaysWhereItsReplyStands() async throws {
+        if ProcessInfo.processInfo.environment["PERSONA_MOCK_DRAFT_ACTIONS"] == "1" {
+            _ = try await fixture("reset")
+        }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-app.tab", "assistant", "-tab", "assistant", "-openAssistant", main]
