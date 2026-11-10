@@ -75,6 +75,27 @@ describe("the pick", () => {
     expect(localStorage.getItem(CHOICE_KEY)).toBeNull();
   });
 
+  it("keeps its name under a key per hub like the pick's, only for another assistant than the default, gone with the pick", () => {
+    // the same hub suffix as the pick's key (an origin serving several hubs under prefixes keeps each one's apart)
+    expect(PICKED_NAME_KEY.slice("persona.pickedAssistantName".length)).toBe(CHOICE_KEY.slice("persona.currentManager".length));
+    setRoster(ROSTER);
+    chooseManager("assistant"); // the default: nothing kept at all
+    expect(localStorage.getItem(CHOICE_KEY)).toBeNull();
+    expect(localStorage.getItem(PICKED_NAME_KEY)).toBeNull();
+    chooseManager("m-1");
+    expect(localStorage.getItem(PICKED_NAME_KEY)).toBe("工作");
+    // the pick left the roster: back to the default, the pick and its name both forgotten
+    setRoster({ ...ROSTER, managers: ROSTER.managers.filter((m) => m.id !== "m-1") });
+    expect(localStorage.getItem(CHOICE_KEY)).toBeNull();
+    expect(localStorage.getItem(PICKED_NAME_KEY)).toBeNull();
+    // made the default: no pick, no name
+    setRoster(ROSTER);
+    chooseManager("m-1");
+    setRoster({ ...ROSTER, default: "m-1" });
+    expect(localStorage.getItem(CHOICE_KEY)).toBeNull();
+    expect(localStorage.getItem(PICKED_NAME_KEY)).toBeNull();
+  });
+
   it("keeps its name as the roster gives it, for the sidebar's head before the roster is read again", async () => {
     setRoster(ROSTER);
     chooseManager("m-1");

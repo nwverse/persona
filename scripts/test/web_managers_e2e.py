@@ -8,6 +8,8 @@ machines checks need; MOCK_MANAGER_OUTDATED=1 marks 工作 needs_update, for --o
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
     python3 scripts/test/web_managers_e2e.py http://127.0.0.1:<web port> --outdated [--shots <directory>]
 and for one manager (MOCK_MANAGERS=1 MOCK_EXTENSIONS=1 on another mock): web_managers_e2e.py <its web address> --single.
+A mock with MOCK_MANAGER_NEEDS_YOU=0 as well (a hub whose roster has no inbox counts) runs the same: the counts are then
+the agents waiting only.
 It moves the NAS to 工作 and back to 家里, so every round (390 / 1200, light / dark) starts alike.
 
 Checks the sidebar's assistant switcher (the current assistant in the sidebar's head; its list with New assistant and
@@ -39,6 +41,10 @@ def go(page, url):
         page.wait_for_timeout(500)
         page.goto(url)
 
+
+# What this browser keeps of the pick (lib/manager-choice.ts): the pick and its name, each per hub, both only while the
+# pick is another assistant than the default.
+KEPT = "Object.fromEntries(Object.entries(localStorage).filter(([k]) => k.startsWith('persona.currentManager') || k.startsWith('persona.pickedAssistantName')))"
 
 # The mock hub's installed managers (scripts/mock/mock_hub.py), by the name the switcher shows.
 MANAGERS = {"助手": "assistant", "工作": "m-3fa21c", "家里": "m-8b04d2"}
@@ -119,7 +125,7 @@ def check(browser, base, width, theme, shots, single, outdated):
             named = [r for r in api_requests if r[2] or r[3]]
             assert not named, named[:5]
             assert len(api_requests) > 20, len(api_requests)
-            assert page.evaluate("Object.keys(localStorage).filter((k) => k.startsWith('persona.currentManager'))") == []
+            assert page.evaluate(KEPT) == {}, page.evaluate(KEPT)
             assert not errors, errors
             return
 
@@ -164,7 +170,7 @@ def check(browser, base, width, theme, shots, single, outdated):
             page.screenshot(path=name("assistant"))
         page.reload()
         expect(main.get_by_role("textbox").last).to_be_enabled()
-        assert page.evaluate("Object.entries(localStorage).filter(([k]) => k.startsWith('persona.currentManager')).map(([, v]) => v)") == ["m-3fa21c"]
+        assert page.evaluate(KEPT) == {"persona.currentManager": "m-3fa21c", "persona.pickedAssistantName": "工作"}, page.evaluate(KEPT)
         del assistant_headers[:]
         page.wait_for_timeout(800)
 
@@ -234,13 +240,13 @@ def check(browser, base, width, theme, shots, single, outdated):
         go(page, base + "/")
         pick("助手")
         expect(main.get_by_role("textbox").last).to_be_enabled()
-        assert page.evaluate("Object.keys(localStorage).filter((k) => k.startsWith('persona.currentManager'))") == []
+        assert page.evaluate(KEPT) == {}, page.evaluate(KEPT)
         # another assistant's item opened by its address: the item opens, the current assistant stays
         go(page, base + "/inbox/lark%3Af3%3A300?manager=m-3fa21c")
         expect(main.get_by_text("周末徒步群", exact=False).first).to_be_visible()
         if width >= 1024:
             expect(head).to_have_attribute("data-assistant-switcher", "assistant")
-        assert page.evaluate("Object.keys(localStorage).filter((k) => k.startsWith('persona.currentManager'))") == []
+        assert page.evaluate(KEPT) == {}, page.evaluate(KEPT)
 
         page.goto(base + "/settings?tab=extensions")
         expect(main.get_by_text("工作", exact=True).first).to_be_visible()
@@ -306,10 +312,47 @@ def check(browser, base, width, theme, shots, single, outdated):
         context.close()
 
 
+def agents_waiting(request, base, auth, manager):
+    """The agents waiting at manager, counted here from the hub's lists by the rule every client shares
+    (docs/assistant/managers.md "The current assistant"): its sessions that are not a quiet task's and not muted, with
+    a pending card or in Needs you, once each; a pending card on no session, each."""
+    sessions = request.get(base + "/api/v1/sessions", headers=auth).json()["sessions"]
+    cards = request.get(base + "/api/v1/interactions", headers=auth).json()["interactions"]
+    mutes = request.get(base + "/api/v1/mutes", headers=auth).json()
+    key = lambda mid, sid: f"{mid}/{sid}"
+
+    def muted(mid, sid, space):
+        k = key(mid, sid)
+        if k in (mutes.get("sessions") or []):
+            return True
+        if k in (mutes.get("allowed") or []):
+            return False
+        return bool(space) and key(mid, space) in (mutes.get("spaces") or [])
+
+    by_key = {key(s["machine_id"], s["session_id"]): s for s in sessions}
+    counted = lambda s: not s.get("quiet") and not muted(s["machine_id"], s["session_id"], s.get("space_name"))
+    waiting = set()
+    for s in sessions:
+        if s.get("manager") == manager and not s.get("assistant") and counted(s) and (s.get("state") or s.get("status")) == "needs_you":
+            waiting.add(key(s["machine_id"], s["session_id"]))
+    for c in cards:
+        if c.get("manager") != manager:
+            continue
+        if not c.get("session_id"):
+            waiting.add("card:" + c["id"])
+            continue
+        s = by_key.get(key(c["machine_id"], c["session_id"]))
+        if s is not None and not counted(s) or s is None and muted(c["machine_id"], c["session_id"], None):
+            continue
+        waiting.add(key(c["machine_id"], c["session_id"]))
+    return len(waiting)
+
+
 def check_counts(browser, base):
-    """The count beside 工作 is its agents waiting plus the roster's inbox_needs_you, and moves without a reload when the hub
-    pushes `managers`: one of its inbox items that need the user handled elsewhere (as another device would), then
-    brought back."""
+    """The count beside 工作 is its agents waiting (counted here from the hub's lists) plus the roster's inbox_needs_you,
+    0 when the roster has none (a hub from before it, MOCK_MANAGER_NEEDS_YOU=0). Where the roster has it, the count moves
+    without a reload when the hub pushes `managers`: one of its inbox items that need the user handled elsewhere (as
+    another device would), then brought back."""
     context = browser.new_context(viewport={"width": 1200, "height": 900}, locale="zh-CN")
     page = context.new_page()
     page.set_default_timeout(15000)
@@ -322,18 +365,27 @@ def check_counts(browser, base):
         head = page.locator("[data-assistant-switcher]")
         expect(head).to_have_attribute("data-assistant-switcher", "assistant")
 
-        def needs_you():
+        def work():
             roster = page.request.get(base + "/api/v1/managers", headers=auth).json()
-            return next(m for m in roster["managers"] if m["id"] == MANAGERS["工作"]).get("inbox_needs_you", 0)
+            return next(m for m in roster["managers"] if m["id"] == MANAGERS["工作"])
 
+        def needs_you():
+            return work().get("inbox_needs_you", 0)
+
+        agents = agents_waiting(page.request, base, auth, MANAGERS["工作"])
+        has_field = "inbox_needs_you" in work()
         before_needs = needs_you()
-        assert before_needs > 0, before_needs
         head.click()
         badge = page.get_by_role("menu").get_by_role("menuitemradio").filter(has_text="工作").locator("[data-menu-badge]")
-        expect(badge).to_be_visible()
+        expect(badge).to_have_text(str(agents + before_needs))
         before = int(badge.inner_text())
-        agents = before - before_needs
-        assert agents >= 0, (before, before_needs)
+        assert agents > 0, agents
+        if not has_field:
+            # a hub without the field: the agents only, and nothing an inbox change pushes moves it
+            assert before == agents, (before, agents)
+            assert not errors, errors
+            return
+        assert before_needs > 0, before_needs
 
         def done(item_id, on):
             r = page.request.post(f"{base}/api/v1/inbox/{item_id}/done", headers={**auth, "X-Persona-Manager": MANAGERS["工作"]}, data={"done": on})
