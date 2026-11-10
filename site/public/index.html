@@ -67,10 +67,10 @@ button{font:inherit;color:inherit}
 .brand img{width:34px;height:34px;border-radius:9px;border:2px solid var(--ink)}
 .brand span{font:800 19px/1 var(--mark);letter-spacing:-.01em}
 .top nav{display:flex;align-items:center;gap:4px}
-.top nav a{font-size:15px;text-decoration:none;padding:7px 13px;border-radius:999px;white-space:nowrap}
+.top nav a{display:inline-flex;align-items:center;min-height:44px;font-size:15px;text-decoration:none;padding:0 13px;border-radius:999px;white-space:nowrap}
 .top nav a:hover{background:var(--sky-tint)}
 .top nav a.go{border:2px solid var(--ink);background:var(--paper);margin-left:6px}
-.top nav a.ver{display:inline-flex;align-items:center;gap:7px;margin-left:6px;padding:6px 12px;border:1.5px solid var(--sky-line);font:500 12.5px/1 var(--mono);color:var(--mist)}
+.top nav a.ver{display:inline-flex;align-items:center;gap:7px;margin-left:6px;min-height:30px;padding:0 12px;border:1.5px solid var(--sky-line);font:500 12.5px/1 var(--mono);color:var(--mist)}
 .top nav a.ver[hidden]{display:none}
 .top nav a.ver i{width:7px;height:7px;border-radius:50%;background:var(--go)}
 @media (max-width:1120px){.top nav a.ver{display:none}}
@@ -265,12 +265,13 @@ h1 .say path{fill:none;stroke:var(--cheek);stroke-width:7;stroke-linecap:round}
 .path{display:flex;flex-direction:column;align-items:flex-start;padding:26px;background:var(--paper);border:var(--stroke);border-radius:var(--r);box-shadow:var(--lift)}
 .path h3{margin:0 0 8px;font-size:20px}
 .path p{margin:0 0 18px;font-size:15px;line-height:1.7;color:var(--body)}
-.path .btn{margin-top:auto;padding:12px 18px;font-size:15px}
+.path .btn{margin-top:auto;padding:13px 18px;font-size:15px}
 .path.first{background:var(--cheek-tint)}
 .cmd{position:relative;width:100%;margin:0 0 14px;padding:12px 44px 12px 14px;background:var(--ink);color:#E9E8F0;border-radius:14px;font:400 12.5px/1.6 var(--mono);word-break:break-all}
 .cmd .pr{color:#9C9AB0;user-select:none}
 .copy{position:absolute;right:8px;top:8px;width:30px;height:30px;display:grid;place-items:center;padding:0;background:#2E2D38;color:#E9E8F0;border:0;border-radius:8px;cursor:pointer}
 .copy svg{width:15px;height:15px}
+.copy::before{content:"";position:absolute;inset:-7px}
 .copy.ok{background:var(--go)}
 .paths{grid-template-columns:minmax(0,5fr) minmax(0,7fr);align-items:start}
 .steps{width:100%;margin:4px 0 22px;padding:0;list-style:none;counter-reset:step;display:grid;gap:18px}
@@ -314,7 +315,7 @@ html:not(.js) .lockmark .shackle,.lockmark.in .shackle{transform:none}
 @keyframes wave{0%,50%,100%{transform:translateY(0) rotate(0)}25%{transform:translateY(-7px) rotate(0)}62%{transform:rotate(-4deg)}74%{transform:rotate(3deg)}86%{transform:rotate(-2deg)}}
 .sign .hello{margin:0;font:700 clamp(30px,3.4vw,44px)/1.3 var(--serif);font-feature-settings:"palt"}
 .sign .hello-sub{margin:12px 0 0;max-width:32em;font-size:18px;color:var(--body)}
-.sign .issue{margin-top:20px;padding:12px 18px;font-size:15px}
+.sign .issue{margin-top:20px;padding:13px 18px;font-size:15px}
 .foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 24px;padding:22px 0 40px;border-top:2px solid var(--sky-line);font-size:13.5px;color:var(--mist)}
 .foot nav{display:flex;flex-wrap:wrap;gap:6px 20px}
 .foot a{text-decoration:none}
