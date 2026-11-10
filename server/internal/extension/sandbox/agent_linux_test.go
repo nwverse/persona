@@ -559,6 +559,9 @@ func TestLinuxAgentSandboxNamespaceBoundariesForReal(t *testing.T) {
 	if _, err := exec.LookPath("umount"); err != nil {
 		t.Skip("umount is not installed")
 	}
+	if out, err := exec.Command("unshare", "-rm", "/bin/true").CombinedOutput(); err != nil {
+		t.Skipf("the host cannot create the nested control namespace: %v: %s", err, strings.TrimSpace(string(out)))
+	}
 	f := newAgentFixture(t)
 	work := filepath.Join(f.home, "work")
 	if err := os.Mkdir(work, 0o700); err != nil {
