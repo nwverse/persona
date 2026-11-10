@@ -128,8 +128,38 @@ enum ExtensionUIStyle {
         case "secondary": Theme.Font.secondary
         case "caption": Theme.Font.caption
         case "code": Theme.Font.code
+        // UI version 6: a section's big title and a small heading.
+        case "title": Theme.Font.title
+        case "headline": Theme.Font.heading
         default: Theme.Font.body
         }
+    }
+
+    /// A named color (UI version 6, schema `Color`) as the app's own hue, right in light and dark; nil for a name this
+    /// app does not know (the quiet ink then). Marks only: icons, badges' tints, tiles, chart series, never text.
+    static func color(_ name: String?) -> Color? {
+        switch name {
+        case "red": Theme.Hue.red
+        case "orange": Theme.Hue.orange
+        case "amber": Theme.Hue.amber
+        case "yellow": Theme.Hue.yellow
+        case "green": Theme.Hue.green
+        case "teal": Theme.Hue.teal
+        case "blue": Theme.Hue.blue
+        case "indigo": Theme.Hue.indigo
+        case "purple": Theme.Hue.purple
+        case "pink": Theme.Hue.pink
+        case "gray": Theme.Hue.gray
+        default: nil
+        }
+    }
+
+    /// A badge's look: its tone (words and fill in the role color); else its named color as a soft tint behind words
+    /// in the text's own color (UI version 6: a color is never on text); else neutral.
+    static func badge(_ b: ExtensionBadge) -> Chip.Look {
+        if let t = b.tone, t != "neutral" { return .tint(tone(t)) }
+        if let c = color(b.color) { return .tint(c.opacity(0.14), text: .primary) }
+        return .neutral
     }
 
     /// The icon set's names (docs/extensions/extensions.md「New components」: a row's `icon`, an empty state's, a nav_page's) as the app's
@@ -155,6 +185,59 @@ enum ExtensionUIStyle {
         case "tag": Theme.Icon.label
         case "search": Theme.Icon.search
         case "settings": Theme.Icon.settings
+        // UI version 4's code hosting.
+        case "branch": Theme.Icon.gitBranch
+        case "commit": Theme.Icon.pluginCommit
+        case "code": Theme.Icon.code
+        case "pull_request": Theme.Icon.pullRequest
+        case "merge": Theme.Icon.merged
+        case "file": Theme.Icon.file
+        // UI version 6: homes and markets; meanings the app has draw its own.
+        case "home": Theme.Icon.home
+        case "sofa": Theme.Icon.pluginSofa
+        case "light": Theme.Icon.pluginLight
+        case "power": Theme.Icon.pluginPower
+        case "fan": Theme.Icon.pluginFan
+        case "thermometer": Theme.Icon.pluginThermometer
+        case "droplet": Theme.Icon.pluginDroplet
+        case "lock": Theme.Icon.locked
+        case "unlock": Theme.Icon.pluginUnlock
+        case "door": Theme.Icon.pluginDoor
+        case "window": Theme.Icon.pluginWindow
+        case "camera": Theme.Icon.camera
+        case "video": Theme.Icon.video
+        case "play": Theme.Icon.run
+        case "pause": Theme.Icon.pause
+        case "stop": Theme.Icon.interrupt
+        case "speaker": Theme.Icon.pluginSpeaker
+        case "tv": Theme.Icon.pluginTV
+        case "plug": Theme.Icon.pluginPlug
+        case "battery": Theme.Icon.pluginBattery
+        case "bolt": Theme.Icon.pluginBolt
+        case "sun": Theme.Icon.lightMode
+        case "moon": Theme.Icon.darkMode
+        case "cloud": Theme.Icon.pluginCloud
+        case "rain": Theme.Icon.pluginRain
+        case "snow": Theme.Icon.pluginSnow
+        case "wind": Theme.Icon.pluginWind
+        case "leaf": Theme.Icon.pluginLeaf
+        case "car": Theme.Icon.pluginCar
+        case "location": Theme.Icon.currentLocation
+        case "robot": Theme.Icon.pluginRobot
+        case "wifi": Theme.Icon.pluginWifi
+        case "shield": Theme.Icon.protection
+        case "trend_up": Theme.Icon.pluginTrendUp
+        case "trend_down": Theme.Icon.pluginTrendDown
+        case "wallet": Theme.Icon.pluginWallet
+        case "bank": Theme.Icon.pluginBank
+        case "heart": Theme.Icon.health
+        case "plus": Theme.Icon.add
+        case "minus": Theme.Icon.pluginMinus
+        case "trash": Theme.Icon.delete
+        case "edit": Theme.Icon.edit
+        case "refresh": Theme.Icon.retry
+        case "share": Theme.Icon.share
+        case "info": Theme.Icon.info
         default: Theme.Icon.plugins
         }
     }
@@ -174,6 +257,7 @@ struct ExtensionItemRow: View {
                 .font(ExtensionUIStyle.font(t.style))
                 .foregroundStyle(t.style == "secondary" || t.style == "caption" ? Color.secondary : Color.primary)
                 .textSelection(.enabled)
+                .accessibilityAddTraits(t.style == "title" || t.style == "headline" ? .isHeader : [])
         case .markdown(let m): ExtensionMarkdown(text: m.text, link: $link)
         case .metric(let m): metric(m)
         case .progress(let p): progress(p)
@@ -239,7 +323,15 @@ struct ExtensionItemRow: View {
 
     private func metric(_ m: ExtensionMetricComponent) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            Text(m.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: Theme.Space.xs) {
+                // UI version 6: an icon before the label, in its named color (else the quiet ink).
+                if let i = m.icon, !i.isEmpty {
+                    ThemedIcon(ExtensionUIStyle.icon(i)).foregroundStyle(ExtensionUIStyle.color(m.iconColor) ?? Color.secondary)
+                        .accessibilityHidden(true)
+                }
+                Text(m.label).lineLimit(1)
+            }
+            .font(Theme.Font.label).foregroundStyle(.secondary)
             ExtensionChangingText(m.value).font(Theme.Font.title.monospacedDigit()).foregroundStyle(ExtensionUIStyle.ink(m.tone)).lineLimit(1)
                 .minimumScaleFactor(0.6)
             if let d = m.detail, !d.isEmpty { Text(d).font(Theme.Font.label).foregroundStyle(.secondary) }

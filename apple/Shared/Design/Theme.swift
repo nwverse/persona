@@ -846,6 +846,12 @@ nonisolated enum Theme {
         static let pink = Color(light: 0xD62E5C, dark: 0xFF6B8B)
         /// A quiet mark: a list row's tile that is information, not a place to go.
         static let gray = Color(light: 0x8E8E93, dark: 0x636366)
+        // The rest of an extension's named colors (UI version 6, `ExtensionUIStyle.color`, #827): marks only (icons,
+        // badges' tints, tiles, chart series), never text.
+        static let red = Color(light: 0xD1342C, dark: 0xFF6961)
+        static let amber = Color(light: 0xB7791F, dark: 0xF5B342)
+        static let yellow = Color(light: 0x9A7B00, dark: 0xFFD60A)
+        static let teal = Color(light: 0x0F7C80, dark: 0x40C8C8)
     }
 
     /// The user's own messages.
