@@ -2319,7 +2319,7 @@ if "nas" in MANAGED_MACHINES and any(m["id"] == "nas" for m in MACHINES) and not
                          "备份改成增量了。", seen_at=ago(minutes=190)))
 # hub-assistant_link.offline (zh-Hans): what the hub puts in an offline manager's computers' error
 MANAGER_OFFLINE_ERROR = "助手暂时连不上，稍后再试"
-MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2"}
+MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2", "lark:f2:200": "m-3fa21c", "mail:acc1:t4:504": "m-3fa21c"}
 # extensions / plugins / connectors of the other managers: by position among the ones not built in. The built-ins
 # (source "builtin": cua, ego, imessage, voice…) are every manager's own, as each one's extmgr adds them (extensions.go
 # AddBuiltin), so the merged list has them once per installed manager.
@@ -2359,6 +2359,19 @@ def inbox_owner(item_id):
     dflt = MANAGERS["default"]
     mid = MANAGED_INBOX.get(item_id, dflt)
     return mid if _manager_known(mid) else dflt
+
+
+def inbox_needs_you():
+    """Each installed, online manager's `inbox_needs_you` in the roster (hub/managers.go): its open inbox items under
+    "Needs you" (the hub's status, else the tier; untriaged counts), the connectors' among them. A manager that is
+    away or being installed has none. MOCK_MANAGER_NEEDS_YOU=0: none at all, as a hub or managers from before it."""
+    if os.environ.get("MOCK_MANAGER_NEEDS_YOU") == "0": return {}
+    out = {m["id"]: 0 for m in MANAGERS["list"] if m.get("online") and not m.get("installing")}
+    for x in INBOX:
+        status = x.get("status") or (x.get("tier") if x.get("tier") in ("fyi", "noise") else "action")
+        owner = inbox_owner(x.get("id"))
+        if owner in out and not x.get("done_at") and status == "action": out[owner] += 1
+    return out
 
 
 def merged_by_manager(items):
@@ -2526,7 +2539,9 @@ def managers_route(h, method, p):
                         datetime.fromisoformat(m["installing"].replace("Z", "+00:00")) > datetime.now(timezone.utc) - timedelta(days=7)]
     ms, dflt = MANAGERS["list"], MANAGERS["default"]
     if p == "/api/v1/managers" and method == "GET":
-        out = [dict(m, default=True) if m["id"] == dflt else m for m in ms]
+        needs_you = inbox_needs_you()
+        out = [dict(m, **({"default": True} if m["id"] == dflt else {}),
+                    **({"inbox_needs_you": needs_you[m["id"]]} if m["id"] in needs_you else {})) for m in ms]
         out.sort(key=lambda m: (m["id"] != dflt, bool(m.get("installing"))))
         reply = {"managers": out, "default": dflt}
         if os.environ.get("MOCK_SHARED_BOTS") == "1":
@@ -16581,6 +16596,18 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         self.send_json({"ok": True})
 
+    _do_post = do_POST
+
+    def do_POST(self):
+        """As the hub: a request that moved a manager's inbox_needs_you tells the apps to read the roster again (at
+        once: the hub waits a second for the counts that change together). Only a request does here: an inbox the
+        mock changes on its own (/mock/… fixtures, timers) moves the roster's number without a push."""
+        before = inbox_needs_you()
+        try:
+            return self._do_post()
+        finally:
+            if inbox_needs_you() != before: _managers_changed()
+
     do_PUT = do_POST
     do_DELETE = do_POST
     do_PATCH = do_POST
@@ -17176,6 +17203,7 @@ MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
+MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
 MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装码过期了还没装的（码已过期，可以拿新的安装码），和一个过期超过 7 天的（像 hub 一样不在名册里）")
