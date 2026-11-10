@@ -50,7 +50,12 @@ The latter is not a home-layout toggle and is not a reason to remove Android's I
 
 The existing **Assistant / Agents** home tabs do not change. Above the Assistant composer, the old All/task/Agent chip
 strip becomes three single-line actions, ordered **Pending**, **Progress**, **Agents**. Tapping opens a bounded, scrollable
-tray upward and flips its arrow; opening another closes the first. The bar is absent on the Agents page.
+tray upward and selects its entry; opening another closes the first. The bar is absent on the Agents page.
+
+The entries are the same short filter chips as the old All / task chips (#2956): `AssistantTrayEntry` draws a `JChip`, so
+height (36 dp), the style's chip radius, 12 dp side padding, `labelSmall` text, the `micro` count and the selected fill
+all come from `JChipTokens` and `JChip` rather than a second copy. They sit content-width at the leading edge and scroll
+sideways when a large font no longer fits them. The open tray is the chip's selected state; there is no arrow.
 
 - **Pending:** orange dot/count; one row per decision, with Approve or Review and an Approve all header. Bulk approval
   takes only explicitly approvable permissions/plans, respects the session's approval capability and never chooses an
@@ -1476,6 +1481,7 @@ Specification [extensions.md](../extensions/extensions.md) ("Turning contributio
 
 - **Contribution toggles**: detail contributions listed individually, disableable via `setContribution` `PUT …/-/contributions/{point}/{id}`, update from detail response; unsaved settings retained, failure preserves state/reason. can_disable false status-only; via connector says controlled in connector settings; manager.json read-only. Legacy absent field uses contributes/Provides list.
 - **Dependencies/bundles**: preview depends/bundle/unresolved, manifest extension_pack. `BundlePreview` confirmation lists dependency status/members/every extension installed-upgraded/permissions/additions/warnings. Disabled/unknown dependencies or missing members block confirmation; flattened bundle evaluates member dependencies as group. Confirm returns all `{preview_id, permissions_digest}` in original order, never installs only main silently. Legacy previews unchanged.
+- **Installed dependencies and pack members** (#1315): the manager-bound extension detail retains `depends` and `extension_pack`. Its settings page lists each dependency's name/id, required version and readiness (including the installed version when too old), then each pack member's id, version constraint and market. These sections are read-only and absent when an older hub supplies neither field. Unknown installed dependency states ask to refresh details, without changing installation-preview guidance.
 - **Not-ready dependency** (#2469): state not_ready explicitly Dependency not ready, complete dependency setup then preview again including same-bundle dependencies. Only ok Satisfied; unknown conservative/blocking, legacy fields unchanged.
 - **Declaration assembly**: Root `ExtensionDeclarationsHost` supplies prompts/themes/triage templates by current hub identity (`ExtensionDeclarationsModel`), resumed-only fetch, immediate on return then 30 sec; reload after local install/upgrade/uninstall/disable/contribution change. New API 404 means unsupported/empty; other errors retain data, never treat outage as disabled. No demo.
 - **Quick prompts**: GET …/-/prompts → `LocalExtensionPrompts`, composer slash/+ lists, single-line title, identity extension/id. Choosing replaces text, cursor end/focus, preserves attachments, no send/command callback. Built-in behavior unchanged, shared main/Agent composer.
