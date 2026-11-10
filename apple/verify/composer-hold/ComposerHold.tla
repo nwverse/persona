@@ -127,11 +127,11 @@ Taken ==
     /\ Put([FinishS([St EXCEPT !.pending = FALSE, !.decided = FALSE], "lock") EXCEPT !.down = FALSE],
            1, "ComposerHoldMic.swift:91-98", "touch taken away")
 
-\* ---- Send (ShellComposerBar.swift:215, endDictation :463-466) ----
+\* ---- Send (ShellComposerBar.swift:221, endDictation :492-495) ----
 Send ==
     /\ sends < MaxSends /\ ~down
     /\ Put([(IF listening THEN StopS(St) ELSE St) EXCEPT !.wantOn = FALSE, !.sends = sends + 1],
-           2, "ShellComposerBar.swift:215 + :463-466", "send: dictation ended")
+           2, "ShellComposerBar.swift:221 + :492-495", "send: dictation ended")
 
 \* ---- A start task ----
 

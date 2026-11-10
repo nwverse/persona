@@ -53,11 +53,11 @@ into the draft.
 ### Finding 2 (r4): send while a tapped mic still waits for permission
 
 1. A tap on the mic: start task 1 (ComposerButtons.swift:56).
-2. Send. `endDictation` stops only a dictation that is already listening (ShellComposerBar.swift:463-466), so it
+2. Send. `endDictation` stops only a dictation that is already listening (ShellComposerBar.swift:492-495), so it
    does nothing here, and the message goes.
 3. Task 1 gets permission, claims and listens: dictation starts writing into the emptied composer after the send.
 
-The same happens when the composer goes away (`onDisappear`, ShellComposerBar.swift:275). Both findings need the
+The same happens when the composer goes away (`onDisappear`, ShellComposerBar.swift:282). Both findings need the
 second action inside the permission wait. Once permission is granted, `allowed()` comes back after two callbacks on
 a system queue, a few milliseconds. The first time, it waits for the system's prompts. **Only model evidence:**
 `allowed()` is private and the DEBUG dictation sample (`-showDictationSample`) has no wait, so the real code can't
@@ -73,7 +73,7 @@ the maintainers' call.
 | `Slide(o)` | `whileHeld` decides (:118-123), then `finish` (:49-63) |
 | `Up(o)` | `onEnded` (:133-143): `finish` with `onRelease`'s outcome, or `toggle` for a tap; then `onChange(of: touching)` (:91-98), which then has nothing to do |
 | `Taken` | `onChange(of: touching)` without an end (:91-98): `finish(.lock)` |
-| `Send` | send (ShellComposerBar.swift:215) and `endDictation` (:463-466) |
+| `Send` | send (ShellComposerBar.swift:221) and `endDictation` (:492-495) |
 | `TaskRuns(t)` | the task body runs into `Dictation.start` up to `await Self.allowed()` (Views/Chat/PromptComposer.swift:327-338) |
 | `TaskResumes(t)` | the rest of `start` runs without suspending: `claim` (:345, Shared/Recording/RecordingMicrophone.swift:12-22), the engine (:356-361), `isListening` (:372). Then the caller: `begin`'s check (ComposerHoldMic.swift:36-46) or `toggle`'s (ComposerButtons.swift:57-59) |
 | `StopS` | `Dictation.stop` (PromptComposer.swift:402-417): only the owner gets past `release` |
