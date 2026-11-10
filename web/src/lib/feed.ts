@@ -145,7 +145,7 @@ export interface BriefBody {
   /** Questions Agents left to wait for a briefing, the oldest first (`id` is the one the Handled button sends). A hub that does not know them leaves the list out. */
   later: BriefRow[];
   later_total: number;
-  progress: { id: string; title: string; stage?: string }[];
+  progress: { id: string; title: string; stage?: string; stage_kind?: Todo["stage_kind"] }[];
   progress_total: number;
 }
 

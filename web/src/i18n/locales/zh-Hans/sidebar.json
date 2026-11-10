@@ -140,5 +140,12 @@
   "arrange_pages": "整理侧栏…",
   "draft": "草稿",
   "resize_label": "拖动调整侧边栏宽度",
-  "resize_title": "拖动调整宽度，双击还原"
+  "resize_title": "拖动调整宽度，双击还原",
+  "assistants": "助手",
+  "new_assistant": "新建助手",
+  "manage_assistants": "管理助手…",
+  "switched_to": "已切换到 {name}",
+  "switcher_label": "{name}，切换助手",
+  "switcher_label_waiting": "{name}，切换助手。别的助手有事等你处理",
+  "switcher_count": "{count} 件等你处理"
 }
