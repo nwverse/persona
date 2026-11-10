@@ -2233,7 +2233,7 @@ A row's extra actions open from a right click, a half-second press on a touch sc
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
 **iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
-(the 45 icons, named colors, `title` / `headline`), row actions, and charts and sparks; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+(the 45 icons, named colors, `title` / `headline`), row actions, charts and sparks, and tiles (grid, carousel); see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2686,6 +2686,11 @@ Views, components, actions, responses, placements and context all use schema-gen
   close, volume bars under it when every point has one, rising green unless `rising` is red, the falling one the other color; holding a candle reads its prices), a series' named `color`
   (after its tone); `spark` (`TrendLine`) before a row's value, under a metric's number and a stat's, in its named color, else its tone's, else the quiet ink. Unit tests
   `ExtensionChartsTests`; screenshots of `showcase › chart-v6` and `showcase › spark`.
+- UI version 6's tiles (#827, `ExtensionTiles.swift`): a `grid` in as many columns as fit (two on a phone, at most `max_columns`, 4 when absent), a `carousel` in one line that scrolls
+  sideways and snaps to a tile (narrow, regular, or wide: most of the width), both on the page's background as wide as the sections. A tile has its picture across the top (https; a hub one
+  comes with pictures) or its icon in its color, the title, a state line, a value and a spark, a badge and a switch in its corner (the controls' model: shown at once, confirm asks); `active`,
+  or its switch on, lays its color under and around it, the text staying in the ink. Tapping does its action, a long press shows its `actions`; VoiceOver reads it as one element. Unit tests
+  `ExtensionTilesTests`; screenshots of `showcase › grid`, `carousel` and `home-demo`.
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.

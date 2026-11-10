@@ -317,9 +317,19 @@ struct ExtensionItemRow: View {
                         return await context.onRequest(request, key, version)
                     })
             }
-        // UI version 6's picture, grid and carousel are not drawn yet (#827). Until all of version 6 is, the app asks
-        // for an older version, so the hub turns them into older components before they get here.
-        case .divider, .unknown, .image, .grid, .carousel: EmptyView()
+        // UI version 6's tiles (`ExtensionTiles.swift`): on the page's background, as wide as the sections.
+        case .grid(let g):
+            ExtensionGridItem(grid: g, model: model, link: $link)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush, bottom: Theme.Space.s, trailing: Theme.Space.flush))
+        case .carousel(let c):
+            ExtensionCarouselItem(carousel: c, model: model, link: $link)
+                .listRowBackground(Color.clear)
+                // Its own page margin lines its first tile up with the rows' words; it scrolls to the section's edges.
+                .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.flush, bottom: Theme.Space.s, trailing: Theme.Space.flush))
+        // UI version 6's picture is not drawn yet (#827). Until all of version 6 is, the app asks for an older version,
+        // so the hub turns it into older components before it gets here.
+        case .divider, .unknown, .image: EmptyView()
         // UI version 4's code-hosting components: a View with them is drawn by the code page (`ExtensionCodePage`, #2961).
         case .header, .breadcrumb, .fileTree, .code, .diff, .commentThread, .composer: EmptyView()
         }

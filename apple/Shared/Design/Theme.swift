@@ -590,6 +590,16 @@ nonisolated enum Theme {
         static let codeSideColumn: CGFloat = 300
         /// The width from which an extension's code page puts its side column beside the main one (#2961).
         static let codeSplitMin: CGFloat = 700
+        // An extension's tiles (UI version 6's grid and carousel, #827).
+        /// A grid's narrowest tile: two to a phone, more on wider screens.
+        static let tileMin: CGFloat = 150
+        /// A tile's least height.
+        static let tileHeight: CGFloat = 96
+        /// A carousel's narrow tile (scenes) and its usual one (rooms); a wide one (cameras) takes most of the width.
+        static let tileNarrow: CGFloat = 140
+        static let tileRegular: CGFloat = 200
+        /// A wide carousel tile's share of the width it scrolls in (the next one's edge shows).
+        static let tileWideShare: CGFloat = 0.8
     }
 
     /// The system's sidebar column on iPad (iOS 26, the glass styles), measured from its pixels: the split fills the
