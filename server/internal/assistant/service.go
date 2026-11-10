@@ -121,6 +121,7 @@ type Service struct {
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex
+	attend     attendState       // meeting_feed.go: feeding the meetings Persona attends, and their turns
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
 	work       workBook          // agents_work.go: the Agents business
@@ -294,7 +295,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true && !meetingSource(p) {
+		// A meeting's batch is no one speaking there either: its turn is a side exchange (meeting_turns.go).
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
@@ -514,6 +516,8 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
+	// A meeting's turn under way is the user's from here on (meeting_turns.go).
+	s.meetingTurnUserSpoke(r.MachineID, r.SessionID)
 	s.releasePushes(ctx, r.SessionID) // the user speaks: its turns are pushed as ever (supervise_digest.go)
 	s.withdrawAskUser(r.SessionID)    // a question it waits on is taken back: the user's words are not left behind its turn
 	s.unarchiveOnSend(r.MachineID, r.SessionID)
@@ -525,6 +529,9 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 // TurnStarted: one of a task's agents is working; what was going to be done about an agent's last turn is off.
 func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
+	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
+		return // a meeting's batch started it: a side exchange (meeting_turns.go)
+	}
 	s.turnStartedObserved(ctx, r, true)
 }
 
@@ -536,16 +543,26 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
+	s.turnEnded(ctx, r, s.meetingTurnEnded(r.MachineID, r.SessionID))
+}
+
+// turnEnded is TurnEnded; meeting: the turn was a meeting's batch's (meeting_turns.go), a side exchange that is
+// neither a task's progress nor triaged, mirrored or a reason to name the conversation.
+func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
-	s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
-	// A review's reviewer answered (supervise_autoreview.go).
-	go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
-	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
-	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	if !meeting {
+		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
+		// A review's reviewer answered (supervise_autoreview.go).
+		go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+		go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
+		go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
+	}
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
 	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
-	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
+	if !meeting {
+		s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
+	}
 }
 
 // afterSettle runs settled for machine's session sid once its turn stayed still (settleDelay, read now), on a timer:

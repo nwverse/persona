@@ -212,6 +212,9 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 
 // taskTurnSettled is taskTurnEnded once the turn stayed still: after its sleep, or afterSettle's timer.
 func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
+	if s.meetingTurnNow(machine, sid) {
+		return // a meeting's batch: never the task's progress, report or completion (meeting_turns.go)
+	}
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
 		return
