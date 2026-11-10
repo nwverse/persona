@@ -237,7 +237,8 @@ func (s *Service) snapshotApprovals(ctx context.Context, web string) []prompts.S
 		if gate == "" {
 			gate = "等用户批准"
 		}
-		out = append(out, prompts.SnapshotApproval{ID: t.ID, Title: t.Title, Stage: deliveryLabels[t.Delivery.State], Gate: gate,
+		out = append(out, prompts.SnapshotApproval{ID: t.ID, Title: clip(oneLine(t.Title), 60), Stage: deliveryLabels[t.Delivery.State],
+			Gate: clip(oneLine(gate), 60),
 			Link: todoLink(web, t.ID)})
 		if len(out) == 10 {
 			break
