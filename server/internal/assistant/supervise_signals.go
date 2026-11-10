@@ -26,6 +26,9 @@ const (
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
 	sigAsk         = "ask"         // its agent's card came to the supervisor before the user (ask_route.go)
+	// sigLeaderStuck: a leader's task is stuck (leader_reports.go): the main conversation says so in one line, no push
+	// (the owner's ruling after H1, #3609). Detail is the direction's name and where it is stuck.
+	sigLeaderStuck = "leader_stuck"
 )
 
 var (

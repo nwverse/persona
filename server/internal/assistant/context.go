@@ -23,8 +23,21 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		s.ackViewErrors(ctx, p)
 		return ContextResult{}
 	}
-	text := prompts.RenderAssistantContext(prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
-		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)})
+	c := prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx), Owner: s.owner(ctx),
+		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID)}
+	switch {
+	case c.Main:
+		cfg := s.settings(ctx)
+		names := s.leaderNames(ctx, cfg.Leaders)
+		for _, id := range cfg.Leaders {
+			if id != "" && id != cfg.Main {
+				c.Directions = append(c.Directions, prompts.ContextDirection{ID: id, Name: names[id]})
+			}
+		}
+	case c.Leader:
+		c.LeaderName = s.leaderNames(ctx, []string{p.SessionID})[p.SessionID]
+	}
+	text := prompts.RenderAssistantContext(c)
 	errs, receipts := s.viewErrors(ctx, p)
 	return ContextResult{Text: text, ViewErrors: errs, Receipts: receipts}
 }
