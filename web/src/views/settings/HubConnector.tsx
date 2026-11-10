@@ -48,15 +48,19 @@ function Mark({ id, size }: { id: string; size: number }) {
 
 // ── the rows on Settings › Connectors ────────────────────
 
-export function ConnectorList({ onOpen }: { onOpen: (id: string) => void }) {
+export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void }) {
   const [all, setAll] = useState<HubConnector[] | null>(null);
   const [error, setError] = useState("");
   const lark = useLarkOn();
   useEffect(() => {
     listConnectors()
-      .then((l) => (setAll(l), setError("")))
+      .then((l) => {
+        setAll(l);
+        onLarkCli?.(l.find((c) => c.id === "larkcli") ?? null);
+        setError("");
+      })
       .catch((e) => setError(errorText(e)));
-  }, []);
+  }, [onLarkCli]);
   const list = useMemo(() => all && otherConnectors(all, lark), [all, lark]);
   if (list?.length === 0) return null;
   return (
