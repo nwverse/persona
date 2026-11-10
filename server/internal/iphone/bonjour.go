@@ -36,8 +36,16 @@ type Service struct {
 	Addrs    []netip.Addr      `json:"addrs"`         // IPv4 first, link-local IPv6 last (with its zone)
 }
 
-// Identifier is the TXT record's identifier: what a pairing record's Identifier matches.
+// Identifier and AuthTag are the TXT values a phone is recognized by. The identifier changes; the tag is derived
+// from it with a key kept in the pairing record, so only the bridge can tell whether an advertisement is the phone
+// a record was made with (Matcher).
 func (s Service) Identifier() string { return s.TXT["identifier"] }
+func (s Service) AuthTag() string    { return s.TXT["authtag"] }
+
+// usable: the service can be matched and connected to.
+func (s Service) usable() bool {
+	return s.Port > 0 && len(s.Addrs) > 0 && s.Identifier() != "" && s.AuthTag() != ""
+}
 
 // Browser finds the advertisements on the network. done, when not nil, ends the search early once it says the
 // services so far are enough.
@@ -65,19 +73,6 @@ func Browse(ctx context.Context, wait time.Duration, done func([]Service) bool) 
 		return nil, err
 	}
 	return q.c.services(), nil
-}
-
-// FindByIdentifier is the advertisement whose TXT identifier is id, or nil.
-func FindByIdentifier(services []Service, id string) *Service {
-	if id == "" {
-		return nil
-	}
-	for i := range services {
-		if strings.EqualFold(services[i].Identifier(), id) && services[i].Port > 0 && len(services[i].Addrs) > 0 {
-			return &services[i]
-		}
-	}
-	return nil
 }
 
 // question asks name's type with the unicast-response bit, as a one-shot querier does.

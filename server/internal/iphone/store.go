@@ -22,9 +22,6 @@ type Record struct {
 	Name        string `json:"name,omitempty"`
 	ProductType string `json:"product_type,omitempty"` // the model identifier, e.g. iPhone16,2
 	OSVersion   string `json:"os_version,omitempty"`
-	// Identifier is what the phone advertises in its _remotepairing._tcp TXT record, from the bridge at pairing
-	// time: how Bonjour tells this phone from others on the network.
-	Identifier string `json:"identifier,omitempty"`
 	// Address is a manual "host" or "host:port" (a Tailscale address or name, where Bonjour doesn't reach); tried
 	// before Bonjour when set.
 	Address string `json:"address,omitempty"`

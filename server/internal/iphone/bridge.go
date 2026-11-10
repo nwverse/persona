@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/osproc"
 )
 
@@ -26,7 +27,8 @@ const BridgeName = "persona-iphone-bridge"
 // BridgeEnv names the bridge's path explicitly.
 const BridgeEnv = "PERSONA_IPHONE_BRIDGE"
 
-// FindBridge is the bridge's path: $PERSONA_IPHONE_BRIDGE, else next to this program, else in PATH.
+// FindBridge is the bridge's path: $PERSONA_IPHONE_BRIDGE, else in PATH, else <PERSONA_HOME>/bin, else next to
+// this program.
 func FindBridge() (string, error) {
 	if p := os.Getenv(BridgeEnv); p != "" {
 		if _, err := os.Stat(p); err != nil {
@@ -34,17 +36,21 @@ func FindBridge() (string, error) {
 		}
 		return p, nil
 	}
+	if p, err := exec.LookPath(BridgeName); err == nil {
+		return p, nil
+	}
+	dirs := []string{filepath.Join(identity.HomeDir(), "bin")}
 	if exe, err := os.Executable(); err == nil {
 		if real, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = real
 		}
-		p := filepath.Join(filepath.Dir(exe), BridgeName)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	for _, d := range dirs {
+		p := filepath.Join(d, BridgeName)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
 			return p, nil
 		}
-	}
-	if p, err := exec.LookPath(BridgeName); err == nil {
-		return p, nil
 	}
 	return "", &Error{Code: CodeBridgeMissing, Message: BridgeName + " is not installed on this computer"}
 }
@@ -67,7 +73,6 @@ type PairInfo struct {
 	Model          string `json:"model,omitempty"` // the product type, e.g. iPhone16,2
 	ProductType    string `json:"product_type,omitempty"`
 	ProductVersion string `json:"product_version,omitempty"`
-	Identifier     string `json:"identifier,omitempty"`
 }
 
 // maxOutput bounds what a one-shot command's stdout and stderr are kept to.
@@ -111,6 +116,25 @@ func (b Bridge) Pair(ctx context.Context, udid, out string) (PairInfo, error) {
 	}
 	return info, nil
 }
+
+// Match is `bridge match --record path --identifier id --auth-tag tag`: whether the advertisement with that TXT
+// identifier and authTag is the phone the record was made with (the tag is keyed with a secret in the record).
+func (b Bridge) Match(ctx context.Context, recordPath string, svc Service) (bool, error) {
+	out, err := b.oneShot(ctx, "match", "--record", recordPath, "--identifier", svc.Identifier(), "--auth-tag", svc.AuthTag())
+	if err != nil {
+		return false, err
+	}
+	var v struct {
+		Match bool `json:"match"`
+	}
+	if err := json.Unmarshal(lastLine(out), &v); err != nil {
+		return false, fmt.Errorf("%s match: %w", BridgeName, err)
+	}
+	return v.Match, nil
+}
+
+// Matcher says whether svc is the phone of the pairing record at recordPath.
+type Matcher func(ctx context.Context, recordPath string, svc Service) (bool, error)
 
 // oneShot runs one command to its end. A failure's error is the JSON on the last line of stderr (an *Error).
 func (b Bridge) oneShot(ctx context.Context, args ...string) ([]byte, error) {

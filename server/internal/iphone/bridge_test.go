@@ -27,7 +27,11 @@ pair)
     exit 1
   fi
   printf 'opaque' > "$out"
-  echo '{"udid":"'"$udid"'","name":"Test Phone","product_version":"26.1","identifier":"ID-1"}'
+  echo '{"udid":"'"$udid"'","name":"Test Phone","model":"iPhone99,1","product_version":"26.1"}'
+  ;;
+match)
+  # match --record <path> --identifier <id> --auth-tag <tag>: the record "knows" the tag TAG-1
+  if [ "$6" = "TAG-1" ]; then echo '{"match":true}'; else echo '{"match":false}'; fi
   ;;
 serve)
   if [ -n "$FAKE_SERVE_FAIL" ]; then
@@ -83,8 +87,14 @@ func TestBridgeOneShots(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "rec")
 	info, err := b.Pair(ctx, testUDID, out)
-	if err != nil || info.Identifier != "ID-1" || info.Name != "Test Phone" {
+	if err != nil || info.ProductType != "iPhone99,1" || info.Name != "Test Phone" {
 		t.Fatalf("Pair = %+v, %v", info, err)
+	}
+	for tag, want := range map[string]bool{"TAG-1": true, "TAG-2": false} {
+		svc := Service{TXT: map[string]string{"identifier": "ID", "authtag": tag}}
+		if ok, err := b.Match(ctx, out, svc); err != nil || ok != want {
+			t.Fatalf("Match(%s) = %v, %v", tag, ok, err)
+		}
 	}
 	t.Setenv("FAKE_PAIR_FAIL", "1")
 	if _, err := b.Pair(ctx, testUDID, out); Code(err) != "trust_pending" {
@@ -96,6 +106,18 @@ func TestFindBridge(t *testing.T) {
 	path, _ := fakeBridge(t)
 	t.Setenv(BridgeEnv, path)
 	if got, err := FindBridge(); err != nil || got != path {
+		t.Fatalf("FindBridge = %q, %v", got, err)
+	}
+	// Not in PATH: <PERSONA_HOME>/bin.
+	home := t.TempDir()
+	t.Setenv("PERSONA_HOME", home)
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv(BridgeEnv, "")
+	_ = os.MkdirAll(filepath.Join(home, "bin"), 0o700)
+	data, _ := os.ReadFile(path)
+	inHome := filepath.Join(home, "bin", BridgeName)
+	_ = os.WriteFile(inHome, data, 0o755)
+	if got, err := FindBridge(); err != nil || got != inHome {
 		t.Fatalf("FindBridge = %q, %v", got, err)
 	}
 	t.Setenv(BridgeEnv, filepath.Join(t.TempDir(), "missing"))
@@ -190,7 +212,7 @@ func TestPairKeepsAddressAndCleansUpOnFailure(t *testing.T) {
 	}
 	_ = m.SetAddress(testUDID, "phone.example.com")
 	rec, err := m.Pair(ctx, testUDID, nil)
-	if err != nil || rec.Address != "phone.example.com" || rec.Identifier != "ID-1" {
+	if err != nil || rec.Address != "phone.example.com" || rec.ProductType != "iPhone99,1" {
 		t.Fatalf("pairing again: %+v, %v", rec, err)
 	}
 	path, _ := m.store.RecordPath(testUDID)

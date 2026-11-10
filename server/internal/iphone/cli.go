@@ -140,9 +140,6 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 			name = rec.UDID
 		}
 		fmt.Fprintf(stdout, "Paired %s. The node finds it on the same Wi-Fi by Bonjour; elsewhere set its address with: %s phone address %s <host>\n", name, clitext.CommandName(), rec.UDID)
-		if rec.Identifier == "" {
-			fmt.Fprintln(stdout, "The bridge gave no Bonjour identifier for it, so set its address as above.")
-		}
 		return 0
 	case "forget":
 		if len(rest) != 1 {
@@ -188,10 +185,19 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 			return fail(err)
 		}
 		recs, _ := m.store.List()
-		paired := map[string]string{}
-		for _, r := range recs {
-			if r.Identifier != "" {
-				paired[strings.ToLower(r.Identifier)] = r.UDID
+		paired := map[string]string{} // instance → UDID
+		if match, err := m.matcher(); err == nil {
+			for _, svc := range services {
+				if !svc.usable() {
+					continue
+				}
+				for _, r := range recs {
+					path, _ := m.store.RecordPath(r.UDID)
+					if ok, _ := match(ctx, path, svc); ok {
+						paired[svc.Instance] = r.UDID
+						break
+					}
+				}
 			}
 		}
 		if *asJSON {
@@ -208,7 +214,7 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 			if len(s.Addrs) > 0 {
 				addr = hostPort(s.Addrs[0].String(), s.Port)
 			}
-			p := paired[strings.ToLower(s.Identifier())]
+			p := paired[s.Instance]
 			if p == "" {
 				p = "no"
 			}

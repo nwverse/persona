@@ -12,7 +12,7 @@ const testUDID = "00000000-TESTPHONE0001" // made up
 
 func TestStoreSaveLoadPermissions(t *testing.T) {
 	s := Store{Dir: filepath.Join(t.TempDir(), "phone")}
-	rec := Record{UDID: testUDID, Name: "Test Phone", Identifier: "id-1", PairedAt: time.Unix(1, 0).UTC()}
+	rec := Record{UDID: testUDID, Name: "Test Phone", ProductType: "iPhone99,1", PairedAt: time.Unix(1, 0).UTC()}
 	if err := s.Save(rec); err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestStoreSaveLoadPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Load(testUDID)
-	if err != nil || got.Name != "Test Phone" || got.Identifier != "id-1" {
+	if err != nil || got.Name != "Test Phone" || got.ProductType != "iPhone99,1" {
 		t.Fatalf("Load = %+v, %v", got, err)
 	}
 	for _, p := range []string{s.Dir, filepath.Join(s.Dir, testUDID)} {

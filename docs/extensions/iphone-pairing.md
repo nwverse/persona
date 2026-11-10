@@ -25,8 +25,7 @@ personad iphone list            # paired here, and plugged in now
 2. `personad iphone pair` asks the bridge (`persona-iphone-bridge pair --udid <udid> --out <path>`) for the trusted
    pairing. The phone asks its user to **Trust** this computer and for its passcode; the command waits up to 3 minutes.
 3. The bridge writes the pairing record; the node keeps it, and next to it what the bridge reported: the phone's
-   name, product type (model identifier such as `iPhone16,2`), iOS version and RemotePairing **identifier** (what the
-   phone advertises over Bonjour).
+   name, product type (model identifier such as `iPhone16,2`) and iOS version.
 
 The app can start the same pairing as a background job on the machine (`StartPair`, one job at a time, its state in
 the machine's iPhone status like the computer extension's install job). Someone still has to be at the phone to tap Trust.
@@ -43,7 +42,7 @@ through a temporary file and a rename.
 | File | Contents |
 | --- | --- |
 | `pairing.record` | The bridge's own format, holding this computer's private key for the phone. Only the bridge reads it; the node never parses it |
-| `device.json` | Nothing secret: name, product type, iOS version, Bonjour identifier, manual address, the last address that worked, when it was paired |
+| `device.json` | Nothing secret: name, product type, iOS version, manual address, the last address that worked, when it was paired |
 
 The **UDID** names the directory and is the phone's stable id: the same across addresses, reconnections and iOS
 updates. Name and iOS version are refreshed from the bridge's `device_info` whenever a session comes up.
@@ -62,14 +61,17 @@ session (re)connects it tries, in order:
    Bonjour doesn't reach (`--clear` to go back to Bonjour).
 2. **Bonjour**: a one-shot multicast DNS query for `_remotepairing._tcp.local.` on every multicast interface, IPv4 and
    IPv6, from an ephemeral port with the unicast-response bit (RFC 6762 §5.1), so it runs beside the system's own
-   responder without joining the group. The advertisement whose TXT `identifier` equals the record's is the phone;
-   its SRV port goes to the bridge with each address (IPv4 first, link-local IPv6 last with its interface, as
-   `fe80::…%en0`). It stops as soon as the phone is found, after at most about 4.5 seconds.
-   `personad iphone find` shows what it sees.
+   responder without joining the group. An advertisement doesn't name its phone: its TXT `identifier` changes, and
+   its `authTag` is derived from the identifier with a key kept inside the pairing record. So for each new
+   advertisement (with an address, a port, an identifier and a tag) the node asks the bridge
+   `persona-iphone-bridge match --record <path> --identifier <id> --auth-tag <tag>` → `{"match": true|false}`, and
+   connects to the first that matches: its SRV port goes to the bridge with each address (IPv4 first, link-local IPv6
+   last with its interface, as `fe80::…%en0`). It stops as soon as the phone is found, after at most about
+   4.5 seconds. `personad iphone find` shows what it sees and which paired phone each advertisement is.
 3. **The last address that worked**, remembered after each Bonjour connection: the fallback when Bonjour finds nothing.
 
-Without an identifier from the bridge (or a real phone that advertises a different TXT key), only the manual and last
-addresses work; `personad iphone pair` says so.
+`match` belongs to the bridge's USB pairing module (with `pair` and `usb-list`); until a bridge has it, Bonjour finds
+nothing and only the manual and last addresses work.
 
 ## Sessions
 
@@ -132,9 +134,9 @@ Errors are `*iphone.Error{Code, Message}`: the bridge's codes, plus `not_paired`
 
 ## Security
 
-- Addresses are only hints. Anything on the network can answer the Bonjour query with the phone's identifier, and a
-  manual address can be wrong; the bridge authenticates the phone with the keys in the pairing record before anything
-  is sent, so a wrong address fails to connect rather than reaching another device.
+- Addresses are only hints. Anything on the network can answer the Bonjour query, and a manual address can be wrong;
+  the bridge authenticates the phone with the keys in the pairing record before anything is sent, so a wrong address
+  fails to connect rather than reaching another device.
 - The pairing record holds this computer's private key for the phone: 0600 in a 0700 directory of the user the node
   runs as, never logged, never sent anywhere. The node passes only its path to the bridge.
 - Device ids and manual addresses are checked before they become paths or arguments (no `/`, `..`, or leading `-`).
@@ -144,10 +146,12 @@ Errors are `*iphone.Error{Code, Message}`: the bridge's codes, plus `not_paired`
 `personad iphone list | pair | forget | address | find | call` (`personad iphone -h`). `call <udid> <op> [json]` runs
 one operation through a session of the command's own, for checks; it doesn't go through the node.
 
+The bridge is found at `$PERSONA_IPHONE_BRIDGE`, else in `PATH`, else `<PERSONA_HOME>/bin`, else next to `personad`.
+
 ## Tests
 
-`server/internal/iphone`: the store's permissions and ids, Bonjour responses assembled into services, every row of the
+`server/internal/iphone`: the store's permissions and ids, Bonjour responses assembled into services and matched, every row of the
 replay table against an in-memory bridge, re-resolution after an address change, the health check, record changes
 from another process, backoff, and the real process path against a shell-script bridge. Locally checked once against
-a `_remotepairing._tcp` service registered with `dns-sd -R` on a Mac (found, matched by identifier, `serve` started at
-its address and port).
+two `_remotepairing._tcp` services registered with `dns-sd -R` on a Mac (both found, the one whose tag the record
+accepts matched, `serve` started at its address and port).

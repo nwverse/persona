@@ -168,6 +168,7 @@ func testManager(t *testing.T, rec Record) (*Manager, *fakePhone) {
 	p := &fakePhone{}
 	m.dial = p.dial
 	m.findBridge = func() (string, error) { return "/nonexistent/bridge", nil }
+	m.match = func(context.Context, string, Service) (bool, error) { return false, nil }
 	m.browse = func(context.Context, time.Duration, func([]Service) bool) ([]Service, error) { return nil, nil }
 	m.logf = t.Logf
 	if rec.UDID == "" {
@@ -317,15 +318,17 @@ func TestFailedSendIsResentOnNextLink(t *testing.T) {
 }
 
 func TestBonjourFollowsAddressChanges(t *testing.T) {
-	m, p := testManager(t, Record{Identifier: "ID-1"})
+	m, p := testManager(t, Record{})
+	m.match = func(_ context.Context, _ string, svc Service) (bool, error) { return svc.AuthTag() == "TAG-1", nil }
 	addr := netip.MustParseAddr("192.0.2.20")
 	var mu sync.Mutex
 	m.browse = func(ctx context.Context, wait time.Duration, done func([]Service) bool) ([]Service, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		return []Service{
-			{Instance: "other", Port: 1, TXT: map[string]string{"identifier": "ID-2"}, Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.99")}},
-			{Instance: "mine", Port: 49152, TXT: map[string]string{"identifier": "ID-1"}, Addrs: []netip.Addr{addr}},
+			{Instance: "other", Port: 1, TXT: map[string]string{"identifier": "ID-2", "authtag": "TAG-2"}, Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.99")}},
+			// The identifier rotates; the tag (checked with the record's key) is what says it is this phone.
+			{Instance: "mine", Port: 49152, TXT: map[string]string{"identifier": "ID-" + addr.String(), "authtag": "TAG-1"}, Addrs: []netip.Addr{addr}},
 		}, nil
 	}
 	if _, err := call(t, m, "device_info", time.Second); err != nil {

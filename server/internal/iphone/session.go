@@ -291,21 +291,15 @@ func (s *session) connect(rec Record) (*conn, Endpoint, error) {
 			lastErr = err
 		}
 	}
-	if rec.Identifier != "" {
-		// Browse's own rounds take at most 1.5 × browseWait; its context only stops it with the manager.
-		ctx, cancel := context.WithTimeout(s.m.ctx, 2*browseWait)
-		services, err := s.m.browse(ctx, browseWait, func(found []Service) bool { return FindByIdentifier(found, rec.Identifier) != nil })
-		cancel()
-		if svc := FindByIdentifier(services, rec.Identifier); svc != nil {
-			for _, a := range svc.Addrs {
-				ep := Endpoint{Host: a.String(), Port: svc.Port, Source: "bonjour"}
-				if c := try(ep); c != nil {
-					return c, ep, nil
-				}
+	if svc, err := s.find(path); svc != nil {
+		for _, a := range svc.Addrs {
+			ep := Endpoint{Host: a.String(), Port: svc.Port, Source: "bonjour"}
+			if c := try(ep); c != nil {
+				return c, ep, nil
 			}
-		} else if err != nil && lastErr == nil && ctx.Err() == nil {
-			lastErr = err
 		}
+	} else if err != nil && lastErr == nil {
+		lastErr = err
 	}
 	if rec.LastHost != "" {
 		ep := Endpoint{Host: rec.LastHost, Port: rec.LastPort, Source: "last"}
@@ -317,6 +311,60 @@ func (s *session) connect(rec Record) (*conn, Endpoint, error) {
 		lastErr = &Error{Code: CodeUnreachable, Message: "the phone wasn't found on the network (it advertises itself over Bonjour on the same Wi-Fi; elsewhere set its address with personad iphone address)"}
 	}
 	return nil, Endpoint{}, lastErr
+}
+
+// find is the phone's Bonjour advertisement, asking the bridge about each new one as it arrives (only the record
+// can tell its phone's advertisement from others'), or nil.
+func (s *session) find(recordPath string) (*Service, error) {
+	match, err := s.m.matcher()
+	if err != nil {
+		return nil, err
+	}
+	// Browse's own rounds take at most 1.5 × browseWait; its context only stops it with the manager.
+	ctx, cancel := context.WithTimeout(s.m.ctx, 2*browseWait)
+	defer cancel()
+	return findPhone(ctx, s.m.browse, match, recordPath)
+}
+
+// findPhone browses for the advertisement match says is the record's phone.
+func findPhone(ctx context.Context, browse Browser, match Matcher, recordPath string) (*Service, error) {
+	checked := map[string]bool{}
+	var found *Service
+	var matchErr error
+	check := func(services []Service) bool {
+		for _, svc := range services {
+			key := svc.Instance + "\x00" + svc.Identifier() + "\x00" + svc.AuthTag()
+			if found != nil || !svc.usable() || checked[key] {
+				continue
+			}
+			checked[key] = true
+			mctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			ok, err := match(mctx, recordPath, svc)
+			cancel()
+			if err != nil {
+				matchErr = err
+				continue
+			}
+			if ok {
+				found = &svc
+			}
+		}
+		return found != nil
+	}
+	services, err := browse(ctx, browseWait, check)
+	if found == nil && err == nil {
+		check(services) // what the last round added
+	}
+	if found != nil {
+		return found, nil
+	}
+	if matchErr != nil {
+		return nil, matchErr
+	}
+	if err != nil && ctx.Err() == nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // startConn wraps a ready link and passes its answers on until it ends.
