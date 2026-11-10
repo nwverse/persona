@@ -193,4 +193,35 @@ func TestQuietPatrolWakeByABackgroundTask(t *testing.T) {
 	if e.mirrored() {
 		t.Error("the result of the patrol's own background task would be mirrored")
 	}
+
+	// The patrol checks on the user's earlier task and its result names that task: the task is still the user's.
+	e = newPatrolEnv(t)
+	e.run()
+	e.working()
+	e.done([]proto.Item{e.patrolInput(),
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "TaskOutput", ToolUseID: "tu-chk"},
+		{Role: "user", Kind: proto.KindToolResult, ToolUseID: "tu-chk", Text: "<task_id>bx1</task_id><status>running</status>"},
+		{Role: "assistant", Kind: proto.KindText, Text: "Nothing new"},
+		{Role: "user", Kind: proto.KindNotice, Text: "Background command finished", Wake: true,
+			Task: &proto.TaskNote{Kind: "shell", Status: "completed", TaskID: "bx1", ToolUseID: "tu-user"}},
+		{Role: "assistant", Kind: proto.KindText, Text: "后台测试全部通过。"}}, "后台测试全部通过。")
+	if !e.mirrored() {
+		t.Error("the result of the user's task, named in a patrol call's result, would be hidden from channels")
+	}
+}
+
+// The user's turn ends and, before its finished push is decided, the next patrol's input is already in the transcript
+// while the session list has not moved: the answer above that input is the user's and is pushed.
+func TestQuietPatrolInputWrittenAfterUsersTurn(t *testing.T) {
+	e := newPatrolEnv(t)
+	e.working()
+	e.done([]proto.Item{{Role: "user", Kind: proto.KindText, Text: "帮我看下 MR"},
+		{Role: "assistant", Kind: proto.KindText, Text: "MR 已看完。"}, e.patrolInput()}, "MR 已看完。")
+	got := e.ft.pushesOf(assistantwire.NotifyDone, 1, 2*time.Second)
+	if len(got) != 1 || got[0].Body != "MR 已看完。" {
+		t.Errorf("the user's answer with a patrol input written after it: %d notifications, want 1 with its answer", len(got))
+	}
+	if !e.mirrored() {
+		t.Error("the user's answer with a patrol input written after it would be hidden from channels")
+	}
 }

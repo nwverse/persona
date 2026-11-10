@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // A scheduled task's "Push when done" (#2396, docs/assistant/assistant.md "Push after running"): each run is a turn in a conversation, and the
@@ -175,7 +176,9 @@ func (s *Service) askedTaskPostsInto(ctx context.Context, session string) bool {
 }
 
 // quietTurnItems: a turn's items (the node's last turn, from the input that started it) say its answer is only the
-// asked scheduled run's. The turn's input is its last user text that is neither queued nor a wake. After it:
+// asked scheduled run's. The turn's input is its last user text that is neither queued nor a wake, and the run has
+// answered after it (a patrol input written but not yet answered leaves the answer above it, the previous turn's).
+// After the input:
 //   - user input absorbed mid-turn (queued text or image without a scheduled source) makes the answer the user's too;
 //   - a wake by a background task this turn did not start (one the user started earlier, a loop, a peer) is
 //     the user's result, not the patrol's. A wake by a task the turn launched stays the patrol's.
@@ -190,6 +193,7 @@ func quietTurnItems(items []proto.Item) bool {
 	if start < 0 || !askedScheduledSource(prompts.ItemSource(items[start])) {
 		return false
 	}
+	answered := false
 	for i := start + 1; i < len(items); i++ {
 		it := items[i]
 		switch {
@@ -201,9 +205,11 @@ func quietTurnItems(items []proto.Item) bool {
 			if !askedScheduledSource(prompts.ItemSource(it)) {
 				return false
 			}
+		case it.Role == "assistant" && it.Kind == proto.KindText && strings.TrimSpace(it.Text) != "":
+			answered = true
 		}
 	}
-	return true
+	return answered
 }
 
 // askedScheduledSource: source is a scheduled run's that pushes only what it sends.
@@ -211,21 +217,24 @@ func askedScheduledSource(source *proto.MessageSource) bool {
 	return source != nil && (source.Kind == proto.SourcePatrol || source.Kind == proto.SourceFollowup) && source.Push == pushAsked
 }
 
-// launchedIn: the background task note reports on was launched by a call among items (its call id, or its task id in
-// a call's result). No note (a loop firing, a peer's message) was launched by none of them.
+// launchedIn: the background task note reports on was launched by a call among items. A note with its call's id is
+// matched by that id alone: another call's result may mention the task (a status check of the user's task). A note
+// without one falls back to its task id, matched whole against the id a call's result says that call started
+// (transcript.LaunchedBackgroundID). No note (a loop firing, a peer's message) was launched by none of them.
 func launchedIn(items []proto.Item, note *proto.TaskNote) bool {
-	if note == nil || note.ToolUseID == "" && note.TaskID == "" {
+	if note == nil {
 		return false
 	}
 	for _, it := range items {
-		if it.Kind != proto.KindToolUse && it.Kind != proto.KindToolResult {
-			continue
-		}
-		if note.ToolUseID != "" && it.ToolUseID == note.ToolUseID {
-			return true
-		}
-		if note.TaskID != "" && it.Kind == proto.KindToolResult && strings.Contains(it.Text, note.TaskID) {
-			return true
+		switch {
+		case note.ToolUseID != "":
+			if (it.Kind == proto.KindToolUse || it.Kind == proto.KindToolResult) && it.ToolUseID == note.ToolUseID {
+				return true
+			}
+		case note.TaskID != "":
+			if it.Kind == proto.KindToolResult && transcript.LaunchedBackgroundID(it.Text) == note.TaskID {
+				return true
+			}
 		}
 	}
 	return false
