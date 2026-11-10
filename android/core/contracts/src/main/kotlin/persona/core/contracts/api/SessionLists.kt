@@ -13,7 +13,10 @@ data class SessionListFilter(
     val source: String? = null,
     val provider: String? = null,
     val query: String = "",
-    /** Local policy: the caller derives membership the paged API cannot express (#6108). Never sent as a query. */
+    /**
+     * Local policy: the caller derives membership the paged API cannot express (#6108). Never sent as a filter; the
+     * transport reads complete rows (`summary=0`) for it.
+     */
     val requiresCompleteMembership: Boolean = false,
 )
 

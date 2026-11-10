@@ -34,8 +34,15 @@ class HubSessionsRepository(
     private var machinesChanged = 0L
     private val sessionChanges = mutableMapOf<String, Long>()
     private val revisionChanges = mutableMapOf<SessionKey, Long>()
-    private enum class Mode { Unknown, Paged, Legacy }
+    /**
+     * [Complete]: a view needing every row on a `sessions_list` hub. One baseline of complete pages (`summary=0`), then
+     * `since` reads of complete rows on each hint; a new baseline only on an expired revision, a changed hub (another
+     * repository, or a hello that changes the capability) or an explicit [refresh].
+     */
+    private enum class Mode { Unknown, Paged, Legacy, Complete }
     private var mode = Mode.Unknown
+    /** Held rows are the whole collection, not a bounded window. */
+    private val Mode.holdsAll get() = this == Mode.Legacy || this == Mode.Complete
     private var listCapability: Boolean? = null
     private var generation = 0L
     private var activeRequest: Job? = null
@@ -46,7 +53,8 @@ class HubSessionsRepository(
     private val pageStarts = mutableListOf<String?>(null)
     private data class LoadedPage(val index: Int, val keys: Set<SessionKey>)
     private val loadedPages = ArrayDeque<LoadedPage>()
-    private val invalidations = Channel<Unit>(Channel.CONFLATED)
+    /** A hint's revision, or "" for a local invalidation that must read. */
+    private val invalidations = Channel<String>(Channel.CONFLATED)
 
     private val restored = scope.async {
         val machines = snapshots.restore<List<Machine>>("machines")
@@ -61,7 +69,7 @@ class HubSessionsRepository(
     private suspend fun persist() {
         snapshots.save("machines", mutableMachines.value)
         // A cache is a first-paint hint, not a row checkpoint or a complete verified baseline.
-        snapshots.save("sessions", if (mode == Mode.Legacy) mutableSessions.value else mutableSessions.value.take(WINDOW_SIZE))
+        snapshots.save("sessions", if (mode.holdsAll) mutableSessions.value else mutableSessions.value.take(WINDOW_SIZE))
     }
 
     /**
@@ -82,7 +90,7 @@ class HubSessionsRepository(
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             connection.events.collect { event ->
                 if (event is SessionsListEvent) {
-                    invalidations.trySend(Unit)
+                    invalidations.trySend(event.revision)
                     return@collect
                 }
                 restored.await()
@@ -91,17 +99,21 @@ class HubSessionsRepository(
                         is Hello -> {
                             val enabled = "sessions_list" in event.features
                             val changed = (listCapability != null && listCapability != enabled) ||
-                                (mode == Mode.Legacy && enabled) || (mode == Mode.Paged && !enabled)
+                                (mode == Mode.Legacy && enabled) || (mode == Mode.Paged && !enabled) ||
+                                (mode == Mode.Complete && !enabled)
                             listCapability = enabled
                             if (changed) {
                                 generation++
                                 activeRequest?.cancel()
                                 mode = Mode.Unknown
                                 resetPages()
-                                mutableSessions.value = mutableSessions.value.take(WINDOW_SIZE)
+                                // A complete view keeps every row on screen until the new baseline replaces them.
+                                if (!mutableListStatus.value.filter.requiresCompleteMembership) {
+                                    mutableSessions.value = mutableSessions.value.take(WINDOW_SIZE)
+                                }
                                 verifiedLists.value = VerifiedSessionLists()
                                 mutableListStatus.update { SessionListStatus(filter = it.filter) }
-                                invalidations.trySend(Unit)
+                                invalidations.trySend("")
                             }
                             return@withLock
                         }
@@ -110,14 +122,14 @@ class HubSessionsRepository(
                             mutableMachines.value = event.machines
                             if (connection.state.value == ConnectionState.Online) verifiedLists.update { prior ->
                                 prior.copy(machines = event.machines, sessions = prior.sessions.filterKeys { machine ->
-                                    mode == Mode.Legacy && event.machines.firstOrNull { it.id == machine }?.online == true &&
+                                    mode.holdsAll && event.machines.firstOrNull { it.id == machine }?.online == true &&
                                         prior.machines?.firstOrNull { it.id == machine }?.online != false
                                 })
                             }
                         }
                         is SessionsEvent -> {
                             // A negotiated paged client must not adopt an accidental full legacy push.
-                            if (mode == Mode.Paged) return@withLock
+                            if (mode == Mode.Paged || mode == Mode.Complete) return@withLock
                             sessionChanges[event.machineId] = ++revision
                             revisionChanges.keys.removeAll { it.machineId == event.machineId }
                             val remaining = mutableSessions.value.filterNot { it.machineId == event.machineId }
@@ -133,7 +145,8 @@ class HubSessionsRepository(
                         }
                         is RevsEvent -> {
                             revision++
-                            if (mode != Mode.Paged) event.revs.forEach { (sessionId, rev) ->
+                            // Only a legacy read merges them later; HTTP rows of the other modes come with their revs.
+                            if (mode == Mode.Legacy || mode == Mode.Unknown) event.revs.forEach { (sessionId, rev) ->
                                 revisionChanges[SessionKey(event.machineId, sessionId)] = rev
                             }
                             mutableSessions.update { list -> list.map { session ->
@@ -148,10 +161,12 @@ class HubSessionsRepository(
             }
         }
         scope.launch {
-            for (ignored in invalidations) {
+            for (first in invalidations) {
                 delay(INVALIDATION_DELAY_MS)
-                while (invalidations.tryReceive().isSuccess) { /* Coalesce a burst, retaining hints during HTTP. */ }
-                try { quietly { recoverDelta() } }
+                var hint = first
+                // Coalesce a burst, retaining hints during HTTP; a local invalidation always reads.
+                while (true) { val next = invalidations.tryReceive().getOrNull() ?: break; hint = if (hint.isEmpty()) hint else next }
+                try { quietly { recoverDelta(hint) } }
                 catch (cancelled: CancellationException) { currentCoroutineContext().ensureActive() }
             }
         }
@@ -159,7 +174,7 @@ class HubSessionsRepository(
             connection.state.collectLatest {
                 if (it == ConnectionState.Online) {
                     val heldMode = lock.withLock { mode }
-                    if (heldMode == Mode.Paged) {
+                    if (heldMode == Mode.Paged || heldMode == Mode.Complete) {
                         if (connection.resumed) lock.withLock { verifyHeld() }
                         quietly { recoverDelta() }
                     } else if (connection.resumed && heldMode == Mode.Legacy) lock.withLock { verifyHeld() }
@@ -199,7 +214,10 @@ class HubSessionsRepository(
 
     private suspend fun firstPage(epoch: Long, filter: SessionListFilter) {
         if (filter.requiresCompleteMembership) {
-            fallbackLegacy(epoch)
+            // Without hints (`sessions_list`) a `since` checkpoint would never be followed: the full list keeps the
+            // hub's whole-list pushes. Before this repository sees a hello, the connection's last one says.
+            val hinted = lock.withLock { listCapability } ?: connection.lastHello?.let { "sessions_list" in it.features }
+            if (hinted == true) completeBaseline(epoch) else fallbackLegacy(epoch)
             return
         }
         if (lock.withLock { mode == Mode.Legacy }) {
@@ -257,6 +275,12 @@ class HubSessionsRepository(
     override suspend fun setListFilter(filter: SessionListFilter) {
         val changed = lock.withLock {
             if (mutableListStatus.value.filter == filter) return
+            // The complete collection is the same for every filter (the view projects it locally): keep the baseline.
+            if (mode == Mode.Complete && filter.requiresCompleteMembership &&
+                mutableListStatus.value.filter.requiresCompleteMembership) {
+                mutableListStatus.update { it.copy(filter = filter) }
+                return
+            }
             // A view policy is not a server capability failure. Reprobe pagination when leaving that view.
             if (mutableListStatus.value.filter.requiresCompleteMembership != filter.requiresCompleteMembership) mode = Mode.Unknown
             generation++
@@ -319,22 +343,36 @@ class HubSessionsRepository(
         catch (_: SessionListsUnsupported) { fallbackLegacy(epoch) }
     }
 
-    private suspend fun recoverDelta() = request { epoch, filter ->
-        val since = lock.withLock { if (mode == Mode.Paged) checkpoint else null }
+    /** [hint] is the `sessions_list` revision that woke this read, or "" for a local invalidation. */
+    private suspend fun recoverDelta(hint: String = "") = request { epoch, filter ->
+        val (heldMode, since) = lock.withLock {
+            // The checkpoint already holds this revision: nothing changed since the last read.
+            if (mode == Mode.Complete && hint.isNotEmpty() && hint == checkpoint) return@request
+            mode to if (mode == Mode.Paged || mode == Mode.Complete) checkpoint else null
+        }
         if (since == null) {
             // A paged WebSocket emits invalidations even when this view uses the complete HTTP fallback.
-            if (filter.requiresCompleteMembership || lock.withLock { mode != Mode.Legacy }) firstPage(epoch, filter)
+            if (filter.requiresCompleteMembership || heldMode != Mode.Legacy) firstPage(epoch, filter)
             return@request
         }
+        val complete = heldMode == Mode.Complete
         try {
-            val last = streamDelta(epoch, filter, since)
+            val last = streamDelta(epoch, if (complete) COMPLETE_QUERY else filter, since)
             lock.withLock {
                 if (epoch != generation) return@withLock
                 checkpoint = last.revision
-                mutableListStatus.update { it.copy(total = last.total) }
-                persist()
+                if (complete) {
+                    mutableListStatus.update { it.copy(total = mutableSessions.value.size) }
+                    verifyHeld()
+                    // Serializing every row on each hint kept the phone busy; the snapshot is a first-paint hint.
+                    persistLater()
+                } else {
+                    mutableListStatus.update { it.copy(total = last.total) }
+                    persist()
+                }
             }
-            refreshMetadata(epoch, filter)
+            // The complete view derives its counts locally (counts need the paged API's membership).
+            if (!complete) refreshMetadata(epoch, filter)
         } catch (_: SessionListExpired) { firstPage(epoch, filter) }
         catch (_: SessionListsUnsupported) { fallbackLegacy(epoch) }
     }
@@ -361,7 +399,9 @@ class HubSessionsRepository(
                 val kept = mutableSessions.value.mapNotNull { row ->
                     if (row.key in removals) null else changes[row.key] ?: row
                 }
-                mutableSessions.value = arrivals(changes.values.filter { it.key !in loaded }, kept) + kept
+                val unloaded = changes.values.filter { it.key !in loaded }
+                // The complete collection takes every new row; a bounded window only those that belong in it.
+                mutableSessions.value = (if (mode == Mode.Complete) unloaded else arrivals(unloaded, kept)) + kept
                 candidates?.let { window ->
                     removals.forEach { window.remove(it) }
                     changes.forEach { (key, row) -> if (window.containsKey(key)) window[key] = row }
@@ -399,6 +439,62 @@ class HubSessionsRepository(
         loadedPages.clear()
         baselineRevision = null
         checkpoint = null
+    }
+
+    /**
+     * The complete collection from complete pages of one frozen snapshot, with machines read once beside it. Hints then
+     * follow from its revision; machines change through their own pushes.
+     */
+    private suspend fun completeBaseline(epoch: Long) {
+        val before = lock.withLock { revision }
+        val (machines, baseline) = try {
+            coroutineScope {
+                val machines = async { transport.machines() }
+                val rows = async { completeRows() }
+                machines.await() to rows.await()
+            }
+        } catch (_: SessionListsUnsupported) {
+            fallbackLegacy(epoch)
+            return
+        }
+        val (rows, baselineAt) = baseline
+        lock.withLock {
+            if (epoch != generation) return
+            mode = Mode.Complete
+            resetPages()
+            baselineRevision = baselineAt
+            checkpoint = baselineAt
+            if (machinesChanged <= before) mutableMachines.value = machines
+            mutableSessions.value = rows.map { session ->
+                revisionChanges[session.key]?.takeIf { it > (session.rev ?: Long.MIN_VALUE) }?.let { session.copy(rev = it) } ?: session
+            }
+            revisionChanges.clear()
+            mutableListStatus.update { it.copy(paged = false, loaded = true, hasMore = false, hasPrevious = false, total = rows.size) }
+            verifyHeld()
+            persist()
+        }
+    }
+
+    /** Every page of one snapshot; a snapshot that expires part way (five minutes) is read again from page one. */
+    private suspend fun completeRows(): Pair<List<Session>, String> {
+        var attempts = 0
+        while (true) {
+            val rows = ArrayList<Session>()
+            var cursor: String? = null
+            try {
+                while (true) {
+                    val page = transport.sessionPage(COMPLETE_QUERY, cursor = cursor)
+                    currentCoroutineContext().ensureActive()
+                    rows += page.sessions
+                    if (!page.hasMore) return rows to page.revision
+                    val next = requireNotNull(page.nextCursor) { "Missing session page cursor" }
+                    require(next != cursor) { "Repeated session page cursor" }
+                    cursor = next
+                }
+            } catch (expired: SessionListExpired) {
+                if (cursor == null || ++attempts >= COMPLETE_ATTEMPTS) throw expired
+            }
+        }
     }
 
     private suspend fun fallbackLegacy(epoch: Long) {
@@ -440,7 +536,7 @@ class HubSessionsRepository(
             verifiedLists.value = VerifiedSessionLists(machines = mutableMachines.value)
             return
         }
-        if (mode == Mode.Legacy) verifiedLists.value = VerifiedSessionLists(
+        if (mode.holdsAll) verifiedLists.value = VerifiedSessionLists(
             mutableMachines.value,
             (mutableMachines.value.map { it.id } + mutableSessions.value.map { it.machineId })
                 .distinct().associateWith { machine -> mutableSessions.value.filter { it.machineId == machine } },
@@ -455,7 +551,7 @@ class HubSessionsRepository(
             // A single start response isn't authoritative filtered membership. Reconcile the bounded list instead.
             if (mode == Mode.Paged) { invalidations.trySend(Unit); return@withLock }
             sessionChanges[session.machineId] = ++revision
-            mutableSessions.value = (mutableSessions.value + session).let { if (mode == Mode.Legacy) it else it.take(WINDOW_SIZE) }
+            mutableSessions.value = (mutableSessions.value + session).let { if (mode.holdsAll) it else it.take(WINDOW_SIZE) }
             persist()
         }
     }
@@ -475,6 +571,9 @@ class HubSessionsRepository(
         const val WINDOW_SIZE = 50
         const val MAX_LOADED_PAGES = 10
         const val INVALIDATION_DELAY_MS = 40L
+        const val COMPLETE_ATTEMPTS = 3
+        /** The complete view's server query: the whole collection as complete rows; its filters apply locally. */
+        val COMPLETE_QUERY = SessionListFilter(requiresCompleteMembership = true)
     }
 }
 
