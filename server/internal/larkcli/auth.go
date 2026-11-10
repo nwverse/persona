@@ -6,6 +6,9 @@ import (
 )
 
 type authStatusWire struct {
+	AppID              string   `json:"appId"`
+	AppIDSnake         string   `json:"app_id"`
+	Brand              string   `json:"brand"`
 	Identity           string   `json:"identity"`
 	MissingScopes      []string `json:"missingScopes"`
 	MissingScopesSnake []string `json:"missing_scopes"`
@@ -73,7 +76,7 @@ func (w authStatusWire) result(now time.Time) AuthStatus {
 			strings.Contains(strings.ToLower(user.Message), "refresh")
 	}
 	loggedIn := available && ready && !expired
-	return AuthStatus{LoggedIn: loggedIn, Expired: expired, UserName: name, OpenID: openID,
+	return AuthStatus{AppID: firstNonEmpty(w.AppID, w.AppIDSnake), Brand: w.Brand, LoggedIn: loggedIn, Expired: expired, UserName: name, OpenID: openID,
 		TokenStatus: tokenStatus, ExpiresAt: expires, RefreshExpiresAt: refreshExpires,
 		GrantedScopes: uniqueStrings(granted), MissingScopes: uniqueStrings(missing)}
 }

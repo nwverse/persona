@@ -23,6 +23,12 @@ export interface HubConnector {
   account?: string;
   via?: string;
   error?: string;
+  /** Permissions the connector still needs, when the hub can name them. */
+  missing_scopes?: string[];
+  /** The open-platform page where the connector's missing permissions can be enabled (the hub sends it as guide_url). */
+  guide_url?: string;
+  /** Alias of guide_url, accepted as well. */
+  permission_url?: string;
   /** How to fix it, a step a sentence. */
   guide?: string[];
   last_sync?: string;

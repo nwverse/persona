@@ -28,7 +28,7 @@ func TestRunnerSuccessJSONAndProfile(t *testing.T) {
 	ctx := context.Background()
 
 	auth, err := r.AuthStatus(ctx)
-	if err != nil || !auth.LoggedIn || auth.UserName != "Example User" || auth.OpenID != "ou_example_user" {
+	if err != nil || !auth.LoggedIn || auth.UserName != "Example User" || auth.OpenID != "ou_example_user" || auth.AppID != "cli_example" {
 		t.Fatalf("auth = %+v, err = %v", auth, err)
 	}
 	if got := auth.GrantedScopes; len(got) < 2 || got[0] != "im:chat:read" || got[1] != "im:message:readonly" {
@@ -60,6 +60,95 @@ func TestRunnerSuccessJSONAndProfile(t *testing.T) {
 	text := string(log)
 	if !strings.Contains(text, "--profile example") || !strings.Contains(text, "--as user --format json") {
 		t.Fatalf("profile or user JSON flags missing from %q", text)
+	}
+}
+
+func TestManagedProfileConfigAndSecretStdin(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "init.log")
+	t.Setenv("LARKCLI_FAKE_INIT_LOG", logPath)
+	r := New(fakeConfig(t, "config_missing"))
+	got, err := r.ConfigShow(context.Background())
+	if err != nil || got.AppID != "" {
+		t.Fatalf("missing config = %+v, err = %v", got, err)
+	}
+	if err := r.InitProfile(context.Background(), "persona", "cli_bot", "secret-value", "feishu"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	if !strings.Contains(text, "--app-id cli_bot") || !strings.Contains(text, "stdin=secret-value") {
+		t.Fatalf("init record = %q", text)
+	}
+	argv := strings.SplitN(text, "|", 2)[0]
+	if strings.Contains(argv, "secret-value") {
+		t.Fatalf("secret entered argv: %q", text)
+	}
+}
+
+func TestBlockingLoginPrintsLinkAndPollsProcess(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "release")
+	t.Setenv("LARKCLI_FAKE_LOGIN_RELEASE", release)
+	argsLog := filepath.Join(t.TempDir(), "login.args")
+	t.Setenv("LARKCLI_FAKE_LOG", argsLog)
+	r := New(fakeConfig(t, "login_wait"))
+	p, err := r.StartLogin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := p.Info()
+	if info.UserCode != "ABCD-1234" || !strings.Contains(info.URL, "accounts.feishu.cn") {
+		t.Fatalf("login info = %+v", info)
+	}
+	args, err := os.ReadFile(argsLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "auth login --domain all") || strings.Contains(string(args), "--no-wait") {
+		t.Fatalf("login args = %q", args)
+	}
+	if done, err := p.Poll(); done || err != nil {
+		t.Fatalf("pending poll = %v, %v", done, err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		done, err := p.Poll()
+		if done {
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("login process did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestBlockingLoginCancellation(t *testing.T) {
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "login_wait")
+	r := New(fakeConfig(t, "login_wait"))
+	p, err := r.StartLogin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Cancel()
+	deadline := time.Now().Add(time.Second)
+	for {
+		done, _ := p.Poll()
+		if done {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("login process did not cancel")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

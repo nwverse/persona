@@ -603,7 +603,10 @@ func (h *Manager) registerConnectors() {
 	// lark-cli is a separate source from the optional Lark gateway extension. It
 	// is deliberately absent when lark.cli is unset, preserving existing hubs.
 	if h.cfg.Lark.CLI != nil {
-		lc := larkcliconnector.New(larkcliadapter.Config{Bin: h.cfg.Lark.CLI.Bin, Profile: h.cfg.Lark.CLI.Profile})
+		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
+			h.logf("larkcli profile sync: %v", err)
+		}
+		lc := larkcliconnector.New(larkcliadapter.Config{Bin: h.cfg.Lark.CLI.Bin, Profile: h.effectiveLarkCLIProfile(context.Background())})
 		if err := h.addConnector(lc); err != nil {
 			h.logf("larkcli connector: %v", err)
 		}

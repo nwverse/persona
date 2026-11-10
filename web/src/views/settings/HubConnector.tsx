@@ -519,7 +519,14 @@ function SignInSections({ c, reload }: { c: HubConnector; reload: () => Promise<
   );
 }
 
-function SignInSteps({ c, reload, footer }: { c: HubConnector; reload: () => Promise<void>; footer: string }) {
+export function SignInSteps({ c, reload, footer, startLabel, bare }: {
+  c: HubConnector;
+  reload: () => Promise<void>;
+  footer?: string;
+  startLabel?: string;
+  /** Draw only the step content so a caller can place it inside its own section. */
+  bare?: boolean;
+}) {
   const [prompt, setPrompt] = useState<ConnectorPrompt | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -561,29 +568,28 @@ function SignInSteps({ c, reload, footer }: { c: HubConnector; reload: () => Pro
   // until the user has entered / scanned it.
   useStepPolling(isPolledStep(prompt) ? prompt : null, (step) => send(step, {}, true), prompt?.kind === "qr" ? 3 : 5);
 
-  if (!prompt) {
-    return (
-      <Group title={t("settings-hubconnector.sign_in")} footer={footer}>
-        <div className="px-4 py-3">
-          <Button tone="accent" busy={busy} onClick={() => void send("", {})}>{t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
-        </div>
-      </Group>
-    );
-  }
   const cancel = () => (setPrompt(null), setValues({}));
+  const body = !prompt ? (
+    <div className="px-4 py-3">
+      <Button tone="accent" busy={busy} onClick={() => void send("", {})}>{startLabel ?? t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
+    </div>
+  ) : (
+    <SignInStep
+      name={c.name}
+      prompt={prompt}
+      values={values}
+      busy={busy}
+      isChannel={isChannel}
+      onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
+      onSubmit={() => void send(prompt.step ?? "", values)}
+      onRestart={() => (cancel(), void send("", {}))}
+      onCancel={cancel}
+    />
+  );
+  if (bare) return body;
   return (
     <Group title={t("settings-hubconnector.sign_in")} footer={footer}>
-      <SignInStep
-        name={c.name}
-        prompt={prompt}
-        values={values}
-        busy={busy}
-        isChannel={isChannel}
-        onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
-        onSubmit={() => void send(prompt.step ?? "", values)}
-        onRestart={() => (cancel(), void send("", {}))}
-        onCancel={cancel}
-      />
+      {body}
     </Group>
   );
 }
