@@ -99,6 +99,49 @@ export interface TodoAsk {
   verdict: string;
   recommend?: string;
   asked_at: string;
+  /** A decision's own fields (#3804), absent from an older hub and from an ask that is no decision: what is to be
+   *  decided in one sentence, why only the owner can, the options (2 to 4, the recommended one first) with what each
+   *  leads to, and what waiting costs. */
+  question?: string;
+  why_owner?: "irreversible" | "visible_to_others" | "priority" | "acceptance" | "only_owner_knows" | string;
+  options?: AskOption[];
+  cost_of_waiting?: string;
+  /** Where the task came from and where it stands, as one line the hub wrote in the request's language; `from` and
+   *  `stands` are its parts. */
+  background?: string;
+  from?: { conversation?: string; title?: string; at?: string; message?: string; by_assistant?: boolean };
+  stands?: string;
+  /** `default` "taken": the recommendation is taken at `deadline` when nobody answers; "never": it never is. */
+  deadline?: string;
+  default?: "taken" | "never" | string;
+  /** The fixed answers besides the options: the owner cannot answer this as asked (lib/feed `acceptBrief`). */
+  responses?: string[];
+  /** The fixed answer already given while the decision still waits (`explain_first`: Persona is to ask again with the
+   *  background; the options stay answerable meanwhile). */
+  response?: string;
+}
+
+/** One option of a decision: its label, which is the answer, and what choosing it leads to. */
+export interface AskOption {
+  label: string;
+  leads_to?: string;
+}
+
+/** The fixed answers of a decision the web app knows (`TodoAsk.responses`), in the order the menu lists them. */
+export const ASK_RESPONSES = ["decide_yourself", "not_what_i_asked", "explain_first"] as const;
+export type AskResponse = (typeof ASK_RESPONSES)[number];
+
+/** The options of a decision that can be answered on its row: a decision with at least two of them, each with a label.
+ *  None for any other ask, which keeps its one button (askTake). */
+export function askOptions(ask: TodoAsk): AskOption[] {
+  if (ask.outcome !== "decide" || !Array.isArray(ask.options)) return [];
+  const list = ask.options.filter((o) => o && typeof o.label === "string" && o.label.trim());
+  return list.length >= 2 ? list : [];
+}
+
+/** The fixed answers this hub takes for the ask, in the menu's order; none from a hub that does not know them. */
+export function askResponses(ask: TodoAsk): AskResponse[] {
+  return ASK_RESPONSES.filter((r) => ask.responses?.includes(r));
 }
 
 /** What the one button of an ask does: take a decision's recommendation, acknowledge a conclusion that only tells, or
