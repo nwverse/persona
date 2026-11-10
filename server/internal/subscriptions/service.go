@@ -224,8 +224,8 @@ func (s *Service) Summary(ctx context.Context) ([]ConnectorSummary, error) {
 			no := false
 			line.Subscribable = &no
 		}
-		if c.ready() && (!ok || s.now().Sub(e.at) > catalogFresh) {
-			s.readLater(c)
+		if c.Conn != nil && c.Enabled && (!ok || s.now().Sub(e.at) > catalogFresh) {
+			s.readLater(c.ID)
 		}
 		out = append(out, line)
 	}
@@ -243,22 +243,25 @@ func subscribable(sources []connector.CatalogSource) bool {
 	return false
 }
 
-// readLater reads c's catalog in the background, once at a time.
-func (s *Service) readLater(c ConnectorInfo) {
+// readLater reads connector id's catalog in the background, once at a time, if it can be called now.
+func (s *Service) readLater(id string) {
 	s.mu.Lock()
-	if s.reading[c.ID] {
+	if s.reading[id] {
 		s.mu.Unlock()
 		return
 	}
-	s.reading[c.ID] = true
+	s.reading[id] = true
 	s.mu.Unlock()
 	go func() {
 		defer func() {
 			s.mu.Lock()
-			delete(s.reading, c.ID)
+			delete(s.reading, id)
 			s.mu.Unlock()
 		}()
-		_, _ = s.catalog(context.Background(), c, 0)
+		ctx := context.Background()
+		if c, ok := s.o.Connectors.Find(ctx, id); ok && c.ready() {
+			_, _ = s.catalog(ctx, c, 0)
+		}
 	}()
 }
 

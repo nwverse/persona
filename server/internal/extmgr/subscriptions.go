@@ -50,14 +50,14 @@ func (h *Manager) Subscriptions() *subscriptions.Service { return h.subs }
 // subscriptionConnectors finds the registered connectors and the extension that brings each.
 type subscriptionConnectors struct{ h *Manager }
 
-func (sc subscriptionConnectors) info(ctx context.Context, c connector.Connector, infos []connector.Info) subscriptions.ConnectorInfo {
-	out := subscriptions.ConnectorInfo{ID: c.ID(), Conn: c}
-	for _, in := range infos {
-		if in.ID == c.ID() {
-			out.Status, out.Enabled = in.Status, in.Enabled
-			out.Direct = subscriptions.Direct{Inbox: in.Inbox != nil && *in.Inbox, Archive: in.Archive != nil && *in.Archive}
-		}
-	}
+// info is c as subscriptions see it: its own status only (a list of every connector's would ask each of them).
+func (sc subscriptionConnectors) info(ctx context.Context, c connector.Connector) subscriptions.ConnectorInfo {
+	r := sc.h.connectors
+	out := subscriptions.ConnectorInfo{ID: c.ID(), Conn: c, Status: connector.StatusOf(ctx, c).State, Enabled: r.Enabled(c.ID()),
+		Direct: subscriptions.Direct{
+			Inbox:   c.Manifest().Has(connector.CapInbox) && r.Feeds(c.ID(), connector.FeedInbox),
+			Archive: c.Manifest().Has(connector.CapArchive) && r.Feeds(c.ID(), connector.FeedArchive),
+		}}
 	if hp := sc.h.extensions.ownerOf(c); hp != nil {
 		out.Extension = hp.id
 	}
@@ -69,14 +69,18 @@ func (sc subscriptionConnectors) Find(ctx context.Context, id string) (subscript
 	if c == nil {
 		return subscriptions.ConnectorInfo{}, false
 	}
-	return sc.info(ctx, c, sc.h.connectors.Infos(ctx)), true
+	return sc.info(ctx, c), true
 }
 
+// All is every registered connector without asking any for its status: the summary needs only who brings it.
 func (sc subscriptionConnectors) All(ctx context.Context) []subscriptions.ConnectorInfo {
-	infos := sc.h.connectors.Infos(ctx)
 	var out []subscriptions.ConnectorInfo
 	for _, c := range sc.h.connectors.All() {
-		out = append(out, sc.info(ctx, c, infos))
+		info := subscriptions.ConnectorInfo{ID: c.ID(), Conn: c, Enabled: sc.h.connectors.Enabled(c.ID())}
+		if hp := sc.h.extensions.ownerOf(c); hp != nil {
+			info.Extension = hp.id
+		}
+		out = append(out, info)
 	}
 	return out
 }
