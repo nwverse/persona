@@ -99,10 +99,10 @@ describe("scopeBody", () => {
 });
 
 describe("scopeSummary", () => {
-  const name = (id: string) => ({ mbp: "MacBook", box: "Devbox" })[id] ?? id;
+  const name = (id: string) => ({ mbp: "MacBook", box: "Test computer" })[id] ?? id;
   it("says where, how the key travels and whether it also runs where signed in", () => {
     expect(scopeSummary({ share: "all", delivery: "on_demand", own_service: "skip" })).toBe("所有电脑 · 用到时再取");
-    expect(scopeSummary({ share: "selected", scope_machines: ["mbp", "box"], delivery: "push", own_service: "use" }, name)).toBe("MacBook、Devbox · 每台存一份 · 已登录的电脑也用");
+    expect(scopeSummary({ share: "selected", scope_machines: ["mbp", "box"], delivery: "push", own_service: "use" }, name)).toBe("MacBook、Test computer · 每台存一份 · 已登录的电脑也用");
     expect(scopeSummary({ share: "all", scope_machines: ["w1"], delivery: "push" })).toBe("所有电脑 + 1 台工作电脑 · 每台存一份");
     expect(scopeSummary({ share: "none", delivery: "push" })).toBe("只留在 hub");
     expect(scopeSummary({ share: "all", delivery: "push", own_service: "use", legacy_scope: true })).toBe("所有电脑，包括工作电脑 · 每台存一份 · 已登录的电脑也用");
