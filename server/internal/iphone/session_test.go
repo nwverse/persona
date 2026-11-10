@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ type fakeLink struct {
 	err      error
 	sendFail bool
 	sendHang bool // the bridge stopped reading stdin
+	sendLate bool // the write finishes just as the caller's deadline passes
 	phone    *fakePhone
 }
 
@@ -53,7 +55,18 @@ func (l *fakeLink) Send(ctx context.Context, line []byte) error {
 		l.Close()
 		return ctx.Err()
 	}
+	late := l.sendLate
 	l.mu.Unlock()
+	if late { // the whole line reaches the bridge, and the deadline passes at that moment (sendLine returns nil)
+		var r request
+		_ = json.Unmarshal(line, &r)
+		l.phone.mu.Lock()
+		l.phone.got = append(l.phone.got, r)
+		l.phone.mu.Unlock()
+		<-ctx.Done()
+		l.Close()
+		return nil
+	}
 	var r request
 	if err := json.Unmarshal(line, &r); err != nil {
 		return err
@@ -593,5 +606,26 @@ func waitFor(t *testing.T, ok func() bool) {
 			t.Fatal("condition not met in time")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestWriteFinishingAtTheDeadlineIsUncertain(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	l := p.lastLink()
+	l.mu.Lock()
+	l.sendLate = true
+	l.mu.Unlock()
+	_, err := call(t, m, "tap", 100*time.Millisecond)
+	if Code(err) != CodeUncertain || Sent(err) != "unknown" {
+		t.Fatalf("the tap reached the bridge: want uncertain, never \"no\"; got %v (sent %s)", err, Sent(err))
+	}
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if ops := p.ops(); strings.Join(ops, ",") != "device_info,tap,device_info" {
+		t.Fatalf("phone got %v: the tap must not be sent again", ops)
 	}
 }

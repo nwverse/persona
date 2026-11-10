@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -271,5 +272,39 @@ func TestPairJob(t *testing.T) {
 	}
 	if _, err := m.store.Load(testUDID); err != ErrNotPaired {
 		t.Fatalf("after forget: %v", err)
+	}
+}
+
+// gatedWriter's Write finishes only when release is closed, then succeeds or fails.
+type gatedWriter struct {
+	release chan struct{}
+	fail    bool
+}
+
+func (w *gatedWriter) Write(p []byte) (int, error) {
+	<-w.release
+	if w.fail {
+		return 0, errors.New("file already closed")
+	}
+	return len(p), nil
+}
+
+func TestSendLineAtTheDeadline(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		w := &gatedWriter{release: make(chan struct{}), fail: fail}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // the deadline has passed while the write is under way
+		closed := false
+		// Closing the link is what ends a blocked write; here it lets the write finish, as it may in a real race.
+		err := sendLine(ctx, w, func() { closed = true; close(w.release) }, []byte(`{"op":"tap"}`))
+		if !closed {
+			t.Fatal("the link wasn't closed")
+		}
+		if !fail && err != nil {
+			t.Fatalf("the whole line was written: want nil (the caller waits for the answer), got %v", err)
+		}
+		if fail && err == nil {
+			t.Fatal("a failed write is a line that never left")
+		}
 	}
 }

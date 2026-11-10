@@ -239,7 +239,8 @@ func hostPort(host string, port int) string {
 // Link is one running bridge session with one phone: requests in, answers and events out, one line of JSON each.
 type Link interface {
 	// Send writes one request line, giving up (and closing the link) when ctx ends first. A failed Send left no
-	// complete line with the bridge, which acts only on whole lines, so nothing of it reached the phone.
+	// complete line with the bridge, which acts only on whole lines, so nothing of it reached the phone. A write that
+	// finished as ctx ended returns nil: the line did reach the bridge.
 	Send(ctx context.Context, line []byte) error
 	// Lines are the bridge's stdout lines; closed when the session ends.
 	Lines() <-chan []byte
@@ -327,20 +328,31 @@ type procLink struct {
 }
 
 func (l *procLink) Send(ctx context.Context, line []byte) error {
+	return sendLine(ctx, l.stdin, l.Close, line)
+}
+
+// sendLine writes line (with its newline) to w, giving up when ctx ends first: then it closes the link (which ends a
+// blocked write) and still waits for the write's outcome. Only a failed write is a line that never reached the
+// bridge; a write that finished as the deadline passed did reach it, so it returns nil and the caller waits for the
+// answer (which, past the deadline, makes an input operation uncertain rather than safe to send again).
+func sendLine(ctx context.Context, w io.Writer, closeLink func(), line []byte) error {
 	if !bytes.HasSuffix(line, []byte("\n")) {
 		line = append(line, '\n')
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := l.stdin.Write(line)
+		_, err := w.Write(line)
 		done <- err
 	}()
 	select {
 	case err := <-done:
 		return err
-	case <-ctx.Done(): // the bridge stopped reading: the line isn't whole there, and closing stdin ends the write
-		l.Close()
-		return ctx.Err()
+	case <-ctx.Done():
+		closeLink()
+		if err := <-done; err != nil {
+			return fmt.Errorf("%w (%v)", ctx.Err(), err)
+		}
+		return nil
 	}
 }
 

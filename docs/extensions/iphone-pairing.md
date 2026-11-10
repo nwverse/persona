@@ -104,7 +104,8 @@ An operation that changes the phone (tap, swipe, typing, keys, launching an Appâ
 
 | What happened | Read-only operation (`device_info`, `screenshot`, `ax_tree`, `list_apps`) | Any other operation |
 | --- | --- | --- |
-| Write to the bridge failed, or didn't finish before the deadline | Sent on the next link | Sent on the next link, or `unreachable` at the deadline: the bridge acts only on whole lines, so nothing reached the phone |
+| Write to the bridge failed (also when the deadline cut it off) | Sent on the next link | Sent on the next link, or `unreachable` at the deadline: the bridge acts only on whole lines, so nothing reached the phone |
+| The write finished just as the deadline passed | `timeout` | **`uncertain`**: the whole line reached the bridge |
 | Link dropped before the answer, or the bridge answered `disconnected` | Sent once more on the next link | **`uncertain`**, never sent again |
 | The caller's deadline passed before the answer | `timeout` | **`uncertain`**, never sent again |
 | The bridge answered `timeout` | `timeout` | **`uncertain`** |
