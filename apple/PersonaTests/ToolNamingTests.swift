@@ -271,4 +271,12 @@ struct ToolNamingTests {
         #expect(ToolNaming.commandLine("Monitor", .object(["ws": .object(["url": .string("wss://e.example.com")])])) == "wss://e.example.com")
         #expect(ToolNaming.commandLine("Read", .object([:])) == nil)
     }
+
+    @Test func wordsGiveWayAtTheirEndAPathInItsMiddle() {
+        #expect(ToolPresentation.truncation("Read", subject: "/Users/me/code/weather/Sources/App/Forecast.swift") == .middle)
+        #expect(ToolPresentation.truncation("Grep", subject: "func\\s+load") == .middle)
+        #expect(ToolPresentation.truncation("Monitor", subject: "Watch the export's throughput") == .tail)
+        #expect(ToolPresentation.truncation("mcp__github__create_issue", subject: "CSV export times out on a year of hourly data") == .tail)
+        #expect(ToolPresentation.truncation("TodoWrite", subject: "Fix") == .tail)
+    }
 }

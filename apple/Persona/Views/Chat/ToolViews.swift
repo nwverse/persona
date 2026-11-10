@@ -179,10 +179,14 @@ enum ToolPresentation {
         return verb(call.name)
     }
 
-    /// Where a tool's subject gives way when it does not fit: a path keeps its file name (the middle goes), a Mac's
-    /// steps, a browser script or a plan (which step it is on) read from their start (the end goes).
-    static func truncation(_ name: String) -> Text.TruncationMode {
-        ComputerSteps.isComputerTool(name) || ["browser_run", "browser_look", "iphone_look", "iphone_do", "TodoWrite"].contains(baseName(name)) ? .tail : .middle
+    /// Where a tool's subject gives way when it does not fit: a Mac's steps, a browser script, a plan (which step it is
+    /// on) and words (a description, a title, a message, a command line) read from their start (the end goes); one word
+    /// (a path, a pattern, an id) keeps its end, where the file name is (the middle goes).
+    static func truncation(_ name: String, subject: String = "") -> Text.TruncationMode {
+        if ComputerSteps.isComputerTool(name) || ["browser_run", "browser_look", "iphone_look", "iphone_do", "TodoWrite"].contains(baseName(name)) {
+            return .tail
+        }
+        return subject.contains(where: \.isWhitespace) ? .tail : .middle
     }
 
     /// `machines`: who the computer tools' `machine` is (AppModel's when nil).
@@ -628,7 +632,7 @@ struct ToolCallRow: View {
             .font(Theme.Font.secondary)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            .truncationMode(ToolPresentation.truncation(call.name))
+            .truncationMode(ToolPresentation.truncation(call.name, subject: subject))
     }
 
     /// The row's head: BeautifulUI's tool row — kind icon (a chevron once open), the verb, the subject in a chip. A call
