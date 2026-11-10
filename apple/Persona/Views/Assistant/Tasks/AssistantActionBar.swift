@@ -160,7 +160,9 @@ struct AssistantActionBar: View {
         // "Not done", whatever conversation a to-do came from (#3331)
         let isMain = model.assistantMain?.sessionID == conversation
         let tasks = isMain ? store.todos.values.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) } : store.tasks(of: conversation)
-        let lookup = TodosLogic.makeSessionLookup(model.allSessions(inFront: true))
+        // only the tasks' own agents, which is all the triage reads: the bar must not follow every agent's push
+        // (AllSessionsReadersTests)
+        let lookup = TodosLogic.makeSessionLookup(tasks.flatMap { store.sessions($0) })
         let restored = TodoRestores.load()
         let now = Date.now
         let rows = tasks.map {

@@ -7,6 +7,7 @@
 // tests can run them without a DOM.
 
 import { itemHeaders, otherManager, sameManager, stampedHeaders } from "./manager-choice";
+import { scoped, useScope } from "./current-assistant";
 import { formatDate, t } from "../i18n";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { api, ApiError, enc, errorText, getToken } from "./api";
@@ -1727,7 +1728,9 @@ export function useInbox<T>(select: (s: InboxState) => T): T {
 
 /** How many unread open items the inbox has (the sidebar's badge). */
 export function useInboxBadge(): number {
-  return useInbox((s) => badgeCount(s.items));
+  // the current assistant's, with several (docs/assistant/managers.md "Clients")
+  const scope = useScope();
+  return useInbox((s) => badgeCount(scoped(s.items, scope)));
 }
 
 /** Tests only: back to an empty, unstarted list. */

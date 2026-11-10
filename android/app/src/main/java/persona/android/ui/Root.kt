@@ -266,7 +266,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
     val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
     val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
-    val uncompletedTodosCount = remember(todos) { todos.count { !it.isDone && !it.quiet } }
+    // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.
+    val currentAssistant = persona.core.designsystem.currentAssistant()
+    val counts = remember(currentAssistant, sessions, preferences.mutes) { ShellCounts(currentAssistant, sessions, preferences.mutes) }
+    val uncompletedTodosCount = remember(todos, counts) { counts.todos(todos) }
     fun kind(key: SessionKey): ConversationKind? = when {
         key == assistant.mainSession || assistant.conversations.any { it.key == key } -> ConversationKind.Assistant
         else -> sessions.firstOrNull { it.key == key }?.let { if (it.assistant) ConversationKind.Assistant else ConversationKind.Agent }
@@ -417,22 +420,25 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val decorators = AppTab.entries.associateWith { tab -> key(tab) {
         listOf(rememberSaveableStateHolderNavEntryDecorator<NavKey>(), rememberViewModelStoreNavEntryDecorator<NavKey>())
     } }
-    val assistantRequests = pending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
-    val agentRequests = pending - assistantRequests.toSet()
-    // A quiet task's request (#1731) is told in the main conversation, not counted on the tab.
-    val agentNeeds = agentRequests.count { request ->
-        val key = SessionKey(request.machineId, request.sessionId)
-        val session = sessions.firstOrNull { it.key == key }
-        val space = session?.spaceName?.let { "${key.machineId}/$it" }
-        session?.quiet != true && !preferences.mutes.mutes(key.path, space)
-    }
+    // The current assistant's cards (ShellCounts): the tab badges and "Needs you now" count them.
+    val shownPending = pending.filter(counts::owned)
+    val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
+    val agentRequests = shownPending - assistantRequests.toSet()
+    val agentNeeds = agentRequests.count(counts::countsCard)
+    // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
+    // (each once), counted here, and its inbox's "Needs you" from the roster.
+    val managerRoster = persona.core.designsystem.LocalManagerRoster.current
+    val waiting = remember(managerRoster, pending, counts) { counts.waiting(managerRoster, pending) }
+    val othersWaiting = currentAssistant.othersWaiting(waiting)
     // Only when what the count reads changed: the shell recomposes on every push, and the whole list is built to count
     // one group. Of the sessions it reads only which space each is in (for mutes), not their state or activity.
     val inboxSpaces = inbox.sessions.map { it.id to it.spacePreferenceKey }
-    val inboxNeeds = remember(inbox.records, inbox.interactions, inboxSpaces, inbox.mutes) {
+    val shownRecords = remember(inbox.records, currentAssistant) { ShellCounts.records(currentAssistant, inbox.records) }
+    val shownInteractions = remember(inbox.interactions, currentAssistant) { ShellCounts.interactions(currentAssistant, inbox.interactions) }
+    val inboxNeeds = remember(shownRecords, shownInteractions, inboxSpaces, inbox.mutes) {
         // Rows the AI twin is on are Persona's: the same count as the inbox page's "Needs you" (#4848).
         needsYouCount(
-            buildInboxList(inbox.records.map { it.item }, inbox.interactions, inbox.sessions, inbox.mutes), inbox.records)
+            buildInboxList(shownRecords.map { it.item }, shownInteractions, inbox.sessions, inbox.mutes), shownRecords)
     }
     val inboxConversations by session.inbox.conversationInbox.collectAsStateWithLifecycle()
     val inboxConversationList by (inboxConversations?.state ?: remember {
@@ -443,9 +449,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size)
     // "Needs you now" on the Persona home: the agents waiting (not Persona's own, not muted), then the inbox's "Needs you".
-    val needsYou = remember(agentRequests, sessions, preferences.mutes, inbox.records) {
+    val needsYou = remember(agentRequests, sessions, preferences.mutes, shownRecords) {
         persona.feature.assistant.needsYou(agentRequests, sessions, preferences.mutes,
-            inbox.records.map { persona.feature.assistant.NeedsYouMessage(it.item, lark = it.feedId != null,
+            shownRecords.map { persona.feature.assistant.NeedsYouMessage(it.item, lark = it.feedId != null,
                 working = it.agentWorking) })
     }
     // Voice chat is offered while the hub runs a voice extension: asked each time the Persona tab shows while connected.
@@ -457,7 +463,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // Each page shows the connection state in its own title, so the shell adds no banner above it.
         val style = PersonaTheme.style
         val connected = connection == ConnectionState.Online
-        val working = sessions.any { it.agentState == AgentState.Working }
+        val working = sessions.any { it.agentState == AgentState.Working && currentAssistant.ownsOn(it.machineId, it.manager) }
         val ambience = when {
             !connected && connection != ConnectionState.Connecting && connection != ConnectionState.Updating -> Ambience.Alert
             agentNeeds + inboxNeeds > 0 -> Ambience.NeedsYou
@@ -545,12 +551,25 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         }
                     },
                     onTogglePin = { key -> session.preferences.togglePin(key.path) },
-                    onRetired = { key -> sidebar.retired = sidebar.retired + key })
+                    onRetired = { key -> sidebar.retired = sidebar.retired + key },
+                    // The current assistant at the sidebar's head; its roster opens under it.
+                    switcher = { head, trailing, fallback ->
+                        persona.feature.settings.AssistantSwitcher(services.managers.takeUnless { services.demo }, waiting,
+                            hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating,
+                            onManage = {
+                                sidebar.opened.value = false
+                                settingsSheetStack.clear()
+                                settingsSheetStack.add(SettingsRoute)
+                                settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
+                                settingsOpened = true
+                            }, headModifier = head, trailing = trailing, fallback = fallback)
+                    })
             }
         }
         // What the decorator below reads: it is remembered across compositions, these change with the window.
         val currentSidebar = rememberUpdatedState(sharedSidebar)
         val currentRegular = rememberUpdatedState(regular)
+        val currentOthersWaiting = rememberUpdatedState(othersWaiting)
         val currentHinges = rememberUpdatedState(paneHinges)
         // A regular window shows the sidebar as a column beside the Assistant page (inside its root page, so the pages
         // opened over it, Inbox's list and detail among them, still have the whole width): the avatar hides and shows
@@ -576,10 +595,20 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
                         LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
                             onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
-                                JPersonaButton(sidebar.personaState, stringResource(R.string.app_sidebar), {
-                                    if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
-                                    else sidebar.opened.value = true
-                                })
+                                Box {
+                                    // The dot is spoken too: that something waits at another assistant.
+                                    val sidebarLabel = stringResource(R.string.app_sidebar).let { label ->
+                                        if (!currentOthersWaiting.value) label
+                                        else stringResource(persona.core.designsystem.R.string.designsystem_manager_spoken, label,
+                                            stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
+                                    }
+                                    JPersonaButton(sidebar.personaState, sidebarLabel, {
+                                        if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
+                                        else sidebar.opened.value = true
+                                    })
+                                    // Something waits at another assistant: the switcher's badges say where.
+                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs))
+                                }
                             }) else null) {
                         entry.Content()
                     }
