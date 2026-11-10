@@ -130,6 +130,7 @@ Tested 2026-11-04 with Claude Code 2.1.318: plugin hooks behave like settings ho
 | PermissionRequest | `*` | AskUserQuestion → phone card while the terminal can also answer; ExitPlanMode → plan approval; others → tool authorization |
 | PostToolUse | `AskUserQuestion` | A terminal answer withdraws the waiting phone card |
 | Notification / Stop / UserPromptSubmit / SessionStart | — | Report only, record pane; hub sends completion push from session state changes, not Stop |
+| Stop, a turn that did work and has no closeout | `decision: block` once, with the closeout form | Only with the `closeout` triage switch on; never twice in a row (`../assistant/agent-work.md` "Closeout") |
 | MessageDisplay | — | The Agents' live replies plugin only (not the hooks plugins, not the settings files), loaded while the setting is on: pass the reply's lines to node, exec form (`command` + `args`, no shell), `async`, timeout 1, prints nothing; see "Live replies (MessageDisplay)" |
 
 Test results:

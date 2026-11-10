@@ -46,6 +46,10 @@ struct ChatView: View {
     @State private var showActivity = false
     /// "All subagents" opened, from the header's status line or ⋯ (`SubagentTreeSheet`).
     @State private var showSubagents = false
+    #if os(iOS)
+    /// The review page of this session's changes (#151).
+    @State private var reviewRequest: ReviewRequest?
+    #endif
     /// The folded header's goal mark opened (`GoalSheet`); the open header's `GoalBar` keeps its own.
     @State private var showGoal = false
     @State private var debugImages: [ImagePayload]?
@@ -1760,7 +1764,7 @@ struct ChatView: View {
                     .accessibilityHidden(!terminalShown)
             }
             if pane == .git {
-                GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git).padding(.top, headerRoom)
+                GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
                     .transition(.move(edge: .trailing))
             } else if pane == .files {
                 FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key).padding(.top, headerRoom)
@@ -1777,7 +1781,7 @@ struct ChatView: View {
                     .padding(.top, style == .dev ? chrome.height - min(chrome.collapse, chrome.maxCollapse) : 0)
             } else { chatPane }
         // Files and Git come in from the right (a swipe to the left), the chat back from the left.
-        case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git).padding(.top, headerRoom)
+        case .git: GitPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", status: $git, review: openReview).padding(.top, headerRoom)
             .transition(.move(edge: .trailing))
         case .files: FilesPane(machineID: key.machineID, group: key.group, cwd: session?.cwd ?? "", git: git, key: key,
                                      reloadGit: { await loadGit() }).padding(.top, headerRoom)
@@ -2747,6 +2751,25 @@ struct ChatView: View {
     }
 
     /// The "…" menu, in the custom header (Agents) or the system bar (assistant).
+    /// Opens the review of this session's changes, when the hub reviews (`git_review`) and the session has a folder; nil
+    /// on the Mac (frozen) and elsewhere. `nil` scope: the one the session last used.
+    private var openReview: ((GitReviewScope?) -> Void)? {
+        #if os(iOS)
+        guard style == .dev, model.features(key.group).contains("git_review"), let cwd = session?.cwd, !cwd.isEmpty else { return nil }
+        return { scope in reviewRequest = ReviewRequest(scope: scope) }
+        #else
+        return nil
+        #endif
+    }
+
+    #if os(iOS)
+    private func reviewPage(_ r: ReviewRequest) -> some View {
+        ReviewPage(key: key, cwd: session?.cwd ?? "", scope: r.scope, api: { [model, key] in model.api(key.group) })
+            .environment(model)
+            .presentationSizing(.page) // the iPad's too: room for the diffs, not the small form
+    }
+    #endif
+
     @ViewBuilder private var moreMenuItems: some View {
             if style == .dev, let host { hostedMenuItems(host) }
             if let s = session, let todo = s.todo,
@@ -2769,6 +2792,11 @@ struct ChatView: View {
                         Label(paneBadges[p].map { String(localized: "\(p.title) (\($0))") } ?? p.title, systemImage: p.symbol)
                     }
                 }
+                #if os(iOS)
+                if let open = openReview {
+                    Button { open(nil) } label: { Label("Review Changes", systemImage: Theme.Icon.reviewChanges).lineLimit(1) }
+                }
+                #endif
                 #if !os(macOS)
                 // The header's status line shows only running subagents: finished and nested ones are here (the Mac's
                 // strip and a hosted one still have their own "All subagents").
@@ -3056,6 +3084,9 @@ struct ChatView: View {
             compactChrome
         }
         .sheet(isPresented: $showSubagents) { subagentTree }
+        #if os(iOS)
+        .sheet(item: $reviewRequest) { r in reviewPage(r) }
+        #endif
         .sheet(isPresented: $showActivity) {
             ActivitySheet(loop: session?.loop, background: session?.background ?? [], stopLoop: { model.stopLoop(key) }) { t in
                 showActivity = false
@@ -3130,6 +3161,9 @@ struct ChatView: View {
         .animation(Theme.Motion.layout, value: composerTyping)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sideHeaderHeight = $0 }
         .sheet(isPresented: $showSubagents) { subagentTree }
+        #if os(iOS)
+        .sheet(item: $reviewRequest) { r in reviewPage(r) }
+        #endif
         .sheet(isPresented: $showActivity) {
             ActivitySheet(loop: session?.loop, background: session?.background ?? [], stopLoop: { model.stopLoop(key) }) { t in
                 showActivity = false

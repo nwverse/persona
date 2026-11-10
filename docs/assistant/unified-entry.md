@@ -256,10 +256,11 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
   Completion is about the assigned task and its `done_when`, not whichever side question the Agent answered last. A known peer, cross-conversation or inspection turn cannot enter pending review on its answer alone. Only a fresh, successful `report_to_supervisor` done call with evidence tied to this task can establish the completion candidate from such a turn; the supervisor must still verify it. Unknown-source fallbacks never imply that a new question replaced a finished task. Ordinary delivery turns continue through the existing judge without requiring that tool.
   Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior.
 - **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
-  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start.
+  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below).
   The same signal for the same task is reported only once within the same state segment. A second guard suppresses an unchanged summary for the same task, Agent and signal kind for 30 minutes, regardless of new turn timestamps or elapsed-minute counters. Its hashed fingerprints and timestamps live in Postgres settings (`assistant.supervision_dedup`), survive manager restarts, and are reserved before dispatch; failed dispatch and queue admission release the reservation. An unreadable or unwritable reservation is retried rather than treated as empty history. Changed evidence, questions, summary, task, Agent or status can wake again. Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, links, and handling instructions).
   The first waits 15 seconds to coalesce; subsequent messages are at most one per 10 minutes, with a 2-minute minimum for decision-waiting signals such as `needs_you` / `idle` / `interrupted` / `failed`. If the main chat is running, queue between turns ("Supervision message" above the input); replace any queued, undelivered supervision message with the merged one.
   Supervised tasks no longer emit "🔔 任务…" (task notices) from `quiet.go`; all appear in supervision messages. Tasks started by other chats are unchanged.
+  **`orphaned`** (#3618, `server/internal/assistant/tasks_orphan.go`): every Agent of the open task is closed or its computer is offline, and no wake, continuation, card or queued input is pending for any of them (`docs/assistant/todos.md`, "Nobody is working on this"). The message says why (closed after a model error with the error, closed, computer offline) and the instructions give three ways out: send the Agent a message to resume it, start another Agent and cancel this task, or close the task. One state segment is the same set of Agents with no new step from any of them, so the signal is told once however the reason changes meanwhile (a closed Agent's computer going to sleep), and again only after an Agent worked and was lost again. It is a decision-waiting signal (2-minute minimum), is dropped from a waiting message once an Agent is back, and is never raised for a task waiting for review or for the user.
 - **Levels and visibility** (#1988): `info` reports update task progress only and never wake the assistant. Other automatic signals are `triage`: they wake it but the web folds the whole turn into a muted supervision record by default, including the input, trace and answer. Expanding the record reveals the original content; transcripts are never deleted. Older supervision messages default to triage too. The fold ends at the next genuine user message, so that user's exchange remains visible.
   `supervision_finish {visibility: silent|user, summary}` gives the assistant an explicit disposition. Silent means finish without a user-facing reply; user explicitly reveals the turn without adding a push. Successful `notify_user`, `ask_user`, and user-facing `task_review` conclusions also promote it, monotonically: a later silent disposition cannot hide them. Server work folds preserve promotion via `fold.supervision_user`.
   Native clients need corresponding whole-turn folding, promotion and `checking` receipt rendering; this change modifies server and web only.
@@ -292,11 +293,44 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
 
 Off by default: with no leaders, everything above is unchanged and only the main chat supervises. Layering: user → main chat (secretary) → one leader per repository or long-running project → workers.
 
-- **Opening one**: start a side conversation for the project (`conversation_new` from the main chat, or New chat in the app), then add its id to `assistant.leaders` with `persona_settings` (`set`, the whole list of conversation ids; `conversations_list` has them). The user approves the change on the phone. Only Persona conversations on the assistant's computer other than the main chat are accepted. Removing an id ends it; tasks it handed out keep their supervisor in the ledger but their signals go back to the main chat.
+- **Opening one**: the owner's tap, or the assistant with the owner's approval. A New chat is routed as it opens (below, "New chat opens a direction"): **Start direction** on its offer, or **Make it a direction** on any side conversation, makes it a leader at once; **End direction** takes one out. These are the owner's own choice, so they need no phone approval and are never redone by the hub. The assistant can still add a side conversation's id to `assistant.leaders` with `persona_settings` (`set`, the whole list of conversation ids; `conversations_list` has them), which the user approves on the phone. Either way, only Persona conversations on the assistant's computer other than the main chat are accepted, and at most 20. Removing an id ends it; tasks it handed out keep their supervisor in the ledger but their signals go back to the main chat.
 - **What a leader gets**: its context starts with "这是 leader 对话" (prompts `assistant/context.md`). A task it hands out with `task_plan` is supervised with the leader as `supervisor` (tasks handed out before it became one are not). The supervision loop routes each signal to its task's supervisor when that is a current leader (`digestTo`, `server/internal/assistant/supervise_leader.go`): the leader gets its own "📋 督办" message (when its conversation is gone, the main chat gets them instead) (the leader variant of `prompts/assistant/supervise.md`), with the same gathering, queueing, deduplication and folding as the main chat's. It reviews its tasks with `task_review` (accepted, rework with the same 2-round limit, cancelled); another side conversation cannot.
 - **What still goes to the main chat**: a leader's `needs_user` (the user gets the decision card as always, and the main chat gets an `escalated` entry with the leader's reason and recommendation, so it neither asks again nor loses track); any signal of a task waiting for the user; failed and retried starts (the start remedies, `task_start_screen` / `task_start_keys` / `task_retry`, stay main-chat tools); and tasks waiting for the user's nod to ship stay in the snapshot's approvals list. The main chat may still review a leader's task (for example after the user answered there); the task stays the leader's.
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools; the main chat and leaders are not limited.
 - **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
+
+#### Asks go to the supervisor first (#3589)
+
+Only with leaders configured (`assistant.leaders` not empty); without them every card goes to the user as above.
+Code: `server/internal/assistant/ask_route.go`.
+
+- **What goes up**: a card raised by an agent of a supervised task (not waiting for the user, not closed): a question
+  (not `ask_user`, not a form or a password card), a tool permission or a plan. Terminal dialogs read off the screen
+  and the conversations' own cards stay the user's. The card is shown on the apps marked `delegating` (an answer given
+  there still wins) and rings nothing: no push, no bot card, no Persona Link notification.
+- **Who gets it**: the task's supervisor as an `ask` entry in its "📋 督办" message (its leader; the main chat when the
+  main chat supervises it or the leader's conversation is gone), with the card's `interaction_id`, what it asks and the
+  task's decisions in effect. Concurrent cards of one task are one entry. The agent's `needs_you` signal is not sent
+  while its card is on its way up.
+- **What the supervisor does**: answers a question that is the agent's own call with `interaction_answer` (with
+  `reason`); the answer is kept as the task's decision (`source: agent`, the supervisor's conversation). What the user
+  must decide — a permission or a plan (no conversation approves them, "No answering approvals on the user's behalf"),
+  a red line, a goal change, a conflict with a decision already made — goes up with `ask_escalate {todo_id, reason,
+  recommend}`: every card of the task the user has not been told of rings at once, as one push (the first card pushes;
+  the others go to the apps and channels without one), each carrying `delegate.reason` / `delegate.recommend`. Only the
+  task's supervisor and the main chat may. A leader's escalation adds an `escalated` entry to the main chat with the
+  cards, the reason and the recommendation, so it does not ask again.
+- **Answers**: the user's answers go to the agents as any card's; a question's is kept as every card's is
+  (`source: card`), and an escalated permission or plan becomes a `card` decision too ("Allow …" → "Allowed"), so a
+  later card cannot quietly go the other way.
+- **Nothing hangs**: a card not handled within 5 minutes (`askHoldFor`) goes up a rung: from a leader to the main chat
+  (its entry marked as raised), from the main chat to the user (all of the task's cards reaching the user then ring
+  as one, without supervisor context).
+- **Limits**: the route lives on the pending card. A held card shown again without it (after a manager restart, or a
+  Codex card listed again once its node reconnected) is on the apps without a push; the supervisor still hears of it
+  through the task's `needs_you` signal, and `ask_escalate` takes it. A card the assistant is deciding on for the user
+  (agents.delegate) is not escalated: that decision tells the user itself. `ask_escalate` refuses without leaders. Cards raised after an escalation go to the supervisor again rather than joining the
+  escalated push.
 
 **Directions and reports up (#3484, #3485).** Each leader has a record, `assistant.directions` (`directions.go`): the kb
 project it is filed under, who filed it, since when, and when it ended (it left `assistant.leaders`; nothing is
@@ -308,6 +342,53 @@ in Waiting on you or stopped unfinished with no move for 24 hours. Stuck is told
 tells nothing again. Reviews from before reports started on the hub are not told. The main-chat entry for a stuck task,
 and the leader lines in the briefings, come with the prompts (P1). See `docs/extensions/extensions.md` "Leader events".
 
+**New chat opens a direction (#3607).** Right after the owner sends a New chat's first message (an app's
+`POST /api/v1/assistant/conversations`: not the main chat, a guest, the health space, a purpose or an extension's), the
+hub asks the model purpose `assistant.route` (Model configuration › Information processing, under the knowledge
+category, like chat titles) whether the sentence opens a direction or is a quick chat, off the conversation's path
+(`route.go`, prompts `assistant/route.md`, `route_input.md`). It gets the current leaders and the knowledge base's
+project names, and the model call has 2 seconds: a slower, failed or unreadable answer is a quick chat, and nothing shows.
+A direction is only offered: the offer (its name, the existing kb project the sentence names or a new project's name,
+and with 6 leaders or more the closest existing leader to use instead) is kept in `assistant.route_offers` for 7 days
+and told to the apps (`direction_offer`). The owner's taps:
+
+| Tap | Endpoint | What it does |
+| --- | --- | --- |
+| Start direction | `POST /api/v1/assistant/directions/{id}/start` | Takes the offer: adds the conversation to `assistant.leaders`, files its record under the offer's project (a new one is made in the knowledge base as a long project), names it as offered unless the owner named it; 404 without an offer |
+| Just a quick chat | `DELETE /api/v1/assistant/directions/offers/{id}` | Drops the offer; nothing else changes |
+| Make it a direction | `POST /api/v1/assistant/directions/{id}/make` | The same for any side conversation, with no offer; `{"project"?, "title"?}` |
+| End direction | `POST /api/v1/assistant/directions/{id}/end` | Takes it out of `assistant.leaders`; its record is ended, nothing is deleted |
+
+Each records the direction `by: "user"`, so the hub never files it under another project itself (one made without a project stays so until the owner picks one); `leader.changed` follows as for any change. The apps' strip, the ⋯ items and
+the New agent field come with W1 / I1 / A1.
+
+**New agent goes under a leader (#3608).** Work is handed to a leader three ways, and each makes the leader the task's
+`supervisor`, so its signals go to the leader (`digestTo`) and the leader reviews it:
+
+- **The main chat hands a plan to a leader**: `task_plan` with `supervisor` (main chat only, a current leader; the
+  plan's tasks carry it, `PlanTask.supervisor`). The plan card stays in the main chat and each task's card goes into
+  the leader's conversation too; a leader that ended before the owner pressed Start leaves the tasks to the main chat.
+- **The owner starts an agent by hand** (`agent_route.go`): the New agent sheet asks `POST /api/v1/assistant/route/agent`
+  for its **Under** field (the leader of the kb project that owns the directory; else the leader `assistant.route`
+  matches the prompt to, prompt `assistant/route_agent.md`, 2 s; else Persona), and once the agent runs,
+  `POST /api/v1/assistant/agents/{mid}/{sid}/supervisor` makes it that conversation's supervised task (as
+  `agent_supervise` does for the main chat; the card goes into that conversation). Called again with another
+  conversation, it moves the task there (**Move to…**) and its card follows (the old conversation keeps its history).
+- **A leader hands out its own** `task_plan`, as before.
+
+A plan of a leader's (its own, or one the main chat handed to it) that waits for the owner's Start is a `decision`
+report (`leader.report` with `plan`, told once), as the owner ruled after H1. The waiting plans are read from the plans
+themselves every 10 minutes and right after a leader's plan is made, not on every change.
+
+**Names and progress (#3679).** A direction is shown by its `name` (`direction_progress.go`): the one the owner gave
+it (`PUT /api/v1/assistant/directions/{id}/name`, or Start direction's offered name) or the secretary gave it
+(`direction_name`, main chat only), else its kb project's name, else its title without the `MMDD | kind | ` prefix.
+`leader.changed` and `GET /api/v1/assistant/leaders` carry it. Besides the hub's own reached / decision / stuck
+reports, a leader writes its direction's progress itself with `leader_progress` (leaders only): what was reached, what
+is being done and where it is stuck, what the owner has to do, and evidence links; it goes to the extensions as
+`leader.report` kind `progress` and the latest stays on the direction (listed by `GET /api/v1/assistant/leaders`).
+It never messages the owner: the work-log card shows it.
+
 ### Agent tasks (#3617)
 
 Supervision above covers the tasks the main chat or a leader hands out. An Agent started any other way (New Agent in an app, `agent_start` from another chat, a to-do the user made and linked an Agent to) had triage at most: nobody judged whether it finished, nobody received its `report_to_supervisor`, and its tab stayed open after it was done. With **Agent tasks** on, every Agent Persona starts is on a quiet to-do with a supervisor. It is made of the same pieces as the main chat's own tasks (the quiet to-do of `agent_start`, adoption as `agent_supervise` does it, the `todo_supervision` ledger, leader routing); `server/internal/assistant/agent_tasks.go`.
@@ -316,7 +397,7 @@ Supervision above covers the tasks the main chat or a leader hands out. An Agent
 - **`agent_start` from any chat** makes the quiet to-do at once, as from the main chat (`origin` the calling chat, its card in that chat, title from the prompt), also when `main_tasks_quiet` is off. A reporting chat's start (#3192) is unchanged.
 - **An app's New Agent** (`POST /api/v1/sessions` without `todo_id`) gets its to-do when a turn of it ends having done work: an edit, a command or a subagent (`Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `apply_patch`, `Bash`, `shell`, `exec_command`, `local_shell`, `shell_command`, `Task`, `Agent`). A session that only reads, searches and answers leaves no to-do behind; a later turn that does work makes one. The to-do is the main chat's (`origin` and supervisor the main chat, its card in the main chat, title and notes from that turn's message), made by the same adoption code as `agent_supervise`, and that very stop is judged like any supervised task's ("Automatic completion" in `docs/assistant/todos.md`). Checked when the turn has settled, with one read of the turn's items and no model call.
 - **Left alone**: Agents the user starts by hand in a terminal (not `started_by_persona`), assistant conversations, sessions an agent runtime or another source lists, a review's reviewer, archived sessions, and an Agent that is or ever was on a to-do (a closed task's Agent stays that task's: an accepted one reopens when its Agent works again, a cancelled one stays closed).
-- **Supervisor**: the chat that started the Agent when it is the main chat or a leader; otherwise the main chat. There is no per-repository leader lookup: leaders are filed under knowledge-base projects (`assistant.directions`), not repositories, so a start from an app or a non-leader chat goes to the main chat. Without a main chat nothing is made.
+- **Supervisor**: the chat that started the Agent when it is the main chat or a leader; otherwise the main chat. An Agent the owner starts from an app that puts it under a leader itself ("New agent goes under a leader", #3608) is that leader's task already and is left alone here; this switch does not look a leader up by directory, so any other start from an app or a non-leader chat goes to the main chat. Without a main chat nothing is made.
 - **A to-do the user made** gets a supervisor when an Agent is linked to it (`PUT /api/v1/todos/{id}/agents/{mid}/{sid}`, a start or message with `todo_id`): the ledger's `supervisor` only, no `done_when`. It stays the user's: not quiet, `origin` empty, closed only by the user (the done judge still skips it, and `task_review` and `agent_supervise` still refuse it); the supervisor gets its signals (stopped unfinished, waiting for an answer, stalled) and its Agent's reports.
 - **`report_to_supervisor` has a receiver** for an Agent on any open to-do: a to-do without a supervisor gets one on the first report (as above, no `done_when`), whoever opened it. "Nobody receives this" remains for an Agent on no to-do, and for a reporting chat's task (#3192): its notices go to that chat, and a ledger would move them into the main chat's supervision messages (#4101).
 - **Not noisier**: the to-dos made here are quiet ("Quiet tasks" above): no pushes, no Live Activity, not counted in global badges; their signals go to the supervisor, which decides what the user hears (`notify_user`, `ask_user`). This includes an app-started Agent's own completion and needs-you pushes once it is a task.

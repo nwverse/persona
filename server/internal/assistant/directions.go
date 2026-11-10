@@ -7,11 +7,13 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -45,12 +47,60 @@ type direction struct {
 	At        time.Time   `json:"at"`
 	EndedAt   *time.Time  `json:"ended_at,omitempty"`
 	Told      *leaderTold `json:"told,omitempty"`
+	// Name: the name the owner or the secretary gave the direction (#3679, "" none: directionName falls back); NameBy
+	// who gave it (directionByUser or directionByAssistant).
+	Name   string `json:"name,omitempty"`
+	NameBy string `json:"name_by,omitempty"`
+	// Progress: the leader's latest own summary (leader_progress, #3679).
+	Progress *leaderProgress `json:"progress,omitempty"`
 }
 
 type leaderTold struct {
 	Title   string `json:"title"`
+	Name    string `json:"name,omitempty"`
 	Project string `json:"project,omitempty"`
 	Ended   bool   `json:"ended,omitempty"`
+}
+
+// titlePrefix is an assistant conversation title's "MMDD | kind | " (titles.go), which a direction's name leaves out.
+var titlePrefix = lazyre.New(`^\s*\d{4}\s*\|[^|]*\|\s*`)
+
+// directionName is what a direction is called (#3679): the name the owner or the secretary gave it, else its
+// knowledge-base project's name, else its conversation's title without the "MMDD | kind | " prefix (the title as it is
+// when nothing is left).
+func directionName(d *direction, title, projectName string) string {
+	if d != nil && d.Name != "" {
+		return d.Name
+	}
+	if projectName != "" {
+		return projectName
+	}
+	if t := strings.TrimSpace(titlePrefix.ReplaceAllString(title, "")); t != "" {
+		return t
+	}
+	return title
+}
+
+// projectNames are the knowledge base's project names by slug; false when it could not be read.
+func (s *Service) projectNames(ctx context.Context) (map[string]string, bool) {
+	e, err := s.kbGet(ctx)
+	if err != nil || e == nil {
+		return nil, false
+	}
+	out := map[string]string{}
+	for _, p := range e.Store.Projects() {
+		out[p.Slug] = p.Name
+	}
+	return out, true
+}
+
+// nameOf is direction d's name with the project names pn (ok false: unreadable; then a project's name last told
+// stands, rather than telling the extensions another name only for want of the knowledge base).
+func nameOf(d *direction, title string, pn map[string]string, ok bool) string {
+	if d != nil && d.Name == "" && d.Project != "" && !ok && d.Told != nil && d.Told.Name != "" {
+		return d.Told.Name
+	}
+	return directionName(d, title, pn[d.Project])
 }
 
 type directionBook struct {
@@ -134,6 +184,7 @@ func (s *Service) directionsSync(ctx context.Context) {
 		return
 	}
 	projects := s.leaderProjects()
+	pnames, pok := s.projectNames(ctx)
 	now := time.Now().UTC()
 	tell := s.todoEventsOn()
 
@@ -158,7 +209,7 @@ func (s *Service) directionsSync(ctx context.Context) {
 		if d.EndedAt != nil {
 			d.EndedAt, changed = nil, true
 		}
-		if d.Project == "" && d.By == directionByAssistant && projects[id] != "" {
+		if d.Project == "" && d.By == directionByAssistant && projects[id] != "" { // never one the owner filed
 			d.Project, changed = projects[id], true
 		}
 	}
@@ -172,7 +223,7 @@ func (s *Service) directionsSync(ctx context.Context) {
 		if !leaders[id] && d.EndedAt == nil {
 			d.EndedAt, changed = &now, true
 		}
-		cur := leaderTold{Title: titles[id].title, Project: d.Project, Ended: d.EndedAt != nil}
+		cur := leaderTold{Title: titles[id].title, Name: nameOf(d, titles[id].title, pnames, pok), Project: d.Project, Ended: d.EndedAt != nil}
 		if d.Told != nil && *d.Told == cur || !tell {
 			continue
 		}
@@ -181,7 +232,7 @@ func (s *Service) directionsSync(ctx context.Context) {
 			continue
 		}
 		d.Told, changed = &cur, true
-		notices = append(notices, assistantwire.LeaderChangedEvent{ID: id, Title: cur.Title, Project: cur.Project, Ended: cur.Ended})
+		notices = append(notices, assistantwire.LeaderChangedEvent{ID: id, Title: cur.Title, Name: cur.Name, Project: cur.Project, Ended: cur.Ended})
 	}
 	if changed {
 		s.saveDirectionsLocked(ctx) // before telling: a crash between the two loses an event rather than repeating one
@@ -255,9 +306,11 @@ func (s *Service) directionViews(ctx context.Context) (map[string]*proto.Directi
 // leaderView is a leader as GET /api/v1/assistant/leaders lists it: what leader.changed says of it, and its record.
 type leaderView struct {
 	assistantwire.LeaderChangedEvent
-	By      string     `json:"by"`
-	At      time.Time  `json:"at"`
-	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// Progress: the leader's latest own summary (leader_progress), nil before its first.
+	Progress *leaderProgress `json:"progress,omitempty"`
+	By       string          `json:"by"`
+	At       time.Time       `json:"at"`
+	EndedAt  *time.Time      `json:"ended_at,omitempty"`
 }
 
 // directionRoutes: GET /api/v1/assistant/leaders lists every direction, current leaders first, then ended ones, each as
@@ -266,6 +319,7 @@ type leaderView struct {
 func (s *Service) directionRoutes() {
 	s.handle("GET /api/v1/assistant/leaders", func(w http.ResponseWriter, r *http.Request) {
 		titles, ok := s.conversationTitles()
+		pnames, pok := s.projectNames(r.Context())
 		b := &s.directions
 		b.mu.Lock()
 		ok = ok && s.directionsLocked(r.Context())
@@ -277,7 +331,8 @@ func (s *Service) directionRoutes() {
 		list := make([]leaderView, 0, len(b.m))
 		for id, d := range b.m {
 			list = append(list, leaderView{LeaderChangedEvent: assistantwire.LeaderChangedEvent{ID: id, Title: titles[id].title,
-				Project: d.Project, Ended: d.EndedAt != nil}, By: d.By, At: d.At, EndedAt: d.EndedAt})
+				Name: nameOf(d, titles[id].title, pnames, pok), Project: d.Project, Ended: d.EndedAt != nil}, Progress: d.Progress,
+				By: d.By, At: d.At, EndedAt: d.EndedAt})
 		}
 		b.mu.Unlock()
 		slices.SortFunc(list, func(a, b leaderView) int {
