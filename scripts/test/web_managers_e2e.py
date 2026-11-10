@@ -20,7 +20,8 @@ item opened by its address (its requests name its manager, the Trail's too, and 
 Hand to AI on it), the Muted dialog, and Settings › Assistants' Notifications switch;
 Once after the rounds: the count beside 工作 (its agents waiting plus the roster's inbox_needs_you) moving without a
 reload when the hub pushes `managers`, and every row of the list reachable and clickable at 200% zoom and at the largest
-text size. --outdated its Needs update badge; --single checks the switcher is there with one assistant, that nothing is filtered
+text size. --outdated its Needs update badge; --single checks the earlier Persona product row and appearance menu,
+without assistant identity or a roster dropdown, that nothing is filtered
 and that no request names a manager (no X-Persona-Manager header, no manager= in the address). Screenshots (390 and
 1200 wide, light and dark) contain only mock data.
 """
@@ -31,9 +32,13 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Error as PlaywrightError, expect, sync_playwright
 
+# Shared development machines may take longer than Playwright's five-second assertion default.
+expect.set_options(timeout=15000)
+
 
 def go(page, url):
-    """page.goto, once more when a navigation the page started itself (a dialog closed with Back) cut it short."""
+    """Navigate after a closed overlay's pending history entry has been popped."""
+    page.wait_for_function("!history.state?.personaOverlay")
     try:
         page.goto(url)
     except PlaywrightError as e:
@@ -63,42 +68,63 @@ def check(browser, base, width, theme, shots, single, outdated):
     page.on("request", lambda r: "/api/" in r.url and api_requests.append((r.method, r.url, r.headers.get("x-persona-manager"), (parse_qs(urlparse(r.url).query).get("manager") or [None])[0])))
     name = lambda what: os.path.join(shots, f"managers-{what}-{width}-{theme}.png")
     try:
-        page.goto(base + "/?token=mock")
+        with page.expect_response(lambda r: "/api/v1/managers" in r.url):
+            page.goto(base + "/?token=mock")
         main = page.locator("main")
         head = page.locator("[data-assistant-switcher]")
 
         # a phone's drawer is off screen and inert until opened
         shut = lambda: head.evaluate("(e) => Boolean(e.closest('[inert]'))")
 
-        def open_list():
-            """The switcher's list, from the sidebar's head (a phone opens the drawer first)."""
+        def open_drawer():
             if width < 1024:
                 # once the page is drawn (its sidebar button), and settled after a navigation
                 expect(main.get_by_role("button", name="侧边栏").first).to_be_visible()
                 page.wait_for_timeout(300)
                 if shut():
                     main.get_by_role("button", name="侧边栏").first.click()
+
+        def open_list():
+            """The head's menu: product settings with one assistant, the roster with several."""
+            open_drawer()
             head.click()
             return page.get_by_role("menu")
 
         def pick(assistant):
-            open_list().get_by_role("menuitemradio").filter(has_text=assistant).click()
+            menu = open_list()
+            overlay = page.evaluate("history.state?.personaOverlay")
+            menu.get_by_role("menuitemradio").filter(has_text=assistant).click()
             expect(head).to_have_attribute("data-assistant-switcher", MANAGERS[assistant])
-            if not shut() and width < 1024:  # a phone's drawer stays open when the page did not change: close it
-                page.keyboard.press("Escape")
+            expect(menu).to_have_count(0)
+            if width < 1024:
+                # Menu and drawer close pop separate history entries asynchronously. Let both settle before page.goto.
+                if overlay:
+                    page.wait_for_function("(id) => history.state?.personaOverlay !== id", arg=overlay)
+                if not shut():
+                    page.keyboard.press("Escape")
+                page.wait_for_function("!history.state?.personaOverlay")
 
         if single:
             # signed in and the assistant page drawn (its box)
             page.wait_for_function("localStorage.getItem('persona.token')")
             expect(main.get_by_role("textbox").last).to_be_visible()
-            # one assistant: the switcher is there with New assistant, and nothing to switch to
-            menu = open_list()
-            expect(menu.get_by_role("menuitemradio")).to_have_count(1)
-            expect(menu.get_by_role("menuitem", name="新建助手")).to_be_visible()
-            expect(menu.get_by_text("默认", exact=True)).to_have_count(0)
+            # The installed roster has loaded: the head stays product-branded and the chat does not name an assistant.
+            expect(head).to_have_attribute("data-assistant-switcher", "")
+            expect(head).to_contain_text("Persona")
+            expect(head).not_to_contain_text("助手")
+            expect(page.locator("[data-assistant-avatar]")).to_have_count(0)
+            open_drawer()
             if shots:
                 page.wait_for_timeout(400)
                 page.screenshot(path=name("single"))
+            menu = open_list()
+            expect(menu.get_by_role("menuitemradio")).to_have_count(0)
+            expect(menu.get_by_role("menuitem", name="新建助手")).to_have_count(0)
+            expect(menu.get_by_role("menuitem", name="管理助手…")).to_have_count(0)
+            expect(menu.get_by_role("menuitem", name="设置", exact=True)).to_be_visible()
+            expect(menu.get_by_role("menuitem", name="深色", exact=True)).to_be_visible()
+            if shots:
+                page.screenshot(path=name("single-menu"))
             page.goto(base + "/machines")
             expect(main.get_by_text("MacBook", exact=True).first).to_be_visible()
             # the pages that name a manager with several: with one, none of their requests may name it
@@ -342,6 +368,15 @@ def check(browser, base, width, theme, shots, single, outdated):
         page.get_by_role("menu").get_by_role("menuitem").filter(has_text="家里").click()
         expect(page.get_by_text("已移到「家里」", exact=True)).to_be_visible()
         assert not errors, errors
+    except Exception:
+        # This driver is for mock data only; retain the actual page when a selector or browser fails.
+        print("failed mock page:", page.url, "errors:", errors)
+        if shots:
+            try:
+                page.screenshot(path=name("failure"), timeout=5000)
+            except PlaywrightError:
+                pass
+        raise
     finally:
         context.close()
 

@@ -283,6 +283,72 @@ With no open to-do, or with a step its to-do does not authorize, the hub neither
 Sending a message yourself or typing on the computer starts the session working: all retries, wakeups, and cards for that turn become invalid. Triage again after the new turn ends.
 The same applies to "Retry" on an App error card (work begins, invalidating queued automatic retries). Persona records continuations, wakeups and status questions in `session_work`, sending each only once per turn.
 
+## Declining a task-progress reply draft (#3743)
+
+A `message` card in a task's conversation is a reply drafted from the task's progress,
+not an Agent permission or question card. **Send** explicitly replies through the
+Inbox (`POST /api/v1/inbox/{ref}/reply`, with `card` and `text`) and records `sent_at`.
+The existing **Later** action only collapses the inbox ref in that client's memory;
+it does not record a decision and does not survive a reload.
+
+**Do not handle** records a decision on this exact draft without sending anything.
+It removes only this card from **Needs you**. The Inbox item stays open, and the task,
+its Agents, supervision, permissions and unrelated pending questions are unchanged.
+The card retains its original draft and adds `dismissed_at` and `dismissal_id`; it
+must not be presented as sent or as completed work.
+
+Both routes go to the conversation's manager (`X-Persona-Manager` or `?manager=`):
+
+| Method | Path | Body | Success |
+| --- | --- | --- | --- |
+| POST | `/api/v1/assistant/feed/{id}/dismiss` | `{"draft":"<original body.draft>"}` | `{"item":FeedItem,"dismissal_id":"<decision id>"}` |
+| POST | `/api/v1/assistant/feed/{id}/undo-dismiss` | `{"dismissal_id":"<decision id>"}` | `{"item":FeedItem}` |
+
+The draft comparison uses the unedited original card text, not textarea edits. The
+card ID binds the immutable draft version. A duplicate dismissal returns its
+existing receipt without writing another decision. **Undo** removes `dismissed_at`
+and `dismissal_id` and returns the same unsent card to pending. It writes a decision
+superseding the dismissal. An old Undo cannot replace a newer dismissal or restore
+an older card once a newer draft for the same Inbox ref exists in the conversation.
+Ordinary Agent output does not invalidate dismissal or toast Undo: an exact old
+card can still be declined without affecting any newer pending card. Dismissal
+preserves its original progress generation; only legacy cards establish a baseline.
+A changed draft, sent or filed item, or stale Undo decision returns
+`409 task_draft_stale`; missing or non-message cards return `404`; read-only roles
+return `403`. Sending a dismissed card from a stale client returns
+`409 task_draft_dismissed`, with `delivered: "none"`.
+
+The manager stores the body change and the task's `todo_decisions` audit (`source:
+card`) in one Postgres transaction. It broadcasts the same `assistant_feed` item ID
+only after commit. Incremental feed reads also return older cards whose dismissal or
+Undo changed after `since`, in original `at, id` order. The indexed `updated_at`
+column and retained `body.dismissal_updated_at` recover Undo after its dismissal
+fields have been removed; the original card's conversation position never moves.
+
+Clients opt into stable feed pagination with `GET /api/v1/assistant/conversations/{id}/feed?paginate=1&since=<RFC3339Nano>`
+(`since` is optional for a cold read). The response retains all existing fields and
+always adds `next_cursor`: an opaque string, or `""` when complete. Fetch subsequent
+pages from the same path with only `cursor=<URL-encoded next_cursor>`; a cursor
+implies pagination. Do not advance `since` using the last card's original `at`: a
+full page of older dismissal updates would repeat and starve new progress.
+The cursor preserves the initial `since`, freezes an upper bound `until`, and
+advances only the `(at, id)` position. Each page therefore returns older updates
+once while retaining new entries in original conversation order. Updates after
+`until` remain eligible for a later incremental traversal. An invalid cursor, one
+from another conversation, or `cursor` combined with `since` returns `400`.
+Legacy requests without `paginate=1` or a cursor retain their existing response;
+clients that receive no `next_cursor` from an older server can use legacy paging.
+
+Draft submission records `message_version` and an opaque `progress_version` based
+on the active task Agents' transcript revision, last output and tool activity. It
+never uses polling timestamps or the task's decision-update timestamp. Submitting
+another draft for a dismissed source message and the same progress generation is
+suppressed before insertion or broadcast, including reworded drafts and after a
+manager reload. Missing Agent progress is not evidence of a new generation. New
+Agent progress or a genuinely new source message can produce a new pending card for
+the same Inbox ref. The periodic handling sweep does not itself create draft cards;
+creation remains at `inbox_suggest` / `inbox_draft` submission.
+
 ## Switches (requested 2026-11-05: all off by default)
 
 Triage calls a model after every stopped turn; continuation and wakeups also make the Agent run another turn on its own model. All consume the user's tokens. Therefore **everything defaults to off**,

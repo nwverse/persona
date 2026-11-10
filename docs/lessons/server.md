@@ -1569,6 +1569,19 @@ A connector that folds several notifications into one thread (GitHub CI failures
   `json.Marshal`'s for HTML characters, U+2028, control characters and invalid UTF-8 (`TestNotifyMarshaledIsTheSameLine`).
   Give the type a `MarshalJSON`, or a `[]byte` passed anywhere else is written as base64.
 
+## HTML characters escaped at the first hop stay escaped on every later one (2026-11-10, #2907)
+
+- `json.Marshal` and a default `json.NewEncoder` write `<`, `>` and `&` as six bytes each, and an encoder keeps escapes
+  it finds in a `json.RawMessage` even with `SetEscapeHTML(false)`. A tool input of HTML went from the transcript's clip
+  through the node's rpc line to the hub's page and push: 61,011 bytes as Claude wrote them, 160,011 on the wire. Turning
+  escaping off at one hop changes nothing while an earlier one still escapes, so the clip (`transcript.marshalPlain`,
+  which `jsonLen` measures with too), every rpc line (`rpc.marshal`, `encodeLine`) and the hub's item bodies and pushes
+  (`marshalItems`, `writeItemsJSON`) leave them as they are. U+2028 and U+2029 are still escaped, as encoding/json does.
+- Prove it end to end, not per encoder: parse a line, send it over real rpc lines, read the page, the full item, the
+  push and a subscribe's backlog, and check that `tool_input` is no longer than it was written and holds the same value
+  (`TestItemsKeepHTMLCharactersOnTheWire`). A call's params carry no items and are pinned in the rpc package
+  (`TestCallKeepsHTMLCharacters`). Putting back any one escaping hop fails one of the two.
+
 ## Transport source is not pane origin (#994)
 
 A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
