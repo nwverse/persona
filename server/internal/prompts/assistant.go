@@ -345,10 +345,12 @@ type TaskRun struct {
 	Label          string
 	Once, Interval bool   // neither: daily
 	Every          string // interval: "30 minutes"
-	Late           string // "" when on time; else how late ("25 minutes")
-	Due            time.Time
-	Prompt         string
-	KBHint         bool // daily runs with the knowledge base on
+	// Accelerated: a leader's open supervised todos shortened this run's interval.
+	Accelerated bool
+	Late        string // "" when on time; else how late ("25 minutes")
+	Due         time.Time
+	Prompt      string
+	KBHint      bool // daily runs with the knowledge base on
 	// KnowledgeDir: the knowledge base directory the hint names; "" is the default ~/.persona/data.
 	KnowledgeDir string
 	// Continued: it goes into the task's own conversation, which got the background on the first run.

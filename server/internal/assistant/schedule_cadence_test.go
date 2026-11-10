@@ -199,8 +199,12 @@ func TestLeaderFollowupCadenceRunPromptUsesTheEffectiveInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := f.lastSend(t)["text"].(string)
-	if !strings.Contains(text, "每 10 分钟") || strings.Contains(text, "每 3 小时") {
-		t.Fatalf("the run should be told its effective interval: %q", text)
+	if !strings.Contains(text, "每 10 分钟") || strings.Contains(text, "每 3 小时") ||
+		!strings.Contains(text, "没有变化就立即结束，不做长汇报") {
+		t.Fatalf("the run should be told its effective interval and to stop when nothing changed: %q", text)
+	}
+	if got := stripScheduleHeader(text[strings.Index(text, "⏰"):]); got != "巡检" {
+		t.Fatalf("the run's own prompt must survive without accumulated schedule notes: %q", got)
 	}
 }
 
