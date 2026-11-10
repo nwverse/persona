@@ -175,7 +175,7 @@ struct PlanCard: View {
                     let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: ultraChoice), blocked: { blocked.contains($0) })
                     Task { await store.start(plan, edits: edits, remember: remember) }
                 } label: {
-                    Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Started")).lineLimit(1)
+                    Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Start")).lineLimit(1)
                         .frame(maxWidth: .infinity)
                 }
                 .themedButton(prominent: true)
@@ -329,7 +329,7 @@ struct PlanEditSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: !tasks.isEmpty && tasks != opened) { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Started") { start(tasks) }.bold() }
+                ToolbarItem(placement: .confirmationAction) { Button("Start") { start(tasks) }.bold() }
             }
         }
         #if os(macOS)
