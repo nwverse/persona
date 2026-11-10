@@ -3,6 +3,7 @@ import XCTest
 /// MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASK_DECISION=1: a task-review decision on the pending tray.
 final class DirectCompletionUITests: XCTestCase {
     @MainActor func testCompletingTheDecisionRemovesItWithoutAnotherAgentTurn() async throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the iPhone pending tray") }
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
             throw XCTSkip("needs the task decision mock hub")
         }

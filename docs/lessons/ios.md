@@ -9,7 +9,8 @@ Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in
   recommendation and resumes the Agent; interaction resolution answers a different object and must not be used.
 - Apple must decode the optional `ask` before the pending tray can show a stopped Agent's decision. Keep malformed or
   absent asks compatible, retain the exact `asked_at` for recommendation acceptance, and ignore cached asks on completed
-  tasks. Completion and recommendation share one in-flight guard for each hub/task/round; a failed completion leaves
+  tasks. The conversation's shared task cards, the iPhone pending tray and the iPad task board use the same action.
+  Completion and recommendation share one in-flight guard for each hub/task/round; a failed completion leaves
   the card available and shows an error. Apply the successful todo response to the shared index before refreshing it.
 - A SwiftUI accessibility identifier on a wrapper can overwrite identifiers on all of its child buttons. The first
   decision-tray UI run found the buttons by label but not by their action ids. Keep identifiers on the actions rather
