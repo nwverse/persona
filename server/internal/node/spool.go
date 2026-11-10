@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -81,34 +82,65 @@ type spoolEntry struct {
 type spool struct {
 	path     string
 	replayMu sync.Mutex
+	logf     func(string, ...any)
+	rewrites int // how often writeLocked replaced (or removed) the file, under spoolMu: tests count them
 }
 
 var spoolMu sync.Mutex // one spool file per process
 
 func openSpool(path string) *spool { return &spool{path: path} }
 
+func (s *spool) log(format string, args ...any) {
+	if s.logf != nil {
+		s.logf(format, args...)
+	}
+}
+
 // load reads the entries; a line that does not parse is skipped.
 func (s *spool) load() []spoolEntry {
 	spoolMu.Lock()
 	defer spoolMu.Unlock()
-	return s.loadLocked()
+	entries, _, err := s.loadLocked()
+	if err != nil {
+		s.log("load %s: %v", s.path, err)
+	}
+	return entries
 }
 
-func (s *spool) loadLocked() []spoolEntry {
+// loadLocked reads the entries and, for each, its line in the file: a rewrite keeps those bytes instead of encoding
+// every entry again.
+func (s *spool) loadLocked() (entries []spoolEntry, lines [][]byte, err error) {
 	b, err := os.ReadFile(s.path)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
 	}
-	var out []spoolEntry
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 0, 64<<10), spoolBytesMost+1)
+	badLines := 0
 	for sc.Scan() {
+		raw := sc.Bytes()
+		if len(bytes.TrimSpace(raw)) == 0 {
+			continue
+		}
 		var e spoolEntry
-		if json.Unmarshal(sc.Bytes(), &e) == nil && e.ID != "" {
-			out = append(out, e)
+		if err := json.Unmarshal(raw, &e); err == nil && e.ID != "" {
+			entries = append(entries, e)
+			lines = append(lines, bytes.Clone(raw)) // the scanner reuses its buffer
+		} else {
+			badLines++
 		}
 	}
-	return out
+	if err := sc.Err(); err != nil {
+		s.log("scanner error reading %s: %v", s.path, err)
+		return entries, lines, err
+	}
+	if badLines > 0 {
+		s.log("skipped %d bad line(s) in %s", badLines, s.path)
+	}
+	return entries, lines, nil
 }
 
 // add appends e, dropping the oldest entries past the bounds. dropped is how many went.
@@ -122,13 +154,17 @@ func (s *spool) add(e spoolEntry) (dropped int, err error) {
 	if len(line) >= spoolBytesMost {
 		return 0, errors.New("too large to keep")
 	}
-	all := append(s.loadLocked(), e)
-	lines := make([][]byte, 0, len(all))
+	if ok, err := s.appendLocked(line); ok || err != nil {
+		return 0, err
+	}
+	_, lines, err := s.loadLocked()
+	if err != nil {
+		return 0, err
+	}
+	lines = append(lines, line)
 	size := 0
-	for _, x := range all {
-		b, _ := json.Marshal(x)
-		lines = append(lines, b)
-		size += len(b) + 1
+	for _, l := range lines {
+		size += len(l) + 1
 	}
 	for len(lines) > spoolMost || size > spoolBytesMost {
 		size -= len(lines[0]) + 1
@@ -138,40 +174,126 @@ func (s *spool) add(e spoolEntry) (dropped int, err error) {
 	return dropped, s.writeLocked(lines)
 }
 
+// appendLocked adds line at the end of the file when that stays within the bounds (counting every line, bad ones too)
+// and the file ends with a whole line. ok false: add rewrites the file instead (there is none yet, a bound is reached,
+// or a torn last line from a crash is to go).
+func (s *spool) appendLocked(line []byte) (ok bool, err error) {
+	f, err := os.OpenFile(s.path, os.O_RDWR|os.O_APPEND, 0)
+	if os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	count, size, last := 0, 0, byte('\n')
+	buf := make([]byte, 32<<10)
+	for {
+		k, err := f.Read(buf)
+		if k > 0 {
+			count += bytes.Count(buf[:k], []byte{'\n'})
+			size, last = size+k, buf[k-1]
+		}
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return false, err
+		}
+	}
+	if last != '\n' || count+1 > spoolMost || size+len(line)+1 > spoolBytesMost {
+		return false, nil
+	}
+	if _, err = f.Write(append(line, '\n')); err == nil {
+		err = f.Sync()
+	}
+	if err != nil {
+		_ = f.Truncate(int64(size)) // not kept: leave no part of it
+		return false, err
+	}
+	return true, nil
+}
+
 // failed counts a failed replay of id and says whether it is to be dropped now.
 func (s *spool) failed(id string) (drop bool, err error) {
 	spoolMu.Lock()
 	defer spoolMu.Unlock()
-	var lines [][]byte
-	for _, x := range s.loadLocked() {
-		if x.ID == id {
-			if x.Tries++; x.Tries >= spoolTriesMost {
-				drop = true
-				continue
-			}
-		}
-		b, _ := json.Marshal(x)
-		lines = append(lines, b)
+	entries, lines, err := s.loadLocked()
+	if err != nil {
+		return false, err
 	}
-	return drop, s.writeLocked(lines)
+	kept := lines[:0]
+	for i, x := range entries {
+		if x.ID != id {
+			kept = append(kept, lines[i])
+			continue
+		}
+		if x.Tries++; x.Tries >= spoolTriesMost {
+			drop = true
+			continue
+		}
+		b, err := json.Marshal(x)
+		if err != nil {
+			return false, err
+		}
+		kept = append(kept, b)
+	}
+	return drop, s.writeLocked(kept)
 }
 
-// remove takes the entry id out (it was delivered).
-func (s *spool) remove(id string) error {
+// remove takes the entries ids out (delivered, or dropped), in one rewrite; none of them there writes nothing.
+func (s *spool) remove(ids ...string) error {
 	spoolMu.Lock()
 	defer spoolMu.Unlock()
-	var lines [][]byte
-	for _, x := range s.loadLocked() {
-		if x.ID != id {
-			b, _ := json.Marshal(x)
-			lines = append(lines, b)
+	gone := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		gone[id] = true
+	}
+	entries, lines, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	kept := lines[:0]
+	for i, x := range entries {
+		if !gone[x.ID] {
+			kept = append(kept, lines[i])
 		}
 	}
-	return s.writeLocked(lines)
+	if len(kept) == len(entries) {
+		return nil
+	}
+	return s.writeLocked(kept)
+}
+
+// spoolRemoveEvery bounds how far the file lags behind a replay: what it handed over leaves the file in one rewrite,
+// once this many are due and when the pass ends. A node stopped in between sends at most these again, and the manager
+// drops the repeats by spool_id.
+const spoolRemoveEvery = 64
+
+// spoolRemovals collects the entries a replay pass is done with (sp.remove once spoolRemoveEvery are due, and at flush).
+type spoolRemovals struct {
+	sp   *spool
+	logf func(string, ...any)
+	ids  []string
+}
+
+func (r *spoolRemovals) add(id string) {
+	if r.ids = append(r.ids, id); len(r.ids) >= spoolRemoveEvery {
+		r.flush()
+	}
+}
+
+func (r *spoolRemovals) flush() {
+	if len(r.ids) == 0 {
+		return
+	}
+	if err := r.sp.remove(r.ids...); err != nil {
+		r.logf("spool: %v", err)
+	}
+	r.ids = r.ids[:0]
 }
 
 // writeLocked replaces the file with lines (atomically: a crash leaves the old file or the new one); none removes it.
 func (s *spool) writeLocked(lines [][]byte) error {
+	s.rewrites++
 	if len(lines) == 0 {
 		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
 			return err
@@ -246,6 +368,9 @@ type standby struct {
 }
 
 func newStandby(sp *spool, logf func(string, ...any)) *standby {
+	if sp != nil && sp.logf == nil {
+		sp.logf = logf
+	}
 	return &standby{sp: sp, logf: logf, now: time.Now, retry: 5 * time.Second}
 }
 
@@ -508,10 +633,11 @@ func (s *standby) keep(kind string, req sockRequest) error {
 // until a later try brings it (reloadState), and the gate opens at once: new hooks never wait for the hold. A replay
 // that runs after new hooks went ahead of it leaves what they moved on alone (replayAhead).
 //
-// An entry goes from the file once it was sent; a hook event that could not be sent stops the replay (the connection is
-// gone), and the rest stays for the next one. A notification the manager refused, did not answer, or could not take
-// now stays too; retry says whether one is left for retryNotifications on this connection. One the manager got twice
-// (the node stopped between sending and removing) it drops by spool_id.
+// An entry goes from the file once it was sent (spoolRemovals: in one rewrite every spoolRemoveEvery entries and at the
+// end); a hook event that could not be sent stops the replay (the connection is gone), and the rest stays for the next
+// one. A notification the manager refused, did not answer, or could not take now stays too; retry says whether one is
+// left for retryNotifications on this connection. One the manager got twice (the node stopped between sending it and
+// taking it out) it drops by spool_id.
 func (n *Node) replaySpool(ctx context.Context, sp *spool) (retry bool) {
 	var once sync.Once
 	openGate := func() { once.Do(func() { close(n.replayed) }) }
@@ -542,6 +668,8 @@ func (n *Node) replaySpool(ctx context.Context, sp *spool) (retry bool) {
 			n.logger.Printf("spool: replayed %d taken while the manager was away (%d too old, %d behind new hooks: dropped)", sent, stale, ahead)
 		}
 	}()
+	done := spoolRemovals{sp: sp, logf: n.logger.Printf}
+	defer done.flush() // on every return, before replayMu is let go: the next replay never sees what this one handed over
 	for _, e := range sp.load() {
 		if ctx.Err() != nil {
 			return false
@@ -573,9 +701,7 @@ func (n *Node) replaySpool(ctx context.Context, sp *spool) (retry bool) {
 				continue
 			}
 		}
-		if err := sp.remove(e.ID); err != nil {
-			n.logger.Printf("spool: %v", err)
-		}
+		done.add(e.ID)
 	}
 	return retry
 }
@@ -659,7 +785,9 @@ const (
 // answered, and drops one that can never be sent; it does not remove a sent one.
 func (n *Node) replayNotify(ctx context.Context, sp *spool, e spoolEntry) notifyOutcome {
 	cctx, cancel := context.WithTimeout(ctx, replayNotifyTimeout)
-	rep, err := n.notifyCall(cctx, e.Request, e.ID)
+	req := e.Request
+	req.Pane = n.ownPane(req.Pane) // kept as the client sent it (serveSock translates live ones)
+	rep, err := n.notifyCall(cctx, req, e.ID)
 	timedOut := cctx.Err() != nil && ctx.Err() == nil
 	cancel()
 	if err == nil && rep.Error != "" { // refused before the manager was asked (empty, not JSON): never sendable
@@ -741,6 +869,8 @@ func (n *Node) retryNotifications(ctx context.Context, sp *spool) {
 func (n *Node) retryNotificationsOnce(ctx context.Context, sp *spool) (again bool) {
 	sp.replayMu.Lock()
 	defer sp.replayMu.Unlock()
+	done := spoolRemovals{sp: sp, logf: n.logger.Printf}
+	defer done.flush()
 	for _, e := range sp.load() {
 		if e.Kind != "notify" {
 			continue // a hook entry left by a connection that dropped: the next connection's replay has it
@@ -750,9 +880,7 @@ func (n *Node) retryNotificationsOnce(ctx context.Context, sp *spool) (again boo
 		}
 		if time.Since(e.At) > spoolMaxAge {
 			n.logger.Printf("spool: notification %s too old, dropped unsent", e.ID)
-			if err := sp.remove(e.ID); err != nil {
-				n.logger.Printf("spool: %v", err)
-			}
+			done.add(e.ID)
 			continue
 		}
 		switch n.replayNotify(ctx, sp, e) {
@@ -760,9 +888,7 @@ func (n *Node) retryNotificationsOnce(ctx context.Context, sp *spool) (again boo
 			return false
 		case notifySent:
 			n.logger.Printf("spool: notification %s handed over on a retry", e.ID)
-			if err := sp.remove(e.ID); err != nil {
-				n.logger.Printf("spool: %v", err)
-			}
+			done.add(e.ID)
 		case notifyBusy, notifyRefused:
 			again = true
 		case notifyTimedOut, notifyHubAway:
@@ -776,6 +902,7 @@ func (n *Node) retryNotificationsOnce(ctx context.Context, sp *spool) (again boo
 // that standby answered: no card, it is long over or asks again by itself.
 func (n *Node) replayHook(e spoolEntry) error {
 	req := e.Request
+	req.Pane = n.ownPane(req.Pane)
 	var in hookInput
 	if json.Unmarshal(req.Input, &in) != nil {
 		return nil

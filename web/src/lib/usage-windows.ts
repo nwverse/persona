@@ -3,7 +3,7 @@
 // countdown, sample age, what the sidebar shows); the bars and the popover are views/UsageBars.tsx.
 import { useEffect, useState } from "react";
 import { formatDate, formatRelative, t as tr } from "../i18n";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 
 export interface UsageWindow {
   label: string;
@@ -26,7 +26,8 @@ export interface UsageAccount {
   /** Where the numbers came from (#2595): an agent's files on one of the computers, and/or account-pool gateways by name. */
   local?: boolean;
   sources?: string[];
-  /** "unreachable" | "error": the gateway could not read the account just now and the numbers are its last. */
+  /** Why a gateway's numbers are old: "error" (it could not read this account just now) or, when its own last read
+   *  failed, "rejected" (the key was turned away), "unreachable" or "failed" (docs/server/usage-windows.md). */
   problem?: string;
 }
 
@@ -140,6 +141,22 @@ export function sourceNames(a: UsageAccount): string[] {
   return [...(a.local ? [tr("usage.source_local")] : []), ...(a.sources ?? [])];
 }
 
+/** What the gateway could not do, in words; "" when nothing went wrong or the hub sends a reason this build doesn't know. */
+export function problemText(a: UsageAccount): string {
+  switch (a.problem) {
+    case "rejected":
+      return tr("usage.problem_rejected");
+    case "unreachable":
+      return tr("usage.problem_unreachable");
+    case "failed":
+      return tr("usage.problem_failed");
+    case "error":
+      return tr("usage.problem_error");
+    default:
+      return "";
+  }
+}
+
 /** The plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
 export function planNote(a: UsageAccount): string {
   const plan = (a.plan ?? "").trim();
@@ -171,11 +188,9 @@ export function useUsageWindows(): UsageAccount[] {
       const current = () => !dead && mine === seq;
       api<{ accounts?: UsageAccount[] }>("/usage/windows")
         .then((r) => current() && setAccounts(r.accounts ?? []))
-        .catch((e: unknown) => {
-          if (!current()) return;
-          // a copy of what is kept: the bars render again and liveAccounts judges its age with the time now
-          setAccounts((kept) => ((e as { status?: number } | null)?.status === 404 ? [] : kept.slice()));
-        });
+        // an older hub has no such route: nothing to show; any other failure keeps the bars it last had, as a copy so
+        // that they render again and liveAccounts judges their age with the time now (#1905)
+        .catch((e: unknown) => current() && setAccounts((kept) => (e instanceof ApiError && e.status === 404 ? [] : kept.slice())));
     };
     load();
     const t = setInterval(load, POLL_MS);

@@ -15,11 +15,10 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// reviewNode is the fake node's side of a review: the change git.review reports, the copy worktree.snapshot makes, the
-// reviewer's answer, and what the manager asked of it.
+// reviewNode is the fake node's side of a review: the change git.review reports, the copy worktree.snapshot makes, and
+// what the manager asked of it.
 type reviewNode struct {
 	change    proto.GitReview
-	reply     string            // the reviewer's last answer ("" none)
 	snapshots []map[string]any  // worktree.snapshot params
 	closed    []string          // session.close ids
 	removed   []map[string]any  // worktree.remove params
@@ -250,6 +249,9 @@ func TestReviewerHiddenFromTheSessionList(t *testing.T) {
 	}
 	if got := ids(s.decoratedUnarchived("box")); len(got) != 2 {
 		t.Fatalf("the node's list: %v", got)
+	}
+	if got, ok := s.decoratedSession("box", "reviewer"); !ok || got.SessionID != "reviewer" {
+		t.Fatalf("the manager's own lookup lost the reviewer: %+v", got)
 	}
 }
 

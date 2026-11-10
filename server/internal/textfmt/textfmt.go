@@ -25,6 +25,16 @@ func Clip(s string, n int) string {
 // OneLine is s with every run of white space (line breaks among them) one space, trimmed.
 func OneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+// FirstNonEmpty is the first of s with more than white space in it, as given (not trimmed); "" when there is none.
+func FirstNonEmpty(s ...string) string {
+	for _, x := range s {
+		if strings.TrimSpace(x) != "" {
+			return x
+		}
+	}
+	return ""
+}
+
 // FirstLine is the first line of s with text, without a Markdown heading's #s.
 func FirstLine(s string) string {
 	for _, l := range strings.Split(s, "\n") {

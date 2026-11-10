@@ -10,6 +10,61 @@ import (
 	"time"
 )
 
+// One whole message each way, for the wire tests: the responder sends served.response (mdns.go) and the browser reads
+// messages with group into its cache (browse.go); these two use the same functions without the sockets or the cache.
+
+// parseEntries reads the instances of the service type browse that one message describes, without any cache:
+// an instance with only a PTR in this message comes back with an empty Host and Port 0. Queries, malformed
+// messages and a bad browse type give nil.
+func parseEntries(msg []byte, browse string) []Entry {
+	typ, err := parseType(browse)
+	if err != nil {
+		return nil
+	}
+	m, err := unpackMessage(msg)
+	if err != nil || !m.isResponse() {
+		return nil
+	}
+	now := time.Now()
+	insts, addrs := group(m, typ)
+	out := make([]Entry, 0, len(insts))
+	for _, g := range insts {
+		e := Entry{Instance: g.label, Seen: now}
+		switch {
+		case g.ptr != nil:
+			e.TTL = clampTTL(g.ptr.ttl)
+		case g.srv != nil:
+			e.TTL = clampTTL(g.srv.ttl)
+		case g.txt != nil:
+			e.TTL = clampTTL(g.txt.ttl)
+		}
+		if g.srv != nil {
+			e.Host = g.srv.target.String()
+			e.Port = int(g.srv.port)
+			for _, a := range addrs {
+				if a.name.equal(g.srv.target) && !slices.Contains(e.Addrs, a.addr) {
+					e.Addrs = append(e.Addrs, a.addr)
+				}
+			}
+			slices.SortFunc(e.Addrs, netip.Addr.Compare)
+		}
+		if g.txt != nil {
+			e.TXT = decodeTXT(g.txt.txt)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// buildResponse packs the announcement of svc with addrs (ttl 0: the goodbye).
+func buildResponse(svc Service, addrs []netip.Addr, ttl uint32) ([]byte, error) {
+	s, err := newServed(svc)
+	if err != nil {
+		return nil, err
+	}
+	return s.response(addrs, ttl)
+}
+
 func testService() Service {
 	return Service{
 		Instance: "Hub. One 2",

@@ -11,7 +11,8 @@ interface Deferred {
   reject: (e: unknown) => void;
 }
 const calls: Deferred[] = [];
-vi.mock("./api", () => ({
+vi.mock("./api", async (original) => ({
+  ...(await original<typeof import("./api")>()),
   api: () =>
     new Promise((resolve, reject) => {
       calls.push({ resolve, reject });
@@ -19,6 +20,7 @@ vi.mock("./api", () => ({
 }));
 
 import { useUsageWindows } from "./usage-windows";
+import { ApiError } from "./api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -69,14 +71,14 @@ describe("useUsageWindows", () => {
     expect(host.textContent).toBe("B");
   });
 
-  it("keeps the last answer when the newest request fails, and shows nothing for a hub without the route (#1905)", async () => {
+  it("clears the bars only on a 404: an older hub has no such route, anything else keeps them", async () => {
     await settle(() => calls[0].resolve({ accounts: [account("A")] }));
     expect(host.textContent).toBe("A");
     backToFront();
-    await settle(() => calls[1].reject(Object.assign(new Error("助手暂时连不上"), { status: 503 }))); // the assistant away
-    expect(host.textContent).toBe("A"); // liveAccounts ages it by stale_at
+    await settle(() => calls[1].reject(new TypeError("flaky link")));
+    expect(host.textContent).toBe("A");
     backToFront();
-    await settle(() => calls[2].reject(Object.assign(new Error("not found"), { status: 404 })));
+    await settle(() => calls[2].reject(new ApiError(404, "no such route", {})));
     expect(host.textContent).toBe("");
   });
 

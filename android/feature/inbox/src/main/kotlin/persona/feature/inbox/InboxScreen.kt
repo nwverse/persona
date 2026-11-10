@@ -61,6 +61,9 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     val listStates = rememberSaveableStateHolder()
     var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(repository, snapshot.refreshes) {
+        if (snapshot.refreshes > 0 && snapshot.error == null) error = null
+    }
     var refreshing by remember { mutableStateOf(false) }
     val pending = remember { mutableStateMapOf<String, Boolean>() }
     val roster = LocalManagerRoster.current
@@ -122,21 +125,12 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             try { if (collectNow) repository.refreshNow() else repository.refresh(); error = null }
             catch (e: CancellationException) { throw e }
             // Background refreshes stay quiet; a pull or tap reports its result.
-            catch (e: Exception) { if (feedback?.failure(e, operation = collectNow) != true) error = res.getString(R.string.inbox_refresh_failed) }
+            catch (e: Exception) { error = res.getString(R.string.inbox_refresh_failed) }
             finally { refreshing = false }
         }
     }
-    fun markDone(id: String, done: Boolean) {
-        if (id in pending) return
-        pending[id] = done
-        // As iOS InboxStore: filing buzzes success at once, putting back a light tap.
-        haptics(doneHaptic(done))
-        scope.launch {
-            try { repository.setDone(id, done); error = null }
-            catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (feedback?.failure(e) != true) error = res.getString(R.string.inbox_failed_restored) }
-            finally { pending.remove(id) }
-        }
+    val failedCompletions = remember(repository) {
+        mutableStateMapOf<String, Pair<persona.core.contracts.api.InboxDoneTarget, InboxBulkAction>>()
     }
     // Clean up all / Mark all as seen / Clear all, and their Undo: one request for them all (the hub skips the ones that took new
     // messages since this list), shown at once, then a notice with Undo when something was filed.
@@ -144,13 +138,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         val done = action != InboxBulkAction.Reopen
         val asked = targets.filter { it.id !in pending }
         if (asked.isEmpty()) return
-        asked.forEach { pending[it.id] = done }
+        asked.forEach { pending[it.id] = done; failedCompletions.remove(it.id) }
         haptics(doneHaptic(done))
         scope.launch {
             try {
                 val result = repository.bulk(asked, action)
                 // The hub could not write some of them: they are back as they were.
-                error = if (result.failed.isEmpty()) null else res.getString(R.string.inbox_failed_restored)
+                asked.filter { it.id in result.failed }.forEach { failedCompletions[it.id] = it to action }
                 val notice = if (undoable) bulkNotice(res, result, cleaned = action == InboxBulkAction.Dismiss) else null
                 if (notice != null) {
                     val back = result.changed.map { persona.core.contracts.api.InboxDoneTarget(it) }
@@ -159,8 +153,22 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 }
             }
             catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (feedback?.failure(e) != true) error = res.getString(R.string.inbox_failed_restored) }
+            catch (e: Exception) { asked.forEach { failedCompletions[it.id] = it to action } }
             finally { asked.forEach { pending.remove(it.id) } }
+        }
+    }
+    fun markDone(id: String, done: Boolean) {
+        val record = records[id] ?: return
+        if (id in pending) return
+        val action = if (done) InboxBulkAction.Done else InboxBulkAction.Reopen
+        pending[id] = done
+        failedCompletions.remove(id)
+        haptics(doneHaptic(done))
+        scope.launch {
+            try { repository.setDone(id, done) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { failedCompletions[id] = persona.core.contracts.api.InboxDoneTarget(id, record.item.version) to action }
+            finally { pending.remove(id) }
         }
     }
     // "Mute this repository / chat / sender" from a row's menu (iOS `InboxStore.mute`): what it covers is filed at once.
@@ -175,8 +183,12 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     var showMutes by remember { mutableStateOf(false) }
+    var showRules by remember { mutableStateOf(false) }
+    var ruleTarget by remember { mutableStateOf<InboxPolicyTarget?>(null) }
     val sectionReader = rememberInboxSectionReader(conversations, conversationRows)
     if (showMutes) InboxMutesSheet(repository, onDismiss = { showMutes = false })
+    if (showRules) InboxRulesSheet(repository, onDismiss = { showRules = false })
+    ruleTarget?.let { InboxPolicySheet(repository, it, onDismiss = { ruleTarget = null }) }
     LaunchedEffect(repository) { refresh(collectNow = false) }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val connectionDetails = rememberConnectionDetails(shownConnection, { navigator.navigate(ConnectionSettingsRoute) }, onRetry = { refresh(collectNow = false) })
@@ -198,6 +210,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             actions = listOf(
                 JAction(bulkLabel(res, bulk.size, scopeText), PhIcons.Checks, enabled = bulk.isNotEmpty()) { cleanAll() },
                 JAction(res.getString(R.string.inbox_mutes_title), PhIcons.Prohibit, separatorBefore = true) { showMutes = true },
+                JAction(res.getString(R.string.inbox_rules_title), PhIcons.Target) { showRules = true },
             ),
             note = if (scopeText == null) stringResource(R.string.inbox_bulk_note_all) else stringResource(R.string.inbox_bulk_note_scope, scopeText))
     }
@@ -269,9 +282,19 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             }
             // New items waiting outside the list for triage (#1773): one line over the first item until triage is ok.
             InboxTriageText.banner(res, snapshot.triage)?.let { banner -> item("triage") { InboxTriageNotice(banner) } }
+            // Sources the hub could not read this round (#1849): what they show is the last round's.
+            InboxTriageText.unread(res, snapshot.triage)?.let { text -> item("triage-unread") { InboxUnreadNotice(text) } }
             if (loadingFirst) item("loading") { JLoading(text = stringResource(R.string.inbox_loading)) }
             if (!failedEmpty) (error ?: snapshot.error?.takeIf { feedback == null || connection == ConnectionState.Online })?.let { message ->
-                item("error") { StatusText(message, isError = true) }
+                item("error") { JNotice(message, actionLabel = stringResource(R.string.inbox_retry),
+                    onAction = { refresh(collectNow = false) }) }
+            }
+            if (failedCompletions.isNotEmpty()) item("completion-error") {
+                JNotice(stringResource(R.string.inbox_failed_restored), actionLabel = stringResource(R.string.inbox_retry), onAction = {
+                    failedCompletions.values.toList().groupBy({ it.second }, { it.first }).forEach { (action, targets) ->
+                        markAll(targets, action, undoable = false)
+                    }
+                })
             }
             if (preferenceError) item("preference-error") { StatusText(stringResource(R.string.inbox_filters_not_saved), isError = true) }
             sectionReader.notice?.let { notice -> item("section-read-result") {
@@ -331,12 +354,12 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                             done = done, busy = conversation.records.any { it.item.id in pending },
                             onHandOff = { handingOff = conversation.itemId },
                             onDone = { markAll(conversation.records.filter { it.item.isDone == done }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) },
-                                if (done) InboxBulkAction.Reopen else InboxBulkAction.Done) })
+                                if (done) InboxBulkAction.Reopen else InboxBulkAction.Done, undoable = false) })
                     } ?: records[row.id]?.let { record ->
                         val done = pending[record.item.id] ?: record.item.isDone
                         InboxItemRow(record, repository, navigator, composers, position, done, record.item.id in pending, onlineSince,
                             onDone = { markDone(record.item.id, !done) }, onHandOff = { handingOff = record.item.id },
-                            onMute = { option -> mute(record, option) })
+                            onMute = { option -> mute(record, option) }, onRule = { ruleTarget = InboxPolicyTarget.of(record, it) })
                     }
                 }
             } }
