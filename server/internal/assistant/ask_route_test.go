@@ -480,9 +480,10 @@ func TestRestoredAskFindsItsSupervisorAgain(t *testing.T) {
 	settleService(t, s2)
 }
 
-// A card restored after a restart may have rung the user already: when its time is up it goes back on the apps as the
-// user's, without a second push.
-func TestRestoredAskReachingTheUserAgainDoesNotRing(t *testing.T) {
+// An approval card restored after a restart that its supervisor does not settle rings the user when its time is up:
+// it is not left waiting on the apps for nobody. The timeout neither approves it nor makes it a decision, and the
+// supervisor still cannot answer it for the user.
+func TestRestoredApprovalReachingTheUserRings(t *testing.T) {
 	database := todoTestDB(t)
 	e := newRouteEnv(t, database, true)
 	ix := askPermission("ix1", "worker-1")
@@ -503,9 +504,56 @@ func TestRestoredAskReachingTheUserAgainDoesNotRing(t *testing.T) {
 	}
 	s2.askTick(time.Now().Add(2 * askHoldFor)) // its leader has had its time
 	s2.askTick(time.Now().Add(3 * askHoldFor)) // the main conversation too
-	waitFor(t, "the card the user's again", func() bool { return !e.lastShown("ix1").Delegating })
+	waitFor(t, "the user told", func() bool { return e.pushesOf("ix1") == 1 })
+	if e.lastShown("ix1").Delegating {
+		t.Fatal("the card is still shown as the supervisor's")
+	}
+	if _, err := runJSON(t, s2, "lead1", "interaction_answer", map[string]any{"machine": "mac", "session_id": "worker-1",
+		"interaction_id": "ix1", "answers": map[string]any{"x": "y"}}); err == nil || !strings.Contains(err.Error(), "only the user") {
+		t.Fatalf("the supervisor approved an approval: %v", err)
+	}
+	if _, pending := s2.pendingIx("ix1"); !pending {
+		t.Fatal("the timeout resolved the approval")
+	}
+	if list, _ := database.ListTodoDecisions(context.Background(), e.todo.ID, false); len(list) != 0 {
+		t.Fatalf("the timeout became a decision: %+v", list)
+	}
+	s2.askTick(time.Now().Add(4 * askHoldFor)) // the user's now: no second ring
+	if n := e.pushesOf("ix1"); n != 1 {
+		t.Fatalf("the card rang %d times", n)
+	}
+	settleService(t, s2)
+}
+
+// A question restored after a restart may have rung the user before: when its time is up it only goes back on the
+// apps, without a second push, and stays pending for the user (or the supervisor, before then).
+func TestRestoredQuestionReachingTheUserDoesNotRing(t *testing.T) {
+	database := todoTestDB(t)
+	e := newRouteEnv(t, database, true)
+	ix := askQuestion("ix1", "worker-1")
+	ix.Resumable, ix.ExpiresAt = true, time.Now().Add(time.Hour).UTC()
+	ctx, gone := context.WithCancel(context.Background())
+	wait := make(chan proto.Resolution, 1)
+	go func() { r, _ := e.s.waitInteraction(ctx, ix); wait <- r }()
+	e.waitPendingID(ix.ID)
+	gone()
+	<-wait
+
+	s2 := New(Options{Hub: e.f, Store: func() Store { return database }, Logf: t.Logf, Devices: e.d})
+	shortSupervise(t, s2)
+	noDirectionsTimers(s2)
+	s2.FleetUp(context.Background())
+	if _, ok := s2.routedTo("ix1", "lead1"); !ok {
+		t.Fatal("the restored card has no route to its leader")
+	}
+	s2.askTick(time.Now().Add(2 * askHoldFor)) // its leader has had its time
+	s2.askTick(time.Now().Add(3 * askHoldFor)) // the main conversation too
+	waitFor(t, "the card the user's", func() bool { return !e.lastShown("ix1").Delegating })
 	if n := e.pushesOf("ix1"); n != 0 {
-		t.Fatalf("a restored card was pushed again %d times", n)
+		t.Fatalf("a restored question was pushed again %d times", n)
+	}
+	if _, pending := s2.pendingIx("ix1"); !pending {
+		t.Fatal("the timeout resolved the question")
 	}
 	settleService(t, s2)
 }

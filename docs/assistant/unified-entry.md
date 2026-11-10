@@ -354,13 +354,16 @@ Code: `server/internal/assistant/ask_route.go`.
 - **Limits**: the route lives on the pending card, not in the store. After a manager restart the card is back on the
   apps without a push (as every card is); its route is made again from the task's supervisor, so the supervisor can
   still answer it or escalate it. Whether the user was told of the card before the restart is not kept either, so a
-  restored card never pushes when its time is up (it only goes on the apps); the supervisor may answer a question the
-  user was already asked, and an explicit `ask_escalate` still rings — that is the supervisor saying the user must
-  decide now. A Codex card listed again once its node reconnected is on the apps without a push too; the supervisor
-  still hears of it through the task's `needs_you` signal, and `ask_escalate` takes it. A card the assistant is
-  deciding on for the user (agents.delegate) is not escalated: that decision tells the user itself. `ask_escalate`
-  refuses without leaders. Cards raised after an escalation go to the supervisor again rather than joining the
-  escalated push.
+  restored approval (a permission or a plan) whose time is up is handed to the user and rings once, as any: no
+  conversation may answer it, so silence would leave the agent blocked with nobody told. A restored question whose
+  time is up only goes back on the apps (it may have rung before), and its supervisor can still answer it. An approval
+  stays the user's: its timeout neither approves it nor becomes a decision. The supervisor may answer a question the
+  user was already asked, and an explicit `ask_escalate` rings — that is the supervisor saying the user must decide
+  now. A Codex card listed again once its node reconnected is on the apps
+  without a push too; the supervisor still hears of it through the task's `needs_you` signal, and `ask_escalate` takes
+  it. A card the assistant is deciding on for the user (agents.delegate) is not escalated: that decision tells the
+  user itself. `ask_escalate` refuses without leaders. Cards raised after an escalation go to the supervisor again
+  rather than joining the escalated push.
 
 **Directions and reports up (#3484, #3485).** Each leader has a record, `assistant.directions` (`directions.go`): the kb
 project it is filed under, who filed it, since when, and when it ended (it left `assistant.leaders`; nothing is

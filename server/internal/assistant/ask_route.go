@@ -49,8 +49,9 @@ type askRoute struct {
 	step    int
 	since   time.Time
 	held    time.Time // when it reached this rung: askBusyMax counts from here
-	// maybeTold: the card was pending when the manager restarted, and whether the user was told of it is not kept: a
-	// way back that cannot tell whether it rang before never rings them again (ringAsks).
+	// maybeTold: a question card restored after a restart. Whether the user was told of it is not kept, so its
+	// timeout only puts it back on the apps (ringAsks), not ringing them a second time. An approval restored so (a
+	// permission or a plan) is not: no conversation may answer it, so its timeout rings.
 	maybeTold bool
 }
 
@@ -262,8 +263,9 @@ func (r *askRoute) busyLocked(s *Service) bool {
 // (with the supervisor's context d, when it gave some) and the channels each card to answer, but only the first one
 // pushes. Cards that come later are not folded into it: they go to the supervisor as any. d nil is the timeout's: a
 // quiet task's cards then only go on the apps, as they did before routing (main_tasks_quiet: never pushed unless the
-// supervisor says so), and a card restored after a restart (maybeTold) only goes on the apps too, as it may have rung
-// the user before it. The cards rung.
+// supervisor says so), and so does a question restored after a restart, which may have rung the user before it. An
+// approval restored so is not quiet: no conversation may answer it, so its timeout rings as any other approval's.
+// The cards rung.
 func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate) []proto.Interaction {
 	var list []proto.Interaction
 	maybeTold := map[string]bool{}
@@ -302,7 +304,7 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate) []proto
 	for _, ix := range list {
 		ix = s.tellApps(ix)
 		if d == nil && (maybeTold[ix.ID] || s.quietSession(ix.MachineID, ix.SessionID)) {
-			continue // a card that may have rung before, or a quiet task's: the apps, no second push
+			continue // a question that may have rung before, or a quiet task's: the apps, no second push
 		}
 		s.tellUser(ix, !pushed)
 		pushed = true
