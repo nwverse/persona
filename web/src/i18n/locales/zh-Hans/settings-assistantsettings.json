@@ -75,6 +75,5 @@
   "recordings_footer": "超过此天数的录音会从知识库移除，手机也会删除本地副本（包括音频）。会议纪要默认永久保留，直到你删除。也可设置为会议后的指定天数，但不会短于录音的保留时间。",
   "recordings_footer_with_minutes": "超过这个天数的录音会连同会议纪要一起从知识库删除，手机也会删掉自己的那份（包括音频）。",
   "retention_unconfirmed": "助手没有确认这个保留期限。请刷新后再试。",
-  "forever": "永久保留",
-  "retention_days_value": "{days} 天"
+  "forever": "永久保留"
 }

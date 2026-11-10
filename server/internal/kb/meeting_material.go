@@ -30,6 +30,8 @@ type MeetingMaterial struct {
 	Lines []LiveSegment
 	// Asks are this meeting's questions already answered, oldest first.
 	Asks []LiveAsk
+	// EarlierAvailable distinguishes an allowed but empty lookup from material excluded by the privacy policy.
+	EarlierAvailable bool
 	// Earlier are at most materialMaxEarlier earlier meetings, the best ranked first.
 	Earlier []EarlierMeeting
 }
@@ -59,7 +61,8 @@ func (e *Engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error
 	if err != nil {
 		return MeetingMaterial{}, err
 	}
-	m := MeetingMaterial{Title: r.Title, Language: r.Language, Lines: latestLines(l.Segments, materialLiveRunes)}
+	m := MeetingMaterial{Title: r.Title, Language: r.Language, Lines: latestLines(l.Segments, materialLiveRunes),
+		EarlierAvailable: e.EarlierMeetingsInAnswers}
 	if c := r.Calendar; c != nil {
 		m.Calendar = &RecordingCalendar{Title: c.Title, Attendees: slices.Clone(c.Attendees), Location: c.Location}
 	}
@@ -69,7 +72,7 @@ func (e *Engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error
 			m.Asks = append(m.Asks, a)
 		}
 	}
-	if e.EarlierMeetingsInAnswers {
+	if m.EarlierAvailable {
 		m.Earlier = e.earlierMeetings(&r, question)
 	}
 	return m, nil

@@ -156,7 +156,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 	// Until a per-meeting private mark exists (#3862), production reads none of the earlier meetings,
 	// their projects or action-item to-do IDs. This meeting's own material stays available.
 	current, err := e.MeetingMaterial(recID, "What did we decide about the export cap?")
-	if err != nil || len(current.Earlier) != 0 || len(current.Lines) != 2 || len(current.Asks) != 1 || current.Calendar == nil {
+	if err != nil || current.EarlierAvailable || len(current.Earlier) != 0 || len(current.Lines) != 2 || len(current.Asks) != 1 || current.Calendar == nil {
 		t.Fatalf("default material: %+v, %v", current, err)
 	}
 	e.EarlierMeetingsInAnswers = true
@@ -179,7 +179,7 @@ func TestMeetingMaterialOnlyMeetingMaterial(t *testing.T) {
 	if len(mat.Asks) != 1 || mat.Asks[0].Answer != "We kept the cap." {
 		t.Errorf("asks %+v", mat.Asks)
 	}
-	if len(mat.Earlier) != 2 || mat.Earlier[0].ID != earlier || mat.Earlier[1].ID != asked {
+	if !mat.EarlierAvailable || len(mat.Earlier) != 2 || mat.Earlier[0].ID != earlier || mat.Earlier[1].ID != asked {
 		t.Fatalf("earlier %+v", mat.Earlier)
 	}
 	first := mat.Earlier[0]

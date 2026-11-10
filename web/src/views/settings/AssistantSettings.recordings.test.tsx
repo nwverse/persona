@@ -40,10 +40,12 @@ async function choose(value: string) {
   await act(async () => { mode().value = value; mode().dispatchEvent(new Event("change", { bubbles: true })); });
   await flush();
 }
-async function enter(el: HTMLInputElement, value: string) {
+async function enter(el: HTMLInputElement, value: string, commit: "blur" | "Enter" = "blur") {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
   await act(async () => { setter.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); });
-  await act(async () => { el.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+  await act(async () => { el.dispatchEvent(commit === "Enter"
+    ? new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+    : new FocusEvent("focusout", { bubbles: true })); });
   await flush();
 }
 beforeEach(async () => {
@@ -81,8 +83,10 @@ it("shows both retentions in effect and saves a change the hub confirms", async 
   expect(minutes()).toBeNull();
   await choose("days");
   expect(minutes()!.value).toBe("365");
+  expect(writes).toEqual([]);
+  expect(saved!.minutes_days ?? 0).toBe(0);
   await enter(minutes()!, "730");
-  expect(writes).toEqual([{ minutes_days: 365 }, { minutes_days: 730 }]);
+  expect(writes).toEqual([{ minutes_days: 730 }]);
   expect(minutes()!.value).toBe("730");
   await enter(recordings()!, "30");
   expect(writes.at(-1)).toEqual({ recording_days: 30 });
@@ -158,8 +162,10 @@ it("saves forever as zero, even with longer recording retention, and switches ba
   await enter(recordings()!, "365");
   expect(mode().value).toBe("forever");
   await choose("days");
-  expect(writes.at(-1)).toEqual({ minutes_days: 365 });
+  expect(writes).toEqual([{ minutes_days: 0 }, { recording_days: 365 }]);
   expect(minutes()!.value).toBe("365");
+  await enter(minutes()!, "3650");
+  expect(writes.at(-1)).toEqual({ minutes_days: 3650 });
   expect(toast).not.toHaveBeenCalled();
 });
 
@@ -171,4 +177,42 @@ it("does not claim forever when the hub refuses or ignores it", async () => {
   expect(mode().value).toBe("days");
   expect(minutes()!.value).toBe("365");
   expect(toast).toHaveBeenCalledWith(expect.stringContaining(t("settings-assistantsettings.retention_unconfirmed")), "error");
+});
+
+it.each(["blur", "Enter"] as const)("commits only the intended finite days on %s", async (commit) => {
+  await render();
+  await choose("days");
+  expect(writes).toEqual([]);
+  await enter(minutes()!, "1000", commit);
+  expect(writes).toEqual([{ minutes_days: 1000 }]);
+  expect(saved!.minutes_days).toBe(1000);
+  expect(minutes()!.value).toBe("1000");
+  await act(async () => { minutes()!.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
+  await flush();
+  expect(writes).toEqual([{ minutes_days: 1000 }]);
+});
+
+it("can cancel a finite draft without changing forever retention", async () => {
+  await render();
+  await choose("days");
+  await act(async () => { minutes()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(mode().value).toBe("forever");
+  expect(minutes()).toBeNull();
+  await choose("days");
+  await choose("forever");
+  expect(mode().value).toBe("forever");
+  expect(minutes()).toBeNull();
+  expect(writes).toEqual([]);
+});
+
+it("restores forever when the hub refuses a finite draft", async () => {
+  answer = () => json({ error: "Synthetic refusal" }, 400);
+  await render();
+  await choose("days");
+  expect(writes).toEqual([]);
+  await enter(minutes()!, "1000");
+  expect(writes).toEqual([{ minutes_days: 1000 }]);
+  expect(mode().value).toBe("forever");
+  expect(minutes()).toBeNull();
+  expect(toast).toHaveBeenCalledWith(expect.stringContaining("Synthetic refusal"), "error");
 });

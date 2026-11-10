@@ -391,9 +391,11 @@ function AboutMe({ notesSaves, info, onSaved }: { notesSaves: ReturnType<typeof 
  *  unconfirmed or raised one (minutes never below the recordings' days) shows what is in effect. */
 function DaysRow({ field, label, value, tries, disabled, onSave }: { field: Retention; label: string; value: number; tries: number; disabled: boolean; onSave: (days: number) => void }) {
   const { min, max } = RETENTION[field];
-  const forever = field === "minutes_days" && value === 0;
+  const savedForever = field === "minutes_days" && value === 0;
+  const [forever, setForever] = useState(savedForever);
   const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value, tries]);
+  useEffect(() => { setDraft(String(value)); setForever(savedForever); }, [value, tries, savedForever]);
+  const reset = () => { setDraft(String(value)); setForever(savedForever); };
   const days = Number(draft.trim());
   const valid = forever || /^\d+$/.test(draft.trim()) && days >= min && days <= max;
   const commit = () => {
@@ -404,13 +406,22 @@ function DaysRow({ field, label, value, tries, disabled, onSave }: { field: Rete
   return (
     <Row label={label} hint={valid ? undefined : t("settings-assistantsettings.days_range", { min, max })}>
       {field === "minutes_days" && <select aria-label={label} value={forever ? "forever" : "days"} disabled={disabled}
-        className={settingsInputClass} onChange={(e) => onSave(e.target.value === "forever" ? 0 : 365)}>
+        className={settingsInputClass} onChange={(e) => {
+          if (e.target.value === "forever") {
+            if (!savedForever) onSave(0);
+            else reset();
+          } else {
+            // Exposing the editor must not shorten retention before the user commits their intended days.
+            setDraft(String(value || 365));
+            setForever(false);
+          }
+        }}>
         <option value="forever">{t("settings-assistantsettings.forever")}</option>
-        <option value="days">{forever ? t("settings-assistantsettings.retention_days_value", { days: 365 }) : t("settings-assistantsettings.days_unit")}</option>
+        <option value="days">{t("settings-assistantsettings.days_unit")}</option>
       </select>}
       {!forever && <input type="number" inputMode="numeric" min={min} max={max} step={1} aria-label={label} aria-invalid={!valid || undefined}
         value={draft} disabled={disabled} onChange={(e) => setDraft(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") setDraft(String(value)); }}
+        onKeyDown={(e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") reset(); }}
         className={`${settingsInputClass} max-w-20 text-right tabular-nums`} />}
       {field === "recording_days" && <span>{t("settings-assistantsettings.days_unit")}</span>}
     </Row>

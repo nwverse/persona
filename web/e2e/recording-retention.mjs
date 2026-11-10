@@ -83,14 +83,17 @@ async function run(theme, lang, large = false) {
   const days = page.getByRole("spinbutton", { name: s.minutes_days, exact: true });
   await days.waitFor();
   assert.equal(await days.inputValue(), "365");
-  await days.fill("90"); await days.press("Enter");
-  await page.waitForFunction(() => document.querySelector('input[type="number"][max="3650"]')?.value === "90" && !document.querySelector('input[type="number"][max="3650"]')?.disabled);
-  assert.equal(saved.minutes_days, 90);
+  assert.deepEqual(writes, []);
+  assert.equal(saved.minutes_days, 0);
+  await shot("retention-draft", group);
+  await days.fill("1000"); await days.press("Enter");
+  await page.waitForFunction(() => document.querySelector('input[type="number"][max="3650"]')?.value === "1000" && !document.querySelector('input[type="number"][max="3650"]')?.disabled);
+  assert.equal(saved.minutes_days, 1000);
   await shot("retention-finite", group);
   await mode.selectOption("forever");
   await days.waitFor({ state: "detached" });
   assert.equal(saved.minutes_days, 0);
-  assert.deepEqual(writes, [{ minutes_days: 365 }, { minutes_days: 90 }, { minutes_days: 0 }]);
+  assert.deepEqual(writes, [{ minutes_days: 1000 }, { minutes_days: 0 }]);
 
   await page.goto(new URL(detailPath, base).href);
   const minutes = page.getByRole("region", { name: k.minutes, exact: true });

@@ -77,6 +77,5 @@
   "recordings_footer": "Recordings older than this leave the knowledge base, and the phone deletes its own copies, audio included. Meeting minutes are kept forever by default, until you delete them. You can choose a number of days after the meeting instead, never fewer than the recording’s.",
   "recordings_footer_with_minutes": "Recordings older than this leave the knowledge base together with their meeting minutes, and the phone deletes its own copies, audio included.",
   "retention_unconfirmed": "The assistant did not confirm this retention. Reload before trying again.",
-  "forever": "Forever",
-  "retention_days_value": "{days} days"
+  "forever": "Forever"
 }
