@@ -19,7 +19,7 @@ import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotic
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, type TaskIndex } from "../../lib/tasks";
+import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -978,7 +978,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
-  const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
+  const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
   // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, the running bar shows no time (#3534)
   const [clocks, setClocks] = useState(0);

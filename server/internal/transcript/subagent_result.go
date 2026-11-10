@@ -12,6 +12,14 @@ type agentCall struct {
 	Status string
 }
 
+func agentTerminal(status string) bool {
+	switch status {
+	case "completed", "failed", "killed", "stopped", "ended":
+		return true
+	}
+	return false
+}
+
 func (m *Meta) rememberAgentCall(call, title string) {
 	if call == "" {
 		return
@@ -102,6 +110,7 @@ func (m *Meta) agentPeer(mk func(int, string, string) proto.Item, origin, conten
 		m.removeBackground(agent)
 		m.handedBack(agent, "")
 	}
+	it.IsError = status == "failed"
 	it.Task = &proto.TaskNote{Kind: "agent", TaskID: strings.Clone(agent), ToolUseID: id, Title: call.Title, Status: status,
 		Detail: clipTo(it.Text, pageOutputLen)}
 	return it, true

@@ -215,7 +215,7 @@ function AgentGrid({ agents, p }: { agents: ToolStep[]; p: WorkProps }) {
       </div>
       <div className="grid min-w-0 grid-cols-1 gap-2 @[560px]:grid-cols-2">
         {agents.map((a, i) => (
-          <SubagentCard key={a.id} step={a} status={statuses[i]} mid={p.mid} scope={p.scope} />
+          <SubagentCard key={a.id} step={a} status={statuses[i]} mid={p.mid} sid={p.sid} scope={p.scope} />
         ))}
       </div>
     </div>
@@ -235,7 +235,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
   switch (step.kind) {
     case "tool":
       if (p.trace) return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} trace />;
-      if (isAgentStep(step)) return <SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} scope={p.scope} />;
+      if (isAgentStep(step)) return <SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} />;
       if (isPlanStep(step)) return <PlanCard id={step.id} todos={planTodos(step)} live={live} mid={p.mid} sid={p.sid} />;
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;

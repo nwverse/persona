@@ -2,6 +2,7 @@
 import { BASE } from "./base";
 import type { Item } from "./types";
 import { injectedOf } from "./injected";
+import { buildTaskIndex } from "./tasks";
 
 const PREFIX = "persona.feedCache.v1:";
 export const FEED_CACHE_MAX_BYTES = 256 * 1024;
@@ -150,11 +151,31 @@ function containsCredential(raw: string): boolean {
 
 /** Only the newest two user-question turns, matching GET items?turns=2; injected prompts do not consume the budget. */
 function newestTurns(value: FeedCache): FeedCache {
+  const userQuestion = (item: Item) => item.role === "user" && item.kind === "text" && !item.queued && !item.wake && !injectedOf(item);
   let start = value.items.length, turns = 0;
   while (start > 0 && turns < 2) {
-    const item = value.items[--start];
-    if (item.role === "user" && item.kind === "text" && !item.queued && !item.wake && !injectedOf(item)) turns++;
+    if (userQuestion(value.items[--start])) turns++;
   }
+  // A retained report must not lose the earlier launch it belongs under. Extend the contiguous prefix, including
+  // that call's user turn, rather than caching a detached call that would break paging coverage.
+  const index = buildTaskIndex(value.items);
+  const launches = new Map<string, number>();
+  value.items.forEach((i, at) => {
+    if (i.kind === "tool_use" && i.tool_use_id && (i.tool_name === "Agent" || i.tool_name === "Task")) launches.set(i.tool_use_id, at);
+  });
+  let previous = start;
+  do {
+    previous = start;
+    for (const i of value.items.slice(start)) {
+      if (i.task?.kind !== "agent") continue;
+      const call = i.tool_use_id || index.calls.get(i.id);
+      const launch = call ? launches.get(call) : undefined;
+      if (launch !== undefined && launch < start) {
+        start = launch;
+        while (start > 0 && !userQuestion(value.items[start])) start--;
+      }
+    }
+  } while (start < previous);
   while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
   return {
     machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,

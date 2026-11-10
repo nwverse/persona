@@ -110,6 +110,45 @@ func TestSubagentAssociationDoesNotUsePeerDisplayName(t *testing.T) {
 	}
 }
 
+func TestSubagentNotificationLifecycle(t *testing.T) {
+	for _, status := range []string{"running", "waiting", "future-status", "completed", "failed", "killed", "stopped"} {
+		t.Run(status, func(t *testing.T) {
+			var meta Meta
+			for i, line := range subagentLaunch() {
+				ParseLine(i+1, []byte(line), &meta)
+			}
+			got := ParseLine(4, []byte(subagentNoteLine("outcome", status, "Synthetic status detail.", true)), &meta)
+			if len(got) != 1 || got[0].Kind != proto.KindToolResult || got[0].Task.Status != status || got[0].IsError != (status == "failed") {
+				t.Fatalf("notification: %+v", got)
+			}
+			if (len(meta.Background) == 0) != agentTerminal(status) {
+				t.Fatalf("status %s incorrectly changed background lifecycle: %+v", status, meta.Background)
+			}
+			late := ParseLine(5, []byte(subagentPeerLine("late-status", "agent-review", "More synthetic detail.", true, false)), &meta)
+			if len(late) != 1 || late[0].Task.Status != status || late[0].IsError != (status == "failed") {
+				t.Fatalf("late report lost lifecycle: %+v", late)
+			}
+		})
+	}
+}
+
+func TestSubagentSeedsSkipLargeRequestBlobs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "request.jsonl")
+	data := `{"type":"api-request-blob","tools":[{"name":"Agent"}],"padding":"` + strings.Repeat("x", 100<<10) + "\"}\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	_, seeds, _, _, _, _, err := scanLines(f, int64(len(data)))
+	if err != nil || len(seeds) != 0 {
+		t.Fatalf("request blob should not become expensive agent state seed: %+v %v", seeds, err)
+	}
+}
+
 func TestSubagentForegroundAndFailedLaunch(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		var meta Meta

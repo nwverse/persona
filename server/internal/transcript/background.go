@@ -244,7 +244,7 @@ func outputFile(result string) string {
 }
 
 func (m *Meta) taskFinished(notification string, ts time.Time) {
-	if n, _ := taskNote(notification); n.Kind == "agent" && (n.Status == "waiting" || n.Status == "running") {
+	if n, _ := taskNote(notification); n.Kind == "agent" && !agentTerminal(n.Status) {
 		return
 	}
 	if id := firstTag(notification, "task-id"); id != "" {
