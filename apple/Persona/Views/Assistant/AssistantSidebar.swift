@@ -861,12 +861,15 @@ struct AssistantSidebar: View {
             }
         } else {
             HStack {
-                #if os(macOS)
-                // The other sections' title (`MacPageTitle`), #3179.
-                Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
-                #else
-                Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
-                #endif
+                if model.showsAssistantIdentity {
+                    #if os(macOS)
+                    Text(model.persona.name).font(Theme.Font.title).foregroundStyle(Theme.macLabel).lineLimit(1)
+                        .accessibilityIdentifier("assistant-identity-heading")
+                    #else
+                    Text(model.persona.name).font(isShell && !besideBar ? Theme.Font.display : Theme.Font.title).foregroundStyle(Color.primary).lineLimit(1)
+                        .accessibilityIdentifier("assistant-identity-heading")
+                    #endif
+                }
                 Spacer(minLength: Theme.Space.s)
                 if let collapse {
                     AssistantTopBar.circle(Theme.Icon.sidebar, label: String(localized: "Hide Sidebar"), id: "assistant-sidebar-collapse") {
@@ -1526,7 +1529,9 @@ struct AssistantSidebar: View {
         } else {
             #if os(macOS)
             if macPlacesGroup {
-                AssistantStatusLine(machineID: machineID, openProfile: openProfile)
+                if model.showsAssistantIdentity {
+                    AssistantStatusLine(machineID: machineID, openProfile: openProfile)
+                }
             } else {
                 AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: openSettings)
             }
@@ -1635,26 +1640,33 @@ private struct AssistantProfileFooter: View {
             HStack(spacing: Theme.Space.m) {
                 Button(action: openProfile) {
                     HStack(spacing: Theme.Space.m) {
-                        PersonaAvatar(size: Theme.Size.avatarL)
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            HStack(spacing: Theme.Space.xs) {
-                                Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
-                                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                        if model.showsAssistantIdentity {
+                            PersonaAvatar(size: Theme.Size.avatarL)
+                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                HStack(spacing: Theme.Space.xs) {
+                                    Text(model.persona.name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+                                }
+                                HStack(spacing: Theme.Space.xs) {
+                                    Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
+                                        .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
+                                    Text(online ? String(localized: "Online · \(machine?.name ?? machineID)") : String(localized: "Offline · \(machine?.name ?? machineID)")).lineLimit(1)
+                                }
+                                .font(Theme.Font.label)
+                                .foregroundStyle(.secondary)
                             }
-                            HStack(spacing: Theme.Space.xs) {
-                                Circle().fill(online ? Theme.positive : Color.secondary.opacity(0.5))
-                                    .scaledFrame(width: Theme.Size.dotXS, height: Theme.Size.dotXS)
-                                Text(online ? String(localized: "Online · \(machine?.name ?? machineID)") : String(localized: "Offline · \(machine?.name ?? machineID)")).lineLimit(1)
-                            }
-                            .font(Theme.Font.label)
-                            .foregroundStyle(.secondary)
+                        } else {
+                            Label("Details [Assistant Top Bar 1932da]", systemImage: Theme.Icon.person)
+                                .font(Theme.Font.bodyStrong)
+                                .lineLimit(1)
                         }
                     }
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(model.persona.name), \(state), view profile")
+                .accessibilityLabel(model.showsAssistantIdentity ? String(localized: "\(model.persona.name), \(state), view profile") : String(localized: "Details [Assistant Top Bar 1932da]"))
+                .accessibilityIdentifier("assistant-profile-footer")
                 Spacer(minLength: Theme.Space.s)
                 if let search {
                     // The shell's foot's round button (Settings beside New Chat), as the row above has it.
