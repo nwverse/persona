@@ -85,6 +85,10 @@ fun PairingScreen(
     var address by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
     var metadata by remember { mutableStateOf<PairingRequest?>(null) }
+    // A Cloudflare Access service token (docs/operations/network.md "Behind Cloudflare Access"), kept out of saved state too.
+    var accessId by remember { mutableStateOf("") }
+    var accessSecret by remember { mutableStateOf("") }
+    var accessOpen by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<PairingFailure?>(null) }
     var running by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(listOf<PairingProgress>()) }
@@ -300,6 +304,7 @@ fun PairingScreen(
                                 PairingRecovery.Permission -> authorize()
                                 PairingRecovery.Scan -> requestScan()
                                 PairingRecovery.Retry, PairingRecovery.Update -> lastRequest?.let(::connect) ?: edit()
+                                PairingRecovery.Access -> lastRequest?.let { confirm = it; failure = null; progress = emptyList(); accessOpen = true } ?: edit()
                             }
                         }, Modifier.fillMaxWidth())
                         JButton(stringResource(R.string.settings_pairing_diagnostics), onDiagnostics, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
@@ -317,10 +322,23 @@ fun PairingScreen(
                 val request = requireNotNull(confirm)
                 item { PairingHeading(stringResource(R.string.settings_pairing_confirm), stringResource(R.string.settings_pairing_confirm_body)) }
                 pairingDetails(request, resources)
+                item {
+                    JTextButton(stringResource(R.string.settings_access_title), { accessOpen = !accessOpen }, Modifier.padding(top = Tokens.Space.s))
+                }
+                if (accessOpen) item {
+                    JCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                            HubAccessFields(accessId, { accessId = it }, accessSecret, { accessSecret = it })
+                            SettingsCaption(stringResource(R.string.settings_access_pairing_caption))
+                        }
+                    }
+                }
                 if (paired) item { JNotice(stringResource(R.string.settings_pairing_replace_body), title = stringResource(R.string.settings_pairing_replace_title), status = Status.NeedsYou) }
                 item {
                     PairingActions {
-                        JButton(stringResource(R.string.settings_pairing_confirm), { confirm = null; connect(request) }, Modifier.fillMaxWidth())
+                        JButton(stringResource(R.string.settings_pairing_confirm), {
+                            confirm = null; connect(request.copy(access = HubAccess.of(accessId, accessSecret)))
+                        }, Modifier.fillMaxWidth())
                         JButton(stringResource(R.string.settings_pairing_edit_input), ::edit, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
                     }
                 }
