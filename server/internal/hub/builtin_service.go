@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/managerconf"
 )
 
 // The built-in manager as a service of its own (docs/assistant/managers.md "The built-in manager as its own
@@ -43,15 +44,15 @@ func managerMode(dir string, args []string, out io.Writer) error {
 			return err
 		}
 		mode := AssistantModeChild
-		if a, err := cfg.object("assistant"); err == nil && a != nil {
-			if raw, ok := a.get("mode"); ok {
+		if a, err := cfg.Object("assistant"); err == nil && a != nil {
+			if raw, ok := a.Get("mode"); ok {
 				var m string
 				if json.Unmarshal(raw, &m) == nil && m != "" {
 					mode = m
 				}
 			}
 			var external bool
-			if raw, ok := a.get("external"); ok && json.Unmarshal(raw, &external) == nil && external {
+			if raw, ok := a.Get("external"); ok && json.Unmarshal(raw, &external) == nil && external {
 				mode += " (assistant.external: it runs elsewhere)"
 			}
 		}
@@ -63,7 +64,7 @@ func managerMode(dir string, args []string, out io.Writer) error {
 		return fmt.Errorf("manager-mode %q: child or service", mode)
 	}
 	err := editHubJSON(dir, func(o *jsonObject) error {
-		a, err := o.object("assistant")
+		a, err := o.Object("assistant")
 		if err != nil {
 			return err
 		}
@@ -71,11 +72,11 @@ func managerMode(dir string, args []string, out io.Writer) error {
 			a = &jsonObject{}
 		}
 		if mode == AssistantModeChild {
-			a.del("mode") // the default
-		} else if err := a.set("mode", mode); err != nil {
+			a.Del("mode") // the default
+		} else if err := a.Set("mode", mode); err != nil {
 			return err
 		}
-		o.setObject("assistant", a)
+		o.SetObject("assistant", a)
 		return nil
 	})
 	if err != nil {
@@ -110,7 +111,7 @@ func ManagerCode(ctx context.Context, out io.Writer) error {
 func writeManagerCode(out io.Writer, code string, until time.Time, listen string) error {
 	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs), with "+
 		"the code in the environment, where other users of the machine cannot read it:\n"+
-		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen))
+		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), managerconf.LocalHubURL(listen))
 	return err
 }
 

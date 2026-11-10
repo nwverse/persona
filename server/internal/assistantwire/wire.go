@@ -1,5 +1,5 @@
 // Package assistantwire is what the hub and the assistant (internal/assistant, its own process) say to each other
-// over the bus (docs/protocol/protocol.md "Bus", docs/assistant/assistant.md "The boundary with the hub"): each method's and event's name, params
+// over the bus (docs/protocol/protocol.md "Bus", docs/assistant/assistant.md "Boundary with hub"): each method's and event's name, params
 // and result, the error codes that cross it, and the routes the hub relays. Both sides import it; neither imports
 // the other.
 package assistantwire
@@ -220,6 +220,11 @@ type Notification struct {
 	LongMS int64 `json:"long_ms,omitempty"`
 	// Todo is a NotifyDecide push's to-do and the round of its decision.
 	Todo *NotifyTodo `json:"todo,omitempty"`
+	// LinkCovered: a NotifyInput push's card is what the manager's Persona Link summary shows for its agent and rings
+	// for (the card that stands for it, notifying, among the listed items), so a Persona Link desktop of the manager's
+	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
+	// out: the phone is pushed.
+	LinkCovered bool `json:"link_covered,omitempty"`
 }
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what
@@ -244,8 +249,8 @@ type Snapshot struct {
 	Epoch string    `json:"epoch"` // this run of the assistant
 	Seq   uint64    `json:"seq"`   // increasing within Epoch
 	At    time.Time `json:"at"`
-	// Partial: some of the state could not be read (the database did not answer); the hub asks again (Resync) the
-	// next time it shows it.
+	// Partial: some of the state could not be read (the database did not answer). The hub no longer reads it: it
+	// used to ask again with manager.resync.
 	Partial bool `json:"partial,omitempty"`
 	// Sessions are the assistant's conversations it has something to say about.
 	Sessions []SessionView `json:"sessions"`
@@ -253,8 +258,8 @@ type Snapshot struct {
 	// cards about agents' turns (WorkCardTool). The hub shows each like any agent's and sends the answer back
 	// (Handler.Action); one that leaves the list is withdrawn.
 	Interactions []proto.Interaction `json:"interactions"`
-	// Tasks are its scheduled tasks, as the hub's other parts need them (the model configuration's "Scheduled tasks"); null
-	// while they could not be read.
+	// Tasks are its scheduled tasks; null while they could not be read. The hub no longer keeps them: the model
+	// configuration that read them is the manager's own now.
 	Tasks []TaskView `json:"tasks"`
 	// Todos is which todo each agent works for (TodoReport); null while the todos could not be read.
 	Todos *TodoReport `json:"todos"`
@@ -338,6 +343,10 @@ type SessionView struct {
 	// extension); both "" while it is not known.
 	Origin    string `json:"origin,omitempty"`
 	OriginRef string `json:"origin_ref,omitempty"`
+	// OpenedBy is the extension whose token opened it, by id: noted when it opened (StartParams.OpenedBy), never
+	// backfilled, so "" for any other and for one opened before it was noted. Only that extension's token may change
+	// its permission mode (hub/extension_modes.go).
+	OpenedBy string `json:"opened_by,omitempty"`
 	// Supervising: its current turn was started by a supervision message about the tasks it handed out (#3124): the assistant
 	// does not push its normal finish (SupervisedFinish); it pushes what the user needs to know (notify_user).
 	Supervising bool `json:"supervising,omitempty"`

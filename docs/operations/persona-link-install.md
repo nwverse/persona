@@ -5,6 +5,9 @@ It bundles the persona-link connector and persona-node (the device's own program
 
 There is no published installer yet. Build from source for now; it takes a few minutes.
 
+On a computer you use Persona through the web app; this app is the part that runs on the Mac ([link.md](link.md), "On computers: the web app and Persona Link").
+If this Mac already runs the command-line Link (`persona-link run`), follow [link.md](link.md), "Move a Mac from the command-line Link to the menu bar App", instead: it stops that Link first and keeps its pairing and data directory.
+
 ## Prerequisites
 
 | Requirement | Details |
@@ -35,6 +38,8 @@ After launch, an icon appears at the top right in the menu bar, with no Dock ico
 
 - When the `com.persona.node` LaunchAgent is not installed yet, it copies the bundled persona-node to `~/.persona/bin/persona-node` and installs the agent to keep the local node running on it (on a Mac that runs a hub or a manager, the agent runs their personad). An agent that is already there stays as it is: one that runs personad moves over with `persona-link node switch`, [link.md](link.md) "The device's program". **Reinstall** in the menu (offered when the agent is installed but not running) removes the agent and installs it again, so it comes back on persona-node, without the switch's wait for an answer.
 - On the first connection to a LAN address, the system asks whether to allow Persona Link to find devices on the local network. Choose Allow. If you denied it, enable it in **System Settings › Privacy & Security › Local Network**.
+- When the hub first sends the "Needs you" summary, the system asks whether Persona Link may send notifications. Choose Allow: Persona Link then notifies you when a session needs you, even with the web app closed. If you denied it, the menu offers **Turn On Notifications…**.
+  On a Mac with Persona Link, leave the web app's "Show system notifications" off, or both notify.
 
 ## Pairing
 
@@ -77,6 +82,8 @@ If the web client says "Secure connection isn't enabled on the hub yet", the old
 | Link connected, but the hub cannot reach the local node | The persistent node is not running; see "Troubleshooting" below |
 | Disconnected · Retry in N seconds | One line per candidate address explaining why it failed; retries automatically, or click **Reconnect now** |
 | Hub rejected this computer's credentials | The computer was removed from the hub or its credentials were revoked: pair again |
+| **Needs You** and a count beside the icon | Sessions waiting on you (newer hubs only). Click one to open it in the web app; **And N More…** opens the web app |
+| **Set Web Address…** | Where the web app opens. Needed when the hub has no https public URL, or when you use the web app at another address |
 
 See [link.md](link.md), "Menu-bar app", for the icon states.
 
@@ -120,6 +127,6 @@ If you must copy it, right-click › Open, or run `xattr -dr com.apple.quarantin
 **"Link connected, but the hub cannot reach the local node"**: run `"/Applications/Persona Link.app/Contents/Helpers/persona-link" node status` to check whether the persistent node service is installed
 and loaded by launchd. Logs are in `~/.persona/node-attach.log`. If not installed, click **Install local node service** in the menu.
 
-**The menu-bar panel has the old square corners and thin border**: the app was built with an older script. Pull the latest code and run `install` again (see [lessons/macos.md](../lessons/macos.md), "Persona Link panel has the old appearance", for why).
+**The menu-bar panel has the old square corners and thin border**: the app was built with an older script. Pull the latest code and run `install` again (see [lessons/macos.md](../lessons/macos.md), "Persona Link's panel kept the old appearance", for why).
 
-**Read logs**: `tail -f ~/.persona/link.log`, or `"/Applications/Persona Link.app/Contents/Helpers/persona-link" logs -f`. On a computer that used the older Persona version, these files may still live under `~/.persona/` ([config.md](config.md), "Naming and compatibility").
+**Read logs**: `tail -f ~/.persona/link.log`, or `"/Applications/Persona Link.app/Contents/Helpers/persona-link" logs -f`. On a computer that used the older Persona version, these files may still live under `~/.persona/` ([config.md](config.md), "Naming and configuration").

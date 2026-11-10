@@ -26,6 +26,8 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.ChatTaps
+import persona.core.domain.chatBubbles
 import persona.core.domain.lines.ChatLine
 import persona.core.domain.lines.isLiveStatus
 import persona.core.domain.sort.READ_ONLY
@@ -182,13 +184,12 @@ private fun ChatPage(
     val chromeOverlay = headerOverlay || modeOverlay || composerOverlay
     var requestCollapsed by rememberSaveable { mutableStateOf(false) }
     val machine = machines.firstOrNull { it.id == key.machineId }
-    var resolved by remember { mutableStateOf(emptySet<String>()) }
+    // The cards' taps: the answer in flight, the cards answered here, the unconfirmed ones (persona.core.domain.ChatTaps).
+    var taps by remember { mutableStateOf(ChatTaps()) }
     var interactionFeedback by remember { mutableStateOf<String?>(null) }
     // Counts the cards this page took away by answering: the next one waiting elsewhere is offered for a while after.
     var answeredHere by remember { mutableIntStateOf(0) }
     var offerNext by remember { mutableStateOf(false) }
-    var uncertain by remember { mutableStateOf(emptySet<String>()) }
-    var busyId by remember { mutableStateOf<String?>(null) }
     // The assistant's tasks (docs/assistant/unified-entry.md): their agents' questions are answered here too, oldest first.
     val tasks = chrome.tasks
     val taskTodos by (tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<persona.core.contracts.Todo>()) })
@@ -200,11 +201,9 @@ private fun ChatPage(
     val taskAgentSessions by (tasks?.agentSessions ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<SessionKey, Session>())
     }).collectAsStateWithLifecycle()
-    val requests = allRequests.filter { (it.sessionKey == key || it.sessionKey in taskKeys) && it.id !in resolved }
+    val requests = taps.shown(allRequests).filter { it.sessionKey == key || it.sessionKey in taskKeys }
         .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
-    val messages = allMessages.filter {
-        it.session == key && snapshot.items.none { item -> item.id == it.clientMessageId || MessageEcho.tag(item) == it.clientMessageId }
-    }
+    val messages = chatBubbles(allMessages, key, snapshot.items)
     val currentMessageCount by rememberUpdatedState(messages.size)
     val composerDeliveries by (composerService?.deliveries ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, ComposerDelivery>())
@@ -286,8 +285,18 @@ private fun ChatPage(
     val projection by produceState(persona.core.domain.lines.ChatSnapshot(emptyList(), emptyList(), persona.core.domain.lines.TaskIndex()),
         snapshot.items, live, openWork, timelineVersion) {
         val items = snapshot.items
-        value = withContext(Dispatchers.Default) { timeline.lines(items, live, openWork.toSet()) }
+        value = withContext(Dispatchers.Default) {
+            timeline.lines(items, live, openWork.toSet())
+        }
         projectedFrom = items
+    }
+    val liveWorkLines = remember(projection) { liveWorkIds(projection.lines) }
+    var previousLiveWork by remember { mutableStateOf(emptySet<String>()) }
+    // Fold the completed run, but keep choices made on historical lines and transfer an opened placeholder.
+    LaunchedEffect(liveWorkLines) {
+        val settled = settleWorkOpen(openWork.toSet(), liveWorkLines, previousLiveWork)
+        previousLiveWork = liveWorkLines
+        if (settled != openWork.toSet()) chatList.setExpanded(settled)
     }
     val feeds by (tasks?.feeds ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<persona.core.contracts.FeedItem>>()) })
         .collectAsStateWithLifecycle()
@@ -317,6 +326,7 @@ private fun ChatPage(
             photos.id.takeIf { photos is ChatLine.UserImages && user.id in contentUserImages }
         }.toSet()
     }
+    val contentSourceLabels = remember(lines) { sourceLabelIds(lines.asReversed()) }
     val contentWorkGroups = remember(lines) { lines.filterIsInstance<ChatLine.Work>().associateBy { it.id } }
     // Each open work line's plan card (web #1990 draws only the latest plan of an exchange).
     val contentPlans = remember(contentWorkGroups) { contentWorkGroups.filterValues { it.open }.mapValues { latestPlan(it.value.steps) } }
@@ -375,10 +385,14 @@ private fun ChatPage(
         }
     }
     fun toggle(id: String) {
-        val wasOpen = id in openWork
-        chatList.setExpanded(if (wasOpen) openWork - id else openWork + id)
-        if (!wasOpen) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
+        val (next, opened) = toggleWork(WorkOpenState(openWork.toSet()), id)
+        chatList.setExpanded(next.open)
+        if (opened) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
             ?.filterIsInstance<persona.core.domain.lines.WorkItem.Folded>()?.forEach { expand(it.item.item) }
+    }
+    // Restored open lines and folds arriving while expanded load just as a manual tap does.
+    LaunchedEffect(projection) {
+        openFoldsToFetch(projection.lines, folding, foldErrors.keys).forEach(::expand)
     }
     /** Whether the message was taken (false: nothing went, the box or another send stands); [onFailed] if it then fails. */
     fun send(command: String? = null, onFailed: () -> Unit = {}): Boolean {
@@ -541,7 +555,7 @@ private fun ChatPage(
     }
     DisposableEffect(tasks, key) { onDispose { tasks?.watchAgents(emptySet()) } }
     // the cards still to answer: one just answered here no longer says what it asked
-    val taskCards = remember(allRequests, resolved) { allRequests.filter { it.id !in resolved } }
+    val taskCards = remember(allRequests, taps.resolved) { taps.shown(allRequests) }
     val taskHost = tasks?.let { store ->
         AssistantTaskHost(store, key.sessionId, (sessionList + taskAgentSessions.values).distinctBy { it.key }, { id -> machines.firstOrNull { it.id == id }?.name?.takeIf(String::isNotBlank) ?: id },
             onOpen = { k -> chrome.onOpenSession?.invoke(k) }, onError = { notice = operationFeedback(it).text.resolve(res) },
@@ -568,8 +582,7 @@ private fun ChatPage(
         if (answeredHere > 0) { offerNext = true; delay(NEXT_WAITING_MILLIS); offerNext = false }
     }
     LaunchedEffect(allRequests) {
-        val pending = allRequests.map { it.id }.toSet()
-        resolved = resolved.intersect(pending); uncertain = uncertain.intersect(pending)
+        taps = taps.pending(allRequests.map { it.id }.toSet())
     }
     val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
     ChatCompletionFeedback(lastUserId, session?.status,
@@ -580,10 +593,11 @@ private fun ChatPage(
             !snapshot.ended && !snapshot.replaced && (connection == null || connection == ConnectionState.Online))
     val unreadEntry = if (session?.agentState == AgentState.Unread) lines.firstOrNull { line ->
         line.holds(lastUserId)
-    }?.let { ChatListEntry(it.id, lastLineAtTop = true) } else null
-    ChatListEffects(chatList, messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.id },
+    }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
+    ChatListEffects(chatList, messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
         ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty()) &&
             (unreadEntry == null || markdownReadyFor == snapshot.items), entry = unreadEntry,
+        rowAliases = lines.associate { it.id to it.contentKey },
         hasOlder = snapshot.hasOlder, loadingOlder = snapshot.loadingOlder,
         onFreeze = { timeline.freeze(currentItems); timelineVersion++ },
         onFollow = { timeline.follow(); timelineVersion++ },
@@ -607,8 +621,8 @@ private fun ChatPage(
             } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         }
     }
-    val status = chatStatusState(res, snapshot, session, machine, messages, requests, busyId != null || controls.busy,
-        operationUnknown = uncertain.isNotEmpty() || controls.pending != null, awaiting = awaitingStatus)
+    val status = chatStatusState(res, snapshot, session, machine, messages, requests, taps.busy || controls.busy,
+        operationUnknown = taps.uncertain.isNotEmpty() || controls.pending != null, awaiting = awaitingStatus)
     val replacement = if (snapshot.replaced) sessionList.firstOrNull { candidate ->
         session != null && candidate.key != key && SessionRuntimeState.map(session, listOf(candidate), true).replaced
     } else null
@@ -634,6 +648,10 @@ private fun ChatPage(
     }
     // A task's notice jumps to the call that started it through the task bar's navigation (ChatTasks).
     val callJumps = remember(key) { ChatCallJumps() }
+    // Whose the conversation is, for what its links open (docs/assistant/managers.md "Clients"): its session's manager, else
+    // for an assistant conversation the one whose page listed it.
+    val linkManager = session?.manager ?: if (renderStyle == ChatRenderStyle.Assistant)
+        persona.core.contracts.api.AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", key.sessionId)) else null
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalChatWorkflows provides workflowCards,
@@ -647,7 +665,7 @@ private fun ChatPage(
                     sender.send(key, ChatLinkContext.editMessage(selection, instruction, context.resources), selection.id)
                     followEnd()
                 }
-            }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }) { linkInset ->
+            }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
                 val panelMax = maxHeight * 0.55f
                 JPage(
@@ -695,45 +713,41 @@ private fun ChatPage(
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
                                 }
-                            if (!readOnly) InteractionPanel(requests, machine, panelMax, busyId, uncertain, { interaction, resolution ->
-                                if (busyId == null && interaction.id !in uncertain && interaction.id !in resolved &&
-                                    allRequests.any { it == interaction } &&
-                                    !persona.core.domain.answer.RequestExpiry.expired(interaction.expiresAt, java.time.Instant.now())) {
-                                    busyId = interaction.id
+                            if (!readOnly) InteractionPanel(requests, machine, panelMax, taps.busyId, taps.uncertain, { interaction, resolution ->
+                                if (taps.canTap(interaction, allRequests, java.time.Instant.now())) {
+                                    taps = taps.tapped(interaction.id)
                                     scope.launch {
                                         try {
                                             val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
                                             result.submission.haptic?.let(haptics)
+                                            taps = taps.answered(interaction.id, result.card)
                                             if (result.withdraw) {
-                                                resolved = resolved + interaction.id
-                                                uncertain = uncertain - interaction.id
                                                 interactionFeedback = result.notice(res, interaction, resolution)
                                                 if (result.offersNext(resolution)) answeredHere++
-                                            } else uncertain = uncertain + interaction.id
-                                            notice = if (result.submission == InteractionSubmission.Unknown) res.getString(result.submission.notice) else null
-                                            if (result.submission == InteractionSubmission.PromptChanged || result.submission == InteractionSubmission.Unknown) {
+                                            }
+                                            notice = if (result.withdraw) null else result.notice(res, interaction, resolution)
+                                            if (result.submission == InteractionSubmission.PromptChanged || !result.withdraw) {
                                                 try { interactions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                                             }
-                                        } finally { busyId = null }
+                                        } finally { taps = taps.idle() }
                                     }
                                 }
                             }, terminal, { overlay = it }, linkVisible = linkVisible,
                                 collapsed = requestCollapsed, onCollapsedChange = { requestCollapsed = it },
                                 blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
                                 terminalHelp = canTerminal, onDiscardLocal = { interaction ->
-                                    if (busyId == null) {
-                                        busyId = interaction.id
+                                    if (!taps.busy) {
+                                        taps = taps.tapped(interaction.id)
                                         scope.launch {
                                             try {
                                                 interactions.discardLocal(interaction.id)
-                                                resolved = resolved + interaction.id
-                                                uncertain = uncertain - interaction.id
+                                                taps = taps.discarded(interaction.id)
                                                 interactionFeedback = res.getString(R.string.chat_card_discarded_local)
                                                 notice = null
                                             } catch (e: CancellationException) { throw e
                                             } catch (_: Exception) {
                                                 notice = res.getString(R.string.chat_card_discard_failed)
-                                            } finally { busyId = null }
+                                            } finally { taps = taps.idle() }
                                         }
                                     }
                                 })
@@ -821,14 +835,14 @@ private fun ChatPage(
                                         }
                                     }
                                 }
-                                items(lines, key = { it.id }, contentType = { it.contentType() }) { line ->
-                                    ChatSearchHighlight(search, line.id) {
+                                items(lines, key = { it.contentKey }, contentType = { it.contentType() }) { line ->
+                                    ChatSearchHighlight(search, line.contentKey) {
                                         androidx.compose.runtime.CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
                                         ChatLineContent(line, key, loader,
                                         line.recordedDuration(snapshot.recordedTurnDurations),
                                         ::toggle, ::expand, folding, foldErrors,
                                         lastUserId = lastUserId,
-                                        onLastLine = { extent -> chatList.reportLastLine(line.id, extent) }, onFullText = { item ->
+                                        onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = { item ->
                                         scope.launch {
                                             try { fullText = repository.fullText(key, item.id) }
                                             catch (e: CancellationException) { throw e }
@@ -841,7 +855,8 @@ private fun ChatPage(
                                         lastWorkStep = (line as? ChatLine.Step)?.let {
                                             contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
                                         } == true,
-                                        plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] })
+                                        plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
+                                        showSourceLabel = line.id in contentSourceLabels)
                                         }
                                     }
                                 }
@@ -860,7 +875,7 @@ private fun ChatPage(
                                     stringResource(if (readOnly) R.string.chat_screen_empty_read_only else R.string.chat_screen_empty_hint),
                                     Modifier.align(Alignment.Center).padding(padding).padding(horizontal = horizontalPadding))
                             // The newest plan card scrolled out of view: "Step N/M" above the composer brings it back (web PlanPill).
-                            val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans, renderStyle.compactToolSummary) }
+                            val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans) }
                             val planOut by remember(anchor) { derivedStateOf {
                                 anchor != null && list.layoutInfo.totalItemsCount > 0 &&
                                     list.layoutInfo.visibleItemsInfo.none { it.key == anchor.lineId }

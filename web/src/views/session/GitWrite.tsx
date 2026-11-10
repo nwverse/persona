@@ -140,11 +140,11 @@ export function CommitBox({ s, writer }: { s: GitStatus; writer: GitWriter }) {
   );
 }
 
-/** Pull in the summary (#1887, as on iOS and Android): whenever the branch has an upstream, on any host and without
- *  `git_write`. One click: it only fast-forwards, and the node refuses it over uncommitted changes or a branch that has
- *  moved apart, saying why in the refusal dialog. */
+/** Pull in the summary (#1887, as on iOS and Android): whenever the branch has an upstream that still exists on the
+ *  remote, on any host and without `git_write`. One click: it only fast-forwards, and the node refuses it over
+ *  uncommitted changes or a branch that has moved apart, saying why in the refusal dialog. */
 export function PullButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
-  if (!s.branch || !s.upstream) return null;
+  if (!s.branch || !s.upstream || s.gone) return null;
   const pull = async () => {
     const r = await writer.run("pull", "pull", {});
     if (r) toast(r.updated ? t("session-gitwrite.pulled") : t("session-gitwrite.pull_current"), "ok");
@@ -156,11 +156,11 @@ export function PullButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
   );
 }
 
-/** Push in the summary: only with commits to send or a branch the remote does not have; confirmed first. */
+/** Push in the summary: only with commits to send or a branch the remote does not have (any more); confirmed first. */
 export function PushButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
   const [asking, setAsking] = useState(false);
   const ahead = s.ahead ?? 0;
-  if (!s.branch || (s.upstream && ahead === 0)) return null;
+  if (!s.branch || (s.upstream && !s.gone && ahead === 0)) return null;
   const fresh = !s.upstream;
   const push = async () => {
     setAsking(false);
@@ -173,7 +173,11 @@ export function PushButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
       </Button>
       <Dialog open={asking} onClose={() => setAsking(false)} title={t("session-gitwrite.push_title")}>
         <div className="py-1 text-[13.5px] leading-[1.6] text-ink-2">
-          {fresh ? t("session-gitwrite.push_new", { branch: s.branch }) : t("session-gitwrite.push_confirm", { count: ahead, upstream: s.upstream ?? "" })}
+          {fresh
+            ? t("session-gitwrite.push_new", { branch: s.branch })
+            : s.gone
+              ? t("session-gitwrite.push_gone", { branch: s.branch, upstream: s.upstream ?? "" })
+              : t("session-gitwrite.push_confirm", { count: ahead, upstream: s.upstream ?? "" })}
         </div>
         <div className="mt-1 text-[12px] text-ink-3">{t("session-gitwrite.push_never_force")}</div>
         <div className="mt-4 flex justify-end gap-2">

@@ -61,6 +61,8 @@ nonisolated struct ContextRef: Identifiable, Hashable, Sendable, Codable {
             for am in attrRe.matches(in: attrs as String, range: NSRange(location: 0, length: attrs.length)) {
                 a[attrs.substring(with: am.range(at: 1))] = unescape(attrs.substring(with: am.range(at: 2)))
             }
+            // Provenance and protected-user sentinels are transport metadata, never selectable context cards.
+            guard a["kind"] != "message-source" else { continue }
             refs.append(ContextRef(kind: a["kind"] ?? "context", title: a["title"] ?? "", url: a["url"] ?? "",
                                    text: ns.substring(with: m.range(at: 2)), msg: a["msg"] ?? "", part: a["part"]))
         }
@@ -91,7 +93,10 @@ struct LinkTarget: Identifiable, Hashable {
     /// A machine's port forwarded to the phone (docs/operations/ports.md): what to call it ("machine name :5173"); the url is the
     /// phone's loopback, which only this app serves.
     var forwarded: String? = nil
-    var id: String { url.absoluteString }
+    /// The manager its native view reads through (the chat's or inbox item's it was tapped in, docs/assistant/managers.md
+    /// "Clients"); nil: the default's, nothing named.
+    var manager: String? = nil
+    var id: String { manager.map { $0 + "\u{0}" + url.absoluteString } ?? url.absoluteString }
 }
 
 extension EnvironmentValues {
@@ -115,7 +120,7 @@ struct LinkSheet: View {
     @State private var detent: PresentationDetent = .large
 
     /// Feishu links with a native view (documents, company-feed posts), while the hub has them.
-    private var feishuRoute: FeishuRoute? { FeishuLinks.route(target.url, lark: model.larkFeatures) }
+    private var feishuRoute: FeishuRoute? { FeishuLinks.route(target.url, lark: model.larkFeatures, manager: target.manager) }
     private var isFeishuDoc: Bool { if case .doc = feishuRoute { true } else { false } }
 
     var body: some View {

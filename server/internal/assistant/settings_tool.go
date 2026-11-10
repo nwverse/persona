@@ -13,11 +13,11 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// persona_settings: Persona changes its own settings for the user (docs/assistant/assistant.md "Operating Persona itself"). The
-// assistant's own ("About me", its launcher, "notify tasks the main chat starts only in the main chat") are its to read and change; the hub's (the
-// inbox's rules, the blocked Claude config directories, mail accounts…) are the hub's settings app's, which asks the
-// user itself (app.tool persona_settings). Reads are free; every change is a card on the phone that says what changes
-// (before → after) and is applied only when approved.
+// persona_settings: Persona changes its own settings for the user (docs/assistant/assistant.md "Current structure", the
+// "Control Persona itself" row). The assistant's own ("About me", its launcher, "notify tasks the main chat starts only
+// in the main chat") are its to read and change; the hub's (the inbox's rules, the blocked Claude config directories,
+// mail accounts…) are the hub's settings app's, which asks the user itself (app.tool persona_settings). Reads are free;
+// every change is a card on the phone that says what changes (before → after) and is applied only when approved.
 
 // ownSetting is one of the assistant's own settings persona_settings offers.
 type ownSetting struct {
@@ -80,6 +80,13 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "a launcher name from this setting's get"},
 			get: s.getLauncher,
 			set: s.setLauncher},
+		{Setting: Setting{Key: "model_profiles.tiers", Title: "Agent presets (the model profiles' tiers)", Actions: getSet,
+			About: "the Agent presets: each model profile's named tiers, what agent_start / task_plan's tier and the New Agent " +
+				"form's presets run on (launcher, model, effort) and when to use each; get lists every profile's, set adds, " +
+				"changes or removes one tier, in every profile unless profiles names some (a switch then keeps it)",
+			Value: modelTiersValue},
+			get: s.getModelTiers,
+			set: s.setModelTiers},
 	}
 }
 
@@ -185,7 +192,8 @@ func orNone(s string) string {
 // what the assistant reads).
 var settingTitles = map[string]string{"assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
-	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery"}
+	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
+	"model_profiles.tiers": "title_model_tiers"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -220,54 +228,45 @@ func (s *Service) setNotes(ctx context.Context, v json.RawMessage) (*ownChange, 
 		}}, nil
 }
 
-func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+// setBoolSetting changes one of the assistant's on/off settings: v is the new value, current reads it, unchanged is
+// the summary when v is what it already is, card the approval card's text (before → after, each "on" or "off" in the
+// card's language), field where Settings keeps it, and applied the tool's answer once it is (a format of the value).
+func (s *Service) setBoolSetting(ctx context.Context, v json.RawMessage, current func(context.Context) bool, unchanged string,
+	card func(l i18n.Lang, before, after string) string, field func(*Settings) **bool, applied string) (*ownChange, error) {
 	var on bool
 	if err := json.Unmarshal(v, &on); err != nil {
 		return nil, errors.New("value must be true or false")
 	}
-	before := s.mainTasksQuiet(ctx)
+	before := current(ctx)
 	if on == before {
-		return &ownChange{summary: "「主对话派的任务只在主对话里通知」没有变化"}, nil
+		return &ownChange{summary: unchanged}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
 	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_main_tasks_quiet", i18n.Args{"before": i18n.T(l, word[before]), "after": i18n.T(l, word[on])})
-	},
+	return &ownChange{cardText: func(l i18n.Lang) string { return card(l, i18n.T(l, word[before]), i18n.T(l, word[on])) },
 		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MainTasksQuiet = &on; return nil }); err != nil {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { *field(v) = &on; return nil }); err != nil {
 				return "", err
 			}
 			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.main_tasks_quiet is %v for tasks opened from now on (existing ones keep theirs).", on), nil
+			return fmt.Sprintf(applied, on), nil
 		}}, nil
 }
 
+func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.mainTasksQuiet, "「主对话派的任务只在主对话里通知」没有变化", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_main_tasks_quiet", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.MainTasksQuiet },
+		"assistant.main_tasks_quiet is %v for tasks opened from now on (existing ones keep theirs).")
+}
+
 func (s *Service) setStartRequestedTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var on bool
-	if err := json.Unmarshal(v, &on); err != nil {
-		return nil, errors.New("value must be true or false")
-	}
-	before := s.startRequestedTasks(ctx)
-	if on == before {
-		return &ownChange{summary: "「我在对话里说过的，直接开始」没有变化"}, nil
-	}
-	if s.store() == nil {
-		return nil, errors.New("no database on this hub")
-	}
-	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_start_requested_tasks", i18n.Args{"before": i18n.T(l, word[before]), "after": i18n.T(l, word[on])})
-	},
-		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.StartRequestedTasks = &on; return nil }); err != nil {
-				return "", err
-			}
-			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.start_requested_tasks is %v for plans from now on.", on), nil
-		}}, nil
+	return s.setBoolSetting(ctx, v, s.startRequestedTasks, "「我在对话里说过的，直接开始」没有变化", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_start_requested_tasks", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.StartRequestedTasks },
+		"assistant.start_requested_tasks is %v for plans from now on.")
 }
 
 func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
@@ -296,28 +295,10 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 }
 
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var on bool
-	if err := json.Unmarshal(v, &on); err != nil {
-		return nil, errors.New("value must be true or false")
-	}
-	before := s.doneNeedsDelivery(ctx)
-	if on == before {
-		return &ownChange{summary: "「上线并实测才算做完」没有变化"}, nil
-	}
-	if s.store() == nil {
-		return nil, errors.New("no database on this hub")
-	}
-	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": i18n.T(l, word[before]), "after": i18n.T(l, word[on])})
-	},
-		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.DoneNeedsDelivery = &on; return nil }); err != nil {
-				return "", err
-			}
-			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.done_needs_delivery is %v from the next judgment and task on.", on), nil
-		}}, nil
+	return s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.DoneNeedsDelivery },
+		"assistant.done_needs_delivery is %v from the next judgment and task on.")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.

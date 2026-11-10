@@ -79,6 +79,11 @@
     <string name="machines_deploying">正在把 hub 这一版的 Persona 装到这台电脑…</string>
     <string name="machines_deploy_failed_last">上次部署没成：%1$s</string>
     <string name="machines_redeploy">重新部署</string>
+    <string name="machines_deploy_waiting_idle">等这台电脑上的 Agent 空闲后再更新 Persona…</string>
+    <string name="machines_deploy_transferring">正在把 hub 这一版的 Persona 传到这台电脑…</string>
+    <string name="machines_deploy_restarting">正在重启这台电脑上的 Persona…</string>
+    <string name="machines_deploy_confirming">正在等这台电脑上的 Persona 重新连上，并确认和 hub 是同一版…</string>
+    <string name="machines_deploy_unsupported">这台电脑还不能远程更新，先在它上面手动更新 Persona。</string>
     <string name="machines_controls_title">引擎与连接</string>
     <string name="machines_engine">引擎</string>
     <string name="machines_reconnecting">正在重新连接…</string>
@@ -182,6 +187,8 @@
     <string name="machines_usage_reset_at">%1$s 重置</string>
     <string name="machines_usage_source_local">本机</string>
     <string name="machines_usage_problem_unreachable">网关暂时读不到，显示的是上次的数字</string>
+    <string name="machines_usage_problem_rejected">网关不认这把 Key，请到管理界面 → 用量来源更新。显示的是上次的数字</string>
+    <string name="machines_usage_problem_failed">读网关出错，显示的是上次的数字</string>
     <string name="machines_usage_problem_error">网关读这个账号失败，显示的是它存着的数字</string>
     <plurals name="machines_health_summary_attention"><item quantity="other">%d 项功能需要处理</item></plurals>
     <plurals name="machines_health_fixed"><item quantity="other">已重新生成 %d 项</item></plurals>

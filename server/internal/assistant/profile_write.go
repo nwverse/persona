@@ -64,6 +64,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
 		return
 	}
+	if d := in.IdleCloseHours; d != nil && (*d < 0 || *d > maxIdleCloseHours) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("idle_close_hours must be 0–8760"))
+		return
+	}
 	if in.Timezone != "" {
 		if _, err := time.LoadLocation(in.Timezone); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -77,6 +81,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			err = s.saveModel(ctx, "assistant", rec)
 		}
 		if err != nil {
+			apierr.Write(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if in.Main != "" && in.Main != "-" {
+		// The user's from now on, as a main conversation started as one (startMain): no extension keeps its mode.
+		if err := s.originMadeMain(ctx, in.Main); err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -110,6 +121,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
+		}
+		if in.IdleCloseHours != nil {
+			v.IdleCloseHours = in.IdleCloseHours
 		}
 		if in.DoneNeedsDelivery != nil {
 			v.DoneNeedsDelivery = in.DoneNeedsDelivery
