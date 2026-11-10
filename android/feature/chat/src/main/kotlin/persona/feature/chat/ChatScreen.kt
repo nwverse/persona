@@ -401,6 +401,7 @@ private fun ChatPage(
     // for this: a reply drawn as plain text and then as Markdown grows after the list was placed, and in the reversed
     // list that pushes the question off the top (the newest reply is the one that keeps its place).
     var markdownReadyFor by remember { mutableStateOf<List<Item>?>(null) }
+    val markdownSplit = remember { MarkdownPrewarm() }
     DisposableEffect(loader) { onDispose { loader.shutdown() } }
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
@@ -592,7 +593,7 @@ private fun ChatPage(
         val items = snapshot.items
         val paths = rowActions.paths?.takeIf { rowActions.openPath != null }
         val (latest, earlier) = withContext(Dispatchers.Default) {
-            markdownPrewarm(items).let { (latest, earlier) -> latest.map { it.key to it.source(paths) } to earlier.map { it.key to it.source(paths) } }
+            markdownSplit.split(items).let { (latest, earlier) -> latest.map { it.key to it.source(paths) } to earlier.map { it.key to it.source(paths) } }
         }
         markdownCache.keep(latest.map { it.first } + earlier.map { it.first })
         latest.forEach { (id, source) -> markdownCache.parse(id, source) }
