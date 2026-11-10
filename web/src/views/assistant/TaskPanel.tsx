@@ -42,7 +42,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const head = st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : info.label;
   const subtitle = [head, chosen ? place({ ...todo, agents: [chosen] }, shown ?? lead) : place(todo, lead)].filter(Boolean).join(" · ");
   const taskItems: MenuItem[] = [
-    openInWindow({ name: "todos", id: todo.id }),
+    openInWindow(chosen ? { name: "session", mid: chosen.machine_id, sid: chosen.session_id } : { name: "todos", id: todo.id }),
     ...(isRemovable(st.status) ? [{ key: "remove", label: t("assistant-taskpanel.remove_ellipsis"), icon: "trash" as const, danger: true, onSelect: () => removeTaskNow(todo) }] : []),
   ];
   // several agents: the ⌄ beside the title switches between them (iOS #3255)
