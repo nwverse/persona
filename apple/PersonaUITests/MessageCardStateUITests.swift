@@ -115,6 +115,7 @@ final class MessageCardStateUITests: XCTestCase {
         XCTAssertTrue(dismiss.waitForExistence(timeout: 10), app.debugDescription)
         reveal(dismiss, in: tray)
         XCTAssertTrue(dismiss.isHittable, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(dismiss.frame.height, 44, "the pending decision target is too small")
         try shot(app, "needs-you-open")
         let countBefore = needs.label
         dismiss.tap()
@@ -168,7 +169,9 @@ final class MessageCardStateUITests: XCTestCase {
         let dismiss = app.buttons["messageCard.dismiss"].firstMatch
         XCTAssertTrue(dismiss.waitForExistence(timeout: 20), app.debugDescription)
         dismiss.tap()
-        XCTAssertTrue(app.otherElements["toast"].waitForExistence(timeout: 10), "no failure toast")
+        let toast = app.descendants(matching: .any)["toast"].firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 5), "no failure toast:\n\(app.debugDescription)")
+        XCTAssertTrue(toast.label.contains("无法忽略草稿"), toast.label)
         XCTAssertTrue(dismiss.exists, "a failed request removed the draft")
         XCTAssertTrue(dismiss.isEnabled, "a failed request left the card busy")
         dismiss.tap()

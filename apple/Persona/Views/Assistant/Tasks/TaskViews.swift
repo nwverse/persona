@@ -809,25 +809,25 @@ struct MessageCard: View {
                                 editing = false
                             }
                         } label: { Text("Send").lineLimit(1).frame(maxWidth: .infinity) }
-                            .themedButton(prominent: true)
+                            .draftDecisionButton(prominent: true)
                             .accessibilityIdentifier("messageCard.send")
                         Button {
                             if text.isEmpty { text = card.draft ?? "" }
                             withAnimation(Theme.Motion.state) { editing.toggle() }
                         } label: { Text(editing ? String(localized: "Done [Task Views 9b8ee8]") : String(localized: "Edit [Task Views 928324]")).lineLimit(1) }
-                            .themedButton()
+                            .draftDecisionButton()
                             .accessibilityIdentifier("messageCard.edit")
                     }
                     HStack(spacing: Theme.Space.s) {
                         Button { withAnimation(Theme.Motion.state) { store.later(card.id) } } label: {
                             Text("Later [Task Views 9d2ca2]").lineLimit(1).frame(maxWidth: .infinity)
                         }
-                        .themedButton()
+                        .draftDecisionButton()
                         .accessibilityIdentifier("messageCard.later")
                         Button { Task { await store.dismissMessage(card) } } label: {
                             Text("Do not handle [Task Draft]").lineLimit(1).frame(maxWidth: .infinity)
                         }
-                        .themedButton()
+                        .draftDecisionButton()
                         .accessibilityIdentifier("messageCard.dismiss")
                     }
                 }
@@ -835,6 +835,7 @@ struct MessageCard: View {
             }
         }
         .card(padding: Theme.Space.l)
+        .accessibilityElement(children: .contain)
         .animation(Theme.Motion.state, value: state)
     }
 

@@ -232,8 +232,8 @@ struct ChatView: View {
     }
     /// A listed default-manager session has a nil owner; it must not inherit the page's current selection.
     private var feedManager: String? {
-        if let session { return model.linkManager(session.manager, group: key.group) }
-        return linkManager
+        if let session { return session.manager ?? model.managerRosters[key.group]?.defaultID }
+        return linkManager ?? model.managerRosters[key.group]?.defaultID
     }
     nonisolated private struct FeedScope: Hashable {
         var key: SessionKey
