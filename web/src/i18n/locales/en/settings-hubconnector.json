@@ -70,7 +70,7 @@
   "lark_docs_spaces": "Wiki spaces",
   "lark_docs_space_placeholder": "Paste a Wiki space link (every document in it)",
   "lark_docs_owned": "All comments on documents I own",
-  "lark_docs_owned_sub": "Documents you own that were edited or opened in the last 30 days (up to 50): every new comment and reply from others comes in, without mentioning you and without adding them above.",
+  "lark_docs_owned_sub": "Documents you own that were edited or opened in the last 30 days (up to 50): every new comment and reply from others comes in, without mentioning you and without adding them one by one.",
   "lark_docs_remove": "Stop watching {link}",
   "lark_triage": "Inbox triage rules",
   "lark_triage_footer": "Say in a sentence or two what in Lark is Needs you, FYI or Collapsed. Empty uses the Inbox's default judgment; when set, Lark items are triaged by these rules only.",
