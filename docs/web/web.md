@@ -24,13 +24,16 @@ retains planning, permission/question and owner-acceptance flows; `Todo.ask` use
 individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
 TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
 
-Progress lists and counts **every open task** of the conversation (#3162): working, waiting for the user, finished but
-unseen, stopped between rounds (`follow_up`, where supervised tasks spend most of their time) and plan tasks still waiting
-for Start — not only the ones with a running agent. What needs the user sorts first (`todoRank`, a plan task waiting for
-Start right after), each row leads with its status mark (`TaskMark`), and closed tasks (done, accepted, cancelled, failed to
-start) fold under one **Closed N** line. While a plan waits for Start a fourth entry, **To start N**, sits after Pending:
-its tray is the plan cards themselves (Start, Edit, Don't start), so a plan is not lost in the chat; Pending no longer
-lists or counts those plans. Tapping a plan task in Progress opens To start.
+Progress lists and counts the conversation's open tasks by **the To-dos page's rule** (#3331, `todoBucket` in
+`web/src/lib/todo-triage.ts`, the same `countsAsOpen` as the page's "Not done"): working, waiting for the user, finished but
+unseen and stopped between rounds count; a task shelved (no activity for 48 h, nothing running, not restored on this
+browser) folds under one **Shelved N** line and is not counted; accepted (task_review accepted), deployed, done, cancelled
+and old failed starts fold under **Closed N**. The main conversation watches every task, so its Progress has a row for
+every to-do whatever its origin, and its count is the To-dos page's "Not done"; other conversations count only the tasks
+they handed out. What needs the user sorts first (`todoRank`), each row leads with its status mark (`TaskMark`). Plan
+tasks waiting for Start are no to-dos yet: neither Progress nor the To-dos page lists or counts them. While a plan waits
+a fourth entry, **To start N**, sits after Pending: its tray is the plan cards themselves (Start, Edit, Don't start), so a
+plan is not lost in the chat; Pending no longer lists or counts those plans.
 
 The three entries are the dock's old **All** / task capsules (#2999): `DOCK_CAPSULE` in `web/src/views/assistant/Tasks.tsx`
 gives "All", the task pills and the entries one height (2 rem, 32 px at the default size), full capsule radius, 12 px side
