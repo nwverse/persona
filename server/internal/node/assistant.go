@@ -140,7 +140,8 @@ func (p *assistantProc) alive() bool {
 // isAssistantSession tells assistant conversations (headless) apart from herdr sessions.
 func (n *Node) isAssistantSession(id string) bool { return n.isAssistantSessionIn(id, nil) }
 
-// isAssistantSessionIn is isAssistantSession with the assistant's project name taken once per list pass (codexListPass).
+// isAssistantSessionIn is isAssistantSession with the assistant's project name and a Codex rollout's stat taken once
+// per list pass (codexListPass).
 func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	n.mu.Lock()
 	_, ok := n.procs[id]
@@ -157,7 +158,7 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	if st, ok := n.state.get(id); ok && identity.IsAssistantDir(st.Cwd) {
 		return true
 	}
-	if p := n.transcriptPath(id); p != "" && (compat.IsAssistantTranscript(filepath.Base(filepath.Dir(p))) ||
+	if p := n.transcriptPathIn(id, pass); p != "" && (compat.IsAssistantTranscript(filepath.Base(filepath.Dir(p))) ||
 		isAssistantProject(filepath.Base(filepath.Dir(p)), pass.assistantProject(n))) {
 		return true
 	}
