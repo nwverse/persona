@@ -97,6 +97,7 @@ var modelPurposes = []ModelPurpose{
 	{ID: "kb.items", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.moments", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "assistant.title", Group: "group_processing", Kind: "api", Parent: "kb"},
+	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // New chat: a direction or a quick chat (route.go)
 	{ID: "agent.title", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "todo.title", Group: "group_processing", Kind: "api", Parent: "kb"}, // a task's todo (assistant/todo_titles.go)
 	// Drafting a source subscription's recipe, called by the manager (models.purpose_complete, #2040).

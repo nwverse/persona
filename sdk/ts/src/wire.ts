@@ -4103,6 +4103,10 @@ export interface ConnectorPrompt {
   /** Seconds between asks of a device_code or qr step. */
   interval?: number;
   qr?: ConnectorQRCode;
+  /** An absolute URL where this step's action is completed; empty means no link. */
+  link?: string;
+  /** The label for the optional link. */
+  link_text?: string;
   hint?: string;
   error?: string;
   done?: boolean;
