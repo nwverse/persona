@@ -620,6 +620,7 @@ nonisolated enum SessionStatus: String, Codable, Sendable {
 }
 
 /// New sources opt in to every operation; a partial capability object never grants missing permissions.
+/// `modes` alone is optional: an older hub omits it and the client keeps its agent-based fallback.
 nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var read = false
     var send = false
@@ -627,8 +628,9 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var approve = false
     var terminal = false
     var attach = false
+    var modes: Bool?
 
-    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach }
+    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach, modes }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -638,6 +640,7 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         approve = try c.decodeIfPresent(Bool.self, forKey: .approve) ?? false
         terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         attach = try c.decodeIfPresent(Bool.self, forKey: .attach) ?? false
+        modes = try c.decodeIfPresent(Bool.self, forKey: .modes)
     }
 }
 
@@ -925,6 +928,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// to send now" or "ctrl+x ctrl+s to send now", #2467) the node presses. Other agents refuse it
     /// (`send_now_unsupported`).
     var steersQueue: Bool { isClaude && !assistant && !hasSource && paneID != nil && canSend }
+    /// A declared modes capability wins, including a runtime such as Orca or agy; an older hub that omits it keeps the old rule.
+    /// As on the web, a non-assistant must be live, while an assistant can apply its modes to the next run even while offline.
+    var canChangeModes: Bool { canSend && (assistant || status.isLive) && (capabilities?.modes ?? (assistant || isClaude)) }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
     /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
     var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !(efforts ?? []).isEmpty }
@@ -1222,6 +1228,7 @@ nonisolated extension Subagent {
     /// loaded lines: the list's word.
     func running(in tasks: TaskIndex, sessionWorks: Bool = false) -> Bool {
         guard let call = toolUseID else { return running }
+        if let status = tasks.agentStatuses[call] { return !SubagentDelivery.isTerminal(status) }
         if tasks.started.contains(call) { return running && !tasks.notes[call, default: []].contains { $0.status != "event" } }
         if tasks.answered.contains(call) { return false }
         return running || (sessionWorks && tasks.asked.contains(call))
@@ -1778,7 +1785,7 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var wake: Bool?
     /// kind == .fold: the work this item stands for.
     var fold: Fold?
-    /// kind == .notice: a background task reporting back.
+    /// kind == .notice or .toolResult: a background task reporting back.
     var task: TaskNote?
     /// The id the app sent the message this item came from with (`PendingMessage.id`): on every item of it — its text,
     /// its images, a queued copy, or the notice it became (`/compact`). Nil from older hubs, or when the node could not
