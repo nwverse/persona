@@ -198,7 +198,8 @@ type LoginProcess struct {
 	once   sync.Once
 }
 
-// StartLogin starts `auth login --domain all` without --no-wait. The command
+// StartLogin starts the connector's least-privilege `auth login --scope`
+// request without --no-wait. The command
 // has its own ten-minute lifetime so the HTTP request that began the login may
 // finish while the process continues in the background.
 func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
@@ -208,7 +209,7 @@ func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
 	}
 	loginCtx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	p := &LoginProcess{ready: make(chan struct{}), done: make(chan struct{}), cancel: cancel}
-	argv := r.profileArgs([]string{"auth", "login", "--domain", "all"})
+	argv := r.profileArgs([]string{"auth", "login", "--scope", strings.Join(ReadAsMeScopes, " ")})
 	cmd := exec.CommandContext(loginCtx, bin, argv...)
 	cmd.Env = cliEnv(bin)
 	// lark-cli may launch a child process of its own. Killing only the shell
@@ -280,6 +281,53 @@ func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
 		p.Cancel()
 		return nil, &Error{Kind: KindTimeout}
 	}
+}
+
+// Profiles reads the named lark-cli profiles without returning secrets. The
+// profile list command emits JSON by default, so no output-format flag is
+// needed (and older CLI releases reject one).
+func (r *Runner) Profiles(ctx context.Context) ([]Profile, error) {
+	out, err := r.executeNoProfile(ctx, []string{"profile", "list"}, outputRaw)
+	if err != nil {
+		return nil, err
+	}
+	var raw []profileWire
+	if err := json.Unmarshal(out, &raw); err != nil {
+		var envelope struct {
+			Profiles []profileWire `json:"profiles"`
+		}
+		if err := json.Unmarshal(out, &envelope); err != nil {
+			return nil, cliError(KindOther, errors.New("invalid profile list JSON"))
+		}
+		raw = envelope.Profiles
+	}
+	profiles := make([]Profile, 0, len(raw))
+	for _, p := range raw {
+		name := strings.TrimSpace(firstNonEmpty(p.Name, p.NameSnake))
+		if name == "" {
+			continue
+		}
+		profiles = append(profiles, Profile{
+			Name:        name,
+			AppID:       strings.TrimSpace(firstNonEmpty(p.AppID, p.AppIDSnake)),
+			Brand:       strings.TrimSpace(p.Brand),
+			User:        strings.TrimSpace(firstNonEmpty(p.User, p.UserSnake)),
+			TokenStatus: strings.TrimSpace(firstNonEmpty(p.TokenStatus, p.TokenStatusSnake)),
+		})
+	}
+	return profiles, nil
+}
+
+type profileWire struct {
+	Name             string `json:"name"`
+	NameSnake        string `json:"profile_name"`
+	AppID            string `json:"appId"`
+	AppIDSnake       string `json:"app_id"`
+	Brand            string `json:"brand"`
+	User             string `json:"user"`
+	UserSnake        string `json:"user_name"`
+	TokenStatus      string `json:"tokenStatus"`
+	TokenStatusSnake string `json:"token_status"`
 }
 
 func (r *Runner) profileArgs(args []string) []string {
@@ -693,14 +741,6 @@ func (r *Runner) Search(ctx context.Context, kind, query string) (json.RawMessag
 		return r.rawSearch(ctx, []string{"drive", "+search", "--query", query})
 	case "people":
 		return r.rawSearch(ctx, []string{"contact", "+search-user", "--query", query})
-	case "minutes":
-		return r.rawSearch(ctx, []string{"minutes", "+search", "--query", query})
-	case "todos":
-		return r.rawSearch(ctx, []string{"task", "+search", "--query", query})
-	case "mail":
-		return r.rawSearch(ctx, []string{"mail", "+triage", "--query", query})
-	case "calendar":
-		return r.rawSearch(ctx, []string{"calendar", "+agenda"})
 	default:
 		return nil, fmt.Errorf("unknown search kind %q", kind)
 	}
@@ -776,15 +816,26 @@ func (r *Runner) execute(ctx context.Context, args []string, mode outputMode) ([
 }
 
 func (r *Runner) executeAs(ctx context.Context, args []string, mode outputMode, identity string) ([]byte, error) {
-	return r.executeInput(ctx, args, mode, identity, nil)
+	return r.executeInputProfile(ctx, args, mode, identity, nil, true)
+}
+
+func (r *Runner) executeNoProfile(ctx context.Context, args []string, mode outputMode) ([]byte, error) {
+	return r.executeInputProfile(ctx, args, mode, "", nil, false)
 }
 
 func (r *Runner) executeInput(ctx context.Context, args []string, mode outputMode, identity string, input []byte) ([]byte, error) {
+	return r.executeInputProfile(ctx, args, mode, identity, input, true)
+}
+
+func (r *Runner) executeInputProfile(ctx context.Context, args []string, mode outputMode, identity string, input []byte, includeProfile bool) ([]byte, error) {
 	bin, err := r.binary(ctx)
 	if err != nil {
 		return nil, err
 	}
-	argv := r.profileArgs(args)
+	argv := args
+	if includeProfile {
+		argv = r.profileArgs(args)
+	}
 	switch mode {
 	case outputAuth:
 		argv = append(argv, "--json")

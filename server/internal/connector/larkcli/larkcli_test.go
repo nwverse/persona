@@ -146,7 +146,7 @@ func TestStatusSuccessAndExpiryReminder(t *testing.T) {
 	c = testConnector(t, "refresh_expiring")
 	st = c.Status(context.Background())
 	if st.State != connector.StateOK || !strings.Contains(st.Error, "1 天") ||
-		!strings.Contains(st.Error, "lark-cli --profile example auth login --domain all") {
+		!strings.Contains(st.Error, "lark-cli --profile example auth login --scope") {
 		t.Fatalf("expiry status = %+v", st)
 	}
 }
@@ -187,9 +187,9 @@ func TestLoginGuideUsesConfiguredProfile(t *testing.T) {
 		profile string
 		command string
 	}{
-		{name: "default profile", command: "lark-cli auth login --domain all"},
-		{name: "named profile", profile: "example", command: "lark-cli --profile example auth login --domain all"},
-		{name: "profile with spaces and non ASCII", profile: "工作 profile", command: "lark-cli --profile '工作 profile' auth login --domain all"},
+		{name: "default profile", command: "lark-cli auth login --scope"},
+		{name: "named profile", profile: "example", command: "lark-cli --profile example auth login --scope"},
+		{name: "profile with spaces and non ASCII", profile: "工作 profile", command: "lark-cli --profile '工作 profile' auth login --scope"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := testConnectorWithProfile(t, "not_logged_in", tc.profile).Status(context.Background())
@@ -232,7 +232,7 @@ func TestStatusCategories(t *testing.T) {
 	st := c.Status(context.Background())
 	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
 		len(st.MissingScopes) == 0 || st.MissingScopes[0] != "search:message" ||
-		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --domain all") ||
+		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --scope") ||
 		st.GuideURL != "https://open.larksuite.com/app/cli_example/auth" {
 		t.Fatalf("missing scope status = %+v", st)
 	}
@@ -242,9 +242,20 @@ func TestStatusUsesRefreshExpiryAndReportsFeatureScopes(t *testing.T) {
 	for _, scenario := range []string{"needs_refresh", "ready"} {
 		st := testConnector(t, scenario).Status(context.Background())
 		if st.State != connector.StateNoPermission || strings.Contains(st.Error, "not signed") || len(st.Guide) != 1 ||
-			!strings.Contains(st.Error, "im:chat:read") || !strings.Contains(st.Guide[0], "lark-cli --profile example auth login --domain all") {
+			!strings.Contains(st.Error, "im:chat:read") || !strings.Contains(st.Guide[0], "lark-cli --profile example auth login --scope") {
 			t.Fatalf("%s status = %+v", scenario, st)
 		}
+	}
+}
+
+func TestStatusAcceptsExactlyReadAsMeScopesAndNamesOneGap(t *testing.T) {
+	if st := testConnector(t, "success").Status(context.Background()); st.State != connector.StateOK {
+		t.Fatalf("all connector scopes should be enough: %+v", st)
+	}
+	c := testConnector(t, "auth_read_scope_missing")
+	st := c.Status(context.Background())
+	if st.State != connector.StateNoPermission || len(st.MissingScopes) != 1 || st.MissingScopes[0] != "wiki:node:retrieve" {
+		t.Fatalf("one missing connector scope = %+v", st)
 	}
 }
 
@@ -523,10 +534,10 @@ func TestInboxCursorAndTopicsPersistInStore(t *testing.T) {
 
 func TestDisplayNameFollowsLanguage(t *testing.T) {
 	c := New(adapter.Config{Bin: "lark-cli"})
-	if got := connector.DisplayName(i18n.With(context.Background(), i18n.ZhHans), c); got != "飞书（以我的身份）" { // i18n-ignore: the zh-Hans catalog entry under test
+	if got := connector.DisplayName(i18n.With(context.Background(), i18n.ZhHans), c); got != "飞书 · 我的消息" { // i18n-ignore: the zh-Hans catalog entry under test
 		t.Fatalf("zh-Hans name = %q", got)
 	}
-	if got := connector.DisplayName(i18n.With(context.Background(), "en"), c); got != "Lark (as you)" {
+	if got := connector.DisplayName(i18n.With(context.Background(), "en"), c); got != "Lark · my messages" {
 		t.Fatalf("en name = %q", got)
 	}
 	if c.Name() != Name {

@@ -52,6 +52,7 @@ case "${1:-}" in
       not_logged_in) cat "$base/auth_not_logged_in.json" ;;
       expired) cat "$base/auth_expired.json" ;;
       auth_missing_scope) cat "$base/auth_missing_scope.json" ;;
+      auth_read_scope_missing) cat "$base/auth_read_scope_missing.json" ;;
       needs_refresh) cat "$base/auth_needs_refresh.json" ;;
       ready) cat "$base/auth_ready.json" ;;
       expiring) cat "$base/auth_expiring.json" ;;
@@ -60,6 +61,17 @@ case "${1:-}" in
       *) cat "$base/auth_status.json" ;;
     esac
     exit 0
+    ;;
+  profile)
+    if [ "${2:-}" = "list" ]; then
+      cat <<'JSON'
+[
+  {"name":"example","appId":"cli_example","brand":"feishu","user":"Example User","tokenStatus":"valid"},
+  {"name":"other","appId":"cli_other","brand":"lark","user":"","tokenStatus":"signed_out"}
+]
+JSON
+      exit 0
+    fi
     ;;
   config)
     case "${2:-}" in

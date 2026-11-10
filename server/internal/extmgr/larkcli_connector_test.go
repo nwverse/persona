@@ -2,6 +2,9 @@ package extmgr
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,7 +167,87 @@ func TestBotViewExposesLarkCLIBinding(t *testing.T) {
 	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: bin}}
 	h.cfg.Bots.Feishu = FeishuBotConfig{AppID: "cli_example", AppSecret: "bot-secret"}
 	view := h.botView(context.Background())
-	if view.LarkCLI == nil || view.LarkCLI.Profile != managedLarkCLIProfile || view.LarkCLI.AppID != "cli_example" || !view.LarkCLI.SameApp {
+	if view.LarkCLI == nil || view.LarkCLI.Profile != managedLarkCLIProfile || view.LarkCLI.AppID != "cli_example" || !view.LarkCLI.SameApp || view.LarkCLI.Mode != "bot" || view.LarkCLI.Choice != "" || len(view.LarkCLI.Profiles) != 2 {
 		t.Fatalf("larkcli view = %+v", view.LarkCLI)
+	}
+}
+
+func TestLarkCLIAppProfileChoicePrecedenceAndValidation(t *testing.T) {
+	h := newTestManager(t)
+	h.store = newBotStore()
+	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "success")
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: bin}}
+	if err := h.store.PutSetting(context.Background(), botSettingsKey, FeishuBotSettings{LarkCLIProfile: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.effectiveLarkCLIProfile(context.Background()); got != "other" {
+		t.Fatalf("chosen profile = %q", got)
+	}
+	if got := h.larkCLIMode(context.Background()); got != "chosen" {
+		t.Fatalf("mode = %q", got)
+	}
+	if err := h.validateLarkCLIProfile(context.Background(), "other"); err != nil {
+		t.Fatalf("existing profile rejected: %v", err)
+	}
+	if err := h.validateLarkCLIProfile(context.Background(), "missing"); err == nil {
+		t.Fatal("missing profile accepted")
+	}
+	h.cfg.Lark.CLI.Profile = "fixed"
+	if got := h.effectiveLarkCLIProfile(context.Background()); got != "fixed" {
+		t.Fatalf("config profile did not win: %q", got)
+	}
+	if got := h.larkCLIMode(context.Background()); got != "config" {
+		t.Fatalf("config mode = %q", got)
+	}
+}
+
+func TestLarkCLIProfileRouteRejectsManagerConfigChoice(t *testing.T) {
+	h := newTestManager(t)
+	h.store = newBotStore()
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: "/bin/false", Profile: "fixed"}}
+	mux := http.NewServeMux()
+	h.botRoutes(mux)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/bots/feishu", strings.NewReader(`{"larkcli_profile":"other"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["code"] != "larkcli_profile_fixed" {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestLarkCLIProfileRouteStoresExistingChoice(t *testing.T) {
+	h := newTestManager(t)
+	h.store = newBotStore()
+	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "success")
+	h.cfg.Lark = lark.Config{CLI: &lark.CLIConfig{Bin: bin}}
+	mux := http.NewServeMux()
+	h.botRoutes(mux)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/bots/feishu", strings.NewReader(`{"larkcli_profile":"other"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var view feishuBotView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.LarkCLI == nil || view.LarkCLI.Choice != "other" || view.LarkCLI.Mode != "chosen" {
+		t.Fatalf("view = %+v", view.LarkCLI)
+	}
+	if got := h.larkCLIProfileChoice(context.Background()); got != "other" {
+		t.Fatalf("saved choice = %q", got)
 	}
 }
