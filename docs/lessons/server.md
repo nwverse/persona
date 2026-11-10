@@ -220,6 +220,17 @@ The 1900 date system also has a calendar boundary (#1310): January 1 is serial 1
 - Recursive JSON duplicate checks must distinguish case-sensitive maps from protocol structs. Compare arbitrary map keys exactly; reject known struct-field aliases using Unicode simple folding (`strings.EqualFold`, as in `encoding/json`). Lowercasing every object both rejects valid configuration keys and misses long-s signature aliases.
 - Address migration must repeat target uniqueness checks after network reads under the final state lock, including the one official identity across branch and transport aliases. This was a pre-existing migration defect, not an embedded-signature regression.
 
+## User completion is not a recommendation (#3038)
+
+A `needs_user` task's direct completion is the existing to-do `PATCH {"done":true}`,
+not its ask's Accept route: Accept can send the recommendation and resume a closed
+Agent. Keep user completion's empty `done_by`; assigning `review` would allow later
+Agent activity to reopen it. A task snapshot read before a slow session lookup cannot
+authorize automatic rework or recommendation delivery after completion or reopening.
+Recheck the task immediately before dispatch, including inside a queued offline-send
+closure. Test the actual lookup boundary with a blocking fake RPC, not a fixed sleep;
+direct user messages still deliberately retain their separate reuse semantics.
+
 ## Completion reads must belong to the current turn (#6525)
 
 A model judgment can return after a resumed turn has already stopped again. Checking only the current

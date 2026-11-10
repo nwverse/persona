@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## A completed task's omitted ask must clear the partial store merge (#3038)
+
+`putTodo` merges partial records. A completed to-do response omits `ask`, so passing it directly leaves the old decision card in the attention tray until another list read. Explicitly clear the returned optional ask when applying completion, invalidate earlier list reads with `todosAsked.forget()`, then refresh the list. Regress a delayed pre-completion read followed by a failed refresh: an accepted write must not roll back. Admit completion and recommendation acceptance through one synchronous guard: disabling buttons after a React render does not block mixed actions in the same event batch. Regress successful completion with JSON-omitted optional fields, not an object containing `ask: undefined`. Offer direct completion only on the live Pending row, never a historical briefing snapshot that may describe an earlier run.
+
 ## Shared wire projections need one property declaration (#2947)
 
 Two independently merged features can add the same optional field to an interface without a text conflict. Keep one declaration backed by the shared wire type, including its compatibility with unknown values; an older inline union can disagree with the extracted type and break the production TypeScript build. Derived projections such as a brief's acceptance row should reference that shared field type too, rather than maintain another narrower union. Run the normal build on the integrated branch: focused runtime tests alone do not detect duplicate interface properties.
