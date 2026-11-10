@@ -47,11 +47,11 @@ final class ProviderComputersUITests: XCTestCase {
         XCTAssertTrue(el("computers.key.server.remove").waitForExistence(timeout: 5))
         PasswordPrompt.assertNone(app, "a computer's own key")
 
-        // Hub Only: nothing travels, so no toggles and no keys.
+        // Hub Only: nothing travels, so no toggles and no new keys; a stored key stays listed so it can still be removed.
         app.swipeDown()
         el("computers.share.none").tap()
         XCTAssertTrue(el("computers.push").waitForNonExistence(timeout: 5))
-        XCTAssertFalse(el("computers.keys").exists)
+        XCTAssertFalse(el("computers.key.macbook").exists, "Hub Only still offers a key for a computer without one")
         shot("3-hub-only")
     }
 

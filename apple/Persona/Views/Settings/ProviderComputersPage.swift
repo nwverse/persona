@@ -175,8 +175,9 @@ struct ProviderComputersPage: View {
                         Spacer()
                         if !keysOpen { Text(keysBadge).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1) }
                     }
+                    // On the label only: on the group it would replace every key row's own identifier.
+                    .accessibilityIdentifier("computers.keys")
                 }
-                .accessibilityIdentifier("computers.keys")
             } footer: {
                 Text("A key here replaces the provider's key on that computer only. Leave it empty to keep what's there. Keys are stored encrypted on the hub and never sent back.")
             }
@@ -204,7 +205,7 @@ struct ProviderComputersPage: View {
                         Text("Removed When You Save").font(Theme.Font.label).foregroundStyle(Theme.cautionText).lineLimit(1)
                         Spacer(minLength: Theme.Space.s)
                         Button { scope.remove.removeAll { $0 == id } } label: {
-                            Label("Undo", systemImage: Theme.Icon.undo).lineLimit(1)
+                            Label("Undo", systemImage: Theme.Icon.undo).font(Theme.Font.label).lineLimit(1)
                         }
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("computers.key.\(id).undo")
@@ -212,7 +213,7 @@ struct ProviderComputersPage: View {
                         Text("Has Its Own Key").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                         Spacer(minLength: Theme.Space.s)
                         Button(role: .destructive) { scope.remove.append(id) } label: {
-                            Text("Remove Key").lineLimit(1)
+                            Text("Remove Key").font(Theme.Font.label).lineLimit(1)
                         }
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("computers.key.\(id).remove")
