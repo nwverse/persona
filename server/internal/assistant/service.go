@@ -94,6 +94,7 @@ type Service struct {
 	reports   reportBook     // reports.go
 	upReports reportRate     // agent_control.go: report_to_supervisor
 	noteRate  reportRate     // todo_decisions.go: todo_decision_add
+	dispatch  dispatchBook   // dispatch.go: dispatch_start, dispatch_read
 	adoptMu   sync.Mutex     // agent_control.go: one agent_supervise at a time
 	placeBook placeBook      // places.go
 	accept    acceptBook     // acceptance.go
