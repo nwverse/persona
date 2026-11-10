@@ -135,6 +135,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.ReviewSamplePercent != nil {
 			v.ReviewSamplePercent = in.ReviewSamplePercent
 		}
+		if in.InterjectBackground != nil {
+			v.InterjectBackground = in.InterjectBackground
+		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode
 		}
