@@ -9,6 +9,8 @@
   "plan_waiting": "開始を待っています",
   "dispatch_hint": "{count}件を依頼 ·「進捗」で見る",
   "progress_count": "{value}/{total}",
+  "progress_stopped": "止まったまま未完了",
+  "progress_stopped_reason": "止まったまま未完了 · {reason}",
   "progress_pr": "PR #{number}",
   "receipt_review_followup": "Persona がフォロー",
   "report_progress": "進捗更新 · {title}",

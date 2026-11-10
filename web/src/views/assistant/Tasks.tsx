@@ -36,7 +36,7 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { runningWorkflows, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, taskNow, todoRank, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, stoppedReason, taskNow, todoRank, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -1224,9 +1224,12 @@ function ProgressTaskRow({ card, conversation }: { card: TaskCardMetadata; conve
   // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
   const mark: TodoStatus = accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
+  // stopped and not done: the hub's completion check says why (#3180); an agent's open question says more
+  const why = ask ? undefined : stoppedReason(todo, state);
+  const stopped = why === undefined ? undefined : why ? t("assistant-tasks.progress_stopped_reason", { reason: why }) : t("assistant-tasks.progress_stopped");
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>

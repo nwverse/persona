@@ -159,6 +159,9 @@ data class Todo(
     val supervision: Supervision? = null,
     /** How far its finished work went out, and short of live where it is held (#3306); null from an older hub or before judged. */
     val delivery: TodoDelivery? = null,
+    /** The hub's latest automatic completion check of its work while still current (#3180); null before one, after a
+     *  reopen or a new turn, and from an older hub. */
+    val check: TodoCheck? = null,
     /** When it is due (#1683): a moment, or a day ("yyyy-MM-dd", due by its end in the user's zone); at most one. */
     @WireTime @SerialName("due_at") val dueAt: String? = null,
     @SerialName("due_date") val dueDate: String? = null,
@@ -212,6 +215,20 @@ data class TodoDelivery(
     val gate: String? = null,
     val unblock: String? = null,
     @WireTime val at: String? = null,
+)
+
+/**
+ * The hub's latest automatic completion check of a task (#3180, docs/assistant/todos.md "Automatic completion"): [verdict] done,
+ * not_done, waiting, needs_user, undelivered or unsure (a later one kept as sent), [reason] the judge's line in the user's
+ * language, [at] when it was judged and [workSince] the start of the work it judged.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = TodoCheckSerializer::class)
+data class TodoCheck(
+    val verdict: String = "",
+    val reason: String? = null,
+    @WireTime val at: String? = null,
+    @WireTime @SerialName("work_since") val workSince: String? = null,
 )
 
 /** One criterion as a review found it (#3124). */
@@ -414,6 +431,7 @@ object ReviewCheckSerializer : WireSerializer<ReviewCheck>(ReviewCheck.generated
 object TaskReviewSerializer : WireSerializer<TaskReview>(TaskReview.generatedSerializer())
 object SupervisionSerializer : WireSerializer<Supervision>(Supervision.generatedSerializer())
 object TodoDeliverySerializer : WireSerializer<TodoDelivery>(TodoDelivery.generatedSerializer())
+object TodoCheckSerializer : WireSerializer<TodoCheck>(TodoCheck.generatedSerializer())
 object TodosResponseSerializer : WireSerializer<TodosResponse>(TodosResponse.generatedSerializer())
 object FeedResponseSerializer : WireSerializer<FeedResponse>(FeedResponse.generatedSerializer())
 object TodosEventSerializer : WireSerializer<TodosEvent>(TodosEvent.generatedSerializer())

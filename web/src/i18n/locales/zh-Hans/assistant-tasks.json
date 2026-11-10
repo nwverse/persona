@@ -9,6 +9,8 @@
   "plan_waiting": "等你点开始",
   "dispatch_hint": "派出 {count} 件 · 在「进度」里看",
   "progress_count": "{value}/{total}",
+  "progress_stopped": "停下了，还没完成",
+  "progress_stopped_reason": "停下了，还没完成 · {reason}",
   "progress_pr": "PR #{number}",
   "receipt_review_followup": "由 Persona 跟进",
   "report_progress": "进度更新 · {title}",

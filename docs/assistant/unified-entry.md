@@ -62,6 +62,15 @@ retaining its existing turn-source presentation. Apple's independent client work
 The older card-oriented descriptions below document
 the legacy presentation and the retained detail actions; they do not require duplicate cards in the simplified chat.
 
+**A stopped task says why it is still open (#3180).** When a task's Agents all stop, the hub's completion check keeps its
+verdict and reason on the to-do (`check`, [To-dos](todos.md#automatic-completion)). While the task is neither working nor
+done and that check is current with a verdict other than `done` / `unsure`, the web (`ProgressTaskRow`) and Android
+(`trayProgress`) row reads "Stopped, not done yet · <reason>" ("停下了，还没完成 · …"), in place of the supervisor's or the
+Agent's last line; an Agent's open question still comes first. A new turn or a reopen clears the check, so the row goes back
+to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-trays.py` (the stopped task), Android
+`AssistantTraysShotsTest.aStoppedTaskSaysWhyItIsNotDoneInEveryStyle`, and the mock hub with `MOCK_TASKS=1 MOCK_TASK_CHECK=1`
+(the blog move waits for its deploy).
+
 ### Task cards
 
 - Once a plan starts, its card collapses to "Started N tasks," followed by N task cards. Task cards **update in place**: state (spinner / orange dot / green check), title,
