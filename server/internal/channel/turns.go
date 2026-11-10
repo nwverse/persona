@@ -219,10 +219,10 @@ func (r *Run) Check(l Look) Step {
 	if l.Offline || !l.Exists && !l.Online {
 		gaveUp = EndOffline
 	}
-	if r.Held && age > HeldMost {
-		return Step{Do: Finish, End: gaveUp}
-	}
-	if age > RunMost {
+	// Both limits end with a word. A held run has no progress card left (it gave the card back with its message), so an
+	// ending without a note would be a quiet one: nothing would be said anywhere, and the owner would never hear that
+	// the wait is over.
+	if (r.Held && age > HeldMost) || age > RunMost {
 		return Step{Do: Finish, End: gaveUp, Note: i18n.T(l.Lang, "channel-turns.gave_up", i18n.Args{"took": Duration(l.Lang, age)})}
 	}
 	if !l.Exists {

@@ -33,7 +33,9 @@ type remoteThread struct {
 	// does not bring it back, and its completion arriving again is not another end (#5598).
 	ended string
 	// model and effort are what the app-server says the thread is configured with (codex_effort.go); "" unknown / unset.
-	model, effort string
+	model, effort       string
+	serviceTier         string
+	serviceTierRevision uint64
 	// failure / failureKind: the latest turn failed, as turn/completed said it (status failed, its error, #2185);
 	// cleared when a turn starts. Session.TurnError / TurnErrorKind, before the rollout has it.
 	failure, failureKind string
@@ -421,6 +423,7 @@ func (c *codexRemote) refresh() error {
 		if old, ok := c.threads[raw]; ok && old.revision != seenRevision[raw] {
 			t.joined, t.turn, t.partial, t.files, t.status, t.revision, t.buffer, t.lastDelta = old.joined, old.turn, old.partial, old.files, old.status, old.revision, old.buffer, old.lastDelta
 			t.failure, t.failureKind, t.ended = old.failure, old.failureKind, old.ended
+			t.serviceTier, t.serviceTierRevision = old.serviceTier, old.serviceTierRevision
 			t.model, t.effort = old.model, old.effort // an effort just set (codex_effort.go) over a read from before it
 			next[raw] = t
 		}
@@ -500,9 +503,10 @@ func (c *codexRemote) join(ctx context.Context, id string, remember bool) error 
 	}
 	// This is an explicit user-requested join, not a discovery or global subscription. Do not override runtime config.
 	var reply struct {
-		Thread remoteThreadData `json:"thread"`
-		Model  string           `json:"model"`
-		Effort string           `json:"reasoningEffort"`
+		Thread      remoteThreadData `json:"thread"`
+		Model       string           `json:"model"`
+		Effort      string           `json:"reasoningEffort"`
+		ServiceTier json.RawMessage  `json:"serviceTier"`
 	}
 	c.mu.Lock()
 	joining := c.threads[t.id]
@@ -532,6 +536,10 @@ func (c *codexRemote) join(ctx context.Context, id string, remember bool) error 
 	current, ok := c.threads[t.id]
 	if ok {
 		current.joined = true
+		if tier := codexServiceTier(reply.ServiceTier); tier != "" && current.serviceTier == "" {
+			current.serviceTier = tier
+			current.serviceTierRevision++
+		}
 		current.revision++
 		if m := firstNonEmpty(reply.Model, reply.Thread.Model); m != "" {
 			current.model, current.effort = m, firstNonEmpty(reply.Effort, reply.Thread.Effort)
@@ -713,8 +721,9 @@ func (c *codexRemote) message(m codexMessage) {
 		} `json:"turn"`
 		Item     remoteEventItem `json:"item"`
 		Settings struct {
-			Model  string `json:"model"`
-			Effort string `json:"effort"`
+			Model       string          `json:"model"`
+			Effort      string          `json:"effort"`
+			ServiceTier json.RawMessage `json:"serviceTier"`
 		} `json:"threadSettings"`
 	}
 	if json.Unmarshal(m.Params, &ev) != nil {
@@ -798,6 +807,10 @@ func (c *codexRemote) message(m codexMessage) {
 		}
 	case "thread/settings/updated": // the thread's settings changed: on the computer, or from here (codex_effort.go)
 		t.model, t.effort = firstNonEmpty(ev.Settings.Model, t.model), ev.Settings.Effort
+		if tier := codexServiceTier(ev.Settings.ServiceTier); tier != "" {
+			t.serviceTier = tier
+			t.serviceTierRevision++
+		}
 	case "item/completed":
 		delete(t.files, ev.Item.ID)
 		refresh = true

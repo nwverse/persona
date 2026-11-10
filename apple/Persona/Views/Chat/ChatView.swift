@@ -578,13 +578,6 @@ struct ChatView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        // The assistant's tasks (docs/assistant/unified-entry.md): a task's detail rises like a link; All is the board.
-        // In regular width (iPad) it fills the detail column instead, as an agent opened from the Agents list (#2816).
-        .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
-                                                 set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
-            if let id = TasksStore.shared.detailTask { TaskDetailSheet(todoID: id) }
-            else if let key = TasksStore.shared.detailAgent { TaskDetailSheet(agent: key) }
-        }
         .sheet(isPresented: Binding(get: { style == .assistant && TasksStore.shared.showBoard },
                                     set: { TasksStore.shared.showBoard = $0 }),
                onDismiss: {
@@ -617,6 +610,20 @@ struct ChatView: View {
             }
         }
         #endif
+        // A task's own detail also has a presenter on Mac: assigning detailTask must not be a dead link. iPhone
+        // dispatch links push a live Agent directly; this is the starting/no-Agent fallback and the normal task detail.
+        .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
+                                                 set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
+            Group {
+                if let id = TasksStore.shared.detailTask {
+                    TaskDetailSheet(todoID: id, initialAgent: TasksStore.shared.detailTaskAgent).id(id)
+                }
+                else if let key = TasksStore.shared.detailAgent { TaskDetailSheet(agent: key) }
+            }
+            #if os(macOS)
+            .macSheet()
+            #endif
+        }
     }
 
     private var chatActivity: some View {
@@ -859,7 +866,7 @@ struct ChatView: View {
         let feed = style == .assistant ? TasksStore.shared.feed(shownKey.sessionID) : []
         let key = ChatScratch.LinesKey(store: "\(shownKey.machineID)/\(shownKey.sessionID)", version: frozen == nil ? store.version : cut,
                                        first: items.first?.id, live: frozen == nil ? liveTurnID : frozen?.live, open: openWork,
-                                       runs: openRuns, frozen: frozen, feed: feed.map(\.id),
+                                       runs: openRuns, frozen: frozen, feed: ChatLines.feedKey(feed),
                                        streaming: drawsLive && (frozen.map { !$0.text.isEmpty } ?? liveShown),
                                        quietAgents: quietSubagents, workflowCalls: workflowCalls,
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
@@ -873,8 +880,9 @@ struct ChatView: View {
         }
         var lines = lineBuilder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            // The hand-offs the task cards take in are drawn there, not among the lines (#1542).
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, SentToAgents.shown(feed))))
+            // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
+            // of hiding them as though a full task card still rendered them (#3711).
+            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
         }
         lines = ChatLines.sourceRuns(lines)
         scratch.lines = lines
@@ -2888,6 +2896,9 @@ struct ChatView: View {
             .tint(Color.primary) // a title, not a button: the menu's accent tint would color it blue
             .accessibilityLabel("\(title), \(host.agents.count) agents, tap to switch")
             .accessibilityIdentifier("chat.title")
+            #if DEBUG
+            .modifier(UITestSessionProof(session: key.path))
+            #endif
             .connectionDetails($showLink)
         } else {
             infoTitleButton
@@ -2939,6 +2950,9 @@ struct ChatView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(link != .online ? String(localized: "\(title), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true)), view connection details") : String(localized: "\(title), view session info"))
         .accessibilityIdentifier("chat.title")
+        #if DEBUG
+        .modifier(UITestSessionProof(session: key.path))
+        #endif
         .connectionDetails($showLink)
     }
 

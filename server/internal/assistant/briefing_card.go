@@ -40,7 +40,9 @@ func (s *Service) briefCard(f *briefFacts, label, answer string) (card *feishubo
 	c := feishubot.NewCard(label, color, f.countsText())
 	plain := []string{label}
 	if answer = strings.TrimSpace(answer); answer != "" {
-		c.Markdown(feishubot.CardMarkdown(clip(answer, briefAnswerRunes)))
+		// Charts become text first, as the bot's answers do (feishu_answer.go): clipMarkdown drops a persona-card block
+		// it cannot draw down to its title, so a chart on a long answer would lose its numbers.
+		c.Markdown(feishubot.CardMarkdown(clipMarkdown(feishubot.PersonaCards(answer), briefAnswerRunes)))
 		plain = append(plain, clip(answer, briefAnswerRunes))
 		if len([]rune(answer)) > briefAnswerRunes {
 			c.Note(i18n.T(l, "assistant-briefing.answer_clipped"))

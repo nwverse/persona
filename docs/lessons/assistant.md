@@ -185,3 +185,32 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   — a state that cannot be told still tries, the owner asked — and let a live run this chat sent into that conversation
   win (`channel.Run.Seen` false: the turn may just not be read as working yet), or a `/stop` sent right after the message
   stops nothing.
+
+- **A table row is split at every unescaped `|`, inside a code span too** (#3852). GFM cuts a cell at a pipe the row did
+  not escape, so `| `a || b` | 或 |` really is a row with four cells while its header has two; GFM draws only the
+  header-width cells and ignores the excess, and `answerTables` (`feishubot/answer.go`) built a row the same way, by
+  looping over the header's columns alone, so everything past the header's width — here "b`" and "或" — never reached
+  the card, with nothing said. The rich-text fallback kept those words, so the same answer read differently as a card
+  and as a refused card's text. Those words are still the row's: keep the surplus cells in the last column, joined with
+  " | " and with empty ones skipped (a trailing `||` adds no junk), clipped and escaped like any other cell. When
+  changing how a table row is laid out, compare its card with its fallback.
+
+- **Text a client draws as Markdown is cut with `clipMarkdown`, not `clip`** (#3818). The briefing card quoted the model's answer through `textfmt.Clip` (exactly n runes plus an ellipsis), so an answer over 1500 runes was cut inside whatever it was in: an unclosed code fence turned the rest of the quote into code, and a cut inside `**`, a code span or a link left half a marker or half a URL. `clipMarkdown` (`assistant/mdtext.go`) cuts on a line break where it can, closes a code block the cut lands in, and moves the cut back out of an unclosed span, emphasis or link; it also flattens a `persona-card` block to its title (`wire.AssistantCardText`), so draw charts first with `feishubot.PersonaCards` and cut after, as `answerCards` does for the bot's answers. Plain fallback text (the push body, a notice's fallback) keeps `clip` / `textfmt.PlainMarkdown`; only the Markdown element takes `clipMarkdown`. Test through the same builder the card uses, not the clippers alone, and assert the shape (`fences % 2 == 0`, no `](https://…` left) rather than an exact string.
+
+- **A finished run's last write into the progress card has to wait out a card rate limit** (#3915). The progress tick
+  answers 230020 by pausing its updates (`prog.quietUntil`), but the answer's write comes right after a tick's, and a
+  card update (PATCH) gets no retry of its own on 230020 (`feishubot/api.go` leaves that wait to the caller, because the
+  tick may be holding the run's progress lock): the answer was then posted as a card of its own while nothing wrote the
+  progress card again — the run had ended — so it kept saying it was still working, and a quiet end wrote nothing at
+  all. `botUpdateAnswerCard` (`feishu_turn.go`) waits `answerCardWait` (5 seconds, the first progress backoff) and
+  tries once more before the answer falls back to a card of its own; another refusal still falls back at once. Waiting
+  synchronously is the whole fix here: the run is over, so no tick can write that card later.
+
+- **A quiet ending says nothing when the run has no card left, so a timeout must carry a note** (#3930). `channel.Run.Check`
+  returned the 2-hour held timeout (`HeldMost`) with no note, and `checkChannelRun` turns an empty note into `Quiet`; the
+  Lark sink answers a quiet ending only by rewriting the card it still has (`feishu_turn.go`), and a held run has none —
+  `finishChannelRun` gives the card back with the message (`delete(r.Ext, "card")`) — so the owner's first answer stayed
+  the last word and the chat never learned the wait was over. Both limits now end with `channel-turns.gave_up`, as the
+  docs promise ("Timed out, see the app"); a run with no card gets that line as a card of its own. Plugin channels, which
+  send a note as plain text, stop being silent the same way. When a step ends a run without an answer, give it a note, or
+  check what the sink does with a quiet end and no card.

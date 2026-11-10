@@ -111,6 +111,22 @@ func manualBackground(result string) []string {
 	return bgManualRe.FindStringSubmatch(result)
 }
 
+// LaunchedBackgroundID is the id of the background task a tool result says its call started (a backgrounded command,
+// an async agent, a workflow, a Monitor, a command moved or sent to the background), "" for any other result. The id is
+// read whole, so "bash_1" is not the id of a result that started "bash_12".
+func LaunchedBackgroundID(result string) string {
+	if mm := manualBackground(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgIDRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgMovedRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	return ""
+}
+
 // onceCron reports a cron expression pinned to one date ("33 17 21 10 *": day of month and month both fixed).
 func onceCron(expr string) bool {
 	f := strings.Fields(expr)

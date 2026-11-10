@@ -20,10 +20,14 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    /api/v1/extensions/{id}/-/machines/{mid}/
 -                    /api/v1/imessage
 -                    /api/v1/imessage/
+-                    /api/v1/iphone
+-                    /api/v1/iphone/
 -                    /api/v1/machines/{mid}/browser
 -                    /api/v1/machines/{mid}/browser/
 -                    /api/v1/machines/{mid}/computer
 -                    /api/v1/machines/{mid}/computer/
+-                    /api/v1/machines/{mid}/iphone
+-                    /api/v1/machines/{mid}/iphone/
 -                    /api/v1/mail/
 -                    /api/v1/messaging
 -                    /api/v1/messaging/
@@ -32,11 +36,13 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    /api/v1/plugins/
 -                    /api/v1/subscriptions
 -                    /api/v1/subscriptions/
+-                    DELETE /api/v1/admin/devices/{credential_id}/owner
 -                    DELETE /api/v1/admin/devices/{id}
 -                    DELETE /api/v1/admin/extensions/{id}
 -                    DELETE /api/v1/admin/machines/{id}
 -                    DELETE /api/v1/admin/peers/{hub_id}
 -                    DELETE /api/v1/admin/usage-sources/{id}
+-                    DELETE /api/v1/agent-shares/{share_id}
 -                    DELETE /api/v1/agents/sessions/{id}/messages/{clientId}
 -                    DELETE /api/v1/assistant/conversations/{id}/always/{hash}
 -                    DELETE /api/v1/assistant/directions/offers/{id}
@@ -77,6 +83,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE {base}/markets/{mid}
 -                    GET /api/v1/admin/assistant
 -                    GET /api/v1/admin/devices
+-                    GET /api/v1/admin/devices/{credential_id}/owner
 -                    GET /api/v1/admin/extensions
 -                    GET /api/v1/admin/extensions/-/metrics
 -                    GET /api/v1/admin/extensions/{id}
@@ -87,10 +94,14 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    GET /api/v1/admin/mesh
 -                    GET /api/v1/admin/network
 -                    GET /api/v1/admin/overview
+-                    GET /api/v1/admin/owner-subjects
 -                    GET /api/v1/admin/peers
 -                    GET /api/v1/admin/routes
 -                    GET /api/v1/admin/state
 -                    GET /api/v1/admin/usage-sources
+-                    GET /api/v1/agent-shares
+-                    GET /api/v1/agent-shares/{share_id}
+-                    GET /api/v1/agent-shares/{share_id}/messages
 agents.read          GET /api/v1/agents
 -                    GET /api/v1/agents/hidden
 -                    GET /api/v1/agents/outbox
@@ -166,6 +177,7 @@ inbox.read           GET /api/v1/inbox/tree/{kind}/{id...}
 inbox.read           GET /api/v1/inbox/{id}
 agents.read          GET /api/v1/interactions
 agents.read          GET /api/v1/interactions/history
+-                    GET /api/v1/iphone
 kb.read              GET /api/v1/kb-search
 kb.read              GET /api/v1/kb/chats/{id}/context
 kb.read              GET /api/v1/kb/chats/{id}/days/{day}
@@ -216,6 +228,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/git/status
 -                    GET /api/v1/machines/{mid}/health/reports
 -                    GET /api/v1/machines/{mid}/herdr
+-                    GET /api/v1/machines/{mid}/iphone
 -                    GET /api/v1/machines/{mid}/launchers
 -                    GET /api/v1/machines/{mid}/launchers/{name}/models
 -                    GET /api/v1/machines/{mid}/omp-settings
@@ -247,6 +260,8 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/items
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/full
 agents.read          GET /api/v1/sessions/{mid}/{sid}/items/{iid}/image
 agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
+-                    GET /api/v1/sessions/{mid}/{sid}/share-catalog
+-                    GET /api/v1/sessions/{mid}/{sid}/share-preview/{preview_id}
 -                    GET /api/v1/skills
 -                    GET /api/v1/subscriptions
 -                    GET /api/v1/subscriptions/catalog
@@ -272,6 +287,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {link.Path}
 -                    GET {link.StreamPath}
 -                    GET {peerPath}
+-                    PATCH /api/v1/agent-shares/{share_id}
 inbox.write          PATCH /api/v1/inbox/policies/{id}
 -                    PATCH /api/v1/managers/{id}
 -                    PATCH /api/v1/model-config/purposes/{id}
@@ -289,6 +305,7 @@ todos.write          PATCH /api/v1/todos/{id}
 -                    POST /api/v1/admin/machines/{id}/connector
 -                    POST /api/v1/admin/machines/{id}/link-pair
 -                    POST /api/v1/admin/machines/{id}/reconnect
+-                    POST /api/v1/admin/owner-subjects
 -                    POST /api/v1/admin/password
 -                    POST /api/v1/admin/peers
 -                    POST /api/v1/admin/peers/code
@@ -300,6 +317,7 @@ todos.write          PATCH /api/v1/todos/{id}
 -                    POST /api/v1/admin/setup-code
 -                    POST /api/v1/admin/usage-sources
 -                    POST /api/v1/admin/usage-sources/test
+-                    POST /api/v1/agent-shares
 -                    POST /api/v1/agents/sessions/{id}/hide
 agents.control       POST /api/v1/agents/sessions/{id}/messages
 agents.control       POST /api/v1/agents/sessions/{id}/read
@@ -409,6 +427,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/git/stash
 -                    POST /api/v1/machines/{mid}/git/switch
 -                    POST /api/v1/machines/{mid}/herdr/start
+-                    POST /api/v1/machines/{mid}/iphone/{action}
 -                    POST /api/v1/machines/{mid}/node-update/{action}
 -                    POST /api/v1/machines/{mid}/panes
 -                    POST /api/v1/machines/{mid}/panes/agent
@@ -455,6 +474,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
 -                    POST /api/v1/sessions/{mid}/{sid}/rewind
 -                    POST /api/v1/sessions/{mid}/{sid}/screen/before
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
+-                    POST /api/v1/sessions/{mid}/{sid}/share-preview
 -                    POST /api/v1/sessions/{mid}/{sid}/unarchive
 -                    POST /api/v1/subscriptions
 -                    POST /api/v1/subscriptions/-/dry-run
@@ -480,6 +500,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST {bus.JoinPath}
 -                    POST {peerPairPath}
 -                    PUT /api/v1/admin/assistant
+-                    PUT /api/v1/admin/devices/{credential_id}/owner
 -                    PUT /api/v1/admin/extensions/{id}/enabled
 -                    PUT /api/v1/admin/extensions/{id}/sandbox
 -                    PUT /api/v1/admin/hub
@@ -515,6 +536,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 inbox.write          PUT /api/v1/inbox/folders
 inbox.write          PUT /api/v1/inbox/{id}/folder
 inbox.write          PUT /api/v1/inbox/{id}/parent
+-                    PUT /api/v1/iphone/consent
 -                    PUT /api/v1/kb/selection
 kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}
@@ -533,6 +555,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/engine
 -                    PUT /api/v1/machines/{mid}/file-transfer/settings
 -                    PUT /api/v1/machines/{mid}/herdr
+-                    PUT /api/v1/machines/{mid}/iphone
 -                    PUT /api/v1/machines/{mid}/omp-settings
 -                    PUT /api/v1/model-config/purposes/{id}
 -                    PUT /api/v1/model-profiles/{id}

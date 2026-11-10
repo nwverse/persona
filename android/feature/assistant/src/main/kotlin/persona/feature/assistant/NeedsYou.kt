@@ -106,12 +106,12 @@ fun needsYou(
     return NeedsYou(all.take(shown), (all.size - shown).coerceAtLeast(0))
 }
 
-/** The conversation's name as the lists show it: its title, else its folder, else "Agent". */
+/** The conversation's name as the lists show it: its title, else its folder, else blank (the row then reads "Agent", [needsYouWho]). */
 private fun agentName(request: Interaction, session: Session?): String =
     request.sessionTitle?.trim()?.takeIf { it.isNotEmpty() && it != "Claude Code" }
         ?: session?.title?.trim()?.takeIf { it.isNotEmpty() && it != "Claude Code" }
         ?: (request.cwd ?: session?.cwd)?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
-        ?: "Agent"
+        .orEmpty()
 
 private fun oneLine(text: String): String = text.replace(Regex("\\s+"), " ").trim()
 
@@ -161,10 +161,11 @@ internal fun NeedsYouSection(needs: NeedsYou, onOpen: (NeedsYouLine) -> Unit, on
     }
 }
 
-/** Who a line is from as the row reads it: an inbox item without a title or sender is "Lark" or "Mail". */
+/** Who a line is from as the row reads it: an agent without a title or folder is "Agent", an inbox item without a title or sender is "Lark" or "Mail". */
 @Composable
 internal fun needsYouWho(line: NeedsYouLine): String = when {
     line.who.isNotBlank() -> line.who
+    line is NeedsYouLine.Agent -> stringResource(R.string.assistant_needs_you_agent)
     line is NeedsYouLine.Inbox && line.lark -> stringResource(R.string.assistant_source_lark)
     else -> stringResource(R.string.assistant_source_mail)
 }

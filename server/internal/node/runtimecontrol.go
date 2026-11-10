@@ -123,12 +123,19 @@ func (h *runtimeConn) setLaunchers(list []runtimeLauncher) {
 }
 
 // runtimeLauncherModels is launchers.models for a runtime's launcher: the models it said (none: an empty list, the
-// form offers no choice); false for a launcher no runtime offers, or the login shell's of that name.
+// form offers no choice); false for a launcher no runtime runs (runtimeOf).
 func (n *Node) runtimeLauncherModels(name string) (proto.LauncherModels, bool) {
-	if shellLauncherNames()[name] {
-		return proto.LauncherModels{}, false
-	}
-	h := n.runtimes.launcherRuntime(name)
+	return launcherModelsOf(n.runtimeOf(name), name)
+}
+
+// agyRuntimeModels is the Antigravity runtime's own launcher models, which a managed launcher named agy does not hide:
+// what a managed Antigravity launcher starts (startRuntime) and offers.
+func (n *Node) agyRuntimeModels() (proto.LauncherModels, bool) {
+	return launcherModelsOf(n.runtimes.launcherRuntime("agy"), "agy")
+}
+
+// launcherModelsOf is runtime h's advertisement for its launcher name; false without a runtime.
+func launcherModelsOf(h *runtimeConn, name string) (proto.LauncherModels, bool) {
 	if h == nil {
 		return proto.LauncherModels{}, false
 	}
@@ -200,6 +207,9 @@ func (n *Node) startOnEngineRuntime(ctx context.Context, p runtimeStartParams) (
 	if p.Resume != "" {
 		return n.takeOverInRuntime(ctx, h, p)
 	}
+	// The engine runs every start with a provider of its own: one it has by the launcher's name (a managed launcher made
+	// from it carries the same configuration), else its default (shell_launcher). A managed launcher's own settings
+	// apply only where personad launch runs it (runtimeStart), never inside the engine.
 	if _, own := h.launcherNamed(p.Launcher); !own && p.Launcher != "" {
 		p.Shell = true
 	}
