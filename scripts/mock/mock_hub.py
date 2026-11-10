@@ -852,6 +852,31 @@ if os.environ.get("MOCK_BG_WAITING") == "1":
                       background=[{"id": "bb1d5te2k", "kind": "shell", "description": "打包发布产物", "command": "make release",
                                    "started_at": ago(minutes=4)}])
 
+# MOCK_HEADER_MODES=1 (#3719): one agent per permission mode, for the mode at the end of the Agents header's second row
+# and its menu. The widget agent: Auto-Edit, and it can take Allow Everything while it runs; tests: Ask First, with a long
+# title; photos: Plan Only; release: Auto; review: no mode reported yet; blog: Allow Everything with no way back from the
+# phone, its turn over and four background commands that only wait (the screenshot the issue came from). The recipe agent
+# (offline, no space) keeps Ask First: a second row with only the mode. The Codex agent has none.
+if os.environ.get("MOCK_HEADER_MODES") == "1":
+    _waits = [("等 PR #7 的检查跑完", "gh pr checks 7 --watch"), ("等预发环境部署完成", "until curl -sf https://staging.example.com/health; do sleep 30; done"),
+              ("等夜间构建出结果", "gh run watch 4711"), ("盯着日志里的超时报错", "tail -f /tmp/blog-build.log")]
+    for _s in SESSIONS:
+        _sid = _s["session_id"]
+        if _sid == WIDGET:
+            _s.update(bypass_available=True)
+        elif _sid == TESTS:
+            _s.update(title="补齐网络层的单元测试，包括重试、超时和离线缓存的各种边界情况")
+        elif _sid == RELEASE:
+            _s.update(permission_mode="auto")
+        elif _sid == REVIEW:
+            _s.update(permission_mode=None)
+        elif _sid == BLOG:
+            _s.update(status="done", state="working", state_since=ago(minutes=9), seen_at=None, background_working=True,
+                      background_waiting=True, permission_mode="bypassPermissions", bypass_available=False,
+                      last_text="PR 开好了，后台四个任务都在等结果，等齐了我再合。",
+                      background=[{"id": "bw%d" % i, "kind": "shell", "description": d, "command": c, "started_at": ago(minutes=9 - i)}
+                                  for i, (d, c) in enumerate(_waits)])
+
 # MOCK_WORKFLOW=crowded (#4532): three workflows on the review agent, as a user's chat had them: one running with ten
 # agents, one stopped with its error, one completed. The chat's header must not push the conversation off the screen.
 if os.environ.get("MOCK_WORKFLOW") == "crowded":
