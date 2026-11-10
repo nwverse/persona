@@ -1550,6 +1550,11 @@ pending count to drop, pass with the rule deleted.
   page still runs, makes `jsonb_typeof('…')` or `jsonb_typeof($1)` with an unknown-typed argument fail in the whole
   database (`function jsonb_typeof(unknown) is not unique`). Every existing call passes a typed value; new SQL casts
   the argument (`$1::jsonb`) until a later migration drops the shim, once no pre-0471 build can run.
+- **The start read decodes from the driver's buffer, so an inbox type must not keep its input.** `InboxItems` hands
+  each row as `rows.RawValues()[0]`, which the next row overwrites. `encoding/json` copies every string and
+  `json.RawMessage` it keeps, so `InboxItem` holds none of the buffer; a custom `UnmarshalJSON` on any type inside it
+  must copy what it keeps too, or the items loaded share bytes the driver reuses. `TestInboxItemsAllocationBudget`
+  fails if the read starts copying rows again (6 allocations per 200-row read; collecting the rows took 616).
 
 ## Optional filesystem labels must not gate inventory (2026-11-10, #2750)
 
@@ -1561,3 +1566,10 @@ A regular Git HEAD can block in open despite stat succeeding. Keep project label
 - `writeMerged` decoded every manager's answer into a map, decoded each item into a map only to look for `manager`, and encoded everything again: 13 ms and 7 MB for 400 inbox items on every refetch. One `json.Valid`, then a structural scan that cuts out the top-level members and the items, writes the same bytes in 3 ms and 0.5 MB (`merged_scan.go`). Anything the scan cannot read the way decoding does goes to the old decoding, kept as `writeDecoded`: a top-level key that is escaped, non-ASCII or repeated (how a map keeps and sorts such keys is decoding's to say), a list that is neither an array nor null. Do the same for any other reader the scan replaces: `mergeList` takes the todos' ids from the scan only where a key cannot fold to `todos` or `id` (`encoding/json` matches struct fields regardless of case) and the id is plain ASCII, and decodes otherwise (`TestTodoOwnersMatchDecoding`).
 - `i18n.InboxJSON` decoded and marshaled the whole inbox list on every GET to change a few labels (17-22 ms, 4-7 MB for 400 items). What it does to a value depends on that value alone, so the hub localizes each item on its own and keeps the result by a 128-bit hash of the item's bytes, per list route, manager and language, for the items of the latest answer only (`inbox_forms.go`). Byte identity with the whole-body pass needs one more step: when anything in an answer changes, the whole answer is marshaled again, so every unchanged item and the top level are then written as `InboxReencoded` (decode with `UseNumber`, marshal) gives them. An answer whose top level is itself an item is localized whole, since `InboxJSON` then visits none of its list. Equal bytes do not show the per-item path ran, so the relay test also counts the slots kept (`TestInboxListsLocalizedAsWhole`).
 - A 2xx answer whose body was `null` made `writeMerged` panic: `json.Unmarshal` of `null` into a map leaves it nil, and the merge then assigned to it. Treat any answer that is not a JSON object, `null` included, as no answer.
+
+## Remote tests need fixtures outside the Go module (2026-11-10, #2980)
+
+When server tests read a shared fixture outside `server/`, include it in `scripts/test/test-server.sh` at the same
+relative path and create its remote parent directory. The inbox list tests read `scripts/mock/inbox_events.json`;
+copying only the Go module left them failing on the test machine. Extend the fake remote launcher test to read the
+staged fixture from the package directory, check refreshed contents, and reject a missing source before Go starts.
