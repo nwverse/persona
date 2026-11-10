@@ -1,7 +1,8 @@
 // Overview: what needs you, what is running, what just finished — Beautiful UI's Task Rows — and the computers.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ago, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
-import { cardState } from "../lib/card-focus";
+import { ago, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
+import { usePendingLine } from "../lib/card-answer";
+import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
 import { answerLines, type Resolution } from "../lib/answered";
 import { quickAnswers, withHeld, type HeldRow, type QuickChoice } from "../lib/quick-answers";
@@ -119,7 +120,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                 const s = sessions.find((x) => x.machine_id === ix.machine_id && x.session_id === ix.session_id);
                 const title = ix.session_title || (s ? sessionTitle(s) : ix.cwd || t("home.session"));
                 // what the row answers in one tap, as iOS's "Needs you" cards; the rest (plans, forms, typing) opens the chat
-                const quick = sessionCan(s ?? getSession(ix.machine_id, ix.session_id), "approve") ? quickAnswers(ix) : null;
+                const quick = interactionCanAnswer(ix, s ?? getSession(ix.machine_id, ix.session_id)) ? quickAnswers(ix) : null;
                 // allowed in one tap, a permission says the tool and what it runs or touches (iOS: "Bash: swift test"),
                 // not the agent's description of it
                 const tool = quick && ix.kind === "permission" ? toolDisplayName(ix.tool_name) : "";
@@ -139,13 +140,13 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                         i={i}
                         state="needs_you"
                         done={done}
-                        to={{ name: "session", mid: ix.machine_id, sid: ix.session_id }}
+                        to={requestRoute(ix)}
                         title={title}
                         tags={rowTags(title, [name(ix.machine_id), s?.space_name, s && tabLabel(s)])}
                         detail={(tool && ask && ask !== tool ? t("home.permission_detail", { tool, what: ask }) : ask) || undefined}
                         pill={!done && <Pill>{KIND[ix.kind]}</Pill>}
                         entry={cardState(ix.id)}
-                        actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
+                        actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
                       />
                     </div>
                   </Collapse>
@@ -443,14 +444,18 @@ function ContinueAction({ s, title, several }: { s: Session; title: string; seve
 
 const ANSWERED_HOLD_MS = 1600;
 
-/** A row's one-tap answers (lib/quick-answers.ts), under its words; the one being sent spins, the others wait. */
-function QuickAnswers({ choices, sending, onPick }: { choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
+/** A row's one-tap answers (lib/quick-answers.ts), under its words; the one being sent spins, the others wait. An answer
+ *  on its way from anywhere (this row, the chat's card, a notification) holds them all too, also after leaving Overview
+ *  and coming back, and the row says which one, as the chat's card does (#2793). */
+function QuickAnswers({ ix, choices, sending, onPick }: { ix: Interaction; choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
+  const { pending, line } = usePendingLine(ix);
   return (
     <div className="flex flex-wrap gap-1.5 px-3 pb-2 pl-10.5">
+      {line && <p data-row-pending role="status" className="basis-full truncate text-[12px] text-ink-2">{line}</p>}
       {choices.map((c) => {
         const shown = optionDisplay(c.label);
         return (
-          <Button key={c.key} tone={c.primary ? "primary" : "secondary"} busy={sending === c.key} disabled={sending !== undefined} title={c.hint || shown.text} onClick={() => onPick(c)} className="max-w-full">
+          <Button key={c.key} tone={c.primary ? "primary" : "secondary"} busy={sending === c.key} disabled={sending !== undefined || pending} title={c.hint || shown.text} onClick={() => onPick(c)} className="max-w-full">
             <span className="min-w-0 truncate">{shown.text}</span>
             {shown.recommended && <RecommendedTag />}
           </Button>

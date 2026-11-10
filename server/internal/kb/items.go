@@ -8,10 +8,10 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // ItemSource lists documents, meetings and calendar events (Feishu through the Lark extension).
@@ -21,7 +21,9 @@ type ItemSource interface {
 	DocTitle(ctx context.Context, url string) string
 }
 
-// CollectItems stores new meetings and events and fills in titles of documents seen in chats.
+// CollectItems stores new meetings and events and fills in titles of documents seen in chats. With a selection
+// (Engine.Selection), a document is stored only when it selects it (Selection.DocSelected): one it does not select is
+// not written, and one already stored is left as it is (the selection stops writes; only Prune deletes, by days).
 func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...string) error {
 	if e.Store.ReadOnly() {
 		return ErrReadOnly
@@ -35,9 +37,13 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...st
 		return err
 	}
 	now := time.Now().UTC()
+	sel, ret := e.selection(), e.Retention()
 	for _, w := range items {
 		it := ItemFromWire(w)
 		it.Source = source
+		if it.Kind == KindDoc && sel != nil && !sel.DocSelected(ret, DocFacts{Source: source, ID: it.ID, Signals: it.Signals}) {
+			continue
+		}
 		old, ok := e.Store.Item(it.Kind, it.ID)
 		if ok {
 			// An ID alone cannot identify an owner: legacy or colliding items stay
@@ -56,10 +62,15 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...st
 				}
 				continue
 			}
-			it.Tagging, it.Projects, it.Note, it.Seen = old.Tagging, old.Projects, old.Note, old.Seen
-			it.Tagging.TaggedAt = time.Time{} // changed: tag again
+			carryOver(&it, old)
 		} else {
 			it.Seen = now
+			if it.Kind == KindDoc && sel != nil {
+				// Past its days already (an old document a source still lists): not written, as Prune would delete it.
+				if days, ok := sel.DocDays(DocFacts{Source: source, ID: it.ID, Signals: it.Signals}); ok && docExpired(&it, now, days) {
+					continue
+				}
+			}
 		}
 		if err := e.Store.PutItem(&it); err != nil {
 			return err
@@ -68,6 +79,9 @@ func (e *Engine) CollectItems(ctx context.Context, src ItemSource, sources ...st
 	n := 0
 	for _, it := range e.Store.Items(KindDoc) {
 		if it.Title != "" || n >= 10 || ctx.Err() != nil || e.itemSource(it) != source {
+			continue
+		}
+		if x := sel.Item(source, ItemDoc, it.ID); x != nil && !x.Read { // the user keeps it from being read
 			continue
 		}
 		it.Source = source
@@ -265,25 +279,8 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 	return hits
 }
 
-// clip cuts s to its first n runes plus an ellipsis; a string of at most n runes comes back as it is, without a copy.
-// Ranging over s steps through the same runes as []rune(s) (one U+FFFD per invalid byte), so the cut lands where it
-// always did: a valid prefix is cut at its byte offset, and one with invalid bytes still has them replaced.
-func clip(s string, n int) string {
-	if len(s) <= n { // n bytes are at most n runes
-		return s
-	}
-	runes := 0
-	for i := range s {
-		if runes == n { // rune n+1 starts at i
-			if utf8.ValidString(s[:i]) {
-				return s[:i] + "…"
-			}
-			return string([]rune(s[:i])) + "…"
-		}
-		runes++
-	}
-	return s
-}
+// clip cuts s to its first n runes plus an ellipsis (textfmt.Clip).
+var clip = textfmt.Clip
 
 // Rank orders by importance, then relevance, then recency.
 func Rank(list []Entry) {
@@ -385,4 +382,13 @@ func (e *Engine) Prompt(projects, chats int) string {
 
 func digestEntry(x Entry) prompts.KBDigestEntry {
 	return prompts.KBDigestEntry{ID: x.ID, Name: x.Name, Importance: x.Importance, OneLine: x.OneLine, Relevance: x.Relevance}
+}
+
+// carryOver gives an update of a stored item what the source does not send (tags, projects, note, first seen); the
+// item is tagged again, as it changed. The Tagging it copies carries the mark that it was read from disk, so a write
+// after the item was deleted meanwhile (a prune, a forget) does not bring it back (putEntity skips a persisted item
+// that is no longer there).
+func carryOver(it, old *Item) {
+	it.Tagging, it.Projects, it.Note, it.Seen = old.Tagging, old.Projects, old.Note, old.Seen
+	it.Tagging.TaggedAt = time.Time{}
 }

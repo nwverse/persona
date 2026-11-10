@@ -29,6 +29,8 @@ import persona.core.contracts.api.ExtensionField
 import persona.core.contracts.api.ExtensionManagement
 import persona.core.contracts.api.ExtensionSecret
 import persona.core.contracts.api.ExtensionUiPlace
+import persona.core.contracts.api.ManagerPins
+import persona.core.contracts.api.pinned
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.LocalDetailKey
@@ -40,6 +42,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -149,16 +153,18 @@ fun ExtensionPage(
     onUpgrade: ((String, String) -> Unit)? = null,
     /** Just installed and not signed in (`next: auth`, #4507): its sign-in starts once the page knows it. */
     startSignIn: Boolean = false,
-    /** Whose extension it is (several managers); null: the default's. Its requests name it while the page is open. */
+    /** Whose extension it is (several managers); null: the default's. The requests this page makes name it. */
     manager: String? = null,
 ) {
-    PinnedExtension(extensionId, manager)
+    val owner = remember(extensions, extensionId, manager) { ExtensionOwners.of(manager) }
     if (extensions == null) {
         JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_ext_demo_none)) } }
         return
     }
+    val api = rememberPinned(extensions, extensionPrefixes(extensionId) + listOf(listOf("extensions", "-", "catalog"),
+        listOf("extensions", "-", "upgrades"), listOf("plugins", "-", "catalog"), listOf("plugins", "-", "upgrades")), owner)
     val res = LocalResources.current
-    val model = remember(extensions, extensionId, res) { ExtensionModel(extensions, extensionId, res) }
+    val model = remember(api, extensionId, res, owner) { ExtensionModel(api, extensionId, res, owner) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
@@ -172,8 +178,8 @@ fun ExtensionPage(
     LaunchedEffect(model) { model.load() }
     // Its sign-in (#4507): the hub's pushes, and the steps a sheet shows.
     LaunchedEffect(model) { model.watchAuth() }
-    val signIn = remember(extensions, extensionId) {
-        ConnectorSignInModel({ step, values -> extensions.authStep(extensionId, step, values) }, { model.setAuth(extensions.authLogout(extensionId)) })
+    val signIn = remember(api, extensionId) {
+        ConnectorSignInModel({ step, values -> api.authStep(extensionId, step, values) }, { model.setAuth(api.authLogout(extensionId)) })
     }
     val signInState by signIn.state.collectAsState()
     var signOutError by remember { mutableStateOf<String?>(null) }
@@ -197,72 +203,62 @@ fun ExtensionPage(
     }
     val contributed = detail?.takeIf { it.extension.enabled ?: true }?.extension?.contributes.orEmpty()["connectors"].orEmpty()
     val roster = LocalManagerRoster.current
-    PinnedExtension(contributed.map { listOf("connectors", it) }, manager)
+    val connectorPins = remember(contributed, owner) { ManagerPins.of(contributed.map { listOf("connectors", it) }, owner) }
     var hubConnectors by remember(connectors, extensionId, manager) { mutableStateOf<List<HubConnector>>(emptyList()) }
-    LaunchedEffect(connectors, contributed) {
+    LaunchedEffect(connectors, contributed, owner) {
         if (connectors == null || contributed.isEmpty()) return@LaunchedEffect
         // The list is every manager's (docs/assistant/managers.md): this page's are its manager's, whose requests it pins below.
         hubConnectors = try {
             connectors.connectors(all = true)
-                .filter { it.id in contributed && roster.ownerOrDefault(it.manager) == roster.ownerOrDefault(manager) }.distinctBy { it.id }
+                .filter { it.id in contributed && roster.ownerOrDefault(it.manager) == owner }.distinctBy { it.id }
         }
         catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() } // the connector's page says what is wrong
     }
     val hasForm = detail != null && !detail.readOnly && detail.form.isNotEmpty()
     // A form of machine lists only saves each switch at once: nothing waits for "Save".
     val waitsForSave = hasForm && detail.form.flatMap { if (it.type == "object") it.fields.orEmpty() else listOf(it) }.any { it.items?.machines != true }
-    JListPage(title = detail?.extension?.name?.ifBlank { null } ?: stringResource(R.string.settings_ext_title), onBack = onBack, largeTitle = false,
-        refreshing = state.loading && detail != null, onRefresh = { scope.launch { model.load() } },
-        bottomBar = if (!waitsForSave) null else ({
-            Row(Modifier.fillMaxWidth().padding(horizontal = pagePadding, vertical = Tokens.Space.s)) {
-                JButton(stringResource(R.string.settings_ext_save), { scope.launch { if (model.save()) feedback?.notice(res.getString(R.string.settings_ext_saved_restart)) } }, Modifier.fillMaxWidth(),
-                    loading = state.saving, enabled = state.canSave)
-            }
-        })) {
-        header(extensionId, state, res, onRetry = { scope.launch { model.load() } })
-        if (auth != null) extensionSignIn(auth, enabled = detail.extension.enabled != false, starting = signInState.bind.sending && signInState.bind.prompt == null,
-            error = signInState.bind.error?.resolve(res)?.takeIf { signInState.bind.prompt == null } ?: signOutError, busy = state.busy,
-            onSignIn = { signOutError = null; scope.launch { signIn.start() } }, onSignOut = { confirmingSignOut = true })
-        if (detail != null && onChannel != null) channelLink(detail, onChannel)
-        if (detail != null) {
-            if (detail.readOnly) item("read-only") {
-                JNotice(stringResource(R.string.settings_ext_read_only), Modifier.padding(top = Tokens.Space.m))
-            } else {
-                item("enabled") {
-                    JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
-                        JSwitchRow(stringResource(R.string.settings_ext_enabled), detail.extension.enabled ?: true, { on -> scope.launch { model.setEnabled(on) } }, enabled = !state.busy)
-                    }
-                }
-                item("enabled-note") { Note(stringResource(R.string.settings_ext_enabled_note)) }
-            }
-            if (detail.extension.autoUpgrade != null) upgrades(detail.extension, state.busy, res, onUpgrade,
-                onToggle = { on ->
+    ExtensionSettingsPage(detail = detail, busy = state.busy || state.saving || state.loading || state.loadFailed,
+        refreshing = state.loading && detail != null, onBack = onBack, onRefresh = { scope.launch { model.load() } }, updates = state.updates,
+        onEnabled = { on -> scope.launch { model.setEnabled(on) } },
+        onAutoUpgrade = { on -> scope.launch {
+            if (model.setAutoUpgrade(on)) feedback?.notice(res.getString(if (on) R.string.settings_ext_auto_upgrade_on else R.string.settings_ext_auto_upgrade_off))
+        } }, onCheck = { scope.launch { model.checkForUpdates() } }, onUpgrade = onUpgrade, onUninstall = { removing = true },
+        configuration = {
+            header(extensionId, state, res, onRetry = { scope.launch { model.load() } })
+            if (detail != null) {
+                if (auth != null) extensionSignIn(auth, enabled = !state.loadFailed, starting = signInState.bind.sending && signInState.bind.prompt == null,
+                    error = signInState.bind.error?.resolve(res)?.takeIf { signInState.bind.prompt == null } ?: signOutError, busy = state.busy,
+                    onSignIn = { signOutError = null; scope.launch { signIn.start() } }, onSignOut = { confirmingSignOut = true })
+                if (onChannel != null) channelLink(detail, onChannel)
+                val pages = detail.ui.filter { auth?.page.isNullOrBlank() || it.id != auth.page }
+                if (onPage != null) extensionPages(pages, onPage)
+                if (connectors != null) connectorInbox(hubConnectors, onConnector) { c, on ->
                     scope.launch {
-                        if (model.setAutoUpgrade(on)) feedback?.notice(res.getString(if (on) R.string.settings_ext_auto_upgrade_on else R.string.settings_ext_auto_upgrade_off))
-                    }
-                })
-            // The extension's own sign-in page is for older apps: this one signs in above (#4507).
-            if (onPage != null) extensionPages(detail.ui.filter { auth?.page.isNullOrBlank() || it.id != auth.page }, onPage)
-            if (connectors != null) connectorInbox(hubConnectors, onConnector) { c, on ->
-                scope.launch {
-                    try {
-                        val changed = connectors.setConnectorFeed(c.id, "inbox", on)
-                        hubConnectors = hubConnectors.map { if (it.id == changed.id) changed else it }
-                    } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                        feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
+                        try {
+                            val changed = withContext(connectorPins ?: EmptyCoroutineContext) { connectors.setConnectorFeed(c.id, "inbox", on) }
+                            hubConnectors = hubConnectors.map { if (it.id == changed.id) changed else it }
+                        } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                            feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
+                        }
                     }
                 }
+                if (hasForm) form(detail, state, model, machineList, onChoose = { field, path -> choosing = field to path })
+                if (!detail.readOnly && detail.secrets.isNotEmpty()) secrets(detail, state, onEdit = { editingSecret = it })
+                if (!hasForm && detail.secrets.isEmpty() && auth == null && (onPage == null || pages.isEmpty()) && hubConnectors.isEmpty() &&
+                    (onChannel == null || detail.extension.contributes.orEmpty()["channel"].isNullOrEmpty()))
+                    item("configuration-empty") { Note(stringResource(R.string.settings_extension_empty)) }
+                if (waitsForSave) item("configuration-save") {
+                    JButton(stringResource(R.string.settings_ext_save), { scope.launch { if (model.save()) feedback?.notice(res.getString(R.string.settings_ext_saved_restart)) } },
+                        Modifier.fillMaxWidth().padding(vertical = Tokens.Space.s), loading = state.saving, enabled = state.canSave)
+                }
             }
-            if (hasForm) form(detail, state, model, machineList, onChoose = { field, path -> choosing = field to path })
-            if (!detail.readOnly && detail.secrets.isNotEmpty()) secrets(detail, state, onEdit = { editingSecret = it })
-            contributions(detail, state.busy || state.saving, res) { item, on -> scope.launch { model.setContribution(item, on) } }
-            sandbox(detail.extension.sandbox)
-            permissions(detail)
-            about(detail, res)
-            // From a market: removed here too, as in the market (docs/extensions/extensions.md "Extension market"), read-only config or not.
-            if (detail.fromMarket) uninstallRow(state.busy) { removing = true }
-        }
-    }
+        }, information = {
+            if (detail != null) {
+                contributions(detail, state.busy || state.saving || state.loadFailed, res) { item, on -> scope.launch { model.setContribution(item, on) } }
+                sandbox(detail.extension.sandbox)
+                permissions(detail)
+            }
+        })
     if (auth != null) ExtensionSignInSheet(auth, detail.extension.name.ifBlank { extensionId }, signInState.bind, signIn)
     if (confirmingSignOut && auth != null) {
         JDialog({ confirmingSignOut = false }, title = res.getString(R.string.settings_ext_auth_sign_out_title, ExtensionAuthText.title(res, auth)),
@@ -279,7 +275,7 @@ fun ExtensionPage(
             })
     }
     val current = detail
-    if (removing && current != null) UninstallDialog(current.extension.name.ifBlank { current.extension.id }, onDismiss = { removing = false }) { keep ->
+    if (removing && current != null) UninstallDialog(current.extension.name.ifBlank { current.extension.id }, onDismiss = { removing = false }, installedVersion = current.extension.version) { keep ->
         removing = false
         scope.launch {
             if (model.uninstall(keep)) {
@@ -337,7 +333,7 @@ private fun LazyListScope.header(id: String, state: ExtensionState, res: Resourc
         item("error") {
             Column(Modifier.padding(top = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JInlineStatus(error, tone = InlineTone.Failed)
-                if (extension == null) JButton(stringResource(R.string.settings_ext_retry), onRetry, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary, enabled = !state.loading)
+                if (extension == null || state.loadFailed) JButton(stringResource(R.string.settings_ext_retry), onRetry, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary, enabled = !state.loading)
             }
         }
     }
@@ -378,60 +374,6 @@ private fun LazyListScope.connectorInbox(list: List<HubConnector>, onOpen: ((Str
             Note(if (c.inbox == true) stringResource(R.string.settings_ext_connector_inbox_on, c.name) else stringResource(R.string.settings_ext_connector_inbox_off))
         }
     }
-}
-
-/**
- * A market extension's upgrades (docs/extensions/extensions.md "Auto-upgrade"): its own switch, its newer version (opening the market's
- * upgrade when it waits for the user) or what happened last.
- */
-private fun LazyListScope.upgrades(
-    extension: HubExtension, busy: Boolean, res: Resources, onUpgrade: ((String, String) -> Unit)?, onToggle: (Boolean) -> Unit,
-) {
-    val upgrade = extension.upgrade
-    val note = if (upgrade == null) extension.upgradeNote?.let { n -> ExtensionText.upgradeNote(res, n)?.let { it to n } } else null
-    val count = 1 + (if (upgrade != null) 1 else 0) + (if (note != null) 1 else 0)
-    // Switched off, the extension is not upgraded: its switch shows off and waits (the hub keeps it) until it is on.
-    val paused = extension.autoUpgradePaused != null
-    item("upgrade-title") { JSectionHeader(stringResource(R.string.settings_ext_upgrade_title)) }
-    item("upgrade-auto") {
-        JGroupItem(GroupPosition.of(0, count)) {
-            JSwitchRow(stringResource(R.string.settings_ext_auto_upgrade), ExtensionText.autoUpgradeShown(extension), onToggle, enabled = !busy && !paused)
-        }
-    }
-    upgrade?.let { u ->
-        item("upgrade-new") {
-            // Only a known market can open the upgrade; without one the line only says.
-            val action = ExtensionText.upgradeAction(res, u)?.takeIf { onUpgrade != null && u.market.isNotBlank() }
-            val detail = ExtensionText.upgradeDetail(res, u).takeIf { it.isNotBlank() }
-            JGroupItem(GroupPosition.of(1, count)) {
-                if (action == null) JRow(stringResource(R.string.settings_ext_new_version, u.to), subtitle = detail, subtitleLines = 4, leadingIcon = PhIcons.ArrowUp)
-                else JRow(stringResource(R.string.settings_ext_new_version, u.to), subtitle = detail, subtitleLines = 4, leadingIcon = PhIcons.ArrowUp,
-                    // Waiting on the user (more permissions, or a version that rolled back) stands out; the rest is a plain link.
-                    value = action.takeUnless { ExtensionText.upgradeAttention(u) },
-                    trailing = if (ExtensionText.upgradeAttention(u)) ({ JTag(action, Tone.Caution) }) else null,
-                    chevron = true, enabled = !busy, onClick = { onUpgrade?.invoke(u.market, u.id.ifBlank { extension.id }) })
-            }
-        }
-    }
-    note?.let { (text, n) ->
-        item("upgrade-note") {
-            JGroupItem(GroupPosition.of(count - 1, count)) {
-                JRow(text, subtitle = n.at?.let(CatalogText::time), subtitleLines = 3,
-                    trailing = if (n.kind == "rolled_back") ({ JIcon(PhIcons.WarningCircle, text, tint = PersonaTheme.palette.needsYou.dot) }) else null)
-            }
-        }
-    }
-    item("upgrade-note-footer") { Note(stringResource(if (paused) R.string.settings_ext_upgrade_paused_footer else R.string.settings_ext_upgrade_footer)) }
-}
-
-/** Removing an extension a market installed, at the end of its page. */
-private fun LazyListScope.uninstallRow(busy: Boolean, onRemove: () -> Unit) {
-    item("uninstall") {
-        JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.l)) {
-            JRow(stringResource(R.string.settings_ext_uninstall), leadingIcon = PhIcons.Trash, destructive = true, chevron = false, enabled = !busy, onClick = onRemove)
-        }
-    }
-    item("uninstall-note") { Note(stringResource(R.string.settings_ext_market_installed_note)) }
 }
 
 private fun LazyListScope.form(detail: ExtensionDetail, state: ExtensionState, model: ExtensionModel, machines: List<ExtensionMachine>, onChoose: (ExtensionField, List<String>) -> Unit) {
@@ -652,49 +594,6 @@ private fun LazyListScope.permissions(detail: ExtensionDetail) {
     item("permissions-note") { Note(stringResource(R.string.settings_ext_permissions_note)) }
 }
 
-private fun LazyListScope.about(detail: ExtensionDetail, res: Resources) {
-    val extension = detail.extension
-    val rows = listOfNotNull(
-        extension.version?.takeIf { it.isNotBlank() }?.let { res.getString(R.string.settings_ext_about_version) to it },
-        detail.previousVersion?.takeIf { it.isNotBlank() }?.let { res.getString(R.string.settings_ext_about_previous) to it },
-        ExtensionText.source(res, extension.source)?.let { res.getString(R.string.settings_ext_about_source) to it },
-        detail.publisher?.takeIf { it.isNotBlank() }?.let { res.getString(R.string.settings_ext_about_publisher) to it },
-    )
-    val origin = detail.origin?.takeIf { it.isNotBlank() }
-    val homepage = detail.homepage?.takeIf { it.startsWith("https://") || it.startsWith("http://") }
-    // The command-line programs this version runs with (#4507): each with its version, the machine's own copy marked.
-    val tools = extension.tools.orEmpty()
-    val count = rows.size + tools.size + listOfNotNull(origin, homepage).size
-    if (count == 0 && extension.warnings.isNullOrEmpty()) return
-    item("about-title") { JSectionHeader(stringResource(R.string.settings_ext_about)) }
-    rows.forEachIndexed { index, (label, value) ->
-        item("about-$label") { JGroupItem(GroupPosition.of(index, count)) { JRow(label, value = value) } }
-    }
-    tools.forEachIndexed { index, tool ->
-        item("about-tool-${tool.name}") {
-            JGroupItem(GroupPosition.of(rows.size + index, count)) {
-                val title = tool.title?.takeIf { it.isNotBlank() }
-                JRow(title ?: tool.name, leadingIcon = PhIcons.TerminalWindow, value = tool.version.takeIf { it.isNotBlank() },
-                    subtitle = listOfNotNull(stringResource(R.string.settings_ext_about_tools), tool.name.takeIf { title != null },
-                        stringResource(R.string.settings_ext_tool_reused).takeIf { tool.reused }).joinToString(stringResource(R.string.settings_ext_dot_separator)))
-            }
-        }
-    }
-    // Where it was installed from is long (a path or an address): it goes under its label, not beside it.
-    origin?.let { item("about-origin") { JGroupItem(GroupPosition.of(rows.size + tools.size, count)) { JRow(stringResource(R.string.settings_ext_about_origin), subtitle = it, subtitleLines = 3) } } }
-    homepage?.let { url ->
-        item("about-homepage") {
-            val uri = LocalUriHandler.current
-            JGroupItem(GroupPosition.of(count - 1, count)) {
-                JRow(stringResource(R.string.settings_ext_about_homepage), leadingIcon = PhIcons.ArrowSquareOut, onClick = { runCatching { uri.openUri(url) } })
-            }
-        }
-    }
-    extension.warnings.orEmpty().forEachIndexed { index, warning ->
-        item("warning-$index") { JInlineStatus(warning, Modifier.padding(top = Tokens.Space.s), tone = InlineTone.Caution) }
-    }
-}
-
 /** Sets one of an extension's secrets: typed in hidden, saved to the hub, never shown again; one that is set can be cleared. */
 @Composable
 private fun ExtensionSecretSheet(
@@ -721,20 +620,16 @@ private fun ExtensionSecretSheet(
 internal fun persona.core.contracts.api.ManagerRoster?.ownerOrDefault(manager: String?): String =
     manager?.takeIf { it.isNotBlank() } ?: this?.defaultManagerId ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
 
+/** An extension's own requests' paths (`extensions/<id>/…`, `plugins/<id>/…` on an older hub). */
+internal fun extensionPrefixes(extensionId: String) = listOf(listOf("extensions", extensionId), listOf("plugins", extensionId))
+
 /**
- * While an extension's page is open, its requests (`extensions/<id>/…`, `plugins/<id>/…` on an older hub) name [manager]:
- * the same id may be installed under several managers (each one's built-ins, docs/assistant/managers.md), and the default's own
- * keep going to it elsewhere.
+ * [extensions] naming [manager] on its requests under [prefixes] (segments under /api/v1), for an extension's page to hand
+ * its models: the same id may be installed under several managers (each one's built-ins, docs/assistant/managers.md), and
+ * the default's own keep going to it elsewhere. Only the requests made through it are pinned.
  */
 @Composable
-internal fun PinnedExtension(extensionId: String, manager: String?) =
-    PinnedExtension(listOf(listOf("extensions", extensionId), listOf("plugins", extensionId)), manager)
-
-/** Requests under each of [prefixes] (segments under /api/v1) name [manager] while this is shown. */
-@Composable
-internal fun PinnedExtension(prefixes: List<List<String>>, manager: String?) {
-    DisposableEffect(prefixes, manager) {
-        val release = persona.core.contracts.api.AssistantManagerChoice.pin(prefixes, manager)
-        onDispose { release() }
-    }
+internal fun rememberPinned(extensions: ExtensionManagement, prefixes: List<List<String>>, manager: String?): ExtensionManagement {
+    val pins = remember(prefixes, manager) { ManagerPins.of(prefixes, manager) }
+    return remember(extensions, pins) { extensions.pinned(pins) }
 }

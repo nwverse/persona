@@ -9,7 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -251,10 +251,12 @@ func explainDenied(path, home string, err error) error {
 		return err
 	}
 	exe, _ := os.Executable()
-	return explainDeniedFor(path, home, launchedVia(os.Getenv), exe, err)
+	via := launchedVia(os.Getenv)
+	return explainDeniedFor(path, home, via, fullDiskAccessProgram(via, home, os.Getenv("XPC_SERVICE_NAME"), exe), err)
 }
 
-// explainDeniedFor is explainDenied for a node started via ("ssh", "launchd" or "") from the program exe.
+// explainDeniedFor is explainDenied for a node started via ("ssh", "launchd" or ""), exe the program macOS holds it
+// to under launchd (fullDiskAccessProgram).
 func explainDeniedFor(path, home, via, exe string, err error) error {
 	if !errors.Is(err, fs.ErrPermission) {
 		return err
@@ -267,11 +269,11 @@ func explainDeniedFor(path, home, via, exe string, err error) error {
 	switch via {
 	case "ssh": // TCC holds what ssh starts to account against sshd-keygen-wrapper, not to personad
 		how = "打开 sshd-keygen-wrapper（Persona 经 ssh 在这台 Mac 上运行）"
-	case "launchd": // a LaunchAgent's program answers for itself
+	case "launchd": // a LaunchAgent's program answers for itself and what it starts (fullDiskAccessProgram)
 		if exe == "" {
 			exe = "personad"
 		}
-		how = "点「+」加上 " + exe + " 并打开它（Persona 的常驻 node 由 launchd 启动；它更新后又读不了的话，把开关关了再打开）"
+		how = "点「+」加上 " + exe + " 并打开它（Persona 的 node 由 launchd 服务启动，macOS 按这个服务运行的程序给权限；它更新后又读不了的话，把开关关了再打开）"
 	default:
 		how = "打开运行 Persona node 的终端或 App"
 	}
@@ -335,7 +337,8 @@ func (n *Node) expandPath(path, cwd string) string {
 	return filepath.Clean(path)
 }
 
-// listDir lists a directory for the file tree: directories first, then files, each by name (case-insensitive).
+// listDir lists a directory for the file tree in treeOrder. A folder over maxDirEntries keeps the first maxDirEntries in
+// that order, so the order is decided on every entry before the cap; only the kept ones pay for a stat (e.Info).
 func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 	path, real, err := n.resolveDir(path, cwd)
 	if err != nil {
@@ -345,28 +348,51 @@ func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
 	}
-	list := make([]DirEntry, 0, min(len(ents), maxDirEntries))
-	for _, e := range ents {
-		if len(list) >= maxDirEntries {
-			break
+	all := n.treeOrder(real, ents)
+	list := make([]DirEntry, min(len(all), maxDirEntries))
+	for i := range list {
+		list[i] = all[i].DirEntry
+		if info, err := all[i].e.Info(); err == nil {
+			list[i].Size, list[i].ModTime = info.Size(), info.ModTime()
 		}
+	}
+	markIgnored(real, list)
+	return map[string]any{"path": path, "entries": list, "truncated": len(ents) > maxDirEntries}, nil
+}
+
+// treeEntry is a folder entry as the file tree shows it, before its size and time are read.
+type treeEntry struct {
+	DirEntry
+	key string // lowercased name, computed once rather than in every comparison
+	e   os.DirEntry
+}
+
+// treeOrder sorts the entries of the folder real the way the file tree shows them: directories first, then files, each
+// by name (case-insensitive, byte order breaking ties). Links are followed (statSafe) so linked directories sort and
+// open like directories (not into iCloud Drive); nothing else is stat'ed. listDir and dirSignature both cap this order,
+// so the folder watch looks at the entries the tree shows.
+func (n *Node) treeOrder(real string, ents []os.DirEntry) []treeEntry {
+	all := make([]treeEntry, len(ents))
+	for i, e := range ents {
 		d := DirEntry{Name: e.Name(), Dir: e.IsDir(), Symlink: e.Type()&os.ModeSymlink != 0}
-		if info, err := e.Info(); err == nil {
-			d.Size, d.ModTime = info.Size(), info.ModTime()
-		}
-		if d.Symlink { // follow links so linked directories open like directories (not into iCloud Drive)
+		if d.Symlink {
 			if _, st, err := n.statSafe(filepath.Join(real, d.Name)); err == nil {
 				d.Dir = st.IsDir()
 			}
 		}
-		list = append(list, d)
+		all[i] = treeEntry{DirEntry: d, key: strings.ToLower(d.Name), e: e}
 	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].Dir != list[j].Dir {
-			return list[i].Dir
+	slices.SortFunc(all, func(a, b treeEntry) int {
+		if a.Dir != b.Dir {
+			if a.Dir {
+				return -1
+			}
+			return 1
 		}
-		return strings.ToLower(list[i].Name) < strings.ToLower(list[j].Name)
+		if c := strings.Compare(a.key, b.key); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
 	})
-	markIgnored(real, list)
-	return map[string]any{"path": path, "entries": list, "truncated": len(ents) > maxDirEntries}, nil
+	return all
 }

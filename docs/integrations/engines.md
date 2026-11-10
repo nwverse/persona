@@ -96,9 +96,9 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 | Keys (Enter, Esc, arrows…), interrupt | Yes | Yes | Yes | Interrupt only |
 | Answer dialogs (permissions, options) | Yes | Yes (screen-based) | Yes (screen-based) | Yes (cards, also answerable in Paseo app) |
 | Close sessions from phone | Yes | Yes | Yes | Backend supports archiving in Paseo; app button currently only for terminal sessions |
-| Create / continue Not running sessions from phone | Yes | No | Yes (create; continue a Not running Claude session in a new terminal, #5548) | Yes (each Paseo provider is a launcher) |
+| Create / continue Not running sessions from phone | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; continue a Not running Claude session in a new terminal, #5548) | Yes (each Paseo provider is a launcher) |
 | Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | No | Yes (Orca creates it under the original workspace and owns the checkout directory) | No |
-| Rename spaces / tabs | Yes | No | No | No (backend supports session names; app button currently only for terminal sessions) |
+| Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | No | No (backend supports session names; app button currently only for terminal sessions) |
 | Live terminal, phone takeover | Yes | No | No | No (no terminal) |
 | Colored screen reads, draft detection | Yes | No (plain text, dialogs only) | No (plain text, dialogs only) | No (no terminal) |
 | Change permission mode / thinking effort | Yes | Supported, untested | Supported, untested | Yes (end-to-end tested) |
@@ -109,17 +109,27 @@ Orca's native Claude chats (structured, no terminal) connect through node's brid
 answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
 Codex chats not listed in this version. See `docs/plans/plan-orca-support.md` ("Structured sessions").
 
-Unsupported actions explain failure instead of partially acting. Herdr App rejects sending without entering anything when Claude is not foregrounded (suspended / exited), and Orca does when its pane is still
+Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with Claude not in front, saying "Claude is not in foreground (possibly suspended); nothing sent," or asking to reopen on the computer.
 
-Orca New Agent creates terminals inside already-open Orca workspaces or subdirectories, starting in the selected directory. Unopened Git-repository directories attempt automatic registration; any other directory gets a terminal in the first local Orca workspace that `cd`s there (refused only when Orca has no workspace open). It never takes over an existing terminal.
+Orca New Agent creates terminals inside already-open Orca workspaces or subdirectories, starting in the selected directory. Unopened Git-repository directories attempt automatic registration; any other directory gets a terminal in the first local Orca workspace that `cd`s there (refused only when Orca has no workspace open). The `cd` is typed into the shell's line editor, so a directory whose name holds a control character (a tab, a line break) is refused before any terminal opens (`directory_untypable`). It never takes over an existing terminal.
 Resume of a running session returns it. A Claude session whose agent exited is continued like on herdr (#5548): a new terminal in the Orca workspace holding its directory (the same rules as New Agent), `cd` there, the launcher that started it with `--resume`, then the message. Never a second writer: a session a live claude still has open (Claude's desktop app, another terminal, suspended) is refused (`open_elsewhere`), and so is one whose last pane is still open (its agent may be suspended there; close the pane to resume elsewhere). A session an Orca native chat owns is refused too. Codex, TRAEX and pi sessions are not resumed in Orca. Orca's own `terminal create --agent claude --resume` is not used: it exists only in some Orca builds' CLI, and it starts Orca's claude command, not the session's launcher.
+
+Herdr App New Agent (#2532) opens a terminal the way the app does (the machine's shell, kept, with the app's terminal identity) as a new tab of
+the Herdr App space whose folder matches the directory, else of a new space for the directory, and adds it to the app's layout document, so the app
+shows it like a tab opened there. The core's returned shell determines command syntax, file sourcing and startup probes; an unknown foreground
+never receives a start command. The document is edited, never replaced: only that tab (and space) is added, at the version read, redone after a
+conflict, including folder selection and terminal labels. When there is no layout document (Herdr App never ran on this core) or it is in a form
+Persona does not know, nothing is written and an automatic start opens outside the app's spaces, grouped by its directory. A start explicitly
+targeting an app space is refused if its layout or space cannot be resolved. A Not running session is
+continued as on herdr: a new tab, its launcher with `--resume`. Space and tab renames write the same document.
 
 Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 
 - Agents merges sessions; spaces / tabs, state, screen reads, messages, keys, closing route to the pane's own host, as when selected alone.
-- **Phone create / continue Not running / space rename use classic herdr** (complete capabilities). Continuing an exited Herdr App session from phone
-  opens a new herdr pane with `--resume` (same Claude session ID, continuous history, different window). herdr-core live terminal / phone takeover remain unavailable.
+- **Phone create / continue Not running / space rename use classic herdr** (complete capabilities); New Agent can also be pointed at Herdr App
+  in its host picker. Continuing an exited Herdr App session from phone opens a new herdr pane with `--resume` (same Claude session ID, continuous
+  history, different window). herdr-core live terminal / phone takeover remain unavailable.
 - Neither slows the other: snapshots fetched concurrently with separate timeouts; herdr-core events refresh only herdr-core,
   herdr events only herdr; a failed side clears only its own online state.
 - Available only when both herdr and herdr-core are detected (can preselect offline, effective on reconnect; if only one exists,
@@ -169,6 +179,42 @@ Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
 - **To-dos**: attach by session ID as usual; project-wide grouping uses botmux session cwd.
 - Live test: `go test -tags botmuxlive -run BotmuxLive ./internal/node/ -v` (read-only listing plus one dry-run delivery: validation / rendering, no dispatch).
 
+## Named herdr sessions (#2196)
+
+herdr can run more than one server per account: besides the default one, named sessions (`herdr --session <name>`, listed by
+`herdr session list`), each with its own socket under `<herdr config dir>/sessions/<name>/` and its own ids, so `w4:p1` can be a pane of two
+of them at once. A node on the default herdr server drives every **running** named session as part of the herdr engine
+(`node/hostherdr_sessions.go`):
+
+- **Ids**: a named session's pane, tab and workspace ids are `@<session>:<id>` (`@build:w4:p1`, `herdr.QualifyID`); the default server's stay
+  bare, so stored rows, hooks and clients read as before. No host kind starts with `@`, so the hub and every client take them for herdr panes, and they
+  hold no `/` a path could split on. Sessions and their live rows are listed, read, sent to, interrupted, closed, renamed, split, streamed (observe,
+  control, the full herdr view) and given resume commands on the session the id names; ids herdr hands back (a split, a new tab, a worktree) are
+  qualified again.
+- **Showing the session**: a named session's spaces are labelled `<session> · <workspace label>`. Renaming one sets herdr's label without that
+  prefix (typed or not), and `space.rename` answers the name the space shows now, which the hub keys pins, mutes and to-do links by.
+- **Left alone**: stopped sessions, the `persona-<hash>` sessions of other nodes' data directories (`herdr/session.go`), names that cannot stand in an
+  id, and every other session on a node that runs on a session of its own or on a socket `HERDR_SOCKET_PATH` moved. Windows drives the default server only.
+- **Pane identity from processes**: hooks, MCP calls, the pi extension (`herdrPaneOf`) and the process scans read `HERDR_SESSION` (or the session
+  directory in `HERDR_SOCKET_PATH`) with `HERDR_PANE_ID` (`herdr.EnvSession`, `herdr.PaneOf`), so a hook in a named session's `w4:p1` never binds
+  the default server's `w4:p1`. Hooks, MCP calls and the pi extension write panes as the default server sees them (`nodeclient.HookPane`), and the
+  node translates them where they come in (`node ownPane`: the node socket, the standby spool, runtime hints); the node's own process scans write
+  them as its herdr host does (`node envPane`). The two differ only on a node whose own server is a named session: its own session's panes are bare
+  there, and the default server's are `@default:<id>`, which it does not drive.
+- **Never in the default server's way**: `herdr session list` runs in the background, again once the list is 5 s old; an id of a session the list
+  does not have makes the node ask again (at most once a second) and wait up to 6 s for the answer. Each listing asks the named sessions alongside
+  the default server and waits at most 2 s from its start for them (and, the first time, for the list); what a session has not answered by then
+  comes from its last answer, with one call to it out at a time. The default server failing is the herdr host failing, as before: while it is down
+  the herdr host lists nothing, the named sessions included, and keeps its last list. Each server has its own event stream; the named ones are
+  looked at again every 5 s (a session started since gets one, a stopped one's ends), and one that ends is opened again on its own.
+- **Pane-less work stays on the default server**: new workspaces, and new sessions started without naming a workspace (a named session's labels
+  never match a start's directory name). A start, a new tab or a worktree in a named session's workspace opens there.
+- **Focus** following (`herdr.client.focus`) is the default server's: it is the computer's own herdr window. Focusing a named session's pane works
+  but brings no echo back. A full herdr view is attached to one server (the session of the pane it opened on): asked to show a pane of another
+  session it ends, and opening it again attaches to that session.
+- **Known gap**: the iPhone and Android apps rename a space optimistically under the name typed; for a named session's space the name shown
+  (`<session> · <name>`) differs, so they show the typed name until the app reloads. The web and the hub use the name `space.rename` answers.
+
 ## When herdr is not running
 
 After reboot, launchd / systemd starts node, but no terminal has started classic `herdr` server (#1879). Node starts it on demand:
@@ -180,7 +226,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   Linux systemd-user nodes instead use `systemd-run --user --unit=persona-herdr-server` (stopping the node unit kills its whole cgroup).
   Wait for connectable socket (at most 20 seconds) before create / continue.
 - **Clean environment**: herdr server passes its environment to every pane and claude. Node uses `env -i` with only `HOME`, `USER`, `LOGNAME`, `TMPDIR`, language,
-  `XDG_*`, `HERDR_SOCKET_PATH`, `PERSONA_HOME` (panes find the node socket in that directory), then user's login shell (`$SHELL -l -c 'exec herdr server'`; if launchd has no `SHELL`, read account login shell).
+  `XDG_*`, `HERDR_SOCKET_PATH`, `HERDR_SESSION`, `HERDR_CONFIG_PATH` (the server reads the config file the node reads for the worktrees directory), `PERSONA_HOME` (panes find the node socket in that directory), then user's login shell (`$SHELL -l -c 'exec herdr server'`; if launchd has no `SHELL`, read account login shell).
   PATH comes from that shell; no node / launcher `ANTHROPIC_*` or proxy variables. Find herdr on node PATH first, then ask login shell.
 - **What a start types** (#744, `node/agentenv.go`): a pane has its engine's environment, not the node's. A herdr server started some other way, or Orca's app, may lack the node's `PERSONA_HOME`, and an engine started from the assistant's Bash tool hands the assistant's own variables to every pane.
   So every command the node types into a pane to start or resume an Agent (Claude, Codex, compatible CLIs, pi; herdr's `resume_argv` too) does two things:
@@ -211,6 +257,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   One read failure does not remove existing notices; endpoint 404 stops polling that machine. Start shows "Starting…"; failures show localized known reasons inline (immediate exit / killed, missing, no response, old node, offline, timeout, `HerdrFailure.says`; unknown reasons remain raw). Keep button; raw hub text, status, request ID under long-press / context-menu Copy details, not body.
   After success, use POST result for that machine during this run until hub also reports running (GET may still use connection-time value). Web same (`web/src/lib/herdr-notice.ts`, `views/agents/HerdrNotices.tsx`), below filters in sidebar / mobile Agents section, polling every 10 seconds while visible,
   same rules / localized failures, with raw hub text, status, request ID (`X-Request-Id`) in Copy details button / context menu.
+- **While it is not running**: the node keeps asking herdr for its sessions about twice a second. With no socket it falls back to the herdr CLI, which can reach a server the socket cannot (another session, an older herdr). Once the CLI says no server runs (`server_not_running`), calls without a socket return that same answer without running herdr for 1 s, then 2 s, 4 s, … up to 30 s; the socket answering, or the CLI finding a server, ends the wait at once (`herdr.Client.call`). A computer with herdr installed and its server stopped used to run herdr twice a second (about 140 runs a minute, 240 ms of CPU a minute between the node and those runs; about 20 ms now). A started server is found on the next poll through its socket, so starting it from the phone or a terminal shows its sessions as fast as before.
 - **Failure**: still `engine_missing`. Missing herdr copy unchanged; installed-but-failed says "Automatic start also failed." Details include exit code / final output lines,
   output in `persona/herdr/persona-herdr-server.log` under the user's cache folder (`~/.cache` on Linux, `~/Library/Caches` on macOS; a folder of the node's own in the temp folder when there is none), also node logs. No autostart on Windows; behavior unchanged.
 

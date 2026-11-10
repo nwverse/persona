@@ -185,6 +185,13 @@ While the assistant process is restarting or disconnected from hub, **receivers 
 With `push`, a channel can enable `pushes` (send a copy when `notify_user` pushes to the phone; also send scheduled-task chat answers) and `sync` (send the answer when a main chat turn started outside this channel ends).
 The Lark bot already had both; extension channels use the same switches, off by default.
 
+When a `notify_user` copy reaches a channel with `pushes` on, that channel skips the main-chat or scheduled-task mirror
+for that conversation during the existing three-minute deduplication window. Delivery is tracked separately for each
+channel and conversation (machine and session): the Lark bot records delivery after its first card succeeds (or a
+notifications companion accepts the push); an extension channel records it only after all text pieces are sent.
+A failed push leaves that channel's mirror eligible, regardless of whether another channel received its copy.
+A channel with `pushes` off and `sync` on still receives main-chat mirrors.
+
 ### Source markers
 
 - **Per message**: channel messages sent into chats have `client_msg_id = <channel id>-<message id>` (the Lark bot has always used `feishu-…`, WeChat `wechat-…`), and node carries it onto the transcript item (`Item.client_msg_id`).
@@ -264,7 +271,7 @@ The WeChat extension runs it (`TestWeChatProgramIsAChannel` in `extmgr/wechat_te
 
 Every call above is described in `schema/extension/channel.schema.json` (its `x-methods`), with the SDKs' types generated from it. With the Go SDK alone: answer the `channel` namespace with `ext.Methods{"send": ext.Method(…), "typing": …}.For(<channel id>)`, hand over the owner's messages with `ext.Hub.ChannelReceive`, refuse with `ext.CannotSend` while there is nowhere to send to, and test it with `exttest.CheckChannels` (the conformance checks above, every message held to the schema). `channel/conformance.Check` holds every message both ways to the schema too.
 
-In the server's own tree, use `connector/serve.MainWith`; the connector implements `channel.Transport` (`Send`, optional `Typing`, `Edit`), and calls the `channel.Hub.Receive` supplied by `serve` on incoming messages.
+In the server's own tree, do the same: the WeChat program (`server/plugins/wechat`) is the SDK's `ext.Serve` with these methods and `ext.Hub.ChannelReceive`. `connector/serve`'s runner is left only for the conformance kit and tests.
 Other languages follow the protocol above, one JSON line per message (`docs/extensions/extensions.md` ("Process extension protocol")).
 
 ## 5. Compatibility and migration

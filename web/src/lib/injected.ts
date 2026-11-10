@@ -3,10 +3,11 @@ import { t } from "../i18n";
 import type { Todo } from "./todos";
 import type { Injected, Item } from "./types";
 import { timeMs } from "./times";
+import { userSourceSentinel } from "./message-source";
 
 // Messages Persona types into a conversation for the model (a task's notice, a scheduled run, a wake-up, the
 // background tasks a node restart stopped): one line instead of a user bubble, never the instructions inside
-// (docs/protocol/protocol.md "Messages Persona injects"). The hub marks them (`injected`); an older hub does not, so the text is read
+// (docs/protocol/protocol.md "Messages injected by Persona"). The hub marks them (`injected`); an older hub does not, so the text is read
 // the same way it does (prompts.ParseInjected; spec/fixtures/injected is shared with it).
 
 const NOTICE_HEAD = /^🔔 任务「(.+)」(做完了|在等用户|被模型服务出错打断了|没开起来)(?:（(.+)）)?$/u; // i18n-ignore: matches the hub's injected text
@@ -81,7 +82,7 @@ export function injectedOf(it: Item): Injected | null {
     const n = it.injected;
     return n.state === "supervise" && n.level === undefined ? { ...n, level: parseInjected(it.text ?? "")?.level ?? "triage" } : n;
   }
-  if (it.client_msg_id || it.from) return null;
+  if (it.client_msg_id || it.from || userSourceSentinel(it.text ?? "")) return null;
   return parseInjected(it.text ?? "");
 }
 

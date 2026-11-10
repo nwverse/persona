@@ -24,7 +24,7 @@ nonisolated enum PushCrypto {
     private static let service = "persona.push"
     private static let account = "push-key"
 
-    /// Each group of hubs seals to a key of its own (docs/protocol/multi-hub.md「推送」): the default group's is the one the
+    /// Each group of hubs seals to a key of its own (docs/protocol/multi-hub.md「Push and notifications」): the default group's is the one the
     /// phone always had, another group's has the group's id after it. The key that opens a push says whose it is.
     static func account(group: String) -> String { group.isEmpty ? account : account + "." + group }
 
@@ -155,8 +155,9 @@ nonisolated enum PushCrypto {
         return obj
     }
 
-    /// Puts an opened payload on the notification: the texts, the buttons (category), the thread, how loud, and the ids the
-    /// app reads when it is tapped. Only what the payload has replaces the fallback.
+    /// Puts an opened payload on the notification: the texts, the buttons (category), the thread, how loud, the sound, and
+    /// the ids the app reads when it is tapped. Only what the payload has replaces the fallback, except the sound: the
+    /// relay's fallback always rings, and a sealed aps without one (`notify --silent`, quiet hours) is a quiet notification.
     static func apply(_ payload: [String: Any], to content: UNMutableNotificationContent) {
         let aps = payload["aps"] as? [String: Any] ?? [:]
         if let alert = aps["alert"] as? [String: Any] {
@@ -173,6 +174,11 @@ nonisolated enum PushCrypto {
         case "passive": content.interruptionLevel = .passive
         case "active": content.interruptionLevel = .active
         default: break
+        }
+        switch aps["sound"] {
+        case nil: content.sound = nil
+        case is String: content.sound = .default // the hub sends only "default" (named sounds don't exist on watchOS)
+        default: break // a critical-alert dictionary: the hub sends none, so the fallback's stays
         }
         // The service extension removes the sealed marker; only authenticated payload fields may reach app routing.
         var info: [AnyHashable: Any] = [:]

@@ -2,8 +2,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("../assistant/TaskPanel", () => ({ AgentPanel: () => null, TaskPanel: () => null }));
-vi.mock("../chat/SubagentPanel", () => ({ SubagentPanel: () => null }));
 vi.mock("../../lib/use-fs-live", () => ({ useFsLive: () => {} }));
 import type { GitStatus } from "../../lib/files";
 import { getQuotes, setQuotes } from "../../lib/drafts";
@@ -120,6 +118,60 @@ describe("GitPanel writes", () => {
     expect(last().body).toEqual({ cwd: "/projects/demo", set_upstream: true });
   });
 
+  it("pulls on any hub, without git_write too, and shows the status it answers (#1887)", async () => {
+    mount(false);
+    await act(async () => last().answer(status({ ahead: 1, behind: 2 })));
+    expect(button(t("session-gitwrite.push"))).toBeUndefined();
+    act(() => button(t("session-gitwrite.pull"))!.click());
+    expect(last().path).toContain("/machines/computer/git/pull");
+    expect(last().body).toEqual({ cwd: "/projects/demo" });
+    expect(button(t("session-gitwrite.pulling"))).toBeDefined();
+    await act(async () => last().answer({ status: status({ ahead: 1, behind: 0, head: { hash: "b2", short: "b2", subject: "Theirs", author: "Author" } }), updated: true }));
+    expect(button(t("session-gitwrite.pull"))).toBeDefined();
+    expect(document.querySelector(`[title="${t("session-gitpanel.behind", { count: 2 })}"]`)).toBeNull();
+  });
+
+  it("offers Pull beside Push when the branch is both ahead and behind, and none without an upstream", async () => {
+    mount(true);
+    await act(async () => last().answer(status({ ahead: 1, behind: 2 })));
+    expect(button(t("session-gitwrite.pull"))).toBeDefined();
+    expect(button(t("session-gitwrite.push"))).toBeDefined();
+    act(() => root.unmount());
+    root = createRoot(host);
+    mount(true);
+    await act(async () => last().answer(status({ upstream: undefined })));
+    expect(button(t("session-gitwrite.pull"))).toBeUndefined();
+  });
+
+  it("a refused pull says why in the refusal dialog", async () => {
+    mount(true);
+    await act(async () => last().answer(status({ behind: 2 })));
+    act(() => button(t("session-gitwrite.pull"))!.click());
+    await act(async () => last().answer({ error: "git pull: Not possible to fast-forward, aborting.", code: "git_failed" }, 409));
+    expect(document.querySelector("[role=dialog]")!.textContent).toContain("Not possible to fast-forward");
+  });
+
+  it("a branch whose upstream was deleted is not up to date, has nothing to pull, and its push asks to publish it again", async () => {
+    mount(true);
+    await act(async () => last().answer(status({ gone: true })));
+    expect(document.body.textContent).toContain(t("session-gitpanel.upstream_gone"));
+    expect(document.body.textContent).not.toContain(t("session-gitpanel.in_sync"));
+    expect(button(t("session-gitwrite.pull"))).toBeUndefined();
+    act(() => button(t("session-gitwrite.push"))!.click());
+    expect(document.body.textContent).toContain(t("session-gitwrite.push_gone", { branch: "fix/login", upstream: "origin/fix/login" }));
+    const confirm = [...document.querySelectorAll("[role=dialog] button")].find((b) => b.textContent?.trim() === t("session-gitwrite.push")) as HTMLButtonElement;
+    act(() => confirm.click());
+    expect(last().path).toContain("/git/push");
+    expect(last().body).toEqual({ cwd: "/projects/demo", set_upstream: false });
+  });
+
+  it("offers no push on a branch level with its upstream", async () => {
+    mount(true);
+    await act(async () => last().answer(status()));
+    expect(document.body.textContent).toContain(t("session-gitpanel.in_sync"));
+    expect(button(t("session-gitwrite.push"))).toBeUndefined();
+  });
+
   it("says a refusal with git's words and the files it lists", async () => {
     mount(true);
     await act(async () => last().answer(status()));
@@ -129,6 +181,19 @@ describe("GitPanel writes", () => {
     expect(dialog.textContent).toContain(t("session-gitwrite.refused_git_conflict"));
     expect(dialog.textContent).toContain("src/new.ts");
     expect(dialog.textContent).toContain("index.lock");
+  });
+
+  it("reads the status again after a refusal, which may have changed the tree (#1885)", async () => {
+    mount(true);
+    await act(async () => last().answer(status()));
+    const reads = () => pending.filter((p) => p.path.includes("/git/status?")).length;
+    const before = reads();
+    act(() => button(t("session-gitwrite.stage_file", { name: "src/new.ts" }))!.click());
+    await act(async () => last().answer({ error: "git stash: CONFLICT (content): Merge conflict in src/login.ts", code: "git_stash_conflicted", files: ["src/login.ts"] }, 409));
+    expect(reads()).toBe(before + 1);
+    const dialog = document.querySelector("[role=dialog]")!;
+    expect(dialog.textContent).toContain(t("session-gitwrite.refused_git_stash_conflicted"));
+    expect(dialog.textContent).toContain("src/login.ts");
   });
 
   it("hands a review thread to the agent and asks before merging", async () => {

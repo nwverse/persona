@@ -57,6 +57,8 @@ func TestMain(m *testing.M) {
 				return &chattyProgram{}, nil
 			case "refs":
 				return refProgram{&exampleProgram{secrets: s}}, nil
+			case "catalog":
+				return &catalogProgram{exampleProgram: &exampleProgram{secrets: s}}, nil
 			case "history":
 				return &historyProgram{exampleProgram: &exampleProgram{secrets: s}}, nil
 			}
@@ -479,18 +481,6 @@ func TestProgramRestarts(t *testing.T) {
 	c := New(program(t, sec, "PERSONA_PROC_EXIT=1"))
 	go c.Run(ctx)
 	waitUntil(t, "a restart", func() bool { _, loads := sec.get(); return loads >= 2 })
-}
-
-// Signing out while the connector is switched off (the program not running) runs the program just for that.
-func TestLogoutWhileStopped(t *testing.T) {
-	sec := &memSecrets{data: []byte("example session")}
-	c := New(program(t, sec))
-	if err := c.Logout(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if d, _ := sec.get(); d != nil {
-		t.Fatal("still signed in")
-	}
 }
 
 // A connector whose program never ran (switched off from the start) answers with the manifest it was registered

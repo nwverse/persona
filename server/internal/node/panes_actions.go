@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What the terminal browser's and the sidebar's context menus change on a computer (docs/integrations/terminal.md "Node menu"):
+// What the terminal browser's and the sidebar's context menus change on a computer (docs/integrations/terminal.md "Node menus"):
 // close a tab or a pane, split a pane, rename a tab, run an agent in a plain shell pane, and fetch / pull / push in a
 // pane's directory. The hub lets only a full device call them. Every call names a pane, tab or workspace the host
 // lists; none of them names a directory or a command, so a menu cannot be turned into a way to run anything.
@@ -204,10 +204,13 @@ func adoptedPane(ctx context.Context) *host.Created {
 }
 
 // paneShells are the shells that read what a start types (typedHerdrAgent): the programs in front of the pane the
-// user picked, else the shell herdr opens a tab with.
-func paneShells(ctx context.Context) []string {
+// user picked, else the shell the host opened, falling back to herdr's shell when the host does not report one.
+func paneShells(ctx context.Context, created *host.Created) []string {
 	if a, ok := ctx.Value(adoptedPaneKey{}).(adopted); ok {
 		return a.shells
+	}
+	if created.Shell != "" {
+		return []string{created.Shell}
 	}
 	return []string{herdrPaneShell()}
 }
@@ -232,7 +235,7 @@ func (n *Node) runAgentInPane(ctx context.Context, pane, launcher string) (*prot
 	if err != nil {
 		return nil, err
 	}
-	launch, err := hostCap[host.Launcher](n)
+	launch, err := n.launcherFor(n.defaultKind())
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +376,8 @@ func (n *Node) gitOp(ctx context.Context, dir, op string) (proto.PaneGitResult, 
 		if st.Upstream == "" {
 			return res, errors.New("没有上游分支，请先在电脑上设置上游")
 		}
-		if st.Ahead == 0 {
+		// a deleted upstream counts nothing ahead: the push below publishes the branch there again
+		if st.Ahead == 0 && !st.Gone {
 			res.Message = "没有要推送的提交"
 			return res, nil
 		}

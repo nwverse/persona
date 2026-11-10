@@ -77,7 +77,8 @@ import persona.core.navigation.Navigator
  * A thread that is not a chat (a pull request, a notice) or that cannot be read falls back to the item's own page.
  */
 @Composable
-internal fun ConnectorThreadScreen(repository: InboxRepository, connectors: ConnectorsManagement, route: ConnectorThreadRoute, navigator: Navigator) {
+internal fun ConnectorThreadScreen(repository: InboxRepository, connectors: ConnectorsManagement, route: ConnectorThreadRoute, navigator: Navigator,
+    pins: persona.core.contracts.api.ManagerPins? = null) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val record = inbox.records.inboxRecord(route.itemId)
     val ref = record?.connector
@@ -85,7 +86,9 @@ internal fun ConnectorThreadScreen(repository: InboxRepository, connectors: Conn
         InboxItemDetailScreen(repository, InboxItemDetailRoute(route.itemId), navigator)
         return
     }
-    val model = remember(record.source, ref.thread) { ConnectorThreadModel(connectors, record.source, ref.thread) }
+    val model = remember(record.source, ref.thread, pins) {
+        ConnectorThreadModel(connectors, record.source, ref.thread, pins ?: kotlin.coroutines.EmptyCoroutineContext)
+    }
     val state by model.state.collectAsStateWithLifecycle()
     // Again when the item moves (a new message came in).
     LaunchedEffect(model, record.item.updatedAt) { model.load() }

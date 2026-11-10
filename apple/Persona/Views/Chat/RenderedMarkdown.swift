@@ -6,7 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
-/// Formulas (KaTeX) and diagrams (Mermaid) drawn into pictures for Markdown (docs/apple/ios.md「公式和图」): one hidden web
+/// Formulas (KaTeX) and diagrams (Mermaid) drawn into pictures for Markdown (docs/apple/ios.md「Math and diagrams」): one hidden web
 /// view loads the bundled `render.html` (no network: its content security policy and a rule list block everything
 /// but the bundle), draws one thing at a time and snapshots it; pictures are kept in memory and on disk by what was
 /// drawn. Formulas are drawn black and shown as template images, so they take the text's color in both appearances;
@@ -56,6 +56,9 @@ final class MarkdownRenderer {
         let key = Self.key(kind, source, dark: dark, points: points)
         if let image = images.object(forKey: key as NSString) { return image }
         if let message = failures[key] { throw Failure(message: message) }
+        // A Full Page strip waits for this (#1609).
+        let fullPageLoad = FullPageLoads.shared.begin()
+        defer { FullPageLoads.shared.end(fullPageLoad) }
         let file = dir.appending(path: key + ".png")
         let scale = Self.screenScale, template = kind != .mermaid
         if let image = await Task.detached(priority: .userInitiated, operation: { Self.decode(file, scale: scale, template: template) }).value {

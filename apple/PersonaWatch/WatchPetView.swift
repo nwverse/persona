@@ -2,6 +2,7 @@ import CryptoKit
 import ImageIO
 import SwiftUI
 import WatchKit
+import WidgetKit
 
 /// The Milk Frog's files on this watch (docs/apple/persona.md "The Milk Frog on the watch"): fetched from the hub, by hash,
 /// and shown only once all of them are here. An older hub has none, and the watch simply shows no frog.
@@ -84,7 +85,8 @@ private final class WatchPetFrames: Sendable {
     }
 }
 
-/// Plays one clip. While the wrist is down the system stops the animation, so it draws the clip's still frame.
+/// Plays one clip. While the wrist is down the system stops the animation, so it draws the clip's still frame; with
+/// Reduce Motion it draws that frame too.
 private struct WatchPetClipView: View {
     let url: URL
     let clip: WatchPetManifest.Clip
@@ -92,10 +94,13 @@ private struct WatchPetClipView: View {
     let start: Date
 
     @Environment(\.isLuminanceReduced) private var dimmed
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var frames: WatchPetFrames?
 
+    private var still: Bool { dimmed || reduceMotion }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / clip.fps, paused: dimmed)) { timeline in
+        TimelineView(.animation(minimumInterval: 1 / clip.fps, paused: still)) { timeline in
             if let images = frames?.images, let image = frame(images, at: timeline.date) {
                 Image(decorative: image, scale: 2).resizable().scaledToFit()
             }
@@ -107,7 +112,7 @@ private struct WatchPetClipView: View {
     }
 
     private func frame(_ images: [CGImage], at date: Date) -> CGImage? {
-        if dimmed { return images[min(clip.still, images.count - 1)] }
+        if still { return images[min(clip.still, images.count - 1)] }
         return images[max(0, Int(date.timeIntervalSince(start) * clip.fps)) % images.count]
     }
 }
@@ -168,6 +173,47 @@ struct WatchPetRow: View {
                 }
                 Text(status.title).font(.headline).lineLimit(2)
             }
+        }
+    }
+}
+
+/// Hands the frog to the watch face (`PersonaWatchWidgets`): the snapshot and the state's faces in the App Group. The
+/// face's timeline reloads only when what it shows changes or the last one is getting old, which keeps within
+/// WidgetKit's daily budget.
+@MainActor
+final class WatchPetComplication {
+    private var shown: WatchPetSnapshot?
+    private var copiedFaces: Set<String> = []
+    private static let reloadEvery: TimeInterval = 20 * 60
+
+    func publish(_ status: WatchPetStatus?, at: Date?, pack: WatchPetPack) {
+        guard let dir = WatchPetSnapshot.directory else { return }
+        let file = dir.appending(path: WatchPetSnapshot.fileName)
+        guard let status, let at, let manifest = pack.manifest else {
+            if shown != nil || FileManager.default.fileExists(atPath: file.path) {
+                try? FileManager.default.removeItem(at: file)
+                shown = nil
+                WidgetCenter.shared.reloadTimelines(ofKind: WatchPetSnapshot.widgetKind)
+            }
+            return
+        }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for state in WatchPetState.allCases {
+            guard let face = manifest.faces[state.clip], !copiedFaces.contains(face.sha256),
+                  let source = pack.faceURL(state) else { continue }
+            let target = dir.appending(path: WatchPetSnapshot.faceName(state.clip))
+            try? FileManager.default.removeItem(at: target)
+            if (try? FileManager.default.copyItem(at: source, to: target)) != nil { copiedFaces.insert(face.sha256) }
+        }
+        let next = WatchPetSnapshot(state: status.state.rawValue, title: status.title,
+                                    staleTitle: String(localized: "Not updated lately [Watch Pet]"), at: at)
+        guard let data = try? JSONEncoder().encode(next) else { return }
+        try? data.write(to: file, options: .atomic)
+        let changed = shown?.state != next.state || shown?.title != next.title
+        let aging = shown.map { next.at.timeIntervalSince($0.at) >= Self.reloadEvery } ?? true
+        if changed || aging {
+            shown = next
+            WidgetCenter.shared.reloadTimelines(ofKind: WatchPetSnapshot.widgetKind)
         }
     }
 }

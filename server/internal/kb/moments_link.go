@@ -12,9 +12,10 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
-// Moments for projects (docs/assistant/knowledge.md "Moments of a project"). The archive (moments/, the crawler) is never summarized post
+// Moments for projects (docs/assistant/knowledge.md "Project Moments"). The archive (moments/, the crawler) is never summarized post
 // by post; a project finds its posts instead: its keywords (from the project rewrite) pick candidates out of the
 // posts of the last year, and the model keeps the ones really about it. Keyword hits alone are noise (165 posts say
 // "codex", hardly any about the project named so). Every post judged for a project is remembered
@@ -227,7 +228,7 @@ func (e *Engine) judgeMoments(ctx context.Context, p *Project, cands []*MomentPo
 		if time.Since(m.At) < 14*24*time.Hour {
 			post := byID[m.ID]
 			_ = e.Store.AppendLog(cur.Slug, m.At, "公司圈 · "+momentForPrompt(post, "", 0, e.Store.Zone()).Author,
-				firstNonEmpty(m.Note, clip(oneLine(post.Text), 60)))
+				textfmt.FirstNonEmpty(m.Note, clip(oneLine(post.Text), 60)))
 			cur.Dirty = true
 		}
 	}
@@ -255,15 +256,6 @@ func (e *Engine) projectMomentsForPrompt(p *Project, n int) []prompts.KBMoment {
 		out = append(out, momentForPrompt(list[i].m, list[i].note, 400, e.Store.Zone()))
 	}
 	return out
-}
-
-func firstNonEmpty(a ...string) string {
-	for _, s := range a {
-		if strings.TrimSpace(s) != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 // SeedKeywords marks the live projects without keywords that changed within recent dirty, so the next rewrites give

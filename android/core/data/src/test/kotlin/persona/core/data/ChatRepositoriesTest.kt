@@ -21,12 +21,12 @@ class ChatRepositoriesTest {
     @Test fun olderPagesNotifyTranscriptWithoutChangingTheLastItem() = runTest {
         val recent = listOf(item(3).copy(role = "user"), item(4))
         val older = listOf(item(1).copy(role = "user"), item(2))
-        val transport = Transport().apply { fetch = { query ->
+        val transport = FakeChatTransport().apply { fetch = { query ->
             if (query.beforeSeq != null) ItemsResponse(older, hasMore = false, history = "h")
             else ItemsResponse(recent, hasMore = true, history = "h", toSeq = 4)
         } }
         val observed = mutableListOf<List<String>>()
-        val repository = HubChatRepository(transport, Connection(), Cache(CachedChat()), Sessions(), backgroundScope,
+        val repository = HubChatRepository(transport, FakeConnection(), FakeItemsCache(CachedChat()), FakeSessions(), backgroundScope,
             transcript = { _, items -> observed += items.map { it.id } })
         backgroundScope.launch { repository.observe(key).collect() }
         runCurrent()
@@ -43,8 +43,8 @@ class ChatRepositoriesTest {
         disk.save("sessions", listOf(cached))
         val requested = CompletableDeferred<Unit>()
         val response = CompletableDeferred<List<Session>>()
-        val transport = Transport().apply { listFetch = { requested.complete(Unit); response.await() } }
-        val repository = HubSessionsRepository(transport, Connection(), backgroundScope, ListSnapshotStore(directory))
+        val transport = FakeChatTransport().apply { listFetch = { requested.complete(Unit); response.await() } }
+        val repository = HubSessionsRepository(transport, FakeConnection(), backgroundScope, ListSnapshotStore(directory))
         requested.await()
         assertEquals(listOf(cached), repository.sessions.value)
         val fresh = cached.copy(rev = 2)
@@ -55,7 +55,7 @@ class ChatRepositoriesTest {
         assertTrue(runCatching { repository.refresh() }.isFailure)
         assertEquals(listOf(fresh), repository.sessions.value)
         assertEquals(listOf(fresh), disk.restore<List<Session>>("sessions"))
-        val offline = Connection().apply { state.value = ConnectionState.WaitingForNetwork }
+        val offline = FakeConnection().apply { state.value = ConnectionState.WaitingForNetwork }
         val restarted = HubSessionsRepository(transport, offline, backgroundScope, ListSnapshotStore(directory))
         assertEquals(listOf(fresh), restarted.sessions.first { it.isNotEmpty() })
     }
@@ -64,13 +64,13 @@ class ChatRepositoriesTest {
     private fun item(seq: Int, kind: String = "text") = Item("$seq#0", seq, role = "assistant", kind = kind)
 
     @Test fun recordedDurationsRestoreFromPagesAndCacheAndFollowTheirOwnTurn() = runTest {
-        val connection = Connection()
+        val connection = FakeConnection()
         val user = item(1).copy(role = "user")
         val answer = item(2)
         val duration = JsonCodec.decodeFromString<Item>("""{"id":"3#0","seq":3,"role":"system","kind":"turn_duration","turn_duration":{"source":"claude_turn_duration","parent_uuid":"2","duration_ms":12345}}""")
         val initial = listOf(user, answer, duration)
-        val transport = Transport().apply { fetch = { ItemsResponse(initial, history = "h", toSeq = 3) } }
-        val repository = HubChatRepository(transport, connection, Cache(CachedChat(initial, "h", 3, false)), Sessions(), backgroundScope)
+        val transport = FakeChatTransport().apply { fetch = { ItemsResponse(initial, history = "h", toSeq = 3) } }
+        val repository = HubChatRepository(transport, connection, FakeItemsCache(CachedChat(initial, "h", 3, false)), FakeSessions(), backgroundScope)
         var snapshot = ChatSnapshot()
         backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
         runCurrent()
@@ -113,9 +113,9 @@ class ChatRepositoriesTest {
     }
 
     @Test fun reconnectWaitsForTheLastBacklogPage() = runTest {
-        val connection = Connection()
-        val transport = Transport().apply { fetch = { ItemsResponse(listOf(item(1)), history = "h", toSeq = 1) } }
-        val repository = HubChatRepository(transport, connection, Cache(CachedChat()), Sessions(), backgroundScope)
+        val connection = FakeConnection()
+        val transport = FakeChatTransport().apply { fetch = { ItemsResponse(listOf(item(1)), history = "h", toSeq = 1) } }
+        val repository = HubChatRepository(transport, connection, FakeItemsCache(CachedChat()), FakeSessions(), backgroundScope)
         backgroundScope.launch { repository.observe(key).collect() }
         runCurrent()
         val lastPage = CompletableDeferred<ItemsResponse>()
@@ -134,8 +134,8 @@ class ChatRepositoriesTest {
     }
 
     @Test fun cachedOpenSharesSubscriptionFillsGapsReloadsAndExpandsEveryRangePage() = runTest {
-        val connection = Connection()
-        val transport = Transport()
+        val connection = FakeConnection()
+        val transport = FakeChatTransport()
         val initial = CompletableDeferred<ItemsResponse>()
         val fold = item(3, "fold").copy(fold = Fold(items = 3, throughSeq = 5, throughId = "5#0"))
         val queries = mutableListOf<ItemsQuery>()
@@ -152,8 +152,8 @@ class ChatRepositoriesTest {
                 else -> ItemsResponse(listOf(item(30)), history = "h", toSeq = 30)
             }
         }
-        val cache = Cache(CachedChat(listOf(item(2)), "h", 2, true))
-        val repository = HubChatRepository(transport, connection, cache, Sessions(), backgroundScope)
+        val cache = FakeItemsCache(CachedChat(listOf(item(2)), "h", 2, true))
+        val repository = HubChatRepository(transport, connection, cache, FakeSessions(), backgroundScope)
         var snapshot = ChatSnapshot()
         val first = backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
         val second = backgroundScope.launch { repository.observe(key).collect() }
@@ -201,10 +201,32 @@ class ChatRepositoriesTest {
         assertEquals(2, queries.count { it == ItemsQuery() })
     }
 
+    @Test fun aBurstOfItemsEventsSavesOnceMoreWithTheLatestState() = runTest {
+        val connection = FakeConnection()
+        val transport = FakeChatTransport().apply { fetch = { ItemsResponse(listOf(item(1)), history = "h", toSeq = 1) } }
+        val cache = SlowCache()
+        val repository = HubChatRepository(transport, connection, cache, FakeSessions(), backgroundScope)
+        var snapshot = ChatSnapshot()
+        backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
+        runCurrent()
+        val opened = cache.saves.size
+        val disk = CompletableDeferred<Unit>().also { cache.disk = it }
+        for (seq in 2..11) {
+            connection.events.emit(ItemsEvent(key.machineId, key.sessionId, listOf(item(seq)), "h", seq - 1, seq))
+            runCurrent() // the first event's save starts and waits for the disk
+        }
+        disk.complete(Unit)
+        runCurrent()
+        // The save already writing, then one that reads the state once it starts: not one an event.
+        assertEquals(2, cache.saves.size - opened)
+        assertEquals((1..11).toList(), cache.saves.last().items.map { it.seq })
+        assertEquals(snapshot.items.map { it.id }, cache.saves.last().items.map { it.id })
+    }
+
     @Test fun localDiscardSurvivesReplayReconnectAndRestoredHistoryWithoutSending() = runTest {
         val disk = ListSnapshotStore(temporary.newFolder())
-        val connection = Connection()
-        val transport = Transport()
+        val connection = FakeConnection()
+        val transport = FakeChatTransport()
         val old = Interaction("old", kind = "question")
         val permission = Interaction("permission", kind = "permission")
         val fresh = Interaction("fresh", kind = "question", canCancel = true)
@@ -227,14 +249,14 @@ class ChatRepositoriesTest {
 
         // Even an old history snapshot left on disk cannot resurrect a discarded card.
         disk.save("interactions", listOf(old, permission, fresh))
-        val restored = HubInteractionCenter(transport, Connection(), backgroundScope, disk)
+        val restored = HubInteractionCenter(transport, FakeConnection(), backgroundScope, disk)
         transport.pendingFetch = { error("Offline") }
         assertNotNull(runCatching { restored.refresh() }.exceptionOrNull())
         assertEquals(listOf(fresh), restored.pending.value)
         transport.pendingFetch = null
         restored.refresh()
         assertEquals(listOf(fresh), restored.pending.value)
-        val otherGroup = HubInteractionCenter(transport, Connection(), backgroundScope, ListSnapshotStore(temporary.newFolder()))
+        val otherGroup = HubInteractionCenter(transport, FakeConnection(), backgroundScope, ListSnapshotStore(temporary.newFolder()))
         otherGroup.refresh()
         assertEquals(listOf(old, permission, fresh), otherGroup.pending.value)
         restored.resolveOutcome(fresh.id, Resolution(answers = mapOf("Format?" to "JSON")))
@@ -245,8 +267,8 @@ class ChatRepositoriesTest {
     @Test fun failedLocalDiscardWriteKeepsCardAndDoesNotSend() = runTest {
         val directory = temporary.newFolder()
         val disk = ListSnapshotStore(directory)
-        val transport = Transport().apply { pending = listOf(Interaction("old", kind = "question")) }
-        val center = HubInteractionCenter(transport, Connection(), backgroundScope, disk)
+        val transport = FakeChatTransport().apply { pending = listOf(Interaction("old", kind = "question")) }
+        val center = HubInteractionCenter(transport, FakeConnection(), backgroundScope, disk)
         center.refresh()
         assertTrue(directory.deleteRecursively())
         assertTrue(directory.createNewFile())
@@ -256,8 +278,8 @@ class ChatRepositoriesTest {
     }
 
     @Test fun cardsThatEndedHereStayGoneFromLaterSnapshotsUntilAnEventBringsThemBack() = runTest {
-        val connection = Connection()
-        val transport = Transport()
+        val connection = FakeConnection()
+        val transport = FakeChatTransport()
         val center = HubInteractionCenter(transport, connection, backgroundScope)
         val answered = Interaction("answered", kind = "permission")
         val gone = Interaction("gone", kind = "question")
@@ -286,8 +308,8 @@ class ChatRepositoriesTest {
     }
 
     @Test fun listUsesBroadcastRevsAndInteractionsReconcileWithoutResurrectingResolvedCards() = runTest {
-        val connection = Connection()
-        val transport = Transport()
+        val connection = FakeConnection()
+        val transport = FakeChatTransport()
         transport.list = listOf(Session(key.machineId, key.sessionId, rev = 1))
         val sessions = HubSessionsRepository(transport, connection, backgroundScope)
         val center = HubInteractionCenter(transport, connection, backgroundScope)
@@ -328,15 +350,15 @@ class ChatRepositoriesTest {
     }
 
     @Test fun realtimeRowsKeepIdentityUntilTranscriptArrivesAndNeverEnterCoverageOrCache() = runTest {
-        val connection = Connection()
+        val connection = FakeConnection()
         val user = item(1).copy(role = "user", text = "示例问题")
         var transcript = listOf(user)
-        val transport = Transport().apply {
+        val transport = FakeChatTransport().apply {
             fetch = { query -> ItemsResponse(transcript.filter { it.seq > (query.afterSeq ?: 0) },
                 history = "h", fromSeq = query.afterSeq, toSeq = transcript.last().seq) }
         }
-        val cache = Cache(CachedChat(emptyList(), "h", 0, false))
-        val repository = HubChatRepository(transport, connection, cache, Sessions(), backgroundScope)
+        val cache = FakeItemsCache(CachedChat(emptyList(), "h", 0, false))
+        val repository = HubChatRepository(transport, connection, cache, FakeSessions(), backgroundScope)
         var snapshot = ChatSnapshot()
         backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
         runCurrent()
@@ -418,18 +440,18 @@ class ChatRepositoriesTest {
     }
 
     @Test fun reconnectAfterTheTurnEndedOfflineDropsTheCursorAndShowsTheCutRecord() = runTest {
-        val connection = Connection()
+        val connection = FakeConnection()
         val user = item(1).copy(role = "user", text = "示例问题")
         var transcript = listOf(user)
         val working = Session(key.machineId, key.sessionId, status = "working")
-        val transport = Transport().apply {
+        val transport = FakeChatTransport().apply {
             list = listOf(working)
             machineList = listOf(Machine(key.machineId, online = true))
             fetch = { query -> ItemsResponse(transcript.filter { it.seq > (query.afterSeq ?: 0) },
                 history = "h", fromSeq = query.afterSeq, toSeq = transcript.last().seq) }
         }
         val sessions = HubSessionsRepository(transport, connection, backgroundScope)
-        val repository = HubChatRepository(transport, connection, Cache(CachedChat(emptyList(), "h", 0, false)),
+        val repository = HubChatRepository(transport, connection, FakeItemsCache(CachedChat(emptyList(), "h", 0, false)),
             sessions, backgroundScope)
         var snapshot = ChatSnapshot()
         backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
@@ -465,18 +487,18 @@ class ChatRepositoriesTest {
     }
 
     @Test fun reopenAfterTheTurnEndedWhileAwayDropsTheCursorAndShowsTheCutRecord() = runTest {
-        val connection = Connection()
+        val connection = FakeConnection()
         val user = item(1).copy(role = "user", text = "示例问题")
         var transcript = listOf(user)
         val working = Session(key.machineId, key.sessionId, status = "working")
-        val transport = Transport().apply {
+        val transport = FakeChatTransport().apply {
             list = listOf(working)
             machineList = listOf(Machine(key.machineId, online = true))
             fetch = { query -> ItemsResponse(transcript.filter { it.seq > (query.afterSeq ?: 0) },
                 history = "h", fromSeq = query.afterSeq, toSeq = transcript.last().seq) }
         }
         val sessions = HubSessionsRepository(transport, connection, backgroundScope)
-        val repository = HubChatRepository(transport, connection, Cache(CachedChat(emptyList(), "h", 0, false)),
+        val repository = HubChatRepository(transport, connection, FakeItemsCache(CachedChat(emptyList(), "h", 0, false)),
             sessions, backgroundScope)
         var snapshot = ChatSnapshot()
         var job = backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
@@ -514,16 +536,16 @@ class ChatRepositoriesTest {
     }
 
     @Test fun lifecycleRequiresVerifiedListsAndConfirmedActionsAndKeepsRecordedDurationOnly() = runTest {
-        val connection = Connection()
+        val connection = FakeConnection()
         val working = Session(key.machineId, key.sessionId, status = "working", paneId = "pane")
-        val transport = Transport().apply {
+        val transport = FakeChatTransport().apply {
             list = listOf(working)
             machineList = listOf(Machine(key.machineId, online = true))
             fetch = { ItemsResponse(listOf(item(1)), history = "h", fromSeq = it.afterSeq, toSeq = 1) }
         }
         val sessions = HubSessionsRepository(transport, connection, backgroundScope)
         val repository = HubChatRepository(transport, connection,
-            Cache(CachedChat(emptyList(), null, 0, false)), sessions, backgroundScope,
+            FakeItemsCache(CachedChat(emptyList(), null, 0, false)), sessions, backgroundScope,
             foreground = MutableStateFlow(false))
         var snapshot = ChatSnapshot()
         backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
@@ -586,16 +608,16 @@ class ChatRepositoriesTest {
     }
 
     @Test fun resumedSessionListedAgainIsNoLongerEnded() = runTest {
-        val connection = Connection()
+        val connection = FakeConnection()
         val working = Session(key.machineId, key.sessionId, status = "working", paneId = "pane")
-        val transport = Transport().apply {
+        val transport = FakeChatTransport().apply {
             list = listOf(working)
             machineList = listOf(Machine(key.machineId, online = true))
             fetch = { ItemsResponse(listOf(item(1)), history = "h", fromSeq = it.afterSeq, toSeq = 1) }
         }
         val sessions = HubSessionsRepository(transport, connection, backgroundScope)
         val repository = HubChatRepository(transport, connection,
-            Cache(CachedChat(emptyList(), null, 0, false)), sessions, backgroundScope,
+            FakeItemsCache(CachedChat(emptyList(), null, 0, false)), sessions, backgroundScope,
             foreground = MutableStateFlow(false))
         var snapshot = ChatSnapshot()
         backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
@@ -632,52 +654,13 @@ class ChatRepositoriesTest {
         assertFalse(snapshot.replaced)
     }
 
-    private class Connection : HubConnection {
-        override val state = MutableStateFlow(ConnectionState.Online)
-        override val events = MutableSharedFlow<ServerEvent>()
-        val sent = mutableListOf<JsonObject>()
-        override fun reconnect() = Unit
-        override fun send(message: JsonObject): Boolean { sent += message; return true }
-    }
     private fun JsonObject.type() = getValue("type").jsonPrimitive.content
 
-    private class Sessions : SessionsRepository {
-        override val machines = MutableStateFlow<List<Machine>>(emptyList())
-        override val sessions = MutableStateFlow<List<Session>>(emptyList())
-        override suspend fun refresh() = Unit
-    }
-
-    private class Cache(private val cached: CachedChat) : ChatItemsCache {
-        var saved = cached
-        override suspend fun load(session: SessionKey) = cached
-        override suspend fun save(session: SessionKey, snapshot: CachedChat) { saved = snapshot }
-    }
-
-    private class Transport : ChatTransport {
-        var list = emptyList<Session>()
-        var machineList = emptyList<Machine>()
-        var listFetch: (suspend () -> List<Session>)? = null
-        var pending = emptyList<Interaction>()
-        var pendingFetch: (suspend () -> List<Interaction>)? = null
-        var fetch: suspend (ItemsQuery) -> ItemsResponse = { error("Unexpected items request") }
-        var resolved: String? = null
-        var outcome = ResolveOutcome()
-        var goneStatus: String? = null
-        var fullItemId: String? = null
-        override suspend fun machines() = machineList
-        override suspend fun sessions() = listFetch?.invoke() ?: list
-        override suspend fun items(session: SessionKey, query: ItemsQuery) = fetch(query)
-        override suspend fun interactions() = pendingFetch?.invoke() ?: pending
-        override suspend fun resolve(id: String, resolution: Resolution) { resolved = id }
-        override suspend fun resolveOutcome(id: String, resolution: Resolution): ResolveOutcome {
-            resolved = id
-            goneStatus?.let { goneStatus = null; throw InteractionGoneException(it) }
-            return outcome
-        }
-        override suspend fun image(session: SessionKey, itemId: String) = byteArrayOf()
-        override suspend fun fullItem(session: SessionKey, itemId: String): Item {
-            fullItemId = itemId
-            return Item(itemId)
-        }
+    /** Records each save as it starts, then waits for [disk] when one is set. */
+    private class SlowCache : ChatItemsCache {
+        val saves = mutableListOf<CachedChat>()
+        var disk: CompletableDeferred<Unit>? = null
+        override suspend fun load(session: SessionKey) = CachedChat()
+        override suspend fun save(session: SessionKey, snapshot: CachedChat) { saves += snapshot; disk?.await() }
     }
 }

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// launchers.zshrc (#2455, docs/integrations/launchers.md "Import from ~/.zshrc"): the claude aliases of this machine's ~/.zshrc as the
+// launchers.zshrc (#2455, docs/integrations/launchers.md "Detecting launchers in ~/.zshrc"): the claude aliases of this machine's ~/.zshrc as the
 // hub imports them into providers: `alias x="K=V K=V … claude [args]"`, quoted either way or not at all. Read from
 // the file, not a shell: nothing of the user's runs. Their env holds keys: it goes to the hub through this RPC only,
 // never to a log or an error.

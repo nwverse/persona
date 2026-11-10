@@ -16,6 +16,7 @@
       "endpoints": [],
       "features": [
         "persona_contracts_v1",
+        "look_uploads",
         "locale",
         "assistant_compact",
         "assistant_main_new",
@@ -77,6 +78,7 @@
         "extension_shortcuts",
         "extension_notify_actions",
         "desktops",
+        "desktops_link",
         "sessions_delta",
         "connectors",
         "channels",
@@ -118,6 +120,7 @@
       "fields": {
         "/features": [
           "persona_contracts_v1",
+          "look_uploads",
           "locale",
           "assistant_compact",
           "assistant_main_new",
@@ -179,6 +182,7 @@
           "extension_shortcuts",
           "extension_notify_actions",
           "desktops",
+          "desktops_link",
           "sessions_delta",
           "connectors",
           "channels",
@@ -211,6 +215,7 @@
       "channel": "",
       "features": [
         "persona_contracts_v1",
+        "look_uploads",
         "locale",
         "assistant_compact",
         "assistant_main_new",
@@ -272,6 +277,7 @@
         "extension_shortcuts",
         "extension_notify_actions",
         "desktops",
+        "desktops_link",
         "sessions_delta",
         "connectors",
         "channels",
@@ -303,6 +309,7 @@
       "fields": {
         "/features": [
           "persona_contracts_v1",
+          "look_uploads",
           "locale",
           "assistant_compact",
           "assistant_main_new",
@@ -364,6 +371,7 @@
           "extension_shortcuts",
           "extension_notify_actions",
           "desktops",
+          "desktops_link",
           "sessions_delta",
           "connectors",
           "channels",

@@ -21,7 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// "Please verify" (#2768, docs/extensions/bots.md "Please verify"): once a task's work is deployed, the hub keeps an ask for the user to try it —
+// "Please verify" (#2768, docs/extensions/bots.md "Task progress and review requests"): once a task's work is deployed, the hub keeps an ask for the user to try it —
 // three lines: what changed, where to look (a link straight to the page), how to check. With the bot on (and its task reports
 // on) the ask goes out as a Feishu card with "Pass" on it; without, it is kept all the same (NoCard) and the briefing, the
 // board and the web app show it. "Pass" (the button, a reply saying so, or the web Accept button) marks the task verified; any other reply to the card is written into the todo's
@@ -372,8 +372,8 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		}
 		if ok, err := s.acceptTry(ctx, id, ""); errors.Is(err, errAcceptStore) {
 			s.botNote(ctx, messageID, i18n.T(l, "http-status.unavailable"))
-		} else if err != nil {
-			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}))
+		} else if err != nil { // the recommendation did not reach the agent: nothing recorded, "OK" can be said again
+			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		} else if ok {
 			s.botNote(ctx, messageID, acceptedNote(l, &ask))
 		}
@@ -443,20 +443,14 @@ func withMediaDropped(l i18n.Lang, note string, media bool) string {
 	return note + "\n" + i18n.T(l, "assistant-reports.accept_media_dropped")
 }
 
-// accepted marks task id verified; false when already handled, never asked, or asked before the latest reopen. A card-less
-// ask (NoCard) can be accepted too, from the web app. card is the message pressed ("" from a reply, which acceptFor already
-// matched, from the web app, or when Feishu does not say): a card that is not this round's (an earlier round's, once the
-// next one has its own) accepts nothing (#4853). A decision (a conclusion that needs the owner) is accepted by taking the
-// option it recommends, which goes to the task's agent (takeRecommendation); one with nothing recommended, or no longer
-// waiting, takes nothing; one whose recommendation could not reach the agent is not taken (acceptTry says why).
-func (s *Service) accepted(ctx context.Context, id, card string) bool {
-	ok, _ := s.acceptTry(ctx, id, card)
-	return ok
-}
-
-// acceptTry is accepted, with the error of a decision whose recommendation did not reach the task's agent, or
-// errAcceptStore when the asks cannot be read or the acceptance cannot be saved: either way nothing was taken, the ask
-// still waits, and the owner can try again.
+// acceptTry marks task id verified; false when already handled, never asked, or asked before the latest reopen. A
+// card-less ask (NoCard) can be accepted too, from the web app. card is the message pressed ("" from a reply, which
+// acceptFor already matched, from the web app, or when Feishu does not say): a card that is not this round's (an
+// earlier round's, once the next one has its own) accepts nothing (#4853). A decision (a conclusion that needs the
+// owner) is accepted by taking the option it recommends, which goes to the task's agent (takeRecommendation); one with
+// nothing recommended, or no longer waiting, takes nothing. The error is a decision's whose recommendation did not
+// reach the task's agent, or errAcceptStore when the asks cannot be read or the acceptance cannot be saved: either way
+// nothing was taken, the ask still waits, and the owner can try again.
 func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) {
 	t, todoOK := s.todoNow(id)
 	b := &s.accept

@@ -314,7 +314,7 @@ struct LauncherRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.sm) {
-                // A display name (「智谱 GLM」, docs/integrations/launchers.md「内置预设」) is a name, not an id; without one, the id as before.
+                // A display name (「智谱 GLM」, docs/integrations/launchers.md「Built-in presets」) is a name, not an id; without one, the id as before.
                 if launcher.title != launcher.name {
                     Text(launcher.title).font(Theme.Font.heading).lineLimit(1)
                 } else {
@@ -354,7 +354,7 @@ struct ModelLauncherDetailView: View {
     @State private var showDefinition = false
     /// Test Availability: per machine, running (nil) or done.
     @State private var checks: [String: LauncherCheck?] = [:]
-    /// What plugins draw on this page (docs/extensions/extensions.md「声明式 UI」), and the link one of them opens.
+    /// What plugins draw on this page (docs/extensions/extensions.md「Declarative UI」), and the link one of them opens.
     @State private var pluginSections: ExtensionLauncherModel?
     @State private var pluginLink: LinkTarget?
 
@@ -534,9 +534,8 @@ struct ModelLauncherDetailView: View {
         await withTaskGroup(of: (String, LauncherCheck).self) { group in
             for id in machines {
                 group.addTask {
-                    let c = (try? await api.checkLauncher(name, machine: id.isEmpty ? nil : id))
-                        ?? LauncherCheck(ok: false, millis: 0, error: String(localized: "The request didn't finish"))
-                    return (id, c)
+                    do { return (id, try await api.checkLauncher(name, machine: id.isEmpty ? nil : id)) }
+                    catch { return (id, LauncherCheck.failed(error)) }
                 }
             }
             for await (id, c) in group { checks[id] = .some(c) }

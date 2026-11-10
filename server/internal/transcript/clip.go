@@ -25,11 +25,17 @@ func clipTo(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	cut := n
+	cut, note := clipParts(s, n)
+	return s[:cut] + note
+}
+
+// clipParts is where clipTo cuts s (len(s) > n) and the note it adds.
+func clipParts(s string, n int) (cut int, note string) {
+	cut = n
 	for cut > 0 && (s[cut]&0xC0) == 0x80 {
 		cut--
 	}
-	return s[:cut] + fmt.Sprintf("\n…（已截断，共 %d 字节）", len(s))
+	return cut, fmt.Sprintf("\n…（已截断，共 %d 字节）", len(s))
 }
 
 // light is the copy of an item that pages and pushes carry; cut says something was left out (fetch it with Full).
@@ -65,7 +71,15 @@ func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
 	return it, cut
 }
 
-// clipJSON shortens very long string fields (e.g. Write content) inside tool inputs.
+const (
+	minInputShare = 256 // a long string in a tool input is never cut shorter than this
+	clipNoteRoom  = 48  // what clipTo's note adds to a cut string, as JSON
+)
+
+// clipJSON shortens long strings anywhere in a tool input object: a Write's content, but also push_files'
+// files[].content, MultiEdit's edits[].new_string or an MCP call's nested blocks, which went out whole in every page and
+// push. The shape stays, so the apps' renderers still find their fields. A value that is not an object is left as it is:
+// a Claude tool_use's input and an MCP call's arguments are always objects.
 func clipJSON(raw json.RawMessage) json.RawMessage {
 	if len(raw) <= maxInputLen {
 		return raw
@@ -74,11 +88,75 @@ func clipJSON(raw json.RawMessage) json.RawMessage {
 	if json.Unmarshal(raw, &m) != nil {
 		return raw
 	}
-	for k, v := range m {
-		if s, ok := v.(string); ok && len(s) > maxInputLen/2 {
-			m[k] = clipTo(s, maxInputLen/2)
-		}
+	b, _ := json.Marshal(mapStrings(m, func(s string) string { return clipTo(s, maxInputLen/2) }))
+	if len(b) <= maxInputLen {
+		return b
 	}
-	b, _ := json.Marshal(m)
+	// Still too long (many medium strings): the strings over minInputShare share evenly what the rest leaves. Shorter
+	// strings, keys and other values are never cut, and a share is never under minInputShare, so an input made mostly of
+	// those (thousands of short array items) or of a great many long strings still goes over maxInputLen.
+	long, kept := 0, 0
+	rest, _ := json.Marshal(mapStrings(m, func(s string) string {
+		if len(s) <= minInputShare {
+			return s
+		}
+		long, kept = long+1, kept+min(len(s), maxInputLen/2)
+		return ""
+	}))
+	if long == 0 {
+		return b // nothing left that may be cut
+	}
+	// JSON escapes make a kept byte cost more than one: scale the share by what the first pass's strings cost.
+	share := (maxInputLen - len(rest)) * kept / (len(b) - len(rest)) / long
+	share = min(max(share-clipNoteRoom, minInputShare), maxInputLen/2)
+	b, _ = json.Marshal(mapStrings(m, func(s string) string { return clipIfShorter(s, share) }))
 	return b
+}
+
+// clipIfShorter is clipTo(s, n) if that is shorter as JSON, which is what a tool input carries, and s if not. A string
+// more than clipNoteRoom over n always is: every byte cut costs at least one byte of JSON and the note at most
+// clipNoteRoom. An unescaped ASCII string stays whole up to the note's JSON content length beyond n (37 bytes with
+// a three-digit original size). Escapes change that threshold: json.Marshal writes < > & as six bytes each, so an
+// HTML tail of the same raw length may cost more than the note.
+func clipIfShorter(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if len(s) > n+clipNoteRoom {
+		return clipTo(s, n)
+	}
+	cut, note := clipParts(s, n)
+	// The cut is on a UTF-8 boundary, so JSON encodes the shared prefix identically in both strings, even next to
+	// an escape. That prefix and the surrounding quotes cancel: only the dropped tail and note need marshalling.
+	if jsonLen(s[cut:]) > jsonLen(note) {
+		return s[:cut] + note
+	}
+	return s
+}
+
+// jsonLen is the length of s written as a JSON string.
+func jsonLen(s string) int {
+	b, _ := json.Marshal(s)
+	return len(b)
+}
+
+// mapStrings is a copy of v, a decoded JSON value, with f applied to every string in it (object keys are kept).
+func mapStrings(v any, f func(string) string) any {
+	switch v := v.(type) {
+	case string:
+		return f(v)
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = mapStrings(e, f)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = mapStrings(e, f)
+		}
+		return out
+	}
+	return v
 }

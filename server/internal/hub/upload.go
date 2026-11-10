@@ -2,7 +2,6 @@ package hub
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -158,7 +158,5 @@ func writeCode(w http.ResponseWriter, status int, code, msg string, extra map[st
 	for k, v := range extra {
 		body[k] = v
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	apierr.WriteBody(w, status, body)
 }

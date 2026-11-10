@@ -17,7 +17,7 @@ import (
 // typed as text —, a Submit / Next row under them, then
 // a review tab ("1. Submit answers") once every question is answered. Keys sent together get lost, so it is answered
 // one key at a time, reading the screen again after each: boxes ticked at the computer meanwhile and a cursor
-// anywhere are taken as they are. Measured in docs/integrations/claude-integration.md "Multi-select".
+// anywhere are taken as they are. Measured in docs/integrations/claude-integration.md "Screen cards for multiselect questions".
 
 // dialogStep is how long the TUI gets to take a key before the screen is read again.
 const dialogStep = 350 * time.Millisecond

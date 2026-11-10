@@ -87,6 +87,7 @@ type entry struct {
 	RetryAttempt      int             `json:"retryAttempt"`
 	MaxRetries        int             `json:"maxRetries"`
 	IsAPIErrorMessage bool            `json:"isApiErrorMessage"`
+	APIErrorStatus    int             `json:"apiErrorStatus"`
 	QuotaLimits       *struct {
 		Status   string          `json:"status"`   // "rejected": the limit refused the request
 		ResetsAt json.RawMessage `json:"resetsAt"` // epoch seconds
@@ -189,6 +190,12 @@ type Meta struct {
 	// proto.TurnErrorTransient / User / UsageLimit, or "" when the record gives no kind to go by (an older Claude Code,
 	// a gateway's 429): the hub reads the text then.
 	TurnError, TurnErrorKind string
+	// TurnErrorCode identifies a failed refusal fallback using the runtime's structured error.
+	TurnErrorCode string
+	// ModelFallback is the runtime's active refusal fallback. ModelFallbackObserved also records a clear, so
+	// partial readers can distinguish evidence that it ended from a tail that says nothing about it.
+	ModelFallback         *proto.ModelRefusal
+	ModelFallbackObserved bool
 	// TurnErrorResetsAt: when the subscription usage limit that failed the turn resets, as the record says (Claude
 	// Code's quotaLimits.resetsAt; for Codex the full window of the rollout's latest rate limits); zero when it does not.
 	TurnErrorResetsAt time.Time
@@ -227,9 +234,9 @@ type Meta struct {
 	beforeLocal [2]bool // TurnOpen, TurnClosed
 	// bashInput is the last "! cmd" typed in Claude Code, for the Bash call its output line turns into.
 	bashInput string
-	// notified holds the background-task notifications already shown: one is often recorded twice (as a user line and
-	// as a queued_command attachment). The same task reporting again with other content is a new event and shows.
-	notified map[string]bool
+	// notified holds the background-task notifications already shown, by digest: one is often recorded twice (as a user
+	// line and as a queued_command attachment). The same task reporting again with other content is a new event and shows.
+	notified map[noticeKey]bool
 	// taskCalls: a background task's id → the call that started it, from its notifications that name both, for a
 	// later one that names only the task (noteCall). It grows like notified.
 	taskCalls map[string]string
@@ -526,6 +533,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		return append(items, images...) // the pictures dropped here once: the phone showed the message without them
 	case "system":
+		if strings.HasPrefix(e.Subtype, "model_refusal_") {
+			return meta.claudeModelRefusal(e.Subtype, line, mk(0, "system", proto.KindNotice))
+		}
 		var text string
 		switch e.Subtype {
 		case "turn_duration":
@@ -684,6 +694,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		if e.Message.Model != "" && e.Message.Model != "<synthetic>" {
 			meta.Model = e.Message.Model
+			meta.observeReplyModel(e.Message.Model)
 		}
 		var blocks []block
 		if unmarshalLine(e.Message.Content, &blocks) != nil {

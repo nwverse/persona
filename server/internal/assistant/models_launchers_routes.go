@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -149,7 +150,7 @@ func (s *Service) launcherRoutes() {
 		l, err := s.saveLauncher(ctx, in, nil)
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) {
+			if errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) {
 				status = http.StatusBadRequest
 			}
 			apierr.Write(w, status, err)
@@ -196,11 +197,14 @@ func (s *Service) launcherRoutes() {
 		saved, err := s.saveLauncher(r.Context(), in, old)
 		if err != nil {
 			status := http.StatusInternalServerError
-			if errors.Is(err, errChatProtocolChange) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) {
+			if errors.Is(err, errChatProtocolChange) || errors.Is(err, errAPITransport) || errors.Is(err, errChatTransport) || errors.Is(err, errChatLaunchSettings) {
 				status = http.StatusBadRequest
 			}
 			apierr.Write(w, status, err)
 			return
+		}
+		if launcherSetupChanged(*old, saved) {
+			s.forgetLauncherFailures(r.Context(), saved.Name)
 		}
 		apierr.WriteJSON(w, map[string]any{"launcher": launcherView(saved)})
 	})
@@ -280,6 +284,9 @@ func (s *Service) launcherRoutes() {
 			apierr.Call(w, err)
 			return
 		}
+		if res.OK {
+			s.recordTestPassed(ctx, machine, r.PathValue("name"), res)
+		}
 		apierr.WriteJSON(w, map[string]any{"machine": machine, "check": res})
 	})
 	s.handle("POST /api/v1/launchers/{name}/restore", func(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +343,31 @@ func sessionLaunchers(discovered, configured []ConfiguredLauncher) []ConfiguredL
 
 var errUnknownMachine = errors.New("unknown machine")
 
+// pickerTier is one of the New Agent form's presets: a tier of the profile in use whose launcher this machine starts.
+type pickerTier struct {
+	ModelTier
+	Name string `json:"name"`
+}
+
+// pickerTiers are the presets the New Agent form offers on a machine with these launchers: the tiers of the profile
+// in use, by name, but those whose launcher the machine does not have (a direct API provider is in no machine's list;
+// one whose check failed there is offered, the form marks it). None when no profile is in use or it cannot be read:
+// the form then has no preset row.
+func (s *Service) pickerTiers(ctx context.Context, launchers []ConfiguredLauncher) (*ModelProfile, []pickerTier) {
+	p, _, err := s.activeModelProfile(ctx)
+	if err != nil || p == nil {
+		return nil, nil
+	}
+	var out []pickerTier
+	for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
+		t := p.Tiers[name]
+		if slices.ContainsFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == t.Launcher }) {
+			out = append(out, pickerTier{ModelTier: t, Name: name})
+		}
+	}
+	return p, out
+}
+
 // machineLauncherRoutes are "New Agent"'s pickers on one machine: its launchers with the agent each starts
 // (sessionLaunchers), and a launcher's /model list (node/launcher_models.go; the node keeps a list 10 minutes,
 // ?refresh=1 asks the CLI again) with the ids the user typed for it before (models_custom.go).
@@ -357,8 +389,14 @@ func (s *Service) machineLauncherRoutes() {
 		for _, l := range ls {
 			discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 		}
-		apierr.WriteJSON(w, map[string]any{"launchers": s.withHealth(ctx, mid, sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[mid])),
-			"default": s.pickerDefault(ctx, r)})
+		list := sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[mid])
+		out := map[string]any{"launchers": s.withHealth(ctx, mid, list), "default": s.pickerDefault(ctx, r)}
+		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
+			if p, tiers := s.pickerTiers(ctx, list); len(tiers) > 0 {
+				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
+			}
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("GET /api/v1/machines/{mid}/launchers/{name}/models", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 70*time.Second)
@@ -405,7 +443,7 @@ func (s *Service) pickMachine(ctx context.Context, has []string, want string) (s
 }
 
 // providerModels is GET /api/v1/model-config/providers/{id}/models: a launcher provider's /model list for Model configuration
-// (docs/assistant/model-config.md "Picking a model in Model configuration"). Model configuration is not one machine's, so the list comes from a machine that has the
+// (docs/assistant/model-config.md "Choosing a model in model configuration"). Model configuration is not one machine's, so the list comes from a machine that has the
 // launcher (pickMachine), and the answer says which. Other providers have no list to ask for: a plugin's comes with
 // it, an API connection has none.
 func (s *Service) providerModels(w http.ResponseWriter, r *http.Request) {

@@ -15,8 +15,8 @@ import (
 // retireTodoWork withdraws the manager's pending follow-ups for the agents of a todo that just ended (completed or a
 // failed start): the scheduled wake — one postponed while the machine was offline included — and the open work card
 // are cleared, so neither can wake the finished agent nor let a card answer back into the finished turn. The turn's
-// own work state is kept, as workStarted keeps it: with no wake and no card the tick never acts on the entry, and
-// triage never redoes a turn it already triaged.
+// own work state is kept, as workStartedObserved keeps it: with no wake and no card the tick never acts on the entry,
+// and triage never redoes a turn it already triaged.
 func (s *Service) retireTodoWork(keys ...[2]string) {
 	now := time.Now().UTC()
 	for _, k := range keys {
@@ -67,10 +67,16 @@ func (s *Service) bindRetiredTurn(k [2]string, retiredAt time.Time) {
 	s.saveWork(saved)
 }
 
-// workStarted: a session began working (again). Whatever the manager was going to do for its last turn is off; a card
-// for it is withdrawn. How long the turn waited is recorded.
-func (s *Service) workStarted(ctx context.Context, machine, sid string, now time.Time) {
+// workStartedObserved: a session began working (again). Whatever the manager was going to do for its last turn is
+// off; a card for it is withdrawn. How long the turn waited is recorded.
+//
+// A first or reconnected working list observes a running turn; it does not
+// prove that the turn started while this manager was connected.
+func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, now time.Time, newTurn bool) {
 	k := [2]string{machine, sid}
+	if newTurn {
+		s.clearToolLoop(k, loopTurnChanged)
+	}
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.started[k] = now
@@ -162,8 +168,8 @@ func (s *Service) workTurnEnded(ctx context.Context, machine, sid string) {
 		return
 	}
 	s.wakeWaitersOn(machine, sid)
-	time.Sleep(settleOf(s.triageCfg(ctx)))
-	s.workTurnSettled(ctx, machine, sid)
+	// On a timer: a goroutine asleep through the window would hold a stack per pending turn end (#2472).
+	time.AfterFunc(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
 }
 
 // workTurnSettled checks the turn after the settle window.
@@ -180,6 +186,9 @@ func (s *Service) workTurnSettled(ctx context.Context, machine, sid string) {
 func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c proto.Session) {
 	if c.Assistant || c.Status == proto.StatusOffline || c.Status == proto.StatusWorking || c.Starting {
 		return
+	}
+	if s.isReviewer(machine, c.SessionID) {
+		return // a review's reviewer: its turn is the review's (supervise_autoreview.go), never the user's to decide
 	}
 	k := [2]string{machine, c.SessionID}
 	s.work.mu.Lock()
@@ -335,6 +344,12 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 		return nil, "", true
 	}
 	if e := c.TurnError; e != "" {
+		if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser,
+				Line: i18n.T(l, "assistant-readiness.model_fallback_unavailable_title"),
+				Questions: []proto.Question{{Question: i18n.T(l, "assistant-readiness.model_fallback_unavailable_detail"), Header: workT(l, "header_model"),
+					Options: []proto.QuestionOption{{Label: answerLabel(l, answerSkip)}}}}}, "rule", false
+		}
 		if c.TurnErrorKind == proto.TurnErrorUsageLimit {
 			return limitWork(c, time.Now(), loc, l), "rule", false
 		}
@@ -412,6 +427,9 @@ func runningInBackground(c proto.Session) int {
 // turnErrorTransient: c's turn error is worth a "Continue". The agent's record says so when it gives a kind (Codex's error
 // kinds, #2185); otherwise the text does. A usage limit never is: a "Continue" before its reset is refused at once.
 func turnErrorTransient(c proto.Session) bool {
+	if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
+		return false
+	}
 	switch c.TurnErrorKind {
 	case proto.TurnErrorTransient:
 		return true

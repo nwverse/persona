@@ -51,8 +51,8 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 		if errors.Is(err, errAcceptStore) { // the asks could not be read or saved: not accepted, the button works again
 			return toast("error", i18n.T(l, "http-status.unavailable"))
 		}
-		if err != nil { // a recommendation that did not reach the agent: not taken, the button works again
-			return toast("error", i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}))
+		if err != nil { // a recommendation that did not reach the agent: not taken, nothing recorded, the button works again
+			return toast("error", i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		}
 		if ok {
 			return toast("success", acceptedNote(l, &ask)) // "verified", "got it", or the recommendation taken (conclusion.go)
@@ -60,7 +60,7 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 		return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
 	case "later_done": // the Handled button of a question that can wait, on a briefing card (later.go)
 		ok, err := s.laterHandled(ctx, a.Str("id"), time.Now())
-		if err != nil { // the queue can't be read or written: the question stays, the button works again
+		if err != nil { // the queue (or a question's to-do) can't be read or written: the question stays, the button works again
 			return toast("error", i18n.T(l, "http-status.unavailable"))
 		}
 		if ok {

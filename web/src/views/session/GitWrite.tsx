@@ -11,8 +11,10 @@ import { SearchField } from "../../ui/SearchField";
 import { BackHeader, Empty } from "./files/parts";
 import { t } from "../../i18n";
 
-/** Runs one write at a time for the panel: what is running, and the refusal of the last one until it is read. */
-export function useGitWrite(base: string, cwd: string, onStatus: (s: GitStatus) => void) {
+/** Runs one write at a time for the panel: what is running, and the refusal of the last one until it is read. A refusal
+ *  calls `onRefused` (the panel reads the status again): one may have changed the tree, as a stash apply that stopped
+ *  on conflicts does (#1885). */
+export function useGitWrite(base: string, cwd: string, onStatus: (s: GitStatus) => void, onRefused?: () => void) {
   const [busy, setBusy] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<GitRefusal | null>(null);
   const run = async (what: string, op: GitWriteOp, body: Record<string, unknown>, done?: string) => {
@@ -25,6 +27,7 @@ export function useGitWrite(base: string, cwd: string, onStatus: (s: GitStatus) 
       return r;
     } catch (e) {
       setRefusal(gitRefusal(e));
+      onRefused?.();
       return null;
     } finally {
       setBusy(null);
@@ -140,11 +143,27 @@ export function CommitBox({ s, writer }: { s: GitStatus; writer: GitWriter }) {
   );
 }
 
-/** Push in the summary: only with commits to send or a branch the remote does not have; confirmed first. */
+/** Pull in the summary (#1887, as on iOS and Android): whenever the branch has an upstream that still exists on the
+ *  remote, on any host and without `git_write`. One click: it only fast-forwards, and the node refuses it over
+ *  uncommitted changes or a branch that has moved apart, saying why in the refusal dialog. */
+export function PullButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
+  if (!s.branch || !s.upstream || s.gone) return null;
+  const pull = async () => {
+    const r = await writer.run("pull", "pull", {});
+    if (r) toast(r.updated ? t("session-gitwrite.pulled") : t("session-gitwrite.pull_current"), "ok");
+  };
+  return (
+    <Button tone="secondary" icon="download" busy={writer.busy === "pull"} disabled={writer.busy !== null} title={t("session-gitwrite.pull_hint")} onClick={() => void pull()}>
+      {writer.busy === "pull" ? t("session-gitwrite.pulling") : t("session-gitwrite.pull")}
+    </Button>
+  );
+}
+
+/** Push in the summary: only with commits to send or a branch the remote does not have (any more); confirmed first. */
 export function PushButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
   const [asking, setAsking] = useState(false);
   const ahead = s.ahead ?? 0;
-  if (!s.branch || (s.upstream && ahead === 0)) return null;
+  if (!s.branch || (s.upstream && !s.gone && ahead === 0)) return null;
   const fresh = !s.upstream;
   const push = async () => {
     setAsking(false);
@@ -157,7 +176,11 @@ export function PushButton({ s, writer }: { s: GitStatus; writer: GitWriter }) {
       </Button>
       <Dialog open={asking} onClose={() => setAsking(false)} title={t("session-gitwrite.push_title")}>
         <div className="py-1 text-[13.5px] leading-[1.6] text-ink-2">
-          {fresh ? t("session-gitwrite.push_new", { branch: s.branch }) : t("session-gitwrite.push_confirm", { count: ahead, upstream: s.upstream ?? "" })}
+          {fresh
+            ? t("session-gitwrite.push_new", { branch: s.branch })
+            : s.gone
+              ? t("session-gitwrite.push_gone", { branch: s.branch, upstream: s.upstream ?? "" })
+              : t("session-gitwrite.push_confirm", { count: ahead, upstream: s.upstream ?? "" })}
         </div>
         <div className="mt-1 text-[12px] text-ink-3">{t("session-gitwrite.push_never_force")}</div>
         <div className="mt-4 flex justify-end gap-2">

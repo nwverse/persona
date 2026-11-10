@@ -2,12 +2,12 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// What the Mac does outside its window when an agent needs you or finishes (docs/apple/mac.md「和 iOS 的对应」):
+/// What the Mac does outside its window when an agent needs you or finishes (docs/apple/mac.md「Mapping from iOS」):
 /// the Dock badge (how many cards wait on you) and a system notification for each agent that just turned Needs You /
 /// Done, plus one for every newly arrived card while it is already in Needs You (#4081, a sub-agent's authorization
 /// or a second confirmation for the same agent).
 /// While the app runs it watches its own session list (the WebSocket stays open) and follows the same Settings › Notifications
-/// choices (`NotifyPrefs`); the hub pushes these to the Mac only while it is not connected (docs/apple/mac.md「远程推送（Mac）」).
+/// choices (`NotifyPrefs`); the hub pushes these to the Mac only while it is not connected (docs/apple/mac.md「Remote push」).
 enum MacAttention {
     /// The notifications to post for a session-list change: agents that turned needs-you or finished. Not for the
     /// chat on screen while the app is in front, a muted agent, a session the list just learned about, or a finish
@@ -25,7 +25,8 @@ enum MacAttention {
             case .needsYou:
                 return prefs.input && !looking.contains(s.key) ? (s, .needsYou) : nil
             case .unread:
-                guard !s.assistant, was.state != .needsYou else { return nil }
+                // Inside this device's quiet hours nothing says an agent finished, as the hub skips that push (#1863).
+                guard !s.assistant, was.state != .needsYou, prefs.quiet?.active(at: now) != true else { return nil }
                 switch prefs.done {
                 case .off: return nil
                 case .always: return (s, .unread)
@@ -74,6 +75,21 @@ enum MacAttention {
         }
     }
 
+    /// This device's push switch per manager (#1863, the prefs' `muted_managers`): a switched-off manager's agents ping
+    /// no banner here either. The Dock still counts their cards: the switch is about being told, not about what waits.
+    /// The prefs are those of `group`'s hub (the hub-level one): another group's hub keeps its own, so its agents are
+    /// left alone. A session or card without `manager` is the hub's own assistant's.
+    static func managerMuted(_ prefs: NotifyPrefs, group: String, sessions: [Session], interactions: [Interaction]) -> (SessionKey) -> Bool {
+        guard prefs.mutedManagers?.isEmpty == false else { return { _ in false } }
+        var manager: [SessionKey: String?] = [:]
+        for s in sessions where s.key.group == group { manager[s.key] = s.manager }
+        for ix in interactions where ix.sessionKey.group == group && manager[ix.sessionKey] == nil { manager[ix.sessionKey] = ix.manager }
+        return { key in
+            guard key.group == group, let m = manager[key] else { return false }
+            return prefs.mutes(manager: m)
+        }
+    }
+
     /// The sessions whose every pending card is a question the assistant is still looking at (#544, the web's
     /// `lookingOnly`).
     static func lookingOnly(_ interactions: [Interaction]) -> Set<SessionKey> {
@@ -94,7 +110,7 @@ enum MacAttention {
     /// the first.
     static func identifier(_ s: Session, _ state: AgentState) -> String { "\(s.machineID)/\(s.sessionID)#\(state.rawValue)" }
 
-    /// The banner of one card (`newInteractions`), named by its uid like the hub push's collapse id.
+    /// The banner of one card (`newInteractions`), named by its uid.
     static func identifier(_ ix: Interaction) -> String { "interaction/\(ix.uid)" }
 
     /// The banners to take back (#3513): the Needs You one of an agent no longer waiting on you (answered here or
@@ -133,14 +149,16 @@ extension MacAttention {
     }
 
     /// The banner for one agent. The userInfo keys are the hub push's (`machine_id`, `session_id`, `interaction_id`),
-    /// so MacAppDelegate opens the chat or resolves a button the same way for both.
-    static func content(_ s: Session, _ state: AgentState, interaction: Interaction?) -> UNMutableNotificationContent {
+    /// so MacAppDelegate opens the chat or resolves a button the same way for both. `hushed`: inside this device's quiet
+    /// hours, without a sound and passive, like the hub's push then (#1863).
+    static func content(_ s: Session, _ state: AgentState, interaction: Interaction?, hushed: Bool = false) -> UNMutableNotificationContent {
         let (title, body) = text(s, state)
         let c = UNMutableNotificationContent()
         c.title = title
         c.body = body
         c.threadIdentifier = s.machineID
-        c.sound = state == .needsYou ? .default : nil
+        c.sound = state == .needsYou && !hushed ? .default : nil
+        if hushed { c.interruptionLevel = .passive }
         var info: [String: String] = ["machine_id": s.machineID, "session_id": s.sessionID]
         if state == .needsYou, let interaction {
             c.categoryIdentifier = NotificationActions.category(interaction.kind)
@@ -216,8 +234,10 @@ extension MacAttention {
         // Demo Mode's agents are made up.
         guard !model.isDemo, MacAttention.armed(connectedAt: connectedAt, now: now), !last.isEmpty else { return }
         let prefs = LiveActivityController.shared.prefs ?? NotifyPrefs()
+        let managerMuted = MacAttention.managerMuted(prefs, group: model.hub?.group ?? "", sessions: sessions, interactions: interactions)
+        let bannerMuted: (SessionKey) -> Bool = { mutedKey($0) || managerMuted($0) }
         let ping = MacAttention.transitions(old: last, new: sessions, open: model.visibleSession, appActive: NSApp.isActive,
-                                            prefs: prefs, now: now, looking: MacAttention.lookingOnly(interactions), muted: mutedKey)
+                                            prefs: prefs, now: now, looking: MacAttention.lookingOnly(interactions), muted: bannerMuted)
         // The flip banner of a Needs You turn already carries that session's oldest card: remember the flip for this
         // turn (cards in the same list) and for one settle-length grace in case the card event lands a turn later.
         for (s, state) in ping where state == .needsYou { flippedAt[s.key] = now }
@@ -225,23 +245,24 @@ extension MacAttention {
         let cards = MacAttention.newInteractions(old: lastInteractions, new: interactions,
                                                  transitionedKeys: Set(flippedAt.keys),
                                                  open: model.visibleSession, appActive: NSApp.isActive,
-                                                 prefs: prefs, muted: mutedKey)
+                                                 prefs: prefs, muted: bannerMuted)
         // The flip has met its card once a card for that session is present now: the flip banner covered it, and the
         // next card of this stop must ping even if it still lands inside the grace.
         let metKeys = flippedAt.keys.filter { key in interactions.contains { $0.sessionKey == key } }
         for key in metKeys { flippedAt[key] = nil }
         guard !ping.isEmpty || !cards.isEmpty else { return }
+        let hushed = prefs.quiet?.active(at: now) == true
         var requests = ping.map { s, state in
             UNNotificationRequest(identifier: MacAttention.identifier(s, state),
-                                  content: MacAttention.content(s, state, interaction: interactions.first { $0.sessionKey == s.key }),
+                                  content: MacAttention.content(s, state, interaction: interactions.first { $0.sessionKey == s.key }, hushed: hushed),
                                   trigger: nil)
         }
-        // One banner per new card, identified by the card's uid like the hub push's collapse id: answering removes
-        // the card and a later card (a different uid) pings again, even for the same agent.
+        // One banner per new card, identified by the card's uid: answering removes the card and a later card
+        // (a different uid) pings again, even for the same agent.
         requests += cards.compactMap { ix -> UNNotificationRequest? in
             guard let s = MacAttention.session(for: ix, in: sessions) else { return nil }
             return UNNotificationRequest(identifier: MacAttention.identifier(ix),
-                                         content: MacAttention.content(s, .needsYou, interaction: ix), trigger: nil)
+                                         content: MacAttention.content(s, .needsYou, interaction: ix, hushed: hushed), trigger: nil)
         }
         waiting += requests
         if asked {

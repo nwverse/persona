@@ -2,7 +2,7 @@ package assistantwire
 
 import "github.com/nwverse/persona/server/internal/proto"
 
-// ---- the assistant's settings, and the conversations the hub's features start (docs/assistant/assistant.md "The boundary with the hub") ----
+// ---- the assistant's settings, and the conversations the hub's features start (docs/assistant/assistant.md "Boundary with hub") ----
 
 // Profile is the assistant's settings (settings `assistant`, its own) as the hub's own features need them, in every
 // snapshot: a phone's message to the main conversation is told apart, the model configuration's main chat runs on its
@@ -77,6 +77,9 @@ type StartParams struct {
 	// Origin and OriginRef: who opens it (SessionView.Origin); "" is the user's.
 	Origin    string `json:"origin,omitempty"`
 	OriginRef string `json:"origin_ref,omitempty"`
+	// OpenedBy: the extension whose token opened it (SessionView.OpenedBy). Only POST /api/v1/assistant/conversations
+	// sets it, from the hub's headers; never over the bus.
+	OpenedBy string `json:"-"`
 	// GuestTools: a guest conversation (assistant/guest.go) that may use only these connector tools; nil is an
 	// ordinary one.
 	GuestTools []string `json:"guest_tools,omitempty"`

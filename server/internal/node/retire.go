@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Retiring a finished task's agent (hub tasks_close.go, docs/assistant/todos.md "Closing the agent of a finished task"): its pane closes and
+// Retiring a finished task's agent (hub tasks_close.go, docs/assistant/todos.md "Close Agents for completed tasks"): its pane closes and
 // the agent process with it, while everything needed to bring it back stays — the session id, its transcript, and in
 // the node's state the launcher, directory and model it ran with. The next message to it resumes it (send: claude
 // --resume, codex resume, traex resume) in a new tab of the same engine. Only an agent that can come back that way is
@@ -117,6 +117,21 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	if fi, err := os.Stat(st.Cwd); err != nil || !fi.IsDir() {
 		return fmt.Errorf("directory %s does not exist", st.Cwd)
 	}
+	codex := n.codexPath(id) != ""
+	var argv []string
+	if codex {
+		var ok bool
+		argv, ok = n.codexLauncher(ctx, st.Launcher)
+		if !ok {
+			return fmt.Errorf("启动器「%s」不再运行 Codex，没法接着这个会话", st.Launcher)
+		}
+		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
+			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
+		}
+		if st.Model != "" {
+			argv = append(withoutModelArgs(argv), "--model", st.Model)
+		}
+	}
 	paths, err := n.saveImages(images)
 	if err != nil {
 		return err
@@ -129,16 +144,9 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		return err
 	}
 	tab := n.resumeTabName(id)
-	if n.codexPath(id) == "" { // a compatible CLI: `<launcher> resume <id> <message>`
+	if !codex { // a compatible CLI: `<launcher> resume <id> <message>`
 		_, err = n.startOtherAgent(ctx, launch, st.Cwd, st.Launcher, traexAgent, text, id, ws, tab)
 		return uncertain(err)
-	}
-	argv, ok := n.codexLauncher(ctx, st.Launcher)
-	if !ok {
-		return fmt.Errorf("启动器「%s」不再运行 Codex，没法接着这个会话", st.Launcher)
-	}
-	if st.Model != "" {
-		argv = append(withoutModelArgs(argv), "--model", st.Model)
 	}
 	return uncertain(n.resumeCodex(ctx, launch, id, st, argv, text, ws, tab))
 }
@@ -166,7 +174,7 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	pane := created.Pane.String()
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
-	shells := paneShells(ctx)
+	shells := paneShells(ctx, created)
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
 		return err // the tab is closed: no pane to bind
@@ -201,7 +209,11 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	var err error
 	if ws == "" {
 		if created, err = launch.CreateSpace(ctx, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
-			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, nil))
+			var taken map[string]bool
+			if _, ok := launch.(*herdrCoreHost); ok {
+				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder.
+			}
+			_ = renameSlot(ctx, launch, created.SlotID, tabLabel(tabName, taken))
 		}
 	} else {
 		created, err = launch.CreateSlot(ctx, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))

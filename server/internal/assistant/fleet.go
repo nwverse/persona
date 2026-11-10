@@ -14,11 +14,11 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What comes from the nodes is the manager's (docs/server/machines.md "Who handles the computers' events"). The hub did all of this until the
+// What comes from the nodes is the manager's (docs/server/machines.md "Who handles computer events"). The hub did all of this until the
 // manager connected the computers itself; it moved here as it was (fleet_*.go):
 //
 //   - the interactions (approval / question / plan / screen / Codex cards): made from the nodes' interaction.create
-//     and what their sessions show, kept, waited for, answered, expired (fleet_ix.go);
+//     and what their sessions show, kept, waited for, answered, expired (fleet_ix*.go);
 //   - each Agent's state as the apps get it — the unified state, "Needs you", "Unread" / "Seen", the work and todos it shows —
 //     and the session lists (this file, fleet_sessions.go, fleet_seen.go);
 //   - the pushes and the Live Activity's content: when a finished turn is worth a push, a card's push, what the
@@ -40,16 +40,16 @@ type fleetBook struct {
 	// reportSent: assistant conversation -> when a scheduled run or a task notice was sent into it (noteReportTurn):
 	// the turn it starts is pushed however short it is.
 	reportSent map[string]time.Time
-	// codexAnnounced: Codex card id -> when it was announced (fleet_ix.go)
+	// codexAnnounced: Codex card id -> when it was announced (fleet_ix_codex.go)
 	codexAnnounced map[string]time.Time
-	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix.go)
+	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix_codex.go)
 	codexEnded map[string]time.Time
-	// screenAnswered: screen card id -> when it was answered (fleet_ix.go screenJustAnsweredLocked)
+	// screenAnswered: screen card id -> when it was answered (fleet_ix_screen.go screenJustAnsweredLocked)
 	screenAnswered map[string]answeredScreen
-	// screenDetached: screen card id -> the card its node's connection ended while it was open (fleet_ix.go
+	// screenDetached: screen card id -> the card its node's connection ended while it was open (fleet_ix_screen.go
 	// screenBackLocked): read again off the same dialog once the node is back, it is that card, not a new question.
 	screenDetached map[string]screenGone
-	// screenHandedBack: screen card id -> the card handed back to the computer (fleet_ix.go screenHandedBackLocked):
+	// screenHandedBack: screen card id -> the card handed back to the computer (fleet_ix_screen.go screenHandedBackLocked):
 	// the same dialog still on screen gets no new card until the agent moves on (#4867).
 	screenHandedBack map[string]screenGone
 	// upgradeEvery / upgradeFor override screenUpgradeEvery / screenUpgradeFor (0: those; upgradeScreenCard). Tests
@@ -63,14 +63,14 @@ type fleetBook struct {
 	stopSig, pushedSig map[[2]string]string
 	turns              *turnTracker // "machine/session" -> the turn in progress, for the finished push
 	clients            assistantwire.Clients
-	prev               map[string][]proto.Session // each machine's list setSessions saw last
+	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
 
 	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
 	// decorated and told (publishList), so the lists reach the hub in the order they were made.
 	sentMu sync.Mutex
 	sent   map[string][]byte
-	// shown: the list last told the hub for each machine, decorated (the reminders of agents awaiting a reply read it
-	// instead of decorating every list each minute, agents_reply.go).
+	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
+	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
@@ -309,11 +309,33 @@ func turnErrorCode(text string) string {
 	return ""
 }
 
+var fallbackModelMissing = lazyre.New(`(?i)\b404\b|\bmodel_not_found\b`)
+
+// sessionTurnErrorCode uses the active refusal fallback only for a model-route failure. A notice in another
+// session, or a fallback the runtime has since cleared, cannot change the meaning of an ordinary model error.
+func sessionTurnErrorCode(c proto.Session) string {
+	if c.TurnError == "" {
+		return ""
+	}
+	code := turnErrorCode(c.TurnError)
+	if c.TurnErrorKind == proto.TurnErrorUsageLimit {
+		return proto.TurnErrorRateLimited
+	}
+	if f := c.ModelFallback; f != nil && f.Subtype == "model_refusal_fallback" && f.FallbackModel != "" {
+		if c.TurnErrorCode == proto.TurnErrorModelFallbackUnavailable ||
+			c.TurnErrorKind != proto.TurnErrorTransient && fallbackModelMissing.MatchString(c.TurnError) &&
+				(code == proto.TurnErrorModelRoute || strings.Contains(strings.ToLower(c.TurnError), "model_not_found")) {
+			return proto.TurnErrorModelFallbackUnavailable
+		}
+	}
+	return code
+}
+
 // userTurnError: a turn error with code is the user's to fix; a rate limit passes (or is the user's when the
 // agent's record says so).
 func userTurnError(code string) bool {
 	switch code {
-	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute:
+	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute, proto.TurnErrorModelFallbackUnavailable:
 		return true
 	}
 	return false
@@ -324,12 +346,8 @@ type stateMark struct {
 	at    time.Time
 }
 
-// markStates fills in StateSince: the time an agent's state last changed, kept until it changes again. It drops the
-// marks and hook flags of the machine's sessions no longer listed.
-func (s *Service) markStates(machine string, list []proto.Session, now time.Time) {
-	s.fillStateMarks(machine, list, now, true)
-}
-
+// fillStateMarks fills in StateSince: the time an agent's state last changed, kept until it changes again. A complete
+// list also drops the marks and hook flags of the machine's sessions no longer listed.
 func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.Time, complete bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()

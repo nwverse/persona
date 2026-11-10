@@ -1,6 +1,9 @@
 package prompts
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // AssistantMachine is one computer in the assistant's CLAUDE.md, as seen from where the assistant runs.
 type AssistantMachine struct {
@@ -189,15 +192,30 @@ type SnapshotWorkflow struct {
 	For                     string // how long it has run ("12 minutes"), "" under a minute
 }
 
+// SnapshotProfile is the model profile in use (docs/assistant/model-profiles.md) with its tiers, the Agent presets
+// agent_start and task_plan take; Unreadable when the profiles could not be read, Gone when the one in use was deleted
+// (a rollback to it).
+type SnapshotProfile struct {
+	ID, Name         string
+	Tiers            []SnapshotTier // by name
+	Unreadable, Gone bool
+}
+
+// SnapshotTier is one tier of the profile in use: what an Agent started on it runs on ("" model or effort: the
+// launcher's), and when to use it.
+type SnapshotTier struct {
+	Name, Launcher, Model, Effort, Description string
+}
+
 // Snapshot is the live context a starting assistant gets in its system prompt.
 type Snapshot struct {
-	ModelProfile  string    // always refreshed outside the cached sources
-	Now           time.Time // in the user's zone
+	ModelProfile  *SnapshotProfile // nil: none in use; always refreshed outside the cached sources
+	Now           time.Time        // in the user's zone
 	Zone          string
 	Machines      []SnapshotMachine
 	Needs, Unread []SnapshotAgent
 	// Waiting: stopped on something the hub waits out for them (a retry, a deploy, another agent); Done: finished
-	// within a day, with the conclusion (docs/assistant/agent-work.md "Persona knows").
+	// within a day, with the conclusion (docs/assistant/agent-work.md "What Persona knows").
 	Waiting, Done []SnapshotAgent
 	// Awaiting: stopped on a question to the user, who looked at it and has not answered (docs/protocol/agent-states.md
 	// "Awaiting your reply", #5096).
@@ -410,17 +428,18 @@ type Supervise struct {
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed).
 type SuperviseEntry struct {
 	ID, Title, Kind string
-	Detail          string   // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
-	Minutes         int      // how long it has waited (needs_you) or not moved (stalled)
-	Ask             string   // needs_you: what it asks
-	DoneWhen        []string // what done means
-	Round           int      // reworks so far
-	Machine         string   // where its agent runs (a name)
-	Session         string   // its agent's session id (short)
-	AgentID         string   // full id for durable deduplication; not rendered
-	Last            string   // what its agent said last
-	Link            string   // the task's page ("" when the hub has no public_url)
-	Quiet           bool     // the user was not pushed about it
+	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
+	Minutes         int                // how long it has waited (needs_you) or not moved (stalled)
+	Ask             string             // needs_you: what it asks
+	DoneWhen        []string           // what done means
+	Round           int                // reworks so far
+	Machine         string             // where its agent runs (a name)
+	Session         string             // its agent's session id (short)
+	AgentID         string             // full id for durable deduplication; not rendered
+	Last            string             // what its agent said last
+	Link            string             // the task's page ("" when the hub has no public_url)
+	Quiet           bool               // the user was not pushed about it
+	Review          *SuperviseReviewed // review: what the independent reviewer found (#2173), nil when none ran
 	// report: what its agent reported (progress, question, blocked, done), its words, evidence and step.
 	Report      string
 	Said        string
@@ -429,6 +448,14 @@ type SuperviseEntry struct {
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }
+
+// SuperviseReviewed is the independent review of a task waiting for review: State clean (nothing blocking), blocking
+// (blocking findings left once the rework rounds ran out) or failed (Error says why), its counts and report.
+type SuperviseReviewed struct {
+	State           string
+	Count, Blocking int
+	Findings, Error string
+}
 
 // SuperviseRework is what a task's agent is sent when its supervisor sends the work back.
 type SuperviseRework struct {
@@ -443,6 +470,18 @@ type SuperviseCheck struct {
 }
 
 func RenderSuperviseRework(r SuperviseRework) string { return render("assistant/supervise_rework", r) }
+
+// SuperviseReviewRework is what a task's agent is sent when the independent reviewer found blocking problems in its
+// change (#2173): the round, and the reviewer's report as it wrote it.
+type SuperviseReviewRework struct {
+	Round, Max      int
+	Count, Blocking int
+	Findings        string
+}
+
+func RenderSuperviseReviewRework(r SuperviseReviewRework) string {
+	return render("assistant/supervise_review_rework", r)
+}
 
 // RenderTaskDoneWhen is what follows a supervised task's prompt: what done means, and that the agent shows it.
 func RenderTaskDoneWhen(criteria []string) string {
@@ -509,7 +548,7 @@ type TurnContext struct {
 func RenderTurnContext(c TurnContext) string { return render("assistant/turn_context", c) }
 
 // TaskDone is the system prompt deciding whether a task opened from an assistant conversation is finished, so the
-// hub can mark its todo done (assistant/task_done, docs/assistant/todos.md "Auto-complete").
+// hub can mark its todo done (assistant/task_done, docs/assistant/todos.md "Automatic completion").
 type TaskDone struct {
 	Owner string
 	// Delivery: also say how far the work was delivered (assistant.done_needs_delivery, docs/assistant/todos.md "Delivery"): only
@@ -522,6 +561,19 @@ func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d)
 // RenderTaskDelivery is the delivery standard a task's agent is handed after its prompt (assistant/task_delivery,
 // docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got.
 func RenderTaskDelivery() string { return render("assistant/task_delivery", nil) }
+
+// TaskAttachments ends a message to an agent with the files and pictures the user gave the assistant for it (#2437):
+// where they are on the agent's computer (Copied: copied there from the assistant's), and those that could not come.
+// Pictures go last, in the <attached_images> block a picture sent straight to an agent ends with (node/send.go), so
+// the apps draw them as they do those.
+type TaskAttachments struct {
+	Files, Missing, Pictures []string
+	Copied                   bool
+}
+
+func RenderTaskAttachments(a TaskAttachments) string {
+	return strings.TrimRight(render("assistant/task_attachments", a), "\n")
+}
 
 // SideConversation preserves the provenance of a non-owner's message to a tasked Agent.
 type SideConversation struct {
@@ -571,7 +623,7 @@ type HandoffTurn struct {
 func RenderMainHandoff(h MainHandoff) string { return render("assistant/main_handoff", h) }
 
 // Acceptance is a deployed task, for the three lines of its "Please accept" card (assistant/acceptance_input; the system
-// prompt is assistant/acceptance; docs/extensions/bots.md "Please accept").
+// prompt is assistant/acceptance; docs/extensions/bots.md "Task progress and review requests").
 type Acceptance struct {
 	Title, Prompt, Reply string
 	Links                []string // the only links it may pick
@@ -603,3 +655,6 @@ type WorkspaceSession struct {
 func RenderWorkspaceMention(w WorkspaceMention) string {
 	return render("assistant/workspace_mention", w)
 }
+
+// RenderWorkoutReport describes one consented workout, never a medical diagnosis.
+func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }

@@ -16,17 +16,88 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	gomessage "github.com/emersion/go-message"
 	gomail "github.com/emersion/go-message/mail"
 )
 
 // attachmentMetadata binds IDs to MIME order, metadata and decoded content.
 func attachmentMetadata(h *gomail.AttachmentHeader, body io.Reader, index int, dst io.Writer) (Attachment, error) {
-	name, _ := h.Filename()
-	ct, _, _ := h.ContentType()
+	name, ct := partName(h), partType(h)
 	sum := sha256.New()
 	fmt.Fprintf(sum, "%d\x00%s\x00%s\x00", index, name, ct)
 	n, err := io.Copy(io.MultiWriter(sum, dst), body)
 	return Attachment{ID: strconv.Itoa(index) + "-" + hex.EncodeToString(sum.Sum(nil)), Filename: name, Mime: ct, Size: n}, err
+}
+
+// nextPart is r.NextPart past the parts go-message can only partly decode. A part in an unknown charset comes back
+// with its raw body and is used as is; a part in an unknown transfer encoding comes back without a header and is
+// skipped. The message list and the attachment download both read parts through it, so they count attachment
+// ordinals the same way. io.EOF and every other error are returned. Parts that are files come back as attachments
+// (fileAsAttachment).
+func nextPart(r *gomail.Reader) (*gomail.Part, error) {
+	for {
+		part, err := r.NextPart()
+		switch {
+		case gomessage.IsUnknownEncoding(err):
+			continue
+		case gomessage.IsUnknownCharset(err) && part != nil:
+			return fileAsAttachment(part), nil
+		}
+		return fileAsAttachment(part), err
+	}
+}
+
+// fileAsAttachment turns an inline part that is really a file into an attachment. go-message treats every part marked
+// inline as body, so a named PDF sent inline (the Apple Mail and iOS Mail default) would vanish; and it reads a
+// Content-Disposition whose parameters it cannot parse as no disposition, so a text part marked attachment with a
+// malformed filename would become body. Inline text and inline images stay body.
+func fileAsAttachment(part *gomail.Part) *gomail.Part {
+	if part == nil {
+		return nil
+	}
+	if inline, ok := part.Header.(*gomail.InlineHeader); ok && isFilePart(inline.Header) {
+		part.Header = &gomail.AttachmentHeader{Header: inline.Header}
+	}
+	return part
+}
+
+// isFilePart: the part is marked attachment, or it is marked inline, named, and neither text nor an image.
+func isFilePart(h gomessage.Header) bool {
+	disposition, contentType := h.Get("Content-Disposition"), h.Get("Content-Type")
+	switch headerToken(disposition) {
+	case "attachment":
+		return true
+	case "inline":
+		return !staysInline(headerToken(contentType)) && (hasParam(disposition, "filename") || hasParam(contentType, "name"))
+	}
+	return false
+}
+
+// staysInline: inline parts of these media types are body, never attachments. No type means text/plain (RFC 2045).
+func staysInline(mediaType string) bool {
+	return mediaType == "" || strings.HasPrefix(mediaType, "text/") || strings.HasPrefix(mediaType, "image/") ||
+		strings.HasPrefix(mediaType, "multipart/")
+}
+
+// headerToken is a raw header value's leading token (the media type or disposition), lowercased, even when the
+// parameters after it do not parse.
+func headerToken(value string) string {
+	token, _, _ := strings.Cut(value, ";")
+	return strings.ToLower(strings.TrimSpace(token))
+}
+
+// hasParam reports whether a raw header value carries a non-empty key parameter in any form (key=, or the RFC 2231
+// key*= and key*0=), including values in a syntax or charset Go's mime package rejects.
+func hasParam(value, key string) bool {
+	_, params, _ := strings.Cut(value, ";")
+	for _, param := range strings.Split(params, ";") {
+		name, v, ok := strings.Cut(param, "=")
+		name = strings.ToLower(strings.TrimSpace(name))
+		if ok && (name == key || strings.HasPrefix(name, key+"*")) && strings.Trim(strings.TrimSpace(v), `"`) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) attachment(ctx context.Context, accountID string, uid uint32, mailbox, id string) (*os.File, Attachment, error) {
@@ -73,7 +144,7 @@ func (s *Service) attachment(ctx context.Context, accountID string, uid uint32, 
 				}
 				count := 0
 				for {
-					part, err := reader.NextPart()
+					part, err := nextPart(reader)
 					if err == io.EOF {
 						break
 					}

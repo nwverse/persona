@@ -8,6 +8,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,6 +106,13 @@ type Spec struct {
 
 	// Init is what initialize sends, asked at each start (the configuration and secrets of the moment).
 	Init func(ctx context.Context) (extension.InitializeParams, error)
+	// Version, for an attached plugin that speaks the protocol, is the version it must be: before Init is asked it must
+	// answer manifest as ID at Version, or it is refused and gets nothing Init makes (a token, the settings, secrets).
+	Version string
+	// Release is called after each run that never became ready (a start that failed or was refused, or stopped first),
+	// and after every run of an attached plugin, whose program goes on elsewhere once its run ends: what Init or StartEnv
+	// handed out for it must not outlive it.
+	Release func()
 	// Check runs before each start (a built-in program must be the hub's build); its error is the status's.
 	Check func(ctx context.Context) error
 	// Accept holds what the program said to what the hub expects; an error stops it.
@@ -251,6 +260,15 @@ func (p *Proc) Stop() {
 	if p.client != nil {
 		p.client.CloseIdleConnections()
 	}
+}
+
+type invocationRunKey struct{}
+
+// InvocationRun identifies the trusted transport's exact process attempt, also
+// during initialization. It is not a guest field or an authorization credential.
+func InvocationRun(ctx context.Context) string {
+	run, _ := ctx.Value(invocationRunKey{}).(string)
+	return run
 }
 
 // Generation identifies the active initialized process run, never a source claim.
@@ -514,6 +532,11 @@ func (p *Proc) BeginHTTP(ctx context.Context) (end func(), err error) {
 	return end, nil
 }
 
+// healthBodyMost is how much of a /health answer Healthy reads. The verdict is the status code alone; the body is read
+// only so the connection can be reused, and one that goes on longer (or forever) costs a new connection on the next
+// check instead of being read for the whole HealthTimeout.
+const healthBodyMost = 4 << 10
+
 // Healthy says whether its HTTP side answers GET /health with 200.
 func (p *Proc) Healthy(ctx context.Context) bool {
 	if p.client == nil {
@@ -526,7 +549,7 @@ func (p *Proc) Healthy(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	_, _ = io.Copy(io.Discard, res.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, healthBodyMost))
 	res.Body.Close()
 	return res.StatusCode == http.StatusOK
 }
@@ -548,6 +571,9 @@ func (p *Proc) loop(ctx context.Context) {
 		wasUp := p.ready
 		p.sess, p.ready, p.kill, p.strikes = nil, false, nil, 0
 		p.mu.Unlock()
+		if (!wasUp || p.spec.attached()) && p.spec.Release != nil {
+			p.spec.Release()
+		}
 		if ctx.Err() != nil {
 			p.set(StateStopped, "")
 			return
@@ -689,17 +715,29 @@ func (p *Proc) runOnce(ctx context.Context) error {
 	if !p.spec.attached() { // an attached one's run starts when it comes online (up)
 		p.run(RunStart, "")
 	}
-	runCtx, stopRun := context.WithCancel(ctx)
+	runCtx, stopRun := context.WithCancel(context.WithValue(ctx, invocationRunKey{}, rand.Text()))
 	defer stopRun()
 	var s *session
 	if p.spec.RPC {
 		peer := rpc.New("h", writerOf(ch))
 		peer.Limits = p.spec.RPCBounds
-		peer.OnRequest = p.spec.Handle
+		if p.spec.Handle != nil {
+			peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+				call, cancel := context.WithCancel(context.WithValue(ctx, invocationRunKey{}, InvocationRun(runCtx)))
+				stop := context.AfterFunc(runCtx, cancel)
+				defer stop()
+				defer cancel()
+				if err := runCtx.Err(); err != nil {
+					return nil, err
+				}
+				return p.spec.Handle(call, method, params)
+			}
+		}
 		peer.OnEvent = p.spec.OnEvent
 		go func() { _ = peer.Serve(context.Background(), out) }()
 		s = &session{peer: peer}
 		if err := p.initialize(runCtx, s); err != nil {
+			stopRun()
 			p.end(ch, peer)
 			return err
 		}
@@ -712,6 +750,9 @@ func (p *Proc) runOnce(ctx context.Context) error {
 	p.kill = func() { once.Do(func() { close(killed) }) }
 	p.mu.Unlock()
 	defer func() {
+		// Fence host callbacks before waiting for child/peer cleanup. Neither
+		// process loss nor slow cleanup may extend a storage invocation's life.
+		stopRun()
 		var peer *rpc.Peer
 		if s != nil {
 			peer = s.peer
@@ -861,6 +902,11 @@ func (p *Proc) checkHealth(ctx context.Context, t *time.Ticker) (missed bool) {
 
 // initialize sends initialize and holds the answer to the spec.
 func (p *Proc) initialize(ctx context.Context, s *session) error {
+	if p.spec.attached() && p.spec.Version != "" {
+		if err := p.sameProgram(ctx, s); err != nil {
+			return err
+		}
+	}
 	params := extension.InitializeParams{Protocol: extension.Protocol}
 	if p.spec.Init != nil {
 		var err error
@@ -904,6 +950,36 @@ func (p *Proc) initialize(ctx context.Context, s *session) error {
 	if res.UIPageCancellation == 1 {
 		// Negotiate before readiness; older installed SDKs never receive rpc.cancel.
 		s.peer.Cancels = map[string]bool{"ui.page.mount": true, "ui.page.event": true, "ui.page.resume": true}
+	}
+	return nil
+}
+
+// sameProgram asks an attached plugin which program it is (manifest) before initialize hands it anything: one that
+// says another id or version, or will not say, is refused.
+func (p *Proc) sameProgram(ctx context.Context, s *session) error {
+	mctx, cancel := context.WithTimeout(ctx, ReadyWithin)
+	defer cancel()
+	var m extension.Manifest
+	err := s.peer.Call(mctx, extension.MManifest, struct{}{}, &m)
+	said := ""
+	if err == nil && m.ID == p.spec.ID {
+		said = m.Version // another program's version (or the one before this, when it will not say) says nothing
+	}
+	p.mu.Lock()
+	p.said = said
+	p.mu.Unlock()
+	if err != nil {
+		var re *rpc.Error
+		if errors.As(err, &re) { // it is there and answered
+			return refused{i18n.Err("extension-status.not_ready", i18n.Args{"err": "manifest: " + re.Message})}
+		}
+		return i18n.Err("extension-status.not_ready", i18n.Args{"err": err.Error()})
+	}
+	if m.ID != p.spec.ID {
+		return refused{i18n.ErrEnglish("extension-status.wrong_id", i18n.Args{"current": m.ID, "required": p.spec.ID})}
+	}
+	if m.Version != p.spec.Version {
+		return refused{i18n.ErrEnglish("extension-status.wrong_version", i18n.Args{"current": m.Version, "required": p.spec.Version})}
 	}
 	return nil
 }

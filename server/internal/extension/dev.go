@@ -54,6 +54,7 @@ func (r *Registry) AddDevContext(ctx context.Context, dir string, config json.Ra
 			return nil, fmt.Errorf("清单里没有密钥 %s", name)
 		}
 	}
+	translations, l10nWarnings := ReadTranslations(dir) // read before the lock: it is file I/O
 	r.mu.Lock()
 	cur := r.extensions[m.ID]
 	if cur != nil && cur.Record.Source != SourceDev {
@@ -73,6 +74,8 @@ func (r *Registry) AddDevContext(ctx context.Context, dir string, config json.Ra
 	p := &Extension{Record: Record{ID: m.ID, Source: SourceDev, Origin: "dev:" + dir, Version: m.Version, Manifest: raw,
 		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: true, Config: config, InstalledAt: now, UpdatedAt: now},
 		Manifest: m, Full: m, Schema: schema, Dir: dir, Warnings: m.Lint()}
+	p.L10n = translations
+	p.Warnings = append(p.Warnings, l10nWarnings...)
 	if r.devSecrets == nil {
 		r.devSecrets = map[string]map[string]string{}
 	}

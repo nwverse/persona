@@ -13,6 +13,7 @@ export type SessionView = "chat" | "term";
 
 export type Route =
   | { name: "home" }
+  | { name: "request"; id: string }
   | { name: "workspace-board" }
   | { name: "persona-new" }
   // `view` is the page's `?view=chat|term`; without it the page shows what it showed last (lib/session-view.ts)
@@ -35,7 +36,7 @@ export type Route =
   | { name: "machine"; mid: string }
   // one space of a machine by its name (lib/space-page.ts): its agents, the todos it hangs on, what can be done to it
   | { name: "space"; mid: string; space: string }
-  // the terminal browser (docs/integrations/terminal.md "Standalone terminals"): every pane of every machine; `id` is the terminal opened (an agent
+  // the terminal browser (docs/integrations/terminal.md "Standalone terminal"): every pane of every machine; `id` is the terminal opened (an agent
   // session's id, or "pane:<pane>" for a plain shell)
   | { name: "terminal"; mid?: string; id?: string }
   | { name: "settings" }
@@ -44,7 +45,8 @@ export type Route =
   | { name: "agent-list" }
   // the agents archived from the Agents list (lib/agent-archives.ts), to find and restore
   | { name: "agent-archives" }
-  | { name: "todos"; id?: string }
+  // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"), with the open to-do beside it
+  | { name: "todos"; id?: string; view?: "calendar"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string };
 
 /** `?view=term|chat` of an agent page's address; anything else is no choice. */
@@ -62,6 +64,7 @@ export function parse(path: string, search = ""): Route {
   if (!p.length) return { name: "persona" };
   if (assistantPath(p[0])) return p[1] === "new" && !p[2] ? { name: "persona-new" } : { name: "persona", sid: p[1] };
   if (p[0] === "workspace-board") return { name: "workspace-board" };
+  if (p[0] === "requests" && p[1]) return { name: "request", id: p[1] };
   if (p[0] === "overview") return { name: "home" };
   if (p[0] === "history") return p[1] ? { name: "history", origin: p[1] } : { name: "history" };
   if (p[0] === "health") return { name: "health", sid: p[1] || undefined };
@@ -82,8 +85,19 @@ export function parse(path: string, search = ""): Route {
   // /plugin/<id>/<ui>: the same page under its name before #1845 (bookmarks)
   if ((p[0] === "extension" || p[0] === "plugin") && p[1] && p[2]) return { name: "extension", extension: p[1], ui: p[2] };
   if (p[0] === "todos") {
-    const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("id") : null;
-    return { name: "todos", id: p[1] || q || undefined };
+    const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+    const r: Route = { name: "todos", id: p[1] || q.get("id") || undefined };
+    if (q.get("view") === "calendar") {
+      const mode = q.get("mode");
+      const date = q.get("date");
+      return {
+        ...r,
+        view: "calendar",
+        ...(mode === "day" || mode === "week" || mode === "month" ? { mode } : {}),
+        ...(date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? { date } : {}),
+      };
+    }
+    return r;
   }
   return { name: "home" };
 }
@@ -96,6 +110,8 @@ export function href(r: Route, base = BASE): string {
 /** A route's path in the app, without the sub-path (what parse reads). */
 export function routePath(r: Route): string {
   switch (r.name) {
+    case "request":
+      return `/requests/${encodeURIComponent(r.id)}`;
     case "session":
       return `/s/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.sid)}${viewQuery(r.view)}`;
     case "tab":
@@ -136,8 +152,17 @@ export function routePath(r: Route): string {
       return "/agents";
     case "agent-archives":
       return "/agents/archived";
-    case "todos":
-      return r.id ? `/todos?id=${encodeURIComponent(r.id)}` : "/todos";
+    case "todos": {
+      const q = new URLSearchParams();
+      if (r.view === "calendar") {
+        q.set("view", "calendar");
+        if (r.mode) q.set("mode", r.mode);
+        if (r.date) q.set("date", r.date);
+      }
+      if (r.id) q.set("id", r.id);
+      const s = q.toString();
+      return s ? `/todos?${s}` : "/todos";
+    }
     case "extension":
       return `/extension/${encodeURIComponent(r.extension)}/${encodeURIComponent(r.ui)}`;
     default:

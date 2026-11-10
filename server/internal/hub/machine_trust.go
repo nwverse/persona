@@ -60,7 +60,7 @@ type machineTrust struct {
 	mu      sync.Mutex
 	pending map[string]time.Time // machine id -> since
 	// leaving is the computers rejected or expired that the manager still reports: no row is a confirmed computer, so
-	// until it lets them go they are kept out as a pending one is (applyDeviceStates drops them from here).
+	// until it lets them go they are kept out as a pending one is (applyDeviceStatesFrom drops them from here).
 	leaving map[string]bool
 	// unknown: the pending computers could not be read (loadMachineTrust); every computer is kept out until they are.
 	// A hub that never read them (tests that do not run it) has none.
@@ -450,7 +450,7 @@ func removeMachineEntry(dir, id string) (bool, error) {
 		if !found {
 			return nil
 		}
-		return o.set("machines", kept)
+		return o.Set("machines", kept)
 	})
 	return found, err
 }

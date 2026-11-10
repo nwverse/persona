@@ -1,6 +1,6 @@
 import XCTest
 
-/// The hub's link in the shell (docs/apple/shell.md「连接状态和 toast」): Waiting for Network / Connecting… / Updating… float under the top bar
+/// The hub's link in the shell (docs/apple/shell.md「Connection status and toasts」): Waiting for Network / Connecting… / Updating… float under the top bar
 /// like a toast (#413). Here: in every state, on both pages, it shows, sits below the top bar's buttons, and nothing on
 /// the page moves (the controls a finger uses, the Agents rows), while it shows and once it goes. It used to take a row
 /// of room, pushing everything down and back.

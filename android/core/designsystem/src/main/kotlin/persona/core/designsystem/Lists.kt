@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -60,17 +61,29 @@ fun JSectionHeader(
     onClick: (() -> Unit)? = null,
     /** Greyed: what it heads is not reachable now (an offline manager's group). */
     muted: Boolean = false,
+    /** Before the title: a group's tick while selecting (#2576). */
+    leading: (@Composable () -> Unit)? = null,
+    /** A group inside a section (an inbox section's source or day, #2576): closer to its rows, the title a step quieter,
+     *  and a caret for whether it is open (null: none). */
+    sub: Boolean = false,
+    open: Boolean? = null,
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     Row(
         modifier.fillMaxWidth().then(if (onClick != null) Modifier.combinedClickable(role = Role.Button, onClick = onClick) else Modifier)
-            .padding(top = if (style == AppStyle.Board) 18.dp else 26.dp, bottom = 10.dp,
+            .padding(top = if (sub) Tokens.Space.s else if (style == AppStyle.Board) 18.dp else 26.dp, bottom = if (sub) Tokens.Space.xs else 10.dp,
                 start = if (style == AppStyle.Brief) 0.dp else 4.dp, end = if (style == AppStyle.Brief) 0.dp else 4.dp)
+            .heightIn(min = if (leading != null) 48.dp else 0.dp)
             .semantics { heading() },
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
+        if (sub && open != null) {
+            JIcon(PhIcons.CaretRight, null, size = Tokens.Space.m, tint = palette.ink3, modifier = Modifier.rotate(if (open) 90f else 0f))
+            Spacer(Modifier.width(Tokens.Space.xs))
+        }
         if (status != null && style == AppStyle.Board) {
             Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(palette.status(status).dot))
             Spacer(Modifier.width(8.dp))
@@ -80,9 +93,10 @@ fun JSectionHeader(
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 title,
-                style = if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
+                style = if (sub) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold)
+                else if (style == AppStyle.Glass) PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = androidx.compose.ui.unit.TextUnit(14f, androidx.compose.ui.unit.TextUnitType.Sp))
                 else PersonaTheme.type.headline.copy(fontSize = androidx.compose.ui.unit.TextUnit(15f, androidx.compose.ui.unit.TextUnitType.Sp)),
-                color = if (muted) palette.ink3 else if (style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
             count?.let { Spacer(Modifier.width(6.dp)); Text("$it", style = PersonaTheme.type.micro, color = palette.ink3) }
@@ -108,6 +122,10 @@ fun JGroupItem(
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
+    if (LocalHomeDrawer.current && style == AppStyle.Glass) {
+        Column(modifier.fillMaxWidth(), content = content)
+        return
+    }
     val radius = if (separate) PersonaTheme.shapes.card else PersonaTheme.shapes.panel.coerceAtMost(26.dp).let { if (style == AppStyle.Board) 10.dp else it }
     val shape = if (separate) RoundedCornerShape(radius) else RoundedCornerShape(
         topStart = if (position.first) radius else 0.dp, topEnd = if (position.first) radius else 0.dp,
@@ -190,12 +208,14 @@ fun JRow(
     changingValue: Boolean = false,
     /** What accessibility services call the row's click: a switch row says [Role.Switch] so its on / off is read. */
     role: Role = Role.Button,
+    /** [leadingIcon]'s colour in place of the quiet ink (an extension's named `icon_color`). */
+    leadingIconTint: Color? = null,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
         if (leading != null) { leading(); Spacer(Modifier.width(14.dp)) }
         else if (leadingIcon != null) {
-            JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else palette.ink2, decorative = true)
+            JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else leadingIconTint ?: palette.ink2, decorative = true)
             Spacer(Modifier.width(16.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -255,10 +275,13 @@ private fun RowFrame(
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
+    val drawer = LocalHomeDrawer.current && style == AppStyle.Glass
     Row(
-        modifier.fillMaxWidth().heightIn(min = 56.dp).selectedRow(selected).onSecondaryClick(onLongClick)
+        modifier.fillMaxWidth().heightIn(min = if (drawer) HomeTokens.drawerRowHeight else 56.dp)
+            .then(if (drawer) Modifier.clip(RoundedCornerShape(Tokens.Radius.control)).background(if (selected) palette.sunken else Color.Transparent) else Modifier.selectedRow(selected))
+            .onSecondaryClick(onLongClick)
             .then(if (onClick != null || onLongClick != null) Modifier.combinedClickable(enabled = enabled, role = role, onClickLabel = onClickLabel, onClick = onClick ?: {}, onLongClick = onLongClick) else Modifier)
-            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = rowPadding, vertical = 10.dp),
+            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = if (drawer) Tokens.Space.m else rowPadding, vertical = if (drawer) Tokens.Space.xs else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         content()
@@ -357,14 +380,17 @@ fun JEmptyState(
     modifier: Modifier = Modifier,
     icon: PhIcon? = null,
     action: (@Composable () -> Unit)? = null,
+    /** A named colour for the icon and its well (an extension's `icon_color`); none: the quiet ink. */
+    iconHue: JHue? = null,
 ) {
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         icon?.let {
+            val hue = iconHue?.let { h -> palette.hue(h) }
             Box(
-                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(palette.surfaceStrong),
+                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(hue?.tint ?: palette.surfaceStrong),
                 contentAlignment = Alignment.Center,
-            ) { JIcon(it, null, size = 28.dp, tint = palette.ink2, decorative = true) }
+            ) { JIcon(it, null, size = 28.dp, tint = hue?.dot ?: palette.ink2, decorative = true) }
             Spacer(Modifier.height(16.dp))
         }
         Text(title, style = PersonaTheme.type.title, color = palette.ink, textAlign = TextAlign.Center)

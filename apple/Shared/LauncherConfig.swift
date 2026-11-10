@@ -104,7 +104,7 @@ nonisolated struct ProviderModel: Codable, Hashable, Sendable, Identifiable {
     var title: String { name?.isEmpty == false ? name! : id }
 }
 
-/// How one machine's launchers came in when 「设置」 › 「模型供应商」 asked (docs/integrations/launchers.md「同步状态」).
+/// How one machine's launchers came in when 「设置」 › 「模型供应商」 asked (docs/integrations/launchers.md「Sync state」).
 nonisolated struct LauncherSync: Codable, Identifiable, Hashable, Sendable {
     var machine: String
     var name: String?
@@ -192,6 +192,18 @@ nonisolated struct LauncherCheck: Codable, Hashable, Sendable {
     var error: String?
 }
 
+extension LauncherCheck {
+    /// The row for a check whose request failed (#1901), as web and Android show it: what the hub said when it answered
+    /// (the computer went offline, the node call failed or timed out, no machine to test on), a timeout's words included;
+    /// "The request didn't finish" only when nothing answered (a client timeout, no network) or it was cancelled.
+    nonisolated static func failed(_ error: any Error) -> LauncherCheck {
+        let reason: String?
+        if let api = error as? APIError { reason = api.message.isEmpty ? nil : api.localizedDescription }
+        else { reason = error.shown }
+        return LauncherCheck(ok: false, millis: 0, error: reason ?? String(localized: "The request didn't finish"))
+    }
+}
+
 /// A launcher added or changed in the app; an empty `apiKey` on a change keeps the key.
 nonisolated struct LauncherInput: Encodable, Sendable {
     var name: String
@@ -271,7 +283,7 @@ nonisolated struct LauncherProbeResult: Decodable, Hashable, Sendable {
     var code: String? = nil
 }
 
-/// POST /api/v1/launchers' answer (docs/protocol/protocol.md「模型供应商与用途配置」): the provider as saved and, when `assign`
+/// POST /api/v1/launchers' answer (docs/protocol/protocol.md「Model providers and per-purpose configuration」): the provider as saved and, when `assign`
 /// was sent, which uses now run on it and which were kept, with why (`customized` / `incompatible` / `failed`).
 /// Older hubs answer `{"ok":true}` or `{"launcher":…}` alone.
 nonisolated struct LauncherAdded: Decodable, Hashable, Sendable {
@@ -348,7 +360,7 @@ nonisolated struct LauncherDefault: Codable, Hashable, Sendable {
     }
 }
 
-/// A model provider the hub offers (GET /api/v1/launchers/presets, docs/extensions/extensions.md「模型供应商」, docs/integrations/launchers.md
+/// A model provider the hub offers (GET /api/v1/launchers/presets, docs/extensions/extensions.md「Model providers」, docs/integrations/launchers.md
 /// 「内置预设」): its built-in ones (`plugin` "builtin") and the plugins'. A launcher added from it takes the address, kind
 /// and models from here; the user fills in only the key (and, on an older hub, the name).
 nonisolated struct LauncherPreset: Decodable, Hashable, Sendable, Identifiable {
@@ -397,8 +409,13 @@ nonisolated struct LauncherPreset: Decodable, Hashable, Sendable, Identifiable {
               let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http", u.host() != nil else { return nil }
         return u
     }
-    /// The hub's key test speaks the Messages protocol only: a Responses API cannot be tested.
-    var testable: Bool { !(kind == "api" && api == "responses") }
+    /// Claude Code needs a Messages endpoint; Responses and Chat Completions serve only the hub's direct-API calls.
+    var runsClaude: Bool { kind != "api" || api == nil || api == "" || api == "messages" }
+    /// The hub's key test supports Messages, Responses and Chat Completions (an empty protocol means Messages).
+    var testable: Bool {
+        guard let api, !api.isEmpty else { return true }
+        return ["messages", "responses", "chat"].contains(api)
+    }
     /// The host it talks to, "" when the address does not parse.
     var host: String { URL(string: baseURL)?.host() ?? "" }
 
@@ -481,7 +498,7 @@ extension APIClient {
     }
 }
 
-/// A launcher's quota at its gateway (GET /api/v1/launchers/{name}/quota, docs/integrations/launchers.md「额度」), as a quota plugin
+/// A launcher's quota at its gateway (GET /api/v1/launchers/{name}/quota, docs/integrations/launchers.md「Quota」), as a quota plugin
 /// read it; `error` when there is nothing to read (`unsupported`, no plugin knows the gateway) or the gateway said no.
 nonisolated struct LauncherQuotaAnswer: Decodable, Hashable, Sendable {
     var machine: String?

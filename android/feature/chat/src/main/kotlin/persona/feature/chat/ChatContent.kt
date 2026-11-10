@@ -14,6 +14,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
@@ -127,7 +130,11 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     if (presence != null && asked.isNotEmpty()) LaunchedEffect(presence, asked) { presence.ask(asked) }
     val linkable = if (presence == null || open == null) emptySet() else asked.filterTo(LinkedHashSet(), presence::linkable)
     val source = remember(text, linkable) { PathLinks.markdown(text, linkable) }
-    val parsed by produceState(cache.cached(id, source), id, source, cache) { value = cache.parse(id, source) }
+    // produceState retains its previous value across key changes. Never draw a predecessor's Markdown in this slot.
+    val parsedSource by produceState(source to cache.cached(id, source), id, source, cache) {
+        value = source to cache.parse(id, source)
+    }
+    val parsed = parsedSource.takeIf { it.first == source }?.second
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val outer = LocalUriHandler.current
@@ -238,7 +245,7 @@ internal fun ChatPicture(session: SessionKey, item: Item, loader: ImageLoader, a
 
 /** [userImages] renders neighboring user-image rows in the same bubble; hide those rows with [imagesInUserBubble].
  * [workRunning] comes from the parent work group's live flag; [lastWorkStep] ends its timeline connector; [plan] is the
- * group's plan ([latestPlan]): its TodoWrite is the plan card, the group's other TodoWrites are not drawn (web #1990).
+ * group's plan ([latestPlan]): its TodoWrite is the full plan card, with earlier updates retained as ordinary steps.
  */
 @Composable
 internal fun ChatLineContent(
@@ -253,15 +260,22 @@ internal fun ChatLineContent(
     workRunning: Boolean = false,
     lastWorkStep: Boolean = false,
     plan: LinePlan? = null,
+    showSourceLabel: Boolean = true,
 ) {
     val res = LocalResources.current
     when (line) {
         is ChatLine.Row -> when (line.row.type) {
-            "user" -> line.row.item?.injected?.let { InjectedLine(line.row.id, it) } ?: line.row.item?.item?.let {
-                MergedUserBubble(listOf(it), textUpdates, onLastLine.takeIf { line.row.id == lastUserId },
-                    images = userPictures(userImages, session, loader))
+            "user" -> line.row.item?.item?.let { item ->
+                val source = persona.core.domain.sourceOf(item)
+                when {
+                    source != null -> SourceMessage(item, source, showSourceLabel, textUpdates[item.id],
+                        images = userPictures(userImages, session, loader))
+                    line.row.item?.injected != null -> InjectedLine(line.row.id, line.row.item!!.injected!!)
+                    else -> MergedUserBubble(listOf(item), textUpdates, onLastLine.takeIf { line.row.id == lastUserId },
+                        images = userPictures(userImages, session, loader))
+                }
             }
-            "reply" -> line.row.item?.item?.let { MessageContent(it, false, textUpdates[it.id]) }
+            "reply" -> line.row.item?.item?.let { MessageContent(it, false, textUpdates[it.id], boxed = true) }
             "thinking" -> if (!style.hideThoughts) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
             "image" -> line.row.item?.item?.let { ChatPicture(session, it, loader) }
             "recap" -> line.row.item?.item?.let { RecapLine(listOf(it)) }
@@ -276,44 +290,35 @@ internal fun ChatLineContent(
             line.images.forEach { ChatPicture(session, it.item, loader, alignEnd = true) }
         }
         is ChatLine.Work -> Column(Modifier.fillMaxWidth()) {
-            // While it runs, the plan and the newest steps show under "Working…" and a ticking clock (web #1990); done,
-            // it folds to its summary. Persona's own chat keeps one sentence that counts its time up every second (R1).
-            val trace = line.live && !style.compactToolSummary
-            val now by rememberNow(1_000, enabled = line.live && !trace)
-            // The Workflow calls whose runs the session lists keep their cards out of the fold (#3435): under the line
-            // while it is folded, in their own place among its steps once open. Only a line with such a call reads the
-            // runs, so a run's progress redraws no other line.
-            val launches = remember(line.steps) { line.steps.any { (it as? WorkItem.Tool)?.call?.name == "Workflow" } }
-            val workflows = if (launches) LocalChatWorkflows.current else null
-            val cards = remember(line.steps, workflows?.runs) { workflows?.let { workflowCalls(line.steps, it.runs) }.orEmpty() }
-            val peek = remember(line.steps, trace, cards) {
-                if (trace) workPeek(line.steps, cards = cards.mapNotNullTo(mutableSetOf()) { it.toolUseId }) else null
-            }
-            WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, peek = trace), line.open,
-                { onToggle(line.id) }, running = line.live,
-                trailing = if (trace) ({ WorkClock(line) }) else null,
-                peek = peek?.takeIf { it.plan != null || it.steps.isNotEmpty() }?.let { shown -> {
-                    shown.plan?.let { PlanStep(it, running = true, nested = true) }
-                    shown.steps.forEachIndexed { i, step ->
-                        key(step.id) {
-                            val last = i == shown.steps.lastIndex
-                            // A thought is one line here (web ThinkingLine): a long one streaming in would make the peek jump.
-                            if (step is WorkItem.Thought) TimelineStep(PhIcons.Lightbulb,
-                                thoughtLine(textUpdates[step.item.id]?.text ?: step.item.text.orEmpty(), stringResource(R.string.chat_work_thought)),
-                                verb = stringResource(R.string.chat_work_thought), last = last, singleLine = true)
-                            else WorkStep(step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates,
-                                running = true, last = last)
-                        }
-                    }
-                } }) {}
-            if (!line.open && workflows != null) cards.forEach { run ->
-                key(run.runId ?: run.taskId) { JWorkflowCallCard(run, folds = workflows.folds, onOpenAgent = workflows.open) }
+            // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary.
+            if (style.compactToolSummary) AssistantWorkSummary(line, onToggle)
+            else {
+                val now by rememberNow(1_000, enabled = line.live)
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }), line.open,
+                    { onToggle(line.id) }, running = line.live) {}
             }
         }
         is ChatLine.Step -> WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
+    }
+}
+
+@Composable
+private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
+    val state = stringResource(if (line.open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
+    val label = pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools)
+    val spoken = stringResource(persona.core.designsystem.R.string.designsystem_with_state, label, state)
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { onToggle(line.id) }
+        .then(Modifier.semantics { stateDescription = state; contentDescription = spoken })
+        .padding(vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        JIcon(if (line.open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true,
+            size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
+        Text(label,
+            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -351,8 +356,8 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     open = true
                 }
             }
-            if (todos != null && !style.compactToolSummary) {
-                if (plan?.id == call.id) PlanStep(plan, running)
+            if (todos != null && !style.compactToolSummary && plan?.id == call.id) {
+                PlanStep(plan, running)
                 return
             }
             val presentation = toolPresentation(LocalResources.current, call.use.item)
@@ -415,13 +420,6 @@ private fun PlanStep(plan: LinePlan, running: Boolean, nested: Boolean = false) 
         } }
     }
     PlanCard(items, progress.current, progress.step, live = running, nested = nested, note = if (plan.failed) stringResource(R.string.chat_content_plan_failed) else null)
-}
-
-/** A running line's clock, every second: a leaf of its own, so the ticking redraws nothing else. */
-@Composable
-private fun WorkClock(line: ChatLine.Work) {
-    val now by rememberNow(1_000)
-    Text(line.durationText(now)?.text().orEmpty())
 }
 
 /** The pictures shown inside a user bubble, or null when there are none (a message of only contexts has no bubble). */

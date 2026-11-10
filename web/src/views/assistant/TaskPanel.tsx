@@ -1,11 +1,12 @@
-// A task's detail beside the assistant's conversation (docs/assistant/unified-entry.md "Task detail"; iOS TaskDetailSheet): its
+// A task's detail beside the assistant's conversation (docs/assistant/unified-entry.md "Task details"; iOS TaskDetailSheet): its
 // agent's own chat — everything the Agents page does works here — and, with several agents, a switch between them.
 import { useState } from "react";
-import { isRemovable, TODO_STATUS_INFO } from "../../lib/todos";
+import { isRemovable, openAsk, TODO_STATUS_INFO } from "../../lib/todos";
+import { TodoAskLine } from "../TodoAsk";
 import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { ChatView } from "../chat/ChatView";
-import { PanelHeader } from "../SidePanel";
+import { PanelHeader } from "../../ui/PanelHeader";
 import { place, removeTaskNow, retryTaskNow, useRetrying, useTaskState, useTodo } from "./Tasks";
 import { stateOf } from "../../lib/format";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -58,6 +59,8 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           mid={chosen.machine_id}
           sid={chosen.session_id}
           panel={{ onClose, title: todo.title, sub: subtitle, items: taskItems, agents: switcher }}
+          // what the task's result waits on from the user (#2056), over its agent's chat
+          banner={openAsk(todo) ? <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" /> : undefined}
         />
       </div>
     );

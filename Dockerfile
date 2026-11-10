@@ -1,7 +1,7 @@
 # The hub as a container image (docs/operations/docker.md): personad hub with the web client inside, which is also the node build
 # the app's "Redeploy" sends computers of the image's platform (the others' are built in, or come from the release when
 # the image is built with UPDATE_URL, docs/operations/docker.md "Node builds"). Built for linux/amd64 and linux/arm64
-# (.github/workflows/hub-image.yml); the binaries are cross compiled on the build machine, only the last stage runs on
+# (.github/workflows/release.yml); the binaries are cross compiled on the build machine, only the last stage runs on
 # the target platform.
 #
 #   docker build -t persona-hub .
@@ -23,12 +23,16 @@ COPY web/ ./
 # The shared cases a web test imports (src/lib/injected.test.ts reads ../../../spec/fixtures/injected): tsc -b in the
 # build checks the tests too. Only this folder, so other fixtures' changes keep the cache.
 COPY spec/fixtures/injected/ /src/spec/fixtures/injected/
+# Likewise src/lib/attention-fixture.test.ts reads ../../../spec/fixtures/attention.
+COPY spec/fixtures/attention/ /src/spec/fixtures/attention/
+# And src/lib/recent-setups.test.ts reads ../../../spec/fixtures/recents.
+COPY spec/fixtures/recents/ /src/spec/fixtures/recents/
 # The extension schema, which the web app builds in: src/lib/extension-ui-stream.ts imports its *.schema.json (?raw),
 # the admin page's assistant card preview and the showcase glob its examples (import.meta.glob, which comes out empty
 # without them), and tests import example JSON (TS2307 in tsc -b without it).
 COPY schema/extension/ /src/schema/extension/
 # Without prebuild's privacy check: it scans the whole checkout (scripts/, git), which is not in this context. It
-# runs on the checkout before the image is built (.github/workflows/hub-image.yml; locally the hooks and web builds).
+# runs on the checkout before the image is built (.github/workflows/release.yml; locally the hooks and web builds).
 RUN npm run build --ignore-scripts
 
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
@@ -48,6 +52,8 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=web /src/web/dist/ internal/hub/webdist/
+# Its hashed assets kept gzipped, as the hub sends them (docs/web/web.md "Precompressed assets").
+RUN go run ./internal/webasset/precompress internal/hub/webdist
 # The runtime packages personad carries and keeps its runtimes on (docs/integrations/runtimes.md "Auto-update"): the DSH plugin's and
 # the pi extension's, the Paseo bridge's and the Agent SDK bridge's code.
 COPY integrations/agent-sdk/ /src/integrations/agent-sdk/
@@ -64,21 +70,23 @@ RUN go generate ./internal/runtimepkg
 # itself runs; the PR smoke build passes linux/amd64 only).
 ARG TARGETARCH
 ARG NODE_PLATFORMS="linux/amd64 linux/arm64 darwin/arm64 darwin/amd64"
+# Every program is built with server/build-tags.txt, as the release is: it leaves out the tailscale.com features
+# persona never uses (server/internal/buildtags).
 RUN if [ -n "$UPDATE_URL" ]; then plats="linux/$TARGETARCH"; else plats="$NODE_PLATFORMS"; fi; \
     for t in $plats; do \
-      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath \
+      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" \
         -o /out/nodes/personad-${t%/*}-${t#*/} ./cmd/personad || exit 1; \
     done
 # The built-in plugins' programs (the WeChat bot, docs/extensions/wechat.md), for this image's platform only: the hub runs them next to personad, and starts one only when its `version -v` is
 # personad's (the same -X).
 RUN for p in wechat; do \
-      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath \
+      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker" -o /out/personad-$p ./cmd/personad-$p || exit 1; \
     done
 # The hub's and the manager's own programs (docs/server/server.md "Programs"), the same build as personad.
 RUN for p in persona-hub persona-manager; do \
-      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -trimpath \
+      CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "$(cat build-tags.txt)" -trimpath \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" -o /out/$p ./cmd/$p || exit 1; \
     done
 

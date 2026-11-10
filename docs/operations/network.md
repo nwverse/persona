@@ -40,7 +40,7 @@ Domains are examples; replace with your configuration. HTTP addresses should be 
 | `public.advertise_lan` | Unset or `true` automatically advertises LAN IPv4 / ULA candidates, delivered only after authentication |
 | `public.ddns` | Omitted disables it; use a domain to recover hub after prefix changes; see [configuration](config.md#ddnspublicddns) |
 
-Both listeners share header timeout, idle-connection timeout, and header-size limits. No whole-request read / write timeout, avoiding truncating WebSockets or large-file transfers.
+Both listeners share header timeout, idle-connection timeout, and header-size limits. No whole-request read / write timeout, avoiding truncating WebSockets or large-file transfers. Instead a request body that sends nothing for 2 minutes is answered and let go: over HTTP/1 its connection is closed; over HTTP/2, which clients of the TLS listener usually negotiate, only that request's stream ends. A slow upload that keeps moving is not cut (`server/internal/hub/bodyidle.go`).
 
 The two `advertise_*` switches control only discovery, not explicitly configured `public_url` / `public.advertise`. With TLS enabled, discovered candidates use HTTPS and the TLS port; explicit HTTP URLs remain unchanged.
 
@@ -81,7 +81,7 @@ Replacing a certificate while keeping the private key preserves the pin. Replaci
 Default pairing tokens last 10 minutes and redeem a device token once. After redemption they remain at most 2 more minutes, never beyond original expiry. This supports old iOS pairing; see [protocol](../protocol/protocol.md#临时配对). Only `hub pair --legacy` prints the main token; public sources always reject it.
 
 Computer links (persona-link, [link.md](link.md)) also use only this TLS port and pin the fingerprint obtained at pairing, including on LAN; hub rejects their plaintext requests except loopback.
-TLS terminates at hub, which authenticates link credentials and forwards the connection unchanged to the computer-connection manager (2026-11-04, [machines.md](../server/machines.md), "Who connects computers").
+TLS terminates at hub, which authenticates link credentials and forwards the connection unchanged to the computer-connection manager (2026-11-04, [machines.md](../server/machines.md), "Who connects to computers").
 Forwarding uses `GET /api/v1/bus/relay` with the manager's own bus token (same as the bus: only `Authorization: Bearer jb_…`, TLS required for public sources; device credentials cannot open it, nor can it open app endpoints).
 
 ## Candidate addresses and DDNS
@@ -361,7 +361,7 @@ DEBUG builds: `-seedLocalProxy <base64 of the LocalProxyRoute JSON>` sets the fi
 
 ## Network troubleshooting
 
-Run `personad hub doctor` on the hub machine first. Read-only: checks hub.json plaintext `listen`, `public.tls_listen`, `security.allow_public_plaintext`, TLS certificate; asks running hub for candidates; lists each local IPv6 as publishable / excluded with reasons; on Linux checks public-IPv6 routes through TUN / virtual interfaces and ufw / nft rules; ends with next steps: which TLS port to allow, which URL to test on cellular. **No external reachability probes**: local access to its own address cannot prove public ingress.
+Run `personad hub doctor` on the hub machine first. Read-only: checks hub.json plaintext `listen`, `public.tls_listen`, `security.allow_public_plaintext`, TLS certificate, and that the data directory's credential files (hub.json, `secret.key`, `relay-tunnel.token`, the key and credential suffixes, `docker/db-password`…) are mode 0600 and its whole-secret folders (`tls/`, `docker/`, `extensions/data/`…) are 0700; asks running hub for candidates; lists each local IPv6 as publishable / excluded with reasons; on Linux checks public-IPv6 routes through TUN / virtual interfaces and ufw / nft rules; ends with next steps: which TLS port to allow, which URL to test on cellular. **No external reachability probes**: local access to its own address cannot prove public ingress.
 
 TUN proxy automatic routes may send public-connection responses into the proxy, causing timeout or interrupted handshakes. **Not measured**. On a hub authorized for troubleshooting, inspect IPv6 routes to the phone source and capture on physical / TUN interfaces: did requests arrive, did replies leave correctly? Temporarily disable TUN for comparison. If implicated, preserve direct reply routing for inbound connections in proxy / policy routing; `trusted_cidrs` cannot fix return routes.
 

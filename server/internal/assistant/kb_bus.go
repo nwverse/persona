@@ -94,6 +94,11 @@ func (s *Service) kbRequest(ctx context.Context, method string, params json.RawM
 func (s *Service) kbEvent(ctx context.Context, name string, params json.RawMessage) (bool, error) {
 	switch name {
 	case assistantwire.EventKBKick:
+		var k assistantwire.KBKick
+		if len(params) > 0 {
+			_ = json.Unmarshal(params, &k) // a manager before #1562 sends {}: only the round
+		}
+		s.kbNoteKick(k)
 		s.kbKick()
 	case assistantwire.EventKBAgentTurn:
 		var t assistantwire.KBAgentTurn
@@ -125,14 +130,14 @@ func (s *Service) kbChatContext(ctx context.Context, id string) *prompts.KBConte
 func kbContext(e *kb.Engine, c *kb.Chat) *prompts.KBContext {
 	out := &prompts.KBContext{ChatID: c.ID, ChatName: c.Name}
 	if sum := e.Store.Summary(kb.KindChat, c.ID); sum != "" {
-		out.Summary = clipRunes(sum, 4000)
+		out.Summary = clip(sum, 4000)
 	}
 	for i, slug := range c.Projects {
 		if i >= 3 {
 			break
 		}
 		if p, ok := e.Store.Project(slug); ok {
-			out.Projects = append(out.Projects, prompts.KBProject{Name: p.Name, Summary: clipRunes(e.Store.Summary(kb.KindProject, slug), 3000)})
+			out.Projects = append(out.Projects, prompts.KBProject{Name: p.Name, Summary: clip(e.Store.Summary(kb.KindProject, slug), 3000)})
 		}
 	}
 	return out
@@ -252,7 +257,7 @@ func (s *Service) kbFileTurn(e *kb.Engine, t assistantwire.KBAgentTurn) {
 	if title == "" || title == "Claude Code" {
 		title = filepath.Base(t.Cwd)
 	}
-	line := clipRunes(strings.Join(strings.Fields(t.Line), " "), 160)
+	line := clip(strings.Join(strings.Fields(t.Line), " "), 160)
 	for _, p := range projects {
 		if _, err := e.Apply(kb.KindProject, p.Slug, kb.Update{Log: line, Source: "Agent · " + title + " · " + t.MachineID}); err != nil {
 			s.logf("kb: agent log %s: %v", p.Slug, err)

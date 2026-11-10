@@ -53,9 +53,10 @@ type Preview struct {
 	previous              *Manifest // immutable consent baseline captured when the preview was staged
 	source                Source
 	marketSpec, marketKey string
-	verifiedMarketKey     string // verified entry and package, separate from the mutable market's pin
-	fingerprint           string // all staged package bytes/modes as approved at preview
-	root                  string // the staged package
+	verifiedMarketKey     string       // verified entry and package, separate from the mutable market's pin
+	fingerprint           string       // all staged package bytes/modes as approved at preview
+	root                  string       // the staged package
+	l10n                  Translations // its translations, for the name and description shown (In)
 	staging               string
 }
 
@@ -185,7 +186,7 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 func MorePermissions(cur *Extension, m *Manifest) bool {
 	was := cur.Full
 	return !cur.Record.Granted.Covers(m.Permissions) || (m.Runtime != nil && was.Runtime == nil) || NodeAdds(was, m) ||
-		len(NewTools(was, m)) > 0 ||
+		len(NewTools(was, m)) > 0 || len(newSecrets(was, m)) > 0 ||
 		slices.ContainsFunc(m.Topics(), func(t string) bool { return !slices.Contains(was.Topics(), t) }) ||
 		slices.ContainsFunc(m.Surfaces(), func(t string) bool { return !slices.Contains(was.Surfaces(), t) }) ||
 		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 ||
@@ -282,6 +283,11 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 	}
 	pv.Manifest, pv.Digest, pv.Permissions = m, Digest(m), Explain(m)
 	pv.Warnings = m.Lint()
+	if pv.root != "" {
+		var warnings []string
+		pv.l10n, warnings = ReadTranslations(pv.root)
+		pv.Warnings = append(pv.Warnings, warnings...)
+	}
 	pv.Depends = r.DependenciesContext(ctx, m)
 	fail := func(err error) (*Preview, error) {
 		if pv.staging != "" {
@@ -329,6 +335,8 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 		return fail(fmt.Errorf("这个包是 %s，不是 %s", m.ID, upgrade))
 	case upgrade != "" && (cur == nil || cur.Record.Source != SourceInstalled):
 		return fail(i18n.Err("extension-status.upgrade_not_installed", i18n.Args{"id": upgrade}))
+	case upgrade != "" && cur.Record.AttachedPackage():
+		return fail(i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": cur.Record.ID}))
 	case upgrade != "" && !NewerVersion(m.Version, cur.Record.Version):
 		return fail(fmt.Errorf("%s 不比已装的 %s 新", m.Version, cur.Record.Version))
 	}

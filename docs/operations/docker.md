@@ -63,11 +63,11 @@ It shares the hub's data folder (mounted at both of the hub container's paths) a
 
 ## Image
 
-`ghcr.io/<owner>/persona` (the image name follows the repo: `<owner>` is the account or organization that owns the repo, `persona` is the repo name; put it in `PERSONA_IMAGE` in `.env`), linux/amd64 and linux/arm64, built by `.github/workflows/hub-image.yml`:
+`ghcr.io/<owner>/persona` (the image name follows the repo: `<owner>` is the account or organization that owns the repo, `persona` is the repo name; put it in `PERSONA_IMAGE` in `.env`), linux/amd64 and linux/arm64, built by `.github/workflows/release.yml`:
 
 | Tag | When it exists |
 | --- | --- |
-| `<version>` | Push a `v*` tag (`v1.2.0` → `1.2.0`); see `docs/operations/release.md` ("Publishing the hub image") |
+| `<version>` | Push a `v*` tag (`v1.2.0` → `1.2.0`), which also creates the tag's GitHub Release; see `docs/operations/release.md` ("Publishing a release") |
 | `latest` | Same, but prerelease tags (containing `-`, e.g. `v1.3.0-rc1`) don't move it |
 | `edge`, `sha-<commit>` | Run this workflow manually in Actions (current branch) |
 
@@ -121,7 +121,7 @@ On first start (no `hub.json` in `data/` yet), the entry script writes a `hub.js
 | `machines` | `[]` | The image has no herdr or Claude Code; computers are all added from outside |
 
 Other notes:
-- `PERSONA_PUBLIC_URL` can also be a VPN address, or an HTTPS address from the NAS's built-in reverse proxy. The reverse proxy must forward WebSocket Upgrade / Connection, disable response buffering, and use a longer read timeout (`docs/server/server.md` ("Lightweight hub and pre-deploy checks")).
+- `PERSONA_PUBLIC_URL` can also be a VPN address, or an HTTPS address from the NAS's built-in reverse proxy. The reverse proxy must forward WebSocket Upgrade / Connection, disable response buffering, and use a longer read timeout (`docs/server/server.md` ("Lightweight hub and predeployment checks")).
 - Ports: 18660 is HTTP, 18662 is TLS; compose maps both to all NAS addresses by default. The TLS port's host port must stay 18662 (that's what the hub tells the App); to expose it on only one address, write `PERSONA_TLS_PORT=<NAS LAN address>:18662`. If 18662 is already taken on the NAS, `docker compose up` reports a port conflict: give the hub a different `public.tls_listen` port and map it the same way.
 - `PUID` / `PGID`: the container starts as root, changes the `persona` user to this uid / gid (any other user in the image with the same uid is removed first, or ssh would find that user's home directory), hands every file in `data/` it doesn't own to it (e.g. an old `~/.persona` copied in with sudo), then drops privileges;
   `docker compose exec hub personad …` also runs as this user, so the files it creates don't belong to root. It can't be 0. Don't set the user with compose's `user:`:
@@ -169,7 +169,7 @@ The native method also honors these variables (e.g. systemd's `Environment=`), b
 
 Some hosts pay heavily for every `fsync`: a NAS volume on a single SSD formatted btrfs (copy-on-write, metadata kept twice) turns each one into several metadata writes, so how often things are flushed matters more than how many bytes are written. Two flushers dominate:
 
-- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute).
+- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute). The manager groups its background writes: each 10 s tick's monitoring samples of all machines go in one commit, token usage reports of several machines that come within 5 s of each other in one, and indexing a knowledge base entity again with nothing changed writes nothing, so the number of machines no longer multiplies these commits.
 - **Health checks.** dockerd rewrites and fsyncs a container's state file on every health check run (about 1 MB a run on btrfs): the postgres check runs every 5 s, the hub's every 30 s.
 
 `compose.yaml` takes all of these from `.env`. Every default is what compose did before, or PostgreSQL's own default, so nothing changes until you set one; Postgres settings take effect when the container is recreated (`docker compose up -d`), health checks and logging likewise.
@@ -263,7 +263,7 @@ Trusting the gateway lets in whatever reaches the published ports: with them on 
 
 ### Reverse proxy on the same machine
 
-The hub treats its own container's gateway as public internet ([network.md](network.md) ("Source checks and reverse proxies")): plaintext requests from the internet get `403 tls_required` and can't use the main token.
+The hub treats its own container's gateway as public internet ([network.md](network.md) ("Source classification and reverse proxies")): plaintext requests from the internet get `403 tls_required` and can't use the main token.
 With the two common ways of setting up a reverse proxy on a NAS, the source seen by the hub becomes the gateway, so connect as follows:
 
 - **Proxy in another container** (Caddy, nginx, Nginx Proxy Manager…): don't reach the hub through the host-mapped port (`<NAS address>:18660`). The proxy container is on a different
@@ -334,7 +334,7 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
   so it can't tell "same subnet" and is relaxed to any private address. But connections forwarded by Docker's userland proxy (docker-proxy) all show up as the gateway address (`172.x.0.1`),
   including ones from the internet (IPv6 requests when Docker has no IPv6, requests forwarded by a reverse proxy on the host), so the gateway never counts as LAN. On Linux, LAN computers come in through
   iptables DNAT, the container sees their real address, and they can open it as usual. The App's API works the same way: requests from the gateway are treated as internet (can't use the main token; plaintext APIs return `403 tls_required`),
-  see [network.md](network.md) ("Source checks and reverse proxies").
+  see [network.md](network.md) ("Source classification and reverse proxies").
 - **Docker Desktop / OrbStack**: the forwarding source may be the gateway, or a public-looking address provided by gvisor. Find the real peer as in "Plaintext connections on Docker Desktop / OrbStack" above; for local trial only, bind the port to `127.0.0.1` and put the actual source in `PERSONA_ADMIN_CIDRS`. The API allowlist needs `security.trusted_cidrs` separately.
 - **`loopback`** inside a container means the container itself: for uses like `docker compose exec hub wget -qO- http://127.0.0.1:18660/admin`; rarely useful.
 - **`any`** requires the hub to have TLS on (`public.tls_listen` in `data/hub.json`; the `hub.json` written on first start already has it, and compose maps 18662; older installs need to add it).
@@ -345,15 +345,16 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
 
 1. On the old machine, stop the hub (`systemctl --user stop personad`) and export the database:
    `docker exec persona-postgres pg_dump -U persona -Fc persona > persona.dump`, and the built-in manager's database in the same server: `docker exec persona-postgres pg_dump -U persona -Fc persona_manager > persona_manager.dump`. Both together are the hub's data ([managers.md](../assistant/managers.md) ("The built-in manager's database")); one without the other loses the manager's data or the hub's.
-2. Copy the actual runtime directory (the new default is `~/.persona`; existing deployments may still use the compatibility directory `~/.persona`) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
+2. Copy the actual runtime directory (`~/.persona` by default; an older deployment may still keep it under the old name: [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md)) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
    change it to `ssh` or `tailcat`). Leave `database_url` alone (the environment variable overrides it).
 3. `docker compose up -d postgres`, then import: `docker compose exec -T postgres pg_restore -U persona -d persona --clean --if-exists < persona.dump` (and the manager's: `docker compose exec -T postgres createdb -U persona persona_manager`, then the same `pg_restore -d persona_manager < persona_manager.dump`),
    then `docker compose up -d`. The token is unchanged; paired phones only need the address changed to the new one (or scan again).
 
 ## Verification
 
-`.github/workflows/hub-image.yml` builds the image on every PR that touches the server (including `sdk/go`), the web app, or the image, and runs it once with compose: health check, pairing,
-tailcat key, web app, owner of `hub.json`. The workflow passes no `UPDATE_URL`, so the image carries personad for every platform (for a PR, `linux/amd64` only); one built with `UPDATE_URL` carries its own platform's and fetches the others ("Node builds").
+`.github/workflows/release.yml` builds and smoke-tests the image on explicit workflow dispatch: health check, pairing,
+tailcat key, web app, owner of `hub.json`. The workflow passes no `UPDATE_URL`, so the image carries personad for every platform (for the smoke test, `linux/amd64` only); one built with `UPDATE_URL` carries its own platform's and fetches the others ("Node builds").
+The only automatic trigger is a `v*` release tag, which publishes the version image and, for stable releases, `latest`, then creates a GitHub Release for the tag. Manual dispatch publishes only `edge`/`sha-*` images and does not create a GitHub Release. Docker installations use the versioned images, so this release publication exception is retained. PRs and branch pushes do not start the workflow.
 You can do the same locally (OrbStack / Docker Desktop):
 
 ```sh

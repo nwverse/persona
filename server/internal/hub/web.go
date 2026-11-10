@@ -2,19 +2,25 @@ package hub
 
 import (
 	"bytes"
+	"compress/gzip"
 	"embed"
+	"errors"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/webasset"
 )
 
 // webDist is the web client built into a published personad (scripts/release/publish.sh copies web/dist here before building);
-// in other builds only the placeholder is there.
+// in other builds only the placeholder is there. Its hashed assets and its third-party-licenses.txt are kept gzipped
+// (webasset.Precompress, run by the build after the copy): name.gz instead of name.
 //
 //go:embed all:webdist
 var webDist embed.FS
@@ -23,6 +29,12 @@ var webDist embed.FS
 // API's origin: no CORS, and the WebSocket and images authenticate the same way. Without that directory the copy built
 // into personad serves (published builds), and without either every non-API path is a 404, as before. Paths without a
 // file fall back to index.html (client-side routes).
+//
+// The built-in copy's precompressed files (docs/web/web.md "Precompressed assets") go out as they are stored to a
+// client that takes gzip, and decompressed to any other request, with the headers and bytes a plain file would
+// have. A first-screen asset the web build also wrote as name.br (webasset.BrotliSuffix) goes out as that copy to a
+// client that takes br (serveBrotli). The data dir's files are plain and gzipResponses compresses them as it sends
+// them, as before; its .br copies are not sent.
 func webApp(dir string) http.Handler {
 	embedded, _ := fs.Sub(webDist, "webdist")
 	return webFrom(dir, embedded)
@@ -36,11 +48,12 @@ func webFrom(dir string, embedded fs.FS) http.Handler {
 		}
 		// The data dir wins (scripts/deploy/deploy.sh web swaps it in whole), checked on every request like before.
 		var site fs.FS
+		builtIn := false // site is the copy built into personad, whose assets may be stored gzipped
 		if st, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !st.IsDir() {
 			site = os.DirFS(dir)
 		} else if embedded != nil {
 			if st, err := fs.Stat(embedded, "index.html"); err == nil && !st.IsDir() {
-				site = embedded
+				site, builtIn = embedded, true
 			}
 		}
 		if site == nil {
@@ -49,12 +62,24 @@ func webFrom(dir string, embedded fs.FS) http.Handler {
 		}
 		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		file := name
-		if st, err := fs.Stat(site, name); name == "" || err != nil || st.IsDir() || strings.HasPrefix(path.Base(name), ".") {
-			if strings.HasPrefix(name, "assets/") { // a missing hashed asset is a real 404, not the app
+		asset, hidden := strings.HasPrefix(name, "assets/"), strings.HasPrefix(path.Base(name), ".")
+		kept := asset || name == webasset.Licenses // a file the build may keep gzipped (webasset.Precompressible)
+		// In the built-in copy an asset's .gz is how another asset is stored, never a file of its own (Vite makes none);
+		// so is the licenses' .gz, which falls back to index.html like any other path without a file. An asset's .br is
+		// the build's brotli copy of another asset in either copy, never a file of its own either.
+		storedForm := builtIn && (asset && strings.HasSuffix(name, webasset.Suffix) || name == webasset.Licenses+webasset.Suffix) ||
+			asset && strings.HasSuffix(name, webasset.BrotliSuffix)
+		stored := false // file is kept as file + webasset.Suffix
+		if name == "" || hidden || storedForm || !isFile(site, name) {
+			switch {
+			case builtIn && kept && !hidden && !storedForm && isFile(site, name+webasset.Suffix):
+				stored = true
+			case asset: // a missing hashed asset is a real 404, not the app
 				http.NotFound(w, r)
 				return
+			default:
+				file = "index.html"
 			}
-			file = "index.html"
 		}
 		switch {
 		// the service worker and the manifest (docs/web/web.md "Install as an app") are checked again on every load, like the shell
@@ -73,6 +98,13 @@ func webFrom(dir string, embedded fs.FS) http.Handler {
 			serveIndex(w, r, site)
 			return
 		}
+		if builtIn && asset && brotliWanted(r) && serveBrotli(w, r, site, name) {
+			return
+		}
+		if stored {
+			serveStored(w, r, site, file)
+			return
+		}
 		f, err := site.Open(file)
 		if err != nil {
 			http.NotFound(w, r)
@@ -89,7 +121,141 @@ func webFrom(dir string, embedded fs.FS) http.Handler {
 	})
 }
 
-// serveIndex serves index.html with its <base> at the sub-path a reverse proxy serves the hub under (docs/web/web.md "Sub-path"):
+// isFile: name is in site and not a directory.
+func isFile(site fs.FS, name string) bool {
+	st, err := fs.Stat(site, name)
+	return err == nil && !st.IsDir()
+}
+
+// serveStored serves the file name that site keeps as name + webasset.Suffix. A request gzipResponses would
+// compress (gzipWanted) gets the stored bytes, marked as gzip, which gzipResponses then passes on as they are. Any
+// other (no gzip, HEAD, a range) gets them decompressed as they are read (gunzipSeeker), the same answer as for the
+// plain file.
+func serveStored(w http.ResponseWriter, r *http.Request, site fs.FS, name string) {
+	f, err := site.Open(name + webasset.Suffix)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	rs, ok := f.(io.ReadSeeker)
+	if err != nil || !ok {
+		http.NotFound(w, r)
+		return
+	}
+	// The type goes by the plain name, as http.ServeContent would; one only sniffing could tell is sent decompressed.
+	if ct := mime.TypeByExtension(path.Ext(name)); ct != "" && gzipWanted(r) {
+		h := w.Header()
+		h.Set("Content-Type", ct)
+		h.Set("Content-Encoding", "gzip")
+		h.Add("Vary", "Accept-Encoding")
+		http.ServeContent(w, r, path.Base(name), st.ModTime(), rs)
+		return
+	}
+	plain, err := newGunzipSeeker(rs)
+	if err != nil { // a broken build; not to be kept for a year by a cache
+		w.Header().Del("Cache-Control")
+		http.Error(w, "broken asset", http.StatusInternalServerError)
+		return
+	}
+	http.ServeContent(w, r, path.Base(name), st.ModTime(), plain)
+}
+
+// serveBrotli sends the brotli copy the web build wrote of the asset name (name + webasset.BrotliSuffix), as it is
+// stored, to a request brotliWanted took; gzipResponses passes an answer that has its Content-Encoding on as it is.
+// It reports false, having written nothing, when there is no copy or its type cannot be told by name: the request
+// then gets the gzip or plain file, as before.
+func serveBrotli(w http.ResponseWriter, r *http.Request, site fs.FS, name string) bool {
+	ct := mime.TypeByExtension(path.Ext(name))
+	if ct == "" {
+		return false
+	}
+	f, err := site.Open(name + webasset.BrotliSuffix)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	rs, ok := f.(io.ReadSeeker)
+	if err != nil || !ok || st.IsDir() {
+		return false
+	}
+	h := w.Header()
+	h.Set("Content-Type", ct)
+	h.Set("Content-Encoding", "br")
+	h.Add("Vary", "Accept-Encoding")
+	http.ServeContent(w, r, path.Base(name), st.ModTime(), rs)
+	return true
+}
+
+// gunzipSeeker reads a gzip file's content as http.ServeContent reads a file: its size comes from the gzip trailer
+// (ISIZE, which gzip.Reader checks at the end), so a HEAD decompresses nothing, a GET as it is sent, and a range only
+// up to its end. A seek back starts decompressing again from the top.
+type gunzipSeeker struct {
+	src       io.ReadSeeker // the gzip bytes
+	zr        *gzip.Reader
+	size      int64
+	pos, want int64 // where zr is, where the next Read starts
+}
+
+func newGunzipSeeker(src io.ReadSeeker) (*gunzipSeeker, error) {
+	var trailer [4]byte
+	if _, err := src.Seek(-int64(len(trailer)), io.SeekEnd); err != nil {
+		return nil, err
+	}
+	if _, err := io.ReadFull(src, trailer[:]); err != nil {
+		return nil, err
+	}
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	zr, err := gzip.NewReader(src) // reads and checks the header
+	if err != nil {
+		return nil, err
+	}
+	size := int64(trailer[0]) | int64(trailer[1])<<8 | int64(trailer[2])<<16 | int64(trailer[3])<<24
+	return &gunzipSeeker{src: src, zr: zr, size: size}, nil
+}
+
+func (g *gunzipSeeker) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekCurrent:
+		offset += g.want
+	case io.SeekEnd:
+		offset += g.size
+	}
+	if offset < 0 {
+		return 0, errors.New("gunzipSeeker: negative position")
+	}
+	g.want = offset
+	return offset, nil
+}
+
+func (g *gunzipSeeker) Read(p []byte) (int, error) {
+	if g.want < g.pos { // back: from the top again
+		if _, err := g.src.Seek(0, io.SeekStart); err != nil {
+			return 0, err
+		}
+		if err := g.zr.Reset(g.src); err != nil {
+			return 0, err
+		}
+		g.pos = 0
+	}
+	if g.want > g.pos {
+		n, err := io.CopyN(io.Discard, g.zr, g.want-g.pos)
+		g.pos += n
+		if err != nil {
+			return 0, err
+		}
+	}
+	n, err := g.zr.Read(p)
+	g.pos += int64(n)
+	g.want = g.pos
+	return n, err
+}
+
+// serveIndex serves index.html with its <base> at the sub-path a reverse proxy serves the hub under (docs/web/web.md "Subpaths"):
 // the page's files are relative to it and lib/base.ts reads it for the API, the WebSocket and the page's routes. The
 // same file answers differently per X-Forwarded-Prefix, so a cache must key on it (Vary).
 func serveIndex(w http.ResponseWriter, r *http.Request, site fs.FS) {

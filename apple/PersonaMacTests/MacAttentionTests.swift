@@ -67,6 +67,51 @@ struct MacAttentionTests {
         #expect(ping([session("a", .working)], [session("a", .needsYou)], muted: ["a"]).isEmpty)
     }
 
+    @Test func aManagerSwitchedOffHereRingsNoBanner() throws {
+        // #1863 (the prefs' muted_managers): a session or card without `manager` is the hub's own assistant's.
+        var prefs = NotifyPrefs(done: .always)
+        var theirs = session("b", .needsYou)
+        theirs.manager = "m-2"
+        var card = try interaction("x", session: "c")
+        card.manager = "m-2"
+        let key = { SessionKey(machineID: "m", sessionID: $0) }
+        #expect(!MacAttention.managerMuted(prefs, group: "", sessions: [theirs], interactions: [card])(theirs.key), "none switched off")
+        prefs.mutedManagers = ["m-2"]
+        let muted = MacAttention.managerMuted(prefs, group: "", sessions: [session("a", .needsYou), theirs], interactions: [card])
+        #expect(muted(theirs.key) && muted(key("c")) && !muted(key("a")))
+        // The banners: the switched-off manager's agent and card ring none, the other's do.
+        let rang = MacAttention.transitions(old: [session("a", .working), session("b", .working)], new: [session("a", .needsYou), theirs],
+                                            open: nil, appActive: false, prefs: prefs, now: now, muted: muted)
+        #expect(rang.map { $0.0.sessionID } == ["a"])
+        let other = try interaction("y", session: "a")
+        #expect(MacAttention.newInteractions(old: [], new: [card, other], transitionedKeys: [], open: nil, appActive: false,
+                                             prefs: prefs, muted: muted).map(\.id) == ["y"])
+        // Another group's hub keeps its own prefs: these leave its agents alone.
+        var elsewhere = theirs
+        elsewhere.group = "g2"
+        #expect(!MacAttention.managerMuted(prefs, group: "", sessions: [elsewhere], interactions: [])(elsewhere.key))
+        prefs.mutedManagers = ["assistant"]
+        #expect(MacAttention.managerMuted(prefs, group: "", sessions: [session("a", .needsYou)], interactions: [])(key("a")), "no stamp: the hub's own assistant")
+    }
+
+    @Test func quietHoursDropFinishedBannersAndHushTheRest() throws {
+        // #1863: inside this device's window, as the hub does with its pushes then.
+        var prefs = NotifyPrefs(done: .always)
+        let old = [session("a", .working), session("b", .working)]
+        let new = [session("a", .needsYou), session("b", .unread)]
+        prefs.quiet = QuietHours(enabled: true, start: "23:00", end: "07:00")
+        let utc = try #require(TimeZone(identifier: "UTC"))
+        #expect(prefs.quiet?.active(at: now, fallback: utc) == false, "the test's clock, 13:46 UTC")
+        prefs.quiet?.tz = "UTC"
+        #expect(ping(old, new, prefs: prefs) == ["a:needs_you", "b:unread"], "outside the window")
+        prefs.quiet?.start = "13:00"
+        prefs.quiet?.end = "14:00"
+        #expect(ping(old, new, prefs: prefs) == ["a:needs_you"], "inside it nothing says an agent finished")
+        let hushed = MacAttention.content(session("a", .needsYou), .needsYou, interaction: nil, hushed: true)
+        #expect(hushed.sound == nil && hushed.interruptionLevel == .passive)
+        #expect(MacAttention.content(session("a", .needsYou), .needsYou, interaction: nil).sound != nil)
+    }
+
     @Test func personaAsksButItsRepliesDoNotPing() {
         let old = [session("j", .working, assistant: true), session("k", .working, assistant: true)]
         let new = [session("j", .needsYou, assistant: true), session("k", .unread, assistant: true)]

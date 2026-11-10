@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What a new or resumed Agent runs on and what its tab is called (docs/assistant/model-config.md "Picking a model for a new Agent"): the
+// What a new or resumed Agent runs on and what its tab is called (docs/assistant/model-config.md "Choosing a model for a new Agent"): the
 // manager's. The hub asks before it starts one the app asked for (agents.start_params), before a message resumes one
 // nothing says the launcher of (agents.resume_params), and for a tab's name (agents.tab_name: an Agent started in the
 // background, the Feishu card's); the assistant's own starts (agents_start, a task's agents) come here directly.
@@ -45,11 +45,19 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		params = map[string]any{}
 	}
 	if resume, _ := params["resume_session_id"].(string); resume == "" {
+		own := pickOf(params)
 		if err := s.applyStartTier(ctx, params); err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang))
 		}
 		if err := s.applyModel(ctx, "agent.new", params); err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id among them
+		}
+		// Held to what the computer has (#2640): a launcher picked that it lacks is refused, a default it lacks gives
+		// way to one it has.
+		if m, ok := s.device(ctx, p.MachineID); ok {
+			if _, err := s.fitLauncher(ctx, m, own, params); err != nil {
+				return nil, badRequest(err, s.appLang(ctx, p.Lang))
+			}
 		}
 	}
 	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
@@ -72,6 +80,13 @@ func (s *Service) AgentResumeParams(ctx context.Context, p AgentResumeParams) (m
 	if err := s.applyModel(ctx, "agent.new", q); err != nil {
 		s.logf("resume %s: 新建 Agent's launcher not applied: %v", p.SessionID, err)
 		return params, nil
+	}
+	// One the computer lacks gives way to one it has (#2640; a default is never refused).
+	if m, ok := s.device(ctx, p.MachineID); ok {
+		if _, err := s.fitLauncher(ctx, m, startPick{}, q); err != nil {
+			s.logf("resume %s: the New Agent launcher not applied: %v", p.SessionID, err)
+			return params, nil
+		}
 	}
 	for _, k := range []string{"launcher", "model", "effort", "model_fingerprint"} {
 		if v, ok := q[k]; ok {
