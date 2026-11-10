@@ -28,6 +28,7 @@
   "footer": "Messaging this bot in Lark is talking to Persona. It only answers you once paired, and stays quiet in groups.",
   "larkcli_row": "Read as me (lark-cli)",
   "larkcli_footer": "Reading as you with lark-cli collects messages that mention you and your direct chats.",
+  "larkcli_dialog_footer": "It reads messages that mention you and your direct chats with your Lark login; the bot is how you talk to Persona.",
   "status_unreadable": "Status unavailable",
   "error_with": "{what}: {error}",
   "test_sent": "Sent a test message to Lark",
