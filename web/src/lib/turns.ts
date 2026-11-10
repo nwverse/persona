@@ -543,6 +543,11 @@ export function toolDisplayName(name?: string): string {
   return tool ? `${mcpServerName(server)} · ${tool}` : mcpServerName(server);
 }
 
+/** The tool a card asks about, for its title: the manager's name for its own tools when it gave one (tool_title). */
+export function cardToolName(ix: { tool_name?: string; tool_title?: string }): string {
+  return ix.tool_title || toolDisplayName(ix.tool_name);
+}
+
 /** The MCP server ids that are Persona itself (`persona` today, `persona` if it is ever renamed; plugin_ dropped). */
 
 

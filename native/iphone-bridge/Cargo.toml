@@ -1,0 +1,49 @@
+[package]
+name = "persona-iphone-bridge"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Operates a paired iPhone over RemotePairing for a Persona node (docs/extensions/iphone-bridge.md)"
+publish = false
+
+[[bin]]
+name = "persona-iphone-bridge"
+path = "src/main.rs"
+
+[dependencies]
+idevice = { version = "=0.1.68", default-features = false, features = [
+    "aws-lc",
+    "remote_pairing",
+    "rsd",
+    "tunnel_tcp_stack",
+    "core_device",
+    "display_stream",
+    "springboardservices",
+    "usbmuxd",
+    "pair",
+    "tcp",
+    "mobile_image_mounter",
+    "tss",
+    "installation_proxy",
+    "dvt",
+    "device_info",
+] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "time", "net", "sync", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+plist = "1"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "time", "net", "sync", "process", "test-util"] }

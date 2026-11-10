@@ -12,7 +12,7 @@ import (
 // A session started in plan mode goes on in one mode once its plan is approved, whichever surface approves it
 // (#3784): the mode its start named (session.start's plan_then, sessionState.PlanThen). Approved on Persona's card,
 // the hook's answer sets it (hooks.go). Approved in the terminal's own dialog, Claude Code applies the option picked
-// there; the node then looks at the footer and moves the session to the recorded mode when it differs.
+// there; the node watches the footer from the moment the card is raised and moves the session to the recorded mode when it differs.
 
 // planThenOf is the mode to record for a start in mode with the asked-for plan_then: only for a plan-mode start, a
 // mode Persona knows, and not plan itself.
@@ -41,25 +41,28 @@ func (n *Node) planThen(id string) string {
 	return ""
 }
 
-// How long, and how often, the node looks at the terminal after a plan card ended without an answer.
+// How long, and how often, the node looks at the terminal while a plan waits to be decided. Long: a plan approved in
+// the terminal with "manually approve" is followed at once by a permission dialog, which hides the footer until it is
+// answered.
 var (
-	planThenWatch = 90 * time.Second
-	planThenEvery = 2 * time.Second
+	planThenWatch = 10 * time.Minute
+	planThenEvery = 3 * time.Second
 )
 
 // planThenSet bounds pressing the session over to its mode (tuiSetMode: a read and a key per step of the cycle).
 const planThenSet = 20 * time.Second
 
-// planThenAfterTerminal follows a plan the terminal is deciding: once the footer shows a mode other than plan, the
-// plan was approved there, and the session is moved to its recorded mode when the dialog picked another. A plan sent
-// back (the footer stays on plan), a dialog still open (no footer) and a session with no recorded mode are left alone.
-func (n *Node) planThenAfterTerminal(id string) {
+// planThenAfterTerminal follows a plan from the moment its card is raised: once the footer shows a mode other than
+// plan, the plan was approved in the terminal, and the session is moved to its recorded mode when the dialog picked
+// another. A plan sent back (the footer stays on plan), a dialog in front (no footer) and a session with no recorded
+// mode are left alone. The returned stop ends the watch: the card was answered, and its answer set the mode.
+func (n *Node) planThenAfterTerminal(id string) (stop func()) {
 	want := n.planThen(id)
 	if want == "" {
-		return
+		return func() {}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), planThenWatch)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), planThenWatch)
 		defer cancel()
 		t := time.NewTicker(planThenEvery)
 		defer t.Stop()
@@ -79,7 +82,7 @@ func (n *Node) planThenAfterTerminal(id string) {
 			}
 			switch cur := tuiMode(screen); cur {
 			case "", "plan":
-				continue // the dialog is still up, or the plan was sent back
+				continue // a dialog is up, or the plan is not approved (yet)
 			case want:
 				return
 			default:
@@ -98,4 +101,5 @@ func (n *Node) planThenAfterTerminal(id string) {
 			}
 		}
 	}()
+	return cancel
 }

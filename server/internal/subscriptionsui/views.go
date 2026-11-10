@@ -118,13 +118,13 @@ func (p *pages) list() wire.View {
 
 // confirm is what a destination's switch asks before it turns on: what, how often, where it is kept, which model.
 func (p *pages) confirm(dest, label, kind, every string) string {
-	model := p.env.TriageModel
+	purpose := "inbox.triage" // Information filtering triages the Inbox's items
 	if dest == "to_kb" {
-		model = p.env.KBModel
+		purpose = "kb" // Information processing summarizes the knowledge base's
 	}
 	provider := ""
-	if model != "" {
-		provider = p.t("confirm.provider", i18n.Args{"name": model})
+	if m := p.modelOf(purpose); m.OK && m.Provider != "" {
+		provider = p.t("confirm.provider", i18n.Args{"name": modelName(m)})
 	}
 	return p.t("confirm."+dest, i18n.Args{"source": label, "noun": p.noun(kind), "every": every, "provider": provider})
 }
@@ -282,11 +282,12 @@ func (p *pages) newSource() wire.View {
 		other.Action = open(state{P: pageTools, C: p.st.C, S: p.st.S}, p.t("title.tools"))
 		how.Items = []wire.Component{own, other}
 	} else {
+		how.Items = p.draftItems(&v, sourceKey(p.st.C, p.st.S), state{P: pageSetup, C: p.st.C, S: p.st.S}, false)
 		pick := row("h.pick", p.t("new.pick"))
 		pick.Subtitle = p.t("list.tools", i18n.Args{"count": subscribable(*src)})
 		pick.Icon, pick.IconColor = "search", "blue"
 		pick.Action = open(state{P: pageTools, C: p.st.C, S: p.st.S}, p.t("title.tools"))
-		how.Items = []wire.Component{pick}
+		how.Items = append(how.Items, pick)
 		how.Footer = p.t("new.pick_footer")
 	}
 	v.Sections = append(v.Sections, how, p.switches("", src.Name, kind, every, false, false, len(src.Recipes) > 0))
@@ -305,6 +306,9 @@ func (p *pages) recipe(dry *subscriptions.DryRun, dryErr error) wire.View {
 	}
 	_, src := p.cached(s.Connector, s.Source)
 	v := wire.View{Title: p.t("source.recipe"), State: state{P: pageRecipe, ID: s.ID}.String()}
+	if job, ok := p.env.Drafts.get(subKey(s.ID)); ok && !job.running && job.err == nil && dry == nil && dryErr == nil {
+		dry = job.draftDryRun() // just regenerated: what its check pulled
+	}
 	v.Sections = append(v.Sections, wire.Section{Key: "what", Title: p.t("recipe.what"), Items: []wire.Component{
 		text("plain", p.plain(s, src), "body")}})
 	examples := map[string]string{}
@@ -347,6 +351,9 @@ func (p *pages) recipe(dry *subscriptions.DryRun, dryErr error) wire.View {
 			text("dry.err", p.t("dry.failed"), "secondary")}})
 	case dry != nil:
 		v.Sections = append(v.Sections, p.dryItems(dry)...)
+	}
+	if items := p.draftItems(&v, subKey(s.ID), state{P: pageSetup, ID: s.ID, C: s.Connector, S: s.Source}, true); len(items) > 0 {
+		v.Sections = append(v.Sections, wire.Section{Key: "draft", Title: p.t("draft.title"), Items: items})
 	}
 	try := button("b.dry", p.t("recipe.dry_run"), "dry_run")
 	edit := row("x.tool", p.t("recipe.edit"))
@@ -573,4 +580,83 @@ func (p *pages) rules() wire.View {
 		{Key: "rules", Footer: p.t("rules.footer"), Items: []wire.Component{field}},
 		{Key: "save", Items: []wire.Component{save}},
 	}}
+}
+
+// modelName is a model as the consents name it: its connection, and the model when the connection has several.
+func modelName(m subscriptions.ModelInfo) string {
+	if m.Model == "" || m.Model == m.Provider {
+		return m.Provider
+	}
+	return m.Provider + " · " + m.Model
+}
+
+// draftItems are the rows of a draft by the model (#2040) for key: the press that starts one (asking first what goes to
+// which model), one running (the page draws again when it is done), or what it came to. setup is the setup page a draft
+// opens in; regenerate: a subscription's, whose draft is saved when it passes. Nothing without the model stage.
+func (p *pages) draftItems(v *wire.View, key string, setup state, regenerate bool) []wire.Component {
+	if !p.canDraft() {
+		return nil
+	}
+	job, ok := p.env.Drafts.get(key)
+	switch {
+	case ok && job.running:
+		v.RefreshAfter = 30 // the manager redraws the pages when it is done; this is the fallback
+		r := row("g.running", p.t("draft.running"))
+		r.Subtitle, r.Icon, r.IconColor = p.t("draft.running_line"), "clock", "blue"
+		return []wire.Component{r}
+	case ok && job.err == nil:
+		note := row("g.done", p.t("draft.done"))
+		if regenerate {
+			note.Title = p.t("draft.regenerated")
+		}
+		note.Icon, note.IconColor = "check", "green"
+		items := []wire.Component{note}
+		if job.result.Note != "" { // the model's own words on what it chose: whole, not cut to a subtitle's line
+			items = append(items, text("g.note", job.result.Note, "secondary"))
+		}
+		if !regenerate {
+			review := row("g.review", p.t("draft.review"))
+			st := setup
+			st.T, st.G = job.result.Recipe.Tool, true
+			review.Action = open(st, p.t("title.setup"))
+			items = append(items, review)
+		}
+		return items
+	case ok:
+		failed := row("g.failed", p.t("draft.failed"))
+		failed.Icon, failed.IconColor = "warning", "orange"
+		if se, isProblem := job.err.(*subscriptions.Error); isProblem {
+			failed.Subtitle = p.problemText(&subscriptions.Problem{Code: se.Code})
+		} else {
+			failed.Subtitle = p.t("problem.other")
+		}
+		items := []wire.Component{failed}
+		if d := job.draftRecipe(); d != nil && d.Tool != "" {
+			goOn := row("g.continue", p.t("draft.continue"))
+			st := setup
+			st.T, st.G = d.Tool, true
+			goOn.Action = open(st, p.t("title.setup"))
+			items = append(items, goOn)
+		}
+		return append(items, p.draftPress(regenerate, "draft.again"))
+	}
+	return []wire.Component{p.draftPress(regenerate, map[bool]string{false: "draft.start", true: "draft.regenerate"}[regenerate])}
+}
+
+// draftPress starts a draft, after saying what goes to which model; without a model it only says so.
+func (p *pages) draftPress(regenerate bool, title string) wire.Component {
+	r := row("g.draft", p.t(title))
+	r.Icon, r.IconColor = p.icon("robot"), "purple"
+	m := p.modelOf("recipe")
+	if !m.OK {
+		r.Subtitle = p.t("draft.no_model")
+		return r
+	}
+	r.Subtitle = p.t("draft.start_line")
+	id := "draft"
+	if regenerate {
+		id = "regenerate"
+	}
+	r.Action = &wire.Action{ID: id, Confirm: p.t("draft.consent", i18n.Args{"provider": modelName(m)})}
+	return r
 }

@@ -292,6 +292,7 @@ func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Dev
 	if supervisor != "" {
 		s.superviseTodo(ctx, todo.ID, supervisor, nil, 0)
 	}
+	s.briefFor(ctx, s.callerOrigin(ctx, conversation), todo, nil, 0) // who asked, before its agent is linked (task_brief.go)
 	if err := s.linkTodoAgent(ctx, todo.ID, m.ID, sid, title, cwd, ""); err != nil {
 		s.logf("agent_start %s: link %s: %v", short(sid), todo.ID, err)
 	}
