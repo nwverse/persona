@@ -109,6 +109,7 @@ func (s *Service) announce(ix proto.Interaction) {
 // tell is announce once nothing is in the way: the card on the apps, the push, the channels, or the main conversation
 // for a quiet task.
 func (s *Service) tell(ix proto.Interaction) {
+	s.taskPlanApproval(ix.MachineID, ix.SessionID)
 	ix = s.withTask(ix)
 	s.markTold(ix)
 	s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: ix})
@@ -130,6 +131,7 @@ func (s *Service) tell(ix proto.Interaction) {
 // user's yet (the assistant decides on it; a screen card whose dialog was not read, #4450). It never makes a card the
 // user's (pending.told): only tell does.
 func (s *Service) show(ix proto.Interaction) {
+	s.taskPlanApproval(ix.MachineID, ix.SessionID)
 	s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: s.withTask(ix)})
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // the card, and whether the assistant decides on it, count for Persona Link's summary
@@ -641,6 +643,7 @@ func (s *Service) finishInteraction(id string) {
 
 // finished tells everyone an interaction, already out of the pending set, is over.
 func (s *Service) finished(p *pending) {
+	s.taskPlanApproval(p.ix.MachineID, p.ix.SessionID)
 	s.fleet.mu.Lock()
 	done := assistantwire.FleetResolved{ID: p.ix.ID, AnsweredBy: p.answeredBy}
 	if done.AnsweredBy != "" {

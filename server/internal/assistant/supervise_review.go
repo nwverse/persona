@@ -129,6 +129,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if err != nil {
 		return "", err
 	}
+	if verdict == reviewRework || verdict == reviewNeedsUser || a.UserCheck || a.Outcome == outcomeCannot {
+		s.setTaskStageKind(ctx, t.ID, "unverified", "", "", false)
+	}
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
@@ -146,6 +149,10 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		reason := cmp.Or(clip(oneLine(note), 80), "验收通过")
 		if verdict == reviewCancelled {
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了")
+		}
+		// Accepting an explanation that the task cannot be done is not verifying a delivery.
+		if verdict == reviewAccepted && a.Outcome != outcomeCannot && !a.UserCheck {
+			s.setTaskStageKind(ctx, t.ID, "verify", "", "", true)
 		}
 		carded := false
 		if t.DoneAt == nil {

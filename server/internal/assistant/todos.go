@@ -76,8 +76,11 @@ type Todo struct {
 	Supervision *Supervision `json:"supervision,omitempty"`
 	// Stage is how far its work got (plan, develop, review, merge, deploy, verify; "" not known) and PRURL the PR it
 	// named, read off its agents' replies (reports.go, #2768); the apps draw the stage bar from them.
-	Stage string `json:"stage,omitempty"`
-	PRURL string `json:"pr_url,omitempty"`
+	Stage         string `json:"stage,omitempty"`
+	PRURL         string `json:"pr_url,omitempty"`
+	StageKind     string `json:"stage_kind,omitempty"` // code or general; absent on older hubs
+	stageVerified bool   // explicit acceptance, kept with the stage setting
+	planPending   bool   // a live plan-approval card; never persisted as progress
 	// Delivery: how far its finished work went out, and while short of live where it is held and who can unhold it
 	// (delivery.go, #3306); nil until judged.
 	Delivery *TodoDelivery `json:"delivery,omitempty"`
@@ -345,7 +348,7 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	}
 	for id, st := range s.todoStages(ctx) {
 		if t, ok := tmap[id]; ok {
-			t.Stage, t.PRURL, t.Delivery = st.Stage, st.PR, st.Delivery
+			t.Stage, t.PRURL, t.StageKind, t.Delivery, t.stageVerified = st.Stage, st.PR, st.Kind, st.Delivery, st.Verified
 		}
 	}
 
@@ -474,6 +477,9 @@ func (s *Service) insertTodo(ctx context.Context, row db.TodoRow) (Todo, error) 
 
 func copyTodoLocked(t *Todo) Todo {
 	out := *t
+	if t.planPending && t.DoneAt == nil && !t.stageVerified && stageIndex(t.Stage) <= stageIndex("develop") {
+		out.Stage = "plan" // approval is current, not a rollback of the stored forward-only stage
+	}
 	if t.DoneAt != nil {
 		da := *t.DoneAt
 		out.DoneAt = &da
