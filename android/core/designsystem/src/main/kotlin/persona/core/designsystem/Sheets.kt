@@ -17,11 +17,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 import kotlinx.coroutines.launch
+
+/** A [JMenu]'s group title ([JAction.section]): lined up with the items' labels. */
+object MenuTokens {
+    /** A menu item's side padding (Material's), which a group's title shares. */
+    val itemPadding = 12.dp
+    /** Above and below a group's title. */
+    val sectionPadding = 6.dp
+}
 
 /** One action in a menu or action sheet. */
 @Immutable
@@ -33,6 +43,10 @@ data class JAction(
     val checked: Boolean = false,
     /** Draw a rule above this action, to group menus. */
     val separatorBefore: Boolean = false,
+    /** A quiet line under the label (how many a choice would show: "20 to-dos"). */
+    val subtitle: String? = null,
+    /** A group's title drawn above this action, with a rule above it unless it is the first: "Show", "Sort by". */
+    val section: String? = null,
     val onClick: () -> Unit,
 )
 
@@ -142,10 +156,23 @@ fun JMenu(
             it()
             if (actions.isNotEmpty()) HorizontalDivider(color = palette.line)
         }
-        actions.forEach { action ->
-            if (action.separatorBefore) HorizontalDivider(color = palette.line)
+        actions.forEachIndexed { index, action ->
+            if (action.separatorBefore || (action.section != null && (index > 0 || content != null))) HorizontalDivider(color = palette.line)
+            action.section?.let {
+                Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = MenuTokens.itemPadding, vertical = MenuTokens.sectionPadding).semantics { heading() })
+            }
             DropdownMenuItem(
-                text = { Text(action.label, style = PersonaTheme.type.body, color = if (action.destructive) palette.danger.text else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                text = {
+                    val label = @Composable {
+                        Text(action.label, style = PersonaTheme.type.body, color = if (action.destructive) palette.danger.text else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (action.subtitle == null) label()
+                    else Column {
+                        label()
+                        Text(action.subtitle, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
                 leadingIcon = action.icon?.let { { JIcon(it, null, size = 20.dp, tint = if (action.destructive) palette.danger.dot else palette.ink2) } },
                 trailingIcon = if (action.checked) ({ JIcon(persona.core.designsystem.icons.PhIcons.Check, null, size = 18.dp, tint = palette.ink) }) else null,
                 enabled = action.enabled, onClick = { onDismiss(); action.onClick() },
