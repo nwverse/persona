@@ -148,6 +148,25 @@ struct MessageDraftActionsTests {
         #expect(store.messageCard(original).dismissedAt != nil)
     }
 
+    @Test func anAuthoritativePushWinsOverAnOlderReadEvenWhenItsBodyIsUnchanged() async throws {
+        let original = card()
+        for noOp in [false, true] {
+            let gate = DraftGate()
+            var api = FakeHub().client
+            api.transport = { try await gate.answer($0) }
+            let store = TasksStore(toast: { _ in })
+            store.received(original)
+            let loading = store.load("c1", refreshTodos: false, api: api)
+            for _ in 0..<1000 where gate.pending == nil { await Task.yield() }
+            let authoritative = noOp ? original : card(dismissed: true)
+            let stale = noOp ? card(dismissed: true) : original
+            store.received(authoritative)
+            gate.finish(try JSON.encoder.encode(APIClient.FeedResponseFixture(items: [stale])))
+            await loading?.value
+            #expect(store.messageCard(original).body == authoritative.body)
+        }
+    }
+
     @Test func leavingTheHubFencesLateReceiptsAndUndo() async throws {
         let gate = DraftGate()
         var api = FakeHub().client

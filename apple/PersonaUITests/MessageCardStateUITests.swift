@@ -169,9 +169,10 @@ final class MessageCardStateUITests: XCTestCase {
         let dismiss = app.buttons["messageCard.dismiss"].firstMatch
         XCTAssertTrue(dismiss.waitForExistence(timeout: 20), app.debugDescription)
         dismiss.tap()
-        let toast = app.descendants(matching: .any)["toast"].firstMatch
+        let toast = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "toast", "无法忽略草稿")
+        ).firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 5), "no failure toast:\n\(app.debugDescription)")
-        XCTAssertTrue(toast.label.contains("无法忽略草稿"), toast.label)
         XCTAssertTrue(dismiss.exists, "a failed request removed the draft")
         XCTAssertTrue(dismiss.isEnabled, "a failed request left the card busy")
         dismiss.tap()
