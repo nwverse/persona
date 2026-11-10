@@ -55,7 +55,7 @@ import { Button, Collapse, cx, Dialog, IconButton, Menu, toast, useNow } from ".
 import { StatusMark } from "../../ui/StatusMark";
 import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
-import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
+import { CriteriaSummary, ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { AcceptRow, BriefCard } from "./Brief";
 import { SentLine, TaskSentList } from "./Sent";
 import { latestReview, progressLine } from "../../lib/supervision";
@@ -522,6 +522,7 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
         </span>
       </div>
       {/* what its result waits on from the user, and the one tap that answers it (#2056) */}
+      <CriteriaSummary todo={todo} />
       <TodoAskLine todo={todo} className="px-1" />
       {/* what Persona sent its agent (#1542): the hand-off sent with this card is drawn only here */}
       <TaskSentList todoId={todo.id} conversation={conversation} />

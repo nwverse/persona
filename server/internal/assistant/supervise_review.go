@@ -114,6 +114,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				verdict, over = reviewNeedsUser, true
 			}
 			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note, UserCheck: a.UserCheck}
+			v.applyChecks(checks, r.At, "supervisor:"+self)
 			if verdict == reviewRework {
 				v.Round++
 				r.Round = v.Round

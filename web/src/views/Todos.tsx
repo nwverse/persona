@@ -67,7 +67,7 @@ import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
 import type { Route } from "../lib/router";
-import { LatestReport, ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
+import { CriteriaSummary, LatestReport, ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
 import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
@@ -1062,6 +1062,7 @@ const TodoListItem = memo(function TodoListItem({
         </div>
 
         {/* What it waits on from the user, with the one tap that answers it (#2056) */}
+        <CriteriaSummary todo={todo} />
         <TodoAskLine todo={todo} className="mt-1" />
 
         {/* Due date, a reminder still to push, high priority (#1683) */}

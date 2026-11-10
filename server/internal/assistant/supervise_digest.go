@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -318,6 +319,14 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	if g.Kind == sigReport { // what it said is the report itself, not a reason in brackets
 		e.Detail, e.Report, e.Said, e.Evidence, e.Step, e.Steps = "", g.Report, g.Detail, g.Evidence, g.Step, g.Steps
+	}
+	// Progress reports stay quiet. Their persisted evidence accompanies the next
+	// real supervision event, even after restart or a report of a different kind.
+	for i, c := range v.Criteria {
+		if c.At != nil {
+			e.Evidence = append(e.Evidence, fmt.Sprintf("criterion %d [%s] %s — %s (%s at %s)",
+				i+1, c.State, c.Criterion, c.Evidence, c.By, c.At.UTC().Format(time.RFC3339)))
+		}
 	}
 	if g.Kind == sigFailed {
 		s.remedyEntry(ctx, t, &e) // its kept tab, and the turn that hears of it (start_remedy.go)

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { t } from "../../i18n";
 import type { FeedItem } from "../../lib/feed";
 import { ago } from "../../lib/format";
-import { autoReviewLine, checkCount, checklist, latestReview, reportLine, reportText, reviewBadge, reviewVerdictLabel, type CheckMark, type ReviewTone, type Supervision } from "../../lib/supervision";
+import { autoReviewLine, checkCount, checklist, criterionReporter, latestReview, reportLine, reportText, reviewBadge, reviewVerdictLabel, type CheckMark, type ChecklistEntry, type ReviewTone, type Supervision } from "../../lib/supervision";
 import type { Todo } from "../../lib/todos";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -42,7 +42,46 @@ const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; classNa
   unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
 };
 
-/** The task's criteria, each as its latest review found it, and what the supervisor said last. */
+/** A compact expandable checklist on task cards and to-do rows. */
+export function CriteriaSummary({ todo }: { todo: Todo }) {
+  const list = checklist(todo.supervision);
+  if (list.length === 0) return null;
+  return (
+    <details data-testid="criteria-summary" className="mt-1 min-w-0 text-[12px] text-ink-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <summary className="touch-hit w-fit cursor-pointer rounded-sm hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("assistant-tasks.review_title")}</summary>
+      <CriteriaList list={list} />
+    </details>
+  );
+}
+
+function CriteriaList({ list }: { list: ChecklistEntry[] }) {
+  return (
+    <ul className="mt-2 flex min-w-0 flex-col gap-1.5">
+      {list.map((c) => {
+        const m = MARK[c.mark];
+        return (
+          <li key={c.criterion} className="flex min-w-0 items-start gap-2 text-[13px]">
+            <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
+              <Icon name={m.icon} size={13} stroke={2.4} />
+            </span>
+            <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
+              <span className="text-ink">{c.criterion}</span>
+              {c.evidence && <span className="whitespace-pre-wrap text-[12px] text-ink-3 select-text">{c.evidence}</span>}
+              {(c.at || c.by) && (
+                <span className="flex flex-wrap gap-x-1.5 text-[11px] text-ink-3">
+                  {c.by && <span>{criterionReporter(c.by)}</span>}
+                  {c.at && <time dateTime={c.at} title={c.at}>{new Date(c.at).toLocaleString()}</time>}
+                </span>
+              )}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** The task's current criterion progress and what the supervisor said last. */
 export function ReviewChecklist({ todo }: { todo: Todo }) {
   const sup = todo.supervision;
   if (!sup) return null;
@@ -59,22 +98,7 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
       {list.length === 0 ? (
         <p className="mt-2 text-[12.5px] text-ink-3">{t("assistant-tasks.review_none")}</p>
       ) : (
-        <ul className="mt-2 flex flex-col gap-1.5">
-          {list.map((c) => {
-            const m = MARK[c.mark];
-            return (
-              <li key={c.criterion} className="flex items-start gap-2 text-[13px]">
-                <span role="img" aria-label={m.label()} title={m.label()} className={cx("mt-0.5 shrink-0", m.className)}>
-                  <Icon name={m.icon} size={13} stroke={2.4} />
-                </span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="text-ink">{c.criterion}</span>
-                  {c.evidence && <span className="text-[12px] text-ink-3 select-text">{c.evidence}</span>}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+        <CriteriaList list={list} />
       )}
       {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
       <AutoReviewResult sup={sup} />

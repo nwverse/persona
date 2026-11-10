@@ -67,6 +67,49 @@ those ids cannot be guessed, but any process of the same user can read them from
 hub lists these tools only for assistant=true and forwards calls to the assistant (`assistant/tools.go`). Ordinary Agents in herdr can't see them, even with the assistant's environment;
 a program run under the assistant's own process (its Bash tool) counts as the assistant, as for `personad tool`, and so does an Agent in an engine whose server that shell started without detaching it.
 
+## Per-criterion acceptance progress (#3635)
+
+`todo_supervision.done_when` remains the ordered list of criterion text. The additive
+`criteria` JSON field stores the latest state of each entry: `criterion`,
+`state` (`pending`, `met`, `not_met`), `evidence`, `at` (UTC RFC 3339), and `by`
+(`agent:<machine>/<session>`, `supervisor:<conversation>`, or `judge`).
+An old row with only `done_when` reads as all pending, without invented timestamps
+or confirmers; reviews and other ledger fields are not rewritten. Reordering
+unchanged text keeps its evidence; adding or changing text starts pending.
+
+An Agent uses the existing `report_to_supervisor`, authenticated as the working
+Agent of that task, to report one or more entries by their **one-based** position:
+
+```json
+{
+  "kind": "progress",
+  "text": "The tests pass; the PR is still pending.",
+  "criteria": [
+    {"number": 2, "state": "met", "evidence": "go test ./internal/db: PASS"}
+  ]
+}
+```
+
+`met` and `not_met` require nonempty evidence (up to 600 characters); `pending`
+resets the entry. Out-of-range or duplicate numbers, invalid states, and missing
+evidence reject the whole batch. Omitted entries keep their state. The ledger is
+persisted before the tool succeeds and the normal to-do change event refreshes
+the web count immediately. A progress report still does not wake the assistant;
+the recorded states and evidence accompany the next supervision event. A
+question, blocker or completion report follows its existing delivery rules.
+
+The supervisor's `task_review.checks` writes each matching `done_when` entry back
+as `met` / `not_met`, with the review time and actual reviewing conversation.
+Unchecked entries are preserved; unmatched checks stay in the review history.
+Existing accepted reviews from the done judge also record their checks.
+These reports are evidence, not acceptance: no count closes a task, changes
+dispatch, runs tests, or substitutes for the supervisor's own review.
+
+To-do API responses include `supervision.criteria` for all clients. The web task
+cards and to-do list show the live N/M count and an expandable criterion list;
+details show the same status, evidence, timestamp and reporter. Mobile UI changes,
+automatic CI observation, and criterion dependency gates are outside this change.
+
 ## Boundary with hub (2026-11-04, #1446)
 
 hub is only a conduit: the assistant runs as its own process (`personad assistant`), connected by the bus (`docs/protocol/protocol.md` ("Bus")). hub forwards App requests, caches assistant snapshots, delivers pushes and App messages, and doesn't run assistant code:
