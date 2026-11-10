@@ -278,11 +278,11 @@ class AssistantTraysShotsTest {
         }
         settle()
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithTag("assistant-entry-progress").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
         rule.onNodeWithText("Ship the settings page").performScrollTo()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d; settle()
-            rule.onNodeWithTag("assistant-tray-progress").assertIsDisplayed()
+            rule.onNodeWithTag("assistant-tray-running").assertIsDisplayed()
             rule.onNodeWithText("Stopped, not done yet · Waiting for CI to finish").assertIsDisplayed()
             rule.onNodeWithText("Pushed the branch and opened the PR").assertDoesNotExist()
             shot("progress-stopped-${s.name.lowercase()}-${if (d) "dark" else "light"}")
