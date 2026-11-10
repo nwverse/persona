@@ -92,11 +92,6 @@ func (p ModelPurpose) launch() string {
 	return ""
 }
 
-func (p ModelPurpose) withLaunch() ModelPurpose {
-	p.Launch = p.launch()
-	return p
-}
-
 var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", "agent.delegate"}
 
 // The catalog also includes an opt-in override; category-default assignment must not write it.
@@ -275,7 +270,7 @@ func (s *Service) modelPurposeDef(ctx context.Context, id string) (ModelPurpose,
 					p.MachineID = m
 				}
 			}
-			return p.withLaunch(), nil
+			return p, nil
 		}
 	}
 	if strings.HasPrefix(id, "task.") {
@@ -285,12 +280,12 @@ func (s *Service) modelPurposeDef(ctx context.Context, id string) (ModelPurpose,
 		}
 		for _, t := range tasks {
 			if id == "task."+t.ID {
-				return (ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: t.MachineID}).withLaunch(), nil
+				return ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: t.MachineID}, nil
 			}
 		}
 	}
 	if p, ok := s.extensionPurposeDef(ctx, id); ok { // an extension's own (model_rpc.go)
-		return p.withLaunch(), nil
+		return p, nil
 	}
 	if strings.HasPrefix(id, "plugin.") {
 		for _, p := range s.voicePlugins(ctx) {

@@ -24,7 +24,7 @@ func (s *Service) applyModel(ctx context.Context, id string, params map[string]a
 	if err != nil {
 		return err
 	}
-	params["launch"] = p.Launch // a caller cannot override the purpose's execution form
+	params["launch"] = p.launch() // a caller cannot override the purpose's execution form
 	if name, _ := params["launcher"].(string); name != "" && launcherProvider(name) != b.Provider {
 		b = ModelBinding{Provider: launcherProvider(name), Runtime: b.Runtime}
 	}
