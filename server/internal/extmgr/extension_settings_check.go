@@ -42,11 +42,14 @@ type settingsCheckLimited struct{ error }
 
 func (e settingsCheckLimited) Unwrap() error { return e.error }
 
-// checkLimiter counts each extension's checks in the current window.
+// checkLimiter counts each extension's checks (or, with most and window set, any calls) in the current window.
 type checkLimiter struct {
 	mu   sync.Mutex
 	seen map[string][]time.Time
 	now  func() time.Time
+	// most per window; zero is a settings check's (settingsChecksMost per settingsCheckWindow).
+	most   int
+	window time.Duration
 }
 
 func (l *checkLimiter) allow(id string) bool {
@@ -59,13 +62,17 @@ func (l *checkLimiter) allow(id string) bool {
 	if l.seen == nil {
 		l.seen = map[string][]time.Time{}
 	}
+	most, window := l.most, l.window
+	if most == 0 {
+		most, window = settingsChecksMost, settingsCheckWindow
+	}
 	keep := l.seen[id][:0]
 	for _, t := range l.seen[id] {
-		if now.Sub(t) < settingsCheckWindow {
+		if now.Sub(t) < window {
 			keep = append(keep, t)
 		}
 	}
-	if len(keep) >= settingsChecksMost {
+	if len(keep) >= most {
 		l.seen[id] = keep
 		return false
 	}

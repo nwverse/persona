@@ -168,9 +168,13 @@ func (p *hubExtension) healthy(ctx context.Context) bool { return p.proc != nil 
 type extensions struct {
 	// checks limit how often each extension's settings.check runs (extension_settings_check.go).
 	checks checkLimiter
-	dir    string // the hub's data directory
-	root   string // where the extensions are kept: <dir>/extensions (extensionsRoot)
-	reg    *extension.Registry
+	// resolves limit how often each secret provider is asked for a value; words keeps references' descriptions
+	// (secret_providers.go).
+	resolves checkLimiter
+	words    secretWords
+	dir      string // the hub's data directory
+	root     string // where the extensions are kept: <dir>/extensions (extensionsRoot)
+	reg      *extension.Registry
 	// logf is the hub's log, each line about an extension kept with its log too; journal only the hub's (the host's
 	// lines reach the extension's log through its Observe).
 	logf, journal func(string, ...any)
@@ -231,7 +235,7 @@ type extensions struct {
 func newExtensions(dir string, cfgs []ExtensionConfig, logf func(string, ...any)) *extensions {
 	root := extensionsRoot(dir, logf)
 	ps := &extensions{dir: dir, root: root, reg: extension.NewRegistry(root, nil, nil, 0), journal: logf, byID: map[string]*hubExtension{},
-		stats: newExtensionMetrics()}
+		stats: newExtensionMetrics(), resolves: checkLimiter{most: secretResolvesMost, window: secretResolveWindow}}
 	// The hub's lines about an extension go into its log too (the host's own go there through the spec's Observe).
 	ps.logf = func(format string, args ...any) {
 		logf(format, args...)
