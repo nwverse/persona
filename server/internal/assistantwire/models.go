@@ -115,8 +115,9 @@ type ModelChoice struct {
 
 // What the hub's plugins ask of the model configuration (Handler).
 const (
-	// MethodModelsUsable: {purpose} → {usable}: an API purpose resolves to an address, a model and a key (a plugin
-	// whose inbox needs message screening is switched on only then).
+	// MethodModelsUsable: {purpose} → {usable, provider?, model?}: an API purpose resolves to an address, a model and
+	// a key (a plugin whose inbox needs message screening is switched on only then). When usable, provider is the
+	// display name of the connection it runs on and model its model, for a consent that names where content goes.
 	MethodModelsUsable = "models.usable"
 	// MethodModelsLauncherHTTP: {name, machine?, http?} → {base_url, machine} without http, else the quota.Response: a
 	// request to a launcher's gateway, sent by whoever holds its key (the assistant for a provider added in Persona,

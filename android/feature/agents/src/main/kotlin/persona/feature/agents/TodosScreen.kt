@@ -106,6 +106,20 @@ fun TodosScreen(
     var newNotes by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val res = agentResources()
+    val context = LocalContext.current
+    // List | Calendar and the calendar's "Show done" (#2046), kept on this device.
+    val calendarPrefs = remember(context) { TodoCalendarPrefs(context) }
+    var view by remember(calendarPrefs) { mutableStateOf(calendarPrefs.view) }
+    var showDone by remember(calendarPrefs) { mutableStateOf(calendarPrefs.showDone) }
+    val viewBar: @Composable (Modifier) -> Unit = { modifier ->
+        TodosViewBar(
+            view = view,
+            onView = { view = it; calendarPrefs.view = it },
+            showDone = showDone,
+            onShowDone = { showDone = it; calendarPrefs.showDone = it },
+            modifier = modifier,
+        )
+    }
 
     val sessionMap = remember(sessions) { sessions.associateBy { it.key } }
     val sessionLookup: (SessionKey) -> Session? = remember(sessionMap) { { key: SessionKey -> sessionMap[key] } }
@@ -119,7 +133,6 @@ fun TodosScreen(
     }
 
     // Status sections (#3206, docs/assistant/todo-status-sop.md), the web's rules: related to-dos share a row.
-    val context = LocalContext.current
     val restores = remember(context) { TodoRestores(context) }
     var restored by remember(restores) { mutableStateOf(restores.read()) }
     val nowMs = now.toEpochMilli()
@@ -213,8 +226,26 @@ fun TodosScreen(
         onBack = onBack,
         actions = {
             JIconButton(PhIcons.Plus, stringResource(R.string.agents_todo_new), { creating = true })
-        }
+        },
+        bottomBar = if (view == TodosView.Calendar) ({
+            TodoCalendarUndatedBar(todos, onShowList = { view = TodosView.List; calendarPrefs.view = TodosView.List })
+        }) else null,
     ) { padding ->
+        if (view == TodosView.Calendar) {
+            Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding() + Tokens.Space.s)) {
+                viewBar(Modifier.padding(horizontal = Tokens.Space.l))
+                TodoCalendarMonth(
+                    todos = todos,
+                    sessionLookup = sessionLookup,
+                    showDone = showDone,
+                    now = now,
+                    onOpenTodo = onOpenTodo,
+                    bottomPadding = padding.calculateBottomPadding(),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            return@JPage
+        }
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
@@ -225,6 +256,7 @@ fun TodosScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(ContentTokens.rowGap)
         ) {
+            item(key = "view") { viewBar(Modifier) }
             item(key = "search") {
                 JSearchField(query, { query = it }, placeholder = stringResource(R.string.agents_todos_search))
             }

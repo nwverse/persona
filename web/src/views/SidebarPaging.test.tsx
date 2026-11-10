@@ -39,6 +39,13 @@ async function render(paged: boolean, pins = emptyPins, saved?: string) {
     const url = new URL(input, "http://hub.example.com");
     if (url.pathname.endsWith("/sessions") && !url.pathname.includes("/agents/")) {
       if (url.searchParams.has("counts")) return json({ total: 2, state: { working: 2 }, machine: { computer: 2 }, group: {}, project: {}, revision: "r1" });
+      // The complete fallback's pages (#3759): every row, in two frozen pages; the bounded list's summary pages.
+      if (url.searchParams.get("summary") === "0" && !url.searchParams.has("session_id")) {
+        if (url.searchParams.has("since")) return json({ sessions: [], remove: [], has_more: false, revision: "r1", total: 2 });
+        return url.searchParams.get("cursor") === "next"
+          ? json({ sessions: [tail], remove: [], has_more: false, revision: "r1", total: 2 })
+          : json({ sessions: [first], remove: [], has_more: true, next_cursor: "next", revision: "r1", total: 2 });
+      }
       if (url.search) return json({ sessions: [first], remove: [], has_more: true, next_cursor: "next", revision: "r1", total: 2 });
       return json({ sessions: [first, tail] });
     }
