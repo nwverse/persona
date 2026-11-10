@@ -203,6 +203,11 @@ struct InboxPage: View {
                                 setGroupOpen("done", g.key, manager: first, true)
                                 try? await Task.sleep(for: .milliseconds(300))
                                 scrollTarget = g.items.first?.key
+                            } else {
+                                // the hub's day counts and nothing loaded yet (#2969): Done's groups are folded, so the
+                                // last open row above it goes to the top (a List scrolls to rows, not headers)
+                                try? await Task.sleep(for: .milliseconds(300))
+                                scrollTarget = [InboxItem.Tier.action, .fyi].flatMap { share.byTier[$0] ?? [] }.last?.key
                             }
                         }
                     }
