@@ -5,7 +5,8 @@
 // tailcat (persona's tunnel library) builds its own releases that way. persona does the same with its own keep-list:
 // the keep-list plus each kept feature's dependencies (featuretags.Requires) stay, and every other feature in the
 // registry gets its tag. That leaves out tsweb's debug pages and varz, the web client, the eventbus debug page, SSH,
-// Taildrop and dozens more. A plain `go build` without the tags builds the same persona code; it is only bigger.
+// Taildrop and dozens more. A plain `go build` without the tags builds the same persona code; it is only bigger
+// (update.TestOneBuild fails on a persona file whose build constraint names any of the tags).
 //
 // Regenerate the file after a tailscale.com bump (TestTagsFileInSync fails until then):
 //
@@ -19,8 +20,7 @@ import (
 	"tailscale.com/feature/featuretags"
 )
 
-// Marker is the tag that marks a published build for scripts/release/check_bundle_privacy.py. It changes no code
-// (update.TestOneBuild).
+// Marker is the tag that marks a published build for scripts/release/check_bundle_privacy.py. It changes no code.
 const Marker = "public"
 
 // keep lists the tailscale.com features persona's programs link. The first four are what tailcat's releases keep

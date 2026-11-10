@@ -178,9 +178,9 @@ left="$(find "$WEBDIST/assets" -type f -size +1023c \( -name '*.js' -o -name '*.
 LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$PERSONA_PUBLISH_URL/dl"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 (cd server && go generate ./internal/runtimepkg)
-# The tags are server/build-tags.txt (server/internal/buildtags). Its public marker changes no code (no file builds
-# differently with it, TestOneBuild): it marks the binary for check_bundle_privacy.py, which then knows the dependency
-# constants it may skip. Its ts_omit_ tags leave out the tailscale.com features persona never uses.
+# The tags are server/build-tags.txt (server/internal/buildtags). No persona file builds differently with any of them
+# (TestOneBuild). The public marker marks the binary for check_bundle_privacy.py, which then knows the dependency
+# constants it may skip. The ts_omit_ tags leave out the tailscale.com features persona never uses.
 TAGS="$(cat server/build-tags.txt)"
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
