@@ -284,7 +284,7 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 }
 
 // runtimeHealth: the card's session is in the health space (its cwd or the row's), where every write is confirmed
-// (docs/assistant/health.md "Outgoing"). A directory inside the space counts: a tool's `cd` may have left either there
+// (docs/assistant/health.md "Outbound"). A directory inside the space counts: a tool's `cd` may have left either there
 // (identity.InHealthSpace, #2368).
 func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
 	if identity.InHealthSpace(ix.Cwd) {

@@ -7,8 +7,9 @@
 // section, a section per group with its rows, a row pushing the account's page (and back), no launcher anywhere.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UISection, UIView } from "../../lib/extension-ui";
+import { loadPages } from "../../lib/lazy-page";
 import fixture from "./testdata/relay-accounts-view.json";
 
 type Sent = { action?: string; state?: string; values?: Record<string, string> };
@@ -65,6 +66,9 @@ let root: Root;
 const settle = async () => {
   for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
 };
+// An account's page opens with a header item, which the code views chunk draws (ViewBody.tsx). Loaded here, the page is
+// drawn as soon as its view arrives; loaded on the push, the chunk could take longer than `settle` on a busy machine (#2874).
+beforeAll(() => loadPages(), 60_000);
 beforeEach(() => {
   hub.sent = [];
   hub.answer = answer;

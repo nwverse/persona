@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/link"
 )
 
-// HTTP between hubs over their links (docs/server/mesh.md "Member forwarding"). Each stream a hub opens on a link is one HTTP/1.1
+// HTTP between hubs over their links (docs/server/mesh.md "Members forward Apps"). Each stream a hub opens on a link is one HTTP/1.1
 // connection to the other hub's peer server (no socket: it only takes streams from authenticated links). Two kinds
 // of request travel this way, both passed on hop by hop toward where they go (TTL 8):
 //   - an app's request a member got: everything under /api/ but what the member answers itself (its health, persona-link,
@@ -369,11 +369,9 @@ func (c *codeWriter) Write(b []byte) (int, error) {
 
 func (c *codeWriter) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 
-func (c *codeWriter) Flush() {
-	if f, ok := c.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
+// Flush goes through http.ResponseController, which follows Unwrap: the writer beneath (logRequests' statusWriter) is
+// not an http.Flusher itself. ReverseProxy flushes a stream through here.
+func (c *codeWriter) Flush() { _ = http.NewResponseController(c.ResponseWriter).Flush() }
 
 // trackProxied keeps a passed-on request (an app's WebSocket above all) so it can be cut when the center changes:
 // the app reconnects and reaches the new one.

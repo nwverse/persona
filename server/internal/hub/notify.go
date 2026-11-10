@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 )
 
-// When a "finished" push is worth sending (docs/server/server.md "Pushes"). Borrowed from Ovis (github.com/devswha/ovis,
+// When a "finished" push is worth sending (docs/server/server.md "Push policy"). Borrowed from Ovis (github.com/devswha/ovis,
 // server/push.ts, MIT): a push is for someone away from the computer, so
 //   - wait a while after the turn ends; if the agent resumes, or the user looks at it (herdr idle, or opened in the
 //     app), nothing is sent;

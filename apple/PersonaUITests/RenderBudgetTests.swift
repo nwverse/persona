@@ -1,6 +1,6 @@
 import XCTest
 
-/// What one push costs (docs/apple/ios-state.md「一次推送的代价」): on each page at rest, pushes that change one field of one
+/// What one push costs (docs/apple/ios-state.md「Cost of one push」): on each page at rest, pushes that change one field of one
 /// agent, as the real hub sends them (the machine's whole session list), and the view bodies they make run
 /// (`-perfCounts YES`), per push. `rev`: the transcript grew, nothing shown changed (most of the real hub's pushes);
 /// `last`: one agent's last line. Reports them (PERF lines, attachments) and fails over the budget (docs/apple/ios-state.md

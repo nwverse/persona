@@ -1,6 +1,6 @@
 # 收件箱夹具
 
-本目录固定当前 iOS 收件箱的列表行为，供 Android JUnit 和以后接入的 XCTest 共用。来源为 `docs/assistant/inbox.md`「AI 分拣」「App」、`apple/Shared/InboxModels.swift`、`apple/Persona/Views/Inbox/InboxView.swift`、`apple/Persona/App/InboxStore.swift` 和 `apple/PersonaTests/InboxTests.swift`。分拣模型、采集、发送、数据保留期限不属于本目录范围，输入视为列表已收到的数据。
+本目录固定当前 iOS 收件箱的列表行为，供 Android JUnit 和以后接入的 XCTest 共用。来源为 `docs/assistant/inbox.md`「AI triage」「App」、`apple/Shared/InboxModels.swift`、`apple/Persona/Views/Inbox/InboxView.swift`、`apple/Persona/App/InboxStore.swift` 和 `apple/PersonaTests/InboxTests.swift`。分拣模型、采集、发送、数据保留期限不属于本目录范围，输入视为列表已收到的数据。
 
 ## 规则与用例
 
@@ -23,8 +23,8 @@
 | 空间屏蔽可由单会话 allowed 覆盖。 | AppModel 的 `isMuted`；`apple/Shared/APIClient.swift` 的 `Pins.mutes` | `agent_mute_allow_override` |
 | 段标题件数包括交互和事项，actionCount 只数所有未处理 action 事项，不受页面筛选影响。 | InboxView 的 `sectionHeader`；InboxStore 的 `actionCount` | `waiting_agents_before_items`、`source_hides_agents`、`inbox_filter_mail_account` |
 | 筛选标签当前没有数字，因此 filter_counts 为空对象。 | InboxView 的 `chip` | `inbox_filter_feishu`、`inbox_filter_mail_kind` |
-| 有 status（第一期）时按它分段：进行中排在需要你和知悉即可之间、永远展开；进行中的事项不算需要你（actionCount 不数它）；缺 status 或值不认识时按 tier。 | `docs/assistant/inbox.md`「事件、处理链条、建议」；Android `InboxList.kt` 的 `section` | `status_sections_with_working`、`working_never_folds`、`old_hub_without_status` |
-| 本任务补充同时间按 id 升序的规则，并保留当前 iOS 的对照结果。 | `CLAUDE.md`「同一时间再按 id」；InboxView 的 `shownDone`；AppModel 的 `pendingInteractions` | `equal_times_use_id_extension`、`equal_times_reversed_input` |
+| 有 status（第一期）时按它分段：进行中排在需要你和知悉即可之间、永远展开；进行中的事项不算需要你（actionCount 不数它）；缺 status 或值不认识时按 tier。 | `docs/assistant/inbox.md`「Events and handling chain」；Android `InboxList.kt` 的 `section` | `status_sections_with_working`、`working_never_folds`、`old_hub_without_status` |
+| 本任务补充同时间按 id 升序的规则，并保留当前 iOS 的对照结果。 | `CLAUDE.md`「Most common pitfalls」；InboxView 的 `shownDone`；AppModel 的 `pendingInteractions` | `equal_times_use_id_extension`、`equal_times_reversed_input` |
 
 ## JSON 结构
 
@@ -85,3 +85,14 @@ Android 的目标断言应读取 expected，以后 iOS 跟进时补上比较键�
 ## 新增用例
 
 按主题追加用例并更新规则表，保证两个领域的 name 唯一。先编造输入并独立写 expected，再用真实实现对照；未知档位、空列表、交叉筛选、屏蔽例外和时间相等应分别覆盖。发现当前实现与新规则冲突时，明确标 compatibility 和 ios_expected，并写明谁需要跟进，不能悄悄改 expected。提交前检查 UTF-8、2 空格缩进和隐私扫描。
+
+## Hand to AI memory (`handoff_memory.json`)
+
+Hand to AI remembers, per source, the target an item was last handed to (#2121; `docs/assistant/inbox.md` "Item actions"). Every app follows the same rules:
+
+- `keys`: the source key is the item's `source`, `|`, and the most specific non-empty mute option, in the order `repo`, `chat`, `sender` (`tag:value`). An item without one has no key and no memory.
+- `resolve`: a remembered target is preselected and marked Last time.
+  - A remembered Agent that is no longer listed resolves to the main chat, with `gone` set so the app says so once.
+  - Nothing remembered, or an unreadable value, gives `null`: the platform's own default.
+  - Cases with `needs_new_chat` apply only where New Chat is a target.
+- `recency`: one entry per source, latest first, at most `limit` sources.

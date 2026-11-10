@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Settings › Session Triage (docs/assistant/agent-work.md「开关」, the web's TriageSettings, Android's TriageSettingsPage): when an agent
+/// Settings › Session Triage (docs/assistant/agent-work.md「Switches」, the web's TriageSettings, Android's TriageSettingsPage): when an agent
 /// stops, the hub can read its last reply, say whether it is done or what it waits for, and act on it. All off until
 /// turned on here: the triage calls a model on every stopped turn, and Continue After Errors / Wake on Time run a turn of the agent on
 /// its own model. Saved on the hub (`PUT /api/v1/agents/triage`), so it is the same on every device.

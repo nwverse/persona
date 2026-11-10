@@ -346,7 +346,7 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 		}
 		h := newTestHub(t)
 		c := &client{out: make(chan []byte, 1), meta: clientMeta{features: map[string]bool{"elicitation": true}}}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 		h.broadcast(map[string]any{"type": "interaction", "interaction": ix})
 		add("interactions", "interaction_elicitation_"+mode, "仅向声明 elicitation 能力的连接下发，旧 iOS 不接收此样本。", "event", wireReceive(t, c), fields,
 			"server/internal/hub/http.go: Hub.broadcast", "server/internal/proto/interaction.go: Elicitation", "android/core/contracts/src/main/kotlin/persona/core/contracts/Elicitation.kt")

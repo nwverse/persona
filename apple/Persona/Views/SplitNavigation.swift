@@ -164,7 +164,7 @@ struct SplitDetail: Equatable {
 
 extension EnvironmentValues {
     @Entry var splitDetail: SplitDetail?
-    /// Pushes a page by value onto the stack the view is in (an extension's `push`, docs/extensions/extensions.md「页面跳转」): its
+    /// Pushes a page by value onto the stack the view is in (an extension's `push`, docs/extensions/extensions.md「Page navigation」): its
     /// destination is registered with the list's.
     @Entry var splitPush: SplitPush?
     /// Opens the list column of the split the page is in again (iOS); nil in a single stack.

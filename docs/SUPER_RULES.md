@@ -42,3 +42,8 @@ repository documentation; when instructions conflict, follow this file.
       summary line that can be opened for inspection.
    4. Users can manually expand or collapse the summary during execution and after completion, and inspect the full
       intermediate narration and tool calls, including reloaded history. Do not remove or disable manual inspection.
+
+3. **Use the unified conversation layout on iOS, Android and web.**
+
+   These clients use Assistant and Agents as their only primary home destinations, with Settings opened from the sidebar.
+   Do not retain the old layout or layout-switching controls, and neither read nor migrate saved old-layout preferences.

@@ -583,7 +583,7 @@ final class SelectableUITextView: UITextView {
 /// links keep their look (`**`, `` ` `` and `[](…)` go), headings are bold, `-` / `*` / `+` items get a bullet (their
 /// indent kept), and a fenced block is its code in a monospaced font, indented, without the fence. Formulas
 /// (`$…$`, `\(…\)`, `$$` blocks), four-space-indented code, rules, tables and quotes stay as written.
-/// The chat's own rendering (MarkdownUI) cannot be selected across blocks (docs/apple/ios.md「选择文本」), so this is its own.
+/// The chat's own rendering (MarkdownUI) cannot be selected across blocks (docs/apple/ios.md「Information architecture」), so this is its own.
 enum SelectableMarkdown {
     /// The page's fonts: body text and code, at the text size of `traits` (the current one when nil).
     private struct Fonts {

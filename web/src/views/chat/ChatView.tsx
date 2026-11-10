@@ -1,5 +1,6 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useManagerOffline } from "../ManagerParts";
+import { LinkManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
@@ -22,7 +23,7 @@ import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, suba
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type OutboxEntry } from "../../lib/outbox";
+import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type OutboxEntry } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistant-chat";
 import { unlinkAgentFromTodo } from "../../lib/todos";
@@ -99,7 +100,7 @@ import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark } from "../../ui/AgentMark";
-import { DayLine, FeedLineView, QuickResultCard, RouteChip, TaskDock, TaskQuestions } from "../assistant/Tasks";
+import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
 import { t } from "../../i18n";
 
 // The terminal view (TerminalPanel and its stream / cell parsing) loads on demand: most visits only read the chat, so it
@@ -132,6 +133,7 @@ interface Pending {
   id: string;
   msg: UserMessage;
   at: number;
+  acceptedAt?: number;
   /** The node held it back until an ultracode change waiting for the turn is through (#3428): it goes again then. */
   waits?: boolean;
   /** Its POST has not been answered yet (it may be behind earlier ones): the bubble does not time out. */
@@ -382,14 +384,34 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const shown = echoed(pending, users, (p) => ({ id: p.id, text: p.msg.text, images: p.msg.images, at: p.at }), claimed.current);
     const drop = new Set([...shown].map((p) => p.id));
     const now = Date.now();
+    for (const p of pending) {
+      if (drop.has(p.id) || (!p.waits && !p.posting && state !== "working" && now - (p.acceptedAt ?? p.at) >= SENT_GRACE_MS)) {
+        forgetOutgoing(outboxKey(mid, sid), p.id);
+      }
+    }
     setPending((ps) => {
       // a sent one waits for its copy while the agent works and SENT_GRACE_MS after, as the outbox and the apps do: the
       // transcript can write it late (a long context compacted first, #1119); one held back for an ultracode change
       // waits as long as the turn does
-      return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - p.at < SENT_GRACE_MS));
+      return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - (p.acceptedAt ?? p.at) < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segs, tr.firstRead, refusedNoRow]);
+
+  // A quiet transcript must not leave accepted bubbles forever. Reloads use the same stored deadline; local
+  // composer bubbles retain their existing grace while the agent works. Never expire a POST still in flight.
+  useEffect(() => {
+    const expiring = state === "working" ? [] : pending.filter((p) => !p.posting && !p.waits);
+    const deadlines = [...expiring, ...outbox.filter((e) => e.state === "sent")].map((e) => (e.acceptedAt ?? e.at) + SENT_GRACE_MS);
+    if (!deadlines.length) return;
+    const timer = setTimeout(() => {
+      settleOutbox(mid, sid, []);
+      const expired = new Set(expiring.filter((p) => Date.now() - (p.acceptedAt ?? p.at) >= SENT_GRACE_MS).map((p) => p.id));
+      for (const id of expired) forgetOutgoing(outboxKey(mid, sid), id);
+      if (expired.size) setPending((ps) => ps.filter((p) => !expired.has(p.id)));
+    }, Math.max(0, Math.min(...deadlines) - Date.now()));
+    return () => clearTimeout(timer);
+  }, [mid, sid, pending, outbox, state]);
 
   // seen: on open, when the page comes back to the front, and whenever a turn ends while it is on screen (lib/store.ts
   // viewSession); a subagent's transcript is not an agent of its own
@@ -700,8 +722,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           opId: id,
           json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model },
         }));
-        forgetOutgoing(key, id);
-        setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false } : x)));
+        const acceptedAt = Date.now();
+        acceptOutgoing(key, id, acceptedAt);
+        setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false, acceptedAt } : x)));
         return true;
       } catch (e) {
         // An ultracode change waits for the turn (docs/protocol/protocol.md "Claude Code ultracode"): the node holds messages back
@@ -742,7 +765,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }
 
   const onSend = async (out: Outgoing): Promise<boolean> => {
-    // Routed to a task ("Tell "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Who it points at").
+    // Routed to a task ("Tell "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
     if (assistant && out.images.length && getFeedState().routes[sid]) {
       toast(t("chat-chatview.route_no_images"), "error");
       return false;
@@ -1199,7 +1222,20 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const commands = useMemo(() => (assistant ? [] : agentCommands(AGENT_COMMANDS, session)), [assistant, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
 
-  return (
+  const pendingCards = (
+    <PendingCards
+      interactions={focusedFirst(interactions, focusedCard())}
+      answered={answered}
+      delegated={delegated}
+      offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
+      narrow={compactDock}
+      short={short}
+      keyboard={keyboard}
+      onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
+    />
+  );
+
+  const page = (
     <div className="flex h-full min-w-0 flex-col">
       {!readOnly && (
         <Header
@@ -1272,7 +1308,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 ? displayLines(lines, feed).flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
-                      <FeedLineView key={d.id} item={d.item} />
+                      <FeedLineView key={d.id} item={d.item} simplified />
                     ) : d.kind === "quick" ? (
                       <QuickResultCard key={d.id} result={d.result} />
                     ) : d.kind === "day" ? (
@@ -1370,24 +1406,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         )}
         {assistant && (
           <>
-            <TaskQuestions conversation={sid} />
-            {/* a call keeps the footer to the cards and itself (docs/assistant/voice.md 1.2 A.2) */}
-            {voiceState !== "live" && <TaskDock conversation={sid} />}
+            {voiceState === "live" && <TaskQuestions conversation={sid} />}
+            {/* A call keeps its existing decision controls; otherwise decisions live in Pending. */}
+            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownPending={pendingCards} ownCount={interactions.length} />}
             {voiceState !== "live" && <RouteChip conversation={sid} />}
           </>
         )}
-        <PendingCards
-          interactions={focusedFirst(interactions, focusedCard())}
-          answered={answered}
-          delegated={delegated}
-          // the agent's own page only (#4091): in a side panel the link would change the page under it, and Persona's
-          // conversations list what the tasks' agents ask in TaskQuestions
-          offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
-          narrow={compactDock}
-          short={short}
-          keyboard={keyboard}
-          onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
-        />
+        {(!assistant || voiceState === "live") && pendingCards}
         {assistant && session && <CompactionStrip session={session} />}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && !refusedNoRow && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
@@ -1495,6 +1520,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       </Dialog>
     </div>
   );
+  // a link tapped in the chat opens what it opens as the chat's manager
+  return <LinkManager.Provider value={session?.manager}>{page}</LinkManager.Provider>;
 }
 
 /** Over the chat's top edge when the page keeps getting its items by asking for them, not by push (lib/stale-page.ts). */

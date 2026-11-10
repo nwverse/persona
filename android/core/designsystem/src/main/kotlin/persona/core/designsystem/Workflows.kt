@@ -58,7 +58,7 @@ import persona.core.domain.sort.WorkflowTimeline.PhaseBlock
 import persona.core.domain.sort.WorkflowTimeline.PhaseState
 import java.time.Instant
 
-// A Claude Code Workflow run (#2935, #3435; docs/protocol/agent-states.md "Background workflow, Monitor") as a timeline card,
+// A Claude Code Workflow run (#2935, #3435; docs/protocol/agent-states.md "Background workflows and Monitor") as a timeline card,
 // the same as the web's (#3434): in the chat where the Workflow call that launched it was (JWorkflowCallCard), and in an
 // agent's details (JWorkflowCard). Both draw the same parts:
 // - a head: the mark, its name, its status, "169/185+" agents done of those started ("+" while it runs: the script

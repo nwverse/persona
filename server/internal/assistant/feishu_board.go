@@ -19,7 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// The standing board (#6052, docs/extensions/bots.md "The board"): with the bot's `board` switch on, /tasks keeps one card in the
+// The standing board (#6052, docs/extensions/bots.md "The waiting-for-you board"): with the bot's `board` switch on, /tasks keeps one card in the
 // owner's chat that lists everything waiting for them, and edits that card in place instead of sending another. It is
 // edited again, about boardSettle after a card opens or ends or a to-do enters or leaves "Please verify", and once
 // when the assistant connects to the hub. Only a card that can no longer be edited (Feishu allows boardEditFor after

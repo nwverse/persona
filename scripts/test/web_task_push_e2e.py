@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end check of a scheduled task's "Push when done" in the web (#2570, docs/assistant/assistant.md "Push when done"): the editor shows
+"""End-to-end check of a scheduled task's "Push when done" in the web (#2570, docs/assistant/assistant.md "Push after running"): the editor shows
 "Every time" / "Alerts only" when the hub has the task_push feature; picking the second hides "Continue the original chat", says what it
 means, and saves push "asked"; the list marks the task; picking "Every time" again saves "".
 
