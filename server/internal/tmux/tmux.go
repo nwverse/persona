@@ -7,12 +7,16 @@ package tmux
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // Client runs tmux for one server.
@@ -41,12 +45,18 @@ func (c Client) run(ctx context.Context, stdin string, args ...string) (string, 
 		// read and type into that server's pane of the same id.
 		cmd.Env = envWithout(os.Environ(), "TMUX", "TMUX_PANE")
 	}
+	// A tmux wrapper whose child keeps the output pipe open would otherwise hold Run past ctx (or past its own exit).
+	cmd.WaitDelay = time.Second
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // tmux itself exited 0; only a child it left behind held the pipe
+	}
+	if err != nil {
 		if strings.Contains(errb.String(), "no server running") || strings.Contains(errb.String(), "error connecting to") {
 			return out.String(), fmt.Errorf("%w: %s", ErrNoServer, strings.TrimSpace(errb.String()))
 		}
@@ -119,17 +129,45 @@ func (c Client) Keys(ctx context.Context, pane string, keys ...string) error {
 	return err
 }
 
+// bufferPrefix names this process's tmux buffers: another Persona on the same tmux server (a dev node next to the
+// installed one) has a prefix of its own, so neither loads over a buffer the other has yet to paste.
+var bufferPrefix = fmt.Sprintf("persona-%d-%s", os.Getpid(), randomHex(4))
+
 var bufferSeq atomic.Uint64
 
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b) // crypto/rand.Read does not fail
+	return hex.EncodeToString(b)
+}
+
+// dropBufferTimeout bounds the cleanup of a buffer whose paste failed.
+const dropBufferTimeout = 2 * time.Second
+
 // SendText types text into the pane without submitting it, through a tmux buffer so that a line break is text and not
-// Enter (bracketed paste when the program takes it):
+// Enter (bracketed paste when the program takes it). Empty text types nothing. The buffer never outlives the call: the
+// paste deletes it, and a paste that fails (the pane closed, ctx ended) is followed by an explicit delete.
 func (c Client) SendText(ctx context.Context, pane, text string) error {
-	buf := fmt.Sprintf("persona-%d", bufferSeq.Add(1))
+	if text == "" {
+		return nil
+	}
+	buf := fmt.Sprintf("%s-%d", bufferPrefix, bufferSeq.Add(1))
 	if _, err := c.run(ctx, text, "load-buffer", "-b", buf, "-"); err != nil {
 		return err
 	}
-	_, err := c.run(ctx, "", "paste-buffer", "-p", "-d", "-b", buf, "-t", pane)
-	return err
+	if _, err := c.run(ctx, "", "paste-buffer", "-p", "-d", "-b", buf, "-t", pane); err != nil {
+		c.dropBuffer(ctx, buf)
+		return err
+	}
+	return nil
+}
+
+// dropBuffer deletes a buffer best-effort, on a short context of its own so that it runs after ctx has ended: the text
+// it holds would otherwise stay in the user's tmux server (list-buffers, choose-buffer).
+func (c Client) dropBuffer(ctx context.Context, buf string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dropBufferTimeout)
+	defer cancel()
+	_, _ = c.run(ctx, "", "delete-buffer", "-b", buf) // the paste error is the one that matters
 }
 
 // Prompt types text and presses Enter.
