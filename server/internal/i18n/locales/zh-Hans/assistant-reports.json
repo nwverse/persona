@@ -28,6 +28,7 @@
   "accept_open": "去看看",
   "accept_reply_hint": "回复这条：「通过」标为已验证；写别的会记进待办的决策，交给原来的 Agent 改",
   "accepted": "已验收，标为已验证",
+  "accepted_by_supervisor": "督办已核对证据，标为已验证",
   "accept_gone": "这个任务已经不在了",
   "accept_question": "验收意见",
   "accept_to_agent": "用户验收时的意见（从飞书回的）：\n{feedback}\n\n照这个改，改完重新部署，最后的回复里写清改了什么、去哪看、怎么验。",
@@ -75,5 +76,18 @@
   "live_held_pr": "还没上线：停在 PR",
   "live_held_merged": "还没上线：已合未部署",
   "live_held_off": "已部署但默认关着",
-  "goal_summary": "{title}：{tasks}"
+  "goal_summary": "{title}：{tasks}",
+  "deploy_gate_out": "等部署：线上 hub（{hub}）还没包含合并提交 {merge}",
+  "deploy_gate_unmerged": "PR 还没合并，谈不上部署",
+  "deploy_gate_unknown": "等确认部署：查不到线上 hub 有没有这次合并",
+  "deploy_gate_not_in": "等部署：线上 hub（{hub}）里还没有这个 PR 的合并",
+  "leader_reached": "已达成：{task}",
+  "leader_decision": "要你拍板：{task}",
+  "leader_decision_why": "要你拍板：{task}。{why}",
+  "leader_stuck_waiting": "卡住超过一天，在等你：{task}",
+  "leader_stuck_stopped": "卡住超过一天，停着没做完：{task}",
+  "leader_plan_waiting": "计划等你点开始：{tasks}",
+  "progress_reached": "达成：{text}",
+  "progress_doing": "在做：{text}",
+  "progress_needs_you": "要你做：{text}"
 }

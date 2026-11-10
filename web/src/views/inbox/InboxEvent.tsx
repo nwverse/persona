@@ -3,7 +3,7 @@
 // suggestion card
 // with its buttons right under it, then the handling chain folded to its newest entry, each entry going where its link says.
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
@@ -12,10 +12,12 @@ import { conversationRoute, docChangeLine, isDone, itemKey, itemRoute, suggestio
 import { otherManager } from "../../lib/manager-choice";
 import { openLink } from "../../lib/links";
 import { navigate, type Route } from "../../lib/router";
+import { openFromInbox } from "../../lib/inbox-nav";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
+import { useFoldScroll } from "../chat/fold-scroll";
 import { InboxLine } from "./InboxLine";
 import { Glyph, Spark } from "./InboxParts";
 
@@ -81,12 +83,18 @@ export function EventMark({ it }: { it: InboxItem }) {
 
 // ── the detail ───────────────────────────────────────────
 
-/** The detail's body for an event: summary, recap, how the handling goes, the suggestion, handling chain, "Related" and "Trail". */
-export function EventBody({ item, onSource }: { item: InboxItem; onSource: (at: SourceAt) => void }) {
+/**
+ * The detail's body for an event: summary, recap, how the handling goes, the suggestion, handling chain, "Related" and "Trail".
+ * `embedded`: above the item's own page (a Feishu chat, #3262), as tall as it needs up to a share of the pane, then scrolling.
+ */
+export function EventBody({ item, onSource, embedded = false }: { item: InboxItem; onSource: (at: SourceAt) => void; embedded?: boolean }) {
   const done = isDone(item);
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto" data-event-body>
-      <div className="mx-auto flex max-w-[760px] flex-col gap-4 px-4 py-4 sm:px-6">
+  // capped above the chat: its bottom fades while there is more below, so a cut-off row reads as more to scroll to
+  const box = useRef<HTMLDivElement>(null);
+  const fold = useFoldScroll(box, embedded, [item]);
+  const body = (
+    <div ref={box} {...fold} className={embedded ? "min-h-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto"} data-event-body={embedded ? "embedded" : ""}>
+      <div className={cx("mx-auto flex max-w-[760px] flex-col px-4 sm:px-6", embedded ? "gap-3 py-3" : "gap-4 py-4")}>
         {(item.summary || item.recap) && (
           <section className="flex flex-col gap-2">
             {item.summary && (
@@ -117,6 +125,8 @@ export function EventBody({ item, onSource }: { item: InboxItem; onSource: (at: 
       </div>
     </div>
   );
+  // the line under it outside the fade, which would wash it out
+  return embedded ? <div className="flex max-h-[40%] shrink-0 flex-col border-b border-line">{body}</div> : body;
 }
 
 /** "In progress"'s state with a way into the processing conversation, or why the AI did not get through it. */
@@ -285,7 +295,7 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
         return;
       }
       onSource({ position: x.position, uid: x.uid });
-    } else if (x.kind === "route") navigate(x.route);
+    } else if (x.kind === "route") openFromInbox(x.route);
   };
   return (
     <section data-event-chain>
@@ -358,7 +368,7 @@ function Related({ item }: { item: InboxItem }) {
       <ul className="flex flex-col gap-0.5">
         {list.map((r) => (
           <li key={r.id}>
-            <button type="button" onClick={() => navigate(itemRoute({ id: r.id, manager: item.manager }))} className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12.5px] whitespace-nowrap text-ink hover:bg-field">
+            <button type="button" onClick={() => openFromInbox(itemRoute({ id: r.id, manager: item.manager }))} className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12.5px] whitespace-nowrap text-ink hover:bg-field">
               <Icon name={r.source === "mail" ? "mail" : "link"} size={12} className="shrink-0 text-ink-3" />
               <span className="truncate">{r.title}</span>
             </button>
