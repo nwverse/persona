@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"slices"
 	"strings"
 	"time"
@@ -53,6 +54,10 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 	if reply == "" {
 		return &proto.WorkState{}, false, nil
 	}
+	co, coArtifacts, hasCloseout := closeout.Parse(reply)
+	if hasCloseout && co.Status == proto.CloseoutDone {
+		return closeoutDone(co, coArtifacts, s.lang(ctx)), false, nil // its own closeout says so: no model
+	}
 	others, byShort := triageOthers(machine, c.SessionID, v.sessions(machine))
 	name := machine
 	if d, ok := v.device(machine); ok && d.Name != "" {
@@ -86,7 +91,11 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		text := strings.TrimSpace(q.Question)
 		return text == "" || !strings.Contains(reply, text) || !explicitUserRequest(text)
 	})
-	return triageWork(out, byShort, time.Now(), s.lang(ctx)), same, nil
+	w = triageWork(out, byShort, time.Now(), s.lang(ctx))
+	if hasCloseout {
+		w = withCloseout(w, co, coArtifacts)
+	}
+	return w, same, nil
 }
 
 // Interactions returns newest first. Deferral, delegation and permission approval are not user decisions on questions.
