@@ -225,7 +225,7 @@ private fun SettingsContent(
             val providerService = services.providers.takeUnless { services.demo }
             when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
-                    readiness = services.readiness)
+                    readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })
                 provider != null -> ProviderDetailPage(providerService, provider!!, machines, onBack = { provider = null })
                 else -> ProvidersPage(providerService, machines, back,

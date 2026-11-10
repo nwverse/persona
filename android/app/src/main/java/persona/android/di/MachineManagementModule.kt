@@ -108,11 +108,15 @@ object MachineManagementModule {
         override val builtinPresets: Flow<Boolean> = (application as PersonaApp).hub
             .flatMapLatest { hub -> hub?.connection?.serverFeatures ?: flowOf(emptySet()) }
             .map { BuiltinPresetsFeature in it }.distinctUntilChanged()
+        override val launcherScope: Flow<Boolean> = (application as PersonaApp).hub
+            .flatMapLatest { hub -> hub?.connection?.serverFeatures ?: flowOf(emptySet()) }
+            .map { LauncherScopeFeature in it }.distinctUntilChanged()
         override suspend fun presets() = api().presets()
         override suspend fun add(provider: NewProvider) = api().add(provider)
         override suspend fun create(provider: NewProvider) = api().create(provider)
         override suspend fun test(probe: ProviderProbe) = api().test(probe)
         override suspend fun discover(probe: ProviderProbe) = api().discover(probe)
+        override suspend fun update(name: String, changes: ProviderUpdate) = api().update(name, changes)
         override suspend fun launchers() = api().launchers()
         override suspend fun launcher(name: String) = api().launcher(name)
         override suspend fun remove(name: String) = api().remove(name)

@@ -69,5 +69,7 @@ internal fun OutboxMessage.refusalReason(): String = when (error) {
     "dialog_open" -> stringResource(R.string.chat_delivery_dialog_open)
     "op_id_reused" -> stringResource(R.string.chat_delivery_op_id_reused)
     "invalid" -> stringResource(R.string.chat_delivery_invalid)
+    // The provider does not run on this computer (docs/integrations/launchers.md "Device scope and on-demand delivery").
+    "launcher_out_of_scope", "launcher_own_service" -> stringResource(R.string.chat_delivery_out_of_scope)
     else -> error?.takeIf(String::isNotBlank) ?: stringResource(R.string.chat_delivery_refused)
 }
