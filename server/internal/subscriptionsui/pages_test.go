@@ -370,7 +370,7 @@ func TestSetup(t *testing.T) {
 	if strings.Join(args, ",") != "a.calendar,a.updated_min,a.max_results,a.show_deleted" {
 		t.Fatalf("arguments in the schema's order: %v", args)
 	}
-	if c := item(v, "a.calendar"); c.Kind != "choice" || len(c.Choices) != 2 {
+	if c := item(v, "a.calendar"); c.Kind != "choice" || len(c.Choices) != 2 || c.Value != "primary" {
 		t.Errorf("a required enum is a choice without an empty one: %+v", c)
 	}
 	if c := item(v, "a.updated_min"); c.Value != "{{since}}" || c.Detail == "" {

@@ -63,7 +63,7 @@ var ErrReadOnly = errors.New("read_only_device")
 // Handle draws the page the state names, or does the action and answers what the app shows next.
 func Handle(ctx context.Context, svc Service, env Env, req Request) (wire.ActionResult, error) {
 	if env.Loc == nil {
-		env.Loc = time.Local
+		env.Loc = time.UTC // the manager passes the user's; never the machine's
 	}
 	if env.UIVersion == 0 {
 		env.UIVersion = 6

@@ -242,6 +242,8 @@ func (p *pages) setup(values map[string]string, dry *subscriptions.DryRun, dryEr
 			def = "{{since_date}}"
 		case pm.Default != nil:
 			def = argValue(pm.Default)
+		case pm.Required && len(pm.Enum) > 0: // a required choice starts on its first, as every app then shows the same
+			def = pm.Enum[0]
 		}
 		f := wire.Component{Type: "field", Key: "a." + pm.Name, Name: "arg." + pm.Name, Label: cmp.Or(pm.Title, pm.Name),
 			Value: held("arg."+pm.Name, def), Detail: pm.Description, Kind: "text"}
