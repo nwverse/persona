@@ -82,11 +82,14 @@ class ChatMarkdownBench {
         println("BENCH $name load_after=${load()}")
     }
 
+    /** [callers] callers of one 16 KB text at once, each dispatched alike, so one caller and two differ only by the second. */
+    private fun callers(callers: Int, parse: suspend () -> Unit) = runBlocking { List(callers) { async(Dispatchers.Default) { parse() } }.awaitAll() }
+
     @Test fun twoCallersOfTheSameText() = rounds("concurrent_16k", 40, mapOf(
-        "before_one" to { val c = OldCache(); { runBlocking { c.parse("a/0", reply16k) } } },
-        "before_two" to { val c = OldCache(); { runBlocking { List(2) { async(Dispatchers.Default) { c.parse("a/0", reply16k) } }.awaitAll() } } },
-        "after_one" to { val c = ChatMarkdownCache(); { runBlocking { c.parse("a/0", reply16k) } } },
-        "after_two" to { val c = ChatMarkdownCache(); { runBlocking { List(2) { async(Dispatchers.Default) { c.parse("a/0", reply16k) } }.awaitAll() } } },
+        "before_one" to { val c = OldCache(); { callers(1) { c.parse("a/0", reply16k) } } },
+        "before_two" to { val c = OldCache(); { callers(2) { c.parse("a/0", reply16k) } } },
+        "after_one" to { val c = ChatMarkdownCache(); { callers(1) { c.parse("a/0", reply16k) } } },
+        "after_two" to { val c = ChatMarkdownCache(); { callers(2) { c.parse("a/0", reply16k) } } },
     ))
 
     @Test fun thePrewarmAfterOtherTexts() {
