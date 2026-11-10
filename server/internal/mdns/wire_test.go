@@ -439,10 +439,32 @@ func pointerChain() []byte {
 	return msg
 }
 
+// labelFanOut is a 9000-byte query with no pointer chain at all: q0 is a 255-byte name of 127 one-byte labels, and each
+// of the other 1454 questions is a single pointer to it. Every question follows one pointer but reads 127 labels again,
+// about 185K labels in total.
+func labelFanOut() []byte {
+	msg := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	for range 127 {
+		msg = append(msg, 1, 'a')
+	}
+	msg = append(msg, 0, 0, 1, 0, 1) // root, TYPE A, CLASS IN
+	qd := 1
+	for len(msg)+6 <= maxPacket {
+		msg = append(msg, 0xC0, 12, 0, 1, 0, 1)
+		qd++
+	}
+	msg[4], msg[5] = byte(qd>>8), byte(qd)
+	return msg
+}
+
 func TestCompressionPointerChain(t *testing.T) {
 	msg := pointerChain()
 	if _, err := unpackMessage(msg); !errors.Is(err, errMalformed) {
 		t.Errorf("pointer chain: err = %v, want errMalformed", err)
+	}
+	// Labels read through a pointer count too, or a packet of short pointers to one long name costs more than the chain.
+	if _, err := unpackMessage(labelFanOut()); !errors.Is(err, errNameBudget) {
+		t.Errorf("label fan-out: err = %v, want errNameBudget", err)
 	}
 
 	// Chained pointers of a real message still parse: the answer's PTR target runs 34 -> 23 -> 12.
@@ -459,14 +481,26 @@ func TestCompressionPointerChain(t *testing.T) {
 		t.Errorf("got %+v", m.answers)
 	}
 	// The budget covers rdata names too: running out in the PTR target fails the message instead of skipping the record.
-	jumps := 4 // the answer's name takes 2, its target 3
-	if _, _, _, err := readRecord(msg, 34, &jumps); !errors.Is(err, errTooManyPointers) {
-		t.Errorf("PTR target over budget: err = %v, want errTooManyPointers", err)
+	budget := 10 // the answer's name takes 5 (3 labels, 2 pointers), its target 6
+	if _, _, _, err := readRecord(msg, 34, &budget); !errors.Is(err, errNameBudget) {
+		t.Errorf("PTR target over budget: err = %v, want errNameBudget", err)
+	}
+	budget = 11
+	if r, ok, _, err := readRecord(msg, 34, &budget); err != nil || !ok || r.target.String() != "hub._tcp.local." || budget != 0 {
+		t.Errorf("PTR within budget: %+v ok %v err %v, budget left %d", r, ok, err, budget)
 	}
 }
 
 func BenchmarkUnpackPointerChain(b *testing.B) {
 	msg := pointerChain()
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _ = unpackMessage(msg)
+	}
+}
+
+func BenchmarkUnpackLabelFanOut(b *testing.B) {
+	msg := labelFanOut()
 	b.ReportAllocs()
 	for b.Loop() {
 		_, _ = unpackMessage(msg)

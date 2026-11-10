@@ -38,9 +38,9 @@ const (
 var (
 	errMalformed = errors.New("mdns: malformed message")
 	errTooBig    = errors.New("mdns: message too big")
-	// errTooManyPointers ends the parse of a message whose names follow more compression pointers in total than the
-	// message has bytes (readName); it is errMalformed too.
-	errTooManyPointers = fmt.Errorf("%w: too many compression pointers", errMalformed)
+	// errNameBudget ends the parse of a message whose names read more labels and follow more compression pointers in
+	// total than the message has bytes (readName); it is errMalformed too.
+	errNameBudget = fmt.Errorf("%w: names read too many labels and compression pointers", errMalformed)
 )
 
 // name is a domain name as raw labels, most specific first, without the root. A label may hold any bytes,
@@ -300,11 +300,12 @@ func packMessage(m *message) ([]byte, error) {
 // readName decodes the name at off and returns it with the offset just past it. Compression pointers must point
 // strictly backwards from where the current run of labels started, which rules out loops.
 //
-// jumps is the pointer budget that all the names of one message share: each pointer followed takes one, and going
-// past it is errTooManyPointers. Backwards-only pointers alone still let every name walk a chain through all the
-// names before it, so a crafted packet would cost work quadratic in its size; a budget for the whole message keeps
-// it linear, while one deep but legitimate name (an ip6.arpa name compressed label by label) still reads.
-func readName(msg []byte, off int, jumps *int) (name, int, error) {
+// budget is shared by all the names of one message: each label read and each pointer followed takes one, and going
+// past it is errNameBudget. Backwards-only pointers alone still let every name walk a chain through all the names
+// before it, or let every 2-byte pointer read a long name again, so a crafted packet would cost work far beyond its
+// size; a budget for the whole message keeps it linear (each label is at most maxLabel bytes), while one deep but
+// legitimate name (an ip6.arpa name compressed label by label) still reads.
+func readName(msg []byte, off int, budget *int) (name, int, error) {
 	var n name
 	next := -1
 	limit := off
@@ -332,6 +333,9 @@ func readName(msg []byte, off int, jumps *int) (name, int, error) {
 			if total > maxNameWire {
 				return nil, 0, errMalformed
 			}
+			if *budget--; *budget < 0 {
+				return nil, 0, errNameBudget
+			}
 			n = append(n, string(msg[pos+1:pos+1+l]))
 			pos += 1 + l
 		case 0xC0:
@@ -345,8 +349,8 @@ func readName(msg []byte, off int, jumps *int) (name, int, error) {
 			if ptr >= limit {
 				return nil, 0, errMalformed
 			}
-			if *jumps--; *jumps < 0 {
-				return nil, 0, errTooManyPointers
+			if *budget--; *budget < 0 {
+				return nil, 0, errNameBudget
 			}
 			limit = ptr
 			pos = ptr
@@ -358,9 +362,9 @@ func readName(msg []byte, off int, jumps *int) (name, int, error) {
 
 // readRecord decodes the record at off. ok is false for records this package does not use (other types and
 // classes, or malformed rdata); they are skipped, the rest of the message still parses, unless a name in the rdata
-// used up the message's pointer budget (readName).
-func readRecord(msg []byte, off int, jumps *int) (r record, ok bool, next int, err error) {
-	n, off, err := readName(msg, off, jumps)
+// used up the message's name budget (readName).
+func readRecord(msg []byte, off int, budget *int) (r record, ok bool, next int, err error) {
+	n, off, err := readName(msg, off, budget)
 	if err != nil {
 		return record{}, false, 0, err
 	}
@@ -393,8 +397,8 @@ func readRecord(msg []byte, off int, jumps *int) (r record, ok bool, next int, e
 		}
 		r.addr = netip.AddrFrom16([16]byte(msg[rd:end]))
 	case typePTR:
-		t, e, err := readName(msg[:end], rd, jumps)
-		if errors.Is(err, errTooManyPointers) {
+		t, e, err := readName(msg[:end], rd, budget)
+		if errors.Is(err, errNameBudget) {
 			return record{}, false, 0, err
 		}
 		if err != nil || e != end {
@@ -406,8 +410,8 @@ func readRecord(msg []byte, off int, jumps *int) (r record, ok bool, next int, e
 			return r, false, end, nil
 		}
 		r.port = binary.BigEndian.Uint16(msg[rd+4:])
-		t, e, err := readName(msg[:end], rd+6, jumps)
-		if errors.Is(err, errTooManyPointers) {
+		t, e, err := readName(msg[:end], rd+6, budget)
+		if errors.Is(err, errNameBudget) {
 			return record{}, false, 0, err
 		}
 		if err != nil || e != end {
@@ -431,8 +435,8 @@ func readRecord(msg []byte, off int, jumps *int) (r record, ok bool, next int, e
 }
 
 // unpackMessage decodes a whole message. Counts in the header are not trusted for allocation: records are
-// appended as they parse, and running out of bytes is an error. Its names may follow at most len(msg) compression
-// pointers in total (readName).
+// appended as they parse, and running out of bytes is an error. Its names may read at most len(msg) labels and
+// compression pointers in total (readName).
 func unpackMessage(msg []byte) (*message, error) {
 	if len(msg) < 12 || len(msg) > maxPacket {
 		return nil, errMalformed
@@ -448,9 +452,9 @@ func unpackMessage(msg []byte) (*message, error) {
 		int(binary.BigEndian.Uint16(msg[10:])),
 	}
 	off := 12
-	jumps := len(msg)
+	budget := len(msg)
 	for range qd {
-		n, next, err := readName(msg, off, &jumps)
+		n, next, err := readName(msg, off, &budget)
 		if err != nil {
 			return nil, err
 		}
@@ -467,7 +471,7 @@ func unpackMessage(msg []byte) (*message, error) {
 	secs := [3]*[]record{&m.answers, &m.authorities, &m.additionals}
 	for i, sec := range secs {
 		for range counts[i] {
-			r, ok, next, err := readRecord(msg, off, &jumps)
+			r, ok, next, err := readRecord(msg, off, &budget)
 			if err != nil {
 				return nil, err
 			}
