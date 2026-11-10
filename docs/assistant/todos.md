@@ -48,8 +48,10 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
-External runtime starts (including Paseo) still fail closed: their start protocol does not guarantee enforcement,
-and a runtime may ignore the mode or fall back to a different provider at dispatch.
+External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
+without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
+(#3238): a plan start runs on a Paseo provider that runs Claude Code, in Paseo's `plan` mode; a non-Claude provider, no
+such provider, an agent Paseo reports in another mode (archived at once), or a takeover are refused.
 Update both the assistant and nodes for this behavior. This is the runtime's plan restriction on task work, not a
 promise that the runtime writes no session metadata or plan files, and it does not prevent a later explicit mode
 change by the user.
@@ -334,6 +336,19 @@ effective from the next judgment and next dispatched task. When on:
 - **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten).
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
 
+## Spot-check reviews
+
+(#3128, `assistant/supervise_sample.go`.) Every finished supervised task waits for the main conversation's `task_review`; with many tasks that makes the main conversation the bottleneck. The assistant setting `review_sample_percent` (0–100) lets the done judge close the tasks it can verify and sends only a share of them to the main conversation.
+
+- **Default 100**: nothing changes. The judge is not asked for anything more and every finished task waits for `task_review`.
+- **Turning it on**: tell the assistant (`assistant.review_sample_percent` in `persona_settings`, confirmation card on the phone), or `PUT /api/v1/assistant` with `{"review_sample_percent": 20}`; `GET /api/v1/assistant` reports the share in effect. It applies from the next judgment.
+- **The judge's check**: below 100, the "Automatic completion" model of a supervised task with `done_when` also returns `checks` (per criterion, in order: `checkable`, `met`, `evidence`) and `delivery` (as in "Delivery", whether or not `done_needs_delivery` is on; it is not written to the to-do unless that setting is on). The hub matches the checks to the ledger's criteria by position. A task **passes** when every criterion is checkable (a command's output, CI, a link, a live reading — not a matter of taste or something only the user can confirm), met, with evidence, and the delivery is `live`. A task without `done_when` never passes.
+- **Passed and not sampled**: the judge closes it as `task_review accepted` would: the ledger records an accepted review `by: "judge"` with the checks, the to-do closes (`done_reason` starts with 判官核对通过), the outcome goes to the project timeline, and the owner gets the usual conclusion card. The main conversation gets no supervision message for it.
+- **Passed and sampled**: whether a task is sampled is a hash of the to-do id and the stretch of work, so the same work always gets the same answer; about `review_sample_percent` percent are. A sampled one waits for `task_review` as before, its supervision message starting with 抽查 so the main conversation knows the judge's check already passed.
+- **Failed the check**: waits for `task_review` as before.
+- **Never closed by the judge**: a rework round (the supervisor was promised the next review, and asked for more than `done_when` says), a task that was reopened or was ever accepted or cancelled before, and a task the supervisor reviewed while the judge was deciding. `live` counts only when the judge itself says so, never on the Agent's delivery line alone; checks that do not come one per criterion with each criterion copied in its place count as not met.
+- When the independent review (`supervise_autoreview.go`) starts for a task, it runs first and its result waits for `task_review`; the judge's check does not close it.
+
 ## Close Agents for completed tasks
 
 Completing a to-do stops Persona's automatic follow-ups for its linked Agents, including when a turn ends after
@@ -577,7 +592,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 - Sidebar has a **To-dos** entry with unfinished-count badge.
 
 ### 2. To-do list and details
-- List: search bar, unfinished list, collapsed completed group at bottom. Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
+- List: search bar, unfinished list, collapsed completed group at bottom. Every client's default list (web, iOS / Mac and Android, #3206) is by status section (Waiting on you, Working, Just finished, PR to merge, then Other open, Shelved and Done folded), related to-dos merged into one row and stale ones shelved; by folder is the web's secondary view (`docs/assistant/todo-status-sop.md`). Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
 - Details: edit title/notes directly (iOS: notes can be dictated with the composer's mic, in details and in the New To-Do sheet, #2188); current state; linked projects (whole-project links) and active Agents (state dot, title, machine/workspace labels, latest-message summary, update time, tap to chat; beyond session time window use snapshot and mark "Ended"; launch failures show reason/removal); collapsed "Previously involved" list; persistent bottom **Hand to Agent** and **Done / Reopen** buttons; delete in top-right more menu.
 - **Decisions** section under notes (web): effective decisions chronologically (question, choice, reason, time, provenance), each can **Change decision** (write a replacement) or ⋯ **Which decision did this replace?** / **Undo replacement**; when superseded records exist, **View full history**, with old records struck through. Hide whole section if hub unsupported (route 404).
 - **Projects** section above Agents: each row "project · machine", with **Remove**; projects without online Agents show "No Agents currently": only sessions in current hub group, on connected computers, not offline count (same-ID computers in other groups do not; disconnected computer sessions marked unknown by hub rather than offline do not count either, matching web). Agent source says "With project <name>" or "Dispatched by <parent title>"; missing project source shows only "With project", missing parent only "Spawned", manual links unlabelled.

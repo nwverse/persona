@@ -93,6 +93,9 @@ nonisolated struct RecordingTransfer: Codable, Sendable {
     var segment: RecordingSegment?
     var total: Int?
     var marks: [Double]
+    /// Started as a meeting recording on the watch (docs/apple/recording.md「Apple Watch」); nil from a note, and from a watch
+    /// with an older app.
+    var meeting: Bool?
 
     static let key = "personaRecording"
     var dictionary: [String: Any] {
@@ -102,6 +105,7 @@ nonisolated struct RecordingTransfer: Codable, Sendable {
     init(entry: RecordingEntry, segment: RecordingSegment? = nil) {
         id = entry.id; createdAt = entry.createdAt; locale = entry.locale
         self.segment = segment; total = segment == nil ? entry.expectedSegments : nil; marks = entry.marks
+        meeting = entry.isMeeting ? true : nil
     }
     init?(dictionary: [String: Any]?) {
         guard let data = (dictionary?[Self.key] ?? dictionary?[LegacyNames.recordingKey]) as? Data,

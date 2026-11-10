@@ -94,6 +94,8 @@ final class RecordingLibrary {
         }
         var entry = entry(transfer.id) ?? RecordingEntry(id: transfer.id, createdAt: transfer.createdAt, source: .watch, locale: transfer.locale)
         entry.marks = Array(Set(entry.marks + transfer.marks)).sorted()
+        // A meeting started on the watch: the phone names it after the calendar (`MeetingRecorder.tagWatchRecording`).
+        if transfer.meeting == true, entry.meeting == nil { entry.meeting = RecordingMeeting() }
         if var segment = transfer.segment, !entry.segments.contains(where: { $0.index == segment.index }) {
             segment.sentences = nil; segment.delivered = false
             entry.segments.append(segment)

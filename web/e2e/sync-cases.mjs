@@ -155,6 +155,12 @@ async function typeAndSend(page, words) {
   await box.press("Enter");
 }
 
+/** The main conversation mounts its cards in Pending; ordinary chats have no tray. Keep it open for reads and answers. */
+async function showCards(page) {
+  const pending = page.locator('[data-assistant-actionbar] [data-tray-entry="pending"][aria-expanded="false"]');
+  if (await pending.count()) await pending.click();
+}
+
 /** Taps a failed bubble's Retry or Delete for the message with these words (by the button's text, as the jsdom
  *  consumer does). */
 async function onFailed(page, words, label) {
@@ -209,7 +215,10 @@ async function playOn(browser, c, devices) {
     if (i === 59) failures.push(`start: not every device subscribed to the chat: ${JSON.stringify(seen)}`);
   }
 
-  const look = (d) => d.page.evaluate(project, d.sent.filter((s) => !s.discarded).map((s) => s.text));
+  const look = async (d) => {
+    await showCards(d.page);
+    return d.page.evaluate(project, d.sent.filter((s) => !s.discarded).map((s) => s.text));
+  };
   const invariants = async (where) => {
     for (const [name, d] of Object.entries(devices)) {
       const v = await look(d);
@@ -253,6 +262,7 @@ async function playOn(browser, c, devices) {
         } else if (u.answer) {
           d.answering.add(u.answer.id);
           const label = u.answer.resolution.allow === false ? interactionsText.deny : interactionsText.allow;
+          await showCards(d.page);
           await d.page.locator(`[data-card="${u.answer.id}"]`).getByRole("button", { name: label, exact: true }).first().click();
         } else if (u.retry) {
           await onFailed(d.page, d.sent.find((s) => s.id === u.retry).text, outboxText.retry);
