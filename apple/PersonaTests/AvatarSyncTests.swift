@@ -645,7 +645,7 @@ struct AvatarSyncTests {
         let following = Task { await s.follow("nwverse", effective: "nwverse", api: api) }
         try await gate.untilHeld()
         #expect(s.current.isBuiltin) // never half a package
-        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "nwverse/r1").path(percentEncoded: false)))
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "nwverse").appending(path: "r1").path(percentEncoded: false)))
         gate.open()
         await following.value
         #expect(s.current.id == "nwverse" && s.isOnPhone(s.current) && s.chosenID == "nwverse")

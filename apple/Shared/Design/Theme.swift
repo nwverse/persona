@@ -128,6 +128,8 @@ nonisolated enum Theme {
     #else
     private static let aiTintStrength = 0.14
     #endif
+    /// A line picked out for a moment in the accent's soft ground (the transcript line a minutes item's time jumped to).
+    static var accentTint: Color { accent.opacity(aiTintStrength) }
     /// The AI color at half strength: a mark of the AI's that is at work but not the lit one (a workflow phase with
     /// agents running that the run has moved past), apart from a ring (not started) and the full dot (lit).
     static var aiMuted: Color { ai.opacity(0.5) }
