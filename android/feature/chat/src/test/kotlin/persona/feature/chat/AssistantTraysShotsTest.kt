@@ -199,7 +199,8 @@ class AssistantTraysShotsTest {
                 uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
                     if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
             }
-            CompositionLocalProvider(LocalConfiguration provides configuration) {
+            val density = androidx.compose.ui.unit.Density(androidx.compose.ui.platform.LocalDensity.current.density, if (large) 1.6f else 1f)
+            CompositionLocalProvider(LocalConfiguration provides configuration, androidx.compose.ui.platform.LocalDensity provides density) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                     Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
                         HomeNavigation(listOf(NavItem("assistant", "Assistant", PhIcons.Sparkle), NavItem("agents", "Agents", PhIcons.Robot)), "assistant", {},
