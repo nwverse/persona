@@ -1437,6 +1437,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(nil)
 		}
 		if n.isAssistantSession(p.SessionID) {
+			defer n.typing.lock(p.SessionID)()
 			n.stopAssistant(p.SessionID)
 			return ok(nil)
 		}

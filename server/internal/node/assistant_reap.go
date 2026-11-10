@@ -37,10 +37,9 @@ func (n *Node) assistantInterrupt(id string) error {
 	return nil
 }
 
-// stopAssistant cancels recovery and serializes an external close with any recovery send. Internal process replacement
-// (assistantSend, whose caller already holds the session send lock) uses stopAssistantProcess instead.
+// stopAssistant cancels recovery before replacing a process. Explicit user stops additionally hold the session send
+// lock (assistantInterrupt and session.close); internal callers may already hold settings locks and must not take it.
 func (n *Node) stopAssistant(id string) {
-	defer n.typing.lock(id)()
 	n.cancelAssistantRecovery(id)
 	n.stopAssistantProcess(id)
 }
