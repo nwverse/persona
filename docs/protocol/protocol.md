@@ -1412,7 +1412,7 @@ When an Agent is blocked without a hook interaction, the hub reads the screen on
   The App's answer carries `options` (the keys of options to check; unlisted ones get unchecked) and `text` (the free answer; empty means don't check it). The hub passes it to the node's `session.keys`
   (`multi: true`, `options`, `free_text`), and the node presses one key at a time, re-reading the screen after each, and finally presses Submit / Next; on the confirmation page, if all questions are answered it presses "Submit answers" too.
   Old Apps send only one `option` for a multi-select card: treated as checking just that one.
-- Passwords: when the last line on the screen is a password prompt (`[sudo] password for …:`, `Password:`, an ssh passphrase…; the rules are deliberately narrow, and the word password in body text doesn't count), the card carries
+- Passwords: when the last line on the screen is a password prompt (`[sudo] password for …:`, `Password:`, an ssh passphrase, the passwd, mysql/psql, ssh-keygen, ansible-vault and openssl/keytool prompts…; the rules are deliberately narrow, and the word password in body text doesn't count), the card carries
   `secret: true` and the App uses a password field (not saved to drafts). Password or not, `text` in terminal card answers is always stored as `<redacted>` in the database;
   the terminal panel's key endpoint (`/keys`) isn't stored at all, and the hub's request log only records the path and status code.
 
