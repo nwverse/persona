@@ -421,7 +421,11 @@ enum ToolRunSummary {
             if groups[k] == nil { order.append(k) }
             groups[k, default: []].append(c)
         }
-        return order.map { k in chip(k, groups[k]!) }
+        return order.map { k in
+            var c = chip(k, groups[k]!)
+            c.truncatesTail = ToolPresentation.truncation(groups[k]![0].name, subject: c.detail ?? "") == .tail
+            return c
+        }
     }
 
     private static func chip(_ kind: Kind, _ calls: [ToolCall]) -> ToolChipGroup.Chip {

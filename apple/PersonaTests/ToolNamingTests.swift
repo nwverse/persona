@@ -278,5 +278,9 @@ struct ToolNamingTests {
         #expect(ToolPresentation.truncation("Monitor", subject: "Watch the export's throughput") == .tail)
         #expect(ToolPresentation.truncation("mcp__github__create_issue", subject: "CSV export times out on a year of hourly data") == .tail)
         #expect(ToolPresentation.truncation("TodoWrite", subject: "Fix") == .tail)
+        let issue = call("mcp__github__create_issue", ["title": .string("CSV export times out on a year of hourly data")])
+        #expect(ToolRunSummary.chips([issue]).first?.truncatesTail == true)
+        let read = call("Read", ["file_path": .string("/Users/me/code/weather/Sources/App/Forecast.swift")])
+        #expect(ToolRunSummary.chips([read]).first?.truncatesTail == false)
     }
 }
