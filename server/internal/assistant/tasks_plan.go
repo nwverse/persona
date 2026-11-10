@@ -173,7 +173,7 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		}
 	}
 	b.WriteString("This is not confirmation that any agent started. Startup can still fail; the task cards and context snapshot show the outcome.")
-	if s.isMain(ctx, sessionID) {
+	if s.supervises(ctx, sessionID) {
 		b.WriteString(" You supervise them: a supervision message comes when one needs you (review it with task_review).")
 	}
 	b.WriteString(dups)

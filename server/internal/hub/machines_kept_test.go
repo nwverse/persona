@@ -260,6 +260,8 @@ type fakeKeeper struct {
 	stop context.CancelFunc
 	mu   sync.Mutex
 	list map[string]json.RawMessage
+	// putDelay is how long a put takes (a slow manager); set it under mu.
+	putDelay time.Duration
 }
 
 func connectKeeper(t *testing.T, h *Hub, srv *httptest.Server, id string, list ...json.RawMessage) *fakeKeeper {
@@ -278,9 +280,22 @@ func connectKeeper(t *testing.T, h *Hub, srv *httptest.Server, id string, list .
 	t.Cleanup(func() { _ = ws.CloseNow() })
 	conn := bus.NewConn(ctx, ws)
 	f.peer = rpc.New("k", conn)
-	f.peer.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
+	f.peer.OnRequest = func(rctx context.Context, method string, params json.RawMessage) (any, error) {
 		var ref devicewire.MachineRef
 		var put devicewire.MachinePut
+		if method == devicewire.MethodMachinesPut {
+			f.mu.Lock()
+			delay := f.putDelay
+			f.mu.Unlock()
+			// a slow manager: the put answers after delay, or not at all once the request or the peer is gone
+			select {
+			case <-time.After(delay):
+			case <-rctx.Done():
+				return nil, rctx.Err()
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		switch method {

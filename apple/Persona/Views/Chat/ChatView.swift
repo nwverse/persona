@@ -186,7 +186,7 @@ struct ChatView: View {
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
 
-    init(key: SessionKey, style: ChatStyle = .dev) {
+    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil) {
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
         _key = State(initialValue: style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key)
@@ -195,10 +195,13 @@ struct ChatView: View {
         #endif
         opened = key
         self.style = style
+        self.itemManager = itemManager
     }
 
     /// The session this page was opened with (the path's), which `switchTo` records its switches under.
     private let opened: SessionKey
+    /// The manager of the inbox item this conversation was opened from (`InboxChatRoute`).
+    private let itemManager: String?
 
     /// A subagent of this session being looked at instead of the main agent (read-only, same message UI).
     @State private var viewing: Subagent?
@@ -222,10 +225,10 @@ struct ChatView: View {
         ComputerActivity.latest(in: store.items, chat: shownKey.machineRef, machines: model.namedMachines)
     }
     private var session: Session? { model.session(key) }
-    /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the one the
-    /// Persona page shows it for; nil for the default's.
+    /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the inbox
+    /// item's it was opened from or the one the Persona page shows it for; nil for the default's.
     private var linkManager: String? {
-        model.linkManager(session?.manager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
+        model.linkManager(session?.manager ?? itemManager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
     }
     /// The latest state of the subagent being viewed (the list refreshes with the session).
     private var viewedAgent: Subagent? {
@@ -2122,13 +2125,15 @@ struct ChatView: View {
         let conversation = key.sessionID
         let tasks = TasksStore.shared
         TaskQuestions(conversation: conversation)
-        if let range = TaskMentionList.mention(in: model.drafts[key] ?? "") {
-            TaskMentionList(conversation: conversation) { todo in
-                withAnimation(Theme.Motion.state) {
-                    var draft = model.drafts[key] ?? ""
-                    draft.removeSubrange(range)
-                    model.drafts[key] = draft
-                    tasks.routes[conversation] = todo.id
+        DraftReader(key: key) { typed in
+            if let range = TaskMentionList.mention(in: typed) {
+                TaskMentionList(conversation: conversation) { todo in
+                    withAnimation(Theme.Motion.state) {
+                        var draft = model.drafts[key] ?? ""
+                        draft.removeSubrange(range)
+                        model.drafts[key] = draft
+                        tasks.routes[conversation] = todo.id
+                    }
                 }
             }
         }
@@ -2208,7 +2213,7 @@ struct ChatView: View {
                 // The assistant takes modes on Codex too (the node maps them to Codex's sandbox / approvals); a Codex thread
                 // on its app-server takes its effort alone (setsEffortOnly).
                 // In the shell the modes are in the composer's model menu (ShellComposerBar, #1091).
-                let modes = viewing == nil && !usesShellComposer && session?.canSend == true && (session.map({ $0.assistant || $0.isClaude || $0.setsEffortOnly }) ?? true)
+                let modes = viewing == nil && !usesShellComposer && session?.canSend == true && (session.map({ $0.canChangeModes || $0.setsEffortOnly }) ?? true)
                 if modes {
                     SessionModeBar(key: key, session: session)
                         .padding(.leading, Theme.Space.xs)
@@ -2238,8 +2243,12 @@ struct ChatView: View {
                     offeredNext = nil
                 }
             }
-            .onChange(of: model.drafts[key] ?? "") { _, draft in
-                if !draft.isEmpty, let recap = pendingRecap { dismissRecap(recap) } // typing closes it
+            .background {
+                DraftReader(key: key) { typed in
+                    Color.clear.onChange(of: typed) { _, draft in
+                        if !draft.isEmpty, let recap = pendingRecap { dismissRecap(recap) } // typing closes it
+                    }
+                }
             }
     }
 
@@ -4021,6 +4030,10 @@ struct Composer: View, Equatable {
     let key: SessionKey
     var status: SessionStatus
     var placeholder: String?
+    /// Glow While Replying (Settings › Appearance, off by default): the assistant's composer glows while its reply is
+    /// being written (`working`), not while it waits on the user (`blocked`) and not in an Agent's chat.
+    @StoredValue(ComposerGlowPrefs.enabledKey) private var glowEnabled = false
+    private var glowsWhileReplying: Bool { glowEnabled && shellChat && status == .working }
     /// After /clear the pane runs a new session: the page follows it.
     var onCleared: ((SessionKey) -> Void)? = nil
     /// The box got or lost the keyboard.
@@ -4234,10 +4247,7 @@ struct Composer: View, Equatable {
     }
 
     /// Effort and permission mode can change: Claude Code and the assistant (`SessionModeBar` shows them for the same).
-    private var setsModes: Bool {
-        guard let s = model.session(key) else { return false }
-        return s.canSend && (s.assistant || s.isClaude)
-    }
+    private var setsModes: Bool { model.session(key)?.canChangeModes == true }
 
     /// Only the effort can change: a Codex thread on its app-server (`Session.setsEffortOnly`).
     private var setsEffortOnly: Bool { model.session(key)?.setsEffortOnly == true }
@@ -4391,6 +4401,7 @@ struct Composer: View, Equatable {
                                  history: key.path,
                                  gate: gate,
                                  openAttach: attachOpener,
+                                 glows: glowsWhileReplying,
                                  send: { if let gate { gate.action() } else { Task { await sendText(text) } } }) {
                     Button { showPhotos = true } label: { Label("Photos", systemImage: Theme.Icon.photos) }
                     if CameraPicker.isAvailable {
@@ -6000,6 +6011,22 @@ private struct ListScroll: Equatable {
     var content: CGFloat = 0
 }
 
+/// The composer's draft, read in a body of its own: the footer around it (cards, dock, the composer's own view) is not
+/// drawn again for every keystroke. Observation tracks `AppModel.drafts` as one value, so any read of it in the footer's
+/// body made each keystroke rebuild and compare the whole footer.
+private struct DraftReader<Content: View>: View {
+    let key: SessionKey
+    @ViewBuilder var content: (String) -> Content
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("DraftReader")
+        #endif
+        content(model.drafts[key] ?? "")
+    }
+}
+
 private struct ChatRegion<Content: View>: View {
     let name: StaticString
     @ViewBuilder var content: () -> Content
@@ -6007,6 +6034,9 @@ private struct ChatRegion<Content: View>: View {
     var body: some View {
         #if PERF_SIGNPOST
         let _ = PerfTrace.event(name)
+        #endif
+        #if DEBUG
+        let _ = PerfCount.body("\(name)")
         #endif
         content()
     }

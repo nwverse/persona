@@ -135,7 +135,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}()
 
 	switch req.Kind {
-	case "hook", "ask", "notify": // after what standby took while the manager was away (spool.go)
+	case "hook", "ask", "notify": // after what standby took while the manager was away (spool_replay.go)
 		if n.replayed != nil {
 			// Not for ever: a report-only hook gives up after 3 s (nodeclient.ReportHook), and a replay that takes long
 			// (a manager slow to answer) must not hold the others past what they wait for. Out of order beats lost.
@@ -151,7 +151,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 				return
 			}
 			if req.Kind == "hook" {
-				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool.go)
+				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool_replay.go)
 			}
 		}
 	}
@@ -789,8 +789,8 @@ func toolSummary(name string, input json.RawMessage) string {
 
 // callerTools are the agents' own tools that act for the agent calling them (assistant/agent_control.go
 // agentToolNames): reporting to its supervisor, reading and noting the decisions of the todo it works on, binding
-// that todo to a chat thread.
-var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread"}
+// that todo to a chat thread, handing a subtask to another computer and reading it back (assistant/dispatch.go).
+var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read"}
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

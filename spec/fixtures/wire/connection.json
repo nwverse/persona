@@ -87,10 +87,13 @@
         "builtin_presets",
         "upload_dir",
         "file_edit",
+        "file_inbox",
+        "file_transfer",
         "task_push",
         "sessions_list",
         "sessions_lookup",
         "sessions_pane_source",
+        "sessions_manager",
         "machine_rename"
       ],
       "fp": "",
@@ -191,10 +194,13 @@
           "builtin_presets",
           "upload_dir",
           "file_edit",
+          "file_inbox",
+          "file_transfer",
           "task_push",
           "sessions_list",
           "sessions_lookup",
           "sessions_pane_source",
+          "sessions_manager",
           "machine_rename"
         ],
         "/type": "hello"
@@ -213,6 +219,7 @@
     "input": {
       "build": 0,
       "channel": "",
+      "commit": "",
       "features": [
         "persona_contracts_v1",
         "look_uploads",
@@ -286,10 +293,13 @@
         "builtin_presets",
         "upload_dir",
         "file_edit",
+        "file_inbox",
+        "file_transfer",
         "task_push",
         "sessions_list",
         "sessions_lookup",
         "sessions_pane_source",
+        "sessions_manager",
         "machine_rename"
       ],
       "fp": "",
@@ -380,10 +390,13 @@
           "builtin_presets",
           "upload_dir",
           "file_edit",
+          "file_inbox",
+          "file_transfer",
           "task_push",
           "sessions_list",
           "sessions_lookup",
           "sessions_pane_source",
+          "sessions_manager",
           "machine_rename"
         ],
         "/ok": true,

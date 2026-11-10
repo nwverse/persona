@@ -78,13 +78,16 @@ export function defaultSocketPath() {
  *   token?: string | (() => string), package?: { name: string, hash: string }, instance?: string,
  *   onUpdate?: (offer: { name: string, hash: string, version?: string }) => void,
  *   launchers?: { name: string, model?: string, agent?: string, models?: object[] }[], resume?: boolean,
- *   keepAlways?: boolean }} options -
+ *   keepAlways?: boolean, readonly?: boolean }} options -
  *   launchers: more entries for the new-session form than options.launcher (a runtime running several agents: one
  *   per provider, each with the agent it starts and its models); rt.launchersChanged replaces them. resume: start
  *   takes {resume: <Claude session id>} — taking a session it does not have over, under that id (caps.resume; the
  *   machine's engine continuing a session not running anywhere). keepAlways: the runtime keeps no "always allow" rule
  *   itself; a permission card with an always_label then gets the hub's "Always allow in this session" for that session and tool
  *   (caps.keep_always, #3974). A runtime whose always is a rule of its own (narrower than the tool) leaves it off.
+ *   readonly: start with permission_mode "plan" runs in a read-only mode from the first prompt or throws
+ *   RpcError(…, 'readonly_unsupported'), never falling back to a writable agent (caps.readonly; without it the node
+ *   refuses such starts itself).
  *   assistant: its launcher may run the Persona assistant (caps.assistant; docs/integrations/runtimes.md "Assistant"). requires: node
  *   features (runtime.hello's features) this runtime cannot do without; on a node lacking one it does not stay
  *   connected, and tries again once the node restarts (its socket file is replaced) or after 10 minutes. onHub: called
@@ -224,6 +227,8 @@ export function createRuntime(driver, options) {
     if (options.resume === true && caps.start) caps.resume = true
     // It keeps no "always allow" rule of its own: the hub remembers one per session and tool for it (#3974).
     if (options.keepAlways === true) caps.keep_always = true
+    // It enforces read-only (plan) starts itself, or refuses them (#3238).
+    if (options.readonly === true && caps.start) caps.readonly = true
     const h = { runtime: options.runtime, name: options.name ?? options.runtime, version: options.version ?? '', instance, caps }
     if (options.package?.name && options.package?.hash) h.package = { name: options.package.name, hash: options.package.hash }
     if (options.agent) h.agent = options.agent

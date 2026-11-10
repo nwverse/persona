@@ -76,8 +76,11 @@ type Todo struct {
 	Supervision *Supervision `json:"supervision,omitempty"`
 	// Stage is how far its work got (plan, develop, review, merge, deploy, verify; "" not known) and PRURL the PR it
 	// named, read off its agents' replies (reports.go, #2768); the apps draw the stage bar from them.
-	Stage string `json:"stage,omitempty"`
-	PRURL string `json:"pr_url,omitempty"`
+	Stage         string `json:"stage,omitempty"`
+	PRURL         string `json:"pr_url,omitempty"`
+	StageKind     string `json:"stage_kind,omitempty"` // code or general; absent on older hubs
+	stageVerified bool   // explicit acceptance, kept with the stage setting
+	planPending   bool   // a live plan-approval card; never persisted as progress
 	// Delivery: how far its finished work went out, and while short of live where it is held and who can unhold it
 	// (delivery.go, #3306); nil until judged.
 	Delivery *TodoDelivery `json:"delivery,omitempty"`
@@ -345,7 +348,7 @@ func (s *Service) loadTodosLocked(ctx context.Context) error {
 	}
 	for id, st := range s.todoStages(ctx) {
 		if t, ok := tmap[id]; ok {
-			t.Stage, t.PRURL, t.Delivery = st.Stage, st.PR, st.Delivery
+			t.Stage, t.PRURL, t.StageKind, t.Delivery, t.stageVerified = st.Stage, st.PR, st.Kind, st.Delivery, st.Verified
 		}
 	}
 
@@ -375,6 +378,7 @@ func (s *Service) todosChanged(ctx context.Context) {
 // linksChanged: which todo an agent works for changed (or a todo's title, or whether it is done): the hub is told
 // (the snapshot's TodoReport: it pushes the session lists that look different now) and the herdr marks follow.
 func (s *Service) linksChanged(ctx context.Context) {
+	s.taskPlanApproval()
 	s.publish(context.WithoutCancel(ctx))
 	s.syncLinkedTodoTokens()
 }
@@ -474,6 +478,9 @@ func (s *Service) insertTodo(ctx context.Context, row db.TodoRow) (Todo, error) 
 
 func copyTodoLocked(t *Todo) Todo {
 	out := *t
+	if t.planPending && t.DoneAt == nil && !t.stageVerified && stageIndex(t.Stage) <= stageIndex("develop") {
+		out.Stage = "plan" // approval is current, not a rollback of the stored forward-only stage
+	}
 	if t.DoneAt != nil {
 		da := *t.DoneAt
 		out.DoneAt = &da
@@ -1497,17 +1504,31 @@ func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, titl
 
 // failTodo ends a todo whose agent did not start: done, with why, and its agents no longer count for it.
 func (s *Service) failTodo(ctx context.Context, id, reason string) error {
+	_, err := s.failTodoIf(ctx, id, reason, nil)
+	return err
+}
+
+// failTodoIf checks keep under the same write lock as completion and agent linking. Startup recovery must not
+// turn a task the user just completed, or one whose agent was just linked, into a failed start.
+func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(Todo) bool) (bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
-		return err
+		return false, err
 	}
 	s.todos.writing.Lock() // memory takes the rows in the order the store committed them (todoBook.writing)
+	if keep != nil {
+		t, ok := s.todoNow(id)
+		if !ok || !keep(t) {
+			s.todos.writing.Unlock()
+			return false, nil
+		}
+	}
 	now := time.Now().UTC()
 	doneAt := now
 	if st := s.todoDB(); st != nil {
 		row, err := st.FailTodo(ctx, id, reason, now)
 		if err != nil {
 			s.todos.writing.Unlock()
-			return err
+			return false, err
 		}
 		if row.DoneAt != nil {
 			doneAt = *row.DoneAt
@@ -1535,7 +1556,7 @@ func (s *Service) failTodo(ctx context.Context, id, reason string) error {
 	s.todos.mu.Unlock()
 	s.todos.writing.Unlock()
 	if t == nil {
-		return db.ErrTodoNotFound
+		return false, db.ErrTodoNotFound
 	}
 	if closing != nil {
 		s.threadPost(id, *closing)
@@ -1546,7 +1567,7 @@ func (s *Service) failTodo(ctx context.Context, id, reason string) error {
 	}
 	s.linksChanged(ctx)
 	s.todosChanged(ctx)
-	return nil
+	return true, nil
 }
 
 // autoDoneTodo marks todo id done by the assistant's judge when it is still open and was not reopened after work

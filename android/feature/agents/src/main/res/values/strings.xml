@@ -511,4 +511,20 @@
     <string name="agents_page_loaded">%1$d of %2$d sessions loaded</string>
     <string name="agents_page_more">Load more</string>
     <string name="agents_page_previous">Load earlier sessions</string>
+    <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
+    <string name="agents_todos_section_waiting">Needs you</string>
+    <string name="agents_todos_section_working">Working</string>
+    <string name="agents_todos_section_just_done">Just finished</string>
+    <string name="agents_todos_section_pr">PR to merge</string>
+    <string name="agents_todos_section_other">Other open</string>
+    <string name="agents_todos_section_shelved">Shelved</string>
+    <string name="agents_todos_summary">%1$d open · %2$d shelved · %3$d done</string>
+    <string name="agents_todo_restore">Restore</string>
+    <string name="agents_todo_pr_moved">%1$s · moved %2$s</string>
+    <string name="agents_todo_pr">PR</string>
+    <string name="agents_todo_state_accepted">Accepted</string>
+    <plurals name="agents_todos_related">
+        <item quantity="one">1 related</item>
+        <item quantity="other">%1$d related</item>
+    </plurals>
 </resources>

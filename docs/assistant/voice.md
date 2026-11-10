@@ -171,7 +171,7 @@ Phase one is done and this document follows the code; how it was split into issu
 
 **M. Disconnection**
 
-- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. Reconnecting plays a tone and shows "Reconnecting".
+- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. An upstream that stays connected but takes no frame for 10 seconds counts as a drop. Reconnecting plays a tone and shows "Reconnecting".
 - **App-to-hub drops**: automatically retry 3 times after 1, 4, 10 seconds, with `resume` in `start`. Rounds finished during the gap are still spoken. After all three failures, show "Continue".
 
 ### 1.3 Errors
@@ -725,7 +725,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
 
 ### 4.10 Reconnect and resume
 
-- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
+- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. Every write to the upstream waits at most `upWriteTimeout` (10 s); on that deadline the WebSocket closes itself, `readUpstream` fails and `lost()` runs, so an upstream that stops reading cannot hold the call (or the app hanging up) forever. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
   #3502: both protocols reset if this session survives 60 seconds (`stableAfter`); three failed attempts or three consecutive drops send fatal `upstream_failed`; protocol 2 App receives `link{reconnecting}` / `link{live}`.
   If Agent-written snapshot parts (title, goal, progress, recent turns, card questions, Agent titles) differ from the prior session (more text during disconnect), the new session has read Agent content: close user-speech gate on coming online, rejecting delegation as `unprompted` until user speaks again. Unchanged snapshot does not close it, allowing the user's pre-disconnect utterance.
 - **App-extension drops** (network switch; forwarded WS closed by hub redeploy; manager restart also restarts extension):

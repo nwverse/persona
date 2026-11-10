@@ -204,6 +204,19 @@ describe("usePlanOutOfView", () => {
     expect(out()).toBe(true);
   });
 
+  it("stops listening to the scroller once it watches another plan", async () => {
+    await render({ id: "p1", cards: ["p1"] });
+    await render({ id: "p2", cards: ["p2"] }); // the old plan's card is gone with it
+    await intersect(card("p2"), true);
+    expect(out()).toBe(false);
+    const sc = scroller();
+    const query = vi.spyOn(Element.prototype, "querySelector");
+    for (let i = 0; i < 3; i++) await act(() => sc.dispatchEvent(new Event("scroll")));
+    // a scroll listener left from p1 would find its card gone, look for p1, find none and show the pill
+    expect(out()).toBe(false);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it("is not out without a plan", async () => {
     await render({ cards: ["p1"] });
     expect(out()).toBe(false);

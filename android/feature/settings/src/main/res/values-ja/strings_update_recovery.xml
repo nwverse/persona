@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_update_pending_cancel">保留中のインストールをキャンセル</string>
+    <string name="settings_update_pending_confirm">保留中の Persona の更新をキャンセルしますか？ペアリングとアプリのデータは保持されます。その後、更新を再ダウンロードできます。</string>
+    <string name="settings_update_pending_cancelled">保留中のインストールをキャンセルしました。更新を再試行できます。</string>
+    <string name="settings_update_pending_failed">保留中のインストールを確認またはキャンセルできません。再試行してください。</string>
+</resources>
