@@ -75,5 +75,8 @@
   "live_held_pr": "not live: stopped at a PR",
   "live_held_merged": "not live: merged, not deployed",
   "live_held_off": "deployed, off by default",
-  "goal_summary": "{title}: {tasks}"
+  "goal_summary": "{title}: {tasks}",
+  "deploy_gate_out": "Waiting for deploy: the running hub ({hub}) does not contain merge {merge} yet",
+  "deploy_gate_unmerged": "The PR is not merged, so it is not deployed",
+  "deploy_gate_unknown": "Deploy not confirmed: cannot tell whether the running hub has this merge"
 }
