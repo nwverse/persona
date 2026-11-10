@@ -7,6 +7,6 @@
 // unknown), limits on every bridge call, every step and the whole call so nothing waits forever, and which steps
 // need the owner's approval (payment, deletion, sending a message, a password) — never approving them itself.
 //
-// It reaches the phone only through Bridge, the device bridge's operations (docs/extensions/phone-control.md), and
+// It reaches the phone only through Bridge, the device bridge's operations (docs/extensions/iphone-control.md), and
 // depends on nothing but the standard library, so tests run it against a fake.
 package iphonectl

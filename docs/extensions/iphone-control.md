@@ -7,8 +7,8 @@ tool call is one hub ↔ node round trip.
 
 | Piece | Where |
 | --- | --- |
-| Device bridge (`device_info`, `screenshot`, `ax_tree`, `tap`, `long_press`, `drag`, `swipe`, `keys`, `button`, `launch_app`, `terminate_app`, `list_apps`) | the bridge binary the node runs |
-| Pairing, the per-machine switch, the node's built-in `iphone` program and the hub ↔ node call | the node and `server/internal/extmgr` |
+| Device bridge (`device_info`, `screenshot`, `ax_tree`, `tap`, `long_press`, `drag`, `swipe`, `keys`, `button`, `launch_app`, `terminate_app`, `list_apps`) | `persona-iphone-bridge` ([iphone-bridge.md](iphone-bridge.md)) |
+| Pairing, the node's session with the phone, the per-machine switch, the node's built-in `iphone` program | [iphone-pairing.md](iphone-pairing.md) |
 | **Core**: element numbers, results, limits, approval rules (#3449) | `server/internal/iphonectl` |
 | The assistant's tools, waiting for the owner's approval and its wording | the manager |
 

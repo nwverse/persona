@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Wire is a Bridge over the device bridge's JSON wire (docs/extensions/phone-control.md, "The core's interface"):
+// Wire is a Bridge over the device bridge's JSON wire (docs/extensions/iphone-control.md, "The core's interface"):
 // Call sends one operation to the phone it is bound to and returns its result, or its error as an *Error with the
 // bridge's code. The node supplies Call; the device argument of the Bridge methods is not used, since Call already
 // knows the phone.
