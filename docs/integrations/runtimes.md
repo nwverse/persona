@@ -291,6 +291,12 @@ the displayed model and effort. Each accepted field is published even if another
 `auto` keeps native safe-operation approval, while Persona's explicit full bypass answers permission requests automatically.
 External session models stay unspecified until native metadata is available. Session discovery does not resume them.
 
+Availability checks use optional `check({launcher, cwd, prompt})` (`caps.check`) through the companion's authenticated
+ACP client. They run the existing one-word probe, cancel tool permission requests, and close their temporary session
+on success, failure or timeout. Completed probe workspaces stay out of the user inventory after companion restarts.
+The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
+node's shell check. Shell and managed launchers keep their own execution context.
+
 Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
 
 ### Shared runtime behavior
