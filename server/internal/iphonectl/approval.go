@@ -31,7 +31,8 @@ const (
 type Rules struct {
 	// SelfApps are the bundle ids of Persona's apps on the phone (from config; app identities never appear in code).
 	SelfApps []string
-	// SelfNames are those apps' names, for a front app the bridge names without a bundle id.
+	// SelfNames are those apps' names (the whole name, case aside): a front app with one of them is Persona's
+	// whatever its bundle id, so the rule holds while no bundle id is known.
 	SelfNames []string
 	// Words add labels, per kind, to the built-in ones (lowercase; a label matches when it is the phrase or starts
 	// with it).
@@ -128,11 +129,10 @@ func (r Rules) words(k Sensitivity) []string {
 	return append(append([]string(nil), builtinWords[k]...), r.Words[k]...)
 }
 
+// self says whether a is Persona's own app: its bundle id is one of SelfApps or its name, whole, is one of SelfNames.
+// Either is enough, so the rule holds with no bundle id known; another app of the same name is refused too.
 func (r Rules) self(a App) bool {
-	if a.BundleID != "" {
-		return listed(r.SelfApps, a.BundleID)
-	}
-	return a.Name != "" && listed(r.SelfNames, a.Name)
+	return a.BundleID != "" && listed(r.SelfApps, a.BundleID) || a.Name != "" && listed(r.SelfNames, a.Name)
 }
 
 // listed compares ids and names as people write them: case and surrounding spaces aside.
@@ -374,16 +374,34 @@ func newApproval(i int, step Step, target *Numbered, screen *Screen, v Verdict) 
 	return a
 }
 
-func summary(st Step) StepSummary {
+// summary is st for an approval card. Its target is named as it is on scr, the screen the owner is asked on (nil when
+// its numbers no longer hold): its number, role and label, for an element the step names by number or by a label only
+// one element has; otherwise as the step wrote it.
+func summary(st Step, scr *Screen) StepSummary {
 	s := StepSummary{Action: st.Action, Key: st.Key, Button: st.Button, App: st.App}
 	if st.Action == ActType {
 		s.TextLen = utf8.RuneCountInString(st.Text)
 	}
-	if t := st.Target; t != nil {
-		if p, ok := t.point(); ok {
-			s.At = &p
-		} else {
-			s.Target = &ElementRef{N: t.N, Role: t.Role, Label: t.Label}
+	t := st.Target
+	if t == nil {
+		return s
+	}
+	if p, ok := t.point(); ok {
+		s.At = &p
+		return s
+	}
+	s.Target = &ElementRef{N: t.N, Role: t.Role, Label: t.Label}
+	if scr == nil {
+		return s
+	}
+	switch {
+	case t.byNumber():
+		if e, ok := scr.Find(t.N); ok {
+			s.Target = ref(&e)
+		}
+	case t.Label != "":
+		if found := scr.byLabel(t.Label, t.Role); len(found) == 1 {
+			s.Target = ref(&found[0])
 		}
 	}
 	return s

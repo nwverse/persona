@@ -66,3 +66,20 @@ func TestZeroLimitsFallBackToTheDefaults(t *testing.T) {
 		t.Fatalf("%+v", l)
 	}
 }
+
+func TestDeliveryTakesTheCallersWordOverTheCode(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want Delivery
+	}{
+		{&Error{Code: CodeLocked}, DeliveryNotSent},
+		{&Error{Code: "not_paired"}, DeliveryUnknown},
+		{&Error{Code: "not_paired", NotSent: true}, DeliveryNotSent},
+		{&Error{Code: CodeLocked, MaybeSent: true}, DeliveryUnknown},
+		{&Error{Code: CodeLocked, NotSent: true, MaybeSent: true}, DeliveryUnknown},
+	} {
+		if got := delivery(c.err, false); got != c.want {
+			t.Errorf("%+v: %s, want %s", c.err, got, c.want)
+		}
+	}
+}

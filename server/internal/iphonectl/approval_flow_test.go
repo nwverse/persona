@@ -1,6 +1,7 @@
 package iphonectl
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -224,7 +225,7 @@ func TestABusyPhoneLeavesTheApprovalPending(t *testing.T) {
 			break
 		}
 	}
-	if resp, _ := h.do(`{}`, approved(id)); !strings.Contains(resp.Text, "the approval is still pending") {
+	if resp, _ := h.do(`{}`, approved(id)); !strings.Contains(resp.Text, "the approval is still pending") || resp.Refused != RefusedBusy {
 		t.Fatalf("%s", resp.Text)
 	}
 	<-done
@@ -245,5 +246,65 @@ func TestTheOwnersConfirmSettingIsTheOneTheDoStoppedUnder(t *testing.T) {
 	// Turned off before approving: the approval still resumes the step.
 	if resp, r := h.do(`{}`, approved(resp.ApprovalID)); r.Steps[0].Delivery != DeliverySent {
 		t.Fatalf("%s", resp.Text)
+	}
+}
+
+func TestSelfAppsFromRequestsStay(t *testing.T) {
+	h := newHarness(t, Options{Rules: Rules{SelfApps: []string{}}}, tree(selfApp, el("button", "Approve", 0, 0, 100, 40)))
+	h.look()
+	tap := `{"steps":[{"action":"tap","target":{"label":"Approve"}}]}`
+	// The hub names Persona's app: no step touches it.
+	resp, r := h.do(tap, func(r *Request) { r.SelfApps = []string{" " + selfApp.BundleID + " "} })
+	if len(r.Steps) != 1 || r.Steps[0].Delivery != DeliveryNotSent || !strings.Contains(r.Steps[0].Detail, "Persona's own app") ||
+		h.f.count("tap") != 0 || resp.Refused != "" {
+		t.Fatalf("%s", resp.Text)
+	}
+	// A later call that doesn't name it (a resume) keeps the rule.
+	if _, r = h.do(tap); r.Steps[0].Delivery != DeliveryNotSent || h.f.count("tap") != 0 {
+		t.Fatalf("%+v", r.Steps)
+	}
+	if got := h.c.ruleSet().SelfApps; len(got) != 1 {
+		t.Fatalf("listed once: %v", got)
+	}
+}
+
+func TestACallTurnedDownAsAWholeSaysSo(t *testing.T) {
+	h := newHarness(t, Options{}, payTree())
+	h.look()
+	if resp, _ := h.do(`{}`, approved("0123456789abcdef0123456789abcdef")); resp.Refused != RefusedNotPending || !strings.Contains(resp.Text, "othing was sent") {
+		t.Fatalf("an approval not pending: %+v", resp)
+	}
+	if resp := h.handle(Request{Op: OpDo, Args: json.RawMessage(`{"steps":[{"action":"fly"}]}`)}); resp.Refused != RefusedArgs {
+		t.Fatalf("bad steps: %+v", resp)
+	}
+	if resp, _ := h.do(`{"steps":[{"action":"tap","target":{"label":"Pay"}}]}`); resp.Refused != "" || !resp.NeedsApproval {
+		t.Fatalf("a do that ran: %+v", resp)
+	}
+	if resp, _ := h.look(); resp.Refused != "" {
+		t.Fatal("a look")
+	}
+}
+
+func TestConfirmNamesTheStepsTargetsAsOnScreen(t *testing.T) {
+	h := newHarness(t, Options{}, payTree())
+	h.look()
+	// By number, by a label only one element has, by a label several have, and a point.
+	resp, _ := h.do(`{"steps":[{"action":"tap","target":{"n":2}},{"action":"tap","target":{"label":"pay"}},`+
+		`{"action":"tap","target":{"label":"o"}},{"action":"tap","target":{"x":10,"y":20}}]}`, withConfirm)
+	a := resp.Approval
+	if a == nil || len(a.Steps) != 4 {
+		t.Fatalf("%+v", resp)
+	}
+	if got := *a.Steps[0].Target; got != (ElementRef{N: 2, Role: "textField", Label: "Note"}) {
+		t.Errorf("by number: %+v", got)
+	}
+	if got := *a.Steps[1].Target; got != (ElementRef{N: 3, Role: "button", Label: "Pay"}) {
+		t.Errorf("by label: %+v", got)
+	}
+	if got := *a.Steps[2].Target; got != (ElementRef{Label: "o"}) {
+		t.Errorf("an ambiguous label stays as written: %+v", got)
+	}
+	if a.Steps[3].Target != nil || a.Steps[3].At == nil || *a.Steps[3].At != (Point{10, 20}) {
+		t.Errorf("a point: %+v", a.Steps[3])
 	}
 }

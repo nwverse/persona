@@ -12,20 +12,28 @@ tool call is one hub ↔ node round trip.
 | **Core**: element numbers, results, limits, approval rules (#3449) | `server/internal/iphonectl` |
 | The assistant's tools, waiting for the owner's approval and its wording | the manager |
 
-Status: the core is logic with unit tests against a fake bridge and the bridge's documented wire shapes; it is not
-wired to the node yet. **Not verified on a real iPhone.**
+Status: the core is logic with unit tests against a fake bridge and the bridge's documented wire shapes. The node's
+`iphone` program runs its looks and dos through it (`server/internal/node/iphone_core.go`), checked end to end against
+a simulator ([iphone-pairing.md](iphone-pairing.md), "The node program `iphone` (#3450)"). **Not verified on a real
+iPhone.**
 
 ## The core's interface
 
 `iphonectl.Controller` (one per node) answers `Handle(ctx, bridge, Request) Response`:
 
 - **Request**: `device` (opaque to the core), `session` (the conversation), `op`, `args`, `approved` (resume a do the
-  owner approved) and `confirm` (the owner's setting to be asked before any input).
+  owner approved), `confirm` (the owner's setting to be asked before any input) and `self_apps` / `self_names`
+  (Persona's own apps, added to `Rules.SelfApps` / `Rules.SelfNames` for as long as the controller runs: a call
+  without them never lifts the rule).
 - **Response**: `output` (the result as JSON), `text` (the result for the model), `image` (a screenshot), and for a
   step waiting for the owner `needs_approval`, `approval_summary` (data, below) and `approval_id`. The approval fields
-  are for the manager only: neither is in `text` or `output`.
+  are for the manager only: neither is in `text` or `output`. `refused` says the call was turned down as a whole
+  before anything was sent, as a code: `bad_args`, `not_pending` (an approval it no longer holds) or `busy` (a resume
+  while the phone is busy: the approval stays pending); `text` says why.
 - `bridge` is the phone: `iphonectl.Wire` turns the bridge's JSON wire into the `Bridge` interface, given a function
-  that sends one operation to the phone and returns its result or its error (`*iphonectl.Error` with the bridge's code).
+  that sends one operation to the phone and returns its result or its error (`*iphonectl.Error` with the bridge's code;
+  the caller sets `NotSent` when its session refused before writing anything, `MaybeSent` when it handed the operation
+  over and lost the answer, whatever the code).
   With a `TempDir`, screenshots are written to a file (`out_file`) and `image.file` names it instead of carrying bytes.
 
 | Op | `args` | Does |
@@ -88,8 +96,9 @@ usually missed. The screenshot after the last input is the one attached to the r
 ## Typing
 
 The bridge types text as key presses on a US layout: only printable ASCII, tab and newline. A type step with any other
-character (Chinese, accented letters, emoji) is `not_sent` before anything, its focusing tap included, and says which
-character and that sending the same text again fails the same way.
+character (Chinese, accented letters, emoji) is `not_sent` before anything, its focusing tap included, and says at
+which character (its position, never the character: what a type step types goes into no result, log or error) and
+that sending the same text again fails the same way.
 
 ## Element numbers
 
@@ -220,7 +229,7 @@ list of the do's steps from there; one answer covers the do, though a step the r
 | `key`, `button`, `launch_app` | for those steps |
 | `evidence` | the facts the rules found (`button "Pay"`, `app Wallet (com.apple.Passbook)`) |
 | `at` | where the touch lands, when it is a point |
-| `steps` | with `confirm`: the do's steps from there (`action`, `target` or `at`, `text_len`, `key`, `button`, `app`) |
+| `steps` | with `confirm`: the do's steps from there (`action`, `target` or `at`, `text_len`, `key`, `button`, `app`); a target named by number, or by a label only one element has, is given as on the screen the owner is asked on (`n`, `role`, `label`), any other as the step wrote it |
 
 **The automation never approves itself**:
 
@@ -229,14 +238,19 @@ list of the do's steps from there; one answer covers the do, though a step the r
   manager never hands it to the model.
 - An id resumes one waiting step of one conversation, once. A newer do in that conversation, an expired wait
   (`Pending`) or a node restart discards it, and the call answers that nothing was sent.
-- No step touches or types into Persona's own app on the phone (`Rules.SelfApps`, bundle ids from config, compared
-  ignoring case and spaces; `Rules.SelfNames` for a front app reported without a bundle id), where approval cards and
-  their buttons appear, and launching it is refused; leaving it (home, another app) is fine.
+- No step touches or types into Persona's own app on the phone, where approval cards and their buttons appear, and
+  launching it is refused; leaving it (home, another app) is fine. The app in front is Persona's when its bundle id is
+  in `Rules.SelfApps` **or** its whole name is in `Rules.SelfNames` (both compared ignoring case and surrounding
+  spaces), so the rule holds while no bundle id is known; another app with the same name is refused too (fail closed).
+  The node starts with `SelfNames: ["Persona"]`, the public product name, and adds bundle ids at run time: those of
+  the apps the device's own `list_apps` names like that (read per device at most hourly, a minute after a failure;
+  an unreadable list leaves the name rule), and any the call sends (`self_apps` / `self_names`). Bundle ids are never
+  written in code, fixtures, logs or docs, and the rules only ever grow.
 
 ## Not covered yet
 
-- Wiring: the node's `iphone` program calling `Handle` with a `Wire` over the bridge, `SelfApps` from config, the
-  manager's tools and approval card.
+- The manager sending `self_apps` / `self_names` (what the iPhone app reports of itself when it consents); until it
+  does, the node's name rule and the device's app list are what keep the automation out of Persona's app.
 - Notification banners from Persona shown over another app are not recognized as Persona's own UI; only the app in
   front is.
 - Real-device checks of the bridge's roles and labels against the identity rules, the 30% threshold and the 400 ms

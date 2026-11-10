@@ -144,6 +144,9 @@ answer on.
   `approval_summary` is the core's `Approval` object (`proto.IPhoneApproval` mirrors it field for field) and
   `approval_id` its id. A resume is op `do` with only `approved` (no `args`); the core's "nothing was sent" for a resume
   it no longer holds stays an `*rpc.Error` with `sent: no` and the core's message.
+  `self_apps` / `self_names` are Persona's own apps on the iPhone (bundle ids and names) for the core's
+  `Rules.SelfApps` / `Rules.SelfNames`, as the iPhone app reports them; they only add to what the node already keeps
+  out (the name `Persona` and the bundle ids its device's app list gives), for as long as it runs.
 
 ## Notes and their languages
 

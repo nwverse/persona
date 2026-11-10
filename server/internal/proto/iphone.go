@@ -63,8 +63,9 @@ type IPhoneCall struct {
 	// Confirm is the extension's "ask before every action": the node asks step by step (the manager does not ask
 	// again first).
 	Confirm bool `json:"confirm,omitempty"`
-	// SelfApps, SelfNames: Persona's own app on the phones (bundle ids, display names, as each app said with its
-	// consent), which the core never operates: its approval cards show there.
+	// SelfApps and SelfNames are Persona's own apps on the iPhone, bundle ids and names, as the hub knows them (never
+	// written in code): no step touches or launches them, since that is where the owner approves steps. The node keeps
+	// them while it runs, so a call without them (a resume) never lifts the rule.
 	SelfApps  []string `json:"self_apps,omitempty"`
 	SelfNames []string `json:"self_names,omitempty"`
 }

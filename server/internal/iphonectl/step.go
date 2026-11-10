@@ -196,9 +196,11 @@ func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, resume 
 	}
 
 	if st.Action == ActType {
-		if bad, ok := untypable(st.Text); !ok {
+		if at, ok := untypable(st.Text); !ok {
+			// Where, not what: what a type step types never goes into a result, a log or an error.
 			return fail(DeliveryNotSent, fmt.Sprintf("not attempted: the phone's keyboard input types only printable ASCII, "+
-				"tab and newline, and the text has %q; nothing was typed. Sending the same text again fails the same way", bad))
+				"tab and newline, and character %d of the text is none of those; nothing was typed. Sending the same text "+
+				"again fails the same way", at))
 		}
 	}
 	if input(st.Action) {
@@ -259,7 +261,7 @@ func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, resume 
 	if sized == nil {
 		sized = &Screen{Size: cl.info.Size}
 	}
-	v := c.rules.Check(st, touchOf(st, tg, sized), scr)
+	v := c.ruleSet().Check(st, touchOf(st, tg, sized), scr)
 	if v.Refused != "" {
 		return fail(DeliveryNotSent, "refused: "+v.Refused)
 	}
@@ -284,8 +286,12 @@ func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, resume 
 			a := newApproval(i, st, tg.target, scr, Verdict{Needs: needs, Evidence: v.Evidence})
 			a.At = tg.at
 			if slices.Contains(needs, Confirm) {
+				named := scr
+				if cl.invalid != "" {
+					named = nil
+				}
 				for _, rest := range cl.remaining {
-					a.Steps = append(a.Steps, summary(rest))
+					a.Steps = append(a.Steps, summary(rest, named))
 				}
 			}
 			w := &waiting{approval: a, print: print}
@@ -346,13 +352,17 @@ func (c *Controller) act(ctx context.Context, cl *call, st Step, scr *Screen, tg
 
 // untypable is the first character the bridge's keyboard input can't type: it types printable ASCII, tab and
 // newline only, and refuses the whole text otherwise.
-func untypable(text string) (string, bool) {
+// untypable is the 1-based position (in characters) of the first character the keyboard input can't type; ok when
+// there is none.
+func untypable(text string) (at int, ok bool) {
+	n := 0
 	for _, r := range text {
+		n++
 		if r != '\t' && r != '\n' && (r < 0x20 || r > 0x7e) {
-			return string(r), false
+			return n, false
 		}
 	}
-	return "", true
+	return 0, true
 }
 
 // deliver sends the step's input.
