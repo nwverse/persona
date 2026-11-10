@@ -422,9 +422,12 @@ class HubChatRepository(
                 })
             }
             is Action.ScheduleFill -> synchronized(entries) {
+                // A rev move heard after the fill ended but while this timer still ran was dropped here: read again.
                 if (entry.timer?.isActive != true) entry.timer = entry.scope.launch {
-                    delay(action.delayMillis)
-                    backgroundSlots.withPermit { catchUp(entry) }
+                    do {
+                        delay(action.delayMillis)
+                        backgroundSlots.withPermit { catchUp(entry) }
+                    } while (entry.lock.withLock { entry.sync.behind })
                 }
             }
             is Action.FetchLatest -> entry.scope.launch { latest(entry) }
@@ -446,7 +449,7 @@ class HubChatRepository(
                 val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                 entry.eventError = null
                 publish(entry, verified = !overtaken)
-                if (overtaken) dispatch(entry, entry.sync.settle(ContinuityReducer.Gap.Fill))
+                if (overtaken || entry.sync.behind) dispatch(entry, entry.sync.settle(ContinuityReducer.Gap.Fill))
             }
             persist(entry)
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -486,7 +489,7 @@ class HubChatRepository(
                             val overtaken = entry.reducer.items.any { it.seq > entry.reducer.covered }
                             entry.eventError = null
                             publish(entry, verified = !overtaken)
-                            if (overtaken) entry.sync.fillTimer() else emptyList()
+                            if (overtaken || entry.sync.behind) entry.sync.fillTimer() else emptyList()
                         }
                     }
                     else -> error("Unexpected catch-up action: $action")
