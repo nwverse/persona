@@ -708,6 +708,9 @@ func TestGoldenAgentTriage(t *testing.T) {
 	golden(t, "agent_wake.approved", renderWake(agentWake{Attempt: 1, Wait: "CI 通过", Then: "push 到 beta", Approved: "push 到 beta"}))
 	golden(t, "agent_triage_input.approved", prompts.RenderAgentTriageInput(prompts.AgentTriageInput{Now: "2026-01-02 09:00 Fri",
 		Agent: "修登录", Machine: "示例电脑", Reply: "CI 还在跑", ApprovedWait: "CI 通过", ApprovedThen: "push 到 beta"}))
+	golden(t, "agent_wake.task_approved", renderWake(agentWake{Attempt: 1, Wait: "发布质检跑完", Then: "推进后续发布", Approved: "推进后续发布", ApprovedByTask: true}))
+	golden(t, "agent_triage_input.task_approved", prompts.RenderAgentTriageInput(prompts.AgentTriageInput{Now: "2026-01-02 09:00 Fri",
+		Agent: "修登录", Machine: "示例电脑", Reply: "质检还在跑", ApprovedWait: "发布质检跑完", ApprovedThen: "推进后续发布", ApprovedByTask: true}))
 	golden(t, "agent_answer", renderAnswer([]agentAnswerItem{{"用哪个方案？", "用 D4"}, {"要不要推到 beta？", "先不推"}}))
 }
 

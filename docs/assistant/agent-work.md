@@ -226,8 +226,16 @@ Persona **sends to Agents on its own** only four kinds of message, none introduc
 Any next step involving **pushing code, deploying / releasing, messaging others, or touching someone else's MR / PR** can only become "Waiting for your decision":
 
 - The prompt requires the model to classify these next steps as `blocked · user` (also when `wait.risky` is true);
-- Code fallback: if `wait.then` / `line` contains push, deploy, `部署` (deploy), `发布` (release), `上线` (go live), merge, `合并` (merge), `发消息` (send a message), `回复` (reply), `评论` (comment), testflight, or release, do not register a wakeup. Instead, ask on a card, "After 'X', it plans to 'Y'. Should it proceed?";
+- Code fallback: if `wait.then` / `line` contains push, deploy, `部署` (deploy), `发布` (release), `上线` (go live), merge, `合并` (merge), `发消息` (send a message), `回复` (reply), `评论` (comment), testflight, release, `发送` (send), `删除` (delete), `购买` / `付费` / `续费` / `充值` (spend), or `生产` / production, do not register a wakeup. Instead, ask on a card, "After 'X', it plans to 'Y'. Should it proceed?";
 - When the user chooses "Do it" on the card, the Agent receives the user's answer, which counts as user authorization.
+
+**A step its task already asked for is not asked again** (#3246, `agents_work_authorized.go`): before the card goes up, the hub reads the title and notes of the Agent's open to-do (supervised or not). When the to-do authorizes the step, the hub treats it as the user's "Do it once it's ready": no card and no push, a normal wakeup once the wait is due, the line `等「X」，任务已授权，好了就去「Y」`, and the work event `auto_approved` (to-do id, whether supervised, wait, step) as the trace. The wake tells the Agent that its task authorized the step. A new wait (the next release node) is checked the same way, so it is not asked again either. The to-do authorizes the step only when every risky word in it passes:
+
+- Never: sending or replying to people (`发消息`, `回复`, `评论`, `发送`, send, comment), deleting (`删除`, delete), spending (`购买`, `付费`, `续费`, `充值`), changing production (`生产`, production). These remain the user's whatever the to-do says.
+- Pushing its own branch (push, `推送`, `推到`): allowed for any to-do.
+- Merging, releasing, deploying (`合入`, `发布`, `上线`, `部署`, merge, release…): only when the to-do text contains the same word and no negation (`不要`, `别`, `禁止`, don't…) precedes it in the same clause.
+
+With no open to-do, with the wake switch off, with more than one question, or with an authorization link, the card goes up as before.
 
 ## Avoid conflicting with manual user actions
 

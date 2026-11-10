@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionlist"
@@ -776,5 +778,37 @@ func TestSessionsOfOneManager(t *testing.T) {
 	}
 	if next := page("limit=1&manager=m-0b0b0b&cursor=" + neturl.QueryEscape(first.Cursor)); next.HasMore || len(next.Sessions) != 1 || next.Sessions[0].SessionID == first.Sessions[0].SessionID {
 		t.Errorf("B's second page: %+v", next)
+	}
+}
+
+// An extension of a manager with two computers asks for its own sessions: the bounded page, the counts and the
+// whole list come from its computers only (one computer would fall back to a machine_id lookup and skip ownPage / ownCounts).
+func TestSessionsOfOneManagerSeveralComputersExtension(t *testing.T) {
+	h, url, _, b := reachHub(t) // A has ma (s3); B has mb (b1)
+	h.cfg.Machines = append(h.cfg.Machines, MachineConfig{ID: "mc", Name: "mc", Kind: "local"})
+	if _, err := h.moveMachine(context.Background(), "mc", "m-0b0b0b"); err != nil {
+		t.Fatal(err)
+	}
+	b.report(t, devicewire.State{Machine: proto.Machine{ID: "mb", Name: "mb"}}, devicewire.State{Machine: proto.Machine{ID: "mc", Name: "mc"}}) // one report is B's whole share
+	eventually(t, 5*time.Second, "mc", func() bool { return h.localMachine("mc") != nil })
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{{MachineID: "mb", SessionID: "b1", Title: "B-SESSION"}}})
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mc", Sessions: []proto.Session{{MachineID: "mc", SessionID: "c1", Title: "C-SESSION"}}})
+
+	for _, path := range []string{"/api/v1/sessions?limit=10&manager=m-0b0b0b", "/api/v1/sessions?summary=1&limit=10&manager=m-0b0b0b", "/api/v1/sessions?manager=m-0b0b0b"} {
+		code, out := extDo(t, url, "GET", path, "", nil)
+		if code != 200 || !strings.Contains(out, "B-SESSION") || !strings.Contains(out, "C-SESSION") || strings.Contains(out, "A-SESSION") {
+			t.Errorf("%s: %d %s", path, code, clip(out, 300))
+		}
+		if strings.Contains(path, "limit=") {
+			var p listTestPage
+			if err := json.Unmarshal([]byte(out), &p); err != nil || p.Total != 2 || len(p.Sessions) != 2 {
+				t.Errorf("%s: total %d of %d sessions (%v)", path, p.Total, len(p.Sessions), err)
+			}
+		}
+	}
+	code, out := extDo(t, url, "GET", "/api/v1/sessions?counts=1&manager=m-0b0b0b", "", nil)
+	var c sessionlist.Counts
+	if err := json.Unmarshal([]byte(out), &c); code != 200 || err != nil || c.Total != 2 || !reflect.DeepEqual(c.Machine, map[string]int{"mb": 1, "mc": 1}) {
+		t.Errorf("B's counts through its extension: %d %s %v", code, out, err)
 	}
 }

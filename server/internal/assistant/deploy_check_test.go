@@ -77,6 +77,7 @@ func deployService(t *testing.T) (*Service, *fakeHub, func() []string, *runningH
 	hub := &runningHub{commit: oldHub}
 	forge := &fakeForge{merged: true, sha: mergeSHA, contains: map[string]bool{oldHub: false, newHub: true}}
 	s.deploy.hubBuild, s.deploy.forge = hub.build, forge
+	s.deploy.listPaths = []string{} // no deployed-commits file unless a test writes one (deployed_commits_test.go)
 	return s, f, posts, hub, forge
 }
 

@@ -627,6 +627,7 @@ Measured 2026-10-31 on a test phone (Android, ColorOS, connected to a real hub) 
 (`debug.style` switches style, `debug.automation` disables dropped-frame fallback so the measurement captures the cost of glass itself), wait 3.5 seconds, reset `dumpsys gfxinfo`, swipe twice in each direction,
 then read framestats. Frame time = `FrameCompleted − IntendedVsync`; each run takes the last roughly 120 frames in framestats (unfinished and invalid rows removed), 10 runs per scenario.
 Jank rate is gfxinfo's own "Janky frames ÷ Total frames", summed across 10 runs; parentheses show per-run min / p50 / max.
+`RUNS`, `SWIPE_MS` and `SETTLE_S` override the run count, swipe duration and idle delay. `SWIPE_MS=1000 SETTLE_S=0` keeps the page scrolling through most of the sample instead of counting ambient-rendering frames during the default idle delays.
 The chat scenario is the phone's longest Agent session (largest transcript); the first round used the Persona main chat, which rendered only about 20 frames each time (it never started scrolling), so it does not count.
 
 With Haze's default blur input resolution (about 0.78):
@@ -650,7 +651,7 @@ with no visible difference in screenshot comparisons. Phone results after loweri
 Emulator figures are only a reference (emulated GPU, very slow RenderEffect): glass median frame time is 166 ms for Agents and 261 ms for chat, versus about 17 ms for Brief and Board;
 at quarter resolution glass is 103 / 126 ms. The fallback below normally takes over on such a machine.
 
-Fallback: when scrolling repeatedly drops frames (over 30% of 240 frames exceed 1.5 times the frame budget), `GlassFrameMonitor` drops one level for this run (refraction → blur → opaque);
+Fallback: severe sustained jank (over 60% slow frames after at least 120 frames) drops one level early; otherwise the original window applies (over 30% of 240 frames exceed 1.5 times the frame budget). Each drop is one level for this run (refraction → blur → opaque);
 battery saver and "Reduce transparency" use opaque panels directly (verified on the emulator by unplugging and enabling battery saver: floating dock and top bar become opaque, scroll edges become gradients). Battery usage: not measured.
 
 ## Verification records

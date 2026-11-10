@@ -81,6 +81,22 @@ Just finished), merged and not in it "merged, not deployed" with the watch above
 to-do is asked about again only when the hub's commit changes, or every 10 minutes while its PR is open. It gets no
 "Please verify": no turn said it was deployed.
 
+**Without GitHub**: a hub that cannot reach GitHub decides from a file the deploy writes, `deployed-commits.txt`, in
+the hub's state directory (`~/.persona`, or `~/.jarvis` kept from before) or next to the hub's binary:
+
+```
+# persona deployed commits v1
+# repo: <owner>/<name>
+<full sha> <subject>
+```
+
+the deployed commit first, then its ancestors newest first, as `git log --max-count=3000 --format='%H %s' <commit>`
+prints them. It is believed only when its first commit is the one the running hub reports, and only for PRs of its
+repository. A PR is found by its merge's subject (a squash merge's `… (#N)`, a merge commit's `Merge pull request #N …`):
+found, it is deployed, with no network. Not found, GitHub is asked; when GitHub cannot answer (no route, a failure
+pauses it for 10 minutes), it is "not in the running hub" (held, "等部署"), and the open to-dos' sweep leaves such a
+to-do as it is (its PR may still be open). The file is checked first, GitHub only when the file cannot say.
+
 GitHub is read through the hub's GitHub connector when it is signed in, else with `GH_TOKEN` / `GITHUB_TOKEN` from the assistant's environment when set, else anonymously (enough
 for a public repository; a private one without a token stays held as "cannot tell").
 

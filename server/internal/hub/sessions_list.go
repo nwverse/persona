@@ -115,6 +115,7 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 	}
 	// The machine's manager goes with its batch (?manager=<id>, sessionsManager): the one a kept list is stamped with,
 	// else the one its rows came stamped with (stamped: every row of a machine carries its manager).
+	// Premise: all rows of one machine's list share one manager (a machine has one owner), so the first row names it.
 	if !stamp && len(list) > 0 {
 		manager = list[0].Manager
 	}
