@@ -879,7 +879,8 @@ struct ReceiptCard: View {
                 Text(Self.heading(outcome, title: title))
                     .font(Theme.Font.bodyStrong)
                 if let s = Self.detail(outcome, summary: item.summary) {
-                    Text(s).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(4)
+                    // The Agent's last words as Markdown, not raw `**` (#2363).
+                    Text(ExchangeText.linked(s)).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(4)
                 }
                 HStack(spacing: Theme.Space.s) {
                     if let pr = item.pr, let url = URL(string: pr), let label = item.prLabel {
