@@ -593,6 +593,8 @@ extension Theme {
         static let agentChat = "bubble.left.and.text.bubble.right"
         /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
         static let meeting = "person.2.wave.2"
+        /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
+        static let attendanceOff = "waveform.slash"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
         /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).

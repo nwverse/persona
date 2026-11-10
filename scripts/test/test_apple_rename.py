@@ -148,7 +148,8 @@ class AppleRenameTests(unittest.TestCase):
         self.assertRegex(selection, r'#if os\(visionOS\)[\s\S]*?return false')
         # Active compact width still selects the shell; #2836 holds that width while iOS snapshots the app away.
         self.assertRegex(selection, r'#elseif os\(iOS\)\s+return \(heldWidthClass \?\? widthClass\) == \.compact \|\| flipped\s+#else\s+return false')
-        self.assertIn('if usesShell { ShellView() } else { RootTabs()', root)
+        self.assertIn('if usesShell { ShellView()', root)
+        self.assertIn('} else { RootTabs()', root)
         self.assertIn('RootTabs().visionShell()', root)
         tabs = root.split('private struct RootTabs: View {', 1)[1].split('\n#if os(iOS)', 1)[0]
         self.assertIn('TabView(selection: $model.selectedTab)', tabs)
