@@ -152,7 +152,14 @@ is 403 `read_only_device`.
 | `runs`, `interval`, `fallback`, `rules`, `raw` | The last runs; pickers that apply at once (the page stays and the choice moves); triage rules; the recipe's JSON |
 
 - A switch that is off carries the confirmation of what turning it on does: what is pulled, how often, that it is kept on the hub,
-  and which model triages or summarizes it. Turning one off asks nothing.
+  and which model triages or summarizes it, with its connection's name (`Service.ModelOf`). Turning one off asks nothing.
+- With drafting in (`features.generate`, "Drafting with a model"), a source without its extension's own recipe offers Draft with
+  AI next to Choose a Tool, and a recipe page offers Regenerate. Each asks first what goes to which model (`Service.RecipeModel`);
+  without one it only says so. A draft takes up to four minutes, so the page starts it in the background (one at a time per
+  connector) and shows it running; when it finishes the manager sends `extension_ui` `{extension: "-subscriptions", invalidate}`,
+  which redraws the pages on every app (`refresh_after` 30 is the fallback). A source's draft opens in the setup form and is saved
+  as the model's when kept unchanged; a refused one opens there too, from as far as it got. Drafts live in the manager's memory:
+  after a restart the user presses again.
 - All text is the manager's, in the request's language (en, zh-Hans, ja); the service gives only codes, localized here.
 - An app below UI version 6 gets the hub's usual downgrade (a switch becomes a row that turns it on or off); a source icon only
   version 6 has is drawn as an older one, never as none.
