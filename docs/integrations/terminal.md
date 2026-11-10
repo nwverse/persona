@@ -359,7 +359,7 @@ Paste screenshots with ⌘V / Ctrl+V or drag files from a file manager. Files up
    Still true in Single pane (use Ctrl+Shift+V or key-bar Paste); Full view handles Ctrl+V now, see section 26. Text-only clipboard uses the original text-paste path unchanged.
 2. Accept only **while controlling**: View Only (or control taken elsewhere) shows "Take over the terminal before pasting files", uploading nothing.
 3. Each file: `POST /api/v1/machines/{mid}/files?name=<filename>&dest=terminal` (raw bytes, `application/octet-stream`, same API as chat Send File and new-Agent attachments,
-   `docs/protocol/protocol.md`, "Send files"; web also shares `sendFile` in `lib/attachments.ts`). Hub forwards 1 MB chunks to that node (`file.upload.begin / chunk / end`, `begin` carries `dest`),
+   `docs/protocol/protocol.md`, "Sending files"; web also shares `sendFile` in `lib/attachments.ts`). Hub forwards 1 MB chunks to that node (`file.upload.begin / chunk / end`, `begin` carries `dest`),
    never holding the whole file in memory. Timeout 60 seconds + 1 second per 100 KB. Unnamed clipboard images get type-based names (`image.png`, `image.jpg`…).
 4. Node stores at `<node directory>/uploads/terminal/<YYYY-MM-DD>/<16 random hex digits>-<sanitized filename>` (directories 0700, files 0600), returning an absolute path.
    Separate from chat image attachments (`uploads/<date>`), so cleanup doesn't affect those.
@@ -515,10 +515,10 @@ A pane terminal is a full shell on that computer, stricter than an Agent-session
 
 ### Not implemented
 
-- iOS has no standalone terminal yet (session terminal only, `terminal_subscribe` uses session id). Protocol already suffices: same API/address. Android has it (#2972): Terminal in Agents List Settings, see `docs/android/android.md` ("Second batch of module entries").
+- iOS has no standalone terminal yet (session terminal only, `terminal_subscribe` uses session id). Protocol already suffices: same API/address. Android has it (#2972): Terminal in Agents List Settings, see `docs/android/android.md` ("App shell and direct page entry").
 - Close panes/tabs, rename, split: outside this version, do it on the computer when needed.
 - Hosts without sessions or herdr (Paseo, botmux): no panes, empty list.
-- ⌘K palette now searches panes too (#2330, `docs/web/web.md`, "Shortcuts"): reads each online computer's `panes.list` once on opening, lists ordinary shells and sessionless panes (Agent panes with sessions already appear as session results); terminal page Jump To unchanged.
+- ⌘K palette now searches panes too (#2330, `docs/web/web.md`, "Pages"): reads each online computer's `panes.list` once on opening, lists ordinary shells and sessionless panes (Agent panes with sessions already appear as session results); terminal page Jump To unchanged.
 
 ### Tests
 
@@ -578,7 +578,7 @@ Not tested on real herdr: these changes don't touch protocol.
 
 ## 21. Node menus: close, split, rename, start an Agent in a shell, Git (2026-11-05, web, #2329)
 
-Computer-changing actions in terminal/sidebar-tree node menus (`docs/web/web.md`, "Node menus"). Hub routes are **`full`-device-only** (`nodeAction` in `hub/panes.go`: `answer` devices and extension tokens 403, `route_scopes.txt` `-`),
+Computer-changing actions in terminal/sidebar-tree node menus (`docs/web/web.md`, "Node menu"). Hub routes are **`full`-device-only** (`nodeAction` in `hub/panes.go`: `answer` devices and extension tokens 403, `route_scopes.txt` `-`),
 with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / `tabs.close` / `tabs.rename` (`node/panes_actions.go`). Common rules: only host-listed panes/tabs/workspaces (refresh snapshot once if missing), directory comes from the pane, no request field for arbitrary directory or command.
 
 - **Host capability**: `host.SlotCloser` (whole tab), `host.Splitter` (split), implemented only by herdr. Orca, herdr-core, botmux return `unsupported`, and web hides actions. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
@@ -591,7 +591,7 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
 - **Git**: run in pane directory (workspace uses its own), reject non-repositories ("Not a Git repository"). **Pull** uses existing `gitPull`: fast-forward only, reject uncommitted changes; **Fetch** `git fetch --no-recurse-submodules`.
   **Push** asks first in every client (#1883, like the Git panel's Push; Pull and Fetch don't change the remote and run at once). It requires branch/upstream and pending commits (otherwise "No commits to push"), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. Remote rejects behind branches, with original reason shown in menu.
   All timeout after 60 seconds, don't prompt for passwords (`GIT_TERMINAL_PROMPT=0`, askpass `false`), retain only last 2 KB output.
-- **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Node menus"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
+- **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Information architecture"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
 - **Measured** (herdr 0.9.5, local temporary tab): `go test -tags herdrlive -run TestLiveMenuActions ./internal/herdr/` (`HERDR_LIVE_WORKSPACE=<workspace id>`) creates/renames tab, splits twice, closes pane/tab, matching fake herdr node tests.
 - **Tests**: `node/panes_actions_test.go` (fake herdr close/rename/split calls, rejection doesn't touch herdr, run in shell pane, rejection/failure preserves pane; real Git fetch/pull/push, force-push config ineffective, reject nonrepo/dirty/detached HEAD),
   `hub/panes_test.go` (every route denies `answer`/extension tokens before node receives it, forwards only named fields, absent from `answer` allowlist, route scopes `-`).
@@ -636,7 +636,7 @@ Same shape as Moshi `worktree/prepare` + `worktree/create`.
   Checkout path absolute (`~/` expanded), not an existing file, existing directory must be empty (Git can reuse it), never inside repo `.git`. Git rejection (branch checked out elsewhere, bad path…) returns original `fatal:` line; no forcing, deleting or partial artifacts on failure.
 - **Dialog** (`views/NewWorktree.tsx`, logic `lib/worktree.ts`): reads repo on open ("Reading repository…"); path follows branch until manually changed, clears to restore auto-follow; immediate branch validation (empty: "Enter a branch name").
   Creation shows spinner and disables dismissal; failure inside dialog ("Couldn't create worktree: …"), missing old-hub/node API says "Persona on this computer is too old; update to create worktrees". Success: toast, reload tree, open new workspace terminal.
-- **iOS / Mac** (#3099): space ⋯ in Agents list has New Worktree…, same two routes/form rules (`WorktreeForm`); success opens New Chat prefilled with new workspace instead of terminal (`docs/apple/ios.md`, "New worktree…").
+- **iOS / Mac** (#3099): space ⋯ in Agents list has New Worktree…, same two routes/form rules (`WorktreeForm`); success opens New Chat prefilled with new workspace instead of terminal (`docs/apple/ios.md`, "Information architecture").
 - **Tests**: `node/worktree_test.go` (real Git + fake herdr: prepare repo name/branch/config directory/linked worktree/detached HEAD/nonrepo; herdr creation with new/existing branches; rejected paths/branches never touch herdr; Git errors; Git fallback/repeated checkout; `panes.list` includes `worktree`),
   `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a workspace Orca does not list),
   `herdr/worktrees_test.go` (config parsing, slug, folder name, socket args, CLI fallback), `hub/panes_test.go` (permissions, named fields only), `web/src/lib/worktree.test.ts`, `node-actions.test.ts`, `node-palette.test.ts`, `views/NewWorktree.test.tsx`.

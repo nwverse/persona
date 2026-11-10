@@ -1,5 +1,14 @@
 # Lessons: web UI and interactions
 
+## Shared wire projections need one property declaration (#2947)
+
+Two independently merged features can add the same optional field to an interface without a text conflict. Keep one declaration backed by the shared wire type, including its compatibility with unknown values; an older inline union can disagree with the extracted type and break the production TypeScript build. Derived projections such as a brief's acceptance row should reference that shared field type too, rather than maintain another narrower union. Run the normal build on the integrated branch: focused runtime tests alone do not detect duplicate interface properties.
+
+## Stable task rows need lifecycle evidence, not stale progress (#2878)
+
+A completed or accepted task can still retain its last blocked progress report. Completion labels/checkmarks must use the current review or receipt summary, not keep a stale “stuck” subtitle underneath. Reused tasks also retain old plan and card upserts: deduplicate by to-do id, prefer its current durable plan, and scope completion evidence to that run's creation time. Test delayed upserts and owner acceptance changes while a previous `asked_at` request is in flight. The palette guard reads the first `:root` block; add shared geometry tokens there instead of introducing another block that hides the palettes from the guard.
+
+
 ## A collapsed execution default is more than an open-state flag (#2602)
 
 The old Agent work line was called folded, but still previewed five tool/thinking steps and left every intermediate text visible. The assistant-only default-open change then exposed the full trace. Removing just that default does not implement a single replace-in-place text segment: grouping, stream-to-item handoff, preview rendering and manual history loading must agree. Keep a stable text-slot identity, put every tool kind and older text inside the same summary, and do not use text length or Markdown shape to exempt intermediate narration. Retain all plan updates for manual inspection even when the composer selects only the latest plan.
@@ -8,6 +17,10 @@ External jump/search reveals use the expansion-memory API, not the summary butto
 
 A background wake can reopen an exchange before its recap. Find the live exchange from the latest source item rather than the last drawn block; keep continuation calls in the normal summary, not a second drawer. Test actual browser replacement, manual expansion, folded history, recap wakes and reload. A lazy collapse can retain its children during its closing animation; checking raw `textContent` then is not a visibility assertion. Use the latest-text slot and folded header state, or browser-visible locators.
 
+
+## Optional sidebar entries need both setup and list results (#2934)
+
+A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
 
 ## Report evidence is separate from report prose (#2554)
 
@@ -463,7 +476,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Upward scroll position does not necessarily mean user action: composer height remeasurement briefly collapses it, growing the viewport and causing the browser to clamp `scrollTop` upward a few pixels; again, the event arrives late.
   Stop following only when the user is scrolling (upward wheel, touch, scroll keys, scrollbar drag, and within 700ms afterward) and position moves upward (`followsAfterScroll`).
 - When content below the list (composer, task dock, question card) grows, content stays unchanged but viewport shrinks. ResizeObserver must observe the viewport too, or the latest row is covered.
-- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "How to run").
+- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "Running it").
 
 ## Spreadsheet viewer (2026-11-04, #1310)
 

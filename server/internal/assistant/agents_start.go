@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What a new or resumed Agent runs on and what its tab is called (docs/assistant/model-config.md "Picking a model for a new Agent"): the
+// What a new or resumed Agent runs on and what its tab is called (docs/assistant/model-config.md "Choosing a model for a new Agent"): the
 // manager's. The hub asks before it starts one the app asked for (agents.start_params), before a message resumes one
 // nothing says the launcher of (agents.resume_params), and for a tab's name (agents.tab_name: an Agent started in the
 // background, the Feishu card's); the assistant's own starts (agents_start, a task's agents) come here directly.

@@ -30,7 +30,7 @@ import persona.core.designsystem.*
 import java.io.File
 
 /**
- * "From WeChat" under a user message that came from a channel (docs/extensions/channels.md "Source marks"), drawn on the JVM with
+ * "From WeChat" under a user message that came from a channel (docs/extensions/channels.md "Source markers"), drawn on the JVM with
  * Robolectric's native graphics, in every style, light and dark: one from WeChat (a monogram), one from the Feishu bot
  * (its mark), one the app sent (no line). PNGs in `build/channel-shots/` (or `-Dpersona.shots=<dir>`).
  */

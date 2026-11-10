@@ -83,7 +83,7 @@ type Form struct {
 	Notes        string   `json:"notes"`
 }
 
-// Sources are where the built-in extension's settings come from (docs/assistant/voice.md "How the extension gets its settings").
+// Sources are where the built-in extension's settings come from (docs/assistant/voice.md "How the extension receives config").
 type Sources struct {
 	// Form is the settings form (PERSONA_EXTENSION_CONFIG), Key its secret key (PERSONA_EXTENSION_SECRETS).
 	Form json.RawMessage
@@ -199,7 +199,7 @@ var (
 	voicePattern      = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 )
 
-// LoadConfig reads the settings the hub hands the plugin (docs/assistant/voice.md "How the extension gets its settings"): the settings form in
+// LoadConfig reads the settings the hub hands the plugin (docs/assistant/voice.md "How the extension receives config"): the settings form in
 // PERSONA_EXTENSION_CONFIG, its key in PERSONA_EXTENSION_SECRETS, the config of the hub.json entry the hub took over
 // in PERSONA_VOICE_HUB_CONFIG. The former PERSONA_PLUGIN_* names are read too.
 func LoadConfig() (Config, error) {

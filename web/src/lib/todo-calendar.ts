@@ -222,6 +222,48 @@ export function slotAt(day: number, minutes: number, snap = 30): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(snapped / 60), snapped % 60).getTime();
 }
 
+// ---- moving a to-do (#2045) ----
+
+/** Where a moved to-do is due: at a moment (`at`), or all day on `day` (its local midnight) without one. */
+export interface CalendarDrop {
+  day: number;
+  at?: number;
+}
+
+/** What a drag on the axis snaps to, in minutes. */
+export const DROP_SNAP = 15;
+
+/** A block dropped with its top edge `minutes` into day: due at the nearest quarter hour, within the day. */
+export function dropOnAxis(day: number, minutes: number, snap = DROP_SNAP): CalendarDrop {
+  const clamped = Math.min(Math.max(minutes, 0), 24 * 60 - snap);
+  const snapped = Math.round(clamped / snap) * snap;
+  const d = new Date(startOfDay(day));
+  return { day: d.getTime(), at: new Date(d.getFullYear(), d.getMonth(), d.getDate(), Math.floor(snapped / 60), snapped % 60).getTime() };
+}
+
+/** e dropped on day as a whole: at the same time of day there (the month), or all day there (the All day row, or one
+ * that already was all day). */
+export function dropOnDay(e: CalendarEntry, day: number, allDay = e.allDay): CalendarDrop {
+  const d = new Date(startOfDay(day));
+  if (allDay) return { day: d.getTime() };
+  const t = new Date(e.start);
+  return { day: d.getTime(), at: new Date(d.getFullYear(), d.getMonth(), d.getDate(), t.getHours(), t.getMinutes(), t.getSeconds()).getTime() };
+}
+
+/** What a move is as PATCH /api/v1/todos/{id} takes it (either due field replaces the other); none when e would land
+ * where it already is. */
+export type DuePatch = { due_at: string; due_date?: undefined } | { due_date: string; due_at?: undefined };
+
+export function dropPatch(e: CalendarEntry, drop: CalendarDrop): DuePatch | undefined {
+  if (drop.at !== undefined) return !e.allDay && e.start === drop.at ? undefined : { due_at: new Date(drop.at).toISOString() };
+  return e.allDay && sameDay(e.start, drop.day) ? undefined : { due_date: dayKey(drop.day) };
+}
+
+/** todo as it is once moved: drawn there at once, before the hub has answered. */
+export function movedTodo(todo: Todo, patch: DuePatch): Todo {
+  return { ...todo, due_at: patch.due_at ?? null, due_date: patch.due_date ?? null };
+}
+
 /** Where a day without anything on it starts. */
 export const MORNING = 8;
 

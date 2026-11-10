@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import persona.core.contracts.api.ConnectorReplyOutcome
 import persona.core.contracts.api.ConnectorThreadMessage
 import persona.core.contracts.api.ConnectorThreadPage
@@ -62,14 +63,18 @@ internal data class ConnectorThreadState(
     val replyError: Throwable? = null,
 )
 
-/** One connector item's thread ([thread] of the connector [id]): its pages and its replies, through the hub only. */
-internal class ConnectorThreadModel(private val api: ConnectorsManagement, val id: String, val thread: String) {
+/**
+ * One connector item's thread ([thread] of the connector [id]): its pages and its replies, through the hub only, with
+ * [pins] (its page's) on each.
+ */
+internal class ConnectorThreadModel(private val api: ConnectorsManagement, val id: String, val thread: String,
+    private val pins: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext) {
     private val mutable = MutableStateFlow(ConnectorThreadState())
     val state: StateFlow<ConnectorThreadState> = mutable.asStateFlow()
 
     suspend fun load() {
         try {
-            val newest = api.connectorThread(id, thread)
+            val newest = withContext(pins) { api.connectorThread(id, thread) }
             mutable.update { it.copy(page = mergeNewest(it.page, newest), loaded = true, failure = null) }
         } catch (e: CancellationException) {
             throw e
@@ -84,7 +89,7 @@ internal class ConnectorThreadModel(private val api: ConnectorsManagement, val i
         if (state.value.older) return null
         mutable.update { it.copy(older = true) }
         return try {
-            val page = api.connectorThread(id, thread, before)
+            val page = withContext(pins) { api.connectorThread(id, thread, before) }
             mutable.update { s -> s.copy(page = s.page?.let { mergeOlder(it, page) } ?: page) }
             null
         } catch (e: CancellationException) {
@@ -100,7 +105,7 @@ internal class ConnectorThreadModel(private val api: ConnectorsManagement, val i
     suspend fun reach(messageId: String): Boolean {
         val have = state.value.page ?: return false
         return try {
-            val (page, found) = reachMessage(have, messageId) { before -> api.connectorThread(id, thread, before) }
+            val (page, found) = reachMessage(have, messageId) { before -> withContext(pins) { api.connectorThread(id, thread, before) } }
             mutable.update { it.copy(page = page) }
             found
         } catch (e: CancellationException) {
@@ -120,7 +125,7 @@ internal class ConnectorThreadModel(private val api: ConnectorsManagement, val i
         mutable.update { it.copy(sending = true, outcome = null, replyError = null) }
         var error: Throwable? = null
         val outcome = try {
-            api.connectorThreadReply(id, thread, action, text.trim(), replyTo?.id)
+            withContext(pins) { api.connectorThreadReply(id, thread, action, text.trim(), replyTo?.id) }
         } catch (e: CancellationException) {
             mutable.update { it.copy(sending = false) }
             throw e

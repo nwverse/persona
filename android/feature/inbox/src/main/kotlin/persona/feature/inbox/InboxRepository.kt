@@ -81,6 +81,11 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun setDone(items: List<persona.core.contracts.api.InboxDoneTarget>, done: Boolean): InboxBulkResult =
         bulk(items, if (done) persona.core.contracts.api.InboxBulkAction.Done else persona.core.contracts.api.InboxBulkAction.Reopen)
     /** Clean up all (dismiss) / Mark all as seen / Clear all (done) / Move back (reopen) over [items] in one request ([setDone] is its done / reopen). */
+    /**
+     * One page of [manager]'s done history (#2200, #2576; null: the default manager), newest done first, after [cursor]
+     * (null: from the newest). A hub without history answers an empty page with no next.
+     */
+    suspend fun doneHistory(manager: String?, cursor: InboxDoneCursor?): InboxDonePage = InboxDonePage()
     suspend fun bulk(items: List<persona.core.contracts.api.InboxDoneTarget>, action: persona.core.contracts.api.InboxBulkAction): InboxBulkResult =
         error("批量处理尚未接入") // i18n-ignore: developer error for a repository without the hub
     suspend fun readDraft(target: ReplyTarget): ReplyDraft?
@@ -107,7 +112,7 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun emojis(): kotlinx.serialization.json.JsonObject? = null
 
     /**
-     * "Muted" (docs/assistant/inbox.md "Mute"): what the user muted, in every source, newest first; [manager]'s (each
+     * "Muted" (docs/assistant/inbox.md "Muting"): what the user muted, in every source, newest first; [manager]'s (each
      * keeps its own; named even when it is the default, which may move before an Unmute), else the default's.
      */
     suspend fun inboxMutes(manager: String? = null): List<InboxMute> = error("静音尚未接入") // i18n-ignore: developer error for a repository without the hub
@@ -369,7 +374,7 @@ sealed interface LarkPart {
     data class Card(val content: LarkCardContent, val source: LarkContentSource, val messageId: String? = null) : LarkPart
     // Models may carry an authenticated Coil ImageRequest supplied by the data layer.
     data class Image(val model: Any, val description: String = "", val width: Int = 1, val height: Int = 1) : LarkPart
-    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream") : LarkPart
+    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream", val source: LarkContentSource? = null) : LarkPart
     data class External(val title: String, val larkUrl: String, val kind: String, val duration: String = "", val cover: Image? = null) : LarkPart
     data class Code(val code: String, val language: String = "") : LarkPart
     data class Audio(val ref: String, val durationMs: Long, val source: LarkContentSource? = null) : LarkPart
@@ -392,7 +397,17 @@ data class InboxPreferences(
     val query: String = "",
     val section: String = "",
     val expanded: List<String> = listOf("action", "fyi"),
+    /** Needs you, FYI and Collapsed grouped by source or by time (#2576, persona.core.domain.inbox.InboxGroups). */
+    val grouping: String = persona.core.domain.inbox.InboxGroups.SOURCE,
+    /** The groups opened or folded against how they start, as "section/key" (InboxGroups.isOpen). */
+    val folds: List<String> = emptyList(),
 )
+
+/** Where a manager's done history goes on: after the entry done at [before] with id [beforeId] (the hub's `next`). */
+data class InboxDoneCursor(val before: String, val beforeId: String?)
+
+/** A page of done history: its items as records (the app's ids), and where the next page starts (null: none). */
+data class InboxDonePage(val records: List<InboxRecord> = emptyList(), val next: InboxDoneCursor? = null)
 
 enum class InboxAiAction { Summarize, DraftReply, Handoff }
 @Serializable

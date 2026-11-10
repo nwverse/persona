@@ -5,7 +5,7 @@ import Testing
 import UIKit
 @testable import Persona
 
-/// The persona on the Live Activity (docs/apple/live-activity.md「形象」): which state it shows for a fleet, and the look
+/// The persona on the Live Activity (docs/apple/live-activity.md「Avatar」): which state it shows for a fleet, and the look
 /// the app hands the widget extension.
 struct FleetPersonaTests {
     private nonisolated static let packID = "custom-mint"

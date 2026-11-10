@@ -76,10 +76,12 @@ type ExtensionView struct {
 	Warnings    []string            `json:"warnings,omitempty"`
 
 	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, why that switch does not apply
-	// now ("disabled": the extension is switched off; the switch is kept for when it is on), its newer version and what
-	// happened last with an upgrade.
+	// now ("market_removed": its market is no longer registered; "disabled": the extension is switched off; the switch
+	// is kept either way), the market it upgrades from (kept after that market is removed, so removing a market can say
+	// which extensions stop upgrading), its newer version and what happened last with an upgrade.
 	AutoUpgrade       *bool                 `json:"auto_upgrade,omitempty"`
 	AutoUpgradePaused string                `json:"auto_upgrade_paused,omitempty"`
+	Market            string                `json:"market,omitempty"`
 	Upgrade           *ExtensionUpgrade     `json:"upgrade,omitempty"`
 	UpgradeNote       *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
 	// Nodes: its program on each computer it is switched on for (extension_nodes.go), for a plugin with one.
@@ -1016,7 +1018,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		for _, c := range m.Channels() {
 			params.Active["channel"] = append(params.Active["channel"], c.ID)
 		}
-		for point := range m.Contributes { // the rest, without what the user switched off (docs/extensions/extensions.md "Contribution switches")
+		for point := range m.Contributes { // the rest, without what the user switched off (docs/extensions/extensions.md "Turning contributions on and off")
 			if ids := m.Items(point); len(ids) > 0 && point != "connectors" && point != "channel" {
 				params.Active[point] = ids
 			}

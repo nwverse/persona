@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// docs/protocol/i18n.md「选哪种语言」: the system's first language decides, by its language subtag only.
+/// docs/protocol/i18n.md「Choosing a language」: the system's first language decides, by its language subtag only.
 struct AppLanguageTests {
     @Test(arguments: [
         ("zh", "zh-Hans"), ("zh-Hans", "zh-Hans"), ("zh-Hans-CN", "zh-Hans"), ("zh-CN", "zh-Hans"), ("zh_SG", "zh-Hans"),

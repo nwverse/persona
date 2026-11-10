@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The Mac inbox (docs/assistant/inbox.md; docs/apple/mac.md「主窗口」): the sidebar's inbox entries (`MacInboxFilters`), the list column
+// The Mac inbox (docs/assistant/inbox.md; docs/apple/mac.md「Main window」): the sidebar's inbox entries (`MacInboxFilters`), the list column
 // (`MacInboxList`) and the detail column (`MacInboxDetail`). The list is the iPhone's: the same rows, sections Needs You /
 // FYI / Collapsed / Done, the AI Twin's draft cards. Mac ways on top: system selection (⇧ / ⌘ for several), ↑↓ to move,
 // E or ⌫ files the selected as Done and selects the next, ⏎ or a double click opens it in a window of its own (an

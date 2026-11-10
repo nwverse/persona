@@ -253,6 +253,23 @@ nonisolated enum Theme {
     }
     #endif
 
+    #if !os(watchOS)
+    /// The crop of a new avatar (`AvatarCropView`): drawn over the photo itself, so the same in light and dark.
+    enum Crop {
+        /// Outside the circle the avatar keeps: dimmed, so the circle reads as what is kept.
+        static let outside = Color.black.opacity(0.5)
+        /// The circle's edge.
+        static let edge = Color.white.opacity(0.9)
+    }
+
+    /// A card that adds one more to a grid of cards (Settings › Appearance › Avatar › New from Photo): an empty well
+    /// with a dashed accent edge, so it reads as a place for something new rather than one of the choices.
+    enum AddCard {
+        static var edge: Color { Theme.accent.opacity(0.45) }
+        static let dash: [CGFloat] = [Theme.Space.xs, Theme.Space.xs]
+    }
+    #endif
+
     /// The image viewer's backdrop (`ImageViewer`), as Photos has it: the page's own color while its bars show (white
     /// in light mode, black in dark), black once a tap hides them.
     enum Viewer {
@@ -520,6 +537,9 @@ nonisolated enum Theme {
         // Wide screens (iPad).
         /// A page meant to be read, not a list (the welcome page): no wider than this, centered.
         static let readable: CGFloat = 560
+        /// The square a new avatar is cropped in (Settings › Appearance › Avatar › New from Photo): no wider than this,
+        /// narrower when the sheet is.
+        static let avatarCrop: CGFloat = 320
         /// The widest the Agents chat header's title gets on a wide page (iPad, Mac): on an iPhone it takes all the room
         /// between the round buttons; past this a line is too long to read at a glance.
         static let headerTitle: CGFloat = 480
@@ -581,7 +601,7 @@ nonisolated enum Theme {
     }
 
     /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner and
-    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), and those stop with Reduce Motion (the spinner
+    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md) and the dot of a held mic (`DictationHold`), and those stop with Reduce Motion (the spinner
     /// is the system's).
     enum Motion {
         static let state = Animation.snappy(duration: 0.25)
@@ -628,6 +648,158 @@ nonisolated enum Theme {
         static let springBack = Animation.spring(duration: 0.3, bounce: 0.25)
         /// The stationary sidebar rises only this far as the page slides off it; no horizontal parallax or zoom.
         static let drawerLift = Theme.Space.s
+
+        // The composer, after Telegram's input panel (docs/apple/ios.md, New shell, "Input motion"): only its timings and curves.
+        /// The draft gaining or losing a line: short, so the field never trails behind the typing.
+        static let composerGrow = Animation.easeInOut(duration: 0.1)
+        /// The keyboard's own spring on iOS 26 (critically damped): the box opening as the keyboard rises moves with it.
+        static let keyboard = Animation.interpolatingSpring(mass: 1, stiffness: 555.027, damping: 47.118)
+        /// Send taking the round button's place and leaving it: it grows out of a point near the right edge.
+        static let composerSwap = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        /// What fades with the swap fades faster than it grows, and clears a slight blur.
+        static let composerSwapFade = Animation.easeInOut(duration: 0.2)
+        static let composerSwapBlur: CGFloat = 4
+        /// Where send grows from: this small, not zero, so the scale animation has a size to start at.
+        static let composerSwapFrom: CGFloat = 0.001
+        /// An icon swapped inside the round button shrinks to this and fades as the next grows from it.
+        static let composerSwapScale: CGFloat = 0.2
+        /// Send pressed down shrinks, slowly, and comes back quicker when let go.
+        static let composerPressScale: CGFloat = 0.75
+        static let composerPress = Animation.easeOut(duration: 0.4)
+        static let composerRelease = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.25)
+        /// A quote bar over the field slides in by its own height while the box grows with it; it fades in quicker than
+        /// it fades out.
+        static let composerAccessory = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        static let composerAccessoryIn = Animation.easeInOut(duration: 0.15)
+        static let composerAccessoryOut = Animation.easeInOut(duration: 0.2)
+        /// Holding the mic: the circle under the finger springs up from a small one; the strip and the lock come with it.
+        static let holdAppear = Animation.spring(duration: 0.5, bounce: 0.3)
+        static let holdAppearScale: CGFloat = 0.2
+        static let holdLeave = Animation.easeOut(duration: 0.18)
+        /// The 「+」 panel (`AttachSheet`, Telegram's attachment menu). It grows out of the 「+」 button (Telegram's spring,
+        /// mass 5, stiffness 900: damping 110 opening, 124 settling), its corners rounding off quicker; the dim fades in
+        /// linearly and out eased.
+        static func attachOpen(velocity: CGFloat = 0) -> Animation {
+            .interpolatingSpring(mass: 5, stiffness: 900, damping: 110, initialVelocity: velocity)
+        }
+        static func attachSettle(velocity: CGFloat = 0) -> Animation {
+            .interpolatingSpring(mass: 5, stiffness: 900, damping: 124, initialVelocity: velocity)
+        }
+        static let attachCorner = Animation.easeInOut(duration: 0.2)
+        static let attachContentIn = Animation.easeInOut(duration: 0.2)
+        static let attachContentOut = Animation.easeInOut(duration: 0.12)
+        static let attachDimIn = Animation.linear(duration: 0.3)
+        static let attachDimOut = Animation.easeInOut(duration: 0.25)
+        static let attachSnapBack = Animation.easeInOut(duration: 0.3)
+        /// Switching tabs: the old page fades over the new; the sheet dips, then springs back with a little bounce.
+        static let attachTabFade = Animation.easeInOut(duration: 0.23)
+        static let attachTabDip = Animation.easeInOut(duration: 0.2)
+        static let attachTabBack = Animation.interpolatingSpring(mass: 5, stiffness: 900, damping: 70)
+        /// The tab bar's highlight sliding to the tab picked.
+        static let attachLens = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        /// The tab bar giving way to the caption and send, and coming back.
+        static let attachBarSwap = Animation.interpolatingSpring(mass: 1, stiffness: 555.027, damping: 47.118)
+        static let attachBarAway = Animation.easeInOut(duration: 0.1)
+        static let attachBarBack = Animation.easeInOut(duration: 0.25)
+        /// A photo's mark: picked, it fills and bounces (0.9, 1.1, 1); let go, it empties.
+        static let attachPick = Animation.easeOut(duration: 0.21)
+        static let attachUnpick = Animation.easeIn(duration: 0.15)
+        static let attachPickSqueeze: CGFloat = 0.9
+        static let attachPickBounce: CGFloat = 1.1
+        static let attachPickSqueezeTime: TimeInterval = 0.08
+        static let attachPickBounceTime: TimeInterval = 0.13
+        static let attachPickSettleTime: TimeInterval = 0.1
+
+        /// The recording dot's blink, one way (it blinks while the finger holds, and stops with Reduce Motion).
+        static let holdBlink = Animation.easeInOut(duration: 0.5)
+    }
+
+    /// The 「+」 panel (`AttachSheet`), Telegram's attachment menu: its sizes, thresholds and motion. A sheet that rests
+    /// with the top quarter of the screen showing the chat, a photo grid with a tab bar floating over its bottom, pulled
+    /// up to fill the screen or down to go (docs/apple/ios.md, New shell, "Attach panel").
+    enum Attach {
+        /// How much of the screen's height stays above the sheet at rest (the chat, dimmed), and on a narrow phone.
+        static let restFraction: CGFloat = 0.2488
+        static let restFractionNarrow: CGFloat = 0.15
+        static let narrowWidth: CGFloat = 320
+        /// The sheet's top under the status bar, open all the way.
+        static let topGap: CGFloat = 10
+        /// At rest the sheet is this much narrower than the screen (half each side); it widens as it is pulled up.
+        static let restInset: CGFloat = 10
+        static let topRadius: CGFloat = 38
+        /// The bottom corners follow the screen's, a little inside them.
+        static let bottomRadius: CGFloat = 60
+        static let grabberWidth: CGFloat = 36
+        static let grabberHeight: CGFloat = 5
+        static let grabberTop: CGFloat = 5
+        static let grabberOpacityLight = 0.07
+        static let grabberOpacityDark = 0.2
+        static let dim = 0.25
+        /// Let go: pulled down this far (or this fast, moving down) it goes; open all the way, a fling this fast from the
+        /// grid's top goes too. Up or down this fast, or past half the way, it opens all the way or goes back to rest.
+        static let dismissDistance: CGFloat = 60
+        static let dismissSpeed: CGFloat = 300
+        static let dismissFling: CGFloat = 1800
+        static let settleSpeed: CGFloat = 300
+        /// The grid: three columns a point apart, square cells; the camera's cell is a column wide and two rows tall.
+        static let columns = 3
+        static let gridSpacing: CGFloat = 1
+        static let headerHeight: CGFloat = 56
+        /// A cell's selection mark: its size and inset from the cell's top right, the white ring round it.
+        static let badge: CGFloat = 29
+        static let badgeInset: CGFloat = 3
+        static let badgeRing: CGFloat = 1.5
+        static let badgeTarget: CGFloat = 45
+        /// The tab bar: a pill floating this far over the sheet's bottom, a tab's cell, its icon.
+        static let barInset: CGFloat = 22
+        static let barHeight: CGFloat = 62
+        static let barTab: CGFloat = 72
+        static let barIcon: CGFloat = 30
+        static let barLensInset: CGFloat = 3
+        /// The pill's width for two, three and four tabs (five or more: the screen less `barInset` each side).
+        static let barWidths: [CGFloat] = [160, 240, 300]
+        /// Switching tabs, the sheet dips this far and springs back while the old page fades.
+        static let tabDip: CGFloat = 10
+        /// Photos picked, the tab bar shrinks to this, blurs this much and gives way to the caption and send.
+        static let barAwayScale: CGFloat = 0.85
+        static let barAwayBlur: CGFloat = 10
+        /// The tab bar's room under the grid: the pill and its inset, so the last row scrolls clear of it.
+        static var gridBottom: CGFloat { barHeight + barInset * 2 }
+        /// After the keyboard starts down, the panel follows this much later (Telegram's), the two moving together.
+        static let afterKeyboard: Duration = .milliseconds(150)
+        static let thumbnailScale: CGFloat = 3
+        /// How many photos a page of the grid asks the library for at a time.
+        static let fetchLimit = 600
+    }
+
+    /// Hold the mic to dictate, slide left to drop it, slide up to keep it going hands-free: Telegram's thresholds
+    /// for its voice button (`DictationHold`).
+    enum Hold {
+        /// A touch held this long is a hold; let go sooner it is a tap (dictation on or off, as before).
+        static let delay: Duration = .milliseconds(190)
+        /// While the finger is down, this far left drops what was heard, this far up locks.
+        static let cancelDistance: CGFloat = 150
+        static let lockDistance: CGFloat = 110
+        /// Let go: a shorter slide counts, or a quick flick.
+        static let releaseCancelDistance: CGFloat = 100
+        static let releaseLockDistance: CGFloat = 60
+        static let flickSpeed: CGFloat = 400
+        /// How far up the lock's progress runs, and how far the label stays put before it follows the finger, at half its pace.
+        static let lockTravel: CGFloat = 105
+        static let labelDeadZone: CGFloat = 8
+        static let labelFollow: CGFloat = 0.5
+        static let labelFade: CGFloat = 10
+        /// The lock's arrow is gone a little past halfway up.
+        static let lockArrowFade: CGFloat = 1.6
+        /// The circle under the finger, and how small it gets as the finger slides toward cancel.
+        static let circle: CGFloat = 96
+        static let circleSlide: CGFloat = 300
+        static let circleSmallest: CGFloat = 0.4
+        /// The lock's pill above the mic: its size, and how far above the mic's centre it sits.
+        static let lockWidth: CGFloat = 40
+        static let lockHeight: CGFloat = 72
+        static let lockShrink: CGFloat = 32
+        static let lockLift: CGFloat = 122
     }
 
     /// Categories with no meaning beyond telling them apart (memory types).
@@ -704,7 +876,7 @@ nonisolated enum Theme {
     static let primaryText = Color(light: 0x1C1C1E, dark: 0xF2F2F7)
     static let codeBackground = Color(light: 0xF3F1EC, dark: 0x1C1D21)
 
-    /// Syntax colors in the file viewer (docs/apple/ios.md「文件查看器」), on `codeBackground` in every style (it does not
+    /// Syntax colors in the file viewer (docs/apple/ios.md「File viewer」), on `codeBackground` in every style (it does not
     /// change with the style, so neither do they): GitHub's palette, every one ≥ 4.5:1 on that background in light
     /// and dark (`SyntaxPaletteTests`). Words that are none of these stay `.primary`.
     enum Syntax {

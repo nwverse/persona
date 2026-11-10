@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Installing, upgrading and removing extensions, with what the hub is doing meanwhile (docs/protocol/protocol.md「扩展的安装、升级、卸载进度」,
+// Installing, upgrading and removing extensions, with what the hub is doing meanwhile (docs/protocol/protocol.md「Extension install, upgrade and uninstall progress」,
 // #3277, #3307).
 //
 // A hub with `extension_operations` runs each as an operation and pushes it in `extension_operation` events (to a

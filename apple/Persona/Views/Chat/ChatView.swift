@@ -143,7 +143,7 @@ struct ChatView: View {
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
-    /// The Persona conversation in the shell (docs/apple/ios.md「新外壳」).
+    /// The Persona conversation in the shell (docs/apple/ios.md「New shell」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
     /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
@@ -268,7 +268,7 @@ struct ChatView: View {
     @ViewBuilder private var chatPage: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("ChatView")
-        // `-showPerfChanges YES`: what made the page draw again, in the log (docs/apple/mac.md「卡顿怎么量」).
+        // `-showPerfChanges YES`: what made the page draw again, in the log (docs/apple/mac.md「Measuring hitches on Mac」).
         let _ = Self.printsChanges ? Self._printChanges() : ()
         #endif
         let _ = actions.set(handlers)
@@ -2072,7 +2072,7 @@ struct ChatView: View {
         }
     }
 
-    /// Opening a work line the page folded fetches its steps (docs/protocol/protocol.md「折叠的工作」).
+    /// Opening a work line the page folded fetches its steps (docs/protocol/protocol.md「Folded work」).
     private var openFold: (Item) async throws -> Void {
         { [model, shownKey] fold in try await model.unfold(shownKey, fold) }
     }
@@ -2513,7 +2513,7 @@ struct ChatView: View {
                 setFollow { $0.touched() } // nothing changes until the finger lets go
             }
         }
-        // Two expressions: as one, Xcode 26.0 could not type-check it in time (#2571).
+        // In parts: as one expression Xcode 26.0 could not type-check it in time (#2571), and Xcode 26.3 not even in two (#2963).
         let base = list
         .environment(menu)
         .environment(\.chatPin, pin)
@@ -2523,7 +2523,7 @@ struct ChatView: View {
             FullPageAnchor { [fullPage] in fullPage.setAnchor($0) }
         }
         #endif
-        return base
+        let hooked = base
         .onAppear {
             pin.letGo = { [position = $position] in position.wrappedValue = ScrollPosition(idType: String.self) }
             pin.onRising = { [rising = $pinRising] in rising.wrappedValue = $0 }
@@ -2540,10 +2540,11 @@ struct ChatView: View {
         .onAppear {
             guard ScrollTrace.enabled else { return }
             ScrollTrace.shared.start(list: { [pin] in pin.list }) { [store, scratch, follow = $follow, frozen = $frozen] in
-                "\(follow.wrappedValue.mode) near \(follow.wrappedValue.near ? 1 : 0) touch \(follow.wrappedValue.touching ? 1 : 0) drag \(scratch.userDragging ? 1 : 0) frozen \(frozen.wrappedValue == nil ? 0 : 1) ftext \(frozen.wrappedValue?.text.count ?? -1) live \(store.liveText.count) items \(store.items.count) gap \(Int(scratch.newestGap))"
+                Self.traceLine(follow: follow.wrappedValue, frozen: frozen.wrappedValue, scratch: scratch, store: store)
             }
         }
         #endif
+        let presented = hooked
         .sheet(item: $menu.selecting) { t in SelectableTextSheet(text: t.text, plain: t.plain, quote: menu.selectionQuote(of: t)) }
         .sheet(item: $menu.sharing) { m in MessageShareSheet(message: m) }
         .confirmationDialog("This Reply", isPresented: Binding(get: { menu.more != nil }, set: { if !$0 { menu.more = nil } })) {
@@ -2560,6 +2561,7 @@ struct ChatView: View {
         }
         .rewindDialogs(menu: menu)
         .sheet(isPresented: Binding(get: { wakeDrawer != nil }, set: { if !$0 { wakeDrawer = nil } })) { wakeDrawerSheet }
+        return presented
         // New content while following: back to offset 0 (exact; nothing to estimate).
         .onChange(of: store.resets) { _, _ in frozen = nil } // the snapshot's items are gone
         .onChange(of: follow.holdsBack) { _, holds in
@@ -2609,6 +2611,15 @@ struct ChatView: View {
         // Parse what rows will show (Markdown, paths) in the background as messages load: scrolling then only lays out.
         .task(id: prewarmKey) { await prewarmRows() }
     }
+
+    #if DEBUG
+    /// One `ScrollTrace` state line. Out of the modifier chain: inline, its interpolation helped the chain time out (#2963).
+    private static func traceLine(follow: ChatFollow, frozen: Frozen?, scratch: ChatScratch, store: ChatStore) -> String {
+        let mode = "\(follow.mode) near \(follow.near ? 1 : 0) touch \(follow.touching ? 1 : 0) drag \(scratch.userDragging ? 1 : 0)"
+        let held = "frozen \(frozen == nil ? 0 : 1) ftext \(frozen?.text.count ?? -1)"
+        return "\(mode) \(held) live \(store.liveText.count) items \(store.items.count) gap \(Int(scratch.newestGap))"
+    }
+    #endif
 
     // Out of the modifier chain: inline, Swift 6.3 timed out type-checking the Release build.
     private var prewarmSource: String { "\(shownKey.machineID)/\(shownKey.sessionID)|\(store.resets)" }
@@ -3120,7 +3131,8 @@ struct ChatView: View {
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
         if !hidesBack {
             ToolbarItem(placement: .cancellationAction) {
-                Button { back() } label: { Label("Back [Task Sheets 572cf4]", systemImage: Theme.Icon.back) }
+                // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
+                Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -3759,7 +3771,7 @@ struct ChatView: View {
             if let source = MessageSource.of(i) {
                 SourceMessage(item: i, source: source, showsSource: showsSource).equatable()
             } else if let n = Injected.of(i) {
-                // Persona's message for the model: one line in its place, never its words (docs/protocol/protocol.md「Persona 注入的消息」).
+                // Persona's message for the model: one line in its place, never its words (docs/protocol/protocol.md「Messages injected by Persona」).
                 InjectedLine(item: i, injected: n, conversation: style == .assistant ? shownKey.sessionID : nil)
             } else if (i.text ?? "").hasPrefix("/loop") {
                 LoopTickRow(item: i)
@@ -4052,6 +4064,10 @@ struct Composer: View, Equatable {
     private var videos: VideoAttachments { held.videos }
     @State private var editingIndex: Int?
     @State private var showFiles = false
+    #if os(iOS)
+    /// The iPhone's 「+」 panel (`AttachSheet`, Telegram's attachment menu).
+    @State private var attachPanel = AttachPanel()
+    #endif
     @State private var selection: TextSelection?
     @State private var declarations = ExtensionTextContributions()
     @State private var confirmClear = false
@@ -4101,7 +4117,7 @@ struct Composer: View, Equatable {
     /// The manager whose conversation this is, while a hub with several has it offline: nothing goes to it until it is
     /// back; its history reads.
     private var offlineManager: HubManager? { model.offlineManager(of: model.session(key)) }
-    /// A health conversation's files go to the health space's reports/ (docs/assistant/health.md「体检报告」), not the temp directory.
+    /// A health conversation's files go to the health space's reports/ (docs/assistant/health.md「Checkup reports」), not the temp directory.
     private var uploadDest: String? { model.session(key)?.isHealth == true ? Session.healthSpace : nil }
 
     /// /loop for Claude agents (`LoopCommand.offered`, as on the web): in the quick commands, with a line saying what
@@ -4167,7 +4183,7 @@ struct Composer: View, Equatable {
             }
             if canClear {
                 Button(role: .destructive) { confirmClear = true } label: {
-                    Label("Clear Context /clear", systemImage: "eraser")
+                    Label("Clear Context /clear", systemImage: Theme.Icon.clearContext)
                 }
                 .disabled(status.isActive || clearing)
             }
@@ -4366,7 +4382,7 @@ struct Composer: View, Equatable {
                 VoiceBar(call: call, key: key, label: VoiceEntry.label(model.session(key), model: model))
                     .transition(.opacity)
             } else if usesShellComposer {
-                // The shell's composer (docs/apple/ios.md「新外壳」), whatever the style: the assistant's and an agent's (#1091).
+                // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
                                      : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
@@ -4378,6 +4394,7 @@ struct Composer: View, Equatable {
                                  alwaysOpen: ChatComposerKind.macCard,
                                  history: key.path,
                                  gate: gate,
+                                 openAttach: attachOpener,
                                  send: { if let gate { gate.action() } else { Task { await sendText(text) } } }) {
                     Button { showPhotos = true } label: { Label("Photos", systemImage: Theme.Icon.photos) }
                     if CameraPicker.isAvailable {
@@ -4575,6 +4592,9 @@ struct Composer: View, Equatable {
             Text("\(model.session(key)?.agentLabel ?? "Claude") will start a new session. This chat stays in your history, and the page moves to the new session.")
         }
         .mediaPicker(isPresented: $showPhotos, selection: $picks)
+        #if os(iOS)
+        .modifier(attachHost)
+        #endif
         .fileUploadPicker(isPresented: $showFiles) { urls in
             uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
         }
@@ -4639,6 +4659,104 @@ struct Composer: View, Equatable {
             }
         }
     }
+
+    /// The iPhone's 「+」 opens the panel (iPad and the Mac keep the menu). The keyboard goes down first and the panel
+    /// follows a moment later, the two moving together (Telegram's).
+    private var attachOpener: ((CGRect) -> Void)? {
+        #if os(iOS)
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
+        return { frame in
+            guard focused else { attachPanel.open(from: frame); return }
+            focused = false
+            Task {
+                try? await Task.sleep(for: Theme.Attach.afterKeyboard)
+                attachPanel.open(from: frame)
+            }
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    #if os(iOS)
+    private var attachHost: AttachSheetHost<AttachMoreRows> {
+        AttachSheetHost(panel: attachPanel, caption: textBinding, photoRoom: max(0, 4 - images.count),
+                        videoRoom: max(0, VideoAttachments.most - videos.items.count),
+                        camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+                        files: { showFiles = true }, allPhotos: { showPhotos = true }, showsMore: true,
+                        more: { AttachMoreRows(panel: attachPanel, sections: attachMoreSections) },
+                        finish: attachFinished)
+    }
+
+    /// The panel's More tab: what the menu offered besides photos and files.
+    private var attachMoreSections: [AttachMoreSection] {
+        var sections: [AttachMoreSection] = []
+        var capture: [AttachMoreRow] = []
+        if MetaGlasses.isBuiltIn {
+            capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses) { showGlasses = true })
+        }
+        if VoicePlatform.current == .phone {
+            capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel) { startVoice() })
+        }
+        if !capture.isEmpty { sections.append(AttachMoreSection(id: "capture", title: nil, rows: capture)) }
+        if !declarations.prompts.isEmpty {
+            sections.append(AttachMoreSection(id: "prompts", title: String(localized: "Extension Prompts"), rows: declarations.prompts.map { prompt in
+                AttachMoreRow(id: "extension-prompt-\(prompt.id)", title: prompt.title, symbol: Theme.Icon.insert) {
+                    text = ExtensionTextContributions.filling(prompt)
+                    selection = TextSelection(insertionPoint: text.endIndex)
+                    focused = true
+                }
+            }))
+        }
+        if !shellChat {
+            var rows = SlashCommand.commands(loop: canLoop).map { cmd in
+                AttachMoreRow(id: "attach-command-\(cmd.title)", title: cmd.title, symbol: cmd.symbol) {
+                    if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
+                }
+            }
+            if canClear {
+                rows.append(AttachMoreRow(id: "attach-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
+                                          destructive: true, disabled: status.isActive || clearing) { confirmClear = true })
+            }
+            sections.append(AttachMoreSection(id: "commands", title: String(localized: "Quick Commands [Chat View c813e6]"), rows: rows))
+        }
+        return sections
+    }
+
+    /// What the panel handed back: picked photos and videos into the composer (and sent, from its Send), or a row's action.
+    private func attachFinished(_ outcome: AttachOutcome) {
+        switch outcome {
+        case .then(let ids, let action):
+            Task { await addPicked(ids) }
+            action()
+        case .closed(let ids):
+            Task { await addPicked(ids) }
+        case .send(let ids):
+            Task {
+                await addPicked(ids)
+                // As the box's Send: the gate first; videos still on their way hold the message and say so (sendText).
+                if let gate { gate.action() } else if allowsSend { await sendText(text) }
+            }
+        }
+    }
+
+    private func addPicked(_ ids: [String]) async {
+        var failed = 0
+        for id in ids {
+            guard let asset = AttachLibrary.asset(id) else { failed += 1; continue }
+            if asset.mediaType == .video {
+                guard let url = await AttachLibrary.movie(asset) else { failed += 1; continue }
+                videos.start(staged: url, machine: key.machineRef, model: model)
+            } else {
+                guard let picture = await AttachLibrary.picture(asset) else { failed += 1; continue }
+                add(picture)
+            }
+        }
+        if failed > 0 {
+            model.toast = Toast(String(localized: "Couldn't read \(failed) photos (they may still be downloading from iCloud) [Chat View 5712c0]"), style: .error)
+        }
+    }
+    #endif
 
     private func sendText(_ raw: String) async {
         guard model.allowSend(key) else { return }
@@ -5307,7 +5425,7 @@ struct ChatLine: Identifiable {
         case quick(QuickResult)
         /// The date over the first line of a day (the assistant's conversation).
         case day(Date)
-        /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「这一轮看过的图片」).
+        /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
         case viewed(id: String, images: [ViewedImage])
 
         var id: String {

@@ -1,4 +1,4 @@
-// The hubs this browser goes between (#1014, docs/web/web.md "Switching hubs"). Each hub serves its own page and keeps its own
+// The hubs this browser goes between (#1014, docs/web/web.md "Switch hub"). Each hub serves its own page and keeps its own
 // sign-in on its own origin (no CORS, no token ever crosses origins), so switching is opening the other hub's page.
 // The list holds names and addresses only and lives in this origin's localStorage; a switch carries it along in the
 // address (`#hubs=`, never sent to a server) so the next hub's page knows the same hubs. Each page keeps its own copy,
@@ -9,7 +9,7 @@ import { BASE } from "./base";
 
 export interface SavedHub {
   /** The hub's origin, `scheme://host[:port]` as `URL.origin` writes it, plus the sub-path a reverse proxy serves it
-   * under (`https://<domain>/<prefix>`, docs/web/web.md "Sub-path"), without a trailing slash. */
+   * under (`https://<domain>/<prefix>`, docs/web/web.md "Subpaths"), without a trailing slash. */
   url: string;
   /** The hub's own name (hello's `hub_name`), refreshed whenever this browser opens it. */
   name?: string;

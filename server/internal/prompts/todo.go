@@ -3,7 +3,7 @@ package prompts
 import "strings"
 
 // TodoDecisions is the context a handoff to an agent carries for a todo's decisions in effect (todo/decisions,
-// #1618, docs/assistant/todos.md "Decision log"). The caller leaves out the closing tags
+// #1618, docs/assistant/todos.md "Decision records"). The caller leaves out the closing tags
 // ("</persona-context>") from the texts.
 type TodoDecisions struct {
 	Title     string
@@ -75,7 +75,7 @@ func RenderTodoTitleInput(prompt string) string {
 }
 
 // TodoOutcome is the system prompt pulling what a finished task came to out of its agents' last replies: a one-line
-// outcome, links, decisions, pitfalls (todo/outcome, docs/assistant/todos.md "Recording the outcome", #2820).
+// outcome, links, decisions, pitfalls (todo/outcome, docs/assistant/todos.md "Record conclusions on completion", #2820).
 type TodoOutcome struct {
 	Owner string
 }

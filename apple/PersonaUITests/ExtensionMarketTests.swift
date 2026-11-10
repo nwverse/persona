@@ -1,6 +1,6 @@
 import XCTest
 
-/// Settings › Extensions › Extension Market and a plugin's own page (docs/extensions/extensions.md「扩展市场」「声明式 UI」): a plugin installed from a market
+/// Settings › Extensions › Extension Market and a plugin's own page (docs/extensions/extensions.md「Extension marketplace」「声明式 UI」): a plugin installed from a market
 /// (preview, its permissions agreed to, installed, then removed so the next run finds it as before), a plugin page's
 /// form filled in and saved (the plugin's toast, its new view), and a launcher's page with the plugin's section — the
 /// one that says unsupported (#1339) not there at all. Against scripts/mock/mock_hub.py with MOCK_EXTENSIONS=1:
