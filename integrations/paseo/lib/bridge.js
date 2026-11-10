@@ -14,6 +14,7 @@ import {
   launchersOf, linkedWorktree, paseoMode, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf, spaceIdOf,
   strayRecord, timelineItems, transcriptOf,
 } from './map.js'
+import { personaMcpServers } from './mcp.js'
 import { PaseoClient } from './paseo.js'
 
 export const BRIDGE_VERSION = '0.1.0'
@@ -28,11 +29,13 @@ const PAGES_MAX = 10 // directory pages read at connect (200 agents each)
 export const TIMELINES_MAX = 16
 const EVENTS = ['agent_permission_request', 'agent_permission_resolved', 'providers_snapshot_update', 'status.daemon_config_changed']
 const TIMEOUT = Symbol('timeout')
+// What Paseo 0.13 says when an agent config has MCP servers and its provider takes none (agent-manager requireExternalMcpSupport).
+const MCP_UNSUPPORTED = /does not support MCP servers/i
 
 /**
  * @param {{ paseo?: object, log?: (msg: string) => void, connect?: (path: string) => import('node:net').Socket }} [deps]
  *   paseo: a PaseoClient (default: one for options.home).
- * @param {{ home?: string, socketPath?: string, retryMs?: number, pushDelayMs?: number, refreshMs?: number,
+ * @param {{ home?: string, socketPath?: string, mcpConfig?: string, retryMs?: number, pushDelayMs?: number, refreshMs?: number,
  *   awayGrace?: number, callWait?: number }} [options]
  */
 export function createPaseoBridge(deps = {}, options = {}) {
@@ -649,14 +652,28 @@ export function createPaseoBridge(deps = {}, options = {}) {
       const opts = thinkingOptions({ provider, model: config.model })
       if (!opts.length || opts.includes(params.effort)) config.thinkingOptionId = params.effort
     }
-    const agentId = randomUUID()
-    const sessionId = `${RUNTIME}-${agentId}`
-    const req = { agentId, config, labels: { [SESSION_LABEL]: sessionId } }
     const prompt = typeof params.prompt === 'string' ? params.prompt : ''
-    if (prompt.trim()) req.initialPrompt = prompt
     const workspaceId = workspaceFor(params.workspace_id, cwd)
-    if (workspaceId) req.workspaceId = workspaceId
-    const created = paseo.request('agent.create.request', req, { timeoutMs: 0 })
+    // The Persona session is fixed for this start: the row handed to the node while Paseo is still creating, the label,
+    // the tools' PERSONA_SESSION_ID and the listed session are all it, whichever Paseo agent ends up holding it.
+    let agentId = randomUUID()
+    const sessionId = `${RUNTIME}-${agentId}`
+    // One creation request, under a Paseo agent id of its own (the retry's is new; the Persona session stays).
+    const attempt = (withTools) => {
+      const mcpServers = withTools ? personaMcpServers(options.mcpConfig, sessionId, log) : undefined
+      const req = { agentId, config: mcpServers ? { ...config, mcpServers } : config, labels: { [SESSION_LABEL]: sessionId } }
+      if (prompt.trim()) req.initialPrompt = prompt
+      if (workspaceId) req.workspaceId = workspaceId
+      return paseo.request('agent.create.request', req, { timeoutMs: 0 }).then((res) => ({ res, withTools: Boolean(mcpServers) }))
+    }
+    // A provider that takes no MCP servers fails the creation outright (Paseo closes that session before it has an
+    // agent): it gets the agent as it did before the Persona tools, in one more request, and for that error only.
+    const created = attempt(true).then(({ res, withTools }) => {
+      if (!withTools || res?.agent || !MCP_UNSUPPORTED.test(res?.error ?? '')) return res
+      log(`paseo: provider ${provider} takes no MCP servers; creating the agent again without the Persona tools`)
+      agentId = randomUUID()
+      return attempt(false).then((again) => again.res)
+    })
     created.then((res) => res?.agent && upsert(res.agent), () => {})
     const res = await within(created, callWait, `start ${agentId}`)
     if (res !== TIMEOUT && !res?.agent) throw new RpcError(`Paseo 没能新建：${res?.error ?? '原因不明'}`, 'start_failed')

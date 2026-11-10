@@ -753,3 +753,10 @@ Native model availability changes independently of Persona releases. Discover th
 settings and session metadata for defaults and current values. A fixed catalog hides new models and invents labels for
 external sessions. Treat ACP configuration responses and notifications as authoritative, publish acknowledged partial
 changes, and propagate failures. Native `auto` is distinct from full permission bypass.
+
+## Runtime availability checks need the runtime's authentication context (#3790)
+
+An SSH node and a local companion can have different credential access. A model list and session start succeeding in
+the companion do not make a login-shell health probe authenticated. Opt into runtime-owned checks, bound inference and
+cleanup, deny probe tools, and hide transcripts whose temporary probe workspace has been removed. Preserve a real
+workspace sharing the probe prefix while it still exists.

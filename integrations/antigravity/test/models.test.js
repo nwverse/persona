@@ -19,7 +19,7 @@ test('native catalog preserves new IDs, defaults and only advertised thinking va
   assert.equal(models[0].default_effort, 'medium')
 })
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agy-models-'))
   t.after(() => rmSync(home, { recursive: true, force: true }))
   const catalog = (value) => writeFileSync(join(home, 'catalog.json'), JSON.stringify(value))
@@ -33,10 +33,12 @@ async function fixture(t) {
   writeFileSync(bin, `#!/bin/sh\nexec '${process.execPath}' '${fake}' '${home}' "$@"\n`)
   chmodSync(bin, 0o755)
   const n = await startFakeNode(t)
-  const runtime = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin: '/missing', socketPath: n.path, log: () => {} })
+  const runtime = createAgyRuntime({ home, agyDir, agyBin: bin, checkTimeoutMs: options.checkTimeoutMs, personadBin: '/missing', socketPath: n.path, log: () => {} })
   t.after(() => runtime.stop())
   runtime.start()
   await n.ready
+  const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+  if (options.noStart) return { n, home, catalog, calls }
   const { session } = await n.peer.call('session.start', { cwd: home })
   const sessionId = session.session_id
   const row = () => n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === sessionId)
@@ -79,5 +81,36 @@ test('session controls confirm native state and preserve acknowledged fields on 
 test('a rejected startup configuration closes the newly created native session', async (t) => {
   const { n, calls } = await fixture(t)
   await assert.rejects(n.peer.call('session.start', { model: 'missing' }), /Model unavailable/)
+  assert.equal(calls().filter((call) => call.method === 'session/close').length, 1)
+})
+
+
+test('availability checks use native ACP and deny tools without phone cards', async (t) => {
+  const { n, home, catalog, calls } = await fixture(t, { noStart: true })
+  catalog({ models: entries, askPermission: true })
+  const result = await n.peer.call('launchers.check', { cwd: home, prompt: 'Reply with OK' })
+  assert.equal(n.hello.caps.check, true)
+  assert.equal(result.ok, true)
+  assert.equal(result.answer, 'OK')
+  assert.equal(result.model, entries[0].modelId)
+  assert.equal(n.asked.length, 0)
+  assert.equal(calls().find((call) => call.method === 'session/set_mode')?.params?.modeId, 'default')
+  assert.equal(calls().find((call) => call.id === 'check-permission')?.result?.outcome?.outcome, 'cancelled')
+  assert.equal(calls().filter((call) => call.method === 'session/close').length, 1)
+  assert.equal(n.last('runtime.sessions')?.sessions.length ?? 0, 0)
+})
+
+test('failed availability inference closes the check session and propagates the native error', async (t) => {
+  const { n, home, catalog, calls } = await fixture(t, { noStart: true })
+  catalog({ models: entries, promptError: 'Provider unavailable' })
+  await assert.rejects(n.peer.call('launchers.check', { cwd: home, prompt: 'Reply with OK' }), /Provider unavailable/)
+  assert.equal(calls().filter((call) => call.method === 'session/close').length, 1)
+})
+
+test('an availability timeout cancels its prompt and closes the session', async (t) => {
+  const { n, home, catalog, calls } = await fixture(t, { noStart: true, checkTimeoutMs: 200 })
+  catalog({ models: entries, holdPrompt: true })
+  await assert.rejects(n.peer.call('launchers.check', { cwd: home, prompt: 'Reply with OK' }), /timed out/)
+  assert.equal(calls().filter((call) => call.method === 'session/cancel').length, 1)
   assert.equal(calls().filter((call) => call.method === 'session/close').length, 1)
 })
