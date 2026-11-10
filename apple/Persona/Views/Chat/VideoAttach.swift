@@ -221,7 +221,9 @@ final class VideoAttachments {
     var ready: [AttachedFile] { items.compactMap(\.file) }
     var busy: Bool { items.contains { $0.file == nil } }
 
-    private enum Source { case pick(PhotosPickerItem), file(URL) }
+    /// `staged`: a private copy in a directory of its own (the 「+」 panel's, `AttachLibrary.movie`), sent as it is and
+    /// deleted with its directory however it ends.
+    private enum Source { case pick(PhotosPickerItem), file(URL), staged(URL) }
 
     /// Videos picked in Photos, for machine.
     func start(_ picks: [PhotosPickerItem], machine: MachineRef, model: AppModel) {
@@ -231,6 +233,16 @@ final class VideoAttachments {
     /// A video file of this app's (DEBUG screenshots and tests): moved in like a picked one.
     func start(file url: URL, machine: MachineRef, model: AppModel) {
         add(.file(url), name: url.lastPathComponent, machine: machine, model: model)
+    }
+
+    /// A video the app already copied into a directory of its own (the 「+」 panel's): sent from there, then deleted.
+    func start(staged url: URL, machine: MachineRef, model: AppModel) {
+        add(.staged(url), name: url.lastPathComponent, machine: machine, model: model)
+    }
+
+    /// A staged copy that will not be sent goes now.
+    private static func discard(_ source: Source) {
+        if case .staged(let url) = source { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     }
 
     /// Cancels one on its way, or takes a ready one off the message.
@@ -246,10 +258,12 @@ final class VideoAttachments {
         let features = model.features(machine.group)
         if !features.isEmpty, !features.contains("file_upload") {
             model.toast = Toast(String(localized: "The hub is too old to send videos. Update the hub and try again."), style: .error)
+            Self.discard(source)
             return
         }
         guard items.count < Self.most else {
             model.toast = Toast(String(localized: "Up to \(Self.most) videos at a time"), style: .error)
+            Self.discard(source)
             return
         }
         let item = Item(name: name)
@@ -257,7 +271,7 @@ final class VideoAttachments {
         let prev = last
         let task = Task { [weak self] in
             await prev?.value
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled else { Self.discard(source); return }
             await self.run(item.id, source: source, machine: machine, model: model)
         }
         tasks[item.id] = task
@@ -278,6 +292,8 @@ final class VideoAttachments {
                 url = movie.url
             case .file(let f):
                 url = try await FileUploads.stage(f)
+            case .staged(let f):
+                url = f
             }
             staged = url
             try Task.checkCancellation()

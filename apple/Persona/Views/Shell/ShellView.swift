@@ -211,7 +211,7 @@ private struct ShellMovingBar: View {
             .padding(.top, Theme.Space.xxs)
             .shellTopBarScaled()
             .background(alignment: .top) {
-                BarFog(solid: AssistantTopBar.height - Theme.Space.sm, fade: AssistantTopBar.fade)
+                BarFog(solid: AssistantTopBar.fogSolid, fade: AssistantTopBar.fade)
                     .opacity(max(0, 1 - p))
                     .allowsHitTesting(false)
             }

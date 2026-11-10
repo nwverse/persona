@@ -205,6 +205,7 @@
   "calendar_next": "次へ",
   "calendar_show_done": "完了を表示",
   "calendar_all_day": "終日",
+  "calendar_move_failed": "日時を変更できませんでした：{error}",
   "calendar_was_due": "期限切れ {when}",
   "calendar_more_one": "他 {count} 件",
   "calendar_more_other": "他 {count} 件",
@@ -212,5 +213,9 @@
   "calendar_undated_other": "期限のない ToDo が {count} 件あり、カレンダーには出ません。",
   "calendar_see_list": "リストで見る →",
   "calendar_back": "カレンダーに戻る",
-  "calendar_close": "閉じる"
+  "calendar_close": "閉じる",
+  "ask_ok": "OK",
+  "ask_answer": "チャットで答える",
+  "ask_answer_hint": "おすすめがないので、元の会話で答えてください。",
+  "ask_failed": "できませんでした：{error}"
 }

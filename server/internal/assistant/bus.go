@@ -246,7 +246,8 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 				svc.Resync(context.WithoutCancel(ctx))
 			}
 		}()
-		go svc.channelsReconnected(context.WithoutCancel(ctx)) // the conversations the channels follow (channels.go)
+		// The conversations the channels follow (channels_handler.go).
+		go svc.channelsReconnected(context.WithoutCancel(ctx))
 		// Turns the hub sent as it connected can be taken before this answer is kept (events come on their own
 		// goroutine): without the hub's kb settings they could not be filed and wait — now they can.
 		go svc.kbFileWaiting(context.WithoutCancel(ctx))
