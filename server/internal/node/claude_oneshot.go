@@ -24,9 +24,13 @@ import (
 // SDKs' runs ("sdk-ts", "sdk-py") are listed: interactive hosts such as Paseo run the user's sessions through them.
 // Codex's one-shot runs are left out the same way (codex_hierarchy.go programRun).
 
-// oneShotTail is how much of a transcript's start and end is read for its first and last entrypoint: Claude Code writes
-// one on every line.
-const oneShotTail = 8 << 10
+// oneShotTail is how much of a transcript's end is read for its last entrypoint: Claude Code writes one on every line,
+// near its end. The first is looked for from the start, a tail's worth at a time up to oneShotHead: a program's first
+// line is its prompt, often longer than a tail (up to 19 KB on one Mac).
+const (
+	oneShotTail = 8 << 10
+	oneShotHead = 64 << 10
+)
 
 type entrypointMark struct {
 	size        int64
@@ -39,8 +43,8 @@ var entrypoints = struct {
 	byPath map[string]entrypointMark
 }{byPath: map[string]entrypointMark{}}
 
-// transcriptEntrypoints are the first and last entrypoints of transcript p within oneShotTail of its start and end (""
-// where none is); read again only when the file changed.
+// transcriptEntrypoints are the first and last entrypoints of transcript p ("" where none is within reach; the first is
+// read only when the last is a one-shot run's); read again only when the file changed.
 func transcriptEntrypoints(p string, st os.FileInfo) (first, last string) {
 	entrypoints.Lock()
 	m, ok := entrypoints.byPath[p]
@@ -80,9 +84,19 @@ func readEntrypoints(p string, size int64) (first, last string) {
 		}
 		return ""
 	}
-	head := read(0, min(size, oneShotTail))
 	tail := read(max(size-oneShotTail, 0), size-max(size-oneShotTail, 0))
-	return value(head, bytes.Index(head, key)), value(tail, bytes.LastIndex(tail, key))
+	last = value(tail, bytes.LastIndex(tail, key))
+	if !transcript.ClaudeOneShot(last) {
+		return "", last // only a one-shot run's start matters
+	}
+	var head []byte
+	for off := int64(0); off < min(size, oneShotHead); off += oneShotTail {
+		head = append(head, read(off, min(oneShotTail, size-off))...)
+		if i := bytes.Index(head, key); i >= 0 && bytes.IndexByte(head[i+len(key):], '"') >= 0 {
+			return value(head, i), last
+		}
+	}
+	return "", last
 }
 
 // personaProjectDirs are the names Claude Code gives the projects of sessions started under Persona's state directory —

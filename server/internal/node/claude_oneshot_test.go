@@ -91,9 +91,16 @@ func TestOfflineListLeavesOneShotRunsOut(t *testing.T) {
 	writeClaudeRun(t, dir, cliThenP, 13*time.Minute, "cli", "sdk-cli")
 	writeClaudeRun(t, under(filepath.Join(home, compat.StateDir), "guest"), legacy, 14*time.Minute, "sdk-cli")
 
+	// A program's long prompt pushes its first entrypoint beyond the first tail's worth of bytes.
+	const longPrompt = "5d500000-0000-4000-8000-00000000000f"
+	lp := filepath.Join(dir, longPrompt+".jsonl")
+	os.WriteFile(lp, []byte(fmt.Sprintf(`{"type":"user","uuid":"u0","timestamp":"2026-11-05T07:31:12Z","message":{"role":"user","content":[{"type":"text","text":%q}]},"cwd":"/src/app","entrypoint":"sdk-cli"}`+"\n", strings.Repeat("review this ", 2000))+
+		`{"type":"assistant","uuid":"a0","timestamp":"2026-11-05T07:31:20Z","entrypoint":"sdk-cli","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}`+"\n"), 0o600)
+	_ = os.Chtimes(lp, time.Now().Add(-15*time.Minute), time.Now().Add(-15*time.Minute))
+
 	got := listedIDs(n)
 	for id, want := range map[string]bool{oneShot: false, resumed: true, cli: true, sdkHost: true, kept: true, fork: true,
-		assistant: true, manager: true, health: true, guest: true, driven: true, hugeTail: true, cliThenP: true, legacy: true} {
+		assistant: true, manager: true, health: true, guest: true, driven: true, hugeTail: true, cliThenP: true, legacy: true, longPrompt: false} {
 		if got[id] != want {
 			t.Errorf("%s listed=%v, want %v", id, got[id], want)
 		}
