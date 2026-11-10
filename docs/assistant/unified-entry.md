@@ -361,8 +361,17 @@ task ledger, with no model call (`leader_reports.go`, `leader.report`): `reached
 `decision` when a review needs the owner, and `stuck` when, by the To-dos SOP's Go copy (`todo_triage.go`), the task sits
 in Waiting on you or stopped unfinished with no move for 24 hours. Stuck is told at most once a day, and only by the
 10-minute loop, because it asks the agents' machines. What was told is kept in `assistant.leader_reports`, so a restart
-tells nothing again. Reviews from before reports started on the hub are not told. The main-chat entry for a stuck task,
-and the leader lines in the briefings, come with the prompts (P1). See `docs/extensions/extensions.md` "Leader events".
+tells nothing again. Reviews from before reports started on the hub are not told. A stuck task is also one
+main-chat entry (`leader_stuck`, a supervision signal to the main chat naming the direction, which the secretary turns
+into one visible line with no push), and the morning and evening briefings' facts carry one line per leader (its open
+tasks, those waiting for the owner, those stuck over a day, and its leader's summary of the day) (#3609).
+
+**The prompts (P1, #3609).** The main chat's context lists the current directions (id and name) and its CLAUDE.md
+makes it the secretary: it routes work to a direction with `task_plan supervisor`, records what the owner wants an
+answer to as a concern and closes it with `concern_report` only after telling the owner, and reports by sending a
+work-log extension's progress card when one offers a tool for it, not by writing the report by hand. A leader's
+context names its direction and gives its rules: report up only reached, decision and stuck; a change counts only once
+deployed and checked live; send `leader_progress` for each reached task and each report cycle. See `docs/extensions/extensions.md` "Leader events".
 
 **New chat opens a direction (#3607).** Right after the owner sends a New chat's first message (an app's
 `POST /api/v1/assistant/conversations`: not the main chat, a guest, the health space, a purpose or an extension's), the

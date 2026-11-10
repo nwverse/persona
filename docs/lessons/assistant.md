@@ -165,3 +165,11 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   with nothing in it as absent (`givenTask`), keeps anything else as it was (another type, a wrongly typed field or an
   unknown key such as a misspelled `title` must not turn a hand-off into an untracked reply), and its schema allows null
   and requires none of the object's fields the handler does not.
+
+- A report written before a tool call vanished from the push and the Lark answer. A main-chat turn wrote a long report,
+  called `agent_send`, then closed with one short line; the push and the Lark bot showed only that line, and the owner
+  took it for another conversation's message. Both read "the answer" as the last text (`Meta.LastText`) or the texts
+  after the last tool call (`channel.Answer`), but the model often reports first and acts after. The hub's answer is now
+  every text of the turn from the first, minus a passing line of at most two sentences right before a tool call
+  (`transcript.AnswerParts`), for the push body and the Lark answer alike. The chat pages still fold all but the last
+  text (super rule 2); changing them needs the administrator's approval.

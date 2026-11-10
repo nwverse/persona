@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -69,6 +70,13 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "a whole number of days, 1–365"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
 			set: s.setRecordingDays},
+		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
+			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
+				"default) only records and makes minutes afterwards; listener follows the meeting in a session and answers questions " +
+				"on the phone's screen; participant also says the answers aloud. Applies to recordings started from now on",
+			Value: "off, listener or participant"},
+			get: func(ctx context.Context) (string, error) { return s.meetingAttendanceDefault(ctx), nil },
+			set: s.setMeetingAttendanceDefault},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
 			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
 				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
@@ -235,7 +243,8 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "model_profiles.tiers": "title_model_tiers"}
+	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "model_profiles.tiers": "title_model_tiers",
+	"assistant.meeting_attendance_default": "title_meeting_attendance_default"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -333,6 +342,34 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 			s.settingsChanged(ctx)
 			s.kbWake() // a shorter retention prunes now
 			return fmt.Sprintf("assistant.recording_days is %d: recordings older than that leave the knowledge base.", days), nil
+		}}, nil
+}
+
+// setMeetingAttendanceDefault changes the role meeting recordings pre-select; the card names the roles in the
+// user's language.
+func (s *Service) setMeetingAttendanceDefault(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var role string
+	if err := json.Unmarshal(v, &role); err != nil || !slices.Contains(meetingRoles, strings.TrimSpace(role)) {
+		return nil, errors.New("value must be off, listener or participant")
+	}
+	role = strings.TrimSpace(role)
+	before := s.meetingAttendanceDefault(ctx)
+	if role == before {
+		return &ownChange{summary: "assistant.meeting_attendance_default is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	name := func(l i18n.Lang, role string) string { return i18n.T(l, "assistant-settings_tool.meeting_role_"+role) }
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_meeting_attendance_default", i18n.Args{"before": name(l, before), "after": name(l, role)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MeetingAttendanceDefault = &role; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.meeting_attendance_default is %s for meeting recordings started from now on.", role), nil
 		}}, nil
 }
 
