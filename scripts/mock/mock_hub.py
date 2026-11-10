@@ -12716,6 +12716,7 @@ IPHONE_MODEL = os.environ.get("MOCK_IPHONE_MODEL", "iPhone18,1")
 IPHONE_IOS = os.environ.get("MOCK_IPHONE_IOS", "26.1")
 IPHONE_CONSENT = {"dev-mock-1"} if os.environ.get("MOCK_IPHONE_CONSENT") == "1" else set()
 IPHONE_ON = {"macbook"}
+IPHONE_SELF_APP = {}  # what the app said of itself with its consent (bundle_id, name)
 IPHONE_JOBS = {}  # machine id -> {"at", "started", "cancelled"}: a pairing from the app (MOCK_IPHONE=pair)
 IPHONE_MODES = ("one", "several", "none", "pair")
 
@@ -14763,6 +14764,8 @@ class H(BaseHTTPRequestHandler):
             if machine is None or "browser" not in machine:
                 return self.send_json({"error": "浏览器插件没打开，或这台不是 Mac"}, 404)
             return self.send_json(browser_now(machine))
+        if p == "/mock/iphone":
+            return self.send_json({"consent": sorted(IPHONE_CONSENT), "self_app": IPHONE_SELF_APP})
         if p == "/api/v1/iphone":  # the extension iphone (MOCK_IPHONE)
             return self.send_json(iphone_list())
         if p.startswith("/api/v1/machines/") and p.endswith("/iphone"):
@@ -15982,6 +15985,7 @@ class H(BaseHTTPRequestHandler):
             device = (body.get("device") or "").strip()
             if not device: return self.send_json({"error": "没说是哪台 iPhone"}, 400)
             (IPHONE_CONSENT.add if body.get("allowed") else IPHONE_CONSENT.discard)(device)
+            IPHONE_SELF_APP.update({k: v for k, v in (body.get("app") or {}).items() if v})  # GET /mock/iphone shows it
             refresh_iphones()
             row = next((d for d in iphone_list()["devices"] if d["id"] == device), {"id": device, "name": "", "machines": [], "consented": device in IPHONE_CONSENT})
             return self.send_json(row)

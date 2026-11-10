@@ -102,7 +102,7 @@ struct IPhoneConsentSection: View {
                 }
             }
         }
-        .alert(String(localized: "Allow the Assistant to Operate This iPhone?"), isPresented: $confirming) {
+        .alert(IPhoneConsentText.confirmTitle(consent.match), isPresented: $confirming) {
             Button(String(localized: "Cancel"), role: .cancel) {}
             Button(String(localized: "Allow [iPhone Consent]")) { Task { await consent.setAllowed(true); report() } }
         } message: {
@@ -162,8 +162,20 @@ struct IPhoneConsentSection: View {
 
 nonisolated enum IPhoneConsentText {
     /// Through which computers, and what is left before the assistant can operate it.
+    /// The dialog before turning it on names the iPhone matched, so the owner can see it is the one in their hand
+    /// (model and iOS version alone can match another).
+    static func confirmTitle(_ match: IPhoneIdentity.Match) -> String {
+        guard case .this(let me, _) = match else { return String(localized: "Allow the Assistant to Operate This iPhone?") }
+        return String(localized: "Allow the Assistant to Operate \(quoted(me))?", comment: "The iPhone's name in quotes")
+    }
+
+    static func quoted(_ d: IPhoneSeen) -> String {
+        String(localized: "「\(d.device.name.isEmpty ? String(localized: "iPhone") : d.device.name)」", comment: "A device's name in quotes")
+    }
+
+    /// Which iPhone it matched (by name, even when only one did), through which computers, and what is left.
     static func detail(_ d: IPhoneSeen) -> String {
-        let through = macs(d)
+        let through = quoted(d) + " · " + macs(d)
         guard d.consented else { return through }
         if !d.macOn { return through + " · " + String(localized: "Turn it on on the computer's page too") }
         return through + " · " + IPhoneControlText.state(d.device).0

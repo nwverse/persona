@@ -68,5 +68,7 @@
   "card_act_launch": "打开 {app}",
   "card_act_terminate": "关闭 {app}",
   "card_act_wait": "等待",
-  "card_act_type_count": "输入 {count} 个字符"
+  "card_act_type_count": "输入 {count} 个字符",
+  "manifest_self_apps_title": "iPhone 上的 Persona App",
+  "manifest_self_names_title": "iPhone 上 Persona App 的名字"
 }

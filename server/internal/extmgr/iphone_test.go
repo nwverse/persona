@@ -1,11 +1,13 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -434,7 +436,7 @@ func TestIPhoneManifest(t *testing.T) {
 	var cfg struct {
 		Properties map[string]any `json:"properties"`
 	}
-	if err := json.Unmarshal(p.Manifest.Configuration, &cfg); err != nil || len(cfg.Properties) != 3 {
+	if err := json.Unmarshal(p.Manifest.Configuration, &cfg); err != nil || len(cfg.Properties) != 5 {
 		t.Fatalf("%v %s", err, p.Manifest.Configuration)
 	}
 	if order := string(p.Manifest.Configuration); strings.Index(order, `"machines"`) > strings.Index(order, `"phones"`) ||
@@ -633,7 +635,152 @@ func TestIPhonePhonesOnlyFromTheConsent(t *testing.T) {
 
 	// Not in the form any client draws.
 	raw, _ := json.Marshal(h.extensions.detail(ctx, h.extensions.reg.Get(iphoneExtensionID)).Form)
-	if strings.Contains(string(raw), `"phones"`) || !strings.Contains(string(raw), `"machines"`) {
+	if strings.Contains(string(raw), `"phones"`) || strings.Contains(string(raw), `"self_apps"`) || !strings.Contains(string(raw), `"machines"`) {
 		t.Fatalf("form: %s", raw)
+	}
+}
+
+// One iphone_do at a time per iPhone: while a do waits for its approval (the card may show on that very iPhone), a
+// second do, from another conversation too, does not reach the node until the first is done.
+func TestIPhoneDoWaitsItsTurn(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	ctx := context.Background()
+	_, seen := iphoneMac(t, h, "mac", []proto.IPhoneDevice{testIPhone}, func(p proto.IPhoneCall) (proto.IPhoneResult, error) {
+		if p.Op == "do" && p.Approved == "" && strings.Contains(string(p.Args), "pay") {
+			return proto.IPhoneResult{NeedsApproval: true, ApprovalID: "ap1", Approval: &proto.IPhoneApproval{Step: 1, Action: "tap", Needs: []string{"payment"}}}, nil
+		}
+		return proto.IPhoneResult{Text: "done"}, nil
+	})
+	if err := h.extensions.reg.SetEnabled(ctx, iphoneExtensionID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.extensions.reg.SetConfig(ctx, iphoneExtensionID, json.RawMessage(`{"machines": ["mac"], "phones": ["dev-a1"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	h.refreshIPhoneMacs(ctx)
+	calls := func() int {
+		n := 0
+		for _, c := range seen() {
+			if c.Method == "iphone.call" {
+				n++
+			}
+		}
+		return n
+	}
+	deskOf(h)
+	first, second := make(chan proto.ToolResult, 1), make(chan proto.ToolResult, 1)
+	go func() {
+		first <- h.callIPhoneTool(ctx, "conv-a", "iphone_do", json.RawMessage(`{"steps": [{"action": "tap", "target": {"label": "pay"}}]}`))
+	}()
+	var card deskCard
+	select {
+	case card = <-deskOf(h).ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no card")
+	}
+	go func() {
+		second <- h.callIPhoneTool(ctx, "conv-b", "iphone_do", json.RawMessage(`{"steps": [{"action": "tap", "target": {"n": 2}}]}`))
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if n := calls(); n != 1 {
+		t.Fatalf("while the card waits only the first do reached the node: %d calls", n)
+	}
+	yes := true
+	card.answer <- proto.Resolution{Allow: &yes}
+	if res := <-first; res.IsError {
+		t.Fatalf("%+v", res)
+	}
+	if res := <-second; res.IsError {
+		t.Fatalf("%+v", res)
+	}
+	if n := calls(); n != 3 {
+		t.Fatalf("the first, its resume, then the second: %d", n)
+	}
+	// A look is not input: it never waits.
+	if res := h.callIPhoneTool(ctx, "conv-c", "iphone_look", nil); res.IsError {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// Persona's own app on the phone, as the app says it when consenting, is kept (only the consent route sets it) and goes
+// down with every call so the core never operates it.
+func TestIPhoneSelfApp(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	ctx := context.Background()
+	mux := h.routes()
+	_, seen := iphoneMac(t, h, "mac", []proto.IPhoneDevice{testIPhone}, nil)
+	phone := deviceToken("dev_phone", roleFull)
+	if err := h.extensions.reg.SetEnabled(ctx, iphoneExtensionID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.extensions.reg.SetConfig(ctx, iphoneExtensionID, json.RawMessage(`{"machines": ["mac"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	h.refreshIPhoneMacs(ctx)
+	body := `{"device": "dev-a1", "allowed": true, "app": {"bundle_id": "com.example.persona", "name": "Persona"}}`
+	for range 2 { // said again: kept once
+		if code, out := call(t, mux, "PUT", "/api/v1/iphone/consent", phone, body); code != 200 {
+			t.Fatalf("%d %v", code, out)
+		}
+	}
+	if s := h.iphone(); strings.Join(s.SelfApps, ",") != "com.example.persona" || strings.Join(s.SelfNames, ",") != "Persona" {
+		t.Fatalf("%+v", s)
+	}
+	code, _ := call(t, mux, "PUT", "/api/v1/extensions/iphone/-/config", h.cfg.Token, `{"config": {"machines": ["mac"], "self_apps": [], "self_names": ["x"]}}`)
+	if s := h.iphone(); code != 200 || strings.Join(s.SelfApps, ",") != "com.example.persona" || strings.Join(s.SelfNames, ",") != "Persona" {
+		t.Fatalf("the settings route keeps them: %d %+v", code, s)
+	}
+	h.refreshIPhoneMacs(ctx)
+	if res := h.callIPhoneTool(ctx, "c", "iphone_do", json.RawMessage(`{"steps": [{"action": "wait", "ms": 10}]}`)); res.IsError {
+		t.Fatalf("%+v", res)
+	}
+	last := lastIPhoneCall(t, seen())
+	if strings.Join(last.Call.SelfApps, ",") != "com.example.persona" || strings.Join(last.Call.SelfNames, ",") != "Persona" {
+		t.Fatalf("%+v", last.Call)
+	}
+}
+
+// What the model types never leaves through the manager: a password the model put in its arguments is in neither the
+// card (its text and its input, which the hub stores and pushes) nor the manager's log; other typed text is never in
+// the log either (only the actions are).
+func TestIPhoneTypedTextStaysOut(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	ctx := context.Background()
+	var logged bytes.Buffer
+	logTo(h, &logged)
+	const password, message = "hunter2-secret", "see you at nine"
+	iphoneMac(t, h, "mac", []proto.IPhoneDevice{testIPhone}, func(p proto.IPhoneCall) (proto.IPhoneResult, error) {
+		if p.Approved == "" {
+			return proto.IPhoneResult{NeedsApproval: true, ApprovalID: "ap1", Approval: &proto.IPhoneApproval{Step: 2, Action: "type",
+				Needs: []string{"password"}, TextLen: len(password), Target: &proto.IPhoneElementRef{N: 5, Role: "secure_text_field"},
+				Evidence: []string{"secure field"}}}, nil
+		}
+		return proto.IPhoneResult{Text: "done"}, nil
+	})
+	if err := h.extensions.reg.SetEnabled(ctx, iphoneExtensionID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.extensions.reg.SetConfig(ctx, iphoneExtensionID, json.RawMessage(`{"machines": ["mac"], "phones": ["dev-a1"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	h.refreshIPhoneMacs(ctx)
+	done := make(chan proto.ToolResult, 1)
+	go func() {
+		done <- h.callIPhoneTool(ctx, "c", "iphone_do", json.RawMessage(`{"steps": [{"action": "type", "text": "`+message+`", "target": {"n": 4}},
+			{"action": "type", "text": "`+password+`", "target": {"n": 5}}]}`))
+	}()
+	card := answerCard(t, h, true, false)
+	if res := <-done; res.IsError {
+		t.Fatalf("%+v", res)
+	}
+	shown, _ := json.Marshal(card)
+	if strings.Contains(string(shown), password) || strings.Contains(string(shown), "secure field") {
+		t.Fatalf("the card holds the password or the evidence: %s", shown)
+	}
+	if !strings.Contains(card.Summary, strconv.Itoa(len(password))) {
+		t.Fatalf("its length only: %q", card.Summary)
+	}
+	if l := logged.String(); strings.Contains(l, password) || strings.Contains(l, message) || !strings.Contains(l, "do [type type]") {
+		t.Fatalf("log: %s", l)
 	}
 }

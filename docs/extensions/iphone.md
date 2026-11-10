@@ -105,6 +105,19 @@ screen (target not identified)". The card's input is the approval without its ev
 (which can hold a password being typed). The card has no picture yet, so the screenshot the core keeps with an
 unchecked approval is not on it.
 
+**One do at a time per iPhone.** An `iphone_do` holds that iPhone's turn (`iphoneTurn`, across conversations) until its
+approvals are answered and it is done; a look never waits. While a card waits, and it may show on that very iPhone (a
+notification banner over another app), no other input reaches the phone, so the automation can never tap its own
+approval. The core also never operates Persona's own app: each iPhone's app sends its bundle id and display name with
+its consent (`app`), kept in `self_apps` / `self_names` (only the consent route changes them, as `phones`) and passed
+down with every call.
+
+**What typed text leaves through the manager.** A password is never in the card (its text or its input), which the hub
+stores and pushes, nor in the manager's log: the core gives only its length. Other text a step types is quoted on the
+card, so the owner sees what is sent, and so is in the card's history and its push. The log names the actions only. The
+model's own call, in the assistant's transcript, holds what it wrote; it can only type a password it already has in the
+conversation.
+
 Once allowed, the manager resumes the do with `approved: <approval_id>` and no arguments. The core answers a resume it
 no longer holds (the id used before, the do replaced by a newer one, older than 15 minutes, the node restarted) with
 "nothing was sent"; the model gets that as it is, told the approved step was not done and not to try it again without
@@ -120,7 +133,7 @@ answer on.
   forget one's pairing record, cancel a pairing (no device). Pairing only once the computer is on (404); forget and cancel
   need only the extension on; no device 400; offline or an old node 409. The log never says which iPhone.
 - `GET /api/v1/iphone` → `{on, devices: [{…device, machines: [{id, name, enabled}], consented}]}`, every iPhone the computers reach, each once.
-- `PUT /api/v1/iphone/consent` `{"device", "allowed"}` → that device as above. Not the user's own app → 403; extension off → 404.
+- `PUT /api/v1/iphone/consent` `{"device", "allowed", "app"?: {"bundle_id", "name"}}` → that device as above. Not the user's own app → 403; extension off → 404.
 - `proto.Machine.iphone` is the computer's `IPhone` while the extension is on (the manager's report, like `computer`).
 - Node: `iphone.status` → `IPhone` (the manager sets `enabled` and `allowed` itself, never taking the node's word);
   `iphone.call` `{device, session, op: status|look|do, args, approved?, timeout_ms?, confirm?, self_apps?, self_names?}` (`proto.IPhoneCall`) → `IPhoneResult`;
