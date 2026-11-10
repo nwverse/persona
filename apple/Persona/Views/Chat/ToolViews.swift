@@ -338,6 +338,7 @@ struct ToolCallRow: View {
     var autoExpand: Bool
     /// A row of an open work line's card (`WorkCardSlice` draws the card): no gray tile of its own, 44 pt tall.
     var grouped = false
+    var headerID = "chat.tool-call"
     @State private var expanded: Bool?
     @Environment(\.openTools) private var openTools
 
@@ -375,6 +376,7 @@ struct ToolCallRow: View {
         VStack(alignment: .leading, spacing: 0) {
             Group { if AppStyle.current.usesBeautifulUI { chipHeader } else { header(base) } }
                 .chatPinned(pinKey)
+                .accessibilityIdentifier(headerID)
 
             if base == "TodoWrite", openPlan != nil {
                 // The plan in one line: how far along, as a thin bar; its whole list in the plan sheet (#5602).

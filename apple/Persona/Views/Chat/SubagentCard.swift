@@ -181,8 +181,7 @@ struct SubagentCard: View {
 
     var body: some View {
         if let finished = SubagentResult.call(call, tasks: tasks, agent: agent) {
-            ToolCallRow(call: finished, autoExpand: false, grouped: true)
-                .accessibilityIdentifier("chat.subagent-result")
+            ToolCallRow(call: finished, autoExpand: false, grouped: true, headerID: "chat.subagent-result")
         } else {
             progressCard
         }
