@@ -66,7 +66,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", fmt.Errorf("at most 8 tasks in one plan")
 	}
 	if scope != nil {
-		if err := s.checkLeaderRoom(ctx, sessionID, len(a.Tasks)); err != nil {
+		if err := s.checkLeaderRoom(ctx, scope, len(a.Tasks)); err != nil {
 			return "", err
 		}
 	}
@@ -87,6 +87,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		if err := t.checkRole(ctx, s, sessionID, scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		if m, ok := s.machineByName(ctx, t.Machine); ok && t.Role == roleLeader && s.isWorkMachine(m.ID) {
+			return "", fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only the "+
+				"reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)
 		}
 		if err := t.normalizeMachinePolicy(); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
@@ -324,12 +328,23 @@ func (t *PlanTask) checkWritablePermission() error {
 	if t.Readonly || t.Permission == permBypass {
 		return nil
 	}
+	return t.permissionRuleError()
+}
+
+// errPermissionRule marks the refusal of checkWritablePermission, for a start that must not be tried again.
+var errPermissionRule = errors.New("writable task without bypassPermissions")
+
+type permissionRuleError struct{ error }
+
+func (e permissionRuleError) Is(target error) bool { return target == errPermissionRule }
+
+func (t *PlanTask) permissionRuleError() error {
 	got := "none"
 	if t.Permission != "" {
 		got = strconv.Quote(t.Permission)
 	}
-	return fmt.Errorf("%q changes files (readonly false), so permission must be %q, set explicitly (got %s); set it, or set "+
-		"readonly true when the task only reads", t.Title, permBypass, got)
+	return permissionRuleError{fmt.Errorf("%q changes files (readonly false), so permission must be %q, set explicitly (got %s); set it, or set "+
+		"readonly true when the task only reads", t.Title, permBypass, got)}
 }
 
 // checkRole refuses a role a plan task may not have, before anything is planned. Role leader is for a supervising

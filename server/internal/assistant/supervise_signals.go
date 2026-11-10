@@ -52,7 +52,10 @@ var (
 // superviseSignal is one thing about one task the supervisor should know. Key names the stretch of state it is about:
 // the same signal with the same key is told once.
 type superviseSignal struct {
-	Todo, Kind, Key  string
+	Todo, Kind, Key string
+	// Unreachable: this decision exists because the task leader's agent could not be reached, not because the worker
+	// waits for the user. It stays a decision even though the worker's ledger is not needs_user (task_leader.go).
+	Unreachable      bool
 	At               time.Time
 	Machine, Session string
 	Detail, Ask      string
@@ -316,6 +319,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed is rehomed even with no signal of its own
 		s.superviseWatch(ctx, time.Now())
 	}
 }

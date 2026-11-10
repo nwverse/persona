@@ -84,16 +84,42 @@ func (s *Service) leaderTask(ctx context.Context, machine, session string) (Todo
 	return Todo{}, TodoAgent{}, false
 }
 
-// isLeaderSession: sid is the session of a task leader's agent, whatever the state of its row.
-func (s *Service) isLeaderSession(sid string) bool {
-	if sid == "" {
-		return false
+// taskOfAny is taskOf plus the tasks whose agent is released or dismissed: a leader whose agent was replaced still has
+// its own task and its supervisor above it, so what could not be delivered can be escalated there.
+func (s *Service) taskOfAny(ctx context.Context, mid, sid string) (Todo, bool) {
+	if t, ok := s.taskOf(ctx, mid, sid); ok {
+		return t, true
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return Todo{}, false
 	}
 	s.todos.mu.RLock()
 	defer s.todos.mu.RUnlock()
 	for _, t := range s.todos.todos {
+		if t.Origin == "" || t.DoneAt != nil {
+			continue
+		}
 		for _, a := range t.Agents {
-			if a.SessionID == sid && a.Source == sourceLeader {
+			if a.MachineID == mid && a.SessionID == sid {
+				return copyTodoLocked(t), true
+			}
+		}
+	}
+	return Todo{}, false
+}
+
+// isLeaderSession: machine/session is a task leader's agent, whatever the state of its row. Both are needed: a session id
+// alone is not unique across computers.
+func (s *Service) isLeaderSession(machine, sid string) bool {
+	if sid == "" {
+		return false
+	}
+	machine = s.canonical(machine)
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	for _, t := range s.todos.todos {
+		for _, a := range t.Agents {
+			if a.MachineID == machine && a.SessionID == sid && a.Source == sourceLeader {
 				return true
 			}
 		}
@@ -103,7 +129,26 @@ func (s *Service) isLeaderSession(sid string) bool {
 
 // agentSupervised: task t's supervisor is a task leader's agent, not a conversation.
 func (s *Service) agentSupervised(t Todo) bool {
-	return t.Supervision != nil && s.isLeaderSession(t.Supervision.Supervisor)
+	if t.Supervision == nil || t.Supervision.Supervisor == "" {
+		return false
+	}
+	return s.isLeaderRef(t.Supervision.Supervisor)
+}
+
+// leaderRef names a task leader's agent as a worker's ledger supervisor and to-do origin: machine and session together,
+// since a session id alone is not unique across computers. It is no conversation id (conversations have none with a "/").
+func leaderRef(machine, session string) string { return machine + "/" + session }
+
+// parseLeaderRef is the machine and session a leaderRef names.
+func parseLeaderRef(ref string) (machine, session string, ok bool) {
+	machine, session, ok = strings.Cut(ref, "/")
+	return machine, session, ok && machine != "" && session != ""
+}
+
+// isLeaderRef: ref names a task leader's agent.
+func (s *Service) isLeaderRef(ref string) bool {
+	m, sid, ok := parseLeaderRef(ref)
+	return ok && s.isLeaderSession(m, sid)
 }
 
 // leaderSupervisor is the leader agent that supervises task t now: the session its ledger names while that is the
@@ -116,16 +161,18 @@ func (s *Service) leaderSupervisor(t Todo) (lead TodoAgent, supervised, ok bool)
 	s.todos.mu.RLock()
 	defer s.todos.mu.RUnlock()
 	open := func(l *Todo) bool { return l != nil && l.DoneAt == nil && !l.Cancelled() }
+	machine, supSession, _ := parseLeaderRef(t.Supervision.Supervisor)
+	machine = s.canonical(machine)
 	pick := func(l *Todo, sid string) {
 		for _, a := range l.Agents {
-			if a.active() && a.Source == sourceLeader && (sid == "" || a.SessionID == sid) && (!ok || a.LinkedAt.After(lead.LinkedAt)) {
+			if a.MachineID == machine && a.active() && a.Source == sourceLeader && (sid == "" || a.SessionID == sid) && (!ok || a.LinkedAt.After(lead.LinkedAt)) {
 				lead, ok = a, true
 			}
 		}
 	}
 	for _, l := range s.todos.todos {
 		if open(l) {
-			pick(l, t.Supervision.Supervisor)
+			pick(l, supSession)
 		}
 	}
 	if ok {
@@ -189,7 +236,7 @@ func (s *Service) leaderTaskPlan(ctx context.Context, machine, session string, a
 		}
 		return proto.TextResult("unknown tool task_plan", true)
 	}
-	res, err := s.taskPlanFrom(ctx, agent.MachineID, session, args, &leaderScope{task: lead, agent: agent})
+	res, err := s.taskPlanFrom(ctx, agent.MachineID, leaderRef(agent.MachineID, session), args, &leaderScope{task: lead, agent: agent})
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
@@ -248,14 +295,27 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	return out, nil
 }
 
-// checkLeaderRoom refuses a plan that would leave the leader with more than leaderWorkersMost open workers.
-func (s *Service) checkLeaderRoom(ctx context.Context, session string, adding int) error {
+// checkLeaderRoom refuses a plan that would leave the leader's task with more than leaderWorkersMost open workers. The
+// workers are counted by the task they belong to (the supervisor ref or a worker row via the leader's task), so a leader
+// started again does not get a new allowance.
+func (s *Service) checkLeaderRoom(ctx context.Context, scope *leaderScope, adding int) error {
+	ref := leaderRef(scope.agent.MachineID, scope.agent.SessionID)
+	_ = s.ensureTodosLoaded(ctx)
 	open := 0
-	for _, t := range s.todosOf(ctx, session) { // a worker's todo is opened from its leader's session
-		if t.DoneAt == nil {
+	s.todos.mu.RLock()
+	for _, t := range s.todos.todos {
+		if t.DoneAt != nil || t.Supervision == nil && !slices.ContainsFunc(t.Agents, func(a TodoAgent) bool { return a.Source == sourceWorker }) {
+			continue
+		}
+		belongs := t.Supervision != nil && t.Supervision.Supervisor == ref
+		for _, a := range t.Agents {
+			belongs = belongs || a.Source == sourceWorker && a.Via == scope.task.ID && a.active()
+		}
+		if belongs {
 			open++
 		}
 	}
+	s.todos.mu.RUnlock()
 	if open+adding > leaderWorkersMost {
 		return fmt.Errorf("at most %d workers of your task are open at a time (%d now): wait for some to finish; nothing was planned",
 			leaderWorkersMost, open)
@@ -264,6 +324,81 @@ func (s *Service) checkLeaderRoom(ctx context.Context, session string, adding in
 }
 
 // ---- supervision messages ----
+
+// leaderConversation is the conversation above task leader agent lead: the one that handed it its task (its ledger's
+// supervisor), and the main conversation if that is gone. A leader whose own task is closed has nobody above it (""):
+// its workers were closed with it.
+func (s *Service) leaderConversation(ctx context.Context, lead TodoAgent) string {
+	if t, ok := s.taskOfAny(ctx, lead.MachineID, lead.SessionID); ok && t.Supervision != nil && t.Supervision.Supervisor != "" && !s.isLeaderRef(t.Supervision.Supervisor) {
+		return t.Supervision.Supervisor
+	}
+	return s.settings(ctx).Main
+}
+
+// leaderAbove is the task whose agent supervises worker task t, with that agent's session (the ledger's), ok when t is
+// leader-supervised at all. It works for a released or dismissed leader too: what could not be delivered still has a
+// conversation above it to go to.
+func (s *Service) leaderAbove(t Todo) (lead Todo, session string, ok bool) {
+	if !s.agentSupervised(t) {
+		return Todo{}, "", false
+	}
+	machine, sid, _ := parseLeaderRef(t.Supervision.Supervisor)
+	machine = s.canonical(machine)
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	for _, l := range s.todos.todos {
+		for _, a := range l.Agents {
+			if a.MachineID == machine && a.SessionID == sid && a.Source == sourceLeader {
+				return copyTodoLocked(l), sid, true
+			}
+		}
+	}
+	return Todo{}, sid, true
+}
+
+// supervisorAbove is the conversation above worker task t's leader agent, "" when there is none. Used to escalate what
+// can no longer be delivered to the leader.
+func (s *Service) supervisorAbove(ctx context.Context, lead TodoAgent) string {
+	if _, ok := s.taskOfAny(ctx, lead.MachineID, lead.SessionID); !ok {
+		return "" // the leader's own task is closed
+	}
+	return s.leaderConversation(ctx, lead)
+}
+
+// supervisorAboveTask is the conversation above worker task t's leader: the conversation that supervises the leader's own
+// task, else the main conversation; "" with neither. It does not need the leader's task to be open: a closed leader's
+// workers go to this conversation (rehomeLeaderlessWorkers).
+func (s *Service) supervisorAboveTask(ctx context.Context, t Todo) (up, leaderSession string) {
+	lead, sid, ok := s.leaderAbove(t)
+	if !ok {
+		return "", ""
+	}
+	if lead.Supervision != nil && lead.Supervision.Supervisor != "" && !s.isLeaderRef(lead.Supervision.Supervisor) {
+		return lead.Supervision.Supervisor, sid
+	}
+	return s.settings(ctx).Main, sid
+}
+
+// escalateLeaderSignal is signal g about a worker whose leader agent is unreachable, as a signal for the conversation
+// above that leader: what could not be delivered, so the conversation can act instead of the leader. Todo "" when there
+// is nobody above it (the leader's own task is closed), in which case the caller leaves the signal for another try.
+func (s *Service) escalateLeaderSignal(ctx context.Context, g superviseSignal) superviseSignal {
+	t, ok := s.todoNow(g.Todo)
+	if !ok {
+		return superviseSignal{}
+	}
+	up, sid := s.supervisorAboveTask(ctx, t)
+	if up == "" {
+		s.logf("supervise: %s of task %s: its task leader %s is unreachable and its task is closed; trying again later", g.Kind, g.Todo, short(sid))
+		return superviseSignal{}
+	}
+	lead, _, _ := s.leaderAbove(t)
+	todo := lead.ID // the decision belongs to the leader's own task, whose ledger is the conversation's
+	why := fmt.Sprintf("Task leader %s cannot be reached, so its worker's supervision message could not be delivered (%s: %s). "+
+		"Decide what to do with the worker: cancel it, or wait for the leader.", short(sid), g.Kind, clip(oneLine(g.Detail), 300))
+	return superviseSignal{Todo: todo, Kind: sigDecide, To: up, Key: "leader-unreachable@" + g.Todo + "@" + time.Now().UTC().Format(time.RFC3339Nano),
+		Detail: why, At: g.At, Unreachable: true}
+}
 
 // leaderRoute says where signal g of a task goes when its supervisor is a leader agent: handled false for any other
 // task (digestTo decides), else the leader agent it goes to, reachable false when there is none now (the signal is
@@ -315,26 +450,68 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	return true
 }
 
-// sendToLeader sends text into the leader agent's session; a closed agent is resumed first, which can take minutes, so
-// that send goes on in the background.
+// leaderUnreachable is a send to the leader's session that failed: the message did not reach it, so it must be retried
+// or escalated, never lost.
+type leaderUnreachable struct{ err error }
+
+func (e leaderUnreachable) Error() string { return e.err.Error() }
+func (e leaderUnreachable) Unwrap() error { return e.err }
+
+// sendToLeader sends text into the leader agent's session, retrying a session that is being resumed until it takes it
+// (up to leaderResumeWait). A returned error is a leaderUnreachable unless the context was done. Escalation is the
+// caller's, on error.
 func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string) error {
-	c, ok := s.session(ctx, lead.MachineID, lead.SessionID)
-	if !ok {
-		return errors.New("its session is not listed")
-	}
-	if c.Status == proto.StatusOffline {
+	if c, ok := s.session(ctx, lead.MachineID, lead.SessionID); !ok {
+		return leaderUnreachable{errors.New("the leader's session is not listed")}
+	} else if c.Status == proto.StatusOffline {
+		// Resuming a closed agent takes minutes: this send goes on in the background, and the caller escalates when it fails.
 		go func() {
-			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaderResumeWait)
 			defer cancel()
 			if err := s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil); err != nil {
-				s.logf("task leader %s: supervision message: %v", short(lead.SessionID), err)
+				s.logf("task leader %s: resume: %v", short(lead.SessionID), err)
+				s.escalateLeaderMessage(lead, text)
 			}
 		}()
 		return nil
 	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 	defer cancel()
-	return s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil)
+	if err := s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil); err != nil {
+		return leaderUnreachable{err}
+	}
+	return nil
+}
+
+// escalateLeaderMessage turns the worker supervision message text that could not be delivered (a closed agent's resume
+// failed) into a decision for the conversation above the leader: who could not be reached, and the message itself, so
+// nothing is silently lost. It runs in the background.
+func (s *Service) escalateLeaderMessage(lead TodoAgent, text string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if up := s.supervisorAbove(ctx, lead); up != "" {
+		s.signal(superviseSignal{Todo: s.leaderTaskIDOf(lead), Kind: sigDecide, To: up, Key: "leader-unreachable@" + time.Now().UTC().Format(time.RFC3339Nano),
+			Detail: fmt.Sprintf("Worker supervision message for task leader %s could not be delivered (its session is offline or gone). Its contents:\n%s", short(lead.SessionID), clip(text, 4000)), Unreachable: true})
+	}
+	// Nobody above it, or the conversation is gone: try to deliver to the leader itself again until its task is closed.
+	go func() {
+		wait := leaderResumeWait
+		for {
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return
+			}
+			if _, ok := s.taskOfAny(ctx, lead.MachineID, lead.SessionID); !ok {
+				return // the leader's task is closed: nobody is left to tell
+			}
+			s.logf("task leader %s: trying the undelivered supervision message again", short(lead.SessionID))
+			if err := s.sendToLeader(ctx, lead, text); err == nil {
+				return
+			}
+			wait = leaderRetryBackoff(wait)
+		}
+	}()
 }
 
 // ---- the leader's task_review ----
@@ -390,7 +567,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new worker for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
 	}
 	var up string // the conversation a needs_user goes to: whoever handed the leader its task
-	if lt, ok := s.leaderTaskOf(lead); ok && lt.Supervision != nil {
+	if lt, ok := s.leaderTaskOf(ctx, lead); ok && lt.Supervision != nil {
 		up = lt.Supervision.Supervisor
 	}
 	if a.Verdict == reviewNeedsUser && up == "" {
@@ -480,8 +657,98 @@ func (s *Service) agentSupervisedSession(machine, session string) bool {
 	return ok && s.agentSupervised(t)
 }
 
+// rehomeLeaderlessWorkers gives the open workers of a leader that is gone (its task closed, cancelled, or no leader
+// agent left) a supervisor that can act: the conversation above the leader (its own supervisor, else the main one), and
+// with no conversation at all the worker is cancelled with the reason. A worker waiting for review keeps that wait, so
+// the conversation is told to review it. The supervisor relationship stays readable on the to-do and in its ledger.
+// It runs whenever the hub notices (a signal about the worker, the watch, the judge), and is idempotent.
+func (s *Service) rehomeLeaderlessWorkers(ctx context.Context) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return
+	}
+	s.todos.mu.RLock()
+	var workers []Todo
+	for _, t := range s.todos.todos {
+		if t.DoneAt == nil && t.Supervision != nil {
+			workers = append(workers, copyTodoLocked(t))
+		}
+	}
+	s.todos.mu.RUnlock()
+	for _, t := range workers {
+		lead, _, _ := s.leaderAbove(t)
+		if lead.ID == "" || s.leaderOpen(lead) { // its leader's task is open: it is supervised, however reachable its agent is
+			continue
+		}
+		up, _ := s.supervisorAboveTask(ctx, t)
+		if up == "" {
+			up = s.settings(ctx).Main
+		}
+		if up == "" || s.isLeaderRef(up) {
+			reason := "its task leader is gone, and there is no conversation above it to take it over" // i18n-ignore: done_reason
+			s.logf("task %s: %s; cancelled", t.ID, reason)
+			if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool { v.State = reviewCancelled; return true }); err != nil {
+				s.logf("task %s: rehome: %v", t.ID, err)
+			}
+			if _, err := s.reviewDoneTodo(ctx, t.ID, reason, false); err != nil {
+				s.logf("task %s: rehome: %v", t.ID, err)
+			}
+			if cur, ok := s.todoNow(t.ID); ok {
+				s.stopTaskAgents(ctx, cur)
+			}
+			continue
+		}
+		s.logf("task %s: its task leader is gone; %s takes it over", t.ID, up)
+		var pending bool
+		v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+			v.Supervisor = up
+			if v.State == reviewRework {
+				v.State = reviewPending // what the leader asked for is with the worker: the new supervisor reviews what comes back
+			}
+			pending = v.state(t) == reviewPending
+			return true
+		})
+		if err != nil {
+			s.logf("task %s: rehome: %v", t.ID, err)
+			continue
+		}
+		if pending {
+			s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "它的 task leader 已经不在，这个任务交给你验收"}) // i18n-ignore: the supervision message is the assistant's prompt
+		}
+	}
+}
+
+// leaderOpen: the leader's own task is open.
+func (s *Service) leaderOpen(t Todo) bool { return t.ID != "" && t.DoneAt == nil && !t.Cancelled() }
+
+// mayReviewForLeader: conversation self supervises the task leader that supervises worker task t, so it can review the
+// worker (a decision the leader sent up). The worker's supervisor stays the leader's agent: this never takes it over.
+func (s *Service) mayReviewForLeader(ctx context.Context, self string, t Todo) bool {
+	up, _ := s.supervisorAboveTask(ctx, t)
+	return up != "" && up == self
+}
+
 // leaderTaskOf is the open task leader agent lead leads.
-func (s *Service) leaderTaskOf(lead TodoAgent) (Todo, bool) {
-	t, ok := s.taskOf(context.Background(), lead.MachineID, lead.SessionID)
+func (s *Service) leaderTaskOf(ctx context.Context, lead TodoAgent) (Todo, bool) {
+	t, ok := s.taskOfAny(ctx, lead.MachineID, lead.SessionID)
 	return t, ok
+}
+
+// leaderResumeWait bounds how long resuming a closed leader agent may take before the message goes up to the conversation
+// above it instead.
+var leaderResumeWait = 3 * time.Minute
+
+// leaderTaskIDOf is the task leader agent lead belongs to ("" if none).
+func (s *Service) leaderTaskIDOf(lead TodoAgent) string {
+	if t, ok := s.taskOfAny(context.Background(), lead.MachineID, lead.SessionID); ok {
+		return t.ID
+	}
+	return ""
+}
+
+// leaderRetryBackoff caps how often an undelivered worker supervision message is tried again.
+func leaderRetryBackoff(d time.Duration) time.Duration {
+	if d < 10*time.Minute {
+		return d * 2
+	}
+	return 30 * time.Minute
 }

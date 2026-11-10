@@ -75,20 +75,26 @@ func (s *Service) sendDigest(ctx context.Context) {
 	web := s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	var order []string
-	leaders := map[string][]superviseSignal{} // a task leader's agent session → the signals of its workers (task_leader.go)
+	leaders := map[[2]string][]superviseSignal{} // leader agent (machine, session) → the signals of its workers (task_leader.go)
 	var leaderOrder []TodoAgent
-	gone := map[string]bool{} // leaders whose conversation is not there: their signals go to the main one
+	gone := map[string]bool{}      // leaders whose conversation is not there: their signals go to the main one
+	s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed gets a supervisor that can act, before routing
 	for _, g := range list {
 		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
-			if !reachable {
-				s.logf("supervise: %s of task %s has no task leader to go to; dropped", g.Kind, g.Todo)
-			} else {
-				if _, seen := leaders[lead.SessionID]; !seen {
+			if reachable {
+				key := [2]string{lead.MachineID, lead.SessionID}
+				if _, seen := leaders[key]; !seen {
 					leaderOrder = append(leaderOrder, lead)
 				}
-				leaders[lead.SessionID] = append(leaders[lead.SessionID], g)
+				leaders[key] = append(leaders[key], g)
+				continue
 			}
-			continue
+			// Unreachable, not dropped: it becomes a decision for the conversation above the leader (escalateLeaderSignal),
+			// which has its own delivery target below.
+			g = s.escalateLeaderSignal(ctx, g)
+			if g.Todo == "" { // nobody above it: it is told again next time
+				continue
+			}
 		}
 		to := s.digestTo(here, g)
 		if to != here.Main {
@@ -107,7 +113,7 @@ func (s *Service) sendDigest(ctx context.Context) {
 	}
 	delivered := false
 	for _, lead := range leaderOrder {
-		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[lead.SessionID], web, now, prev) || delivered
+		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[[2]string{lead.MachineID, lead.SessionID}], web, now, prev) || delivered
 	}
 	for _, to := range order {
 		delivered = s.deliverDigest(ctx, here, to, groups[to], web, now, prev) || delivered
@@ -323,7 +329,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // answered meanwhile
 		}
 	case sigDecide:
-		if st != reviewNeedsUser {
+		if g.Unreachable {
+			// The leader could not be reached: the worker's own state is not what decides this (the leader's task is still open).
+		} else if st != reviewNeedsUser {
 			return prompts.SuperviseEntry{}, false // decided meanwhile
 		}
 	case sigEscalated:

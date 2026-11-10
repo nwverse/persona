@@ -236,7 +236,7 @@ const reportStagesKey = "assistant.todo_stages"
 
 // taskReport notes a change of task t for the next card. ix: what it asks (needs).
 func (s *Service) taskReport(t Todo, state, machine string, session [2]string, text string, ix *proto.Interaction) {
-	if t.Origin == "" || s.isLeaderSession(t.Origin) { // a task leader's worker is no task of the owner's chat (task_leader.go)
+	if t.Origin == "" || s.isLeaderRef(t.Origin) { // a task leader's worker is no task of the owner's chat (task_leader.go)
 		return
 	}
 	b := &s.reports

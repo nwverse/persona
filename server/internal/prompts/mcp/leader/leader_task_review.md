@@ -27,6 +27,7 @@ Close, send back or hand up one of the worker tasks you handed out with task_pla
       "items": {
         "type": "object",
         "required": ["criterion", "met"],
+        "additionalProperties": false,
         "properties": {
           "criterion": {"type": "string", "description": "one of the task's done_when"},
           "met": {"type": "boolean"},

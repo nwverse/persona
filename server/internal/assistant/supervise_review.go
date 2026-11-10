@@ -78,7 +78,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	// supervision messages come to the new one, which has to be able to close them (#4262).
 	isMain := s.isMain(ctx, self)
 	if t.Origin == "" || t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self && !isMain) {
-		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
+		if !s.mayReviewForLeader(ctx, self, t) {
+			return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
+		}
 	}
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new task for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
@@ -105,7 +107,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	var v Supervision
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			if isMain && !s.isLeader(ctx, v.Supervisor) && !s.isLeaderSession(v.Supervisor) {
+			if isMain && !s.isLeader(ctx, v.Supervisor) && !s.isLeaderRef(v.Supervisor) {
 				v.Supervisor = self // the main conversation takes over an old main conversation's task, not a leader's
 			} else if v.Supervisor == "" {
 				v.Supervisor = t.Origin

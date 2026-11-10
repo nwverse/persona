@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -64,7 +65,7 @@ func todosOpenedBy(s *Service, origin string) []Todo {
 func planWorker(t *testing.T, s *Service, f *fakeHub, extra map[string]any) Todo {
 	t.Helper()
 	known := map[string]bool{}
-	for _, o := range todosOpenedBy(s, "s1") {
+	for _, o := range todosOpenedBy(s, "box/s1") {
 		known[o.ID] = true
 	}
 	res := s.mcpCall(context.Background(), "box", "s1", "task_plan", workerArgs(extra), false)
@@ -73,7 +74,7 @@ func planWorker(t *testing.T, s *Service, f *fakeHub, extra map[string]any) Todo
 	}
 	var w Todo
 	waitFor(t, "the worker's link", func() bool {
-		for _, o := range todosOpenedBy(s, "s1") {
+		for _, o := range todosOpenedBy(s, "box/s1") {
 			if !known[o.ID] && len(o.Agents) == 1 {
 				w = o
 				return true
@@ -81,7 +82,7 @@ func planWorker(t *testing.T, s *Service, f *fakeHub, extra map[string]any) Todo
 		}
 		return false
 	})
-	list := todosOpenedBy(s, "s1")
+	list := todosOpenedBy(s, "box/s1")
 	sessions := []proto.Session{{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle, UpdatedAt: time.Now()}}
 	for _, o := range list {
 		for _, a := range o.Agents {
@@ -192,7 +193,7 @@ func TestTaskLeaderTaskPlanCallEnforcement(t *testing.T) {
 	refused("a leader attaching files", call("s1", workerArgs(map[string]any{"attachments": []string{"/tmp/a.png"}})), "attachments")
 	refused("a writable worker with no permission", call("s1", workerArgs(map[string]any{"permission": ""})), "bypassPermissions")
 	refused("a writable worker with another permission", call("s1", workerArgs(map[string]any{"permission": "acceptEdits"})), "bypassPermissions")
-	if got := len(todosOpenedBy(s, "s1")); got != 0 {
+	if got := len(todosOpenedBy(s, "box/s1")); got != 0 {
 		t.Fatalf("refused calls opened %d todos", got)
 	}
 
@@ -213,19 +214,19 @@ func TestTaskLeaderTaskPlanCallEnforcement(t *testing.T) {
 		t.Fatalf("the worker is not told who handed it the task: %s", prompt)
 	}
 	waitFor(t, "the worker's link", func() bool {
-		l := todosOpenedBy(s, "s1")
+		l := todosOpenedBy(s, "box/s1")
 		return len(l) == 1 && len(l[0].Agents) == 1
 	})
-	w := todosOpenedBy(s, "s1")[0]
+	w := todosOpenedBy(s, "box/s1")[0]
 	a := w.Agents[0]
 	if a.Source != sourceWorker || a.Via != todo.ID || w.Quiet {
 		t.Fatalf("the worker's link: %+v, todo %+v", a, w)
 	}
 	// Its supervisor is the leader's agent session, kept in the ledger with the task's done_when, and the API shows it.
-	if v := w.Supervision; v == nil || v.Supervisor != "s1" || !slices.Equal(v.DoneWhen, []string{"登录页布局改好", "测试通过"}) {
+	if v := w.Supervision; v == nil || v.Supervisor != "box/s1" || !slices.Equal(v.DoneWhen, []string{"登录页布局改好", "测试通过"}) {
 		t.Fatalf("the worker's ledger: %+v", v)
 	}
-	if body := request(s, "GET", "/api/v1/todos?all=1", "").Body.String(); !strings.Contains(body, `"supervisor":"s1"`) {
+	if body := request(s, "GET", "/api/v1/todos?all=1", "").Body.String(); !strings.Contains(body, `"supervisor":"box/s1"`) {
 		t.Fatalf("GET /api/v1/todos does not show the worker's supervisor: %s", body)
 	}
 	if lead, supervised, ok := s.leaderSupervisor(w); !supervised || !ok || lead.SessionID != "s1" || lead.MachineID != "box" {
@@ -254,19 +255,66 @@ func TestTaskLeaderTaskPlanCallEnforcement(t *testing.T) {
 	refused("a closed task's leader", call("s1", workerArgs(nil)))
 }
 
-// The room is bounded: a leader cannot keep more than leaderWorkersMost workers open.
+// The room is bounded: a leader cannot keep more than leaderWorkersMost workers open. Workers count by the task they
+// belong to, so a leader started again (a new session) does not get a new allowance.
 func TestTaskLeaderWorkersAreBounded(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
-	startTaskLeader(t, s, f)
+	leader := startTaskLeader(t, s, f)
 	for i := 0; i < leaderWorkersMost; i++ {
-		if _, err := s.createTaskTodo(ctx, "worker", "", "s1", "", ""); err != nil {
+		w, err := s.createTaskTodo(ctx, "worker", "", "box/s1", "", "")
+		if err != nil {
 			t.Fatal(err)
+		}
+		if i%2 == 0 { // ledger names this leader
+			s.superviseTodo(ctx, w.ID, "box/s1", nil, 0)
+		} else { // an older leader session, linked to the same leader task
+			s.superviseTodo(ctx, w.ID, "box/old", nil, 0)
+			if err := s.linkTodoAgentWithSource(ctx, w.ID, "box", "old-worker-"+w.ID, "worker", "/code/app", "", "", sourceWorker, leader.ID); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	res := s.mcpCall(ctx, "box", "s1", "task_plan", workerArgs(nil), false)
 	if !res.IsError || !strings.Contains(res.Content[0].Text, "at most 8 workers") {
 		t.Fatalf("a ninth open worker: %+v", res)
+	}
+}
+
+// An agent that asks for its tools with no session (a pane the node cannot name) gets none and does not wait for a
+// leader being started.
+func TestToolListWithNoSessionDoesNotWait(t *testing.T) {
+	s, _ := newQuietService(t)
+	old := leaderListWait
+	leaderListWait = 3 * time.Second
+	t.Cleanup(func() { leaderListWait = old })
+	s.leaderStarts.Add(1)
+	t.Cleanup(func() { s.leaderStarts.Add(-1) })
+	start := time.Now()
+	if got := s.leaderTools(context.Background(), "box", ""); got != nil || time.Since(start) > time.Second {
+		t.Fatalf("no session: %v after %s", got, time.Since(start))
+	}
+}
+
+// The same session id on another computer is another agent: it is not the leader, is not reached as its workers'
+// supervisor and does not review for it.
+func TestLeaderIdentityIsMachineAndSession(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	if _, _, ok := s.leaderTask(ctx, "other", "s1"); ok {
+		t.Fatal("the same session id on another computer is a leader")
+	}
+	if s.isLeaderSession("other", "s1") || !s.isLeaderSession("box", "s1") {
+		t.Fatal("isLeaderSession ignores the machine")
+	}
+	review, _ := json.Marshal(map[string]any{"todo_id": w.ID, "verdict": "accepted"})
+	if res := s.mcpCall(ctx, "other", "s1", "task_review", review, false); !res.IsError {
+		t.Fatalf("an agent with the leader's session id on another computer reviewed: %+v", res)
+	}
+	if lead, _, ok := s.leaderSupervisor(todoNow(s, w.ID)); !ok || lead.MachineID != "box" {
+		t.Fatalf("the worker's leader: %+v", lead)
 	}
 }
 
@@ -469,7 +517,7 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 		t.Fatalf("a worker's tools after a restart: %v", got)
 	}
 	wr := todoNow(restarted, w.ID)
-	if v := wr.Supervision; v == nil || v.Supervisor != "s1" || len(v.DoneWhen) != 2 {
+	if v := wr.Supervision; v == nil || v.Supervisor != "box/s1" || len(v.DoneWhen) != 2 {
 		t.Fatalf("the worker's ledger after a restart: %+v", v)
 	}
 	if lead, supervised, ok := restarted.leaderSupervisor(wr); !supervised || !ok || lead.SessionID != "s1" {
@@ -487,7 +535,7 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 	if p, err := restarted.loadPlan(ctx, todo.PlanID); err != nil || p.Tasks[0].Role != roleLeader || p.Tasks[0].Parent != "" {
 		t.Fatalf("the leader's plan after a restart: %+v %v", p, err)
 	}
-	if p, err := restarted.loadPlan(ctx, w.PlanID); err != nil || p.Conversation != "s1" || p.Tasks[0].Role != "" || p.Tasks[0].Parent != todo.ID {
+	if p, err := restarted.loadPlan(ctx, w.PlanID); err != nil || p.Conversation != "box/s1" || p.Tasks[0].Role != "" || p.Tasks[0].Parent != todo.ID {
 		t.Fatalf("the worker's plan after a restart: %+v %v", p, err)
 	}
 	// And in the rows the link is read from:
@@ -653,7 +701,7 @@ func TestTaskLeaderReviewsItsWorkers(t *testing.T) {
 	if got := sendsTo(f, "box", w1.Agents[0].SessionID); len(got) != 1 || !strings.Contains(got[0], "补一个深色模式截图") {
 		t.Fatalf("what the worker was sent: %q", got)
 	}
-	if v := todoNow(s, w1.ID).Supervision; v.State != reviewRework || v.Round != 1 || v.Supervisor != "s1" {
+	if v := todoNow(s, w1.ID).Supervision; v.State != reviewRework || v.Round != 1 || v.Supervisor != "box/s1" {
 		t.Fatalf("the ledger after a rework: %+v", v)
 	}
 	// accepted: closed by the leader's review, with no card to the user.
@@ -661,7 +709,7 @@ func TestTaskLeaderReviewsItsWorkers(t *testing.T) {
 	if res.IsError || !strings.Contains(res.Content[0].Text, "accepted and closed") {
 		t.Fatalf("accepted: %+v", res)
 	}
-	if cur := todoNow(s, w2.ID); cur.DoneAt == nil || cur.DoneBy != "review" || cur.Supervision.State != reviewAccepted || cur.Supervision.Supervisor != "s1" {
+	if cur := todoNow(s, w2.ID); cur.DoneAt == nil || cur.DoneBy != "review" || cur.Supervision.State != reviewAccepted || cur.Supervision.Supervisor != "box/s1" {
 		t.Fatalf("an accepted worker: %+v %+v", cur, cur.Supervision)
 	}
 	// cancelled: closed, its agent is stopped.
@@ -709,14 +757,14 @@ func TestTaskLeaderNeedsUserGoesToItsOwnSupervisor(t *testing.T) {
 	if len(f.pushed()) != pushes {
 		t.Fatalf("a card or push went to the user: %+v", f.pushed()[pushes:])
 	}
-	if cur := todoNow(s, w.ID); cur.Supervision.State != reviewNeedsUser || cur.Supervision.Supervisor != "s1" {
+	if cur := todoNow(s, w.ID); cur.Supervision.State != reviewNeedsUser || cur.Supervision.Supervisor != "box/s1" {
 		t.Fatalf("the ledger: %+v", cur.Supervision)
 	}
 	// The main conversation decides with its own task_review; the worker stays the leader's.
 	if res, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": w.ID, "verdict": "rework", "note": "只改登录页"}); err != nil {
 		t.Fatalf("main's rework: %s %v", res, err)
 	}
-	if cur := todoNow(s, w.ID); cur.Supervision.Supervisor != "s1" {
+	if cur := todoNow(s, w.ID); cur.Supervision.Supervisor != "box/s1" {
 		t.Fatalf("the main conversation took the worker over: %+v", cur.Supervision)
 	}
 
@@ -822,5 +870,346 @@ func TestJudgeDoesNotCloseALeadersWorkerThatPassedItsCheck(t *testing.T) {
 	gotMessage(t, f, "waits for your review")
 	if cur := todoNow(s, w.ID); cur.DoneAt != nil || cur.Supervision.State != reviewPending {
 		t.Fatalf("the judge closed a leader's worker: %+v %+v", cur, cur.Supervision)
+	}
+}
+
+// Automatic signals about a worker (idle, stalled, orphaned, interrupted) go to the leader's session like a report.
+func TestWorkerAutomaticSignalsGoToLeader(t *testing.T) {
+	for _, kind := range []string{sigIdle, sigStalled, sigOrphaned, sigInterrupted} {
+		t.Run(kind, func(t *testing.T) {
+			s, f := newQuietService(t)
+			ctx := context.Background()
+			startTaskLeader(t, s, f)
+			w := planWorker(t, s, f, nil)
+			switch kind {
+			case sigIdle, sigInterrupted:
+				s.signal(superviseSignal{Todo: w.ID, Kind: kind, Key: "k1", Machine: "box", Session: w.Agents[0].SessionID, Detail: "停下了"})
+			case sigStalled:
+				old := w.Agents[0]
+				_ = old
+				// watchSignals: an agent working without progress past the stall bound.
+				stall := proto.Session{SessionID: w.Agents[0].SessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
+					Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now().Add(-superviseStallMin - time.Minute)}
+				f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle}, stall)
+				s.superviseWatch(ctx, time.Now())
+			case sigOrphaned:
+				// A session its computer no longer lists: the orphan pass marks it closed, and the worker's signal goes to the leader.
+				f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusIdle})
+				s.orphanWatch(ctx, time.Now())
+				if g, ok := s.orphanSignal(todoNow(s, w.ID)); ok {
+					s.signal(g)
+				}
+			}
+			m := gotMessage(t, f, "Persona · supervision", "改登录页")
+			want := map[string]string{sigIdle: "stopped, but the work is not finished", sigStalled: "no progress for",
+				sigOrphaned: "nobody works on it any more", sigInterrupted: "cut its turn off"}[kind]
+			if !strings.Contains(m, want) {
+				t.Errorf("the leader's message for %s lacks %q:\n%s", kind, want, m)
+			}
+			if got := f.notices(); len(got) != 0 {
+				t.Fatalf("the main conversation was told: %q", got)
+			}
+		})
+	}
+}
+
+// A leader that cannot be reached: the signals are not dropped. While its task is open they become a decision for the
+// conversation above it (who to tell, with the reason), so the worker is not left unreviewed; with nobody above it they
+// stay pending and are tried again. A closed agent whose resume fails is handled the same way.
+func TestUnreachableLeaderEscalatesInsteadOfDropping(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	// The leader's agent row is released (it was replaced): there is no leader agent to reach any more.
+	leadRow, _, _ := s.leaderSupervisor(todoNow(s, w.ID))
+	if leadRow.SessionID != "s1" {
+		t.Fatalf("setup: %v", leadRow)
+	}
+	s.todos.mu.Lock()
+	for i := range s.todos.todos[todo.ID].Agents {
+		a := &s.todos.todos[todo.ID].Agents[i]
+		if a.SessionID == "s1" {
+			now := time.Now().UTC()
+			a.ReleasedAt = &now
+		}
+	}
+	s.todos.mu.Unlock()
+	if lead, _, ok := s.leaderSupervisor(todoNow(s, w.ID)); ok {
+		t.Fatalf("setup: the leader is still reachable: %+v", lead)
+	}
+	if up := s.supervisorAbove(ctx, leadRow); up != "conv1" {
+		t.Fatalf("setup: the conversation above the released leader is %q", up)
+	}
+	f.setSessions("box", proto.Session{SessionID: w.Agents[0].SessionID, MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusDone, State: proto.StateUnread, LastText: "做完了", UpdatedAt: time.Now()})
+	s.signal(superviseSignal{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了，等你验收"})
+	waitFor(t, "the decision to go up to the main conversation", func() bool {
+		return len(f.notices()) == 1
+	})
+	n := f.notices()[0]
+	if !strings.Contains(n, "leader（一个编码 Agent") || !strings.Contains(n, "cannot be reached") {
+		t.Fatalf("the main conversation's escalation:\n%s", n)
+	}
+	// The worker's own task stays open; the leader's task is named in the decision so the conversation can act.
+	if cur := todoNow(s, w.ID); cur.DoneAt != nil {
+		t.Fatalf("the worker was closed by an escalation: %+v", cur)
+	}
+}
+
+// A leader whose own task closed: its open workers are rehomed to the conversation above it (which becomes their
+// supervisor and can review them), not left pending for ever.
+func TestClosedLeaderRehomesItsWorkers(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	if _, _, err := s.updateSupervision(ctx, w.ID, func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.autoDoneTodo(ctx, todo.ID, "done", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("closing the leader's task: %v %v", ok, err)
+	}
+	s.rehomeLeaderlessWorkers(ctx)
+	cur := todoNow(s, w.ID)
+	if cur.Supervision.Supervisor != "conv1" || cur.Supervision.State != reviewPending || cur.DoneAt != nil {
+		t.Fatalf("the rehomed worker: %+v %+v", cur, cur.Supervision)
+	}
+	// The conversation can review it, and does not take over a worker whose leader is alive.
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": w.ID, "verdict": "accepted", "note": "测试通过"}); err != nil {
+		t.Fatalf("the main conversation reviewing a rehomed worker: %v", err)
+	}
+	if got := todoNow(s, w.ID); got.DoneAt == nil || got.DoneBy != "review" {
+		t.Fatalf("the accepted rehomed worker: %+v", got)
+	}
+}
+
+// With no conversation above it at all the worker is cancelled with a reason, not left with nobody to review it.
+func TestLeaderlessWorkerWithNobodyAboveIsCancelled(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Supervisor = ""; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.autoDoneTodo(ctx, todo.ID, "done", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("closing the leader's task: %v %v", ok, err)
+	}
+	s.rehomeLeaderlessWorkers(ctx)
+	if cur := todoNow(s, w.ID); cur.DoneAt == nil || !cur.Cancelled() {
+		t.Fatalf("the worker with nobody above it: %+v", cur)
+	}
+}
+
+// A closed leader agent whose resume fails: the message goes up instead of only being logged.
+func TestLeaderResumeFailureEscalates(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	lead, _, _ := s.leaderSupervisor(todoNow(s, w.ID))
+	// Make the leader's session closed: sends go through the resume path.
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Status: proto.StatusOffline, UpdatedAt: time.Now()},
+		proto.Session{SessionID: w.Agents[0].SessionID, MachineID: "box", Agent: "claude", Status: proto.StatusWorking})
+	f.mu.Lock()
+	f.failSend = context.DeadlineExceeded
+	f.mu.Unlock()
+	text := prompts.RenderWorkerSupervise([]prompts.SuperviseEntry{{ID: w.ID, Title: w.Title, Kind: "review"}})
+	if err := s.sendToLeader(ctx, lead, text); err != nil {
+		t.Fatalf("the resume is scheduled, not failed synchronously: %v", err)
+	}
+	waitFor(t, "the failed resume to escalate", func() bool { return len(f.notices()) >= 1 })
+	if !strings.Contains(f.notices()[0], "could not be delivered") {
+		t.Fatalf("the escalation: %q", f.notices()[0])
+	}
+	_ = todo
+}
+
+// A leader of a writable task on a work-trust computer is refused at planning and at start, readably, because that
+// computer's agents get no task_plan / task_review.
+func TestTaskLeaderRefusedOnWorkTrustMachine(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	f.hello.Assistant.WorkMachines = []string{"box"}
+	args := leaderPlanArgs("leader")
+	if _, err := s.toolTaskPlan(ctx, "conv1", args); err == nil || !strings.Contains(err.Error(), "work-trust computer") {
+		t.Fatalf("planning a leader on a work-trust computer: %v", err)
+	}
+	// A saved plan that names one is held at Start too.
+	f.hello.Assistant.WorkMachines = nil
+	res, err := s.toolTaskPlan(ctx, "conv1", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.hello.Assistant.WorkMachines = []string{"box"}
+	_, err = s.startPlan(ctx, planIDRe.FindString(res), nil, false)
+	var invalid planInvalid
+	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "work-trust computer") {
+		t.Fatalf("starting a saved leader plan on a work-trust computer: %v", err)
+	}
+	if len(f.starts) != 0 {
+		t.Fatalf("it started: %v", f.starts)
+	}
+}
+
+// A plan saved before the permission rule does not get past it on a retry or a remedy retry either.
+func TestRetryAlsoChecksWritablePermission(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	res, err := s.toolTaskPlan(ctx, "conv1", json.RawMessage(`{"tasks":[{"title":"Fix","permission":"bypassPermissions","prompt":"Fix it","machine":"box","cwd":"/code/app"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := planIDRe.FindString(res)
+	started, err := s.startPlan(ctx, id, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo := started.Tasks[0].TodoID
+	waitFor(t, "the first start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
+	waitFor(t, "its link", func() bool { return len(todoNow(s, todo).Agents) == 1 })
+	if err := s.failTodo(ctx, todo, "did not start"); err != nil {
+		t.Fatal(err)
+	}
+	// The plan as it was saved before the rule: a writable task with no permission.
+	p, err := s.loadPlan(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Tasks[0].Permission = ""
+	if err := s.savePlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.retryTask(ctx, todo); err == nil || !strings.Contains(err.Error(), "bypassPermissions") {
+		t.Fatalf("retrying a saved plan with no permission: %v", err)
+	}
+	f.mu.Lock()
+	starts := len(f.starts)
+	f.mu.Unlock()
+	if starts != 1 { // only the first start above
+		t.Fatalf("a retry started %d agents", starts)
+	}
+	if cur := todoNow(s, todo); cur.DoneAt == nil {
+		t.Fatalf("the failed todo was reopened before the check: %+v", cur)
+	}
+	// And with the permission restored the retry works, so the test does not pass because the task is unretryable.
+	p.Tasks[0].Permission = "bypassPermissions"
+	if err := s.savePlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.retryTask(ctx, todo); err != nil {
+		t.Fatalf("the retry once it has the permission: %v", err)
+	}
+}
+
+// main → leader conversation → task leader → worker: the task leader's needs_user reaches the leader conversation (lead1),
+// which reviews the worker with its own task_review (rework, then accepted) without taking the worker over; and when the
+// task leader's own task closes the open worker is rehomed to lead1, which can close it.
+func TestNeedsUserFromTaskLeaderIsReviewedByLeaderConversation(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	f.known["lead1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	var in map[string]any
+	_ = json.Unmarshal(leaderPlanArgs("leader"), &in)
+	in["supervisor"] = "lead1"
+	raw, _ := json.Marshal(in)
+	res, err := s.toolTaskPlan(ctx, "conv1", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.startPlan(ctx, planIDRe.FindString(res), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the leader's link", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	leaderTodo := onlyTodo(s)
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
+	w := planWorker(t, s, f, nil)
+	review := func(self string, args map[string]any) (string, error) {
+		return runJSON(t, s, self, "task_review", args)
+	}
+
+	if r := s.mcpCall(ctx, "box", "s1", "task_review", mustJSON(map[string]any{"todo_id": w.ID, "verdict": "needs_user", "reason": "要不要顺手改注册页", "recommend": "先只改登录页"}), false); r.IsError {
+		t.Fatalf("needs_user: %+v", r)
+	}
+	waitFor(t, "the decision to reach lead1", func() bool { return len(f.noticesTo("lead1")) == 1 })
+	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "要不要顺手改注册页") {
+		t.Fatalf("lead1's message:\n%s", n)
+	}
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("the main conversation was told: %q", got)
+	}
+	// Not its own to review: another conversation, and a task that no leader of lead1 leads.
+	if _, err := review("conv2", map[string]any{"todo_id": w.ID, "verdict": "accepted"}); err == nil {
+		t.Fatal("a conversation that is not above the task leader reviewed its worker")
+	}
+	if res, err := review("lead1", map[string]any{"todo_id": w.ID, "verdict": "rework", "note": "只改登录页"}); err != nil || !strings.Contains(res, "Rework round 1") {
+		t.Fatalf("lead1's rework: %s %v", res, err)
+	}
+	if cur := todoNow(s, w.ID); cur.Supervision.Supervisor != "box/s1" || cur.Supervision.State != reviewRework {
+		t.Fatalf("lead1 took the worker over, or its state: %+v", cur.Supervision)
+	}
+	if res, err := review("lead1", map[string]any{"todo_id": w.ID, "verdict": "accepted", "note": "好了"}); err != nil || !strings.Contains(res, "accepted and closed") {
+		t.Fatalf("lead1's accepted: %s %v", res, err)
+	}
+	if cur := todoNow(s, w.ID); cur.DoneAt == nil || cur.Supervision.State != reviewAccepted || cur.Supervision.Supervisor != "box/s1" {
+		t.Fatalf("the accepted worker: %+v %+v", cur, cur.Supervision)
+	}
+
+	// H1: another open worker when the task leader's own task closes is rehomed to lead1, which can close it.
+	w2 := planWorker(t, s, f, map[string]any{"title": "改注册页"})
+	if ok, err := s.autoDoneTodo(ctx, leaderTodo.ID, "done", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("closing the leader's task: %v %v", ok, err)
+	}
+	s.rehomeLeaderlessWorkers(ctx)
+	if cur := todoNow(s, w2.ID); cur.Supervision.Supervisor != "lead1" || cur.DoneAt != nil {
+		t.Fatalf("the rehomed worker: %+v", cur.Supervision)
+	}
+	if res, err := review("lead1", map[string]any{"todo_id": w2.ID, "verdict": "cancelled", "note": "不用做了"}); err != nil || !strings.Contains(res, "cancelled and closed") {
+		t.Fatalf("lead1's cancel of the rehomed worker: %s %v", res, err)
+	}
+}
+
+func mustJSON(v any) json.RawMessage {
+	raw, _ := json.Marshal(v)
+	return raw
+}
+
+// The permission rule is held on every start of a plan task (runPlanTaskStart), so a retry, a remedy retry or a recovered
+// start of a saved plan cannot get past it: nothing is started and the to-do fails with the reason.
+func TestPlanTaskStartHoldsTheWritablePermissionRule(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	res, err := s.toolTaskPlan(ctx, "conv1", json.RawMessage(`{"tasks":[{"title":"Fix","permission":"bypassPermissions","prompt":"Fix it","machine":"box","cwd":"/code/app"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := planIDRe.FindString(res)
+	started, err := s.startPlan(ctx, id, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo := started.Tasks[0].TodoID
+	waitFor(t, "the first start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
+	waitFor(t, "its link", func() bool { return len(todoNow(s, todo).Agents) == 1 })
+	for _, perm := range []string{"", "default", "acceptEdits"} {
+		task := started.Tasks[0]
+		task.Permission = perm
+		s.startPlanTask(id, "conv1", 0, task, true)
+		f.mu.Lock()
+		starts := len(f.starts)
+		f.mu.Unlock()
+		if starts != 1 {
+			t.Fatalf("permission %q: a start went out (%d starts)", perm, starts)
+		}
+		cur := todoNow(s, todo)
+		if cur.DoneAt == nil || !strings.Contains(cur.StartError, "bypassPermissions") {
+			t.Fatalf("permission %q: the to-do after the refused start: %+v", perm, cur)
+		}
 	}
 }
