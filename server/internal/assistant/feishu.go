@@ -118,7 +118,7 @@ type feishuBook struct {
 	status   *FeishuStatus
 	statusAt time.Time
 	now      func() time.Time     // tests
-	startAt  map[string]time.Time // recent /start form presses, for one press one agent (feishu_card_actions.go)
+	pressAt  map[string]time.Time // recent one-shot card presses (the /start card and the start form), for one press one thing (feishu_card_actions.go)
 	// line is closed when the last message taken is through (FeishuMessage): the chat's messages are handled one at
 	// a time, in the order they came.
 	line chan struct{}

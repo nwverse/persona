@@ -76,6 +76,8 @@ type runtimeHello struct {
 		// Model permits session.modes model changes. Models provides live launchers.models discovery.
 		Model  bool `json:"model"`
 		Models bool `json:"models"`
+		// Check performs the launcher availability probe in the runtime's authenticated context.
+		Check bool `json:"check"`
 		// Resume: session.start with resume takes a Claude session it does not have over, under that id (the machine's
 		// engine continuing a session not running anywhere, runtimecontrol.go).
 		Resume bool `json:"resume"`
