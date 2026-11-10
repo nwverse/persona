@@ -55,3 +55,14 @@ const CodeFileChanged = "file_changed"
 
 // FileTransferEvent is the WebSocket event's type; it goes only to the apps that declared file_transfer.
 const FileTransferEvent = "file_transfer"
+
+// MachineFileTransfer is a machine's file transfer switch (settings key machine_file_transfer, off until the user
+// turns it on): Inbox is its receive folder as hub.json names it ("~/…" or absolute), set while it is on.
+type MachineFileTransfer struct {
+	Enabled bool   `json:"enabled"`
+	Inbox   string `json:"inbox,omitempty"`
+}
+
+// CodeFileTransferDisabled: the machine's file transfer switch is off (403): a dest=inbox upload to it, or a transfer
+// from or to it. Chat attachments and file previews / downloads do not depend on it.
+const CodeFileTransferDisabled = "file_transfer_disabled"

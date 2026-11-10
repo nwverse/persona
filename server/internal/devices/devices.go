@@ -129,9 +129,11 @@ type Devices struct {
 	engines engineChoices
 	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
 	clipboard clipboardSwitches
-	links     linkSet
-	stopping  atomic.Bool
-	workers   sync.WaitGroup
+	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
+	fileTransfer fileTransferSwitches
+	links        linkSet
+	stopping     atomic.Bool
+	workers      sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]

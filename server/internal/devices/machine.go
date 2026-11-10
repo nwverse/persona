@@ -219,6 +219,7 @@ func (m *Machine) snapshot() proto.Machine {
 		version, noPackage = d.nodeTarget(info), d.packageBlocked(info)
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
+	fileTransferOn := d.fileTransferOn(m.cfg.ID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	engines := []proto.Engine{} // what the node found: none while offline
@@ -270,7 +271,8 @@ func (m *Machine) snapshot() proto.Machine {
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
-		Clipboard: m.clipboardStateLocked(clipboardOn),
+		Clipboard:    m.clipboardStateLocked(clipboardOn),
+		FileTransfer: m.fileTransferState(fileTransferOn),
 	}
 }
 

@@ -229,6 +229,13 @@ func (d *Devices) runTransfer(ctx context.Context, t *transfer, from, to *Machin
 			fail(onMachine(from, c.err))
 			return
 		}
+		// A switch turned off mid-way stops the transfer at the next chunk (the switches are re-read every 10 s).
+		for _, m := range []*Machine{from, to} {
+			if !d.fileTransferOn(m.cfg.ID) {
+				fail(onMachine(m, &rpc.Error{Code: proto.CodeFileTransferDisabled, Message: "file transfer was turned off"}))
+				return
+			}
+		}
 		if err := callStep(ctx, to, "file.upload.chunk", map[string]any{"upload_id": uploadID, "offset": off, "data": c.data}, nil); err != nil {
 			fail(onMachine(to, err))
 			return

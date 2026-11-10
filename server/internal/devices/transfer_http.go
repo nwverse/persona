@@ -53,6 +53,13 @@ func (d *Devices) postTransfer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errUnknownMachine)
 		return
 	}
+	// Both ends must have file transfer on (transfer_settings.go): off, never set or unreadable is 403.
+	for _, m := range []*Machine{from, to} {
+		if !d.fileTransferOn(m.cfg.ID) {
+			writeFileTransferOff(w, r, m)
+			return
+		}
+	}
 	t, err := d.startTransfer(r.Context(), from, to, req.From)
 	if err != nil {
 		var te *transferError

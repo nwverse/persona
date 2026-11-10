@@ -185,7 +185,18 @@ func transferDevices(t *testing.T, src *sourceNode, dst *targetNode) (*Devices, 
 	d := newTestDevices(t)
 	a, _ := fakeMachine(t, d, "a", "Laptop", src.handle)
 	b, cutB := fakeMachine(t, d, "b", "Desktop", dst.handle)
+	switchOn(t, d, "a", "b")
 	return d, a, b, cutB, d.Handler(http.NotFoundHandler())
+}
+
+// switchOn turns file transfer on for the machines (it is off until the user does).
+func switchOn(t *testing.T, d *Devices, machines ...string) {
+	t.Helper()
+	for _, id := range machines {
+		if err := d.setFileTransferOn(context.Background(), id, true); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func postTransfer(t *testing.T, mux http.Handler, body string) *httptest.ResponseRecorder {
@@ -396,6 +407,7 @@ func TestTransferTargetDisconnects(t *testing.T) {
 	d := newTestDevices(t)
 	fakeMachine(t, d, "a", "Laptop", src.handle)
 	_, cutB = fakeMachine(t, d, "b", "Desktop", dst.handle)
+	switchOn(t, d, "a", "b")
 	mux := d.Handler(http.NotFoundHandler())
 	end := waitTransfer(t, d, mux, started(t, postTransfer(t, mux, transferBody)).ID)
 	if end.State != proto.TransferFailed || !strings.Contains(end.Error, "Desktop") || end.Bytes != proto.FileDownloadChunkBytes {
