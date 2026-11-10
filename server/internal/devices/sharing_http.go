@@ -208,6 +208,19 @@ func (d *Devices) shareCreate(w http.ResponseWriter, r *http.Request) error {
 	}
 	actor := shareActor(devicewire.CallerOf(r.Context()))
 	digest := shareValueHash(req)
+	// Capture the future frontier before taking the share writer fence.
+	var futureOwner db.SessionShareOwnership
+	var future devicewire.ShareProjection
+	if req.Future {
+		o, err := d.owned(r.Context(), req.Machine, req.Session)
+		if err != nil {
+			return err
+		}
+		if future, err = d.projectShare(r.Context(), o, nil); err != nil {
+			return err
+		}
+		futureOwner = o
+	}
 	var body any
 	status := 201
 	err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
@@ -266,9 +279,10 @@ func (d *Devices) shareCreate(w http.ResponseWriter, r *http.Request) error {
 		s.Meta.Selection.Mode = req.Selection.Mode
 		s.Meta.Selection.Count = len(s.Messages)
 		if req.Future {
-			if err := d.enableShareFuture(r.Context(), &s); err != nil {
-				return err
+			if futureOwner != owner {
+				return shareFail("snapshot_changed")
 			}
+			applyShareFuture(&s, future)
 		}
 		raw := make([]byte, 48)
 		copy(raw, handle)
@@ -401,6 +415,23 @@ func (d *Devices) sharePatch(w http.ResponseWriter, r *http.Request) error {
 	if len(req.Remove) > 1000 || (req.Selection != nil && req.Remove != nil) {
 		return shareFault{400, "invalid_selection"}
 	}
+	// A re-enable needs a fresh frontier; capture it before the writer fence.
+	var futureOwner db.SessionShareOwnership
+	var future *devicewire.ShareProjection
+	if req.Future != nil && *req.Future {
+		if err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
+			_, s, err := d.manageShare(r.Context(), t, r.PathValue("share_id"))
+			futureOwner = s.Owner
+			return err
+		}); err != nil {
+			return err
+		}
+		p, err := d.projectShare(r.Context(), futureOwner, nil)
+		if err != nil {
+			return err
+		}
+		future = &p
+	}
 	var body any
 	err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
 		row, s, err := d.manageShare(r.Context(), t, r.PathValue("share_id"))
@@ -481,9 +512,10 @@ func (d *Devices) sharePatch(w http.ResponseWriter, r *http.Request) error {
 			reenable := *req.Future && (!s.Meta.Future || s.Meta.Publication == "paused")
 			s.Meta.Future = *req.Future
 			if reenable {
-				if err = d.enableShareFuture(r.Context(), &s); err != nil {
-					return err
+				if future == nil || futureOwner != s.Owner {
+					return shareFail("share_changed")
 				}
+				applyShareFuture(&s, *future)
 			} else if !*req.Future {
 				s.Meta.Publication = "frozen"
 				s.Meta.Pause = nil
@@ -595,6 +627,13 @@ func (d *Devices) enableShareFuture(ctx context.Context, s *sealedShare) error {
 	if err != nil {
 		return err
 	}
+	applyShareFuture(s, p)
+	return nil
+}
+
+// applyShareFuture installs a frontier captured outside the share transaction:
+// node RPCs never run while the share writer fence is held.
+func applyShareFuture(s *sealedShare, p devicewire.ShareProjection) {
 	s.Frontier = p.Frontier
 	s.WindowEOF = p.Frontier.EOF
 	s.WindowSequence = p.Frontier.SubmissionSequence
@@ -609,21 +648,36 @@ func (d *Devices) enableShareFuture(ctx context.Context, s *sealedShare) error {
 	}
 	s.Meta.Publication = "live"
 	s.Meta.Pause = nil
-	return nil
 }
 func (d *Devices) ingestShare(ctx context.Context, id string) error {
-	return d.shareDB().ShareTransaction(ctx, func(t *db.ShareTx) error {
-		row, s, err := loadSealed(t, id)
+	// Read the frontier, release the writer fence, call the node, then apply the
+	// result only if nothing about the share changed in the meantime.
+	var before sealedShare
+	live := false
+	if err := d.shareDB().ShareTransaction(ctx, func(t *db.ShareTx) error {
+		_, s, err := loadSealed(t, id)
 		if err != nil {
 			return err
 		}
 		if s.Meta.Status != "active" || !s.Meta.Future || s.Meta.Publication != "live" {
 			return nil
 		}
-		if err := t.MarkIngested(id); err != nil {
-			return err
+		live = true
+		before = s
+		return t.MarkIngested(id)
+	}); err != nil || !live {
+		return err
+	}
+	p, err := d.projectShare(ctx, before.Owner, &before.Frontier)
+	return d.shareDB().ShareTransaction(ctx, func(t *db.ShareTx) error {
+		row, s, lerr := loadSealed(t, id)
+		if lerr != nil {
+			return lerr
 		}
-		p, err := d.projectShare(ctx, s.Owner, &s.Frontier)
+		if s.Meta.Revision != before.Meta.Revision || s.Meta.ContentVersion != before.Meta.ContentVersion ||
+			s.Meta.Status != "active" || !s.Meta.Future || s.Meta.Publication != "live" || shareValueHash(s.Frontier) != shareValueHash(before.Frontier) {
+			return nil
+		}
 		pause := func(reason string) error {
 			// Rebuild from the committed row, so a failed oversized append never
 			// contaminates the sealed history retained by a paused capability.

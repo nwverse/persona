@@ -145,3 +145,50 @@ func TestSharePendingCompletionRetainsFirstSeen(t *testing.T) {
 	}
 	var _ *devicewire.ShareFrontier = &next.Frontier
 }
+
+func TestShareSanitizerCommonCredentialFormats(t *testing.T) {
+	// Synthetic values only: each must lose its secret part, keeping the name.
+	leaks := map[string]string{
+		"OPENAI_API_KEY=abc123def456ghi789":                                                  "abc123def456ghi789",
+		"AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEX":                               "wJalrXUtnFEMIK7MDENGbPxRfiCYEX",
+		"DB_PASSWORD=hunter2hunter2":                                                         "hunter2hunter2",
+		"export PGPASSWORD=s3cretvalue":                                                      "s3cretvalue",
+		"GITHUB_TOKEN=plain-looking-token-value":                                             "plain-looking-token-value",
+		"token: tok_live_synthetic_value":                                                    "tok_live_synthetic_value",
+		"client_secret=synthetic-client-secret":                                              "synthetic-client-secret",
+		"Authorization: Basic dXNlcjpzeW50aGV0aWM=":                                          "dXNlcjpzeW50aGV0aWM=",
+		"password: correct horse battery staple":                                             "battery staple",
+		"postgres://app:Sup3rS3cret@db.example.test/app":                                     "Sup3rS3cret",
+		"redis://:redispass@cache.example.test:6379":                                         "redispass",
+		"slack xoxb-1234567890-synthetic-value":                                              "xoxb-1234567890",
+		"https://bucket.example.test/o?X-Amz-Signature=abcdef0123&X-Amz-Credential=AKID":     "abcdef0123",
+		"curl -u admin:synthetic-pw https://api.example.test":                                "synthetic-pw",
+		"-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF\n-----END PGP PRIVATE KEY BLOCK-----": "lQOYBF",
+	}
+	for in, secret := range leaks {
+		out, err := SanitizeShareText(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, secret) {
+			t.Errorf("leaked %q in %q", secret, out)
+		}
+	}
+	for _, keep := range []string{"max_tokens=4096", "We used 1200 tokens today.", "The author: Synthetic Writer"} {
+		if out, _ := SanitizeShareText(keep); out != keep {
+			t.Errorf("over-redacted %q to %q", keep, out)
+		}
+	}
+	args, err := SanitizeShareArguments(json.RawMessage(`{"env":{"OPENAI_API_KEY":"sk-proj-syntheticvalue0001","PATH":"/usr/bin"},"headers":{"X-Auth-Token":"opaque-synthetic"},"client_secret":"cs-synthetic","max_tokens":1000}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"sk-proj-syntheticvalue0001", "opaque-synthetic", "cs-synthetic"} {
+		if strings.Contains(args, secret) {
+			t.Errorf("argument leaked %q: %s", secret, args)
+		}
+	}
+	if !strings.Contains(args, `"max_tokens":1000`) || !strings.Contains(args, "/usr/bin") {
+		t.Errorf("argument over-redacted: %s", args)
+	}
+}

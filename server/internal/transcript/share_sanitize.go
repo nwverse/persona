@@ -16,13 +16,69 @@ const ShareMessageLimit = 1 << 20
 const ShareDisplayLimit = 32 << 10
 
 var ErrShareComponentLimit = errors.New("sharing component exceeds complete-content limit")
-var privateKeyStart = lazyre.New(`(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
-var privateKeyEnd = lazyre.New(`(?i)-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+var privateKeyStart = lazyre.New(`(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----`)
+var privateKeyEnd = lazyre.New(`(?i)-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----`)
 var shareBearer = lazyre.New(`(?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]+`)
-var shareAssignment = lazyre.New(`(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|authorization)\b(["']?[ \t]*[:=][ \t]*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)`)
-var shareCredential = lazyre.New(`\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b`)
-var shareURL = lazyre.New(`(?i)https?://[^\s<>"']+`)
-var shareSensitiveKey = lazyre.New(`(?i)^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|authorization|credential|private[_-]?key)$`)
+
+// shareSecretName matches any identifier that contains a credential word, so
+// OPENAI_API_KEY, DB_PASSWORD, client_secret and X-Auth-Token all count.
+const shareSecretName = `[A-Za-z0-9_.-]*(?:api[_-]?key|apikey|secret|passw(?:or)?d|token|credential|private[_-]?key|access[_-]?key|session[_-]?key|authorization|cookie|signature)[A-Za-z0-9_.-]*`
+
+var shareAssignment = lazyre.New(`(?i)(^|[^A-Za-z0-9_.-])(` + shareSecretName + `)(["']?[ \t]*[:=][ \t]*)`)
+var shareCredential = lazyre.New(`\b(?:sk-[A-Za-z0-9_-]{16,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|glpat-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{30,}|(?:AKIA|ASIA)[A-Z0-9]{16}|npm_[A-Za-z0-9]{30,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b`)
+var shareURL = lazyre.New(`(?i)\b[a-z][a-z0-9+.-]{1,15}://[^\s<>"']+`)
+var shareSensitiveKey = lazyre.New(`(?i)(?:api[_-]?key|apikey|secret|passw(?:or)?d|token|credential|private[_-]?key|access[_-]?key|session[_-]?key|authorization|cookie|signature|^sig$|x-amz-credential)`)
+var shareBasicUser = lazyre.New(`(?i)((?:^|\s)(?:-u|--user)[ =]+)("[^"\r\n]*"|'[^'\r\n]*'|\S+)`)
+var shareDigits = lazyre.New(`^[0-9]+$`)
+
+// redactAssignments replaces the value after `name:` or `name=` for any
+// credential-like name. Quoted values end at their quote; header-style values
+// (authorization, password, passwd, secret, cookie) end at the line, since they
+// often contain spaces; other values end at whitespace or a delimiter. Bare
+// numbers are kept: max_tokens=4096 is not a secret.
+func redactAssignments(s string) string {
+	var b strings.Builder
+	at := 0
+	for _, m := range shareAssignment.FindAllStringSubmatchIndex(s, -1) {
+		if m[0] < at {
+			continue
+		}
+		name := strings.ToLower(s[m[4]:m[5]])
+		valueStart := m[1]
+		end := valueStart
+		switch {
+		case end < len(s) && (s[end] == '"' || s[end] == '\''):
+			q := s[end]
+			end++
+			for end < len(s) && s[end] != q && s[end] != '\n' {
+				if s[end] == '\\' && end+1 < len(s) {
+					end++
+				}
+				end++
+			}
+			if end < len(s) && s[end] == q {
+				end++
+			}
+		case strings.Contains(name, "authorization") || strings.Contains(name, "passw") || strings.Contains(name, "secret") || strings.Contains(name, "cookie"):
+			for end < len(s) && s[end] != '\n' && s[end] != '\r' {
+				end++
+			}
+		default:
+			for end < len(s) && !strings.ContainsRune(" \t\r\n,;}\"'", rune(s[end])) {
+				end++
+			}
+		}
+		value := s[valueStart:end]
+		if value == "" || shareDigits.MatchString(value) {
+			continue
+		}
+		b.WriteString(s[at:valueStart])
+		b.WriteString("[REDACTED]")
+		at = end
+	}
+	b.WriteString(s[at:])
+	return b.String()
+}
 
 // SanitizeShareText sees the entire decoded component before any display clipping.
 // An unterminated private-key block removes everything through EOF. This is
@@ -58,7 +114,7 @@ func SanitizeShareText(s string) (string, error) {
 		}
 		q := u.Query()
 		for k := range q {
-			if shareSensitiveKey.MatchString(k) || strings.EqualFold(k, "token") {
+			if shareSensitiveKey.MatchString(k) {
 				q.Set(k, "[REDACTED]")
 			}
 		}
@@ -66,7 +122,8 @@ func SanitizeShareText(s string) (string, error) {
 		return u.String()
 	})
 	s = shareBearer.ReplaceAllString(s, "Bearer [REDACTED]")
-	s = shareAssignment.ReplaceAllString(s, "${1}${2}[REDACTED]")
+	s = shareBasicUser.ReplaceAllString(s, "${1}[REDACTED]")
+	s = redactAssignments(s)
 	s = shareCredential.ReplaceAllString(s, "[REDACTED]")
 	return s, nil
 }
@@ -132,8 +189,13 @@ func SanitizeShareArguments(raw json.RawMessage) (string, error) {
 					return nil, err
 				}
 				if shareSensitiveKey.MatchString(k) {
-					out[key] = "[REDACTED]"
-					continue
+					switch a.(type) {
+					case json.Number, bool, nil:
+						// Counts and flags (max_tokens, use_token) are not secrets.
+					default:
+						out[key] = "[REDACTED]"
+						continue
+					}
 				}
 				a, err = walk(a)
 				if err != nil {

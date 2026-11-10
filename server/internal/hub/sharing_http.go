@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -27,6 +28,10 @@ import (
 )
 
 const publicSharePrefix = "/api/public/agent-shares/"
+
+// shareManagementSlots bounds concurrent owner-admitted management relays.
+var shareManagementSlots = make(chan struct{}, 2)
+
 const shareCSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'"
 
 func shareHeaders(w http.ResponseWriter) {
@@ -161,6 +166,20 @@ func (h *Hub) forwardShareManagement(w http.ResponseWriter, r *http.Request) {
 	}
 	s := h.ownerAuthStore()
 	if s == nil {
+		h.shareTransportError(w, r, 503, "authority_unavailable")
+		return
+	}
+	// An admitted relay holds one database connection for its whole duration and
+	// takes up to two more briefly. Bounding concurrent relays keeps that well below
+	// the hub's pool, so sharing traffic can never starve every other hub query.
+	select {
+	case shareManagementSlots <- struct{}{}:
+		defer func() { <-shareManagementSlots }()
+	case <-time.After(3 * time.Second):
+		w.Header().Set("Retry-After", "1")
+		h.shareTransportError(w, r, 429, "busy")
+		return
+	case <-ctx.Done():
 		h.shareTransportError(w, r, 503, "authority_unavailable")
 		return
 	}
@@ -317,12 +336,23 @@ func (s *shareIngress) enter(ip, token string, now time.Time) (func(), bool) {
 			delete(s.buckets, k)
 		}
 	}
-	if s.active >= 32 || len(s.buckets) > 4096 {
+	if s.active >= 32 {
 		return nil, false
 	}
 	consume := func(key string, rate, burst float64) bool {
 		b, ok := s.buckets[key]
 		if !ok {
+			// A full table evicts its least recently seen bucket instead of
+			// refusing everyone, so a flood of new sources cannot lock readers out.
+			if len(s.buckets) >= 4096 {
+				oldest, at := "", now
+				for k, v := range s.buckets {
+					if !v.timeSeen.After(at) {
+						oldest, at = k, v.timeSeen
+					}
+				}
+				delete(s.buckets, oldest)
+			}
 			b = shareBucket{credit: burst, at: now}
 		}
 		b.credit = min(burst, b.credit+now.Sub(b.at).Seconds()*rate)
@@ -335,33 +365,52 @@ func (s *shareIngress) enter(ip, token string, now time.Time) (func(), bool) {
 		s.buckets[key] = b
 		return true
 	}
-	if !consume("ip:"+ip, 1, 20) || !consume("token:"+token, 2, 30) {
+	if !consume("ip:"+ip, 1, 20) || (token != "" && !consume("token:"+token, 2, 30)) {
 		return nil, false
 	}
 	s.active++
 	return func() { s.mu.Lock(); s.active--; s.mu.Unlock() }, true
 }
+
+// shareSourceKey groups an IPv6 source by its /64, the unit one subscriber
+// usually controls, so rotating addresses inside it buys no extra budget.
+func shareSourceKey(remote string) string {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	a = a.Unmap()
+	if a.Is6() {
+		if p, err := a.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return a.String()
+}
 func (h *Hub) forwardSharePublic(w http.ResponseWriter, r *http.Request) {
 	shareHeaders(w)
 	token := strings.TrimPrefix(r.URL.Path, publicSharePrefix)
-	hash := sha256.Sum256([]byte(token))
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	wellFormed := len(token) == 64 && err == nil && len(raw) == 48 && base64.RawURLEncoding.EncodeToString(raw) == token
+	// Only a well-formed capability gets a token bucket; malformed paths spend the
+	// source's budget alone and cannot fill the table with throwaway keys.
+	tokenKey := ""
+	if wellFormed {
+		hash := sha256.Sum256([]byte(token))
+		tokenKey = hex.EncodeToString(hash[:])
 	}
-	release, ok := h.shareIngress.enter(ip, hex.EncodeToString(hash[:]), time.Now())
+	release, ok := h.shareIngress.enter(shareSourceKey(r.RemoteAddr), tokenKey, time.Now())
 	if !ok {
 		w.Header().Set("Retry-After", "15")
 		h.shareTransportError(w, r, 429, "rate_limited")
 		return
 	}
 	defer release()
-	if len(token) != 64 {
-		shareNotFound(w)
-		return
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil || len(raw) != 48 || base64.RawURLEncoding.EncodeToString(raw) != token || h.sharingOrigin() == "" {
+	if !wellFormed || h.sharingOrigin() == "" {
 		shareNotFound(w)
 		return
 	}

@@ -269,7 +269,7 @@ logical messages; complete component 1 MiB; displayed text 32 KiB after sanitizi
 public page 100 messages / 512 KiB; stored publication 16 MiB / 10,000 messages;
 256 transient handles per actor/kind and 64 MiB transient actor data. Anonymous
 admission is IP 60/min burst 20, token-hash 120/min burst 30, concurrency 32, with
-bounded TTL limiter storage. Limits fail closed; they are not hub-global owner
+bounded TTL limiter storage that evicts its least recently seen source rather than refusing everyone; IPv6 sources count per /64 and malformed capabilities spend only the source budget. At most two owner-admitted management relays run at once (others wait up to 3 seconds, then get 429 `busy`), so sharing cannot exhaust the hub database pool. Node projections never run while the share writer fence is held. Limits fail closed; they are not hub-global owner
 quotas across independent manager databases.
 
 ## Security verification checklist

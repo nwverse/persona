@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -85,4 +86,48 @@ func TestShareIngressBoundedAdmission(t *testing.T) {
 		t.Fatal("rate did not replenish")
 	}
 	done()
+}
+
+func TestShareIngressCannotBeFloodedShut(t *testing.T) {
+	var s shareIngress
+	now := time.Now()
+	// Thousands of fresh sources fill the table; a new reader still gets in.
+	for i := 0; i < 5000; i++ {
+		if done, ok := s.enter(fmt.Sprintf("192.0.2.%d-%d", i%250, i), "", now); ok {
+			done()
+		}
+	}
+	if len(s.buckets) > 4096 {
+		t.Fatalf("bucket table grew to %d", len(s.buckets))
+	}
+	done, ok := s.enter("198.51.100.7", "synthetic-hash", now)
+	if !ok {
+		t.Fatal("a full table refused an unrelated reader")
+	}
+	done()
+	// Malformed capabilities never create token buckets.
+	var fresh shareIngress
+	if done, ok := fresh.enter("198.51.100.8", "", now); ok {
+		done()
+	}
+	for k := range fresh.buckets {
+		if strings.HasPrefix(k, "token:") {
+			t.Fatal("malformed request created a token bucket")
+		}
+	}
+	if len(fresh.buckets) != 1 {
+		t.Fatal("malformed request did not spend its source budget")
+	}
+}
+
+func TestShareSourceKeyGroupsIPv6Prefix(t *testing.T) {
+	a := shareSourceKey("[2001:db8:1:2:aaaa::1]:443")
+	b := shareSourceKey("[2001:db8:1:2:bbbb::9]:443")
+	c := shareSourceKey("[2001:db8:1:3::1]:443")
+	if a != b || a == c {
+		t.Fatalf("IPv6 /64 grouping wrong: %q %q %q", a, b, c)
+	}
+	if shareSourceKey("192.0.2.4:1234") != "192.0.2.4" || shareSourceKey("[::ffff:192.0.2.4]:1") != "192.0.2.4" {
+		t.Fatal("IPv4 source key changed")
+	}
 }
