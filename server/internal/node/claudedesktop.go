@@ -13,10 +13,10 @@ import (
 // ~/Library/Application Support/Claude/claude-code-sessions/<…>/<…>/local_<id>.json (Claude-3p for the build on a
 // third-party provider). Each names the transcript the session runs (cliSessionId), whether the session is archived
 // (isArchived), and the transcripts it ran before (priorCliSessionIds: it went on in a new one). Its sidebar lists each
-// unarchived session once. The offline list follows it (#3304): it leaves out the transcripts of archived sessions, and
-// a session's earlier transcripts while the one it runs now is listed. Only what an entry says is acted on: a transcript
-// no entry names, or an entry that cannot be read, hides nothing. Only these files are read, never the app's config file
-// (it holds credentials).
+// unarchived session once (a side session nested under its parent). The offline list follows it (#3304): it leaves out
+// the transcripts of archived sessions, and a session's earlier transcripts once the one it runs now is listed. Only what
+// an entry says is acted on: a transcript no entry names, or an entry that cannot be read, hides nothing; at worst a
+// session shows twice, never not at all. Only these files are read, never the app's config file (it holds credentials).
 
 // claudeDesktopDirs are the desktop apps' data directories under home (a variable: tests use their own). Only macOS's
 // layout is known.
@@ -47,20 +47,24 @@ var claudeDesktopFiles = struct {
 
 // claudeDesktopIndex is what the desktop apps' session index says about transcripts.
 type claudeDesktopIndex struct {
-	visible map[string]bool   // a session's current transcript → some entry naming it is unarchived
-	now     map[string]string // an earlier transcript → the one its session runs now
+	visible map[string]bool               // a session's current transcript → some entry naming it is unarchived
+	earlier map[string][]claudeDesktopNow // an earlier transcript → the sessions that ran it before
+}
+
+// claudeDesktopNow is a session that went on from an earlier transcript: the one it runs now, and whether it is archived.
+type claudeDesktopNow struct {
+	transcript string
+	archived   bool
 }
 
 // readClaudeDesktopIndex reads the index under home; a file is parsed again only when it changed.
 func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 	var paths []string
 	for _, dir := range claudeDesktopDirs(home) {
-		for _, pattern := range []string{"*/*/local_*.json", "*/local_*.json"} {
-			found, _ := filepath.Glob(filepath.Join(dir, "claude-code-sessions", pattern))
-			paths = append(paths, found...)
-		}
+		found, _ := filepath.Glob(filepath.Join(dir, "claude-code-sessions", "*", "*", "local_*.json"))
+		paths = append(paths, found...)
 	}
-	x := claudeDesktopIndex{visible: map[string]bool{}, now: map[string]string{}}
+	x := claudeDesktopIndex{visible: map[string]bool{}, earlier: map[string][]claudeDesktopNow{}}
 	claudeDesktopFiles.Lock()
 	defer claudeDesktopFiles.Unlock()
 	current := make(map[string]bool, len(paths))
@@ -81,9 +85,7 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		}
 		x.visible[e.transcript] = x.visible[e.transcript] || !e.archived
 		for _, old := range e.prior {
-			if validID(old) && old != e.transcript {
-				x.now[old] = e.transcript
-			}
+			x.earlier[old] = append(x.earlier[old], claudeDesktopNow{e.transcript, e.archived})
 		}
 	}
 	for p := range claudeDesktopFiles.byPath {
@@ -110,12 +112,24 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 	return claudeDesktopEntry{transcript: raw.Transcript, archived: raw.Archived, prior: raw.Prior}
 }
 
-// hidden: the offline list leaves transcript id out as the desktop app's sidebar does. present says which transcripts
-// the list has to show: a session's earlier transcript goes only while the one it runs now is there.
-func (x claudeDesktopIndex) hidden(id string, present map[string]bool) bool {
+// hidden: the offline list leaves transcript id out as the desktop app's sidebar does. shown are the transcripts the
+// list has shown so far (newest first, so a session's current one comes before its earlier ones).
+func (x claudeDesktopIndex) hidden(id string, shown map[string]bool) bool {
 	if visible, named := x.visible[id]; named {
-		return !visible // the session is archived
+		return !visible // a session's current transcript: hidden while every entry naming it is archived
 	}
-	now, earlier := x.now[id]
-	return earlier && present[now]
+	sessions := x.earlier[id]
+	if len(sessions) == 0 {
+		return false
+	}
+	open := false
+	for _, s := range sessions {
+		if !s.archived {
+			open = true
+			if shown[s.transcript] {
+				return true // its session is listed through the transcript it runs now
+			}
+		}
+	}
+	return !open // only archived sessions ran it
 }

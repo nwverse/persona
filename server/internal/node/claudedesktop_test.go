@@ -53,7 +53,7 @@ func useDesktopDirs(t *testing.T) (first, third string) {
 }
 
 // The offline list shows the desktop app's sessions as its sidebar does (#3304): not archived sessions, not a session's
-// earlier transcript while its current one is listed. Anything no entry names is listed as before.
+// earlier transcript once its current one is listed. Anything no entry names is listed as before.
 func TestOfflineListFollowsTheDesktopSidebar(t *testing.T) {
 	const (
 		main      = "dddddddd-0000-4000-8000-000000000001"
@@ -68,10 +68,19 @@ func TestOfflineListFollowsTheDesktopSidebar(t *testing.T) {
 		unnamed   = "dddddddd-0000-4000-8000-00000000000a" // a desktop transcript no entry names
 		fork      = "dddddddd-0000-4000-8000-00000000000b" // Persona's "Branch to New Chat" copy, archived in the app
 		kept      = "dddddddd-0000-4000-8000-00000000000c" // kept, archived in the app
-		cli       = "cccccccc-0000-4000-8000-000000000001"
 		corrupted = "dddddddd-0000-4000-8000-00000000000d" // its entry cannot be read
+		oldOfDone = "dddddddd-0000-4000-8000-00000000000e" // the earlier transcript of an archived session
+		current2  = "dddddddd-0000-4000-8000-00000000000f" // a session's current transcript, also named earlier by another
+		shared    = "dddddddd-0000-4000-8000-000000000010" // earlier for two sessions: one listed, one not there
+		newerOld  = "dddddddd-0000-4000-8000-000000000011" // an earlier transcript written after its current one
+		newerNow  = "dddddddd-0000-4000-8000-000000000012"
+		bothFirst = "dddddddd-0000-4000-8000-000000000013" // as both, its unarchived entry read first
+		oversized = "dddddddd-0000-4000-8000-000000000014" // archived, in an entry file too big to read
+		cli       = "cccccccc-0000-4000-8000-000000000001"
 	)
-	transcripts := []string{main, archived, btwDone, btwOpen, earlier, gap, both, firstApp, unnamed, fork, kept, corrupted}
+	// Newest first: main before its earlier transcript, newerOld before newerNow.
+	transcripts := []string{newerOld, main, current2, archived, btwDone, btwOpen, earlier, gap, both, firstApp, unnamed, fork, kept,
+		corrupted, oldOfDone, shared, newerNow, bothFirst, oversized}
 	listed := func(t *testing.T, withIndex bool) map[string]bool {
 		n, home := testNode(t)
 		n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
@@ -86,18 +95,25 @@ func TestOfflineListFollowsTheDesktopSidebar(t *testing.T) {
 		writeEntrypointTranscript(t, dir, cli, "cli", time.Hour)
 		first, third := useDesktopDirs(t)
 		if withIndex {
-			writeDesktopEntry(t, third, "main", main, false, []string{earlier}, "")
+			writeDesktopEntry(t, third, "main", main, false, []string{earlier, shared}, "")
 			writeDesktopEntry(t, third, "archived", archived, true, nil, "")
 			writeDesktopEntry(t, third, "btwdone", btwDone, true, nil, `,"spawnedFrom":{"btw":true,"sideSession":true,"userFork":true}`)
 			writeDesktopEntry(t, third, "btwopen", btwOpen, false, nil, `,"spawnedFrom":{"btw":true,"sideSession":true,"userFork":true}`)
-			writeDesktopEntry(t, third, "gap", missing, false, []string{gap}, "")
+			writeDesktopEntry(t, third, "gap", missing, false, []string{gap, shared}, "")
 			writeDesktopEntry(t, third, "both1", both, true, nil, "")
 			writeDesktopEntry(t, third, "both2", both, false, nil, "")
+			writeDesktopEntry(t, third, "a-bothfirst", bothFirst, false, nil, "")
+			writeDesktopEntry(t, third, "z-bothfirst", bothFirst, true, nil, "")
 			writeDesktopEntry(t, first, "first", firstApp, true, nil, "")
 			writeDesktopEntry(t, third, "fork", fork, true, nil, "")
 			writeDesktopEntry(t, third, "kept", kept, true, nil, "")
 			bad := writeDesktopEntry(t, third, "corrupted", corrupted, true, nil, "")
 			os.WriteFile(bad, []byte(`{"cliSessionId":"`+corrupted+`","isArchived":tru`), 0o600)
+			writeDesktopEntry(t, third, "done", missing, true, []string{oldOfDone}, "")
+			writeDesktopEntry(t, third, "current2", current2, false, nil, "")
+			writeDesktopEntry(t, third, "other", main, false, []string{current2}, "")
+			writeDesktopEntry(t, third, "newer", newerNow, false, []string{newerOld}, "")
+			writeDesktopEntry(t, third, "oversized", oversized, true, nil, `,"pad":"`+strings.Repeat("x", 4<<20)+`"`)
 		}
 		out := map[string]bool{}
 		for _, s := range n.scanOffline() {
@@ -107,8 +123,11 @@ func TestOfflineListFollowsTheDesktopSidebar(t *testing.T) {
 	}
 
 	got := listed(t, true)
-	want := map[string]bool{main: true, btwOpen: true, gap: true, both: true, unnamed: true, fork: true, kept: true, cli: true, corrupted: true,
-		archived: false, btwDone: false, earlier: false, firstApp: false}
+	want := map[string]bool{
+		main: true, btwOpen: true, gap: true, both: true, bothFirst: true, unnamed: true, fork: true, kept: true, cli: true,
+		corrupted: true, current2: true, newerOld: true, newerNow: true, oversized: true,
+		archived: false, btwDone: false, earlier: false, firstApp: false, oldOfDone: false, shared: false,
+	}
 	for id, w := range want {
 		if got[id] != w {
 			t.Errorf("%s listed=%v, want %v", id, got[id], w)
@@ -120,6 +139,29 @@ func TestOfflineListFollowsTheDesktopSidebar(t *testing.T) {
 		if !got[id] {
 			t.Errorf("without an index %s is missing", id)
 		}
+	}
+}
+
+// Rows left out never count toward the 80 the offline list shows: a busy desktop app's archived sessions do not push
+// an older session out.
+func TestDesktopRowsLeftOutDoNotTakeTheCap(t *testing.T) {
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, third := useDesktopDirs(t)
+	for i := 0; i < 85; i++ {
+		id := fmt.Sprintf("ffffffff-0000-4000-8000-%012d", i)
+		writeEntrypointTranscript(t, dir, id, "claude-desktop-3p", time.Duration(i+1)*time.Minute)
+		writeDesktopEntry(t, third, id, id, true, nil, "")
+	}
+	const older = "aaaaaaaa-0000-4000-8000-000000000001"
+	writeEntrypointTranscript(t, dir, older, "cli", 3*time.Hour)
+	rows := n.scanOffline()
+	if len(rows) != 1 || rows[0].SessionID != older {
+		t.Fatalf("rows = %d, want only the older session", len(rows))
 	}
 }
 
