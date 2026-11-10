@@ -84,5 +84,6 @@
   "read_more": "更多设置",
   "read_more_hint": "选择哪些内容收进收件箱",
   "read_as_you": "以你的身份",
-  "read_reauthorize": "重新授权"
+  "read_reauthorize": "重新授权",
+  "read_off_footer": "已关闭：不再读取提到你的消息和私聊；登录状态和已收进来的内容都保留。"
 }

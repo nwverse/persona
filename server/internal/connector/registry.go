@@ -447,7 +447,7 @@ func (r *Registry) Infos(ctx context.Context) []Info {
 	out := []Info{}
 	for _, c := range r.All() {
 		st := StatusOf(ctx, c)
-		info := Info{ID: c.ID(), Name: c.Name(), Status: st.State, Account: st.Account, Via: st.Via, Error: st.Error, Guide: st.Guide, GuideURL: st.GuideURL, MissingScopes: st.MissingScopes,
+		info := Info{ID: c.ID(), Name: DisplayName(ctx, c), Status: st.State, Account: st.Account, Via: st.Via, Error: st.Error, Guide: st.Guide, GuideURL: st.GuideURL, MissingScopes: st.MissingScopes,
 			LastSync: when(st.LastSync), LastEvent: when(st.LastEvent), Capabilities: Capabilities(c), Enabled: r.Enabled(c.ID())}
 		if hosts := c.Manifest().Hosts; len(hosts) > 0 {
 			info.Hosts = hosts
@@ -471,4 +471,20 @@ func when(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// Named is a connector whose display name follows the reader's language. ID and Name stay stable for logs and errors;
+// what people read (the settings list, the switch, an Inbox item's source) comes from DisplayName.
+type Named interface {
+	DisplayName(ctx context.Context) string
+}
+
+// DisplayName is the connector's name for people reading in ctx's language: its own when it is Named, else Name.
+func DisplayName(ctx context.Context, c Connector) string {
+	if n, ok := c.(Named); ok {
+		if name := n.DisplayName(ctx); name != "" {
+			return name
+		}
+	}
+	return c.Name()
 }

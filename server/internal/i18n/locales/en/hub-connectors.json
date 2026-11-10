@@ -21,5 +21,6 @@
   "larkcli_mention": "Lark mention",
   "watched_doc_unreadable": "Watched document \u201c{title}\u201d can no longer be read; remove it in Settings \u203a Connectors",
   "doc_comment_label": "Document comment",
-  "doc_comment_rule": "Rule: a document comment mentions you or replies to your comment."
+  "doc_comment_rule": "Rule: a document comment mentions you or replies to your comment.",
+  "larkcli_name": "Lark (as you)"
 }

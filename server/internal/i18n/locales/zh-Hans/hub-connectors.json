@@ -21,5 +21,6 @@
   "larkcli_mention": "飞书提及",
   "watched_doc_unreadable": "已关注的文档“{title}”无法再读取，请在设置 › 连接器中移除它",
   "doc_comment_label": "文档评论",
-  "doc_comment_rule": "规则：文档评论提到了你，或回复了你参与过的评论。"
+  "doc_comment_rule": "规则：文档评论提到了你，或回复了你参与过的评论。",
+  "larkcli_name": "飞书（以我的身份）"
 }

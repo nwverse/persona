@@ -5,7 +5,7 @@
 import { ChannelLink } from "./Channels";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { connectorState, connectorSummary, signsInHere, connectorTone, listConnectors, type ConnectorTone, type HubConnector } from "../../lib/connectors";
+import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
 import { ago } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -435,6 +435,20 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
 
 function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnector; reload: () => Promise<void>; onOpen: () => void }) {
   const [rechecking, setRechecking] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const on = isEnabled(connector);
+  // The same switch as the connector page's "Sync …": off stops reading Lark as you; the login and what was kept stay.
+  const toggle = async (enabled: boolean) => {
+    setSwitching(true);
+    try {
+      await setConnector(connector.id, { enabled });
+      await reload();
+    } catch (e) {
+      toast(t("settings-feishubot.error_with", { what: t("settings-feishubot.read_section"), error: errorText(e) }), "error");
+    } finally {
+      setSwitching(false);
+    }
+  };
   const scopes = missingScopes(connector);
   const link = permissionLink(connector);
   const lacksPermission = connector.status === "no_permission" || scopes.length > 0;
@@ -448,7 +462,11 @@ function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnecto
     }
   };
   return (
-    <Group title={t("settings-feishubot.read_section")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
+    <Group
+      title={t("settings-feishubot.read_section")}
+      footer={on ? t("settings-feishubot.larkcli_dialog_footer") : t("settings-feishubot.read_off_footer")}
+      right={<Switch on={on} onChange={(v) => void toggle(v)} disabled={switching} label={t("settings-feishubot.read_section")} />}
+    >
       <div className="flex items-center gap-3 px-4 py-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-surface shadow-hairline">
           <BrandMark brand="lark" size={36} fit="tile" />
