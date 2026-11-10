@@ -158,7 +158,7 @@ func (s *Service) directionsSync(ctx context.Context) {
 		if d.EndedAt != nil {
 			d.EndedAt, changed = nil, true
 		}
-		if d.Project == "" && d.By == directionByAssistant && projects[id] != "" {
+		if d.Project == "" && d.By == directionByAssistant && projects[id] != "" { // never one the owner filed
 			d.Project, changed = projects[id], true
 		}
 	}

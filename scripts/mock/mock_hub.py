@@ -1424,6 +1424,16 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+MOCK_LEADERS = []
+if os.environ.get("MOCK_LEADERS") == "1":
+    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+        c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
+        c["origin"] = "user"
+        ASSISTANT.append(c)
+        MOCK_LEADERS.append(c["session_id"])
+
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
 def health_sess(sid, title, minutes, last):
@@ -1719,6 +1729,8 @@ def assistant_state(space="", archived=False):
         out["notes"] = cfg["notes"]
     if cfg["main"]:
         out["main"] = cfg["main"]
+    if MOCK_LEADERS and not space:
+        out["leaders"] = MOCK_LEADERS
     return out
 
 
@@ -4663,7 +4675,8 @@ def cell_width(ch):
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
-# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell.
+# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
+# shell is a new session.
 NODE_ACTIONS = []
 CLOSED_PANES, CLOSED_TABS, TAB_NAMES, SPLIT_PANES = set(), set(), {}, {}
 # #2431 "New worktree…": worktree/create adds a workspace (with one shell pane) next to the persona one; a branch or a path
@@ -4789,6 +4802,23 @@ def node_action(h, p, body):
         return h.send_json({"op": body.get("op"), "outcome": outcome, "message": message})
     elif area == "panes" and verb == "agent":
         time.sleep(0.6)
+        # As the node answers (docs/protocol/protocol.md): the session it started, bound to that pane, idle with no first
+        # message, listed from now on; the apps open its chat (#3287). A started session's id: /mock/reset takes it away.
+        hosts = mock_panes(mid)["hosts"]
+        pane = str(body.get("pane", ""))
+        shell = next((x for x in (hosts[0]["panes"] if hosts else []) if x["pane"] == pane), None)
+        if shell:  # a pane the computer does not list starts nothing: answered as before
+            tab = next((t for t in hosts[0]["tabs"] if t["id"] == shell["tab_id"]), {})
+            ws = shell["workspace_id"]
+            mate = next((x for x in SESSIONS if x["machine_id"] == mid and x.get("workspace_id") == ws), {})  # the space it joins
+            START_IDS[0] += 1
+            s = sess(mid, "d4e6f8a0-0000-4000-8000-%012d" % START_IDS[0], "新会话", shell.get("cwd") or mate.get("cwd", ""), "idle", "idle",
+                     mate.get("space_name", ""), mate.get("space_index", 0), tab.get("label", ""), tab.get("number", 0), 0, "",
+                     pane_id=pane, tab_id=shell["tab_id"], slot_id=shell["tab_id"], workspace_id=ws, space_id=mate.get("space_id", ws))
+            s["launcher"] = body.get("launcher") or "claude"
+            SESSIONS.append(s)
+            push_machine(mid)  # as the hub pushes the machine's list once the node has the session: the app's chat gets its name
+            return h.send_json({"session_id": s["session_id"]})
     return h.send_json({})
 
 
