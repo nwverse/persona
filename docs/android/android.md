@@ -28,7 +28,11 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 The home has only **Assistant** and **Agents**, selected at the top, on phones, tablets and foldables (#2589).
 The avatar opens one shared left-side history drawer from either page; it pushes the full-size page aside rather than
 rising from the bottom. Settings opens from its bottom gear in a sheet, never a home tab. Root Close returns to the
-originating page; child Back pops only the settings sheet's secondary stack. Inbox, To-dos, Computers and extension `nav_page` destinations open under
+originating page; child Back pops only the settings sheet's secondary stack.
+An open foldable or a tablet lays this out as an open iPhone Duo or an iPad (#2951): in a regular window, at least 600dp
+wide and 480dp tall, the sidebar is a column beside the Assistant page that the avatar hides and shows, and the Settings sheet
+shows its list beside the page it opens. Phones, folded or not and either way up, keep the drawer and one
+column. Details and the threshold's reasoning: `docs/android/android-design.md` section 3.1. Inbox, To-dos, Computers and extension `nav_page` destinations open under
 Assistant, following the iPhone sidebar mapping. Scheduled tasks and the knowledge base keep their existing Assistant
 entry points. Extension management remains in Settings and is distinct from extension-provided pages.
 
@@ -323,6 +327,35 @@ Android's take on plan section 4 ("session keys must tell groups apart"), decide
 - The mock hub's linking fields are being added to `scripts/mock/mock_hub.py` by the iOS lane; until then a wrapper that doesn't modify it is used: like `android.sh shots`, it execs its source, replaces `identity()` (used by both health and hello), and adds a fixed `hub_id`, `hub_name` and `mesh`.
   Two groups: two mock hubs (one port each, no mesh), one paired with `debug.mockAddress`, the other with `--es debug.addMockAddress http://<loopback address>:<port>` (debug builds only, equivalent to **Add hub** in Settings). Two hubs in one group: two mock hubs whose mesh lists each other, only one paired; stop it and the connection switches to the other.
 
+## SSH tunnel and local proxy (iOS parity)
+
+A paired hub whose addresses don't answer can be reached through an SSH server or another app's local SOCKS5 proxy, as on
+iOS ([network.md](../operations/network.md) "Connecting to hub through SSH" and "Connecting to hub through a local SOCKS5
+proxy", where the Android notes are). The in-app tunnel is not ported: its core is a private library linked only into the
+iOS app.
+
+- **Settings › Hubs**: under each paired hub, an **SSH tunnel** and a **Local proxy** row ("· name" added when a group has
+  several paired hubs), valued Not set / In use / Always / Fallback like iOS `HubsView`. Their pages
+  (`android/feature/settings/src/main/kotlin/persona/feature/settings/HubTunnelScreens.kt`, models in `HubTunnelState.kt`)
+  follow iOS `SSHTunnelView` and `LocalProxyView`: status and last failure, this device's public key with Copy public key /
+  Copy authorized_keys line, the server, the tunnel target, the pinned fingerprint, Always, **Test connection and save**
+  (a new or changed fingerprint is asked about first) and Delete. Switching Always alone on a saved tunnel saves at once.
+  Diagnostics name tunnel candidates "SSH tunnel" and "Local proxy".
+- **Connection**: one `HubWays` (`android/core/hub/src/main/kotlin/persona/core/hub/tunnel/HubWays.kt`) in
+  `ConnectionRuntime` runs at most one tunnel of each kind per hub for every group connection. `OkHttpHubConnection`
+  picks the way with `HubWay.next` (pure, the order iOS uses) and publishes the tunnel it goes through (`tunnel`), which
+  `GroupRuntime` hands to Settings. A group's tunnels follow the registry: new settings reach the open connection
+  (`GroupRuntime.updateTunnels`), an unpaired hub's tunnels close (`HubWays.retain`). Saving a tunnel's page clears a
+  failure that waited for the user (`HubWays.unblock`) and redials a connection that is not online.
+- **Tests**: `Socks5HandshakeTest`, `HubWayTest`, `LocalProxyForwardTest` (a SOCKS5 proxy on loopback),
+  `SshTunnelTest` (a real SSH server, Apache MINA SSHD, test-only), `HubTunnelConnectionTest` (a group connection through
+  each tunnel, Always, moving back once the address answers, a changed host key that is not redialled, a refused key
+  dialled again after saving) in `core:hub`;
+  `HubTunnelStateTest` and `HubTunnelShotsTest` (Hubs and both pages, empty, saved and failing, three styles × light /
+  dark in Chinese plus English and Japanese, written to `build/tunnel-shots/`) in `feature:settings`.
+- **Release**: R8 would remove every algorithm JSch makes by name (it did, before the rules), so `proguard-rules.pro`
+  keeps them and `scripts/release/check_android_shrink.py` checks one of each kind ("Release shrinking" below).
+
 ## Build and install
 
 ```sh
@@ -406,9 +439,10 @@ shrinking stays off (below), and debug builds are not shrunk.
 - **Reached by name**: R8 keeps what code references, the libraries' own rules (AndroidX, WorkManager, Room, Hilt,
   kotlinx.serialization) and the default `@JavascriptInterface` rule. What the app itself reaches only by name needs a
   rule in `proguard-rules.pro`; today that is `HubFailure.getStatus` / `getCode`, which the tasks store looks up on a
-  failed call. `scripts/release/check_android_shrink.py` checks a release APK for manifest components and App Startup
+  failed call, and the SSH tunnel's algorithms, which JSch makes from class names in its config (its JCE and core
+  classes, and Tink's X25519 and Ed25519 that `SshAlgorithms` names there). `scripts/release/check_android_shrink.py` checks a release APK for manifest components and App Startup
   initializers with their no-argument constructors, workers' `(Context, WorkerParameters)` constructors, Room's
-  generated `_Impl` classes, the Markdown bridge's `done` / `fail`, those getters, the InnerClass annotations that give
+  generated `_Impl` classes, the Markdown bridge's `done` / `fail`, those getters, one SSH algorithm of each kind, the InnerClass annotations that give
   persona exceptions and routes their simple names, an empty `missing_rules.txt`, every class R8's `seeds.txt` lists
   either in the dex or removed in `usage.txt`, never merged, and every Throwable in the dex among those seeds (the
   `-keepnames` rule matches them all). The release worker runs it before signing ([release.md](../operations/release.md) "Android publisher
@@ -818,10 +852,11 @@ The design of #2059 (web and iOS / iPad), with the user's choices there: the hub
 
 - **Groups**: Needs you, FYI and Collapsed by source or by time, a switch under the search field (`InboxPreferences.grouping`, kept on this device with the other filters); the managers' grouping stays outermost, In progress stays flat. By source: the agents' cards ("Agents waiting on you", first either way), Lark, each mail account ("Mail · account"), then connectors and extensions by their own name. By time: today, yesterday, each of the 2–6 days before ("Sat, Nov 7"), 7+ days, 1+ month, by the last message. A section with one group shows no group header.
 - **Done**: always by when it was done, "Just now" (the last hour) first. After the list's few days the page asks each manager's history (`GET /api/v1/inbox/done`, `InboxRepository.doneHistory`, a cursor per manager; an old hub's 404 is no history), merged under Done; "Show older" asks the next pages. Its header has **Jump to**: each group with its count (a tap opens it and scrolls there), Collapse all / Expand all.
-- **Folding**: each group folds to its title and count; Done's start folded except Just now and Today; what the user flipped is kept (`InboxPreferences.folds`, "section/key"). Group headers stay pinned at the top while their rows scroll under them (a background only while pinned).
+- **Done's counts** (#3016, the hub's #2967): when Done opens, each manager's done items per day in the phone's zone (`GET /api/v1/inbox/done/days?tz=&sources=all`, `InboxRepository.doneDays`). With them, and no filter or search on, Done lists every time group with its exact count, loaded or not (Today without Just now; `InboxGroups.doneCounts` / `withCounts`), and Done's title and the Done chip both count their sum. Opening or jumping to a group that isn't all in fetches its own first page, the one before the group's end (`InboxGroups.span`, `before` without an id), and its Show older goes on from the hub's `next`; a group is whole once its items are in or its pages run out. The list's few days are already whole. With a filter or search, or a hub that answers 404 / 400 (no counts, or a zone it doesn't know), it is as before: what is loaded, and Show older at the end of Done paging back from the newest.
+- **Folding**: each group folds to its title (a level below the section's: caption, regular, in every style, as iOS and the web) and count; Done's start folded except Just now and Today; what the user flipped is kept (`InboxPreferences.folds`, "section/key"). Group headers stay pinned at the top while their rows scroll under them (a background only while pinned).
 - **Selection**: a long-press on a row starts it (the Android convention); the bar becomes "N selected · Select all · Mark as done" with ← (or Back) to end it. Each group header gets a tick (none / some / all, `JTriCheckbox`) that picks the whole group, folded or not, and says how many it has picked; a section without groups has the tick on its own header. Agents' cards, done items and ones Persona is working on can't be picked (faded). Mark as done is one `POST /api/v1/inbox/bulk` per manager (`markAll`, with Undo). With one row picked the bar's **⋯** has what its long-press used to: Hand to AI, mutes and rules.
-- **Code**: the rules in `core/domain` (`InboxGroups`: time keys, source order, folds, ticks; `InboxGroupsTest`), the rows' groups and titles and the history in `feature/inbox` (`InboxSections.kt`), the page in `InboxScreen`; `MessageItem` `checked` / `dimmed`, `JSectionHeader` `leading` / `sub`, `JTriCheckbox` / `JCheckMark` in the design system. Checked by `InboxGroupsShotsTest` (mock data: by source, by time, Done with two pages of history and Jump to, a selection marked done; every style, light and dark).
-- **Not yet**: reopening an item of a non-default manager's history that the list no longer has goes to the default manager (the repository finds an item's manager in the list).
+- **Code**: the rules in `core/domain` (`InboxGroups`: time keys, source order, folds, ticks, Done's counts and spans; `InboxGroupsTest`), the rows' groups and titles and the history in `feature/inbox` (`InboxSections.kt`), the page in `InboxScreen`; `MessageItem` `checked` / `dimmed`, `JSectionHeader` `leading` / `sub`, `JTriCheckbox` / `JCheckMark` in the design system. Checked by `InboxGroupsShotsTest` (mock data: by source, by time, Done with two pages of history and Jump to, a selection marked done; every style, light and dark).
+- **Not yet**: reopening an item of a non-default manager's history that the list no longer has goes to the default manager (the repository finds an item's manager in the list; #2974).
 
 ## Inbox, Lark chats and connectors: iOS parity (#3045)
 
@@ -1034,7 +1069,7 @@ Imported when merging main line 2026-11-02: pitfalls from the old single-module 
 
 ## App shell and direct page entry
 
-The composition root uses `PersonaTheme` from `:core:designsystem`, style from `AppStyleStore` (Settings › Interface style). Four fixed bottom tabs: Persona / Agents / Inbox / Settings, identical order and text in all styles, styled independently (Glass floating dock, Brief/Board bottom bar). Dock belongs to each tab's first page; pushed pages (chat, documents, nested settings) cover it. Visited tabs retain composition and do not rebuild on return (`docs/android/android-design.md` section 3). Tablet/foldable layout follows window width: expanded has left navigation and two-pane list/detail; tabletop puts chat above and composer below (section 3.1). Each tab retains its back stack. Agents badge counts ordinary-Agent pending interactions, filtered by hub session/space mute and exception rules; Persona badge counts assistant interactions, each request counted separately even in one session. Inbox badge counts unhandled Needs-you items and unmuted requests. Current tab, Agents machine filter and each tab's open chat are stored in pairing directory and restored on normal cold start; sign-out, revoke and re-pair delete together, and retired writers cannot recreate position files. Legacy global shell preferences/checklist records are cleared on unpairing.
+The composition root uses `PersonaTheme` from `:core:designsystem`, style from `AppStyleStore` (Settings › Interface style). Four fixed bottom tabs: Persona / Agents / Inbox / Settings, identical order and text in all styles, styled independently (Glass floating dock, Brief/Board bottom bar). Dock belongs to each tab's first page; pushed pages (chat, documents, nested settings) cover it. Visited tabs retain composition and do not rebuild on return (`docs/android/android-design.md` section 3). Tablet/foldable layout follows the window: a regular window (at least 600dp wide and 480dp tall) has the sidebar column beside the Assistant page and two-pane list/detail for Agents, Inbox and Settings; tabletop puts chat above and composer below (`docs/android/android-design.md` section 3.1). Each tab retains its back stack. Agents badge counts ordinary-Agent pending interactions, filtered by hub session/space mute and exception rules; Persona badge counts assistant interactions, each request counted separately even in one session. Inbox badge counts unhandled Needs-you items and unmuted requests. Current tab, Agents machine filter and each tab's open chat are stored in pairing directory and restored on normal cold start; sign-out, revoke and re-pair delete together, and retired writers cannot recreate position files. Legacy global shell preferences/checklist records are cleared on unpairing.
 
 Connection state occupies each page's title (Agents, Inbox, Persona, chat); shell no longer adds a separate banner, avoiding duplication and top whitespace. Lightweight refresh failures show no extra notice; user-action failures go through one outlet, with a shared 4-second dedupe window for offline notices. This is notice-policy configuration, not measured performance. Unclear results retain in-chat checking.
 
@@ -1635,6 +1670,9 @@ Ported 2026-11-02 from old App/iOS `ShellNeedsYou`. feature/assistant NeedsYou.k
 Requested 2026-11-01 draggable center/larger right/not device-specific; old Fold.kt/Panes.kt removed #632, ported new shell 2026-11-02.
 
 - material3-adaptive1.3.0 Navigation3 `rememberListDetailSceneStrategy` paneExpansionState/paneExpansionDragHandle per tab (`rememberShellListDetail`, PaneDividers.kt). Built-in paneExpansionDraggable always snaps nearest anchor, cannot snap only within28 dp hinge, so custom draggable sets `PaneExpansionState.setFirstPaneWidth` per frame, relayout only no page recomposition.
+- When (#2951, `RegularWindow.kt`, `RegularWindowTest`): every regular window (≥ 600dp wide and ≥ 480dp tall, an open foldable or a tablet either way up; the open iPhone Duo splits at about 669pt wide), and a phone on its side at least 760dp wide, as before. An open foldable upright (about 700dp) used to be one pane.
+- Sidebar column (#2951): beside the Assistant page in a regular window, `sidebarSplit` (PaneSplit.kt): the default list width capped at 380dp (the phone drawer's widest); with a separating fold the column ends at the fold and the page starts past it; flat folds do not move it. Not draggable, no saved width; the avatar hides and shows it.
+- Settings sheet (#2951): its own list-detail scene with the same splitter, two panes only in a regular window, no saved share (`PaneSplitter(tab = null)`).
 - Pure PaneSplit.kt/PaneSplitTest old values: left min 280 dp,right320; default 38% clamped320–420, preserve400right if possible (771 inner320/451,1280 tablet420/860). Tracks finger, haptic crossing flat hinge, release≤28 dp snaps else exact. Per-tab ratio SharedPreferences persona-panes split.tab, local/style-like, resize ratio then minimum clamp.
 - Collapse left Agents only with right content chat/space: drag64 dp past left min then release, right full, accent handle at left, drag/tap restores; closing right auto-restores. Inbox/Settings never collapse.
 - Separating hinge book/dual-screen fixed split, no handle; let library excludedBounds work by clear() expansion width (otherwise overrides). Flat restores prior drag. Edge-too-near hinge ignored.

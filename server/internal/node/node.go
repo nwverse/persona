@@ -544,6 +544,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ThroughSeq       int           `json:"through_seq"`
 		Name             string        `json:"name"`
 		Pane             string        `json:"pane"`      // panes.*: a pane the host lists
+		InPane           string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
 		Direction        string        `json:"direction"` // panes.split: right or down
 		TabID            string        `json:"tab_id"`    // tabs.*
 		Label            string        `json:"label"`     // tabs.rename
@@ -860,7 +861,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := n.checkStartHost(p.Host); err != nil {
 			return nil, err
 		}
-		ctx := withStartHost(ctx, p.Host)
+		ctx := n.reusingKeptTab(withStartHost(ctx, p.Host), p.InPane)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, err := n.startOnEngineRuntime(ctx, rp)
 			return map[string]any{"session": s}, err
@@ -931,6 +932,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		n.restoreEchoes(a.Echoes)
+		return ok(nil)
+	case "start.keys": // into a failed start's kept tab (startremedy.go, #2570)
+		if err := n.startKeys(ctx, p.Pane, p.Text, p.Keys); err != nil {
+			return nil, err
+		}
 		return ok(nil)
 	case "session.keys":
 		if a, ok := n.agent(p.SessionID); ok {
