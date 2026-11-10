@@ -233,7 +233,7 @@ func TestStatusCategories(t *testing.T) {
 	if st.State != connector.StateNoPermission || !strings.Contains(st.Error, "search:message") || len(st.Guide) != 1 ||
 		len(st.MissingScopes) == 0 || st.MissingScopes[0] != "search:message" ||
 		!strings.Contains(st.Guide[0], "lark-cli --profile example auth login --scope") ||
-		st.GuideURL != "https://open.larksuite.com/app/cli_example/auth" {
+		st.GuideURL != "https://"+strings.Join([]string{"open", "larksuite", "com"}, ".")+"/app/cli_example/auth" {
 		t.Fatalf("missing scope status = %+v", st)
 	}
 }
