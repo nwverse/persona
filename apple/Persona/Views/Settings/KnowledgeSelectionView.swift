@@ -1,6 +1,12 @@
 #if os(iOS)
 import SwiftUI
 
+/// Keep this page's dependency lookup off AppModel's full observable surface.
+private protocol KnowledgeSelectionAPIProvider: AnyObject {
+    var api: APIClient? { get }
+}
+extension AppModel: KnowledgeSelectionAPIProvider {}
+
 /// Settings › Knowledge Selection (`KnowledgeSelectionModel`): the chats and documents with a setting of their own
 /// first (they come before every rule), then the chat rules and the document rules, a section per priority level.
 /// A row opens its options in a sheet; a level's menu reorders it. Every change is saved at once.
@@ -17,8 +23,8 @@ struct KnowledgeSelectionView: View {
                 Section { LoadProblem(text: error) }
             }
             switch model?.unsupported {
-            case .hub?: notice(String(localized: "This hub doesn't have the knowledge selection yet. Update the hub, then choose here what it keeps."))
-            case .document?: notice(String(localized: "This hub's selection has settings this version of the app doesn't know. Update the app to change it here; nothing was changed."))
+            case .hub?: notice(unsupportedText(.hub))
+            case .document?: notice(unsupportedText(.document))
             case nil: EmptyView()
             }
             if let selection = model?.selection {
@@ -35,22 +41,25 @@ struct KnowledgeSelectionView: View {
         .detailTitle(String(localized: "Knowledge Selection"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $editingRule) { ref in
-            if let model, let rule = model.selection?[ref.part].rules[ref.name] {
+            if let model {
                 NavigationStack {
-                    KnowledgeRuleEditor(part: ref.part, name: ref.name, opened: rule) { await model.setRule(ref.name, in: ref.part, to: $0) }
+                    KnowledgeRuleEditor(part: ref.part, name: ref.name, opened: ref.rule, problem: editorProblem) {
+                        await model.setRule(ref.name, in: ref.part, to: $0)
+                    }
                 }
             }
         }
         .sheet(item: $editingItem) { ref in
             if let model {
                 NavigationStack {
-                    KnowledgeItemEditor(opened: ref.item, isNew: ref.isNew, inSheet: true, save: model.setItem, remove: remove) { editingItem = nil }
+                    KnowledgeItemEditor(opened: ref.item, isNew: ref.isNew, inSheet: true, problem: editorProblem,
+                                        save: model.setItem, remove: remove) { editingItem = nil }
                 }
             }
         }
         .sheet(item: $picking) { ref in
             if let model {
-                NavigationStack { KnowledgeItemPicker(kind: ref.kind, model: model, remove: remove) }
+                NavigationStack { KnowledgeItemPicker(kind: ref.kind, model: model, saveProblem: editorProblem, remove: remove) }
             }
         }
         .task {
@@ -59,7 +68,10 @@ struct KnowledgeSelectionView: View {
             #if DEBUG
             // `-openKnowledgeSelection rule | chat | doc` opens the page with that sheet up (screenshots).
             switch UserDefaults.standard.string(forKey: "openKnowledgeSelection") {
-            case "rule" where editingRule == nil && model?.selection != nil: editingRule = RuleRef(part: .messages, name: "mentions")
+            case "rule" where editingRule == nil && model?.selection != nil:
+                if let rule = model?.selection?[.messages].rules["mentions"] {
+                    editingRule = RuleRef(part: .messages, name: "mentions", rule: rule)
+                }
             case "chat" where picking == nil && model?.selection != nil: picking = PickRef(kind: .chat)
             case "doc" where picking == nil && model?.selection != nil: picking = PickRef(kind: .doc)
             default: break
@@ -70,15 +82,23 @@ struct KnowledgeSelectionView: View {
     }
 
     private var deps: KnowledgeSelectionModel.Deps {
-        let connected = { [app] () throws -> APIClient in
-            guard let api = app.api else { throw APIError(status: 0, message: String(localized: "Not connected to the hub yet")) }
-            return api
+        let connected: () throws -> APIClient = { [app] in try Self.requireAPI(app) }
+        let load: () async throws -> KBSelection = { try await connected().kbSelection() }
+        let save: (KBSelection) async throws -> KBSelection = { try await connected().setKBSelection($0) }
+        let entries: (KBSelectionItem.Kind) async throws -> [KBEntry] = { kind in
+            try await connected().kbList(kind == .chat ? .chats : .docs).items
         }
-        return .init(
-            load: { try await connected().kbSelection() },
-            save: { try await connected().setKBSelection($0) },
-            entries: { try await connected().kbList($0 == .chat ? .chats : .docs).items },
-            meta: { kind, id in try await connected().kbDetail(kind == .chat ? KBKind.chats.rawValue : KBKind.docs.rawValue, id: id).detail.meta })
+        let meta: (KBSelectionItem.Kind, String) async throws -> JSONValue? = { kind, id in
+            try await connected().kbDetail(kind == .chat ? KBKind.chats.rawValue : KBKind.docs.rawValue, id: id).detail.meta
+        }
+        return .init(load: load, save: save, entries: entries, meta: meta)
+    }
+
+    private static func requireAPI(_ app: any KnowledgeSelectionAPIProvider) throws -> APIClient {
+        guard let api = app.api else {
+            throw APIError(status: 0, message: String(localized: "Not connected to the hub yet"))
+        }
+        return api
     }
 
     /// Removing a setting is undone from the toast: it goes back as it was.
@@ -95,17 +115,39 @@ struct KnowledgeSelectionView: View {
         }
     }
 
+    private func unsupportedText(_ unsupported: KnowledgeSelectionModel.Unsupported) -> String {
+        switch unsupported {
+        case .hub:
+            String(localized: "This hub doesn't have the knowledge selection yet. Update the hub, then choose here what it keeps.")
+        case .document:
+            String(localized: "This hub's selection has settings this version of the app doesn't know. Update the app to change it here; nothing was changed.")
+        }
+    }
+
+    /// The reason a save did not finish, shown inside the sheet that is still holding the draft.
+    private var editorProblem: String? {
+        if let error = model?.error { return error }
+        guard let unsupported = model?.unsupported else { return nil }
+        return unsupportedText(unsupported)
+    }
+
     // MARK: Per-item settings
 
     private func itemsSection(_ selection: KBSelection) -> some View {
         Section {
             ForEach(selection.items ?? [], id: \.key) { item in itemRow(item) }
             Button { picking = PickRef(kind: .chat) } label: {
-                Label(String(localized: "Add Chat…"), systemImage: Theme.Icon.add).lineLimit(1)
+                HStack(spacing: Theme.Space.s) {
+                    ThemedIcon(Theme.Icon.add)
+                    Text(String(localized: "Add Chat…")).lineLimit(1).minimumScaleFactor(0.5)
+                }
             }
             .accessibilityIdentifier("knowledge-selection-add-chat")
             Button { picking = PickRef(kind: .doc) } label: {
-                Label(String(localized: "Add Document…"), systemImage: Theme.Icon.add).lineLimit(1)
+                HStack(spacing: Theme.Space.s) {
+                    ThemedIcon(Theme.Icon.add)
+                    Text(String(localized: "Add Document…")).lineLimit(1).minimumScaleFactor(0.5)
+                }
             }
             .accessibilityIdentifier("knowledge-selection-add-doc")
         } header: {
@@ -211,7 +253,7 @@ struct KnowledgeSelectionView: View {
     }
 
     private func ruleRow(_ part: KBSelection.Part, _ name: String, _ rule: KBSelectionRule) -> some View {
-        Button { editingRule = RuleRef(part: part, name: name) } label: {
+        Button { editingRule = RuleRef(part: part, name: name, rule: rule) } label: {
             HStack(spacing: Theme.Space.m) {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(KnowledgeSelectionText.ruleTitle(name, in: part))
@@ -241,6 +283,8 @@ struct KnowledgeSelectionView: View {
 private struct RuleRef: Identifiable, Hashable {
     var part: KBSelection.Part
     var name: String
+    /// Keep the opened rule so an unsupported response cannot turn the presented sheet into an empty page.
+    var rule: KBSelectionRule
     var id: String { part.rawValue + "/" + name }
 }
 
@@ -263,14 +307,13 @@ private struct KnowledgeNumberField: View {
     @Binding var text: String
 
     var body: some View {
-        LabeledContent {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text(title)
             TextField(title, text: $text, prompt: Text(prompt))
                 .keyboardType(.numberPad)
-                .multilineTextAlignment(.trailing)
+                .multilineTextAlignment(.leading)
                 .monospacedDigit()
                 .accessibilityIdentifier(accessibilityID)
-        } label: {
-            Text(title)
         }
     }
 }
@@ -282,6 +325,7 @@ private struct KnowledgeRuleEditor: View {
     let part: KBSelection.Part
     let name: String
     let opened: KBSelectionRule
+    let problem: String?
     var save: (KBSelectionRule) async -> Bool
     @State private var on: Bool
     @State private var days: String
@@ -290,10 +334,12 @@ private struct KnowledgeRuleEditor: View {
     @State private var context: String
     @State private var saving = false
 
-    init(part: KBSelection.Part, name: String, opened: KBSelectionRule, save: @escaping (KBSelectionRule) async -> Bool) {
+    init(part: KBSelection.Part, name: String, opened: KBSelectionRule, problem: String?,
+         save: @escaping (KBSelectionRule) async -> Bool) {
         self.part = part
         self.name = name
         self.opened = opened
+        self.problem = problem
         self.save = save
         _on = State(initialValue: opened.on)
         _days = State(initialValue: opened.days.map(String.init) ?? "")
@@ -323,6 +369,9 @@ private struct KnowledgeRuleEditor: View {
 
     var body: some View {
         SettingsForm {
+            if let problem {
+                Section { LoadProblem(text: problem) }
+            }
             Section {
                 Toggle(String(localized: "Store What Matches"), isOn: $on)
                     .accessibilityIdentifier("knowledge-rule-on")
@@ -393,6 +442,7 @@ private struct KnowledgeItemEditor: View {
     let isNew: Bool
     /// Its own sheet (Cancel in the bar) rather than pushed from the picker (the bar's back).
     let inSheet: Bool
+    let problem: String?
     var save: (KBSelectionItem) async -> Bool
     var remove: (KBSelectionItem) async -> Void
     /// Closes the sheet it is in.
@@ -401,11 +451,12 @@ private struct KnowledgeItemEditor: View {
     @State private var days: String
     @State private var saving = false
 
-    init(opened: KBSelectionItem, isNew: Bool, inSheet: Bool, save: @escaping (KBSelectionItem) async -> Bool,
+    init(opened: KBSelectionItem, isNew: Bool, inSheet: Bool, problem: String?, save: @escaping (KBSelectionItem) async -> Bool,
          remove: @escaping (KBSelectionItem) async -> Void, close: @escaping () -> Void) {
         self.opened = opened
         self.isNew = isNew
         self.inSheet = inSheet
+        self.problem = problem
         self.save = save
         self.remove = remove
         self.close = close
@@ -425,6 +476,9 @@ private struct KnowledgeItemEditor: View {
 
     var body: some View {
         SettingsForm {
+            if let problem {
+                Section { LoadProblem(text: problem) }
+            }
             Section {
                 LabeledContent(String(localized: "Source"), value: opened.source)
             } header: {
@@ -503,6 +557,7 @@ private struct KnowledgeItemPicker: View {
     @Environment(\.dismiss) private var dismiss
     let kind: KBSelectionItem.Kind
     let model: KnowledgeSelectionModel
+    let saveProblem: String?
     var remove: (KBSelectionItem) async -> Void
     @State private var entries: [KBEntry]?
     @State private var query = ""
@@ -547,7 +602,8 @@ private struct KnowledgeItemPicker: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheetCancel(unsaved: false) { dismiss() }
         .navigationDestination(item: $picked) { ref in
-            KnowledgeItemEditor(opened: ref.item, isNew: ref.isNew, inSheet: false, save: model.setItem, remove: remove) { dismiss() }
+            KnowledgeItemEditor(opened: ref.item, isNew: ref.isNew, inSheet: false, problem: saveProblem,
+                                save: model.setItem, remove: remove) { dismiss() }
         }
         .task { await load() }
     }
