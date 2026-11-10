@@ -813,7 +813,7 @@ func TestTaskFinishedWhileItsAgentStarts(t *testing.T) {
 	}
 	// ... and the start finishes after it.
 	s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: todo.Title, Prompt: "修好并补测试", Machine: "box",
-		Cwd: "/code/app", TodoID: todo.ID}, false)
+		Cwd: "/code/app", Permission: "bypassPermissions", TodoID: todo.ID}, false)
 
 	f.mu.Lock()
 	starts := len(f.starts)
@@ -923,7 +923,7 @@ func TestTaskStartTimingOutStillEndsTheTask(t *testing.T) {
 			t.Fatal(err)
 		}
 		s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: todo.Title, Prompt: "全仓清理", Machine: "box", Cwd: "/code/app",
-			TodoID: todo.ID}, false)
+			Permission: "bypassPermissions", TodoID: todo.ID}, false)
 		got := todoNow(s, todo.ID)
 		if got.DoneAt == nil || !strings.Contains(got.StartError, "deadline") {
 			t.Fatalf("the timed-out start left the task open: done %v, error %q", got.DoneAt, got.StartError)

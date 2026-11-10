@@ -516,7 +516,7 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 	f.mu.Lock()
 	f.failStart = &rpc.Error{Message: "directory /home/me/nope does not exist"}
 	f.mu.Unlock()
-	s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: "修 CI", Prompt: "修 CI", Machine: "l4", Cwd: "/home/me/nope", Launcher: "work"}, false)
+	s.startPlanTask("plan_x", "conv1", 0, PlanTask{Title: "修 CI", Prompt: "修 CI", Machine: "l4", Cwd: "/home/me/nope", Launcher: "work", Permission: "bypassPermissions"}, false)
 	f.mu.Lock()
 	starts := append([]map[string]any(nil), f.starts...)
 	checked := len(f.checked)
