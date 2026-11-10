@@ -17761,6 +17761,9 @@ if READINESS or BUILTIN_PRESETS:
         return f + [x for x in extra if x not in f]
 
 READY = {"sc": readiness_mock.SCENARIOS.get(READINESS, {}) if READINESS else {}, "dismissed": False}
+# Optional probe boundaries for #1892: exceed Apple's old 30 s timeout, or refuse the try with an HTTP error.
+READINESS_PROBE_DELAY = float(os.environ.get("MOCK_READINESS_PROBE_DELAY", "0"))
+READINESS_PROBE_ERROR = int(os.environ.get("MOCK_READINESS_PROBE_ERROR", "0"))
 READY_MAIN = "b2e4d6f8-0000-4000-8000-0000000000aa"
 if READINESS:
     _sc = READY["sc"]
@@ -17901,7 +17904,15 @@ if READINESS or BUILTIN_PRESETS:
             return True
         if p == "/api/v1/assistant/readiness" and method == "GET":
             q = parse_qs(urlparse(handler.path).query).get("probe", [""])[0]
-            handler.send_json(ready_state(handler, q in ("1", "true")))
+            probing = q in ("1", "true")
+            if probing and READINESS_PROBE_DELAY:
+                time.sleep(READINESS_PROBE_DELAY)
+            if probing and READINESS_PROBE_ERROR:
+                words = {"zh-Hans": "mock 探针没有回答", "en": "The mock probe did not answer",
+                         "ja": "モックプローブが応答しませんでした"}[lang]
+                handler.send_json({"error": words, "code": "probe_failed", "retryable": True}, READINESS_PROBE_ERROR)
+                return True
+            handler.send_json(ready_state(handler, probing))
             return True
         if p == "/api/v1/assistant/readiness/dismiss" and method == "POST":
             try:
@@ -17954,6 +17965,7 @@ MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|ba
                  "主对话就绪度的场景（#287，docs/operations/testing.md「Readiness scenarios」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
                  "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
                  "MOCK_BUILTIN_PRESETS=1 只加内置供应商预设")
+MOCK_HELP.append("MOCK_READINESS_PROBE_DELAY=<秒> / MOCK_READINESS_PROBE_ERROR=<HTTP 状态>  延迟或拒绝 ?probe=1（#1892，超过旧 30 秒客户端超时 / 显示失败）")
 
 # MOCK_ULTRACODE=1 (#3428, docs/protocol/protocol.md "Claude Code ultracode"): the hub has the `ultracode` feature and the agents show
 # each state of Claude Code's session-only switch: on (the widget, working; its chat has the node's "on" notice), a request
