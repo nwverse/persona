@@ -4,7 +4,7 @@ Snapshot commit 738ba824c, date 2026-11-10. Line numbers refer to that commit. T
 
 ## 1. Summary
 
-**Verdict: broadly conformant, with a consistent set of gaps in secondary controls.** The default iOS path uses system components and tokens: Dynamic Type text styles, semantic colors, `confirmationDialog`, system sheets with detents, Liquid Glass through one `surface()` modifier, and a main composer whose Send button is labeled and sized. No finding rises to P0. The failures cluster in a few repeating patterns: icon-only controls drawn at glyph size, custom gestures and tap handlers with no accessibility path, button labels forced to one line, and destructive swipes without undo. The design system already holds most of the fixes (`tapTargetFrame()`, `Theme.Motion.reduced`, `Theme.Icon`), but they are opt-in and many call sites bypass them.
+**Verdict: broadly conformant, with a consistent set of gaps in secondary controls.** The default iOS path uses system components and tokens: Dynamic Type text styles, semantic colors, `confirmationDialog`, system sheets with detents, Liquid Glass through one `surface()` modifier, and a main composer whose Send button is labeled and sized. No finding rises to P0. The failures cluster in a few repeating patterns: icon-only controls drawn at glyph size, custom gestures and tap handlers with no accessibility path, button labels that shrink or truncate instead of using shorter copy or a stacked group, and destructive swipes without undo. The design system already holds most of the fixes (`tapTargetFrame()`, `Theme.Motion.reduced`, `Theme.Icon`), but they are opt-in and many call sites bypass them.
 
 Counts (85 findings):
 
@@ -32,7 +32,7 @@ Most serious problems:
 |---|---|---|---|---|
 | 1 | HIG-001 | Message actions (Copy and the rest) open only by long press; VoiceOver gets only Quote | `apple/Persona/Views/Chat/MessageMenu.swift:284` | P1 |
 | 2 | HIG-002 | Answer rows on agent question cards are tap gestures with no button trait | `apple/Persona/Views/Interactions/InteractionViews.swift:545` | P1 |
-| 3 | HIG-003 | Approve, Deny and Submit labels forced to one line and shrunk; no stacked layout at large type | `apple/Persona/Views/Interactions/InteractionViews.swift:671` | P1 |
+| 3 | HIG-003 | Approve, Deny and Submit labels shrink and truncate; no stacked button group at large type | `apple/Persona/Views/Interactions/InteractionViews.swift:671` | P1 |
 | 4 | HIG-004 | Swipe-to-delete on to-dos, places and tasks runs at once with no confirmation or Undo | `apple/Persona/Views/Todos/TodosView.swift:125` | P1 |
 | 5 | HIG-005 | Toast Undo is a text-height target in a time-boxed toast VoiceOver cannot reach | `apple/Persona/DesignSystem/Toasts.swift:46` | P1 |
 
@@ -110,11 +110,11 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-003 Primary action buttons are one line and shrink; no stacked layout at large sizes
 - **Severity**: P1. **Platform**: iOS, iPadOS.
-- **Location**: `apple/Persona/Views/Interactions/InteractionViews.swift:671`, `apple/Persona/Views/Interactions/InteractionViews.swift:722`, `apple/Persona/Views/Interactions/InteractionViews.swift:794`, `apple/Persona/Views/Interactions/ElicitationForm.swift:224`, `apple/Persona/Views/Interactions/SecretRunForm.swift:38`, `apple/Persona/DesignSystem/Components.swift:559`, `apple/Persona/Views/Todos/TodoDetailView.swift:475`, `CLAUDE.md:93`.
+- **Location**: `apple/Persona/Views/Interactions/InteractionViews.swift:671`, `apple/Persona/Views/Interactions/InteractionViews.swift:722`, `apple/Persona/Views/Interactions/InteractionViews.swift:794`, `apple/Persona/Views/Interactions/ElicitationForm.swift:224`, `apple/Persona/Views/Interactions/SecretRunForm.swift:38`, `apple/Persona/DesignSystem/Components.swift:559`, `apple/Persona/Views/Todos/TodoDetailView.swift:475`.
 - **Violates**: [Typography][typo] (Dynamic Type): minimize truncation, switch to stacked layouts at large sizes; [Accessibility][a11y]: allow at least 200% enlargement.
-- **Problem**: the project rule "button text never wraps" is implemented as `lineLimit(1)` with `minimumScaleFactor(0.8)` on the permission, plan, elicitation, secret-run, stop-and-close and to-do cards, which is how a user answers a blocked agent. Longer labels shrink 20% then truncate at accessibility sizes; Deny/Allow and Decline/Submit share one row. No stacked fallback exists in these files, although `isAccessibilitySize` is used elsewhere (`apple/Persona/Views/Settings/PersonaSettingsView.swift:156`). The pattern repeats on about 50 labels. Allow and Deny stay distinguishable, so not P0.
+- **Problem**: the project rule "button text never wraps" (which stands) is implemented only as `lineLimit(1)` with `minimumScaleFactor(0.8)` on the permission, plan, elicitation, secret-run, stop-and-close and to-do cards, which is how a user answers a blocked agent. Longer labels shrink 20% then truncate at accessibility sizes; Deny/Allow and Decline/Submit share one row. No stacked fallback exists in these files, although `isAccessibilitySize` is used elsewhere (`apple/Persona/Views/Settings/PersonaSettingsView.swift:156`). The pattern repeats on about 50 labels. Allow and Deny stay distinguishable, so not P0.
 - **Evidence**: `Label("Approve & Auto-Run", systemImage: Theme.Icon.run).lineLimit(1).minimumScaleFactor(0.8)`.
-- **Fix**: amend `CLAUDE.md:93` to "one line at standard sizes, wrapping and stacked at accessibility sizes". Add a design-system button-row helper that switches `HStack` to `VStack` (primary first) when `dynamicTypeSize.isAccessibilitySize`, and uses `lineLimit(2...3)` without `minimumScaleFactor` there. Apply to the cards listed first.
+- **Fix**: keep the project rule: button text stays on one line and does not wrap (decided 2026-11-10; `docs/design/DESIGN_SYSTEM.md` section 1.2, rule 3). For each label that would truncate, first shorten the copy in every language (for example "Approve & Auto-Run"); then ask whether a button fits, and move long or variable text into the card body with short verbs on the buttons. Add a design-system button-row helper that switches the whole group from `HStack` to `VStack` (primary first, full width) when `dynamicTypeSize.isAccessibilitySize`, each label still `lineLimit(1)`. Keep `minimumScaleFactor` only as a last resort for small overflows. Apply to the cards listed first.
 
 #### HIG-004 Swipe-to-delete with no confirmation and no Undo
 - **Severity**: P1. **Platform**: iOS, iPadOS.
@@ -186,7 +186,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 - **Violates**: [Typography][typo]: minimize truncation, show as much useful text at the largest accessibility size, stack at large sizes.
 - **Problem**: the options are the content the user chooses between, taken from a terminal screen; they are `lineLimit(1)` with `minimumScaleFactor(0.8)`, and several use caption2. Options with a shared prefix become identical once clipped, and the user approves agent actions on that basis.
 - **Evidence**: `Text("\(opt.key). \(opt.label)").lineLimit(1).minimumScaleFactor(0.8)`.
-- **Fix**: for the four sites use `lineLimit(2...3)` with `fixedSize(horizontal: false, vertical: true)`, drop the scale factor, and raise caption2 to footnote. Keep one line for short verbs (Allow, Deny, Submit).
+- **Fix**: button text still never wraps (`docs/design/DESIGN_SYSTEM.md` section 1.2, rule 3). These options are content copied from a terminal, not button labels, so a row of truncated buttons is the wrong control: show each option's full text as content (a list of selectable rows, or the text above with short keyed buttons such as "1" and "2"), drop the scale factor, and raise caption2 to footnote. Keep one-line buttons for short verbs (Allow, Deny, Submit), stacked vertically at accessibility sizes.
 
 #### HIG-013 Composer image-thumbnail remove button has no hit area beyond its glyph
 - **Severity**: P1. **Platform**: iOS.

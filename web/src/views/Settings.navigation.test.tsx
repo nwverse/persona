@@ -124,6 +124,8 @@ describe("Settings category navigation", () => {
     await mount("/settings?tab=codex");
     expect(location.pathname + location.search + location.hash).toBe("/settings?tab=agents#settings-codex");
     expect([...host.querySelectorAll('[data-page="agent"]')].map((el) => el.getAttribute("data-agent"))).toEqual(["claude", "codex", "agy", "omp"]);
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(false);
+    expect(host.querySelector("#settings-claude-body")?.hasAttribute("hidden")).toBe(false);
     await act(async () => root.render(null));
     await mount("/settings?tab=translate");
     expect(location.pathname + location.search + location.hash).toBe("/settings?tab=general#settings-translation");
@@ -132,6 +134,18 @@ describe("Settings category navigation", () => {
     await mount("/settings?tab=assistant");
     expect(location.search).toBe("?tab=persona");
     expect(host.querySelector('[data-page="persona"]')).not.toBeNull();
+  });
+
+  it("starts with every agent open, and a heading folds just that one", async () => {
+    await mount("/settings?tab=agents");
+    const rows = [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")];
+    expect(rows.map((b) => b.textContent)).toEqual(["Claude Code", "Codex", "Antigravity", "omp"]);
+    expect(rows.map((b) => b.getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
+    await act(async () => rows[1].click());
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(true);
+    expect(host.querySelector("#settings-claude-body")?.hasAttribute("hidden")).toBe(false);
+    await act(async () => rows[1].click());
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(false);
   });
 
   it("scrolls a shared old link to its section in the combined page", async () => {

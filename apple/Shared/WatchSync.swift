@@ -62,6 +62,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
     var configProvider: (() -> ServerConfig?)?
     var configsProvider: (() -> WatchConfigs?)?
     var onRecording: ((RecordingTransfer) -> Void)?
+    /// Watch side: the meetings' minutes the phone relays (`WatchMinutes`).
+    var onMinutes: ((WatchMinutes) -> Void)?
     var onRecordingReceipt: ((RecordingReceipt) -> Void)?
     var onRecordingEvent: (() -> Void)?
 
@@ -145,6 +147,15 @@ final class WatchSync: NSObject, WCSessionDelegate {
         update(["summary": data])
     }
 
+    /// iPhone side: the meetings' minutes for the watch, when they changed.
+    func push(minutes: WatchMinutes) {
+        #if os(iOS) || os(visionOS)
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isWatchAppInstalled,
+              let data = minutes.data, WCSession.default.applicationContext[WatchMinutes.key] as? Data != data else { return }
+        update([WatchMinutes.key: data])
+        #endif
+    }
+
     private func update(_ values: [String: Any], removing gone: [String] = []) {
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         var ctx = WCSession.default.applicationContext
@@ -171,6 +182,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
         if let data = ctx["summary"] as? Data, let s = try? JSON.decoder.decode(WatchSummary.self, from: data) {
             onSummary?(s)
         }
+        if let minutes = WatchMinutes(data: ctx[WatchMinutes.key] as? Data) { onMinutes?(minutes) }
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {

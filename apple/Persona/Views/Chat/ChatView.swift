@@ -182,7 +182,7 @@ struct ChatView: View {
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
 
-    init(key: SessionKey, style: ChatStyle = .dev) {
+    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil) {
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
         _key = State(initialValue: style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key)
@@ -191,10 +191,13 @@ struct ChatView: View {
         #endif
         opened = key
         self.style = style
+        self.itemManager = itemManager
     }
 
     /// The session this page was opened with (the path's), which `switchTo` records its switches under.
     private let opened: SessionKey
+    /// The manager of the inbox item this conversation was opened from (`InboxChatRoute`).
+    private let itemManager: String?
 
     /// A subagent of this session being looked at instead of the main agent (read-only, same message UI).
     @State private var viewing: Subagent?
@@ -218,10 +221,10 @@ struct ChatView: View {
         ComputerActivity.latest(in: store.items, chat: shownKey.machineRef, machines: model.namedMachines)
     }
     private var session: Session? { model.session(key) }
-    /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the one the
-    /// Persona page shows it for; nil for the default's.
+    /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the inbox
+    /// item's it was opened from or the one the Persona page shows it for; nil for the default's.
     private var linkManager: String? {
-        model.linkManager(session?.manager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
+        model.linkManager(session?.manager ?? itemManager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
     }
     /// The latest state of the subagent being viewed (the list refreshes with the session).
     private var viewedAgent: Subagent? {
@@ -2493,7 +2496,9 @@ struct ChatView: View {
         }
         #endif
         let presented = hooked
+        #if os(macOS)
         .sheet(item: $menu.selecting) { t in SelectableTextSheet(text: t.text, plain: t.plain, quote: menu.selectionQuote(of: t)) }
+        #endif
         .sheet(item: $menu.sharing) { m in MessageShareSheet(message: m) }
         .confirmationDialog("This Reply", isPresented: Binding(get: { menu.more != nil }, set: { if !$0 { menu.more = nil } })) {
             if let id = menu.more {
@@ -3985,6 +3990,10 @@ struct Composer: View, Equatable {
     let key: SessionKey
     var status: SessionStatus
     var placeholder: String?
+    /// Glow While Replying (Settings › Appearance, off by default): the assistant's composer glows while its reply is
+    /// being written (`working`), not while it waits on the user (`blocked`) and not in an Agent's chat.
+    @StoredValue(ComposerGlowPrefs.enabledKey) private var glowEnabled = false
+    private var glowsWhileReplying: Bool { glowEnabled && shellChat && status == .working }
     /// After /clear the pane runs a new session: the page follows it.
     var onCleared: ((SessionKey) -> Void)? = nil
     /// The box got or lost the keyboard.
@@ -4355,6 +4364,7 @@ struct Composer: View, Equatable {
                                  history: key.path,
                                  gate: gate,
                                  openAttach: attachOpener,
+                                 glows: glowsWhileReplying,
                                  send: { if let gate { gate.action() } else { Task { await sendText(text) } } }) {
                     Button { showPhotos = true } label: { Label("Photos", systemImage: Theme.Icon.photos) }
                     if CameraPicker.isAvailable {

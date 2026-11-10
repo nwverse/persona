@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/compat"
 )
 
 // A launcher health check runs a real headless claude a hundred times a day on each computer, each leaving a
@@ -35,7 +37,8 @@ func TestLauncherCheckTranscriptsTakeNoSlots(t *testing.T) {
 	_ = os.MkdirAll(kept, 0o700)
 	writeIn("-tmp-persona-check-42", mine, kept, 30*time.Hour)
 	writeIn("-tmp-persona-check-1001641372", gone, "/tmp/persona-check-1001641372", 30*time.Hour)
-	writeIn("-private-tmp-jarvis-check-3821031972", gone, "/tmp/jarvis-check-3821031972", 25*time.Hour) // an older node's check, old prefix
+	old := compat.LauncherCheckDir + "3821031972" // an older node's check, old prefix
+	writeIn("-private-tmp-"+old, gone, "/tmp/"+old, 25*time.Hour)
 	for i := 0; i < 100; i++ {
 		writeIn("-tmp-persona-check-1000"+fmt.Sprint(500000+i), fmt.Sprintf("eeeeeeee-0000-0000-0000-%012d", i), "/tmp/persona-check-100050000"+fmt.Sprint(i), time.Duration(100-i)*time.Minute)
 	}

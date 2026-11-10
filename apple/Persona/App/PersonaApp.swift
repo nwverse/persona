@@ -13,9 +13,15 @@ struct PersonaApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                #if DEBUG && os(iOS)
+                .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
+                #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
+                    #if os(iOS)
+                    if ShortcutCallbacks.shared.handle(url) { return } // a shortcut Persona ran came back (#2283)
+                    #endif
                     if MetaGlasses.shared.handle(url) { return } // the Meta AI app's callback (docs/apple/meta-glasses.md)
                     #if os(iOS)
                     if let link = FleetLink.session(url) { // tapped the Live Activity
@@ -80,7 +86,13 @@ struct PersonaApp: App {
                     await WorkoutReports.shared.refresh(model: model)
                     #endif
                 }
+                #if os(iOS)
+                ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
+                #endif
             } else if new == .background {
+                #if os(iOS)
+                ClipboardOfferWatcher.shared.left()
+                #endif
                 // A suspended app's socket looks alive to the hub until it times out, and phone_* calls sent to it hang.
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
@@ -141,6 +153,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         // `-openRecapsFresh YES`: no away recap closed yet, so the newest shows open again (RecapInFlowTests).
         if d.bool(forKey: "openRecapsFresh") { d.removeObject(forKey: "closedRecaps") }
+        // `-openDraftsFresh YES`: nothing left typed in any chat's box from an earlier run (SelectTextTests read a copy by
+        // pasting it there; a long one left behind makes the box tall and moves the chat, #603).
+        if d.bool(forKey: "openDraftsFresh") { AppModel.shared.drafts = [:] }
         // `-openScreenFresh YES`: no Mac's Screen Sharing sign-in remembered, One-Tap Unlock off (ScreenPasswordTests, #1322).
         if d.bool(forKey: "openScreenFresh") {
             ScreenCredentials.forgetAll()
@@ -401,7 +416,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     static func resolveFromNotification(_ id: String, group: String?, _ resolution: Resolution, action: String, done: @escaping () -> Void) {
         inBackground("resolve-interaction", done: done) {
             do {
-                try await HubStore.client(group: group).resolve(id, resolution)
+                try await AppModel.shared.outside(HubStore.client(group: group)) { try await $0.resolve(id, resolution) }
             } catch {
                 await NotificationActions.reportFailure(id: id, title: NotificationActions.failureTitle(action: action), error: error)
             }

@@ -43,8 +43,7 @@ func (s *Service) inboxRoutes() {
 		if !s.inboxUp(w, r) {
 			return
 		}
-		items, asOf := s.inboxListAt(r.URL.Query().Get("sources") == "all")
-		apierr.WriteJSON(w, map[string]any{"items": items, "as_of": asOf, "triage": s.inboxTriage()})
+		s.writeInboxList(w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
 	})
 	s.handle("GET /api/v1/inbox/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
@@ -203,8 +202,7 @@ func (s *Service) inboxRoutes() {
 				"error": i18n.T(l, "assistant-inbox.refresh_failed"), "detail": i18n.Localize(err, l), "retryable": true})
 			return
 		}
-		items, asOf := s.inboxListAt(r.URL.Query().Get("sources") == "all")
-		apierr.WriteJSON(w, map[string]any{"items": items, "as_of": asOf, "triage": s.inboxTriage()})
+		s.writeInboxList(w, r.URL.Query().Get("sources") == "all")
 	})
 }
 
@@ -259,6 +257,9 @@ func (s *Service) inboxList(all bool) []InboxItem {
 
 // inboxListAt is inboxList and the moment it was read (as_of): everything listed arrived by then.
 func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
+	if inboxMemoVerify { // tests: every list checks the bytes GET /api/v1/inbox keeps too (inbox_list_memo.go)
+		s.inboxListRaw(all)
+	}
 	b := &s.inbox
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -90,7 +90,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		}
 		t.TodoID = todo.ID
-		if s.isMain(ctx, p.Conversation) { // the main conversation follows up what it hands out (supervise.go)
+		if s.supervises(ctx, p.Conversation) { // the main conversation or a leader follows up what it hands out (supervise.go)
 			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
 		}
 		if t.ReuseTodo != "" {

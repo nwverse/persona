@@ -163,6 +163,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         EngineOrca("Terminals in Orca"),
         EngineTern("Terminals in Tern"),
         EnginePaseo("Agents in Paseo"),
+        EngineCindy("Agents in Cindy"),
         EngineOffline("Offline, no detection info yet"),
         EngineUnknown("No detection info yet"),
         EngineFound("Detected and available"),

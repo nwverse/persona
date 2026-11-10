@@ -166,7 +166,7 @@ func (n *Node) defaultKind() string { return n.engineChoice().Default }
 // noEngineRefusal is why nothing can start on a machine that enables no terminal engine (the empty set).
 func noEngineRefusal() error {
 	return refusal(engineMissing, "这台电脑没启用终端引擎，不能从手机新开或接着会话，这次没有发送。"+
-		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca 或 Paseo）再试。", nil)
+		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca、Paseo 或 Cindy）再试。", nil)
 }
 
 // watchEngine starts watching the engine in use for as long as ctx lasts (Serve); engine.use moves it to the new one.
@@ -336,6 +336,7 @@ func (n *Node) engines(ctx context.Context, herdrVersion string) []proto.Engine 
 		orcaEngine(ctx, orcaClient()),
 		ternEngine(ctx, ternClient()),
 		n.paseoEngine(ctx),
+		n.cindyEngine(ctx),
 	}
 }
 

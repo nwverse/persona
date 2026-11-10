@@ -650,8 +650,13 @@ func (h *botmuxHost) trigger(ctx context.Context, body []byte, fresh bool) (int,
 	return resp.StatusCode, msg, nil
 }
 
+// botmuxShowLink makes `botmux dashboard current` print the dashboard's loopback link: botmux 3.58 and later hide it
+// (it carries the token) unless asked; older botmux print it anyway.
+const botmuxShowLink = "--i-am-the-owner-show-token-link"
+
 // dashboard is botmux's dashboard on loopback and its token, from `botmux dashboard current` (which makes the first
-// token when there is none), kept until fresh.
+// token when there is none), kept until fresh. It asks with botmuxShowLink first, and without it when that fails or
+// prints no link (a botmux that does not know the flag). Errors never carry the token.
 func (h *botmuxHost) dashboard(ctx context.Context, fresh bool) (string, string, error) {
 	h.mu.Lock()
 	base, token := h.base, h.token
@@ -661,23 +666,42 @@ func (h *botmuxHost) dashboard(ctx context.Context, fresh bool) (string, string,
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := h.run(ctx, "dashboard", "current")
-	if err != nil {
-		return "", "", fmt.Errorf("botmux dashboard current: %w", err)
+	base, token = "", "" // fresh: ask again
+	out, err := h.run(ctx, "dashboard", "current", botmuxShowLink)
+	if err == nil {
+		base, token = dashboardLink(out)
 	}
+	if base == "" {
+		if out, err = h.run(ctx, "dashboard", "current"); err != nil {
+			return "", "", fmt.Errorf("botmux dashboard current: %w", err)
+		}
+		base, token = dashboardLink(out)
+	}
+	if base == "" {
+		if bytes.Contains(out, []byte(botmuxShowLink)) {
+			return "", "", errors.New("botmux dashboard current: botmux hides the dashboard's loopback link and did not show it with " +
+				botmuxShowLink)
+		}
+		return "", "", errors.New("botmux dashboard current: no dashboard URL in its output")
+	}
+	h.mu.Lock()
+	h.base, h.token = base, token
+	h.mu.Unlock()
+	return base, token, nil
+}
+
+// dashboardLink finds the dashboard's direct link in the output of `botmux dashboard current`: an http URL with a port
+// and the token in t (the https workbench links go through a proxy, without a port). It returns the dashboard on
+// loopback and the token, or "" when there is no such link.
+func dashboardLink(out []byte) (base, token string) {
 	for _, f := range strings.Fields(string(out)) {
 		u, err := url.Parse(f)
 		if err != nil || u.Scheme != "http" || u.Query().Get("t") == "" || u.Port() == "" {
 			continue
 		}
-		base = "http://" + net.JoinHostPort("127.0.0.1", u.Port())
-		token = u.Query().Get("t")
-		h.mu.Lock()
-		h.base, h.token = base, token
-		h.mu.Unlock()
-		return base, token, nil
+		return "http://" + net.JoinHostPort("127.0.0.1", u.Port()), u.Query().Get("t")
 	}
-	return "", "", errors.New("botmux dashboard current: no dashboard URL in its output")
+	return "", ""
 }
 
 // botmuxThreads finds the thread of each Codex and compatible variants session botmux lists (pane → the session id the node keys it

@@ -5,6 +5,7 @@
   "detail_orca": "Orca 里的终端",
   "detail_tern": "Tern 里的终端",
   "detail_paseo": "Paseo 里的 Agent",
+  "detail_cindy": "Cindy 里的 Agent",
   "detection_offline": "电脑离线，没有检测结果",
   "detection_none": "还没有检测结果",
   "detection_not_found": "没检测到",

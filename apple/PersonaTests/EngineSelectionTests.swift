@@ -32,7 +32,7 @@ import Testing
         #expect(!EngineSelectionModel.canSelect(future, on: m))
         m.engines = []
         #expect(!EngineSelectionModel.canSelect(future, on: m))
-        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo"])
+        #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "herdr-core", "herdr-both", "orca", "tern", "paseo", "cindy"])
     }
 
     @Test func combinedEngineIsAKnownChoice() throws {
@@ -67,6 +67,15 @@ import Testing
         #expect(EngineSelectionModel.initialChoice(m, pairing: true) == .tern)
         #expect(EngineSelectionModel.options(m).map(\.id) == ["herdr", "tern"], "the node's list as it reports it")
         #expect(try JSON.decoder.decode(Machine.self, from: JSON.encoder.encode(m)) == m)
+    }
+
+    @Test func cindyIsAKnownChoice() throws {
+        let cindy = MachineEngine.cindy
+        #expect(cindy.rawValue == "cindy" && cindy.name == "Cindy")
+        #expect(cindy.detail == "Cindy 里的 Agent")
+        #expect(EngineSelectionModel.canSelect(cindy, on: try machine()), "selectable offline, as the other engines")
+        let m = try machine(",\"engine\":\"cindy\",\"engines\":[{\"id\":\"cindy\",\"name\":\"Cindy\",\"available\":true,\"version\":\"0.1.128\"}]")
+        #expect(m.engine == .cindy && m.engines.first?.version == "0.1.128")
     }
 
     @Test func pairingTargetAndPreselection() throws {

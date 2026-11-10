@@ -72,6 +72,11 @@ type Service struct {
 	mux    *http.ServeMux
 	routes []string
 
+	// preparedMD is the CLAUDE.md this hub last wrote on a machine for a directory (key: machine id NUL directory),
+	// by prepareSpaceIf; refreshInstructions writes again what differs.
+	preparedMu sync.Mutex
+	preparedMD map[string]string
+
 	epoch string
 	pubMu sync.Mutex
 	seq   uint64
@@ -94,16 +99,22 @@ type Service struct {
 	reports   reportBook     // reports.go
 	upReports reportRate     // agent_control.go: report_to_supervisor
 	noteRate  reportRate     // todo_decisions.go: todo_decision_add
+	dispatch  dispatchBook   // dispatch.go: dispatch_start, dispatch_read
 	adoptMu   sync.Mutex     // agent_control.go: one agent_supervise at a time
 	placeBook placeBook      // places.go
 	accept    acceptBook     // acceptance.go
-	later     laterBook      // later.go: questions that can wait for a briefing
-	brief     briefBook      // briefing.go
-	reporters reporterBook   // reporters.go
-	sched     schedule       // schedule.go
-	tasks     tasksState     // tasks.go
-	questions questions      // tools.go (ask_user)
-	askTodos  askTodoBook    // ask_todo.go: the questions nobody answered, now to-dos
+	deploy    deployProbe    // deploy_check.go: is the work in the running hub
+	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
+	ownerVerifiesAll bool
+	later            laterBook    // later.go: questions that can wait for a briefing
+	brief            briefBook    // briefing.go
+	reporters        reporterBook // reporters.go
+	sched            schedule     // schedule.go
+	tasks            tasksState   // tasks.go
+	questions        questions    // tools.go (ask_user)
+	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
+	deadlineSweeping atomic.Bool
+	askTodos         askTodoBook // ask_todo.go: the questions nobody answered, now to-dos
 	// minutesMu is held while confirmed action items of meeting minutes become to-dos (kb_minutes.go): one
 	// confirmation at a time reads and records what the others made.
 	minutesMu  sync.Mutex

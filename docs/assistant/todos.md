@@ -48,8 +48,10 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
-External runtime starts (including Paseo) still fail closed: their start protocol does not guarantee enforcement,
-and a runtime may ignore the mode or fall back to a different provider at dispatch.
+External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
+without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
+(#3238): a plan start runs on a Paseo provider that runs Claude Code, in Paseo's `plan` mode; a non-Claude provider, no
+such provider, an agent Paseo reports in another mode (archived at once), or a takeover are refused.
 Update both the assistant and nodes for this behavior. This is the runtime's plan restriction on task work, not a
 promise that the runtime writes no session metadata or plan files, and it does not prevent a later explicit mode
 change by the user.
@@ -327,12 +329,26 @@ effective from the next judgment and next dispatched task. When on:
   first try to resolve CI/other-person/environment blocks yourself; if impossible, state where and who can unblock. Fixed last line: `交付：<已上线并实测 | 停在 PR | 已合未上线 | 默认关待启用 | 不涉及上线>；卡点：…；谁来解：…` ("Delivery: <live and tested | at PR | merged, not live | off by default, awaiting enablement | no deployment involved>; blocker: …; who can resolve: …"). Read-only tasks omit it.
 - **Judge one more thing**: the "Automatic completion" model also returns `delivery` (`live` / `pr` / `merged` / `off` / `none`), `gate` (blocking gate), `unblock` (`user` / `agent` / `other`), taking the Agent's line as authoritative unless contradicted by the body.
   If model omits it, use Agent's line; if neither exists, `none`. If `live` (or not judged) but reply mentions a PR without deployment or TestFlight build-number wording, treat as `pr` / `merged`, unless the Agent's line says live.
+- **`live` needs evidence** (#3205): a `live` the judge (or the Agent's line) gives is checked against the running hub; the hub's commit not containing the PR's merge commit (or the check failing) makes it `merged` with the gate "等部署…" / "等确认部署…" (`docs/assistant/todo-status-sop.md` "Deployed needs evidence").
 - **Only `live` and `none` auto-complete**: if `verdict` is `done` but delivery incomplete, change to `undelivered` and keep to-do open.
   Main-chat-supervised tasks (#3124, already not closed by hub) do not enter pending review; supervision message says "Finished but not live yet: …(at PR, blocked on '…')", for main chat to follow up or ask user approval.
 - **To-do shows the blocker**: judgment results except `not_done` are recorded in to-do `delivery` (`{"state", "gate", "unblock", "at"}`, settings `assistant.todo_stages` alongside stage strip, no new table); stage advances at least to its corresponding step (PR → review, merged → merge, off by default/live → deploy).
   Web to-do rows add "At PR · Blocked on '…' · Needs your approval" while open and `state` is `pr` / `merged` / `off`; Android to-do rows (when the Agent is neither working nor waiting for you) and details show the same line (`Todo.hold` in `core:domain`); iOS / Mac do not render it yet (optional field, old clients unaffected).
 - **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten).
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
+
+## Spot-check reviews
+
+(#3128, `assistant/supervise_sample.go`.) Every finished supervised task waits for the main conversation's `task_review`; with many tasks that makes the main conversation the bottleneck. The assistant setting `review_sample_percent` (0–100) lets the done judge close the tasks it can verify and sends only a share of them to the main conversation.
+
+- **Default 100**: nothing changes. The judge is not asked for anything more and every finished task waits for `task_review`.
+- **Turning it on**: tell the assistant (`assistant.review_sample_percent` in `persona_settings`, confirmation card on the phone), or `PUT /api/v1/assistant` with `{"review_sample_percent": 20}`; `GET /api/v1/assistant` reports the share in effect. It applies from the next judgment.
+- **The judge's check**: below 100, the "Automatic completion" model of a supervised task with `done_when` also returns `checks` (per criterion, in order: `checkable`, `met`, `evidence`) and `delivery` (as in "Delivery", whether or not `done_needs_delivery` is on; it is not written to the to-do unless that setting is on). The hub matches the checks to the ledger's criteria by position. A task **passes** when every criterion is checkable (a command's output, CI, a link, a live reading — not a matter of taste or something only the user can confirm), met, with evidence, and the delivery is `live`. A task without `done_when` never passes.
+- **Passed and not sampled**: the judge closes it as `task_review accepted` would: the ledger records an accepted review `by: "judge"` with the checks, the to-do closes (`done_reason` starts with 判官核对通过), the outcome goes to the project timeline, and the owner gets the usual conclusion card. The main conversation gets no supervision message for it.
+- **Passed and sampled**: whether a task is sampled is a hash of the to-do id and the stretch of work, so the same work always gets the same answer; about `review_sample_percent` percent are. A sampled one waits for `task_review` as before, its supervision message starting with 抽查 so the main conversation knows the judge's check already passed.
+- **Failed the check**: waits for `task_review` as before.
+- **Never closed by the judge**: a rework round (the supervisor was promised the next review, and asked for more than `done_when` says), a task that was reopened or was ever accepted or cancelled before, and a task the supervisor reviewed while the judge was deciding. `live` counts only when the judge itself says so, never on the Agent's delivery line alone; checks that do not come one per criterion with each criterion copied in its place count as not met.
+- When the independent review (`supervise_autoreview.go`) starts for a task, it runs first and its result waits for `task_review`; the judge's check does not close it.
 
 ## Close Agents for completed tasks
 
@@ -422,6 +438,17 @@ The costliest long-task mistake is an Agent forgetting a decision already made: 
 - **The supervisor** is told what went out. With a Lark card, as before (don't ask again), plus that a push with OK went too. With the bot off it still asks the owner as before (the hub taking a push says neither that a device got it nor that its app shows OK), and is told that OK on the push may take the recommendation first.
 - **Clients**: the web shows the ask on the to-do's row, its page, the main chat's task card and the task panel, with the one button that takes it (`docs/web/web.md`, "Waiting for you"); a stopped to-do with an open ask sorts with Awaiting review. The iOS / Mac / Watch part (the to-do row and detail, the `TODO_DECIDE` action) and Android are not built yet.
 - Not done here: the push is not withdrawn when the decision is taken elsewhere (an OK on it then answers 409, "already handled"); the watch's answer-only credential can neither read `/api/v1/todos` nor call the accept route.
+
+## Decision deadlines
+
+(#3127, `assistant/decision_deadline.go`.) A decision that waits for the owner can carry a recommended default and a deadline, so work does not stop just because nobody answered. Without a deadline nothing changes.
+
+- **Who sets it**: `task_review` with `needs_user` (`deadline`, `reversible`, with its `recommend`) and `ask_user` (`deadline`, `reversible`, and a `recommend` on every question naming one of its options). `deadline` is a duration (`4h`) or an RFC 3339 time, 1 minute to 30 days ahead; a deadline without `reversible`, or without a recommendation, is refused. `reversible: false` is for what cannot be undone: deleting, sending anything to other people, spending money and production changes.
+- **Where it is kept**: a task's on its decision in the acceptance book (`acceptAsk.deadline`, `reversible`, `due_at`, `by_default`); a question's in its arguments (as a time) and, once it became a to-do, on its record (`assistant.ask_todos`). The card waits no longer than the deadline. The Lark card and the decision push add a line with the deadline and what it does; on the phone card the recommended option's description says so.
+- **At the deadline** (`acceptLoop` looks every minute):
+  - **Reversible**: the recommendation is taken the way the owner's OK takes it. A task's goes to its Agent (the message says it was taken by default and can still change) and the task stops waiting for the user; a question still waiting gets the recommended options as the tool's answer, and one that became a to-do earlier has them sent to the asking conversation as a new message and closes. Either way a decision is recorded on the to-do: the question, the option, the reason "taken by default: no answer by MM-DD HH:MM", with `source = "agent"` because it is not the owner's own call.
+  - **Not reversible**: nothing is taken. The owner is reminded once (the decision push again, and the Lark card again when there was one; a question's to-do gets a push), and it keeps waiting; the owner can still answer at any time.
+- An answer from the owner before the deadline wins as before; a deadline that passes while the hub is down is handled on the next sweep.
 
 ## Chat thread
 
@@ -566,7 +593,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 - Sidebar has a **To-dos** entry with unfinished-count badge.
 
 ### 2. To-do list and details
-- List: search bar, unfinished list, collapsed completed group at bottom. Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
+- List: search bar, unfinished list, collapsed completed group at bottom. Every client's default list (web, iOS / Mac and Android, #3206) is by status section (Waiting on you, Working, Just finished, PR to merge, then Other open, Shelved and Done folded), related to-dos merged into one row and stale ones shelved; by folder is the web's secondary view (`docs/assistant/todo-status-sop.md`). Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
 - Details: edit title/notes directly (iOS: notes can be dictated with the composer's mic, in details and in the New To-Do sheet, #2188); current state; linked projects (whole-project links) and active Agents (state dot, title, machine/workspace labels, latest-message summary, update time, tap to chat; beyond session time window use snapshot and mark "Ended"; launch failures show reason/removal); collapsed "Previously involved" list; persistent bottom **Hand to Agent** and **Done / Reopen** buttons; delete in top-right more menu.
 - **Decisions** section under notes (web): effective decisions chronologically (question, choice, reason, time, provenance), each can **Change decision** (write a replacement) or ⋯ **Which decision did this replace?** / **Undo replacement**; when superseded records exist, **View full history**, with old records struck through. Hide whole section if hub unsupported (route 404).
 - **Projects** section above Agents: each row "project · machine", with **Remove**; projects without online Agents show "No Agents currently": only sessions in current hub group, on connected computers, not offline count (same-ID computers in other groups do not; disconnected computer sessions marked unknown by hub rather than offline do not count either, matching web). Agent source says "With project <name>" or "Dispatched by <parent title>"; missing project source shows only "With project", missing parent only "Spawned", manual links unlabelled.

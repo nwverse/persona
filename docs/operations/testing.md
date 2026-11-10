@@ -69,17 +69,19 @@ source inputs, with same-shard fallback keys; `-count=1` keeps test execution un
 tests, rather than inferring runtime from `Sleep` inside fake-clock tests. The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
 
-Android keeps five independently isolated shards, at most two concurrent: lint/build, core tests, two disjoint sorted feature-test shards,
-and platform/app tests. Module declarations are dynamically partitioned; unknown module prefixes use a fallback shard, while unsupported
-declarations fail rather than skip coverage. Every module's complete test selector retains all variants. Gradle workers remain bounded;
-build and public Robolectric dependency caches do not contain private config. Per-shard Gradle profiles and test/lint reports are uploaded
-for diagnosis. Local entry points without shard options still run complete verification.
+Android runs two independently isolated lanes, both at once: `lint-build-test-0` (checker tests, all-module lint, the debug APK and
+the first of two disjoint sorted feature-test shards) and `test-1` (core tests, the second feature shard, and platform/app tests).
+The parts are balanced by measured task time, and each lane runs its parts in one Gradle invocation, so the upstream compilation they
+share runs once per lane rather than once per part (#3056). Module declarations are dynamically partitioned; unknown module prefixes
+use a fallback part, while unsupported declarations fail rather than skip coverage. Every module's complete test selector retains all
+variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-lane Gradle
+profiles and test/lint reports are uploaded for diagnosis. Local entry points without lane options still run complete verification.
 
 | Platform / reusable workflow | Local entry | Checks | Hosted runner | Planning duration (warm / cold) |
 | --- | --- | --- | --- | --- |
 | Server / `.github/workflows/server-test.yml` | `scripts/ci/server.sh` | gofmt, vet, complete Go tests against disposable Postgres 18, build, Windows cross-build/vet, the programs and tunnel tests with `server/build-tags.txt`, extension schema/examples/SDK bundle, Go SDK tests; hub route/architecture, prompts and hub i18n guards are Go tests | ubuntu-latest | 8–15 / 15–30 min |
 | Web / `.github/workflows/web-test.yml` | `scripts/ci/web.sh` | npm ci, scoped ESLint, TypeScript, complete Vitest, production build and privacy | ubuntu-latest | 2–4 / 4–7 min |
-| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token checker tests, translations/literals, token ratchet, all-module lint and unit-test variants, debug APK | ubuntu-latest | 8–15 / 15–30 min |
+| Android / `.github/workflows/android-test.yml` | `scripts/ci/android.sh` | i18n/token checker tests, translations/literals, token ratchet, all-module lint and unit-test variants, debug APK | ubuntu-latest, two lanes | 8–15 / 15–30 min (branch runs with main's caches measured 15–18 min, #3056) |
 | Apple / `.github/workflows/apple-test.yml` | `scripts/ci/apple.sh ios` and `scripts/ci/apple.sh macos` | PersonaKit/iOS/Watch/HTML and Mac build/unit tests; synthetic configuration, no distribution signing; real results remain visible | macos-26 runners, Xcode 26.0.1 (Swift 6.2) | queue and execution measured separately |
 | Scripts/docs / `.github/workflows/scripts-tests.yml` | `scripts/ci/scripts.sh` | every Python script test, doc/code paths and index, layout/shell/Python compatibility, privacy-rule regression, catalog/translation/token checks, actionlint, issue-link logic, website worker | ubuntu-latest | 2–4 / 4–7 min |
 | Runtimes / `.github/workflows/runtimes-test.yml` | `scripts/ci/runtimes.sh` | TypeScript SDK typecheck/test/portability, Agent SDK build, every runtime integration's npm tests | ubuntu-latest | 2–4 / 4–7 min |
@@ -598,7 +600,8 @@ From WeChat below first main-chat message. Restart mock for dark (binding state 
 Sent as You (`SentModelTests`, `SentAsYouTests`, #5278, `docs/extensions/connectors.md` ("Sent as the user")): `MOCK_SENT=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/SentAsYouTests`: the row after Connectors, how each send was let through, a row's details and a text of exactly 4000 characters,
 the chat that asked, Load Earlier, the connector chips and a chip with nothing recorded (Show All), and the empty / no database / no full access / older hub / unreachable states. Each test first puts the mock back to its rows
-(`GET /mock/sent?mode=1`), then switches it with `mode=empty|nodb|forbidden|old`. `TEST_RUNNER_PERSONA_SHOTS=<dir>` writes `ios-sent-as-you-light.png` and `-dark.png` (`testScreenshots`). `-tab settings -openSentAsYou YES` opens the page directly.
+(`GET /mock/sent?mode=1`, which also forgets recalls), then switches it with `mode=empty|nodb|forbidden|old`. Recall (#3219, `testRecallAsksThenTakesTheMessageBack`): row 66 has **Recall…** and the mock takes it back,
+row 60's recall is refused (502 `recall_refused`, the red text under the button) and row 54 carries the **Recalled** tag; shots `sent-qa-recall` and `sent-qa-recall-refused`. `TEST_RUNNER_PERSONA_SHOTS=<dir>` writes `ios-sent-as-you-light.png` and `-dark.png` (`testScreenshots`). `-tab settings -openSentAsYou YES` opens the page directly.
 
 Browser logins (#1304): `MOCK_BROWSER=ready PORT=<dedicated port> python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>` runs `BrowserLoginsTests`: machine websites, pick cookies.txt (`-openCookieFile <path>` replaces file picker), none selected by default, expired disabled, import/clear; `TEST_RUNNER_PERSONA_SHOTS=<directory>`.
 
@@ -672,6 +675,7 @@ Long-scroll uses `XCTOSSignpostMetric`; simulator reports duration, not dropped 
 - Mock: `PORT=18775 MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py &` (~130 sessions: platform 3 Needs you / 35 Unread / 12 Working,
   plus mostly/all-idle spaces; `seen` WS or POST changes Unread→Seen, `GET /mock/seen`, `/mock/reset`),
   `TEST_RUNNER_PERSONA_AGENTS_HUB=http://127.0.0.1:18775 TEST_RUNNER_PERSONA_SHOTS=<directory> TEST_RUNNER_PERSONA_STYLE=light … -only-testing:PersonaUITests/AgentsListTests`, repeat dark.
+- `-openDraftsFresh YES` empties every chat's saved draft at launch: `SelectTextTests` read a copy by pasting it into the composer (the runner may not read the app's pasteboard), and a long draft left behind makes the composer tall and moves the chat.
 - `-openAgentsFresh YES` clears remembered filter/grouping/compact/collapse at launch. Tests must change these via UI, not fixed launch args which override saved values.
 - Grouping menu and long-run cap (`AgentsGroupingTests`, #5766): `PORT=<port> MOCK_AGENTS=1 python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_GROUPING_HUB=<mock URL>`; each grouping from the capsule beside the quick filters, By Status kept after a restart, Unread's Show all; `TEST_RUNNER_PERSONA_SHOTS=<directory>` + `TEST_RUNNER_PERSONA_SCHEME=light|dark` + `TEST_RUNNER_PERSONA_STYLE=<name>` for the shots.
 - Recent flat mode (`RecentAgentsTests`): ordinary mock (no `MOCK_AGENTS`), `TEST_RUNNER_PERSONA_RECENT_HUB=<mock URL>`,
@@ -948,6 +952,8 @@ maintained locally); backtick values in `CLAUDE.local.md`. Also any private IPv4
 (except `example.*`, public mailboxes, public `site/` contact). Reports type and origin only, never value:
 `private value (5 chars) from config machines.id, config machines.ssh`, `from private-words.txt`, `from CLAUDE.local.md`, `from the home directory`;
 a key that is not a snake_case word or is itself a private value shows as `*` (`config app_store.provisioning_profiles.*`).
+Staged and range scans read the files' Git objects in one `git cat-file --batch`, NUL-separated with `-z`; Git before 2.36 has no `-z` there,
+and the same requests then go one per line (#3224).
 **Ordinary-word config values** (#1065): a machine id like a room's name matches every variable, comment and environment variable of that name
 (`_` is a word boundary), blocking whole PRs on that machine. If such a value names nobody, add a `!<word>` line to `private-words.txt`
 (case-insensitive); the hint after the hits appears only when one of them can be taken back this way. The waiver goes by value, so it also covers

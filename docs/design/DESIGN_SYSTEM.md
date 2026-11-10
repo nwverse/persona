@@ -86,7 +86,7 @@ Relationship to other docs:
 
 1. UI code uses only tokens: font level, `Theme.Space`, `Theme.Radius`, `Theme.Size` with `scaledFrame`, `Theme.Motion`, role colors, `Theme.Icon`. A plain `frame` is for lines of 4 pt or less.
 2. Never restyle an existing screen directly. A new look is a new `AppStyle` or `ThemeColor`.
-3. Button text never wraps. Use `lineLimit(1)` with `minimumScaleFactor`, or a shorter label. Open decision: at accessibility text sizes this conflicts with Apple's advice to stack layouts and minimize truncation (HIG-003 in `docs/design/HIG_AUDIT.md`). The proposed amendment is to let a row of buttons stack vertically when `dynamicTypeSize.isAccessibilitySize` while each label stays on one line. Changing the rule in `CLAUDE.md` is the maintainers' call.
+3. Button text never wraps (decided 2026-11-10). A button label stays on one line at every text size. When a label would be truncated, work through these in order: (a) shorten the copy, in every language; (b) ask whether a button is the right control here, since long or user-supplied text is content and belongs in a row, a list or the body, and a set of actions that doesn't fit goes into a menu; (c) at accessibility text sizes (`dynamicTypeSize.isAccessibilitySize`) stack the whole button group vertically, primary action first, each label still on one line. `minimumScaleFactor` is a last resort for small overflows such as long translations, never the fix for a label that is too long. HIG-003 and HIG-012 in `docs/design/HIG_AUDIT.md` are tracked against this rule.
 4. Use `SecretField`, not `SecureField`, for tokens and keys.
 5. Never write `glassEffect` or `.glass` directly. Go through `.surface` and `.themedButton`.
 6. Docs are English only. User-visible strings go through the string catalogs (section 5.5).
@@ -350,6 +350,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
 - Row actions: swipe actions and a context menu with the same actions. Agents rows on iOS have no swipe (context menu only, #1244).
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
+- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
 
 ### 3.5 Navigation
 
@@ -374,6 +375,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Forms use `.formButton` and `FormAction`.
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
+- `SystemPasteButton` (`apple/Persona/DesignSystem/ClipboardButtons.swift`) wraps the system `PasteButton` for anything that sends what is on the phone's clipboard: a capsule in the accent with the system's own icon and word. Why not `.themedButton`: only the system Paste button reads the clipboard without iOS asking "Allow Paste?" first (the tap is the permission), and the system draws it, so it can be tinted and shaped but not restyled. Place it beside a themed button that does the same thing by reading the clipboard, with one line saying it sends without the prompt (the computer page's Clipboard section, #3064).
 - Web buttons are 32 px tall (hit area expanded on touch). Android: Large 48, Medium 40, Small 32 dp (DS-06).
 
 ### 3.8 Chips, badges, avatars, marks
@@ -440,7 +442,7 @@ Today there are seven mechanisms and the same action can use different ones (DS-
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
-- Deep links: `persona://` and `jarvis://` custom schemes, no associated domains.
+- Deep links: the `persona://` custom scheme, plus the former name's scheme kept for old links (`docs/protocol/rolling-upgrade-compatibility.md`); no associated domains.
 - Reminders are agent tools and Scheduled Tasks, not a UI object.
 - Wording differs per surface for the same event (section 5.4).
 
@@ -511,7 +513,7 @@ Full glossary: `docs/protocol/i18n.md`. Languages: en, zh-Hans, ja. Apple string
 - Text uses `Theme.Font` levels only. Shapes use `scaledFrame`.
 - Rows with name plus chips stack at accessibility sizes (`NameWithChips`). Use `firstFittingText` when several candidate labels exist.
 - Caps are allowed for glyphs in fixed-size buttons and for top bars that must fit a small iPhone. They must be named, and the control must keep a 44 pt hit area.
-- Never shrink to hide truncation of body text; `minimumScaleFactor` is for one-line button labels.
+- Never shrink to hide truncation of body text. For button labels `minimumScaleFactor` is a last resort only; follow rule 3 in section 1.2 (shorten the copy, reconsider the control, stack the group at accessibility sizes).
 
 ### 6.3 Accessibility baseline (the contract every component meets)
 

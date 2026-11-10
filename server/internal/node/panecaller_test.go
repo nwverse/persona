@@ -31,6 +31,8 @@ func TestMCPCaller(t *testing.T) {
 		{"todo_decisions", "", false, "sess-pane"},
 		{"todo_decision_add", "", false, "sess-pane"},
 		{"todo_bind_thread", "", false, "sess-pane"},
+		{"dispatch_start", "", false, "sess-pane"},
+		{"dispatch_read", "", false, "sess-pane"},
 		{"kb_search", "", false, ""},
 		{"todo_decisions", "", true, ""},
 		{"todo_bind_thread", "", true, ""},

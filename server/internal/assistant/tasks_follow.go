@@ -359,9 +359,12 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 	}
 	s.taskNotice(cctx, t, name, "done", "", clipMarkdown(text, 1500))
 	stage, pr := stageOf(text)
+	// Said deployed: only when the running hub has the work (deploy_check.go); else held at merged, and a watch asks to
+	// verify once the deploy lands.
+	stage, deployed := s.gateDeployStage(cctx, t, stage, pr, last.MachineID, last.SessionID, text)
 	s.setTaskStage(cctx, t.ID, stage, pr)
-	if stageIndex(stage) >= stageIndex("deploy") {
-		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // the user tries it (acceptance.go)
+	if deployed {
+		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // verified, by the supervising assistant or the user (acceptance.go)
 	}
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)

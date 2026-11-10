@@ -136,7 +136,8 @@ final class SSHTunnels {
         close(id, forget: true)
     }
 
-    private func close(_ id: String, forget: Bool) {
+    /// `forget`: no longer the way to start first next time (`recent`).
+    func close(_ id: String, forget: Bool) {
         directWatch.removeValue(forKey: id)?.cancel()
         routed.remove(id)
         if forget { recent.remove(id) }

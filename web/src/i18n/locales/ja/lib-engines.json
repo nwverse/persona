@@ -5,6 +5,7 @@
   "detail_orca": "Orcaのターミナル",
   "detail_tern": "Ternのターミナル",
   "detail_paseo": "Paseoのエージェント",
+  "detail_cindy": "Cindyのエージェント",
   "detection_offline": "オフラインのため検出情報がありません",
   "detection_none": "検出情報がありません",
   "detection_not_found": "検出されませんでした",

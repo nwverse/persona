@@ -2,6 +2,18 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Binary-plist reference bytes are not text (#3166)
+
+A compiled localization dictionary's reference table can accidentally spell an address even when every decoded key
+and value is clean. For generic IP/email checks, exclude only container references after validating all indexed
+objects, bounds and references; malformed layouts keep raw scanning. Keep configured private-value matching on the
+original bytes, decode unreachable string objects too, and still scan data, padding and trailing bytes. Do not fix
+this by changing a locale, allowing an address or rearranging the generated plist.
+
+## Device names in Siri intent descriptions (#3113)
+
+App Store Connect can commit an upload but reject it before the build appears in TestFlight. Validation code 90626 rejected a meeting-recording App Intent description containing `iPhone`, even though archive, export, purpose strings and entitlements passed. Keep the intent description device-neutral in Swift and in every catalog translation; changing a permission purpose string does not fix Siri metadata. If a committed upload never appears, inspect the upload's state and errors instead of re-uploading the same package or treating the wait timeout as success.
+
 ## Completing a task-review decision without another Agent turn (#3040)
 
 - A `task_review needs_user` conclusion is a to-do acceptance `ask`, not a runtime `Interaction`. Use the existing
