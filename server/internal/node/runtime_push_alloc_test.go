@@ -83,3 +83,21 @@ func TestRuntimeSessionsPushKeepsTheLastList(t *testing.T) {
 		t.Errorf("kept %d sessions (capacity %d), want other-1 alone", len(h.sessions), cap(h.sessions))
 	}
 }
+
+// Reading resume_argv and transcript in one pass gives what reading them one at a time gave, also for a push where one
+// of the two fields has the wrong type and only the other reads.
+func TestRuntimeRowExtrasReadsAsEachAlone(t *testing.T) {
+	const id, tr = `"0e000000-0000-4000-8000-000000000001"`, `"0e000000-0000-4000-8000-0000000000ff"`
+	for _, params := range []string{
+		`{"sessions":[{"session_id":` + id + `,"resume_argv":["pi","--resume"],"transcript":` + tr + `},{"session_id":"bad id","transcript":` + tr + `}]}`,
+		`{"sessions":[{"session_id":` + id + `,"resume_argv":"pi","transcript":` + tr + `}]}`,
+		`{"sessions":[{"session_id":` + id + `,"resume_argv":["pi"],"transcript":7}]}`,
+		`{"sessions":[{"session_id":` + id + `,"resume_argv":["pi",""]},{"session_id":` + id + `,"resume_argv":["pi","x"]}]}`,
+		`{"sessions":null}`, `{"sessions":{}}`, `{}`, `[`,
+	} {
+		resume, transcripts := runtimeRowExtras(json.RawMessage(params))
+		if r, ts := resumeArgvs(json.RawMessage(params)), runtimeTranscripts(json.RawMessage(params)); !reflect.DeepEqual(resume, r) || !reflect.DeepEqual(transcripts, ts) {
+			t.Errorf("%s:\nread %v %v\nwas  %v %v", params, resume, transcripts, r, ts)
+		}
+	}
+}
