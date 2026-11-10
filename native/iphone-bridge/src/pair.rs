@@ -15,7 +15,7 @@ use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice
 use serde_json::{Value, json};
 
 use crate::error::{BridgeError, Code, Phase, from_idevice};
-use crate::record::Record;
+use crate::record::{Record, Stored};
 
 const LABEL: &str = "persona-iphone-bridge";
 
@@ -82,8 +82,13 @@ pub async fn pair(udid: &str, out: &Path) -> Result<Value, BridgeError> {
 /// Whether a `_remotepairing._tcp` advertisement (its TXT `identifier` and `authTag`) is the phone of the
 /// record at `record`: `{"match": true|false}`.
 pub async fn match_record(record: &Path, identifier: &str, auth_tag: &str) -> Result<Value, BridgeError> {
-    let record = Record::read(record)?;
-    Ok(json!({ "match": matches(&record, identifier, auth_tag)? }))
+    match Stored::read(record)? {
+        Stored::Network(record) => Ok(json!({ "match": matches(&record, identifier, auth_tag)? })),
+        // The node never browses for one; a simulator has no advertisement to check.
+        Stored::Simulator(_) => Err(BridgeError::bad_request(
+            "a simulator's record has no Bonjour advertisement to match",
+        )),
+    }
 }
 
 fn matches(record: &Record, identifier: &str, auth_tag: &str) -> Result<bool, BridgeError> {
@@ -195,6 +200,20 @@ mod tests {
         // The key survives the record file.
         let back = Record::from_bytes(&record.to_bytes()).unwrap();
         assert!(matches(&back, "id-3", &tag("id-3")).unwrap());
+
+        let simulator = std::env::temp_dir().join(format!("persona-iphone-bridge-sim-{}.record", std::process::id()));
+        crate::record::SimRecord { udid: "SIM-1".into() }
+            .write(&simulator)
+            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let err = rt.block_on(match_record(&simulator, "id-1", &tag("id-1"))).unwrap_err();
+        assert_eq!(err.code, Code::BadRequest, "a simulator has nothing to match");
+        let network = std::env::temp_dir().join(format!("persona-iphone-bridge-net-{}.record", std::process::id()));
+        record.write(&network).unwrap();
+        let answer = rt.block_on(match_record(&network, "id-4", &tag("id-4"))).unwrap();
+        assert_eq!(answer, json!({"match": true}));
+        std::fs::remove_file(&simulator).unwrap();
+        std::fs::remove_file(&network).unwrap();
 
         let unpaired = Record::generate();
         assert_eq!(
