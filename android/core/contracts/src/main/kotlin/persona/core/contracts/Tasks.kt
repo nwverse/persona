@@ -418,7 +418,7 @@ class TodosEvent : ServerEvent
 
 @KeepGeneratedSerializer
 @Serializable(with = AssistantFeedEventSerializer::class)
-data class AssistantFeedEvent(val conversation: String = "", val item: FeedItem) : ServerEvent
+data class AssistantFeedEvent(val conversation: String = "", val item: FeedItem, val manager: String? = null) : ServerEvent
 
 @KeepGeneratedSerializer
 @Serializable(with = TaskPlanEventSerializer::class)

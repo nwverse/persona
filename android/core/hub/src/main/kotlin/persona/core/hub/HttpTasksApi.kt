@@ -126,12 +126,16 @@ class HttpTasksApi internal constructor(
 
     private val feedOwners = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    override fun noteFeedOwner(item: FeedItem, manager: String?) {
+        feedOwners[item.id] = persona.core.contracts.pushManager(manager)
+    }
+
     override suspend fun feed(conversation: String, since: String?): FeedResponse {
         val owner = AssistantManagerChoice.itemManager(listOf("assistant", "conversations", conversation))
             ?: AssistantManagerChoice.current.value.defaultId
         val response: FeedResponse = JsonCodec.decodeFromJsonElement(call(path("assistant", "conversations", conversation, "feed",
             query = since?.let { mapOf("since" to it) } ?: emptyMap())))
-        response.items.forEach { feedOwners[it.id] = owner }
+        response.items.forEach { feedOwners.putIfAbsent(it.id, owner) }
         return response
     }
 
@@ -172,7 +176,7 @@ class HttpTasksApi internal constructor(
     }
 
     override suspend fun dismissMessage(cardId: String, draft: String): persona.core.contracts.api.MessageDraftDismissal {
-        val owner = feedOwners[cardId] ?: AssistantManagerChoice.current.value.shown
+        val owner = feedOwners[cardId] ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
         feedOwners[cardId] = owner
         val response = call(path("assistant", "feed", cardId, "dismiss", query = mapOf("manager" to owner)), "POST", buildJsonObject { put("draft", draft) })
         val token = (response["dismissal_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf(String::isNotBlank)
@@ -182,7 +186,7 @@ class HttpTasksApi internal constructor(
 
     override suspend fun undoDismissMessage(cardId: String, dismissalId: String): FeedItem =
         item(call(path("assistant", "feed", cardId, "undo-dismiss", query = mapOf("manager" to
-            (feedOwners[cardId] ?: AssistantManagerChoice.current.value.shown))), "POST", buildJsonObject { put("dismissal_id", dismissalId) }))
+            (feedOwners[cardId] ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER))), "POST", buildJsonObject { put("dismissal_id", dismissalId) }))
 
     override suspend fun viewAction(conversation: String, key: String, input: ExtensionViewActionInput): AssistantViewAnswer =
         cardCall(path("assistant", "conversations", conversation, "views", key, "actions"),

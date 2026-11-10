@@ -70,6 +70,8 @@ class MessageCardTest {
     private class Api(val gate: CompletableDeferred<Unit>, var items: List<FeedItem>, val page: Int = 500) : TasksApi {
         val replies = mutableListOf<Triple<String, String, String?>>()
         val dismissals = mutableListOf<Pair<String, String>>()
+        val owners = mutableListOf<Pair<String, String?>>()
+        override fun noteFeedOwner(item: FeedItem, manager: String?) { owners += item.id to manager }
         val undos = mutableListOf<Pair<String, String>>()
         var dismissGate: CompletableDeferred<Unit>? = null
         var undoGate: CompletableDeferred<Unit>? = null
@@ -181,6 +183,20 @@ class MessageCardTest {
         api.items = listOf(old, card(), later)
         store.load("c1")
         assertTrue(store.feeds.value["c1"]!!.single { it.id == "m1" }.canSend)
+    }
+
+    @Test fun websocketOnlyCardsCaptureTheirOwnerBeforeTheyAreShown() = kotlinx.coroutines.test.runTest {
+        val api = Api(CompletableDeferred(Unit), emptyList())
+        val connection = Connection()
+        val store = TasksStore(api, connection, backgroundScope)
+        runCurrent()
+        val defaultCard = card("default-live", mapOf("draft" to "Default draft"))
+        val otherCard = card("other-live", mapOf("draft" to "Other assistant draft"))
+        connection.events.emit(persona.core.contracts.AssistantFeedEvent(item = defaultCard))
+        connection.events.emit(persona.core.contracts.AssistantFeedEvent(item = otherCard, manager = "assistant-one"))
+        runCurrent()
+        assertEquals(listOf("default-live" to null, "other-live" to "assistant-one"), api.owners)
+        assertEquals(listOf(defaultCard, otherCard), store.feeds.value["c1"])
     }
 
     @Test fun dismissalKeepsTheTaskAndOtherDraftsAndSurvivesReload() = kotlinx.coroutines.test.runTest {

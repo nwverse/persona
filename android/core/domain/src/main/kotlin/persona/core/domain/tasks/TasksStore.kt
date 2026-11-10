@@ -109,7 +109,7 @@ class TasksStore(
                 when (e) {
                     is TodosEvent -> reloadTodos()
                     is persona.core.contracts.SessionsListEvent -> agentLookup.refresh()
-                    is AssistantFeedEvent -> received(listOf(e.item))
+                    is AssistantFeedEvent -> { api.noteFeedOwner(e.item, e.manager); received(listOf(e.item)) }
                     is TaskPlanEvent -> _plans.update { it + (e.plan.id to e.plan) }
                     is AssistantViewEvent -> cards.view(e.conversation, e.view)
                     is AssistantViewActionEvent -> cards.answer(e.conversation, e.action)

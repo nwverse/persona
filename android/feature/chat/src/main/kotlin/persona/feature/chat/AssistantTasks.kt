@@ -241,7 +241,7 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
         }
         "today" -> TodayCard(item, host, todos)
-        "message" -> if (item.ref != null && item.id !in later && item.dismissedAt == null) MessageCard(item, host, todos)
+        "message" -> if (item.ref != null && item.id !in later) MessageCard(item, host, todos)
         // A live card: drawn where it was created, as the hub's latest version of it (docs/assistant/assistant-views.md "Live cards").
         "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
     }
@@ -766,7 +766,7 @@ private fun TodayCard(item: FeedItem, host: AssistantTaskHost, todos: List<Todo>
 
 @Composable
 internal fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<Todo>, enabled: Boolean = true) {
-    if (item.ref == null || item.dismissedAt != null) return
+    if (item.ref == null) return
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     val resources = androidx.compose.ui.platform.LocalContext.current.resources
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
@@ -775,6 +775,7 @@ internal fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<To
     val done = sent != null
     // Dealt with elsewhere and not sent from here (#4797): nothing left to send, so no send / later and no blank warning.
     val filed = item.filedAt != null
+    val dismissed = item.dismissedAt != null
     val blank = if (!item.canSend) null else draftPlaceholder(draft)
     val todo = todos.firstOrNull { it.id == item.field("todo_id") }
     JCard {
@@ -796,13 +797,13 @@ internal fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<To
             }
             // A filed card is no longer a draft to send (#5095): plain well, a read-only text and a title saying so.
             Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape)
-                .background(if (filed) PersonaTheme.palette.sunken else PersonaTheme.palette.statusSurface)
+                .background(if (filed || dismissed) PersonaTheme.palette.sunken else PersonaTheme.palette.statusSurface)
                 .padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                Text(stringResource(when { done -> R.string.chat_tasks_message_replied; filed -> R.string.chat_tasks_message_filed_title
-                    else -> R.string.chat_tasks_message_drafted }), style = PersonaTheme.type.caption,
-                    color = when { done -> PersonaTheme.palette.done.text; filed -> PersonaTheme.palette.ink2; else -> PersonaTheme.palette.accent })
+                Text(stringResource(when { done -> R.string.chat_tasks_message_replied; dismissed -> R.string.chat_tasks_draft_dismissed
+                    filed -> R.string.chat_tasks_message_filed_title; else -> R.string.chat_tasks_message_drafted }), style = PersonaTheme.type.caption,
+                    color = when { done -> PersonaTheme.palette.done.text; filed || dismissed -> PersonaTheme.palette.ink2; else -> PersonaTheme.palette.accent })
                 if (sent != null) Text(sent.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
-                else if (filed) Text(draft, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
+                else if (filed || dismissed) Text(item.field("draft").orEmpty(), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
                 else BasicTextField(draft, { draft = it }, Modifier.fillMaxWidth(),
                     textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
                     cursorBrush = SolidColor(PersonaTheme.palette.accent))

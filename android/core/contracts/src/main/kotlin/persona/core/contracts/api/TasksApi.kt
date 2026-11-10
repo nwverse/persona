@@ -55,6 +55,8 @@ interface TasksApi {
      */
     suspend fun inboxReply(itemId: String, text: String, card: String? = null)
 
+    /** Retain the authoritative live event owner before a card can be acted on, including the unstamped built-in manager. */
+    fun noteFeedOwner(item: FeedItem, manager: String?) = Unit
     /** Dismiss only the displayed message card, checking its exact original draft on the hub. */
     suspend fun dismissMessage(cardId: String, draft: String): MessageDraftDismissal = error("Draft dismissal unavailable")
     /** Undo only this dismissal; the hub rejects a sent, filed or superseded draft. */

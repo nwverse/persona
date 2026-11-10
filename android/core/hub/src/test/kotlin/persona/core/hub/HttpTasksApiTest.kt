@@ -135,6 +135,31 @@ class HttpTasksApiTest {
         } finally { choice.reset(); choice.forgetItems() }
     }
 
+    @Test fun websocketOnlyDraftsPinExplicitAndBuiltInOwnersAcrossSelectionChanges() = runBlocking {
+        val choice = persona.core.contracts.api.AssistantManagerChoice
+        try {
+            for (owner in listOf(null, "assistant-one")) MockWebServer().use { server ->
+                choice.choose(null, "unrelated-assistant", "assistant")
+                val api = api(server)
+                val managerField = owner?.let { ",\"manager\":\"$it\"" }.orEmpty()
+                val rawItem = """{"id":"live-card","conversation":"live-conversation","kind":"message","ref":"source","body":{"draft":"Live original"}}"""
+                val event = persona.core.contracts.ServerEvent.decode("""{"type":"assistant_feed","conversation":"live-conversation"$managerField,"item":$rawItem}""")
+                    as persona.core.contracts.AssistantFeedEvent
+                assertEquals(owner, event.manager)
+                api.noteFeedOwner(event.item, event.manager)
+                choice.pick("another-assistant")
+                server.enqueue(MockResponse().setBody("""{"item":$rawItem,"dismissal_id":"receipt-live"}"""))
+                val receipt = api.dismissMessage("live-card", "Live original")
+                assertEquals(persona.core.contracts.pushManager(owner), server.takeRequest().requestUrl?.queryParameter("manager"))
+                choice.pick("yet-another-assistant")
+                server.enqueue(MockResponse().setBody("""{"item":$rawItem}"""))
+                api.undoDismissMessage("live-card", receipt.dismissalId)
+                assertEquals(persona.core.contracts.pushManager(owner), server.takeRequest().requestUrl?.queryParameter("manager"))
+                assertEquals(2, server.requestCount)
+            }
+        } finally { choice.reset(); choice.forgetItems() }
+    }
+
     @Test fun draftDismissalAndUndoKeepConflictAndMissingErrors() = runBlocking {
         MockWebServer().use { server ->
             val api = api(server)

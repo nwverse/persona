@@ -1,6 +1,7 @@
 package persona.feature.chat
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
@@ -13,12 +14,13 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
@@ -52,7 +54,6 @@ import persona.core.contracts.api.MessageDraftDismissal
 import persona.core.contracts.api.TasksApi
 import persona.core.designsystem.AppFeedback
 import persona.core.designsystem.AppStyle
-import persona.core.designsystem.AssistantTrayTokens
 import persona.core.designsystem.FeedbackAction
 import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.PersonaTheme
@@ -118,20 +119,23 @@ class MessageDraftCardTest {
         store.load(original.conversation)
         val feedback = Feedback()
         val appearance = mutableStateOf(AppStyle.Glass to false)
-        val tray = AssistantTrayState().apply { expanded = AssistantTray.NeedsYou }
-        rule.mainClock.autoAdvance = false
         rule.setContent {
-            PersonaTheme(style = appearance.value.first, darkTheme = appearance.value.second, reduceMotion = true) {
-                val density = androidx.compose.ui.platform.LocalDensity.current
-                CompositionLocalProvider(LocalAppFeedback provides feedback,
-                    androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, textScale)) {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val configuration = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current).apply {
+                fontScale = textScale
+                uiMode = (uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (appearance.value.second) android.content.res.Configuration.UI_MODE_NIGHT_YES else android.content.res.Configuration.UI_MODE_NIGHT_NO
+            }
+            CompositionLocalProvider(LocalAppFeedback provides feedback,
+                androidx.compose.ui.platform.LocalConfiguration provides configuration,
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, textScale)) {
+                PersonaTheme(style = appearance.value.first, darkTheme = appearance.value.second, reduceMotion = true) {
                     val feeds by store.feeds.collectAsState()
                     val host = AssistantTaskHost(store, original.conversation, emptyList(), { it }, {}, { throw it }, {})
-                    Column(Modifier.fillMaxWidth().testTag("draft-scene")) {
-                        AssistantTrays(host, tray, emptyList(), emptyList(), emptyList(), AssistantTrayTokens.maximumHeight,
-                            busy = false, enabled = true, onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
-                        // Keep the feed observation visible to the test even after the tray automatically closes.
-                        if (feeds[original.conversation].isNullOrEmpty()) error("feed disappeared")
+                    Column(Modifier.fillMaxWidth().background(PersonaTheme.palette.background).testTag("draft-scene")) {
+                        feeds[original.conversation].orEmpty().forEach {
+                            AssistantExtraLine(persona.core.domain.tasks.AssistantExtra.Feed(it), host)
+                        }
                     }
                 }
             }
@@ -140,9 +144,9 @@ class MessageDraftCardTest {
         for (style in AppStyle.entries) for (dark in listOf(false, true)) {
             rule.runOnIdle { appearance.value = style to dark; Snapshot.sendApplyNotifications() }
             rule.mainClock.advanceTimeBy(500)
-            rule.onNodeWithTag("assistant-draft-send-draft-one").performScrollTo().assertIsDisplayed()
-            rule.onNodeWithTag("assistant-draft-later-draft-one").performScrollTo().assertIsDisplayed()
-            rule.onNodeWithTag("assistant-draft-dismiss-draft-one").performScrollTo().assertIsDisplayed().assertTextEquals(dismiss)
+            rule.onNodeWithTag("assistant-draft-send-draft-one").assertIsDisplayed()
+            rule.onNodeWithTag("assistant-draft-later-draft-one").assertIsDisplayed()
+            rule.onNodeWithTag("assistant-draft-dismiss-draft-one").assertIsDisplayed().assertTextEquals(dismiss)
             val bitmap = rule.onNodeWithTag("draft-scene").captureToImage().asAndroidBitmap()
             val output = File("build/message-draft-component-shots/$language-${style.name.lowercase()}-${if (dark) "dark" else "light"}-font$textScale.png")
             output.parentFile.mkdirs()
@@ -154,12 +158,24 @@ class MessageDraftCardTest {
         rule.onNodeWithTag("assistant-draft-dismiss-draft-one").performClick()
         rule.mainClock.advanceTimeBy(500)
         rule.onNodeWithTag("assistant-draft-dismiss-draft-one").assertDoesNotExist()
+        rule.onNodeWithTag("assistant-draft-send-draft-one").assertDoesNotExist()
+        rule.onNodeWithTag("assistant-draft-later-draft-one").assertDoesNotExist()
+        rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        rule.onNodeWithText(notice).assertIsDisplayed()
+        rule.onNodeWithText(original.field("draft")!!).assertIsDisplayed()
+        for (style in AppStyle.entries) for (dark in listOf(false, true)) {
+            rule.runOnIdle { appearance.value = style to dark; Snapshot.sendApplyNotifications() }
+            rule.onNodeWithText(notice).assertIsDisplayed()
+            val bitmap = rule.onNodeWithTag("draft-scene").captureToImage().asAndroidBitmap()
+            val output = File("build/message-draft-component-shots/$language-${style.name.lowercase()}-${if (dark) "dark" else "light"}-font$textScale-history.png")
+            output.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
         assertEquals(listOf(original.id to original.field("draft")), api.dismissals)
         assertEquals(notice, feedback.message)
         assertEquals(undo, feedback.action?.label)
-        rule.runOnIdle { feedback.action!!.run(); tray.expanded = AssistantTray.NeedsYou; Snapshot.sendApplyNotifications() }
+        rule.runOnIdle { feedback.action!!.run(); Snapshot.sendApplyNotifications() }
         rule.mainClock.advanceTimeBy(500)
-        rule.onNodeWithTag("assistant-draft-dismiss-draft-one").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("assistant-draft-dismiss-draft-one").assertIsDisplayed()
         assertEquals(listOf(original.id to "dismissal-one"), api.undos)
         assertTrue(store.feeds.value[original.conversation]!!.single().canSend)
     }
