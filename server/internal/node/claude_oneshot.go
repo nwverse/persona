@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,95 +16,106 @@ import (
 
 // A program running Claude Code's command line once (`claude -p`: entrypoint "sdk-cli") writes a transcript like any
 // session's; a script doing it all day filled the offline list with them and pushed the user's own sessions out of its 80
-// (#3828). The offline list leaves such a run out, as a running one is left to its program (claudebg.go) and as Codex's
-// program runs are (codex_hierarchy.go programRun), unless Persona has a hand in it: the assistant's, a health space's or
-// a guest's conversations (every one started under Persona's state directory), a session the node keeps state for, a
-// fork, a kept one. What decides is the last entrypoint in the transcript's last bytes; none there (a huge last line)
-// lists it, as before. The Agent SDKs' runs ("sdk-ts", "sdk-py") are listed: interactive hosts run the user's sessions
-// through them (Paseo).
+// (#3828). The offline list leaves out a transcript that is such a run from its first entrypoint to its last (each read
+// within oneShotTail of the file's start and end): a session the user had in a terminal and then went on with through
+// `claude -p -c`, or the other way round, is listed. So is everything Persona has a hand in: whatever was started under
+// its state directory (the assistant's, any manager's, a health space's, a guest's; its path and its resolved one), a
+// session the node keeps state for (none is left out while that state still loads), a fork, a kept session. The Agent
+// SDKs' runs ("sdk-ts", "sdk-py") are listed: interactive hosts such as Paseo run the user's sessions through them.
+// Codex's one-shot runs are left out the same way (codex_hierarchy.go programRun).
 
-// oneShotTail is how much of a transcript's end is read for its last entrypoint: Claude Code writes one on every line.
+// oneShotTail is how much of a transcript's start and end is read for its first and last entrypoint: Claude Code writes
+// one on every line.
 const oneShotTail = 8 << 10
 
 type entrypointMark struct {
-	size  int64
-	mtime time.Time
-	ep    string
+	size        int64
+	mtime       time.Time
+	first, last string
 }
 
-var lastEntrypoints = struct {
+var entrypoints = struct {
 	sync.Mutex
 	byPath map[string]entrypointMark
 }{byPath: map[string]entrypointMark{}}
 
-// lastEntrypoint is the entrypoint of the last line of transcript p that has one within its last oneShotTail bytes ("" when
-// none does); read again only when the file changed.
-func lastEntrypoint(p string, st os.FileInfo) string {
-	lastEntrypoints.Lock()
-	m, ok := lastEntrypoints.byPath[p]
-	lastEntrypoints.Unlock()
+// transcriptEntrypoints are the first and last entrypoints of transcript p within oneShotTail of its start and end (""
+// where none is); read again only when the file changed.
+func transcriptEntrypoints(p string, st os.FileInfo) (first, last string) {
+	entrypoints.Lock()
+	m, ok := entrypoints.byPath[p]
+	entrypoints.Unlock()
 	if ok && m.size == st.Size() && m.mtime.Equal(st.ModTime()) {
-		return m.ep
+		return m.first, m.last
 	}
-	ep := readLastEntrypoint(p, st.Size())
-	lastEntrypoints.Lock()
-	if len(lastEntrypoints.byPath) > 20000 { // gone transcripts' marks: start over rather than keep them forever
-		clear(lastEntrypoints.byPath)
+	first, last = readEntrypoints(p, st.Size())
+	entrypoints.Lock()
+	if len(entrypoints.byPath) > 20000 { // gone transcripts' marks: start over rather than keep them forever
+		clear(entrypoints.byPath)
 	}
-	lastEntrypoints.byPath[p] = entrypointMark{st.Size(), st.ModTime(), ep}
-	lastEntrypoints.Unlock()
-	return ep
+	entrypoints.byPath[p] = entrypointMark{st.Size(), st.ModTime(), first, last}
+	entrypoints.Unlock()
+	return first, last
 }
 
-func readLastEntrypoint(p string, size int64) string {
+func readEntrypoints(p string, size int64) (first, last string) {
 	f, err := os.Open(p)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer f.Close()
-	off := max(size-oneShotTail, 0)
-	buf := make([]byte, size-off)
-	n, _ := f.ReadAt(buf, off)
-	buf = buf[:n]
+	read := func(off, n int64) []byte {
+		buf := make([]byte, n)
+		got, _ := f.ReadAt(buf, off)
+		return buf[:got]
+	}
 	key := []byte(`"entrypoint":"`)
-	i := bytes.LastIndex(buf, key)
-	if i < 0 {
+	value := func(buf []byte, i int) string {
+		if i < 0 {
+			return ""
+		}
+		rest := buf[i+len(key):]
+		if j := bytes.IndexByte(rest, '"'); j >= 0 {
+			return string(rest[:j])
+		}
 		return ""
 	}
-	rest := buf[i+len(key):]
-	j := bytes.IndexByte(rest, '"')
-	if j < 0 {
-		return ""
-	}
-	return string(rest[:j])
+	head := read(0, min(size, oneShotTail))
+	tail := read(max(size-oneShotTail, 0), size-max(size-oneShotTail, 0))
+	return value(head, bytes.Index(head, key)), value(tail, bytes.LastIndex(tail, key))
 }
 
-// personaProjectDirs are the names Claude Code gives the projects of sessions started under Persona's state directory
-// (the assistant's, a health space's, a guest's, any manager's): its path with every character but letters and digits
-// as "-", then "-" and the subdirectory.
+// personaProjectDirs are the names Claude Code gives the projects of sessions started under Persona's state directory —
+// its path, and its resolved path when links lead there, with every character but letters and digits as "-" — each
+// followed by "-": a prefix of any directory under it.
 func (n *Node) personaProjectDirs() []string {
 	var out []string
 	for _, dir := range []string{identity.DataDir(n.home), filepath.Join(n.home, ".persona"), filepath.Join(n.home, compat.StateDir)} {
-		out = append(out, nonAlnum.ReplaceAllString(dir, "-")+"-")
+		for _, p := range []string{dir, realPath(dir)} {
+			if name := nonAlnum.ReplaceAllString(p, "-") + "-"; !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
 	}
 	return out
 }
 
-// oneShotRun: the transcript at p (project directory base) is a program's one-shot run of Claude Code that the offline
+// oneShotRun: the transcript at p (in project directory base) is a program's one-shot run of Claude Code that the offline
 // list leaves out (see above).
-func (n *Node) oneShotRun(id, base, p string, st os.FileInfo, prefixes []string) bool {
-	if !transcript.ClaudeOneShot(lastEntrypoint(p, st)) {
-		return false
-	}
-	for _, prefix := range prefixes {
+func (n *Node) oneShotRun(id, base, p string, st os.FileInfo, persona []string) bool {
+	for _, prefix := range persona {
 		if strings.HasPrefix(base, prefix) {
-			return false // started under Persona's state directory: its assistant, a health space, a guest
+			return false // started under Persona's state directory
 		}
 	}
 	if n.state != nil {
+		if n.state.isLoading() {
+			return false // which sessions the node keeps state for is not known yet
+		}
 		if _, ok := n.state.get(id); ok {
 			return false // the node started or drove it
 		}
 	}
-	return true
+	first, last := transcriptEntrypoints(p, st)
+	return transcript.ClaudeOneShot(first) && transcript.ClaudeOneShot(last)
 }
