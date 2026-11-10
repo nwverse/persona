@@ -516,6 +516,16 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 
+### 4.9 Sharing a conversation publicly
+
+Sharing an Agent session follows the user-control rules: everything that widens exposure (more messages, work
+details, future messages, a longer lifetime) goes through a preview and an explicit confirmation of possibly
+sensitive content, plus a transport-risk confirmation on an HTTP sharing origin; narrowing and revoking need no
+preview, and revoking is a destructive confirmation. Defaults are the narrowest: future messages and work details
+off, three days. The link is shown once with a copy action and is never listed again. The public viewer is a
+separate, read-only document with the same palette tokens, plain text only and work details collapsed (section 4.7).
+Web: `web/src/sharing/`, `web/public-share/`; Android: `AgentShareSheet`; server contract in #3604.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
