@@ -112,6 +112,11 @@ When historical user text becomes tool output at the same item ID, change the op
 client caches cannot preserve the old standalone peer card. Full-text reparse also needs the call association for
 hidden handback lines. Validate both the bounded preview and the full report, not only a short fixture.
 
+A report card is only mounted inside manually opened work. Load it on that intent rather than enlarging the cold
+first screen for everyone. Keep the same component, disclosure state and running-summary bar; verify manual opening
+in a real browser as well as mounted tests. A later main merge can consume prior bundle headroom: compare against
+unmodified main and reduce eager code, never raise the first-screen budget for the report feature.
+
 ## A tail window may contain no words at all (2026-11-04, #1163)
 
 When listing offline sessions, the node reads only the last 384 KB of a transcript (`quickTail`) to get its title and last words. Claude Code now writes an entire `api-request-blob` on one transcript line, 300–500 KB per line;

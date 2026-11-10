@@ -46,7 +46,7 @@ async function draw(items: Item[], live = true) {
 async function click(selector: string) {
   const button = host.querySelector<HTMLButtonElement>(selector);
   expect(button, selector).not.toBeNull();
-  await act(async () => button!.click());
+  await act(async () => { button!.click(); await vi.dynamicImportSettled(); });
 }
 
 describe("associated subagent reports", () => {

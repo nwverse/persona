@@ -71,7 +71,9 @@ async function verify(theme, width) {
     ws.onMessage((raw) => { if (JSON.parse(String(raw)).type === "app_ping") ws.send(JSON.stringify({ type: "pong" })); });
   });
   const errors = [];
+  const reportChunks = [];
   page.on("pageerror", (error) => errors.push(String(error)));
+  page.on("request", (request) => { if (/\/SubagentCard-[^/]+\.js(?:\?|$)/.test(request.url())) reportChunks.push(request.url()); });
   page.setDefaultTimeout(15000);
   await page.goto(base.replace(/\/$/, "") + `/s/example/${sid}`);
   const chat = page.locator("[data-chat-scroll]");
@@ -88,6 +90,7 @@ async function verify(theme, width) {
   assert.equal(await page.evaluate(() => document.documentElement.dataset.textSize ?? "standard"), textSize, "configured text size is applied");
   assert.equal(await summary.getAttribute("aria-expanded"), "false");
   assert.equal(await card.count(), 0);
+  assert.equal(reportChunks.length, 0, "collapsed work does not fetch the subagent report card");
   items = [...initial, progress];
   socket.send(JSON.stringify({ type: "items", machine_id: "example", session_id: sid, items: [progress] }));
   await shot("running-collapsed");
