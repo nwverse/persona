@@ -11,6 +11,26 @@ func RenderAgentTriage(t AgentTriage) string { return render("agents/triage", t)
 
 func RenderAgentToolLoop() string { return render("agents/tool_loop", nil) }
 
+// AgentReportLine is the system prompt that paraphrases a supervised task's agent's report in one line for the
+// Progress row (agents/report_line, #3181, docs/assistant/unified-entry.md "Progress tray").
+type AgentReportLine struct {
+	Language string // the line's language when it isn't Chinese (answerLanguage), "" for Chinese
+	Max      int    // at most this many characters
+}
+
+func RenderAgentReportLine(r AgentReportLine) string { return render("agents/report_line", r) }
+
+// AgentReportLineInput is the report to paraphrase (agents/report_line_input).
+type AgentReportLineInput struct {
+	Task string // the task's title
+	Kind string // progress, question, blocked or done
+	Text string // the report as the agent wrote it, clipped
+}
+
+func RenderAgentReportLineInput(in AgentReportLineInput) string {
+	return render("agents/report_line_input", in)
+}
+
 // AgentTriageInput is the turn to triage (agents/triage_input).
 type AgentTriageInput struct {
 	Now      string // the user's local time, "2006-01-02 15:04 Mon"
@@ -169,3 +189,13 @@ type DispatchTask struct {
 }
 
 func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }
+
+// AgentCloseoutRequired is what an agent is told when its stop is held for a missing closeout (#3612).
+type AgentCloseoutRequired struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutRequired(c AgentCloseoutRequired) string {
+	return render("agents/closeout_required", c)
+}

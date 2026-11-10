@@ -664,7 +664,7 @@ func (s *Service) acceptTryAs(ctx context.Context, id, card string, byDefault bo
 // taskVerified is what follows deployed task id's "Please verify" a passed (by the owner or its supervisor): the task is
 // verified, its todo's chat thread and where the request came from hear it, and its cards say so.
 func (s *Service) taskVerified(ctx context.Context, id string, a acceptAsk) {
-	s.setTaskStage(ctx, id, "verify", "")
+	s.setTaskStageKind(ctx, id, "verify", "", "", true)
 	s.threadPost(id, threadEvent{kind: threadTodoAccepted}) // and the todo's chat thread
 	s.sourceReportSoon(id, sourceReportWait)                // and where the request came from (todo_source.go)
 	s.updateAskCards(ctx, id, a)
@@ -944,7 +944,7 @@ func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([
 		}
 		total++
 		if len(out) < 8 { // the oldest eight; the total says how many more
-			out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: verdictText(s.botLang(ctx), &x.a),
+			out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
 				Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc)})
 		}
 	}

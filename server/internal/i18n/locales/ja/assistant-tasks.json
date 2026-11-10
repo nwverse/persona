@@ -19,6 +19,8 @@
   "machine_offline": "「{name}」はオフラインです。接続してからもう一度お試しください。",
   "silent_turn": "このターンには出力がありません。エージェントは返信もツールの呼び出しもしませんでした（モデルサービスが空の内容を返した可能性があります）",
   "interrupted": "モデルサービスのエラーで中断されました",
+  "check_no_reply": "エージェントの返信を読めませんでした",
+  "check_side_turn": "最後の返信はこのタスクの報告ではありません",
   "done": "完了しました",
   "route_no_task": "このチャットにはそのタスクがありません",
   "route_no_agent": "このタスクには実行中のエージェントがありません",
@@ -26,6 +28,7 @@
   "outcome_question": "完了時の結論",
   "outcome_pitfall": "つまずいた点",
   "adopt_notes": "監督下に置いた：{agent} · {machine} · {cwd}",
+  "dispatch_notes": "{from_machine} の {from} が依頼（dispatch_start）：{machine} · {cwd}",
   "adopt_failed": "監督下に置けませんでした：{reason}",
   "interrupt_summary": "{agent} · {machine} を止める",
   "start_remedy_notice": "開始できませんでした：「{title}」。{reason}"

@@ -256,6 +256,9 @@ export function taskSessionLookup(s: Pick<State, "sessions" | "sessionSummaries"
     const row = listed(mid, sid);
     if (!row || !detail || row === detail) return row ?? detail;
     if ((detail.rev ?? 0) > (row.rev ?? 0)) return detail;
+    // New summaries carry all the tray's live work metadata. A same-state update can change counts/phase/progress
+    // without changing work or pending cards; never let an older open-chat snapshot hide it.
+    if (row.background_tasks_count !== undefined) return row;
     const same = row.state === detail.state && !!row.background_working === !!detail.background_working
       && (row.pending_interactions ?? 0) === (detail.pending_interactions ?? 0) && sameValue(row.work, detail.work);
     return same ? detail : row;
@@ -782,7 +785,7 @@ function onMessage(msg: Record<string, unknown>) {
       agentsChanged(Array.isArray(msg.session_ids) ? (msg.session_ids as string[]) : []);
       break;
     case "todos":
-      void refreshTodos();
+      todosPushed();
       break;
     case "delta":
       sessionListeners.get(key(msg.machine_id as string, msg.session_id as string))?.forEach((l) => l.delta?.(msg.text as string));
@@ -903,6 +906,8 @@ export function upsertSession(s: Session) {
   const next = i < 0 ? [...list, s] : list.map((x, j) => {
     if (j !== i) return x;
     const merged = { ...x, ...s };
+    merged.background_working = s.background_working;
+    merged.background_waiting = s.background_waiting;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
     // drop its scalar summary markers, or they keep overriding the complete task arrays indefinitely.
     if (typeof s.waiting !== "boolean") {
@@ -910,6 +915,18 @@ export function upsertSession(s: Session) {
       delete merged.background_count;
       delete merged.running_subagents;
       delete merged.running_workflows;
+      delete merged.background_tasks_count;
+      delete merged.workflow_progress;
+      merged.background = s.background;
+      merged.subagents = s.subagents;
+      merged.workflows = s.workflows;
+    } else {
+      // A summary is a complete projection: omitted zero counts and a disappeared run clear the previous one.
+      merged.background_count = s.background_count ?? 0;
+      merged.running_subagents = s.running_subagents ?? 0;
+      merged.running_workflows = s.running_workflows ?? 0;
+      merged.background_tasks_count = s.background_tasks_count;
+      merged.workflow_progress = s.workflow_progress;
     }
     return merged;
   });
@@ -1196,6 +1213,27 @@ export function dropTodo(id: string) {
   set({ todos: state.todos.filter((t) => t.id !== id) });
 }
 
+// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts: the hub sends one per write,
+// and a supervised task's report, stage and links land within the same second. Every GET /todos is the whole list (tens
+// of KB on a busy hub), so pushes read it one at a time: one that lands while such a read is out asks for one more read
+// after it, however many land meanwhile. What this page itself just changed still reads at once (refreshTodos).
+let pushedRead = false;
+let pushedAgain = false;
+
+export function todosPushed() {
+  if (pushedRead) {
+    pushedAgain = true;
+    return;
+  }
+  pushedRead = true;
+  void refreshTodos().finally(() => {
+    pushedRead = false;
+    if (!pushedAgain) return;
+    pushedAgain = false;
+    todosPushed();
+  });
+}
+
 export async function refreshTodos() {
   const asked = todosAsked.ask();
   try {
@@ -1238,9 +1276,10 @@ const assistantByManager = new Map<string, AssistantInfo>();
 /** The assistant page asked for: "" the default's (no header goes, whichever manager the default turns out to be),
  *  else the manager picked on it. */
 const pageOf = () => chosenManager() ?? "";
-/** Where the page's answer is kept: under its manager once the roster's default is known; "" before (the default's,
- *  whose id is not known yet), moved under the default's id when it is. */
-const cacheKey = () => (defaultKnown() ? shownManager() : "");
+/** Where the page's answer is kept: under its manager, the one picked (kept across reloads, so it may be there before
+ *  the roster is read) or the default once the roster said which that is; "" before (the default's, whose id is not
+ *  known yet), moved under the default's id when it is. */
+const cacheKey = () => chosenManager() ?? (defaultKnown() ? defaultManager() : "");
 
 // The manager whose page is drawn (null: the default's, before the roster said which that is).
 let drawnPage = { page: pageOf(), manager: null as string | null };
@@ -1382,6 +1421,7 @@ export function reset() {
   endedHere.clear();
   // a /todos or /assistant answer still on its way belongs to the old login
   todosAsked.forget();
+  pushedAgain = false; // the next login reads its own list
   assistantAsked.forget();
   assistantByManager.clear();
   // and so do the pins and mutes of a refresh() or a failed save still on its way

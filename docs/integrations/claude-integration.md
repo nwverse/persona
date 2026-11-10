@@ -130,6 +130,7 @@ Tested 2026-11-04 with Claude Code 2.1.318: plugin hooks behave like settings ho
 | PermissionRequest | `*` | AskUserQuestion → phone card while the terminal can also answer; ExitPlanMode → plan approval; others → tool authorization |
 | PostToolUse | `AskUserQuestion` | A terminal answer withdraws the waiting phone card |
 | Notification / Stop / UserPromptSubmit / SessionStart | — | Report only, record pane; hub sends completion push from session state changes, not Stop |
+| Stop, a turn that did work and has no closeout | `decision: block` once, with the closeout form | Only with the `closeout` triage switch on; never twice in a row (`../assistant/agent-work.md` "Closeout") |
 | MessageDisplay | — | The Agents' live replies plugin only (not the hooks plugins, not the settings files), loaded while the setting is on: pass the reply's lines to node, exec form (`command` + `args`, no shell), `async`, timeout 1, prints nothing; see "Live replies (MessageDisplay)" |
 
 Test results:
@@ -360,6 +361,9 @@ Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"
 
 - One process supports consecutive turns through stdin, one `{"type":"user","message":{…}}` per line, images as base64 image blocks.
 - `stream_event` `content_block_delta/text_delta` supplies word-by-word output → WS delta; result ends the turn. Structured messages still read from transcript.
+- **Bounded transient recovery** (#3204, `node/assistant_recovery.go`): a turn ending on an upstream safeguards refusal, 429 / throttling, or a 5xx stays working while node resumes the unchanged request once on the same model (`prompts/assistant/model_retry`, a `<persona-context>` block, not another user bubble). If that attempt also fails, node resumes on the next concrete entry in the launcher's own ordered `/model` list; each model gets one same-model retry. The `default` placeholder, models already tried, and a locked launcher's entries are not fallbacks. The named Agent presets in ModelProfile.Tiers are not this queue.
+  The same rule applies to headless Codex's `turn/completed`. A hub/request 400 or any other 4xx but 429, authentication or model-route error, subscription usage limit (including Claude's textual quota errors), over-context refusal, or user interruption is never replayed. The structured kind wins over the words: Claude's failed turn is classified from its transcript (a rejected quota, or Claude Code's notice that it goes on by itself after the reset, is a usage limit; authentication and model routes are the user's), Codex's from `codexErrorInfo`, and only a safeguards refusal is replayed whatever its kind (#3495). Model changes use the ordinary stop-and-resume path, require an explicitly observed empty background-task inventory, and never kill running or not-yet-known background work to make a switch. Claude Code reports that inventory only when it changes, never at start, so before a switch node sends `initialize` (twice: the node sends none of its own, and only a repeated one is answered with the current set, empty included; 2.1.311). The old process stops only after the new start is checked, so a refused switch keeps it; if no eligible model can continue, the original error becomes final. Only then can the manager's scheduled-run watcher record `failed`. The transcript and session retain the model that actually answered, including a fallback.
+  The session stays working throughout process replacement, including after the replacement is registered and before its message is delivered. A resident-node handover waits for the active recovery send, then carries the remaining budget and any queued failure to the new owner, a turn's first failure in the gap included; late results follow that owner. The new owner resumes a carried failure only once its session state has loaded; without the state, or when it cannot go on, the failure is final. A user's message cancels a recovery, but gives back the turn's busy only while the recovery still holds it: a delivered recovery turn is answering, and the message waits for it as for any other turn. A current process exiting without a result closes its recovery instead of leaving a permanent working placeholder.
 - Hooks trigger normally, but **AskUserQuestion is unavailable in -p mode** (No such tool available … nobody in this session can answer it; PreToolUse cannot run). Assistant uses MCP `ask_user` (`docs/assistant/assistant.md`).
 - Per-process inline MCP JSON (`--mcp-config '{…}'`), carrying `PERSONA_ASSISTANT=1` and PERSONA_SESSION_ID. Process env `ENABLE_TOOL_SEARCH=false` (few, frequently used tools, no ToolSearch); `--append-system-prompt` is hub's live snapshot.
 - New assistant and guest sessions register only the `persona` MCP namespace when the hub advertises `persona_contracts_v1`; old or unknown hubs and resumed sessions keep both compatibility namespaces. The allow list uses the same selection. Agent SDK assistants follow this policy too; historical tool-name readers continue accepting both names ([rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), "MCP namespace / tools").
@@ -451,21 +455,20 @@ failure rather than a configuration error.
   unavailable-model chain, recommending a new conversation or `/model` in a Claude Code terminal. Readiness does not
   point at model settings or block creating a new conversation because of this session-only problem. Automatic work
   continuation and scheduled-run retries do not resend this failed turn.
-- No configuration is required. Recovery is the user's decision, and the same request may be refused again. This
-  change does not alter Claude Code's fallback policy or send a model-switch command automatically.
+- No configuration is required. Claude Code's own session-scoped fallback and the headless assistant's bounded recovery in [Headless assistant](#headless-assistant-chat-tab) are separate mechanisms. The latter handles a final safeguards / 429 / 5xx turn error without rewriting the request; it never replays this section's `model_fallback_unavailable` 404 and does not change Claude Code's own fallback policy.
 
 Client follow-up remains necessary for dedicated cards, an always-visible notice, an actual-model/Fell Back marker,
 explicit recovery buttons, and suppressing the old error cards' Retry/Continue or model-settings buttons. Clients may
 ignore the new structured fields today. Apple also needs a `ChatCache` version bump when adopting the changed item
 structure; this server change does not modify Swift. The broader no-fallback refusal policy below remains a proposal.
 
-## Safety blocks and automatic fallback (proposal, #2282, decision pending)
+## Safety blocks and automatic fallback (broader proposal; narrow headless recovery implemented in #3204)
 
-The user asked whether safety blocks and model downgrades are visible in the app. The limited server behavior above is implemented; the broader design in this section remains a proposal, **not implemented**. Items marked Decision Pending require the user's choice; implement the PR split below afterward.
+The user asked whether safety blocks and model downgrades are visible in the app. The limited server behavior above is implemented; the broader design in this section remains a proposal, **not implemented**. Items marked Decision Pending require the user's choice; implement the PR split below afterward. The bounded same-request recovery in #3204 is the one exception to this proposal's no-automatic-Continue baseline, not an implementation of its broader policy.
 
-**Principle**: report what happened honestly and let the user decide. Do not bypass or reduce safeguards: no rewriting user messages, automatic rephrasing retries, automatic Continue on blocked turns, or decisions by the task manager's judging model. Blocked turns use rules only, never model triage.
+**Principle**: report what happened honestly and never bypass or reduce safeguards: no rewriting user messages or automatic rephrasing retries, and no decisions by the task manager's judging model. The implemented recovery only resumes the unchanged request under the explicit bounds above. Every other blocked turn remains the user's decision, using rules only, never model triage.
 
-### Current behavior
+### Baseline before #3204
 
 Claude Code (2.1.318 tested, see issue) has two outcomes when safeguards block a message:
 

@@ -335,6 +335,24 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Statistics**: each evaluation writes `session_work_events` (`delegate_answered` / `delegate_asked` / `delegate_failed`), shown with triage statistics.
 - **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). **Not done**: Android. Questions being delegated during manager restart aren't delegated again or catch-up pushed (cards remain in the App).
 
+## Interjecting while it answers (#3278)
+
+A message sent while a Claude chat is still answering is written to the running `claude -p`, and Claude Code takes it up only at the next
+tool boundary: behind a long foreground command (a download without a timeout, a wait loop) the user waits minutes for any reaction. Codex
+merges such a message into the turn with `turn/steer` ("Codex" below); a Claude in a terminal pane has Send Now (#1097).
+
+- **Switch**: `interject_background` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key
+  `assistant.interject_background`), **off by default**. The manager adds `interject_background: true` to `assistant.send` and to the
+  `session.send` parameters it fills in (`SendParams`) while it is on.
+- **Node** (`node/assistant_interject.go`): when such a message reaches a chat that is busy, runs Claude on the CLI (not the Agent SDK bridge
+  or a runtime) and whose `system/init` named `claude_code_version` 2.1.139 or later, the message gets `prompts/assistant/interject.md`
+  after its live snapshot, and once it is written the node sends the control request `{"subtype":"background_tasks"}` (Ctrl+B: every
+  in-flight foreground Bash command and subagent goes on in the background). The model then reads the message right after the tool that
+  was running returns; the backgrounded work reports back as a task notification, as `run_in_background` does. 2.1.139 is the first
+  release whose control protocol has `background_tasks` (Agent SDK 0.2.139).
+- **Best effort**: an older or unknown version gets no control request and no note; a refused or failed request is logged and the message
+  still waits for the next tool boundary, as before. An idle chat is unaffected.
+
 ## Main chat, knowledge base, and context flow
 
 Prompts live in `server/internal/prompts/assistant/` (`docs/assistant/prompts.md`): CLAUDE.md is `claude_md.md`, snapshots `snapshot.md` (main-chat sentence in `context.md`), due-task messages `task_run.md`, default morning briefing / evening review `routine_*.md`.
@@ -456,6 +474,9 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
   and include it too.
 - No `--append-system-prompt` remains; Codex `developerInstructions` contains only memory (changes with its index; resumed handling not measured).
 - hub snapshot: reuse data for 45 seconds; refresh stale data in the background, wait at most 1.5 seconds per message, then use the prior snapshot if within 30 minutes. Time is always current; ended items removed.
+- Size budget (#3203): a rendered snapshot carries at most 6000 characters (`snapshotBudget` in `assistant/context.go`). Measured on one install over 14 days before it, a full snapshot was a median 8.3k characters (12.5 KB) and the changed sections a message carried a median 6.6k; tasks, the Agents section and the knowledge digest were most of it, resent on almost every message because one of their items changed.
+  Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, follow-ups the next eight). Past the budget, whole sections are left out, least needed first: muted, done and waiting agents, daily routines, follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
+  A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`): never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
 
 ## Compaction
 
@@ -540,7 +561,8 @@ Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), thre
 Readiness skips carry the optional persisted `not_ready` flag (#1857). The failure-streak counter ignores them, including temporary sleep / offline skips: they do not increase or reset the streak, and cannot trigger its notification. Other failures and skips still count as before. Existing history without the flag is not reclassified from its localized error text; the ready-again notice above is unchanged.
 
 **Failure and retry**: node accepts `assistant.send` before model output, so runs ending in API errors (quota, removed model, upstream 503) formerly counted successful.
-`watchScheduledRun` now follows the turn, reads final text, records API errors as failed, pushes "Scheduled task failed: …", and retries after 3 minutes once
+Before a turn is allowed to finish, node's bounded transient recovery may keep it working through a same-model retry and later launcher-model fallbacks (safeguards / 429 / 5xx only; [../integrations/claude-integration.md](../integrations/claude-integration.md) "Headless assistant"). The watcher therefore does not mistake an intermediate provider error for the run's outcome.
+`watchScheduledRun` now follows the final turn, reads final text, records API errors as failed, pushes "Scheduled task failed: …", and retries after 3 minutes once
 (`Retried`, no further push on repeat failure). Retry uses the task **then** in the table, not the startup copy (before #2313, users followed failure push and disabled / deleted it,
 yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry, disabled repeating tasks don't retry, once follow-ups disabled on due still retry, edited prompts use new text.
 
@@ -555,12 +577,18 @@ Each task therefore has `push`:
 - `"asked"` (only when it explicitly notifies): only `notify_user` pushes reach the phone; no news means no push. Run messages explain this (`task_run.md`).
   Errors (`TurnError`), model-truncated answers, blockers (⏳), "Scheduled task failed: …", and user-answer cards still push normally.
 
-**Implemented per chat, not per turn.** `asked` tasks always use their own chat (`ownConversationIfQuiet`: selecting `asked` clears `session_id`,
-including follow-ups no longer entering their originating chat, such as main chat). Snapshot tasks include `push` (`TaskView.Push`); if the finished push (`quietTaskFinish` in `assistant/fleet_push.go`, by the tasks of the manager's last snapshot) recognizes an `asked` task's own chat
+**Implemented per chat, not per turn.** `asked` tasks use their own chat unless they go on in the chat they came from (`session_id`), and never
+main chat (`ownConversationIfQuiet`: selecting `asked` clears a `session_id` that is, or may be, main chat; `runTask` sends a run whose chat became main to its own). Snapshot tasks include `push` (`TaskView.Push`); if the finished push (`quietTaskFinish` in `assistant/fleet_push.go`, by the tasks of the manager's last snapshot) recognizes an `asked` task's own chat
 (`run_session_id`) and a normal completion (`assistantwire.NormalFinish`, based on pushed text: final work explanation or last answer), suppress "Finished"
 but still finish through `settle`. Channel forwarding (Lark, plugin sync and task pushes) skips under the same `quietTaskTurn` rule.
 
-Cost: user-authored messages in that chat also don't push on completion. People generally don't chat in task-owned chats; if they do, they're likely viewing the App.
+**In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run holds that chat's pushes the way a supervision
+message does (`holdPushes`, the send carries `hold_pushes`): its normal finish is neither pushed nor mirrored to channels (`SupervisedFinish`), until the user or any
+other message speaks there (`releasePushes`). The chat stays the user's: their own turns push as ever. A run that arrives while another turn is on there (or the chat
+waits for the user) does not hold, so that turn's finish is not swallowed; that run is pushed as before. Errors, cut-offs, stuck turns, `notify_user` and escalated asks
+reach the user as ever. The hold is in memory: after a manager restart the next finish pushes.
+
+Cost (own chat): user-authored messages in that chat also don't push on completion. People generally don't chat in task-owned chats; if they do, they're likely viewing the App.
 
 Boundaries (`assistantwire.QuietTaskFinish`, shared by hub / channel forwarding):
 
@@ -569,7 +597,7 @@ Boundaries (`assistantwire.QuietTaskFinish`, shared by hub / channel forwarding)
   so runtime asked tasks still push "Finished" rather than swallowing failures as no news.
 - **Main chat is never quiet**: if a user makes a task chat main chat, normal pushes resume and the next task run creates another chat.
   If main-chat identity is uncertain (assistant settings read failure, hub hasn't received profile), treat it as possibly main: push / forward normally and don't reuse it for the task.
-- **Other tasks don't enter quiet chats**: `schedule_followup` from an asked-task chat runs in its own chat; existing tasks targeting it also move to their own on running (they require every-run push).
+- **Other tasks don't enter quiet chats** (an asked task's own chat, `run_session_id`; a chat an asked task only posts into is not one): `schedule_followup` from an asked-task chat runs in its own chat; existing tasks targeting it also move to their own on running (they require every-run push).
 - Decide after `settle`, not as "already pushed": background-pending turns remain suspended, their wakeup turn is judged separately, errors push normally.
 - Run-message explanations ("It's time again…", "This task only notifies when you use notify_user…") are stripped when the assistant renews with the whole message (`stripScheduleHeader`),
   preserving task identity, `push`, and prompt.

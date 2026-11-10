@@ -91,6 +91,13 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
+		{Setting: Setting{Key: "assistant.interject_background", Title: "Move running work to the background when I interject", Actions: getSet,
+			About: "off (the default): a message the user sends while a Claude conversation is still answering waits until the command " +
+				"or subagent running in the foreground ends; on: that work moves to the background (it goes on and reports when done) " +
+				"and the message is answered at once. Needs Claude Code 2.1.139 or later on the conversation's computer; applies from the next message",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
+			set: s.setInterjectBackground},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -210,7 +217,7 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"model_profiles.tiers": "title_model_tiers"}
+	"assistant.interject_background": "title_interject_background", "model_profiles.tiers": "title_model_tiers"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -342,6 +349,13 @@ func (s *Service) setReviewSamplePercent(ctx context.Context, v json.RawMessage)
 		}}, nil
 }
 
+func (s *Service) setInterjectBackground(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.interjectBackground, "assistant.interject_background is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_interject_background", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.InterjectBackground },
+		"assistant.interject_background is %v from the next message on.")
+}
+
 // launchers are the launchers of the assistant's machine, as the apps list them.
 func (s *Service) launchers(ctx context.Context) ([]proto.Launcher, error) {
 	machine := s.settings(ctx).MachineID
@@ -350,7 +364,15 @@ func (s *Service) launchers(ctx context.Context) ([]proto.Launcher, error) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return s.machineLaunchers(cctx, machine)
+	ls, err := s.assistantLaunchers(cctx, machine)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]proto.Launcher, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, l.Launcher)
+	}
+	return out, nil
 }
 
 func (s *Service) getLauncher(ctx context.Context) (string, error) {
@@ -367,7 +389,7 @@ func (s *Service) getLauncher(ctx context.Context) (string, error) {
 	return b.String(), nil
 }
 
-// setLauncher writes the launcher into Model configuration › Main chat, keeping its model and effort.
+// setLauncher writes the launcher into Model configuration › Main chat, inheriting its own default model and effort.
 func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var name string
 	if err := json.Unmarshal(v, &name); err != nil || strings.TrimSpace(name) == "" {
@@ -375,9 +397,6 @@ func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChang
 	}
 	name = strings.TrimSpace(name)
 	before := s.launcherNow(ctx)
-	if name == before {
-		return &ownChange{summary: "启动器没有变化"}, nil
-	}
 	ls, err := s.launchers(ctx)
 	if err != nil {
 		return nil, err
@@ -387,16 +406,32 @@ func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChang
 		known = known || l.Name == name
 	}
 	if !known {
-		return nil, fmt.Errorf("no launcher %q on the assistant's machine (get lists them)", name)
+		return nil, fmt.Errorf("no launcher %q on the assistant's machine (get lists them): %w", name, i18n.Err("assistant-models.err_provider_unsupported"))
+	}
+	if name == before {
+		return &ownChange{summary: "启动器没有变化"}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
-	rec, err := s.modelRecord(ctx, "assistant")
+	providers := s.modelProviders(ctx)
+	p, err := s.modelPurpose(ctx, "assistant", providers)
 	if err != nil {
 		return nil, err
 	}
-	rec.Binding.Provider = "launcher." + name
+	provider, _ := json.Marshal("launcher." + name)
+	binding, err := patchModel(p.Override, modelPatch{Provider: provider})
+	if err != nil {
+		return nil, err
+	}
+	base, _, err := s.modelBaseline(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateModel(ctx, p, mergeModel(base, binding), providers); err != nil {
+		return nil, err
+	}
+	rec := modelRecord{Revision: p.Revision, Binding: binding}
 	return &ownChange{cardText: func(l i18n.Lang) string {
 		return i18n.T(l, "assistant-settings_tool.change_launcher", i18n.Args{"before": before, "after": name})
 	},

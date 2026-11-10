@@ -135,7 +135,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}()
 
 	switch req.Kind {
-	case "hook", "ask", "notify": // after what standby took while the manager was away (spool.go)
+	case "hook", "ask", "notify": // after what standby took while the manager was away (spool_replay.go)
 		if n.replayed != nil {
 			// Not for ever: a report-only hook gives up after 3 s (nodeclient.ReportHook), and a replay that takes long
 			// (a manager slow to answer) must not hold the others past what they wait for. Out of order beats lost.
@@ -151,7 +151,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 				return
 			}
 			if req.Kind == "hook" {
-				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool.go)
+				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool_replay.go)
 			}
 		}
 	}
@@ -327,6 +327,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	n.ultracodeHook(req, in)
 	if repair := n.assistantViewStop(ctx, req, in); repair != nil {
 		return repair, nil
+	}
+	if hold := n.closeoutStop(ctx, req, in); hold != nil {
+		return hold, nil
 	}
 	stopSig := n.recordHookTurn(req, in, time.Now())
 	if !req.ReportOnly && !req.Resume {

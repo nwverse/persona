@@ -43,9 +43,15 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 			task.Last = clip(oneLine(t.StartError), 80) // why it did not start, for the morning brief (#4124)
 		}
 		task.Link = todoLink(web, t.ID)
-		task.Delivery = deliverySummary(t)
+		task.Delivery = clip(oneLine(deliverySummary(t)), 80)
 		var rank int
 		task.Health, rank = taskHealth(t, agents, now) // supervised tasks: what needs the assistant first (supervise.go)
+		if o, ok := s.orphanOf(t.ID); ok && t.DoneAt == nil {
+			task.Orphan = o.Reason   // nobody works on it any more (tasks_orphan.go)
+			if task.Health == "正常" { // i18n-ignore: the snapshot's words, as taskHealth has them
+				task.Health, rank = "没人在做", 2 // i18n-ignore: the snapshot's words
+			}
+		}
 		if t.Supervision != nil {
 			task.DoneWhen = len(t.Supervision.DoneWhen)
 			if p := t.Supervision.Progress; p != nil {
@@ -72,7 +78,7 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 // while it works (or has said nothing yet: an agent that only runs tools, #1583) and its running subagents, as the
 // task cards show them (docs/assistant/unified-entry.md "Task cards").
 func snapshotTask(t Todo, st string, agents []proto.Session, now time.Time) prompts.SnapshotTask {
-	task := prompts.SnapshotTask{ID: t.ID, Title: t.Title, State: taskStateLabel(st)}
+	task := prompts.SnapshotTask{ID: t.ID, Title: clip(oneLine(t.Title), 60), State: taskStateLabel(st)}
 	last := taskLead(st, agents)
 	if last.SessionID == "" {
 		return task
@@ -81,7 +87,7 @@ func snapshotTask(t Todo, st string, agents []proto.Session, now time.Time) prom
 	task.Last = clip(oneLine(last.LastText), 80)
 	working := last.State == proto.StateWorking
 	if doing := strings.TrimSpace(last.Activity); doing != "" && (working || task.Last == "") {
-		task.Doing = doing
+		task.Doing = clip(oneLine(doing), 80)
 		if working && last.ActivityAt != nil && now.Sub(*last.ActivityAt) >= time.Minute {
 			task.DoingFor = humanDuration(now.Sub(*last.ActivityAt))
 		}
@@ -99,7 +105,7 @@ func snapshotTask(t Todo, st string, agents []proto.Session, now time.Time) prom
 // reported puts the agent's latest report p on task. A report newer than lead's plan says more than the plan's count:
 // it stands alone.
 func reported(task *prompts.SnapshotTask, p *TaskProgress, lead proto.Session, now time.Time) {
-	task.Reported = &prompts.SnapshotReport{Kind: p.Kind, Step: p.Step, Steps: p.Steps, Text: p.Text,
+	task.Reported = &prompts.SnapshotReport{Kind: p.Kind, Step: p.Step, Steps: p.Steps, Text: clip(oneLine(p.Text), 160),
 		Minutes: max(0, int(now.Sub(p.At).Minutes()))}
 	if lead.Plan != nil && p.At.After(lead.Plan.At) {
 		task.Plan = nil
@@ -112,7 +118,7 @@ func snapshotPlan(c proto.Session) *prompts.SnapshotAgentPlan {
 	if p == nil || p.Total == 0 {
 		return nil
 	}
-	return &prompts.SnapshotAgentPlan{Done: p.Done, Total: p.Total, Current: p.Current}
+	return &prompts.SnapshotAgentPlan{Done: p.Done, Total: p.Total, Current: clip(oneLine(p.Current), 60)}
 }
 
 // taskLead is the agent a task in state st is shown with: the latest of those that put it in that state (the one
