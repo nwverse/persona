@@ -501,6 +501,40 @@ class TasksStore(
         }
     }
 
+    /** Accept the exact round carried by a brief, even if the task's current ask has since changed. */
+    fun acceptBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit, onAccepted: () -> Unit) {
+        if (todoId.isBlank() || askedAt.isBlank()) return
+        act("accept:$todoId", onError) {
+            api.acceptTask(todoId, askedAt)
+            synchronized(todosLock) {
+                acceptedAsks += todoId to askedAt
+                _todos.update { rows -> rows.map { if (it.id == todoId && it.ask?.askedAt == askedAt) it.copy(ask = null) else it } }
+            }
+            reloadTodos()
+            onAccepted()
+        }
+    }
+
+    /** Complete a decision directly, without accepting or sending its recommendation. */
+    fun finishBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit, onFinished: () -> Unit) {
+        if (todoId.isBlank() || askedAt.isBlank()) return
+        act("accept:$todoId", onError) {
+            val completed = api.patchTodo(todoId, done = true)
+            check(completed.id == todoId && completed.isDone) { "Completion was not confirmed" }
+            reloadTodos()
+            onFinished()
+        }
+    }
+
+    /** Remove a question from the hub's later-briefing queue. */
+    fun markBriefHandled(questionId: String, onError: (Throwable) -> Unit, onHandled: () -> Unit) {
+        if (questionId.isBlank()) return
+        act("later:$questionId", onError) {
+            api.markLaterHandled(questionId)
+            onHandled()
+        }
+    }
+
     /** User completion is not acceptance: no recommendation is sent and no agent is resumed. */
     fun finishTaskNow(todo: Todo, onError: (Throwable) -> Unit, onChanged: () -> Unit) {
         val ask = todo.ask?.takeIf { it.outcome == "decide" } ?: return
