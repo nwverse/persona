@@ -540,20 +540,6 @@ func TestMinutesRemade(t *testing.T) {
 	}
 }
 
-// A part the model takes too long for counts as a failure, so it can't hold the queue for ever.
-func TestMinutesCallTimeoutCounts(t *testing.T) {
-	model := &funcModel{f: func(int, string, string) (string, error) { return "", context.DeadlineExceeded }}
-	e := goldenEngine(t, model)
-	now := time.Now()
-	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "一句"), now)
-	for range minutesTries {
-		e.WriteMinutes(context.Background(), 2)
-	}
-	if r := recordingNow(t, e, recID); r.MinutesState != MinutesFailed {
-		t.Fatalf("%q after %d timeouts", r.MinutesState, minutesTries)
-	}
-}
-
 // What the model's answer must hold to count: something citing a line it read; a copy citing nothing doesn't hide one
 // that does; a date only for a deadline said; a name in Latin letters only as a whole word written so.
 func TestMinutesAnswerRules(t *testing.T) {

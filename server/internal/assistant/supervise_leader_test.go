@@ -164,7 +164,8 @@ func TestDigestGoesToMainWithoutLeader(t *testing.T) {
 	if n := f.noticesTo("conv1")[0]; strings.Contains(n, "leader") {
 		t.Fatalf("the default message changed:\n%s", n)
 	}
-	time.Sleep(3 * shortSuperviseTimings.every)
+	s.supervise.dedupMu.Lock()
+	s.supervise.dedupMu.Unlock() // the digest send has finished before checking the non-recipient
 	if got := f.noticesTo("lead1"); len(got) != 0 {
 		t.Fatalf("a conversation that is not a leader was told: %q", got)
 	}
@@ -293,10 +294,7 @@ func TestCancelStopsAndArchivesAgents(t *testing.T) {
 		closed = append(closed, a.SessionID)
 		gone := row // its node lists it closed a moment later
 		gone.Status, gone.State, gone.PendingInteractions, gone.PaneID = proto.StatusOffline, proto.StateOffline, 0, ""
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			ft.d.setSessions("mac", []proto.Session{gone, other})
-		}()
+		ft.d.setSessions("mac", []proto.Session{gone, other})
 		return map[string]any{"ok": true}, nil
 	})
 	s := ft.s

@@ -68,6 +68,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     version: '',
     launchers: [],
     resume: true,
+    // start() runs permission_mode plan in Paseo's plan mode or refuses it (holdsPlan).
+    readonly: true,
     socketPath: options.socketPath,
     connect: deps.connect,
     log,
@@ -624,9 +626,17 @@ export function createPaseoBridge(deps = {}, options = {}) {
     if (!paseo.connected) throw new RpcError('Paseo 现在没有连上（没在运行，或正在重启），这次没有新建。', 'unavailable')
     const cwd = typeof params.cwd === 'string' ? params.cwd : ''
     if (!cwd || !isDir(cwd)) throw new RpcError(`没有这个目录：${cwd || '（空）'}`, 'bad_request')
+    // Read-only (plan): only a provider holding plan mode starts it, and nothing falls back to a writable one (#3238).
+    const readonly = params.permission_mode === 'plan'
     let provider = launchers.some((l) => l.name === params.launcher) ? params.launcher : undefined
+    if (readonly && provider && !holdsPlan(provider)) {
+      throw new RpcError(`Paseo 的 ${provider} 没有只读（plan）模式，这次没有新建。选一个 Claude Code 的启动器再试。`, 'readonly_unsupported')
+    }
     if (!provider) {
-      provider = defaultProvider(entries, roots)
+      provider = defaultProvider(readonly ? entries.filter((e) => holdsPlan(e?.provider)) : entries, roots)
+      if (!provider && readonly) {
+        throw new RpcError('Paseo 里没有能以只读（plan）模式启动的 provider（要 Claude Code 的），这次没有新建。', 'readonly_unsupported')
+      }
       if (!provider) throw new RpcError('Paseo 里没有能用的 provider：在 Paseo 的设置里打开一个再试', 'unavailable')
       if (params.launcher) log(`paseo: Paseo has no provider ${params.launcher}; starting with ${provider}`)
     }
@@ -650,6 +660,12 @@ export function createPaseoBridge(deps = {}, options = {}) {
     created.then((res) => res?.agent && upsert(res.agent), () => {})
     const res = await within(created, callWait, `start ${agentId}`)
     if (res !== TIMEOUT && !res?.agent) throw new RpcError(`Paseo 没能新建：${res?.error ?? '原因不明'}`, 'start_failed')
+    if (readonly && res !== TIMEOUT && res.agent.currentModeId && res.agent.currentModeId !== modeId) {
+      // Paseo started it in another mode after all: it does not run on as a writable agent.
+      await paseo.request('archive_agent_request', { agentId }).catch(() => {})
+      remove(agentId)
+      throw new RpcError(`Paseo 没有以只读（plan）模式启动（实际：${res.agent.currentModeId}），已经归档。`, 'readonly_unsupported')
+    }
     if (res !== TIMEOUT) {
       upsert(res.agent)
       const row = rowOf(res.agent)
@@ -666,6 +682,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
   }
 
+  /** Whether provider starts in plan mode: one running Claude Code whose Paseo modes (when listed) include plan. */
+  function holdsPlan(provider) {
+    if (!provider || (roots[provider] ?? provider) !== 'claude') return false
+    const e = entries.find((x) => x?.provider === provider)
+    return !Array.isArray(e?.modes) || !e.modes.length || e.modes.some((m) => m?.id === 'plan')
+  }
+
   /**
    * Take a Claude session over (the machine's engine continuing a session not running anywhere): the Paseo agent
    * that has it already, else Paseo imports it — its conversation goes on in Paseo under the same id. Refused when
@@ -677,6 +700,10 @@ export function createPaseoBridge(deps = {}, options = {}) {
     let mine
     for (const { agent } of agents.values()) {
       if (claudeId(agent) === id && agentRoot(agent, roots) === 'claude' && (!mine || mine.status === 'closed')) mine = agent
+    }
+    if (params.permission_mode === 'plan' && mine?.currentModeId !== 'plan') {
+      // A takeover keeps the session's own mode (an import sets none): it cannot promise read-only (caps.readonly).
+      throw new RpcError('Paseo 接着已有的会话时不能保证只读（plan）模式，这次没有发送。', 'readonly_unsupported')
     }
     if (mine) {
       const row = rowOf(mine)

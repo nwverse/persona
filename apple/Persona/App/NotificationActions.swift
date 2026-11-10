@@ -78,7 +78,9 @@ nonisolated enum NotificationActions {
     static func sendReply(_ key: SessionKey, text: String) async {
         let id = UUID()
         do {
-            try await HubStore.client(group: key.group).send(key, text: text, clientMsgID: id.uuidString, opID: id)
+            try await AppModel.shared.outside(HubStore.client(group: key.group)) {
+                try await $0.send(key, text: text, clientMsgID: id.uuidString, opID: id)
+            }
         } catch {
             await reportFailure(id: id.uuidString, title: failureTitle(action: reply), error: error)
         }

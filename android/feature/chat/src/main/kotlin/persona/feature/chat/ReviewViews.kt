@@ -89,6 +89,8 @@ fun ReviewChecklist(todo: Todo, modifier: Modifier = Modifier) {
                         CheckMark.Met -> Triple(PhIcons.Check, PersonaTheme.palette.done.text, stringResource(R.string.chat_review_met))
                         CheckMark.Missing -> Triple(PhIcons.X, PersonaTheme.palette.danger.text, stringResource(R.string.chat_review_missing))
                         CheckMark.Open -> Triple(PhIcons.Clock, PersonaTheme.palette.ink3, stringResource(R.string.chat_review_open))
+                        // added after a standing acceptance (#3156): a dash, nothing waits on it
+                        CheckMark.Unchecked -> Triple(PhIcons.Minus, PersonaTheme.palette.ink3, stringResource(R.string.chat_review_unchecked))
                     }
                     val described = stringResource(R.string.chat_review_criterion, said, c.criterion)
                     Row(Modifier.semantics(mergeDescendants = true) { contentDescription = described },

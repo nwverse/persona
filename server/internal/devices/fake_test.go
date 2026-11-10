@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -40,6 +41,8 @@ type fakeHost struct {
 	theirs map[string]bool
 	// rename answers devices.rename (nil: unknown_method, as an older hub).
 	rename func(p devicewire.Rename) (devicewire.RenameReply, error)
+	// broadcasts are the ws.broadcast messages sent to the apps.
+	broadcasts []json.RawMessage
 
 	// gates holds every event of a kind until its gate is closed (a hub slow to take it, hold); waiting counts the
 	// ones held now.
@@ -200,8 +203,28 @@ func (f *fakeHost) Notify(event string, params any) error {
 		var e devicewire.RequestEnd
 		_ = json.Unmarshal(raw, &e)
 		f.ended = append(f.ended, e)
+	case assistantwire.EventBroadcast:
+		var b assistantwire.Broadcast
+		_ = json.Unmarshal(raw, &b)
+		f.broadcasts = append(f.broadcasts, b.Message)
 	}
 	return nil
+}
+
+// broadcastsOf are the messages of type typ sent to the apps.
+func (f *fakeHost) broadcastsOf(typ string) []json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []json.RawMessage
+	for _, m := range f.broadcasts {
+		var v struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(m, &v) == nil && v.Type == typ {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // eventsOf are the node events forwarded for machine named event.
