@@ -87,6 +87,10 @@ func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []p
 		use.ToolUseID, use.ToolName, use.ToolInput = id, "Bash", input
 		res := mk(1, "user", proto.KindToolResult)
 		res.ToolUseID, res.Text, res.IsError = id, clip(out), strings.TrimSpace(firstTag(trimmed, "bash-stderr")) != ""
+		res.Outcome = &proto.ToolOutcome{Status: proto.OutcomeOK, Tail: outputTail(out)} // no exit code is recorded
+		if res.IsError {
+			res.Outcome.Status = proto.OutcomeFailed
+		}
 		return []proto.Item{use, res}
 	}
 	if strings.HasPrefix(trimmed, "<command-name>") || strings.HasPrefix(trimmed, "<command-message>") {
