@@ -1,6 +1,29 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Couldn’t switch to “%@” on the hub: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t switch to “%1$@” on the hub: %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub で「%1$@」に切り替えられませんでした：%2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能在 hub 上换成「%1$@」：%2$@"
+          }
+        }
+      }
+    },
     "Last time [Inbox Hand-Off]" : {
       "localizations" : {
         "en" : {
