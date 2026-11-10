@@ -16,6 +16,19 @@ To-dos belong to the assistant (`todos.go`, `todo_decisions.go`, `todo_sessions.
   `POST /api/v1/sessions` and `POST /api/v1/sessions/{mid}/{sid}/messages` with `todo_id` first ask the assistant (`assistant.todo_handoff`): does the to-do exist, is it done (if handoff is disallowed, it supplies 404/409 and the message, echoed by hub), prepend decisions to the Agent's message and project context for new Agents, all in one call. After handoff, ask assistant to link it (`assistant.todo_link`; assistant determines both linked title and to-do title); workspace renames through hub notify assistant (`todos.space_renamed`). Protocol in `docs/protocol/protocol.md`, "Bus".
 - **When assistant is disconnected** (hub just started, assistant process restarting): to-do APIs return `503 assistant_offline`, "The assistant is temporarily unavailable. Try again later"; create/send with `todo_id` also return 503 (to-do existence unknown). Session-list to-do/quiet markers keep hub's last report (absent in the first second or two after hub starts before assistant reports). Hub emits no events during this period, so automatic linking, marker reconciliation and decision records wait for the next session list or answer after reconnection; workspaces renamed through hub are not migrated.
 
+## Permission of a planned task
+
+A writable task that `task_plan` leaves without a `permission` gets one on the hub before the plan is saved, so the
+plan card shows the mode the Agent runs in (#1897, #3026), in this order: the manager's default permission mode
+(Settings › Assistant, `default_permission_mode`), then `permissions.defaultMode` in Claude Code's settings on the
+computer the task lands on (Settings › Claude Code › Default permission mode, read with `claude.settings`), then
+`default` (Ask every step). The last two cover the common case: someone who set Claude Code to start in Auto gets
+Auto for the Agents the assistant starts, as for the ones started from the Agents page with no mode picked. A plan
+saved before this, or a task that reaches the start with no mode, is settled the same way on the computer it starts
+on. A computer that is offline, an older node, or a mode Persona does not know (such as `dontAsk`) gives `default`.
+The card names Auto (`auto` is one of `task_plan`'s modes, and Edit offers it on every client); a Codex launcher still
+takes only `plan` from it (`assistant/tasks_permission.go`).
+
 ## Read-only planned tasks
 
 `task_plan` treats `readonly: true` as a launch constraint. The assistant saves `permission: plan`, overriding an
@@ -231,7 +244,7 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 
 | Priority | State | Condition |
 | :--- | :--- | :--- |
-| 0 | Didn't Start | Agent for a task created from chat failed to launch; assistant ends the to-do (`done_at` + `start_error`, #1077); client shows failure/removal, not active |
+| 0 | Didn't Start | Agent for a task created from chat failed to launch; assistant ends the to-do (`done_at` + `start_error`, #1077); client shows failure/removal, not active. A supervised task whose new tab is kept by its computer (`shell_waiting`, `agent_start_stalled`) is first remedied, still "starting" to clients ("Remedying a start" below) |
 | 1 | Done | User marked done, or assistant judged a dispatched task complete (`done_at != null`; client shows **Auto-completed** for `done_by = "auto"`) |
 | 2 | Needs You | A linked active Agent is `needs_you` (waiting for question, plan approval or authorization) |
 | 2.5 | Interrupted | A linked active Agent is stopped (`unread` / `idle`) with `turn_error`: model-service failure interrupted the turn (disconnect, overload, rate limit, expired login…), unfinished (#1516); red, **Continue** on the card sends "继续" ("continue"). A subscription usage limit is not this (the next row) |
@@ -243,6 +256,7 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 
 - To-do list ordering: unfinished first (same state by `created_at` descending), completed collapsed at bottom.
 - Completion means the task is over: its Agents' sessions no longer say they currently work for it; **Reopen** to continue. A chat-dispatched task the hub completed (auto-completed or accepted by its supervisor) also reopens when one of its Agents starts a turn again (sent more with `agent_send`, or by the user; see "Close Agents for completed tasks", #5892). Cancelled tasks stay closed when their Agent works again; only an explicit **Reopen** resumes their task tracking and supervision (#1851).
+- **Remedying a start** (#2570, `assistant/start_remedy.go`): when the new tab's shell stopped on a startup question (`shell_waiting`) or Claude's own screen stopped before its input box (`agent_start_stalled`), the computer keeps the tab for 10 minutes (`node/shellsettle.go`). For a supervised task the hub records this on the plan task (`start`: `state` remedying / started / failed, `attempt`, `by`, `machine`, `pane`, `until`, `code`, `reason`) instead of failing the to-do, and the supervision message carries the question, the tab's last lines and the retries left. The main conversation may read the tab (`task_start_screen`), type into it (`task_start_keys`: any text up to 32 characters and keys, with a reason; the node takes them only into that kept tab while no agent runs there) and start again in it (`task_retry`, which also reopens a start that failed for good, in a new tab); at most 3 retries per task, and the hub never retries by itself. Each step is a `start_remedy` feed item. A retry that starts sends the supervisor a `started` signal. The start fails for good (`done_at` + `start_error`, the failed receipt, the bot's report) when the supervision turn that saw it ends with no retry running, when the kept tab expires (checked on the supervisor's tick, so a restart catches up), or when a retry fails without a kept tab. If that turn never told the user (no `notify_user`, task review card or visible finish), the hub writes "Didn't start: <task>. <reason>" into the conversation and pushes it.
 - User marks done while Agent is still launching (can take minutes on a busy machine; `done_at` written first): not **Didn't Start**, to-do stays done with no `start_error`; Agents that do launch join this completed to-do and are reclaimed by "Close Agents for completed tasks" under existing rules (only after idle long enough) (#2954).
 
 ## To-do titles
