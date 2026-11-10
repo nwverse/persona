@@ -1,4 +1,5 @@
 {
+  "share": "Share…",
   "forked": "Branched to a new chat",
   "fork_failed": "Couldn't branch: {error}",
   "session_unavailable": "This conversation isn't available right now. Try again in a moment, or start a new chat.",

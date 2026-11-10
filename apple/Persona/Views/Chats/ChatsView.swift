@@ -708,6 +708,8 @@ private struct AgentsList: View {
         var sessions: [SessionKey: Session] = [:]
         var scopes: [String: RuntimeSessionLists.Scope] = [:]
         var projection: AgentListProjection?
+        /// The Needs You section's rows (`AgentsNeedsYou`), which its filter counts too: sessions, not cards.
+        var needsYou: Int?
 
         func update(_ projection: AgentListProjection) {
             guard self.projection?.identity != projection.identity else { return }
@@ -849,10 +851,15 @@ private struct AgentsList: View {
         let active = projection.active.map(withAggregate)
         let quiet = projection.quiet.map(withAggregate)
         let pinnedAgents = projection.pinnedAgents
-        let interactions = quick == .all || quick == .needsYou
-            ? AgentsNeedsYou.cards(feed.following ? feed.interactions : model.pendingInteractions, session: session,
-                                   machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil)
-            : []
+        // One row per session that waits for the user, its cards under it (`AgentsNeedsYou`): the section, the Needs
+        // You filter and the tab's badge count these rows.
+        let waiting = AgentsNeedsYou.rows(
+            cards: AgentsNeedsYou.cards(feed.following ? feed.interactions : model.pendingInteractions, session: session,
+                                        machine: machineFilter, hub: model.isMultiHub ? hubFilter : nil),
+            waiting: AgentsNeedsYou.waiting(base))
+        let _ = (lookup.needsYou = waiting.count)
+        let needsYou = quick == .all || quick == .needsYou ? waiting : []
+        let interactions = needsYou.flatMap(\.cards)
         let unreadShown = projection.unread
         let byHost = projection.byHost
         let tree = projection.tree
@@ -877,7 +884,7 @@ private struct AgentsList: View {
 
         observedAgentList(
             agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
-                      interactions: interactions, unreadShown: unreadShown, active: active, quiet: quiet,
+                      needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
                       tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults),
             base: base, interactions: interactions, quiet: quiet, matching: matching)
     }
@@ -885,7 +892,7 @@ private struct AgentsList: View {
     // Opaque helper boundaries keep the same List/modifier tree while allowing
     // the minimum compiler to solve each expression independently.
     private func agentList(base: [Session], filtered: [Session], unpinned: [Session], pinnedAgents: [Session],
-                           interactions: [Interaction], unreadShown: [SessionKey], active: [SpaceGroup], quiet: [SpaceGroup],
+                           needsYou: [AgentsNeedsYou.Row], unreadShown: [SessionKey], active: [SpaceGroup], quiet: [SpaceGroup],
                            tree: [RepoTree.Host], byHost: Bool, hasSearchResults: Bool) -> some View {
         List {
             // On a phone the filter bar is the list's first row: it scrolls with the list, so the search field can
@@ -948,46 +955,11 @@ private struct AgentsList: View {
                     Section { HerdrNoticeRow(machine: m, watch: herdr) }
                 }
             }
-            if !interactions.isEmpty && query.isEmpty {
+            if !needsYou.isEmpty && query.isEmpty {
                 listSection {
-                    ForEach(interactions, id: \.uid) { ix in
-                        if compact && ix.isSessionless {
-                            Button { answering = ix } label: {
-                                CompactInteractionRow(interaction: ix, machine: machine(ix.machineRef)?.title)
-                            }
-                            .buttonStyle(.plain)
-                            .listRowInsets(CompactList.rowInsets)
-                            .accessibilityIdentifier("agents.interaction")
-                        } else if compact {
-                            // Compact List: one row like an agent's; the chat answers it.
-                            NavigationLink(value: ix.sessionKey) {
-                                CompactInteractionRow(interaction: ix, machine: machine(ix.machineRef)?.title)
-                            }
-                            #if os(macOS)
-                            .macOptionClick { MacShellState.shared.chatWindow = ix.sessionKey } // ⌥-click: in a window of its own
-                            #endif
-                            .listRowInsets(CompactList.rowInsets)
-                            .accessibilityIdentifier("agents.interaction")
-                        } else if floating {
-                            // A card of its own on the page, as the agents' cards. The capsules: several groups of hubs,
-                            // the card says whose (one group: as it always was, no machine); State Cards: as the
-                            // grouped list's card says, the machine and the agent.
-                            InteractionPreviewCard(interaction: ix, machine: capsules && !model.isMultiHub ? nil : machine(ix.machineRef)?.title,
-                                                   agentLabel: capsules ? "Claude" : session(ix.sessionKey)?.agentLabel ?? "Claude",
-                                                   inCell: false) { openCard(ix) }
-                                .listRowInsets(Self.capsuleInsets)
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .accessibilityIdentifier("agents.interaction")
-                        } else {
-                            InteractionPreviewCard(interaction: ix, machine: machine(ix.machineRef)?.title,
-                                                   agentLabel: session(ix.sessionKey)?.agentLabel ?? "Claude", inCell: true) { openCard(ix) }
-                                .alignmentGuide(.listRowSeparatorLeading) { _ in 0 } // rows of different shapes: one line
-                                .accessibilityIdentifier("agents.interaction")
-                        }
-                    }
+                    ForEach(needsYou) { row in needsYouRow(row) }
                 } header: {
-                    SectionHeader(title: StateName.needsYou.text, count: interactions.count, tone: StatusPalette.needsYou)
+                    SectionHeader(title: StateName.needsYou.text, count: needsYou.count, tone: StatusPalette.needsYou)
                         .searchTraceMark("needs")
                 }
             }
@@ -1270,9 +1242,16 @@ private struct AgentsList: View {
     /// them. The tap reads the list as it is then.
     /// `base`: as the body worked it out (working it out again here went through every agent twice more per push).
     private func filterBar(_ base: [Session]) -> some View {
-        QuickFilterBar(selection: quick, counts: model.sessionLists.paged ? [:] : lookup.projection?.filterCounts ?? [:],
+        QuickFilterBar(selection: quick, counts: model.sessionLists.paged ? [:] : filterCounts,
                        countsUnknown: model.sessionLists.paged) { choose($0, self.base) }.equatable()
             .searchTraceMark("filter")
+    }
+
+    /// The states' counts, with Needs You counting the section's rows (`AgentsNeedsYou`): sessions, as the badge does.
+    private var filterCounts: [AgentFilter: Int] {
+        var counts = lookup.projection?.filterCounts ?? [:]
+        if let n = lookup.needsYou { counts[.needsYou] = n }
+        return counts
     }
 
     /// The machine the list is narrowed to, in the shell: its menu sits behind the selected Agents switch and says
@@ -1337,6 +1316,110 @@ private struct AgentsList: View {
     private var macOpenNow: SessionKey? {
         guard openedWorkspace == nil else { return nil }
         return model.visibleSession.flatMap { session($0)?.assistant == true ? nil : $0 }
+    }
+
+    /// One row of the Needs You section (`AgentsNeedsYou.Row`): a session's only card as it always was; several cards of
+    /// one session under its name, each answering itself; a session waiting in its terminal, a row that opens it.
+    @ViewBuilder private func needsYouRow(_ row: AgentsNeedsYou.Row) -> some View {
+        if row.cards.count == 1, let ix = row.cards.first {
+            cardRow(ix)
+        } else if let first = row.cards.first {
+            if compact {
+                NavigationLink(value: first.sessionKey) {
+                    CompactInteractionRow(interaction: first, machine: machine(first.machineRef)?.title, more: row.cards.count - 1)
+                }
+                #if os(macOS)
+                .macOptionClick { MacShellState.shared.chatWindow = first.sessionKey } // ⌥-click: in a window of its own
+                #endif
+                .listRowInsets(CompactList.rowInsets)
+                .accessibilityIdentifier("agents.interaction")
+            } else if floating {
+                VStack(alignment: .leading, spacing: 0) { stackedCards(row.cards, dividers: true) }
+                    .card()
+                    .listRowInsets(Self.capsuleInsets)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else {
+                VStack(alignment: .leading, spacing: 0) { stackedCards(row.cards, dividers: false) }
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in 0 } // rows of different shapes: one line
+            }
+        } else {
+            waitingRow(row)
+        }
+    }
+
+    /// One pending card as its own row.
+    @ViewBuilder private func cardRow(_ ix: Interaction) -> some View {
+        if compact && ix.isSessionless {
+            Button { answering = ix } label: {
+                CompactInteractionRow(interaction: ix, machine: machine(ix.machineRef)?.title)
+            }
+            .buttonStyle(.plain)
+            .listRowInsets(CompactList.rowInsets)
+            .accessibilityIdentifier("agents.interaction")
+        } else if compact {
+            // Compact List: one row like an agent's; the chat answers it.
+            NavigationLink(value: ix.sessionKey) {
+                CompactInteractionRow(interaction: ix, machine: machine(ix.machineRef)?.title)
+            }
+            #if os(macOS)
+            .macOptionClick { MacShellState.shared.chatWindow = ix.sessionKey } // ⌥-click: in a window of its own
+            #endif
+            .listRowInsets(CompactList.rowInsets)
+            .accessibilityIdentifier("agents.interaction")
+        } else if floating {
+            // A card of its own on the page, as the agents' cards. The capsules: several groups of hubs,
+            // the card says whose (one group: as it always was, no machine); State Cards: as the
+            // grouped list's card says, the machine and the agent.
+            InteractionPreviewCard(interaction: ix, machine: capsules && !model.isMultiHub ? nil : machine(ix.machineRef)?.title,
+                                   agentLabel: capsules ? "Claude" : session(ix.sessionKey)?.agentLabel ?? "Claude",
+                                   inCell: false) { openCard(ix) }
+                .listRowInsets(Self.capsuleInsets)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .accessibilityIdentifier("agents.interaction")
+        } else {
+            InteractionPreviewCard(interaction: ix, machine: machine(ix.machineRef)?.title,
+                                   agentLabel: session(ix.sessionKey)?.agentLabel ?? "Claude", inCell: true) { openCard(ix) }
+                .alignmentGuide(.listRowSeparatorLeading) { _ in 0 } // rows of different shapes: one line
+                .accessibilityIdentifier("agents.interaction")
+        }
+    }
+
+    /// A session's cards, oldest first, in one cell: its place over the first only. Inside a card of its own a line
+    /// parts them; in the list's cell only room does, so the list's lines keep marking where a session ends.
+    @ViewBuilder private func stackedCards(_ cards: [Interaction], dividers: Bool) -> some View {
+        ForEach(Array(cards.enumerated()), id: \.element.uid) { i, ix in
+            if i > 0 && dividers { Divider().padding(.vertical, Theme.Space.s) }
+            InteractionPreviewCard(interaction: ix, machine: capsules && !model.isMultiHub ? nil : machine(ix.machineRef)?.title,
+                                   agentLabel: capsules ? "Claude" : session(ix.sessionKey)?.agentLabel ?? "Claude",
+                                   inCell: true, showsPlace: i == 0) { openCard(ix) }
+                .padding(.top, i > 0 && !dividers ? Theme.Space.m : 0)
+                .accessibilityIdentifier("agents.interaction")
+        }
+    }
+
+    /// A session that waits in its terminal, no card read: a row that opens it.
+    @ViewBuilder private func waitingRow(_ row: AgentsNeedsYou.Row) -> some View {
+        let s = session(row.key)
+        let place = s.flatMap { machine($0.machineRef)?.title }
+        if compact {
+            NavigationLink(value: row.key) {
+                CompactWaitingRow(session: s, machine: place, since: row.since)
+            }
+            .listRowInsets(CompactList.rowInsets)
+            .accessibilityIdentifier("agents.waiting")
+        } else if floating {
+            NeedsYouWaitingCard(session: s, machine: capsules && !model.isMultiHub ? nil : place, inCell: false) { openFromList(row.key) }
+                .listRowInsets(Self.capsuleInsets)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .accessibilityIdentifier("agents.waiting")
+        } else {
+            NeedsYouWaitingCard(session: s, machine: place) { openFromList(row.key) }
+                .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                .accessibilityIdentifier("agents.waiting")
+        }
     }
 
     /// A card's chat, where it is answered; a card on no session opens by itself (#4059).
