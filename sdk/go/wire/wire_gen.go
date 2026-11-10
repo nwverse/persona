@@ -4538,21 +4538,25 @@ type TodoEventThread struct {
 // deleted to-do); thread is left out when the to-do has none, done unless the to-do is done (closed, or its task
 // failed to start). supervisor is the conversation that supervises it (the main conversation or a leader, see
 // leaders.schema.json), left out when none does; a change of supervisor (the task moved to another leader) sends it
-// too. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the to-do again
-// if it matters.
+// too. kind is concern for something the owner raised in the main conversation and wants an answer to; such a to-do
+// is done only once its outcome was reported to the owner (an event.todo.decision of source reported comes with it),
+// never on its own; kind is left out for a to-do or a task and never changes. Notes, agents and decisions changing do
+// not send it (decisions have event.todo.decision). Read the to-do again if it matters.
 type TodoChangedEvent struct {
 	ID         string           `json:"id"`
 	Title      string           `json:"title"`
 	Thread     *TodoEventThread `json:"thread,omitempty"`
 	Done       bool             `json:"done,omitempty"`
 	Supervisor string           `json:"supervisor,omitempty"`
+	Kind       string           `json:"kind,omitempty"`
 	What       string           `json:"what"`
 }
 
 // TodoEventDecision: A decision on a to-do: what was asked and chosen (reason and supersedes_id left out when empty),
 // and where it came from: manual (written in the to-do), card (the user answered an Agent's question card), outcome
 // (pulled out of an Agent's finished work, not made by the user), agent (an Agent noted it), thread (the user's reply
-// in the to-do's chat thread).
+// in the to-do's chat thread), reported (what the main conversation told the owner of a concern's outcome, as choice;
+// it closes the concern).
 type TodoEventDecision struct {
 	ID           string `json:"id"`
 	Question     string `json:"question"`
