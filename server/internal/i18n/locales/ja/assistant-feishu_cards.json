@@ -53,6 +53,7 @@
   "pick_machine_dir": "コンピューターを選んでディレクトリを入力してください",
   "starting": "起動中…",
   "start_form_opening": "起動フォームを開いています",
+  "start_form_failed": "起動フォームを開けませんでした：{error}",
   "card_expired": "このカードは期限切れです",
   "card_withdrawn": "このカードは取り下げられました",
   "already_handled": "対応済みです",
