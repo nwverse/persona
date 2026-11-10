@@ -220,6 +220,17 @@ The 1900 date system also has a calendar boundary (#1310): January 1 is serial 1
 - Recursive JSON duplicate checks must distinguish case-sensitive maps from protocol structs. Compare arbitrary map keys exactly; reject known struct-field aliases using Unicode simple folding (`strings.EqualFold`, as in `encoding/json`). Lowercasing every object both rejects valid configuration keys and misses long-s signature aliases.
 - Address migration must repeat target uniqueness checks after network reads under the final state lock, including the one official identity across branch and transport aliases. This was a pre-existing migration defect, not an embedded-signature regression.
 
+## User completion is not a recommendation (#3038)
+
+A `needs_user` task's direct completion is the existing to-do `PATCH {"done":true}`,
+not its ask's Accept route: Accept can send the recommendation and resume a closed
+Agent. Keep user completion's empty `done_by`; assigning `review` would allow later
+Agent activity to reopen it. A task snapshot read before a slow session lookup cannot
+authorize automatic rework or recommendation delivery after completion or reopening.
+Recheck the task immediately before dispatch, including inside a queued offline-send
+closure. Test the actual lookup boundary with a blocking fake RPC, not a fixed sleep;
+direct user messages still deliberately retain their separate reuse semantics.
+
 ## Completion reads must belong to the current turn (#6525)
 
 A model judgment can return after a resumed turn has already stopped again. Checking only the current
@@ -1400,6 +1411,7 @@ A connector that folds several notifications into one thread (GitHub CI failures
 
 - `regexp`'s `ReplaceAllString` and a `strings.Replacer` return a fresh copy of the text even when nothing in it matches. Run per line of every session's last words (`transcript.AskOf`), a list-mark regexp and a Markdown replacer copied each line two or three times for nothing. Cut a fixed prefix by hand (compare it with the regexp it replaces on edge cases, `TestCutListMarkMatchesRegexp`), check for the marks before running a replacer, and use `lazyre.NewGated` for a pattern most texts lack: its string replacements give such a text back as it is.
 - An answer of thousands of rows built as one slice and one buffer (`GET /api/v1/sessions` for older clients, about 10 MB for 8,000 sessions) costs memory in proportion to the answer on every request. Encode it a row at a time into a small buffer and write that out as it fills (`writeSessionLists`); compare the bytes with the old whole encoding. Benchmark such a handler with a `ResponseWriter` that keeps nothing: an `httptest.ResponseRecorder` holds the whole body, and its growth hides what the handler itself allocates.
+- A map keyed by a text keeps the text, and a substring keeps the whole string it was cut from. `transcript.Meta.notified` kept every task notification a node had shown, whole, to know a repeat, and `taskCalls` kept ids cut from them; a node keeps one `Meta` per transcript for its uptime, so two steady heap profiles of a real corpus had 5 and 12 MB of notification text in use. Key such a set by a digest (`noticeKey`, 128 bits of SHA-256) and `strings.Clone` the pieces that are kept. Check it with `runtime.ReadMemStats` around reading many large notifications (`TestTaskNotificationsAreNotKept`, #2864), and look at a heap profile's `inuse_space`, not `alloc_space`: the copies are cheap to make and costly to keep.
 
 ## Hot paths: a whole-input check before decoding, a list copied to read a few rows (2026-11-09, #1755)
 
@@ -1556,6 +1568,11 @@ pending count to drop, pass with the rule deleted.
   page still runs, makes `jsonb_typeof('…')` or `jsonb_typeof($1)` with an unknown-typed argument fail in the whole
   database (`function jsonb_typeof(unknown) is not unique`). Every existing call passes a typed value; new SQL casts
   the argument (`$1::jsonb`) until a later migration drops the shim, once no pre-0471 build can run.
+- **The start read decodes from the driver's buffer, so an inbox type must not keep its input.** `InboxItems` hands
+  each row as `rows.RawValues()[0]`, which the next row overwrites. `encoding/json` copies every string and
+  `json.RawMessage` it keeps, so `InboxItem` holds none of the buffer; a custom `UnmarshalJSON` on any type inside it
+  must copy what it keeps too, or the items loaded share bytes the driver reuses. `TestInboxItemsAllocationBudget`
+  fails if the read starts copying rows again (6 allocations per 200-row read; collecting the rows took 616).
 
 ## Optional filesystem labels must not gate inventory (2026-11-10, #2750)
 
@@ -1567,3 +1584,10 @@ A regular Git HEAD can block in open despite stat succeeding. Keep project label
 - `writeMerged` decoded every manager's answer into a map, decoded each item into a map only to look for `manager`, and encoded everything again: 13 ms and 7 MB for 400 inbox items on every refetch. One `json.Valid`, then a structural scan that cuts out the top-level members and the items, writes the same bytes in 3 ms and 0.5 MB (`merged_scan.go`). Anything the scan cannot read the way decoding does goes to the old decoding, kept as `writeDecoded`: a top-level key that is escaped, non-ASCII or repeated (how a map keeps and sorts such keys is decoding's to say), a list that is neither an array nor null. Do the same for any other reader the scan replaces: `mergeList` takes the todos' ids from the scan only where a key cannot fold to `todos` or `id` (`encoding/json` matches struct fields regardless of case) and the id is plain ASCII, and decodes otherwise (`TestTodoOwnersMatchDecoding`).
 - `i18n.InboxJSON` decoded and marshaled the whole inbox list on every GET to change a few labels (17-22 ms, 4-7 MB for 400 items). What it does to a value depends on that value alone, so the hub localizes each item on its own and keeps the result by a 128-bit hash of the item's bytes, per list route, manager and language, for the items of the latest answer only (`inbox_forms.go`). Byte identity with the whole-body pass needs one more step: when anything in an answer changes, the whole answer is marshaled again, so every unchanged item and the top level are then written as `InboxReencoded` (decode with `UseNumber`, marshal) gives them. An answer whose top level is itself an item is localized whole, since `InboxJSON` then visits none of its list. Equal bytes do not show the per-item path ran, so the relay test also counts the slots kept (`TestInboxListsLocalizedAsWhole`).
 - A 2xx answer whose body was `null` made `writeMerged` panic: `json.Unmarshal` of `null` into a map leaves it nil, and the merge then assigned to it. Treat any answer that is not a JSON object, `null` included, as no answer.
+
+## Remote tests need fixtures outside the Go module (2026-11-10, #2980)
+
+When server tests read a shared fixture outside `server/`, include it in `scripts/test/test-server.sh` at the same
+relative path and create its remote parent directory. The inbox list tests read `scripts/mock/inbox_events.json`;
+copying only the Go module left them failing on the test machine. Extend the fake remote launcher test to read the
+staged fixture from the package directory, check refreshed contents, and reject a missing source before Go starts.
