@@ -12,7 +12,8 @@ import (
 
 // A hub's name is whatever any host on the LAN advertises over mDNS: discover prints it with every control character
 // made visible, one line per hub, so a spoofed advert cannot run terminal sequences or fake the installer's question
-// printed under it. --json keeps the name as it was heard (JSON escapes are already inert).
+// printed under it. --json is for scripts and keeps the name as it was heard: encoding/json escapes C0 control
+// characters (ESC included) but writes DEL and C1 characters raw, so that output is not terminal-safe.
 func TestDiscoverPrintsAdvertisedNamesInert(t *testing.T) {
 	f := newFakeEnv(t)
 	old := browseHubs
@@ -42,6 +43,10 @@ func TestDiscoverPrintsAdvertisedNamesInert(t *testing.T) {
 	var got []foundHub
 	if err := json.Unmarshal(f.out.Bytes(), &got); err != nil || len(got) != 2 || got[0].Name != strings.ToValidUTF8(hostile, "\uFFFD") {
 		t.Fatalf("%v %+v", err, got)
+	}
+	// As docs/operations/link.md says: ESC comes out escaped, C1 raw.
+	if js := f.out.String(); strings.ContainsRune(js, '\x1b') || !strings.Contains(js, `\u001b`) || !strings.ContainsRune(js, '\u009b') {
+		t.Errorf("--json no longer escapes ESC and keeps C1 raw; update link.md: %q", js)
 	}
 }
 
