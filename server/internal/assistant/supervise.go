@@ -78,7 +78,7 @@ type TaskReview struct {
 	Checks  []ReviewCheck `json:"checks,omitempty"`
 	Note    string        `json:"note,omitempty"`
 	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
-	// "Please verify" waits for them instead of being passed by the supervisor (acceptance.go, #3240).
+	// "Please verify" waits for them instead of being passed by the supervisor (acceptance_supervisor.go, #3240).
 	UserCheck bool `json:"user_check,omitempty"`
 }
 

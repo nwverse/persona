@@ -88,6 +88,8 @@ struct InteractionPreviewCard: View {
     var agentLabel = "Claude"
     /// The list's cell is the card (same width and corners as the agents' rows): no chrome of its own.
     var inCell = false
+    /// Under its session's first card in the Agents list (`AgentsNeedsYou`), a card does not repeat the session's place.
+    var showsPlace = true
     var open: () -> Void
 
     var body: some View {
@@ -98,10 +100,12 @@ struct InteractionPreviewCard: View {
                     .scaledFrame(width: Theme.Size.icon) // one column: the titles line up card to card
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.heading).lineLimit(1)
-                    Text(interaction.placeLine(machine: machine))
-                        .font(Theme.Font.label)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if showsPlace {
+                        Text(interaction.placeLine(machine: machine))
+                            .font(Theme.Font.label)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer()
                 #if !os(macOS) // a phone's row says it opens; a Mac's list row does not (#2113)

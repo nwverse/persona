@@ -129,6 +129,7 @@
     <string name="assistant_needs_you_header">Needs you now</string>
     <string name="assistant_source_lark">Lark</string>
     <string name="assistant_source_mail">Email</string>
+    <string name="assistant_needs_you_agent">Agent</string>
     <string name="assistant_pair_first">Pair a hub first</string>
     <plurals name="assistant_show_all_recent">
         <item quantity="one">See all %1$d</item>

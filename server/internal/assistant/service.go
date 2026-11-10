@@ -89,6 +89,9 @@ type Service struct {
 	// running is Run's context: it ends when the service stops (runCtx).
 	running atomic.Pointer[context.Context]
 
+	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
+	interrupts interruptBook
+
 	titles    titleBook      // titles.go
 	prefs     settingsBook   // profile.go
 	main      mainBook       // start.go
@@ -385,20 +388,22 @@ func (s *Service) session(ctx context.Context, machine, id string) (proto.Sessio
 
 // devices are the user's machines.
 func (s *Service) devices(ctx context.Context) []Device {
-	devices, _ := s.devicesAndPhone(ctx)
+	devices, _, _ := s.devicesAndPhone(ctx)
 	return devices
 }
 
-// devicesAndPhone are the user's machines, and whether the phone's app is connected (phone_* tools work now).
-func (s *Service) devicesAndPhone(ctx context.Context) ([]Device, bool) {
+// devicesAndPhone are the user's machines, whether the phone's app is connected (phone_* tools work now) and the
+// Persona apps' versions as they last said (client_apps.go).
+func (s *Service) devicesAndPhone(ctx context.Context) ([]Device, bool, []ClientApp) {
 	var res struct {
-		Devices     []Device `json:"devices"`
-		PhoneOnline bool     `json:"phone_online"`
+		Devices     []Device    `json:"devices"`
+		PhoneOnline bool        `json:"phone_online"`
+		Apps        []ClientApp `json:"apps"`
 	}
 	if err := s.call(ctx, DeviceAll, DeviceDevicesList, map[string]any{}, &res); err != nil {
 		s.logf("assistant: devices: %v", err)
 	}
-	return res.Devices, res.PhoneOnline
+	return res.Devices, res.PhoneOnline, res.Apps
 }
 
 // device is the machine by id; false when the hub has none.

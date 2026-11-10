@@ -6,5 +6,19 @@
   "line_when": "{line}（{when}）",
   "minutes_other": "{count}分",
   "hours_minutes": "{hours}時間{minutes}分",
-  "hours_other": "{count}時間"
+  "hours_other": "{count}時間",
+  "closeout_line": "{line} · {suffix}",
+  "closeout_merged_yes": "マージ済み",
+  "closeout_merged_no": "未マージ",
+  "closeout_merged_confirmed": "マージ済み ✓",
+  "closeout_merged_contradicted": "✗ マージ済みと報告、実際は未マージ",
+  "closeout_deployed_yes": "デプロイ済み",
+  "closeout_deployed_no": "未デプロイ",
+  "closeout_deployed_confirmed": "デプロイ済み ✓",
+  "closeout_deployed_contradicted": "✗ デプロイ済みと報告、実際は未デプロイ",
+  "closeout_blocked_on": "ブロック中：{waiting}",
+  "closeout_blocked": "ブロック中",
+  "closeout_not_done_missing": "未完了：{missing}",
+  "closeout_not_done": "未完了",
+  "closeout_done": "完了と報告"
 }

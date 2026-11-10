@@ -110,6 +110,8 @@ export interface SessionCapabilities {
   approve?: boolean;
   terminal?: boolean;
   attach?: boolean;
+  /** Whether the runtime explicitly supports session model changes. */
+  model?: boolean;
   /** Closing the agent independently of terminal access. Older nodes retain terminal-only closing. */
   close?: boolean;
   /** The permission mode and effort chips can change it (session.modes, #1843): the node's word, absent from older nodes. */
@@ -118,7 +120,7 @@ export interface SessionCapabilities {
 
 /** A session's work state (docs/assistant/agent-work.md): working, blocked on a named precondition, or done. */
 export interface WorkState {
-  phase: "working" | "blocked" | "done";
+  phase: "working" | "blocked" | "done" | "";
   /** What a blocked one waits on: user (a decision), agent, external (a deploy, CI, a time), transient (a model error). */
   on?: "user" | "agent" | "external" | "transient";
   /** One line for the lists: what it waits for, or what it concluded. */
@@ -134,7 +136,25 @@ export interface WorkState {
   agent?: { machine_id: string; session_id: string; label?: string };
   link?: { url: string; expires_at?: string };
   artifacts?: { kind: string; ref: string }[];
+  /** What the agent said of its own work as the turn ended (lib/closeout.ts). A turn the hub could not call finished
+   *  (the closeout says merged and it is not) carries it with an empty `phase`. */
+  closeout?: Closeout;
   interaction_id?: string;
+}
+
+/** An agent's closeout (docs/assistant/agent-work.md "Closeout"): its own claim of where the work stands. `merged` and
+ *  `deployed` are "yes" or "no", absent when not said; `checked` is what the hub found when it looked itself, absent
+ *  where it could not tell. Session lists leave out `did` and `verified`. */
+export interface Closeout {
+  status: "done" | "not_done" | "blocked" | (string & {});
+  /** Who or what a blocked turn waits for. */
+  waiting?: string;
+  did?: string[];
+  merged?: string;
+  deployed?: string;
+  verified?: string;
+  missing?: string;
+  checked?: { merged?: string; deployed?: string };
 }
 
 /** Settings › Session triage (GET / PUT /agents/triage): all off until the user turns them on. */
@@ -145,6 +165,8 @@ export interface TriageSwitches {
   decide: boolean;
   /** Detect repeated tool calls during a turn (off when absent). */
   tool_loop?: boolean;
+  /** Ask for a closeout (#3612): hold an agent's stop once when a turn that did work ends without one (off when absent). */
+  closeout?: boolean;
   /** Remind When Seen, Unanswered (#5096): remind once when an agent asked the user something and it stays unanswered after they saw
    *  it. Rule-based, no tokens, so it is on when absent and does not depend on `enabled`. */
   reply_reminder?: boolean;

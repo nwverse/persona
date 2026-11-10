@@ -202,6 +202,10 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		}
 		return
 	}
+	if e.Work.CloseoutAsk == closeoutAskPending {
+		s.sendCloseoutAsk(ctx, e, c, now)
+		return
+	}
 	if e.Work.CI != nil {
 		closed, _, err := s.ciClosedTodo(ctx, e.MachineID, e.SessionID, e.Work.CI.TodoProof, proto.WorkState{}, time.Time{})
 		if err != nil || closed {
