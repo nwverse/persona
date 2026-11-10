@@ -85,7 +85,7 @@ use_split_hub() {
   fi
   BIN="$SPLIT_HUB"
 }
-# Blue-green (docs/operations/hub-restart.md "Blue-green switch"): the running hub's edge starts the new binary next to the one serving
+# Blue-green (docs/operations/hub-restart.md "Blue-green switching: the hub's edge"): the running hub's edge starts the new binary next to the one serving
 # and switches once it is up, nothing restarts. It returns 0 once switched; 1 (no edge here, or one older than the new
 # binary's protocol: `hub switch` exits 3; or a binary that cannot run it) to have the caller restart the service;
 # it exits the script when the new binary did not come up (exit 1: the hub serves on the old one, back in place, or
@@ -164,7 +164,7 @@ PY
   echo "hub: restarted launchd agent $label"
   exit 0
 fi
-# The listening sockets belong to $UNIT.socket (socket activation, docs/operations/hub-restart.md "No gap"): restarting the
+# The listening sockets belong to $UNIT.socket (socket activation, docs/operations/hub-restart.md "Zero gap: systemd socket activation"): restarting the
 # hub never closes the port, connections made meanwhile wait for the next process instead of being refused.
 # PERSONA_HUB_SOCKET=0 goes back to the hub listening itself (the rollback): the socket unit is removed.
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -204,7 +204,7 @@ if (cfg.get('public') or {}).get('tls_listen'):
     listens.append(cfg['public']['tls_listen'])
 use_socket = os.environ['PERSONA_HUB_SOCKET'] != '0'
 unit_dir = Path(os.environ.get('XDG_CONFIG_HOME') or str(Path.home() / '.config')) / 'systemd/user'
-# PERSONA_HUB_EDGE=0 runs the hub without its edge (docs/operations/hub-restart.md "Blue-green switch"): what was given once stays in the unit
+# PERSONA_HUB_EDGE=0 runs the hub without its edge (docs/operations/hub-restart.md "Blue-green switching: the hub's edge"): what was given once stays in the unit
 # across deploys until it is given again (PERSONA_HUB_EDGE=1 goes back to the edge).
 edge = os.environ.get('PERSONA_HUB_EDGE')
 if edge is None:

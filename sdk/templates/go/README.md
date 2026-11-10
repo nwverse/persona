@@ -1,6 +1,6 @@
 # {{name}}
 
-Persona 扩展（`{{id}}`），从 Go 模板生成。写法见 Persona 的 `docs/extensions/extensions.md`「写扩展：SDK、模板和命令行」。
+Persona 扩展（`{{id}}`），从 Go 模板生成。写法见 Persona 的 `docs/extensions/extensions.md`「Writing extensions: SDK, templates and command line」。
 
 | 命令 | 做什么 |
 | --- | --- |

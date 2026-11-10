@@ -428,20 +428,28 @@ func processStart(pid int) (string, error) {
 }
 
 // aliveIs says whether pid is still the exact recorded process instance. The
-// exact identity decides whenever the marker carries one and the platform can
-// read it now; the second-resolution start — what every older version wrote —
-// decides otherwise and stays the fallback when the exact identity cannot be
-// read right now (a masked procfs): still a guard against pid reuse.
+// exact identity decides when available: a live identity must match the marker,
+// and a known-dead process (missing or a zombie) never reaches ps, which also
+// lists zombies. An unknown identity (for example, unreadable procfs) falls back
+// to the second-resolution start. Older markers without an exact identity use
+// that fallback too, but only after ruling out a known-dead process.
 func aliveIs(pid int, start, precise string) bool {
+	return aliveIsWith(pid, start, precise, osproc.IdentifyKnown, processStart)
+}
+
+func aliveIsWith(pid int, start, precise string, identify func(int) (osproc.ProcIdentity, bool), birthOf func(int) (string, error)) bool {
 	if pid < 2 || start == "" {
 		return false
 	}
-	if precise != "" {
-		if id := osproc.Identify(pid); id.Start != "" {
+	if id, known := identify(pid); known {
+		if id.Start == "" {
+			return false
+		}
+		if precise != "" {
 			return id.Start == precise
 		}
 	}
-	birth, err := processStart(pid)
+	birth, err := birthOf(pid)
 	return err == nil && birth != "" && birth == start
 }
 
@@ -453,8 +461,13 @@ func killRecorded(pid int, start, precise string) error {
 	if pid < 2 || start == "" {
 		return nil
 	}
-	if precise != "" && osproc.Identify(pid).Start != "" {
-		return osproc.ProcIdentity{Start: precise}.KillIfStill(pid)
+	if id, known := osproc.IdentifyKnown(pid); known {
+		if id.Start == "" {
+			return nil
+		}
+		if precise != "" {
+			return osproc.ProcIdentity{Start: precise}.KillIfStill(pid)
+		}
 	}
 	if !aliveIs(pid, start, precise) {
 		return nil

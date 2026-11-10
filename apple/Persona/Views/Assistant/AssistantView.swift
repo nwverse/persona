@@ -8,7 +8,7 @@ import SwiftUI
 struct AssistantView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var widthClass
-    /// The ChatGPT-style shell (docs/apple/ios.md「新外壳」): it owns the drawer, and pushes its pages here.
+    /// The ChatGPT-style shell (docs/apple/ios.md「New shell」): it owns the drawer, and pushes its pages here.
     @Environment(\.shell) private var shell
     #if os(iOS)
     /// The iPad's tabs omit Inbox and Settings: the sidebar column lists them as the shell's does.
@@ -32,7 +32,7 @@ struct AssistantView: View {
     @State private var openedExtension: ExtensionNavRoute?
     /// Health: the health space's page (docs/assistant/health.md).
     @State private var showHealth = false
-    /// The sidebar (Chat History, or a drag to the right anywhere on the page): docs/apple/ios.md「Persona 顶栏和侧边栏」.
+    /// The sidebar (Chat History, or a drag to the right anywhere on the page): docs/apple/ios.md「Persona top bar and sidebar」.
     @State private var drawer = AssistantDrawer()
     /// Regular width (iPhone Duo open): the sidebar is a column beside the conversation; Chat History shows or hides it.
     @State private var columns = SplitColumns.shown
@@ -153,8 +153,13 @@ struct AssistantView: View {
                 .disabled(pending != nil)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { switcherHeight = $0 }
                 .background(alignment: .top) {
-                    TopFog(solidHeight: switcherHeight, fadeHeight: AssistantTopBar.fade)
-                        .frame(height: switcherHeight + AssistantTopBar.fade)
+                    // Solid from where the bar's fog stops being solid, so the two read as one: starting at the
+                    // switcher's own top left the line between them showing through, cut in half by that edge (#2909).
+                    // Not higher: the switcher is drawn over the bar, and its fog would hide the bar's buttons.
+                    let lift = max(0, AssistantTopBar.room(railEdge) - AssistantTopBar.fogSolid)
+                    TopFog(solidHeight: lift + switcherHeight, fadeHeight: AssistantTopBar.fade)
+                        .frame(height: lift + switcherHeight + AssistantTopBar.fade)
+                        .offset(y: -lift)
                 }
                 .padding(.top, AssistantTopBar.room(railEdge))
         }
@@ -823,11 +828,11 @@ struct TypingIndicator: View {
 struct StarterComposer: View {
     @Environment(AppModel.self) private var model
     var disabled: Bool
-    /// The shell's composer (docs/apple/ios.md「新外壳」): the launcher, mode and effort are in its gauge menu.
+    /// The shell's composer (docs/apple/ios.md「New shell」): the launcher, mode and effort are in its gauge menu.
     var shell: ShellModes? = nil
     /// The field's hint; nil: Ask <Persona's name>… (Health has its own).
     var placeholder: String? = nil
-    /// Where picked files land on the assistant's machine: "health" for Health's reports/ (docs/assistant/health.md「体检报告」).
+    /// Where picked files land on the assistant's machine: "health" for Health's reports/ (docs/assistant/health.md「Checkup reports」).
     var uploadDest: String? = nil
     /// The main conversation cannot answer yet (docs/assistant/onboarding.md 4.4): send goes to what is missing, the draft stays.
     var gate: SendGate? = nil
@@ -978,7 +983,7 @@ struct StarterComposer: View {
             upload(urls)
         }
         #if os(macOS)
-        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「细节」).
+        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「Details」).
         .macComposerFiles(images: images.count, focused: focused, attach: { MacDrop.append($0, to: &images) }, upload: { urls in upload(urls) })
         #endif
         .onChange(of: picks) { _, items in
@@ -1021,7 +1026,7 @@ struct BeautifulStarterComposer: View {
     @Binding var launcher: String?
     /// The field's hint; nil: Ask <Persona's name>… (Health has its own).
     var placeholder: String? = nil
-    /// Where picked files land on the assistant's machine: "health" for Health's reports/ (docs/assistant/health.md「体检报告」).
+    /// Where picked files land on the assistant's machine: "health" for Health's reports/ (docs/assistant/health.md「Checkup reports」).
     var uploadDest: String? = nil
     /// The main conversation cannot answer yet: send goes to what is missing, the draft stays (the card says what).
     var gate: SendGate? = nil
@@ -1145,7 +1150,7 @@ struct BeautifulStarterComposer: View {
             upload(urls)
         }
         #if os(macOS)
-        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「细节」).
+        // Finder drags and ⌘V of pictures / copied files, as in an Agent's composer (docs/apple/mac.md「Details」).
         .macComposerFiles(images: images.count, focused: focused, attach: { MacDrop.append($0, to: &images) }, upload: { urls in upload(urls) })
         #endif
         .onChange(of: picks) { _, items in

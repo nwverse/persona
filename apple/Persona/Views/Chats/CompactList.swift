@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Compact List's one scale (docs/apple/ios.md「Agents 列表」): every row in it — an agent, "N more idle", Collapse, a quiet space —
+/// Compact List's one scale (docs/apple/ios.md「Information architecture」): every row in it — an agent, "N more idle", Collapse, a quiet space —
 /// is one line of the same height with its mark (state dot, fold chevron, space icon) in one column, so the titles
 /// start at one edge; three levels of type: section titles, row titles, meta. All Dynamic Type levels, so the three
 /// text sizes (Small / Standard / Large) keep the ratios; read each time, since the Mac's move with `Theme.Font.scale`. The cards (Cards) do not use it.

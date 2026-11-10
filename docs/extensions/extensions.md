@@ -184,7 +184,7 @@ Lives at the root of the extension package. Example (a connector for a fictional
 | `engines.persona` | No | A range of hub build numbers, only `>=N`, `<N` and combinations; if not satisfied it can't be installed, and installed ones are marked `incompatible`. Development builds (build number 0) are not checked; a warning is given |
 | `engines.extension_protocol` | Yes when there is `runtime` or `node` | `1` |
 | `runtime` | No | Without it, the extension is declarative only. `command`: a relative path in the package, or `{"<GOOS>-<GOARCH>": path}`; if this hub's platform is missing it can't be installed. Must not be absolute or escape the package (`..` and links pointing outside the package are both checked), and must be executable; `personad` is allowed only for built-in extensions. `args`; `env` (must not start with `PERSONA_` / `PERSONA_`, nor be the dynamic loader's `LD_*` / `DYLD_*`, which would reach the sandbox launcher outside the sandbox; secrets don't go here); `rpc`: `stdio` (default) / `none`; `http`: serve HTTP on `PERSONA_EXTENSION_SOCKET`. `rpc: none` without `http` can't be installed |
-| `node` | No | A program that runs on computers you pick (#1830, `docs/plans/plan-extensions.md` ("Seven")). `command`: per platform only, `{"darwin-<arch>" \| "linux-<arch>": path}`, same path rules as `runtime`, cannot be `personad`; the platforms listed are the computers it can run on, and every platform's program must be in the package and executable (the hub does not check its own platform). `machines`: the name of the config field that picks computers; this field must be an array of `format: machine`, its `items` must set `x-os`, and only to systems that `command` has a program for (to limit it to one computer, set `maxItems`). `args`, `env`, `rpc`, `http` as in `runtime`; `keep_running`: `lease` (default, stops if the hub hasn't renewed for half an hour) / `always`; `secrets`: names of secrets sent to the computer (must be in `secrets`), the rest stay on the hub only; `permissions`: `network` (host names), `files`, `macos_privacy`, see "Permissions". You can have `node` without `runtime` (if the extension points you contribute don't need a program on the hub). How it runs: see "Programs that run on computers" |
+| `node` | No | A program that runs on computers you pick (#1830, `docs/plans/plan-extensions.md` ("Running an extension on selected computers")). `command`: per platform only, `{"darwin-<arch>" \| "linux-<arch>": path}`, same path rules as `runtime`, cannot be `personad`; the platforms listed are the computers it can run on, and every platform's program must be in the package and executable (the hub does not check its own platform). `machines`: the name of the config field that picks computers; this field must be an array of `format: machine`, its `items` must set `x-os`, and only to systems that `command` has a program for (to limit it to one computer, set `maxItems`). `args`, `env`, `rpc`, `http` as in `runtime`; `keep_running`: `lease` (default, stops if the hub hasn't renewed for half an hour) / `always`; `secrets`: names of secrets sent to the computer (must be in `secrets`), the rest stay on the hub only; `permissions`: `network` (host names), `files`, `macos_privacy`, see "Permissions". You can have `node` without `runtime` (if the extension points you contribute don't need a program on the hub). How it runs: see "Programs that run on computers" |
 | `activation_events` | No | `on_startup` / `on_call` / `on_http`, see "When it runs"; with `runtime` the default is `on_call`; `rpc: none` allows only `on_startup` |
 | `contributes` | Yes (except packs) | See "Extension points", at least one item; contributions to an extension point exported by another extension are written `"<extension id>.<extension point id>"`, see "Dependencies, exports and packs" |
 | `off_by_default` | No | Contributions that start off when installed (`["ui/github"]`, #2829), see "Turning contributions on and off". Cannot list connectors or channels bound to connectors. Hubs from before this field read manifests strictly, so extensions with it can't be installed there and their marketplace entries are skipped (with a warning): extensions using it need a new hub anyway |
@@ -203,6 +203,39 @@ first say “This extension needs a newer hub. Update the hub first,” followed
 Messages follow the request language (Chinese, English or Japanese); the CLI always uses the default Chinese, and logs do not change with the UI language.
 At or above a `<N` upper bound, the message explains the incompatibility without telling the user to update the hub. Version checks, installation restrictions and the
 `incompatible` status of installed extensions are unchanged; development builds still only produce a warning.
+
+### Translations: `l10n/` (#897)
+
+A manifest has one language. Its text in the hub's other languages (`docs/protocol/i18n.md`) goes in the package next to it, one file each:
+`l10n/en.json`, `l10n/ja.json`, `l10n/zh-Hans.json`. The manifest itself does not change: hubs read manifests strictly, so a new manifest field
+would make the extension uninstallable on older hubs, while files they do not read are harmless. Example `l10n/en.json` for a manifest written in Chinese:
+
+```json
+{"name": "Example Notes",
+ "description": "Syncs Example Notes into the knowledge base.",
+ "configuration": {
+   "base_url": {"title": "Server URL"},
+   "region": {"title": "Region", "choices": {"cn": "China", "intl": "International"}},
+   "proxy": {"title": "Proxy", "properties": {"host": {"title": "Host"}}}
+ },
+ "secrets": {"api_key": {"title": "API key", "description": "Generate one in Example Notes under Settings › Developer"}}}
+```
+
+- Every key is optional and a blank string is no translation. `configuration.<property>`: `title`, `description`, `confirm` (translates `x-confirm`,
+  never adds one), `choices` (labels by value: a string choice by the string, a number as JSON writes it; on an array, its items' choices) and
+  `properties` (an object's own properties, in the same shape). `secrets.<name>`: `title`, `description`. Keys the hub does not know are ignored.
+- **Which text**: string by string, the request's language (`X-Persona-Lang` / `Accept-Language`), then English unless the request is
+  Simplified Chinese, then the manifest's own text.
+- **Where**: the extension list and details (name, description, the settings form, secrets and the "Missing: …" line), dependency names,
+  marketplace catalog items (from the index entry's `l10n`, see "Extension marketplace"; the search also matches every translation's name and
+  description) and install / upgrade previews (the name and description of the preview's `manifest`). What gets approved and installed, the
+  permission digest and the official-provenance check do not change with the language. Contribution titles (pages, navigation entries,
+  shortcuts, themes) and built-in extensions have one language for now.
+- **Checks**: a file is at most 64 KB, `name` 1–40 characters, any other string at most 2000. A file that does not check out (not JSON, a
+  wrong type, too long, a link) is left out with a warning on the preview and on the installed extension; it never blocks an install. Files
+  of languages the hub does not have are not read.
+- `personad extension pack` packs `l10n/` and prints the index entry's `l10n` next to its `packages`; `personad extension dev` reads the files
+  too. Code: `server/internal/extension/l10n.go`.
 
 ### Configuration: the form subset
 
@@ -403,7 +436,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
 
-Scopes cover what an extension calls with its token. The owner's own answers that a channel extension relays (a button pressed, a reply typed) never go through these routes: they follow the channel's trust model (`docs/extensions/channels.md`, "No answering approvals on the user's behalf").
+Scopes cover what an extension calls with its token. The owner's own answers that a channel extension relays (a button pressed, a reply typed) never go through these routes: they follow the channel's trust model (`docs/extensions/channels.md`, "Responsibilities").
 
 - **Which route belongs to which scope** is registered in `routeScopes` in `server/internal/extmgr/extension_scopes.go` (by the pattern the route was registered with); **unregistered routes accept only full credentials**, and extension tokens always get 403.
   All hub routes and the decision for each are listed in `server/internal/hub/testdata/route_scopes.txt` (`-` means full credentials only), guarded by `TestRouteScopes`: adding a route makes the test fail,
@@ -550,7 +583,7 @@ sends, renames, archives or changes a conversation. The manager, which owns the 
 
 The schema is `schema/extension/assistant.schema.json`; the Go SDK has them as `ext.Hub.AssistantConversations` and `AssistantMessages`.
 
-- **Which conversations**: only the assistant's own space. The health space's (docs/assistant/health.md "Isolation") and guest
+- **Which conversations**: only the assistant's own space. The health space's (docs/assistant/health.md "How directories and memory are isolated") and guest
   conversations are never listed or read (`not_found`), nor are other agents' sessions (those are `agents.read`'s).
   `assistant.conversations` lists the ones last active at or after `since`, newest first, 50 a page (at most 200); with `until`, one
   known to have started at or after it is left out (`started` is set when the manager knows when it began). `origin` says who opened it
@@ -721,7 +754,7 @@ Installing an extension means running a new program on the hub machine, so packa
 The phone (device credentials) can see the list, toggle, change config and fill in secrets; install, upgrade, roll back and uninstall only work for **extensions from a registered extension marketplace** (see "Extension marketplace").
 Arbitrary sources (directories, files, URLs, uploads, running elsewhere) still go only through the two ways above.
 
-Every install, upgrade and uninstall is a step-by-step operation (download → verify → unpack → check → consent → install command-line programs → install → start → sync to computers), and clients can see the progress and which step it's stuck on; see [protocol.md](../protocol/protocol.md) ("Progress of extension install, upgrade and uninstall") (#3277).
+Every install, upgrade and uninstall is a step-by-step operation (download → verify → unpack → check → consent → install command-line programs → install → start → sync to computers), and clients can see the progress and which step it's stuck on; see [protocol.md](../protocol/protocol.md) ("Extension install, upgrade and uninstall progress") (#3277).
 
 Extension package: a directory, or a `.tar.gz` / `.tgz` / `.zip` (with the manifest at the root or in the only top-level directory). At most 200 MB and 20,000 files; unpacking rejects absolute paths, `..`, links pointing outside the package,
 and device files, and zips can't contain links; file permissions keep only "executable or not". Packages made on a Mac often carry macOS metadata (`._*` AppleDouble files when tar runs without `COPYFILE_DISABLE=1`,
@@ -961,6 +994,7 @@ personad extension dev [<dir>]                       Attach it to this hub to tr
 personad extension test [<dir>]                      Build for this machine and run it through the hub's checks
 personad extension pack [<dir>] [--platforms linux-amd64,…] [--out <dir>] [--split]
                                                      --platforms defaults to the platforms the manifest has programs for (this machine's if the manifest has none), --out defaults to <dir>/dist
+                                                     The package takes l10n/ too; the index entry printed carries its l10n
 ```
 
 ## Extension marketplace
@@ -1007,6 +1041,9 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 
 - `manifest` is the extension's whole `persona-extension.json`: its permissions and contributions can be seen without downloading. The manifest in the downloaded package must match it (id, version, permission summary), otherwise it is not installed.
 - `tags` are the labels shown in the marketplace. The extension repo generates them from the manifest's `tags` and takes them out of `manifest` when writing the index (older hubs do not recognize `tags` in a manifest and would drop the whole entry); when an entry has no `tags`, the hub uses the ones in `manifest`.
+- `l10n` (optional) is the package's translations again, `{"<language>": <its l10n/<language>.json>}` (see "Translations: `l10n/`"), so
+  the catalog can show them before anything is downloaded. Older hubs ignore the key. One that does not check out is left out with a warning,
+  and the entry stays, in its manifest's words.
 - `packages` are searched in order for the first whose `platforms` includes this hub (`GOOS-GOARCH`); one without `platforms` counts as usable anywhere. `url` is a path relative to the index (for GitHub and git marketplaces, a path in the repo; git marketplaces cannot escape the repo through links),
   an HTTPS address, an immutable `oci:<registry>/<repository>@sha256:<64 lowercase hex>` reference, or for GitHub marketplaces `release:<tag>/<asset name>` (downloads the Release asset through the API; private repos work too). `sha256` is required and checked after download; on mismatch it is not installed.
 - Broken entries (invalid manifest, no packages, non-https address, the same id twice) are dropped with a warning and the rest work as usual; a whole index whose `market_version` is not 1 or that has no `name` is rejected.
@@ -1021,10 +1058,10 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 | `DELETE /api/v1/extensions/-/markets/{id}` | Stop reading this marketplace; extensions installed from it stay, but their auto-upgrade pauses with `auto_upgrade_paused: "market_removed"`. Add its original registration address again to restore upgrades under the saved settings |
 | `POST /api/v1/extensions/-/markets/{id}/refresh` | Re-read the index now; on a bad signature returns 400 `market_signature` (the last good index is kept) |
 | `PUT /api/v1/extensions/-/markets/{id}/token` `{token}` | Replace the token (empty string removes it) and re-read |
-| `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
+| `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags and every translation's name and description (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
 | `POST /api/v1/extensions/-/catalog/preview` `{market, extension}` (the old field name `plugin` is also accepted) | Download, verify, return a preview (the same as the "Install" preview, plus `market`); if already installed it is an upgrade preview |
 
-`CatalogItem`: `market`, `market_name`, `id`, `name`, `version`, `description`, `publisher`, `homepage`, `tags`, `contributes` (extension point → id),
+`CatalogItem`: `market`, `market_name`, `id`, `name` and `description` (in the request's language, from the entry's `l10n`), `version`, `publisher`, `homepage`, `tags`, `contributes` (extension point → id),
 `permissions` (a few human-readable lines, same as before install), `problem` (why it cannot be installed: no package for this hub's platform, needs a newer hub, bad marketplace signature), `installed` (installed version),
 `installed_source`, `from_this_market`, `upgradable`.
 
@@ -1416,7 +1453,7 @@ The `-` endpoints below exist only when `features` in `/health` and hello includ
 | `POST /api/v1/extensions/{id}/-/rollback` | Same as above | |
 | `POST /api/v1/extensions/{id}/-/attach` `{source}`, `POST …/{id}/-/detach` | Same as above | Returns the details; a refusal is 400 `attach_failed` / `detach_failed` with the reason. See "Attaching an installed package" |
 | `DELETE /api/v1/extensions/{id}/-/` `?keep_data=1` | Same as above | |
-| `/api/v1/admin/extensions…` | Admin UI sessions | The same preview / install / upgrade / rollback / uninstall / switch, plus browser upload; see [admin.md](../operations/admin.md) ("Endpoints") |
+| `/api/v1/admin/extensions…` | Admin UI sessions | The same preview / install / upgrade / rollback / uninstall / switch, plus browser upload; see [admin.md](../operations/admin.md) ("API") |
 | Any `/api/v1/extensions/{id}/{path…}` | Full-access devices | HTTP forwarded to the extension (WebSocket too), with the app's `Authorization` and `token` removed and the caller's identity added (see below); on-demand extensions are started first |
 
 ### The caller on forwarded requests (#3498)
@@ -1451,7 +1488,7 @@ An extension contributes `api` to provide a set of app-facing endpoints `/api/v1
 - The same for connectors: connectors being migrated out of the hub (`connector.MigratableConnectors`, currently `lark`) are not reserved. When an extension contributes the same id, the hub's own one gives up the registry while the extension is enabled,
   and is put back after the extension is disabled or uninstalled (`extmgr/connectors_migrate.go`). The id stays the same, so knowledge base sessions (`lark-<feed>`), Inbox sources and mutes, and connector settings all carry over;
   since 3c (#1520) the hub no longer has its own copy, and the migrated id is simply not reserved. How its Inbox entries stay unchanged: see
-  `docs/protocol/connector-protocol.md` ("Connectors migrated out of the hub").
+  `docs/protocol/connector-protocol.md` ("Connectors migrated out of hub").
 - `features` are added to the `features` of hello and `/health`: clients decide what to show based on features as before, and they disappear once the extension is disabled.
 - The extension sends the event `api.broadcast {type, …}`: the hub pushes it as-is to online clients (with `contribution` removed); `type` must be in `events`, otherwise it is dropped and logged. The manager reports the running extensions' `events` to the hub (the extensions' report, `events_declared: true`), which passes a manager's message of such a type only from that manager (from an older manager, whose report does not say, any type but the hub's own), never one of the hub's own types, and only about that manager's computers and sessions (`docs/assistant/managers.md`, "What the hub keeps of each manager").
 - Extensions that push in real time must stay resident: `api` requires `on_startup`.
@@ -1543,7 +1580,7 @@ Quota extensions contribute `quota` and answer a launcher's quota (`docs/integra
 **Gateway account inventory** (#4576): extensions that accepted `usage_gateways` can read all accounts of the account-pool gateways among the hub's usage sources (`usage.sources[]` in the manager's `manager.json`), not limited to the accounts one launcher key can reach:
 
 - `usage.gateway_accounts {}` → `{sources: [{id, name, type, checked_at, error, listed, complete}], accounts: [{source, account_id, name, provider, plan, plan_raw, plan_display_name, status, schedulable, reason, cooldown_until, windows: [{kind, scope, scoped_model, used_ratio, limit, remaining, resets_at}], checked_at, cached, stale}]}`.
-  What the fields mean, where the windows of disabled accounts come from, what `reason` keeps and the limits: see `docs/server/usage-windows.md` ("Gateway account inventory").
+  What the fields mean, where the windows of disabled accounts come from, what `reason` keeps and the limits: see `docs/server/usage-windows.md` ("The gateway's account list").
 - It returns what the manager last read (one round every 5 minutes by default) and **never asks the gateway on its behalf**; with no sources it returns `{sources: [], accounts: []}`. The response contains no admin key and no gateway address.
 - Without `usage_gateways` it returns `permission_denied`; older hubs do not know this method (`unknown_method`) and do not know this permission either (a manifest that lists it fails to install).
   So an extension that wants it first ships a version that does not list this permission and falls back to `gateway.launchers` + `gateway.open` on those two error codes, then ships the version with the permission after the hub is upgraded (the user consents once more).
@@ -1722,7 +1759,7 @@ For items the extension's connector collects into the Inbox, the body of the det
   if not registered, or registered by another extension, it does not appear in the list, and drawing returns 404 `unsupported`.
 - **Listing**: `GET /api/v1/extensions/-/ui?placement=inbox_item` → `{ui: [{extension, extension_name, id, title, placement: "inbox_item", size: "full", connector}]}`;
   it is also in the list without `placement` (older apps that do not know `inbox_item` ignore it by the rules). The app caches this list (fetched together with the other slots, see "Compatibility"), and when opening an item finds the entry whose `connector` matches the item's `source`, without asking the hub each time.
-- **Drawing**: `POST /api/v1/extensions/{id}/-/ui/{ui}` `{context: {item: "<item id>", …}}`. The hub asks the Inbox (the manager's, `inbox.item` on the bus, `docs/assistant/inbox.md` ("Who owns what")) for this item and checks that its source (`source`) is this UI's `connector`
+- **Drawing**: `POST /api/v1/extensions/{id}/-/ui/{ui}` `{context: {item: "<item id>", …}}`. The hub asks the Inbox (the manager's, `inbox.item` on the bus, `docs/assistant/inbox.md` ("Ownership: the manager owns the Inbox")) for this item and checks that its source (`source`) is this UI's `connector`
   (when the manager is not connected it cannot get it and returns 404 `not_found`, and the app draws the original body as before),
   then includes `item` in `ui.render` / `ui.action`:
 
@@ -2222,7 +2259,7 @@ Returns 502 if nothing drawable remains. Prefer drawing directly for `size`: a `
   it also sends a background push to devices **that reported this widget**: `{"aps": {"content-available": 1}, "extension_widget": {"extension", "id"}}` (`apns-push-type: background`, priority 5),
   **at most once per device per widget in 15 minutes** (iOS budgets background pushes and widget refreshes). On receipt the app calls `WidgetCenter.shared.reloadTimelines(ofKind:)`.
 - Extension lifecycle changes (disable, uninstall, enable, install, upgrade, rollback or reconfigure): the manager clears all cached widget families and contexts for that extension and rejects render replies from its earlier lifecycle. After applying the change, it sends the same background push to every device that reported one of its widgets, including widget IDs removed from the manifest. Targets come from persisted device reports, so uninstall does not need a surviving manifest. Each device/widget gets one push regardless of reported families. These lifecycle wakes bypass the 15-minute content refresh limit; ordinary `ui.invalidate` remains throttled.
-- Widget and complication extensions cannot read the keychain (on real devices, though simulators allow it; see CLAUDE.md, "Common pitfalls"): hub addresses and device credentials are supplied through the existing App Group approach.
+- Widget and complication extensions cannot read the keychain (on real devices, though simulators allow it; see CLAUDE.md, "Most common pitfalls"): hub addresses and device credentials are supplied through the existing App Group approach.
 
 ### Shortcuts (extension point `shortcuts`)
 
@@ -2384,7 +2421,7 @@ Extensions contribute `providers` to declare model providers: address, connectio
 (`{presets: [{id: "<extension>/<provider>", plugin, name, description, kind, api, base_url, model, small_model, models, key_hint, models_error?}]}`);
 for `dynamic_models`, the hub calls the extension's `provider.models {contribution}` → `{models: [{id, name?}]}` and merges with declared models (on failure, declared models remain and `models_error` explains).
 When creating a launcher with `POST /api/v1/launchers` and `preset`, omitted Base URL, connection type, API, model and small model are filled from the preset; the user only enters a name and key. The launcher records its source preset.
-In the app this is **Settings › Model Providers › Add**: iOS shows **Add from Extension** only when presets exist; the web lists them alongside hub built-in presets in the first step, with an **Extension** badge. See `docs/integrations/launchers.md` ("Add from plugin").
+In the app this is **Settings › Model Providers › Add**: iOS shows **Add from Extension** only when presets exist; the web lists them alongside hub built-in presets in the first step, with an **Extension** badge. See `docs/integrations/launchers.md` ("Adding from extensions").
 The new-Agent model picker also lists preset models: launchers added from this preset, and those with the same gateway address (manually added or from ~/.zshrc), get all preset models appended after the `/model` options.
 
 ## Purely declarative contributions (#1854)
@@ -2439,7 +2476,7 @@ Extensions add avatars to Persona: name, avatar image (multisize PNG, optional S
 | `subtitle` / `subtitles` | Second line on the Settings card, ≤40 characters |
 | `avatar.sizes` | Side length (16–1024) → square PNG in the package, actual side length matching the key; at least one (bitmaps for watch, Lock Screen and places without SVG rendering) |
 | `avatar.svg` / `avatar.dark` / `avatar.safe` | Optional vector avatar (≤256 KB, sanitized by the hub before delivery, preferred by web); dark `sizes` / `svg` (missing entries use light ones); `safe` as for avatar packages |
-| `colors` | `light` / `dark`, keys only `primary`, `secondary`, `accent`, `bubble`, `bubble_text` (aligned with Apple's `PersonaPalette`, docs/apple/persona.md ("Color families")), `#RRGGBB`. Insufficient contrast is darkened by clients under avatar-package rules, not rejected |
+| `colors` | `light` / `dark`, keys only `primary`, `secondary`, `accent`, `bubble`, `bubble_text` (aligned with Apple's `PersonaPalette`, docs/apple/persona.md ("Color scheme → design tokens")), `#RRGGBB`. Insufficient contrast is darkened by clients under avatar-package rules, not rejected |
 | `dot` | Optional APNG or PNG per each of five states (`idle` required), frame side ≤512, matching `size` if specified. Without `dot`, the hub uses the largest avatar PNG as `idle` |
 | `app_icon_fallback` | New manifests must name `persona`, the only bundled drawing/icon. For a valid custom look in an older manager report, the hub normalizes retired or unknown icon values to Mochi without dropping the custom picture |
 
@@ -2501,7 +2538,7 @@ once on connection, again on rule changes, followed by another session-list fetc
 
 ## In-App tunnels
 
-An extension contributes `tunnels` to tell the App that this hub can also be reached through an **in-App tunnel**. When the phone cannot reach the hub's own address (for example, the hub is on a dedicated network), the App starts a tunnel inside its own process and connects to the hub's address on that network through it. Only Persona's traffic to the hub uses it; it does not create a system VPN. See [network.md](../operations/network.md) ("Connecting to the hub through an in-App tunnel").
+An extension contributes `tunnels` to tell the App that this hub can also be reached through an **in-App tunnel**. When the phone cannot reach the hub's own address (for example, the hub is on a dedicated network), the App starts a tunnel inside its own process and connects to the hub's address on that network through it. Only Persona's traffic to the hub uses it; it does not create a system VPN. See [network.md](../operations/network.md) ("Connecting to hub through an in-app tunnel").
 
 - **Pure declaration**: no program runs on the hub. The tunnel is a tunnel core compiled into the App at build time (a C static library; interface in network.md). Apps without this core show no entry.
 - **Destination**: extension settings `target_host` (required, hostname or IP resolved by DNS inside the tunnel) and `target_port` (default 18660, the hub's HTTP port). Install and upgrade validate both fields; invalid values prevent installation.
@@ -3210,7 +3247,7 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
 
 When the model delegates to the client (delegation, or `ask_persona` function call with `tools` enabled), the extension hands it to **Persona's main chat** (creating and marking one as main if absent),
 with message `client_msg_id` `voice-<16 random hex digits>`, task on the first line and a "Context · Voice chat" block after it. Return nothing at handoff (the model already said it handed it to main chat).
-The extension tracks by turn (`docs/assistant/voice.md` ("Turn tracking"), same `channel.Run` rules as the channel pipeline): find the message by id, wait for **that turn** to end (queue behind another busy main-chat turn),
+The extension tracks by turn (`docs/assistant/voice.md` ("Per-round tracking"), same `channel.Run` rules as the channel pipeline): find the message by id, wait for **that turn** to end (queue behind another busy main-chat turn),
 read its complete response, convert to speakable text (code, tables, links and hashes become placeholders such as "12 lines of code, on screen"; paths retain only filenames),
 then return it in an `<agent_output>` data block as the delegation's only result; the model gives a one- or two-sentence conclusion. If the delegation is gone (after reconnect), say it as new context.
 When main chat pauses to ask (`ask_user`), full-device calls read questions one by one (option names only); delegated utterances during this period count as answers, resolved through `POST /api/v1/interactions/{id}/resolve`.

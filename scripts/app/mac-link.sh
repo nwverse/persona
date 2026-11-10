@@ -27,12 +27,12 @@ build() {
   for a in "${archs[@]}"; do
     local goarch=$a
     [ "$a" = x86_64 ] && goarch=amd64
-    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -tags "$(cat build-tags.txt)" -trimpath \
       -ldflags "-s -w -X main.version=$version" -o "$OUT/persona-link-$a" ./cmd/persona-link)
     helpers+=("$OUT/persona-link-$a")
     # The resident node the app sets up when this Mac has none (persona-link node install --node-bin, docs/operations/link.md):
     # the device's own program.
-    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+    (cd server && GOOS=darwin GOARCH=$goarch CGO_ENABLED=0 go build -buildvcs=false -tags "$(cat build-tags.txt)" -trimpath \
       -ldflags "-s -w -X main.version=$version" -o "$OUT/persona-node-$a" ./cmd/persona-node)
     nodes+=("$OUT/persona-node-$a")
   done

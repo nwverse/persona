@@ -6,7 +6,7 @@ The proposal is section 5 of [plan-hub-mesh.md](../archive/operations/plan-hub-m
 
 Code: server `server/internal/hub/admin*.go` (extensions in `admin_extensions.go`), `server/internal/db/admin.go` (migration `0161_admin.sql`),
 web `web/admin/index.html` + `web/src/admin/` (same project and same design tokens as the web app, with its own entry point).
-The admin console is only at the hub's root path: the web app can be mounted under a reverse-proxy subpath ([web.md](../web/web.md) ("Subpath")), but the admin console does not read `X-Forwarded-Prefix` and cannot be opened through a subpath; access the hub's port directly.
+The admin console is only at the hub's root path: the web app can be mounted under a reverse-proxy subpath ([web.md](../web/web.md) ("Subpaths")), but the admin console does not read `X-Forwarded-Prefix` and cannot be opened through a subpath; access the hub's port directly.
 
 ## Access scope `admin.access`
 
@@ -164,7 +164,7 @@ not signed in or session expired is 401 `login_required`, a wrong CSRF token is 
 | `PUT network/public` `{"public_url", "tls_listen", "advertise"}` | Change the public address / TLS listener / candidate addresses (omitted fields unchanged), effective after restart |
 | `GET mesh` | `{"role": "center｜member", "center": {hub_id, name, online}, "term", "hubs": [{hub_id, name, role, online, self, paired}]}` |
 | `POST peers/{hub_id}/center` `{"confirm"}` | Make primary (hub_id may be this hub); 409 `confirm_required` (the old primary is unreachable, needs confirmation) / `unreachable`, 404 `not_in_group` |
-| `…/peers`, `…/routes` | Linked hubs: paired hubs (each with `role`), discovered hubs, link codes, disconnect, routes ([mesh.md](../server/mesh.md) ("Admin API and command line")) |
+| `…/peers`, `…/routes` | Linked hubs: paired hubs (each with `role`), discovered hubs, link codes, disconnect, routes ([mesh.md](../server/mesh.md) ("Admin APIs and CLI")) |
 | `devices*` on a member | 409 `member_hub`: devices are managed by the primary |
 | `GET extensions` | `{"extensions": [ExtensionDetail], "can_install", "upload_most"}`: each item is the app API's detail ([extensions.md](../extensions/extensions.md) ("hub API")), each with `data_dir`; `upload_most` is the upload limit (bytes) |
 | `GET extensions/{id}` | One extension's detail (with `data_dir`, its data directory on the manager's machine); 404 `not_found` |
@@ -200,7 +200,7 @@ using the same registry and checks as `personad extension`, plus:
 - **Upload**: the browser POSTs the file unchanged; the hub writes it into this preview's staging directory as it arrives (stopping above 200 MB), then removes the original after unpacking; obviously oversized requests are rejected first by `Content-Length`.
 - **Audit**: every step goes into `plugin_audit`, actor `admin UI`; a hub log line says `admin: installed plugin …`.
 - **Health** (#1857): each list row shows the last 24 hours' error rate and p95; the detail has call / error / latency charts, a table by method, reasons for error exits, and the extension's logs (search, live follow, copy),
-  see [extensions.md](../extensions/extensions.md) ("Health", "Admin console: extensions"). Only signed-in sessions can view logs: an extension's own output may reveal more than the app should see.
+  see [extensions.md](../extensions/extensions.md) ("Runtime status", "Admin console: extensions"). Only signed-in sessions can view logs: an extension's own output may reveal more than the app should see.
 - **Extension market** (#1330, page `web/src/admin/pages/ExtensionMarket.tsx`, sharing logic and copy with the web app in `web/src/lib/extension-market.ts`): two cards above the extension list (#5017), shown only when extensions can be installed (`can_install`) and the hub has the market API (the entire section is hidden on 404 / 503).
   **Extension markets** lists registered markets: name, whether a token exists, address (separate icons for https / GitHub / git), extension count · time since last read, failure reason (red) and index warnings (orange); each market can be refreshed, have its token added / replaced / removed (write-only, never echoed), or be deleted (confirmed in place; extensions installed from it remain).
   **Add market** takes an address and optional token: placeholders and instructions show three forms (`https://…`, `github:owner/repo[@branch]`, `git:<address>[#branch]`, #1373); the page does not validate the syntax, but passes it unchanged to the hub, which only registers it after reading the index and shows any failure reason in the dialog;
@@ -211,7 +211,7 @@ using the same registry and checks as `personad extension`, plus:
 
 ## Assistant cards
 
-Page `web/src/admin/pages/Assistant.tsx`, API `server/internal/hub/admin_assistant.go` (#2023; design in [assistant-views.md](../assistant/assistant-views.md) ("Prompts and switches")).
+Page `web/src/admin/pages/Assistant.tsx`, API `server/internal/hub/admin_assistant.go` (#2023; design in [assistant-views.md](../assistant/assistant-views.md) ("Prompts and toggles")).
 
 - **Switch**: `assistant.persona_view`. Before enabling, a dialog confirms client versions (iPhone must wait for the corresponding TestFlight); disabling asks nothing and returns the assistant to persona-card, supported by every client.
   No hub restart: every hub read of this switch uses `h.assistantPersonaView()` (the changed value if the admin console changed it, otherwise startup `h.cfg`), including Hello. After changing it, the hub sends `manager.updated` to the connected assistant process (`assistantUpdated`, which keeps its own Hello), then requests its tool list again (`assistantToolsFollow`; `view_show` and others appear / disappear with the switch), so card tools and actions, body-card registration and channel forwarding catch up within one second.

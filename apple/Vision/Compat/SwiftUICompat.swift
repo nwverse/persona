@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// iOS modifiers visionOS marks unavailable, given visionOS meanings so the shared pages stay as they are
-/// (docs/apple/vision.md「做法」). The solver prefers these over the unavailable system ones.
+/// (docs/apple/vision.md「Approach」). The solver prefers these over the unavailable system ones.
 extension View {
     /// The visionOS keyboard floats in its own window: nothing on the page scrolls it away.
     func scrollDismissesKeyboard(_ mode: ScrollDismissesKeyboardModeCompat) -> some View { self }

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Settings › Extensions (docs/extensions/extensions.md「hub 的接口」): the hub's plugins, each one's switch, its configuration as a form drawn
+// Settings › Extensions (docs/extensions/extensions.md「The hub's API」): the hub's plugins, each one's switch, its configuration as a form drawn
 // from its schema (`form.fields`), its secrets, write-only, and the pages it draws (`ui`, ExtensionUIModel). Installing,
 // upgrading and removing are done on the hub's machine (`personad plugin`), or from a plugin market the hub has
 // (ExtensionMarketModel: only what a market lists).
@@ -26,7 +26,7 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     var needsSetup: [String]?
     var warnings: [String]?
     /// A plugin from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
-    /// happened last with an upgrade (docs/extensions/extensions.md「自动升级」).
+    /// happened last with an upgrade (docs/extensions/extensions.md「Auto-upgrade」).
     var autoUpgrade: Bool?
     /// Why its own switch does not apply now: "disabled" while the extension is switched off (the hub keeps the switch
     /// for when it is on again). Nil from a hub from before it.
@@ -74,7 +74,7 @@ nonisolated struct ExtensionSandbox: Codable, Hashable, Sendable {
     var egress: [String: JSONValue]
 }
 
-/// An extension's program on one machine (docs/extensions/extensions.md「在电脑上运行的程序」).
+/// An extension's program on one machine (docs/extensions/extensions.md「Programs running on computers」).
 nonisolated struct ExtensionNodeState: Codable, Hashable, Sendable {
     var machineID: String
     var version: String?

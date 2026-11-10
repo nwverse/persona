@@ -157,6 +157,9 @@ type MarketEntry struct {
 	Manifest json.RawMessage `json:"manifest"`
 	Tags     []string        `json:"tags,omitempty"`
 	Packages []MarketPackage `json:"packages"`
+	// L10n is the package's translations again ({"<language>": <l10n/<language>.json>}, l10n.go), so the catalog can
+	// show them before anything is downloaded. Kept as written (read with Translations); hubs before it ignore the key.
+	L10n json.RawMessage `json:"l10n,omitempty"`
 	// Parsed is Manifest, read.
 	Parsed *Manifest `json:"-"`
 	// Only ParseCatalog can create this proof; public fields remain checked
@@ -226,6 +229,10 @@ func ParseIndex(data []byte) (*MarketIndex, []string, error) {
 		default:
 			seen[m.ID] = true
 			e.Parsed = m
+			if _, err := ParseEntryTranslations(e.L10n); err != nil { // the entry stays, in its manifest's words
+				warnings = append(warnings, i18n.T(i18n.En, "extension-status.entry_translation_skipped", i18n.Args{"id": m.ID, "err": err.Error()}))
+				e.L10n = nil
+			}
 			kept = append(kept, e)
 		}
 	}
@@ -234,6 +241,12 @@ func ParseIndex(data []byte) (*MarketIndex, []string, error) {
 		return nil, warnings, err
 	}
 	return &ix, warnings, nil
+}
+
+// Translations are the entry's l10n, read (ParseIndex has left out one that does not check out).
+func (e *MarketEntry) Translations() Translations {
+	ts, _ := ParseEntryTranslations(e.L10n)
+	return ts
 }
 
 func (e *MarketEntry) check() (*Manifest, error) {
