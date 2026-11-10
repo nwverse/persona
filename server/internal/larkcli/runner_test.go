@@ -127,8 +127,13 @@ func TestBlockingLoginPrintsLinkAndPollsProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(args), "auth login --domain all") || strings.Contains(string(args), "--no-wait") {
+	if !strings.Contains(string(args), "auth login --scope ") || strings.Contains(string(args), "--domain all") || strings.Contains(string(args), "--no-wait") {
 		t.Fatalf("login args = %q", args)
+	}
+	for _, scope := range ReadAsMeScopes {
+		if !strings.Contains(string(args), scope) {
+			t.Fatalf("login args do not contain scope %q: %q", scope, args)
+		}
 	}
 	if done, err := p.Poll(); done || err != nil {
 		t.Fatalf("pending poll = %v, %v", done, err)
@@ -149,6 +154,19 @@ func TestBlockingLoginPrintsLinkAndPollsProcess(t *testing.T) {
 			t.Fatal("login process did not finish")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestProfilesAreNonSecretSummaries(t *testing.T) {
+	profiles, err := New(fakeConfig(t, "success")).Profiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 2 || profiles[0].Name != "example" || profiles[0].AppID != "cli_example" || profiles[0].User != "Example User" || profiles[0].TokenStatus != "valid" {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+	if profiles[1].Name != "other" || profiles[1].User != "" {
+		t.Fatalf("signed-out profile = %+v", profiles[1])
 	}
 }
 

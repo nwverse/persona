@@ -170,7 +170,7 @@ describe("Feishu bot dialog", () => {
   });
 
   it("switches reading as you off from the Lark page, the same switch as the connector page", async () => {
-    const larkcli: HubConnector = { id: "larkcli", name: "Lark (as you)", status: "ok", account: "me", enabled: true };
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark · my messages", status: "ok", account: "me", enabled: true };
     setConnector.mockResolvedValue({ ...larkcli, enabled: false });
     connectorList.value = [{ ...larkcli, enabled: false }];
     act(() => root.render(<FeishuBot larkcli={larkcli} />));
@@ -213,6 +213,56 @@ describe("Feishu bot dialog", () => {
     await act(async () => permission.click());
     expect(open).toHaveBeenCalledWith("https://open.feishu.cn/permissions", "_blank", "noopener,noreferrer");
     open.mockRestore();
+  });
+
+  it("lists lark-cli profiles and saves the selected choice", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    connectorList.value = [larkcli];
+    await open(saved({
+      larkcli: {
+        profile: "example",
+        app_id: "cli_example",
+        same_app: true,
+        mode: "chosen",
+        choice: "example",
+        profiles: [
+          { name: "example", app_id: "cli_example", user: "Example User", token_status: "valid" },
+          { name: "other", app_id: "cli_other", user: "", token_status: "signed_out" },
+        ],
+      },
+    }));
+
+    const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)!;
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      t("settings-feishubot.larkcli_profile_auto"),
+      "example · Example User · cli_example",
+      "other · " + t("settings-feishubot.larkcli_profile_not_logged_in") + " · cli_other",
+    ]);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, "other");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(calls.update[0].body).toEqual({ larkcli_profile: "other" });
+    await act(async () => calls.update[0].resolve(saved({ larkcli: { ...saved().larkcli!, mode: "chosen", choice: "other", profiles: [] } })));
+    await act(async () => calls.status[1].resolve(saved({ larkcli: { ...saved().larkcli!, mode: "chosen", choice: "other", profiles: [] } })));
+  });
+
+  it("disables the lark-cli profile choice when manager.json fixes it", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    connectorList.value = [larkcli];
+    await open(saved({
+      larkcli: {
+        profile: "fixed",
+        app_id: "cli_fixed",
+        same_app: true,
+        mode: "config",
+        choice: "",
+        profiles: [{ name: "fixed", app_id: "cli_fixed", user: "Example User", token_status: "valid" }],
+      },
+    }));
+    const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.larkcli_profile_title")}"]`)!;
+    expect(select.disabled).toBe(true);
+    expect(document.body.textContent).toContain(t("settings-feishubot.larkcli_profile_configured"));
   });
 
   it("hides the permission button without a link and re-reads the connector on recheck", async () => {

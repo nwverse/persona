@@ -2,6 +2,7 @@ package extmgr
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,9 +14,19 @@ import (
 const managedLarkCLIProfile = "persona"
 
 type larkCLIBotView struct {
-	Profile string `json:"profile"`
-	AppID   string `json:"app_id,omitempty"`
-	SameApp bool   `json:"same_app"`
+	Profile  string               `json:"profile"`
+	AppID    string               `json:"app_id,omitempty"`
+	SameApp  bool                 `json:"same_app"`
+	Mode     string               `json:"mode"`
+	Choice   string               `json:"choice"`
+	Profiles []larkCLIProfileView `json:"profiles"`
+}
+
+type larkCLIProfileView struct {
+	Name        string `json:"name"`
+	AppID       string `json:"app_id"`
+	User        string `json:"user"`
+	TokenStatus string `json:"token_status"`
 }
 
 // effectiveLarkCLIProfile is the one profile the manager gives to both the
@@ -29,10 +40,48 @@ func (h *Manager) effectiveLarkCLIProfile(ctx context.Context) string {
 	if profile := strings.TrimSpace(h.cfg.Lark.CLI.Profile); profile != "" {
 		return profile
 	}
+	if profile := h.larkCLIProfileChoice(ctx); profile != "" {
+		return profile
+	}
 	if h.botAppCredentialsID(ctx) != "" {
 		return managedLarkCLIProfile
 	}
 	return ""
+}
+
+// larkCLIProfileChoice is the app's setting. It lives with the bot settings
+// in the manager store, not in manager.json, and is intentionally separate
+// from the effective profile selected by the precedence rules.
+func (h *Manager) larkCLIProfileChoice(ctx context.Context) string {
+	if h == nil {
+		return ""
+	}
+	b := &h.bots
+	b.mu.Lock()
+	h.loadBotsLocked(ctx)
+	choice := strings.TrimSpace(b.set.LarkCLIProfile)
+	b.mu.Unlock()
+	return choice
+}
+
+func (h *Manager) configuredLarkCLIProfile() string {
+	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil {
+		return ""
+	}
+	return strings.TrimSpace(h.cfg.Lark.CLI.Profile)
+}
+
+func (h *Manager) larkCLIMode(ctx context.Context) string {
+	switch {
+	case h.configuredLarkCLIProfile() != "":
+		return "config"
+	case h.larkCLIProfileChoice(ctx) != "":
+		return "chosen"
+	case h.botAppCredentialsID(ctx) != "":
+		return "bot"
+	default:
+		return "default"
+	}
 }
 
 func (h *Manager) botAppCredentials(ctx context.Context) (appID, secret, domain string) {
@@ -62,7 +111,7 @@ func (h *Manager) botAppCredentialsID(ctx context.Context) string {
 // putting the app secret in argv or a returned error. It is intentionally a
 // no-op for an explicit profile and for a manager without bot credentials.
 func (h *Manager) syncLarkCLIProfile(ctx context.Context) error {
-	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil || strings.TrimSpace(h.cfg.Lark.CLI.Profile) != "" {
+	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil || h.configuredLarkCLIProfile() != "" || h.larkCLIProfileChoice(ctx) != "" {
 		return nil
 	}
 	appID, secret, domain := h.botAppCredentials(ctx)
@@ -85,6 +134,53 @@ func (h *Manager) syncLarkCLIProfile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+// validateLarkCLIProfile checks a user-selected profile against the CLI's
+// read-only profile list. Empty means automatic selection.
+func (h *Manager) validateLarkCLIProfile(ctx context.Context, choice string) error {
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		return nil
+	}
+	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil {
+		return fmt.Errorf("lark-cli is not configured")
+	}
+	cli := h.cfg.Lark.CLI
+	r := larkcliadapter.New(larkcliadapter.Config{Bin: cli.Bin, Profile: h.effectiveLarkCLIProfile(ctx), Timeout: 5 * time.Second})
+	profiles, err := r.Profiles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if profile.Name == choice {
+			return nil
+		}
+	}
+	return fmt.Errorf("lark-cli profile %q does not exist", choice)
+}
+
+// setLarkCLIProfile persists the app choice and rebuilds the connector. The
+// registry keeps enabled/feed switches by connector id, so Inbox wiring stays
+// attached to the replacement.
+func (h *Manager) setLarkCLIProfile(ctx context.Context, choice string) error {
+	choice = strings.TrimSpace(choice)
+	b := &h.bots
+	b.mu.Lock()
+	h.loadBotsLocked(ctx)
+	if b.set.LarkCLIProfile == choice {
+		b.mu.Unlock()
+		return nil
+	}
+	b.set.LarkCLIProfile = choice
+	h.saveBotSettingsLocked()
+	b.mu.Unlock()
+	if err := h.syncLarkCLIProfile(ctx); err != nil {
+		h.logf("larkcli profile sync: %v", err)
+	}
+	h.refreshLarkCLIConnector(ctx)
+	h.kickInbox()
 	return nil
 }
 
@@ -141,11 +237,27 @@ func (h *Manager) larkCLIView(ctx context.Context, botAppID string) *larkCLIBotV
 		return nil
 	}
 	profile := h.effectiveLarkCLIProfile(ctx)
+	choice := h.larkCLIProfileChoice(ctx)
 	appID := ""
 	cli := h.cfg.Lark.CLI
 	r := larkcliadapter.New(larkcliadapter.Config{Bin: cli.Bin, Profile: profile, Timeout: 5 * time.Second})
 	if auth, err := r.AuthStatus(ctx); err == nil {
 		appID = auth.AppID
 	}
-	return &larkCLIBotView{Profile: profile, AppID: appID, SameApp: botAppID != "" && appID != "" && botAppID == appID}
+	profiles, err := r.Profiles(ctx)
+	if err != nil {
+		profiles = nil
+	}
+	viewProfiles := make([]larkCLIProfileView, 0, len(profiles))
+	for _, p := range profiles {
+		viewProfiles = append(viewProfiles, larkCLIProfileView{Name: p.Name, AppID: p.AppID, User: p.User, TokenStatus: p.TokenStatus})
+	}
+	return &larkCLIBotView{
+		Profile:  profile,
+		AppID:    appID,
+		SameApp:  botAppID != "" && appID != "" && botAppID == appID,
+		Mode:     h.larkCLIMode(ctx),
+		Choice:   choice,
+		Profiles: viewProfiles,
+	}
 }

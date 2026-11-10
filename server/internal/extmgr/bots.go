@@ -41,13 +41,16 @@ type FeishuBotConfig struct {
 
 // FeishuBotSettings is what the app set, in settings (botSettingsKey).
 type FeishuBotSettings struct {
-	Enabled   bool        `json:"enabled"`
-	AppID     string      `json:"app_id,omitempty"`
-	SecretEnc string      `json:"secret_enc,omitempty"` // sealed with secret.key (secretkey.go sealKey)
-	Domain    string      `json:"domain,omitempty"`
-	Features  BotFeatures `json:"features"`
-	Owner     *BotOwner   `json:"owner,omitempty"`
-	Pairing   *botPairing `json:"pairing,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	AppID     string `json:"app_id,omitempty"`
+	SecretEnc string `json:"secret_enc,omitempty"` // sealed with secret.key (secretkey.go sealKey)
+	Domain    string `json:"domain,omitempty"`
+	// LarkCLIProfile is the app's optional profile choice. An empty value keeps
+	// the automatic manager rule; manager.json lark.cli.profile still wins.
+	LarkCLIProfile string      `json:"larkcli_profile,omitempty"`
+	Features       BotFeatures `json:"features"`
+	Owner          *BotOwner   `json:"owner,omitempty"`
+	Pairing        *botPairing `json:"pairing,omitempty"`
 	// TopicChats are the group chats the owner opted in (bots_topics.go): their messages reach the assistant, and the
 	// bot may send into them. The owner's own list: it goes when the owner does.
 	TopicChats []BotChat `json:"topic_chats,omitempty"`
@@ -357,11 +360,12 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 	})
 	api.HandleFunc("PUT /api/v1/bots/feishu", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Enabled   *bool           `json:"enabled"`
-			AppID     *string         `json:"app_id"`
-			AppSecret *string         `json:"app_secret"`
-			Domain    *string         `json:"domain"`
-			Features  json.RawMessage `json:"features"`
+			Enabled        *bool           `json:"enabled"`
+			AppID          *string         `json:"app_id"`
+			AppSecret      *string         `json:"app_secret"`
+			Domain         *string         `json:"domain"`
+			LarkCLIProfile *string         `json:"larkcli_profile"`
+			Features       json.RawMessage `json:"features"`
 			// TopicChats replaces the list of group chats the owner opted in; absent leaves it, [] clears it.
 			// An entry may carry home: true (the home topic group, "/topics home"); when no entry says anything about home,
 			// the one the list has stays.
@@ -377,6 +381,16 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 			writeErr(w, http.StatusBadRequest, err)
 			return
+		}
+		if in.LarkCLIProfile != nil {
+			if fixed := h.configuredLarkCLIProfile(); fixed != "" {
+				writeErrCode(w, http.StatusConflict, "larkcli_profile_fixed", fmt.Errorf("lark-cli profile is fixed by manager.json: %s", fixed))
+				return
+			}
+			if err := h.validateLarkCLIProfile(r.Context(), *in.LarkCLIProfile); err != nil {
+				writeErr(w, http.StatusBadRequest, err)
+				return
+			}
 		}
 		nudge, err := nudgeAfterValue(in.NudgeAfter)
 		if err != nil {
@@ -429,6 +443,12 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		}
 		if nudge != nil {
 			h.setNudgeAfter(r.Context(), *nudge)
+		}
+		if in.LarkCLIProfile != nil {
+			if err := h.setLarkCLIProfile(r.Context(), *in.LarkCLIProfile); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
 		}
 		writeJSON(w, h.botView(r.Context()))
 	})

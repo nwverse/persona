@@ -27,6 +27,17 @@ type AuthStatus struct {
 	MissingScopes    []string  `json:"missing_scopes,omitempty"`
 }
 
+// Profile is the non-secret summary printed by `lark-cli profile list`.
+// Keep this deliberately smaller than the CLI's output: profile credentials
+// and token material must never cross the manager API boundary.
+type Profile struct {
+	Name        string `json:"name"`
+	AppID       string `json:"app_id,omitempty"`
+	Brand       string `json:"brand,omitempty"`
+	User        string `json:"user,omitempty"`
+	TokenStatus string `json:"token_status,omitempty"`
+}
+
 // DaysUntilExpiry returns the rounded-up number of calendar days remaining for
 // the refresh token. The access token can be renewed automatically before this
 // deadline, so its expires_at value is not a login expiry.
