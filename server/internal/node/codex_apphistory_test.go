@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -220,12 +222,12 @@ func TestCodexAppChatHistoryComesFromTheAppsDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	codexAppHistoryFailed.Lock()
-	asked := len(codexAppHistoryFailed.byPath)
+	_, asked := codexAppHistoryFailed.byPath[p]
 	codexAppHistoryFailed.Unlock()
 	if err := os.Chmod(db, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if asked != 0 {
+	if asked {
 		t.Fatal("the database was asked again without a change")
 	}
 	if st := statOf(t, p); !os.SameFile(st, before) || !st.ModTime().Equal(before.ModTime()) || st.Size() != before.Size() {
@@ -330,6 +332,30 @@ func TestCodexAppChatWithoutReadableHistoryHasNoTranscript(t *testing.T) {
 					t.Fatalf("left %s", e.Name())
 				}
 			}
+			if sql == "" {
+				return
+			}
+			// The failed query is not run again for the same change of the chat; it is for the next one.
+			src, _ := n.codexSource(id)
+			p := n.codexAppHistoryFile(src)
+			failedAt := func() time.Time {
+				codexAppHistoryFailed.Lock()
+				defer codexAppHistoryFailed.Unlock()
+				return codexAppHistoryFailed.byPath[p].at
+			}
+			first := failedAt()
+			if first.IsZero() {
+				t.Fatal("the failure is not remembered")
+			}
+			n.file(id)
+			if !failedAt().Equal(first) {
+				t.Fatal("asked again for the same change")
+			}
+			writeCodexApp(t, home, project, "DELETE FROM threads;"+codexAppRow(appChat, "", project, "Alpha chat", time.Now().Add(time.Minute), 0))
+			n.file(id)
+			if failedAt().Equal(first) {
+				t.Fatal("not asked again after the chat changed")
+			}
 		})
 	}
 }
@@ -374,5 +400,190 @@ func TestCodexAppChatFailedTurnAndRunningOnly(t *testing.T) {
 	}
 	if _, err := n.file(ids[appOld]); err == nil {
 		t.Fatal("a transcript for a chat whose only turn still runs")
+	}
+}
+
+// readChat lists the chats and reads one's transcript afresh.
+func readChat(t *testing.T, n *Node, thread string) (string, string) {
+	t.Helper()
+	var id string
+	for _, s := range n.codexSessions(map[string]bool{}) {
+		if s.SourceThreadID == thread {
+			id = s.SessionID
+		}
+	}
+	f, err := n.file(id)
+	if err != nil {
+		return id, ""
+	}
+	got, err := f.Refresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id, historyText(got)
+}
+
+// A turn left "in progress" (the App quit during it) is over once a later turn comes: written as interrupted, it does not
+// hold back the turns after it. The last turn finishing in the history database, with updated_at_ms unchanged, is
+// written on the next read. A rolled back turn, and a file unlike its mark, are written anew.
+func TestCodexAppChatHistoryFollowsTheDatabase(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	updated := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Alpha chat", updated, 0))
+	turns := []historyTurn{
+		{thread: appChat, id: "t0", status: "inProgress", ordinal: 0, items: [][2]string{userItem("u0", "left running")}},
+		{thread: appChat, id: "t1", status: "completed", ordinal: 1, items: [][2]string{userItem("u1", "next one")}},
+		{thread: appChat, id: "t2", status: "inProgress", ordinal: 2, items: [][2]string{userItem("u2", "still going")}},
+	}
+	writeCodexHistory(t, home, turns)
+	id, s := readChat(t, n, appChat)
+	if !strings.Contains(s, "user:text:left running") || !strings.Contains(s, transcript.InterruptedNotice) || !strings.Contains(s, "user:text:next one") ||
+		strings.Contains(s, "still going") {
+		t.Fatalf("first read = %s", s)
+	}
+
+	// The App finishes the last turn: the history database changes, updated_at_ms does not.
+	turns[2].status = "completed"
+	turns[2].items = append(turns[2].items, answerItem("a2", "done now"))
+	writeCodexHistory(t, home, turns)
+	f, _ := n.file(id)
+	more, _ := f.Refresh()
+	if s := historyText(more); !strings.Contains(s, "assistant:text:done now") || strings.Contains(s, "next one") {
+		t.Fatalf("after the turn finished = %s", s)
+	}
+
+	// The App rolls the last turn back and runs another in its place: the file is written anew.
+	turns[2] = historyTurn{thread: appChat, id: "t2b", status: "completed", ordinal: 2, items: [][2]string{userItem("u2b", "asked differently")}}
+	writeCodexHistory(t, home, turns)
+	writeCodexApp(t, home, project, "DELETE FROM threads;"+codexAppRow(appChat, "", project, "Alpha chat", updated.Add(time.Minute), 0))
+	if _, s := readChat(t, n, appChat); !strings.Contains(s, "asked differently") || strings.Contains(s, "done now") {
+		t.Fatalf("after a rollback = %s", s)
+	}
+
+	// The file was cut short (a write that stopped halfway): unlike its mark, it is written anew.
+	p := n.transcriptPath(id)
+	if err := os.Truncate(p, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, s := readChat(t, n, appChat); !strings.Contains(s, "next one") || !strings.Contains(s, "asked differently") {
+		t.Fatalf("after a cut file = %s", s)
+	}
+}
+
+// Another process writing the chat's transcript holds its lock: this one does not write meanwhile. A chat the App no
+// longer lists has its file removed when another of the home's chats is written.
+func TestCodexAppChatHistoryLockAndPrune(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Alpha chat", time.Now(), 0)+
+		codexAppRow(appOld, "", project, "Old chat", time.Now(), 0))
+	writeCodexHistory(t, home, []historyTurn{
+		{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{userItem("u0", "alpha")}},
+		{thread: appOld, id: "o0", status: "completed", ordinal: 0, items: [][2]string{userItem("o0", "old")}},
+	})
+	src := codexSource{home: canonicalCodexHome(home, n.home), thread: appChat}
+	p := n.codexAppHistoryFile(src)
+	os.MkdirAll(filepath.Dir(p), 0o700)
+	release, err := link.LockFile(p+".lock", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, s := readChat(t, n, appChat); s != "" {
+		t.Fatalf("written while another process holds the lock: %s", s)
+	}
+	release()
+	if _, s := readChat(t, n, appChat); !strings.Contains(s, "alpha") {
+		t.Fatalf("after the lock = %s", s)
+	}
+	// Archived in the App: its file goes when the other chat is written.
+	writeCodexApp(t, home, project, "UPDATE threads SET archived = 1 WHERE id = '"+appChat+"';")
+	if _, s := readChat(t, n, appOld); !strings.Contains(s, "old") {
+		t.Fatalf("old chat = %s", s)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("the archived chat's file stays: %v", err)
+	}
+}
+
+// A watched App chat with no rollout: the turns the App finishes are pushed as they would be from a rollout.
+func TestAWatchedCodexAppChatGetsItsNewTurns(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	updated := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Alpha chat", updated, 0))
+	turns := []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{userItem("u0", "first")}}}
+	writeCodexHistory(t, home, turns)
+	id, _ := readChat(t, n, appChat)
+	hub := withHub(t, n)
+	if err := n.watch(id, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer n.unwatch(id)
+	turns = append(turns, historyTurn{thread: appChat, id: "t1", status: "completed", ordinal: 1,
+		items: [][2]string{userItem("u1", "second"), answerItem("a1", "the App's answer")}})
+	writeCodexHistory(t, home, turns)
+	writeCodexApp(t, home, project, "DELETE FROM threads;"+codexAppRow(appChat, "", project, "Alpha chat", updated.Add(time.Minute), 0))
+	waitFor(t, "the App's new turn", func() bool {
+		return slices.ContainsFunc(hub.got(), func(it proto.Item) bool { return it.Text == "the App's answer" })
+	})
+}
+
+// closeLikeTheApp leaves db as the Codex App does when it closes it: in WAL mode, checkpointed, without -wal and -shm.
+func closeLikeTheApp(t *testing.T, db string) {
+	t.Helper()
+	if out, err := exec.Command(sqlite3WithJSON(t), db, "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE);").CombinedOutput(); err != nil {
+		t.Fatalf("sqlite3: %v: %s", err, out)
+	}
+	os.Remove(db + "-wal")
+	os.Remove(db + "-shm")
+	if codexDBTarget(db) == db {
+		t.Fatalf("%s is not left as the App leaves it", db)
+	}
+}
+
+// With the App's databases closed (the App quit, or they were idle), its chats are listed and their history read all the
+// same: sqlite3 -readonly cannot open a WAL database whose -shm is gone, so it is opened as immutable.
+func TestCodexAppChatsReadWhileTheAppHasItsDatabasesClosed(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Alpha chat", time.Now(), 0))
+	writeCodexHistory(t, home, []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{userItem("u0", "while closed")}}})
+	closeLikeTheApp(t, filepath.Join(home, "state_5.sqlite"))
+	closeLikeTheApp(t, filepath.Join(home, "thread_history_1.sqlite"))
+	if id, s := readChat(t, n, appChat); id == "" || !strings.Contains(s, "user:text:while closed") {
+		t.Fatalf("listed as %q, transcript %s", id, s)
+	}
+	for _, ext := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(filepath.Join(home, "state_5.sqlite"+ext)); err == nil {
+			t.Fatalf("reading made the App's %s", ext)
+		}
+	}
+}
+
+// A database the App has open (its -shm is there), or one not in WAL mode, is opened by its path.
+func TestCodexDBTargetIsThePathUnlessClosedInWALMode(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "a b.sqlite")
+	if out, err := exec.Command(sqlite3WithJSON(t), db, "CREATE TABLE x(a);").CombinedOutput(); err != nil {
+		t.Fatalf("sqlite3: %v: %s", err, out)
+	}
+	if got := codexDBTarget(db); got != db {
+		t.Fatalf("rollback journal: %q", got)
+	}
+	closeLikeTheApp(t, db)
+	if got, want := codexDBTarget(db), "file://"+filepath.ToSlash(strings.ReplaceAll(db, " ", "%20"))+"?immutable=1"; got != want {
+		t.Fatalf("closed: %q, want %q", got, want)
+	}
+	os.WriteFile(db+"-shm", nil, 0o600)
+	if got := codexDBTarget(db); got != db {
+		t.Fatalf("open: %q", got)
+	}
+	if got := codexDBTarget(filepath.Join(dir, "missing.sqlite")); got != filepath.Join(dir, "missing.sqlite") {
+		t.Fatalf("missing: %q", got)
 	}
 }

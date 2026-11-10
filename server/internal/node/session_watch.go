@@ -3,6 +3,8 @@ package node
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -272,11 +274,11 @@ func (n *Node) pumpWatch(w *watch, live int) {
 	// The path is cached: a lookup and a stat, a search at most every 30 s. A file being read (Changed says true without
 	// waiting for it) is followed in the goroutine that reads it, so the pump never waits for another's parse.
 	follow := w.ticks%followEvery == 0
-	// A Codex App chat with no rollout: the App's new turns are written into its transcript in the reading goroutine
-	// (codex_apphistory.go), then read as any growth.
+	// A Codex App chat with no rollout (its transcript is under codexAppHistoryDir): the App's new turns are written into
+	// it in the reading goroutine (codex_apphistory.go), then read as any growth. The pump only compares the path.
 	appChat := false
-	if follow {
-		_, _, appChat = n.codexAppHistoryChat(w.id)
+	if dir := n.codexAppHistoryDir(); follow && dir != "" {
+		appChat = strings.HasPrefix(w.f.Where(), dir+string(filepath.Separator))
 	}
 	if !w.f.Changed() && !appChat {
 		if !follow || !n.followCopy(w.id, w.f) {
