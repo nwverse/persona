@@ -168,7 +168,9 @@ waiting: <for status="blocked": who or what it waits for>
 - **Triage** reads the closeout from the final reply before it asks the model. `status="done"` is `done` by rule (`by: "rule"`, no model call), with the first `did` line as the list line. With `not_done` or `blocked` the model is still asked what the turn waits for, and the closeout is kept on the result; when the Agent says `not_done` and the model reads the reply as done, the Agent's word wins and the turn stays untriaged (Unread), as any turn nobody can call finished.
 - **Where it goes**: `work.closeout` on the session ("Protocol" below). The session lists carry only where it stands (`status`, `merged`, `deployed`, `waiting`, `missing`); `did` and `verified` come with the session itself.
 - **Supervision messages** carry the closeout of a task's Agent as its own lines, marked as the Agent's claim that nobody checked, with the block taken out of "what it said last" (`supervise_digest.go`, `prompts/assistant/supervise.md`); the supervisor is told to verify merged, deployed and verified as for any report.
-- **Not done yet** (follow-ups of #3612): the hub does not confirm `merged` and `deployed` against the pull request and the running build; the snapshot still shows only the work line; no client draws the closeout; Codex has no held stop (a closeout it writes is read all the same).
+- **Checked by the hub** (`checkCloseout`): when the closeout names a GitHub pull request by its link, triage looks at it with the deploy check that deliveries use (`deploy_check.go`: the pull request's merge, and whether the running hub contains the merge commit) and keeps the result beside the claim as `closeout.checked {merged, deployed}`, each `yes`, `no` or absent when it could not tell. `deployed` is about the running hub, so it is known only for the hub's own repository; for another repository only `merged` is. A closeout that says merged or deployed when the check says it is not is never `done`: the turn stays untriaged (Unread) with the closeout and the finding kept. Supervision messages show the finding under the closeout.
+- **Delivery**: a reply with a closeout and no delivery line of its own (`docs/assistant/todos.md` "Delivery") states its delivery through the closeout: deployed `yes` is live, merged `yes` is merged and not live, merged `no` with a pull request is held at the PR, and a done closeout that says neither is "nothing to ship". A delivery line in the same reply wins.
+- **Not done yet** (follow-ups of #3612): the snapshot still shows only the work line; no client draws the closeout or has the switch; a `not_done` closeout has no list state of its own; Codex has no held stop (a closeout it writes is read all the same); Agents learn the form only when a stop is held.
 
 ## Automatic actions
 
@@ -324,7 +326,7 @@ For tasks dispatched from the main chat (`internal/assistant/tasks_follow.go`), 
          "link":{"url":"…","expires_at":"…"},
          "artifacts":[{"kind":"pr","ref":"https://github.com/…/pull/1"}],
          "closeout":{"status":"done|not_done|blocked","waiting":"…","did":["…"],"merged":"yes|no","deployed":"yes|no",
-                     "verified":"…","missing":"…"},
+                     "verified":"…","missing":"…","checked":{"merged":"yes|no","deployed":"yes|no"}},
          "turn_at":"…","at":"…","by":"rule|model"}
 ```
 

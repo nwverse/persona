@@ -84,6 +84,16 @@ type Closeout struct {
 	Verified string `json:"verified,omitempty"`
 	// Missing: what it still needs from the user or someone else.
 	Missing string `json:"missing,omitempty"`
+	// Checked is what the hub found when it looked at the closeout's pull request itself; nil when it had nothing to
+	// look at or could not tell.
+	Checked *CloseoutChecked `json:"checked,omitempty"`
+}
+
+// CloseoutChecked: "yes" or "no" where the hub could tell, empty where it could not. Deployed is about the running
+// hub, so it is only ever known for the hub's own repository.
+type CloseoutChecked struct {
+	Merged   string `json:"merged,omitempty"`
+	Deployed string `json:"deployed,omitempty"`
 }
 
 // WorkCI records the target and fallback across manager restarts.

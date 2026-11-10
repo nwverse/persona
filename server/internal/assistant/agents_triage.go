@@ -55,6 +55,14 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		return &proto.WorkState{}, false, nil
 	}
 	co, coArtifacts, hasCloseout := closeout.Parse(reply)
+	if hasCloseout {
+		s.checkCloseout(ctx, &co, coArtifacts)
+		if closeoutDisproved(co) {
+			// It says merged or deployed and it is not: nobody can call this turn finished. Unsure, with the closeout
+			// and what was found kept for whoever looks.
+			return &proto.WorkState{Closeout: &co, Artifacts: workArtifacts(coArtifacts), By: "rule"}, false, nil
+		}
+	}
 	if hasCloseout && co.Status == proto.CloseoutDone {
 		return closeoutDone(co, coArtifacts, s.lang(ctx)), false, nil // its own closeout says so: no model
 	}

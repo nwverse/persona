@@ -108,3 +108,58 @@ func TestGoldenAgentCloseoutRequired(t *testing.T) {
 	golden(t, "agent_closeout_required", renderCloseoutRequired("简体中文"))
 	golden(t, "agent_closeout_required.no_language", renderCloseoutRequired(""))
 }
+
+const mergedCloseout = "合了。\n<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\ndid: 修了重试\nartifact: pr https://github.com/o/r/pull/9\n</closeout>"
+
+// The hub looks at the closeout's pull request itself: what it finds is kept beside the claim, and a claim it
+// disproves is not a finished turn.
+func TestCloseoutIsChecked(t *testing.T) {
+	s, f, _, hub, forge := deployService(t)
+	s.work.switches = &TriageSwitches{Enabled: true}
+	f.sessions["box"] = nil
+
+	hub.deploy(newHub) // the running hub contains the merge
+	f.setSessions("box", stopped("s1", mergedCloseout))
+	triage(t, s, "s1")
+	if w := entryOf(t, s, "s1").Work; w.Phase != proto.WorkDone || w.Closeout == nil || w.Closeout.Checked == nil ||
+		*w.Closeout.Checked != (proto.CloseoutChecked{Merged: proto.CloseoutYes, Deployed: proto.CloseoutYes}) {
+		t.Fatalf("confirmed: %+v %+v", w, w.Closeout)
+	}
+
+	hub.deploy(oldHub) // merged, and the running hub does not contain it: "deployed: yes" is not so
+	f.setSessions("box", stopped("s2", mergedCloseout))
+	triage(t, s, "s2")
+	if w := entryOf(t, s, "s2").Work; w.Phase != "" || w.Closeout == nil || w.Closeout.Checked == nil || w.Closeout.Checked.Deployed != proto.CloseoutNo {
+		t.Fatalf("a disproved deploy read as %+v %+v", w, w.Closeout)
+	}
+
+	forge.merged = false // not merged at all
+	s.deploy.cache = nil
+	f.setSessions("box", stopped("s3", mergedCloseout))
+	triage(t, s, "s3")
+	if w := entryOf(t, s, "s3").Work; w.Phase != "" || w.Closeout.Checked == nil || w.Closeout.Checked.Merged != proto.CloseoutNo {
+		t.Fatalf("a disproved merge read as %+v %+v", w, w.Closeout)
+	}
+	if len(f.triageAsked) != 0 {
+		t.Fatalf("the model was asked %d times", len(f.triageAsked))
+	}
+}
+
+func TestCloseoutDelivery(t *testing.T) {
+	for name, tc := range map[string]struct {
+		reply string
+		state string
+		ok    bool
+	}{
+		"live":          {"<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\n</closeout>", deliveryLive, true},
+		"merged":        {"<closeout status=\"done\" merged=\"yes\" deployed=\"no\">\n</closeout>", deliveryMerged, true},
+		"at a pr":       {"<closeout status=\"blocked\" merged=\"no\">\nartifact: pr #12\nwaiting: review\n</closeout>", deliveryPR, true},
+		"nothing ships": {"<closeout status=\"done\" merged=\"n/a\" deployed=\"n/a\">\n</closeout>", deliveryNone, true},
+		"not done":      {"<closeout status=\"not_done\">\n</closeout>", "", false},
+		"its own line":  {"<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\n</closeout>\n交付：停在 PR；卡点：等 review；谁来解：用户", deliveryPR, true},
+	} {
+		if d, ok := deliveryMark(tc.reply); ok != tc.ok || d.State != tc.state {
+			t.Errorf("%s: delivery %+v ok=%v, want %q %v", name, d, ok, tc.state, tc.ok)
+		}
+	}
+}

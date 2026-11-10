@@ -311,7 +311,7 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 			Attempts: s.Work.Attempts, Max: s.Work.Max, Deferred: s.Work.Deferred, Agent: s.Work.Agent}
 		if c := s.Work.Closeout; c != nil { // the row's part of it: where it stands, not the account of what it did
 			out.Work.Closeout = &proto.Closeout{Status: c.Status, Merged: c.Merged, Deployed: c.Deployed,
-				Waiting: rowText(c.Waiting, 180), Missing: rowText(c.Missing, 180)}
+				Waiting: rowText(c.Waiting, 180), Missing: rowText(c.Missing, 180), Checked: c.Checked}
 		}
 	}
 	if s.Todo != nil {

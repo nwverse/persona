@@ -710,4 +710,6 @@ type SuperviseCloseout struct {
 	Did               []string
 	Verified, Missing string
 	Artifacts         []string
+	// CheckedMerged, CheckedDeployed: what the hub found itself, "yes", "no" or "" when it could not tell.
+	CheckedMerged, CheckedDeployed string
 }

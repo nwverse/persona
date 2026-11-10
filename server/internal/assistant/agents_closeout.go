@@ -75,3 +75,71 @@ func workArtifacts(in []proto.WorkArtifact) []proto.WorkArtifact {
 	}
 	return out
 }
+
+// checkCloseout looks at the closeout's pull request itself (deploy_check.go: the pull request's merge, and whether
+// the running hub contains it) and keeps what it found on c. Nothing when the closeout names no pull request by its
+// link, or nothing could be told.
+func (s *Service) checkCloseout(ctx context.Context, c *proto.Closeout, artifacts []proto.WorkArtifact) {
+	for _, a := range artifacts {
+		if a.Kind != "pr" || ciPRURL.FindString(a.Ref) == "" {
+			continue
+		}
+		c.Checked = closeoutChecked(s.checkDeployed(ctx, a.Ref))
+		return
+	}
+}
+
+func closeoutChecked(r deployResult) *proto.CloseoutChecked {
+	switch r.State {
+	case deployIn:
+		return &proto.CloseoutChecked{Merged: proto.CloseoutYes, Deployed: proto.CloseoutYes}
+	case deployOut:
+		return &proto.CloseoutChecked{Merged: proto.CloseoutYes, Deployed: proto.CloseoutNo}
+	case deployUnmerged:
+		return &proto.CloseoutChecked{Merged: proto.CloseoutNo, Deployed: proto.CloseoutNo}
+	case deployNotIn:
+		return &proto.CloseoutChecked{Deployed: proto.CloseoutNo}
+	case deployUnverified:
+		if r.Merge != "" { // merged, in a repository the running hub is not built from
+			return &proto.CloseoutChecked{Merged: proto.CloseoutYes}
+		}
+	}
+	return nil
+}
+
+// closeoutDisproved: the closeout says merged or deployed and the hub found it is not.
+func closeoutDisproved(c proto.Closeout) bool {
+	k := c.Checked
+	return k != nil && (c.Merged == proto.CloseoutYes && k.Merged == proto.CloseoutNo ||
+		c.Deployed == proto.CloseoutYes && k.Deployed == proto.CloseoutNo)
+}
+
+// closeoutDelivery is the delivery a closeout states, for a reply with no delivery line of its own (delivery.go):
+// the same claim in the other form. ok false when the closeout says nothing of merging or deploying and is not done.
+func closeoutDelivery(c proto.Closeout, artifacts []proto.WorkArtifact) (d TodoDelivery, ok bool) {
+	switch {
+	case c.Deployed == proto.CloseoutYes:
+		d.State = deliveryLive
+	case c.Merged == proto.CloseoutYes:
+		d.State = deliveryMerged
+	case c.Merged == proto.CloseoutNo && hasPR(artifacts):
+		d.State = deliveryPR
+	case c.Merged == "" && c.Deployed == "" && c.Status == proto.CloseoutDone:
+		d.State = deliveryNone
+	default:
+		return d, false
+	}
+	if d.State != deliveryLive && d.State != deliveryNone {
+		d.Gate = cmpOr(c.Missing, c.Waiting)
+	}
+	return d, true
+}
+
+func hasPR(artifacts []proto.WorkArtifact) bool {
+	for _, a := range artifacts {
+		if a.Kind == "pr" {
+			return true
+		}
+	}
+	return false
+}
