@@ -505,6 +505,28 @@ func TestDryRunChecksAndRecordsOnlyTheShape(t *testing.T) {
 	if strings.Contains(string(b), "Notice 1") || strings.Contains(string(b), "Made-up") {
 		t.Fatalf("a subscription keeps source values: %s", b)
 	}
+	// An empty items_path finds the one list in the result, says where, and is saved as found.
+	r0 := itemsRecipe()
+	r0.ItemsPath = ""
+	dr, _ = e.svc.DryRun(e.ctx, DryRunRequest{Connector: "example", Source: "notices", Recipe: &r0})
+	if !dr.OK || dr.ItemsPath != "$.items" || strings.Join(dr.Shape.Arrays, ",") != "items" {
+		t.Fatalf("items_path found: %+v %+v", dr, dr.Shape)
+	}
+	if found := e.create(r0); found.Recipe.ItemsPath != "$.items" {
+		t.Fatalf("the found items_path was not saved: %q", found.Recipe.ItemsPath)
+	}
+	e.conn.setAnswer(func(connector.CatalogQuery) (string, error) {
+		return `{"items":[{"title":"a"}],"others":[1],"n":2}`, nil
+	})
+	dr, _ = e.svc.DryRun(e.ctx, DryRunRequest{Connector: "example", Source: "notices", Recipe: &r0})
+	if dr.OK || dr.Error.Code != CodeNoList || dr.ItemsPath != "" || strings.Join(dr.Shape.Arrays, ",") != "items,others" {
+		t.Fatalf("two lists: %+v %+v", dr, dr.Shape)
+	}
+	e.conn.setAnswer(func(connector.CatalogQuery) (string, error) { return `[{"id":"1","title":"a"}]`, nil })
+	if dr, _ = e.svc.DryRun(e.ctx, DryRunRequest{Connector: "example", Source: "notices", Recipe: &r0}); !dr.OK || dr.ItemsPath != "$" {
+		t.Fatalf("a list itself: %+v", dr)
+	}
+	e.conn.setAnswer(func(connector.CatalogQuery) (string, error) { return notices(1, 2, 3), nil })
 	// Without an id, dedup falls back to a hash, marked as weak.
 	r := itemsRecipe()
 	r.Fields.ID = ""

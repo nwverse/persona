@@ -73,9 +73,9 @@ A refusal at save answers the error below. Before a run, a tool that left the ca
 
 ### Validation and dry runs
 
-A dry run calls the tool once and runs five checks in this order: `read_only`, `args` (the arguments with `{{since}}` / `{{since_date}}` filled in, held to the tool's `input_schema` with the JSON Schema subset of `model.complete`, `server/internal/jsonsubset`), `fields` (`items_path` is a list, some item has a title, times parse), `dedup` (the same result again brings nothing new) and `interval`. A text result can only be a snapshot. An item without an `id` field is keyed by a hash of its title, time and sender, marked `weak_dedup`.
+A dry run calls the tool once and runs five checks in this order: `read_only`, `args` (the arguments with `{{since}}` / `{{since_date}}` filled in, held to the tool's `input_schema` with the JSON Schema subset of `model.complete`, `server/internal/jsonsubset`), `fields` (`items_path` is a list, some item has a title, times parse), `dedup` (the same result again brings nothing new) and `interval`. A text result can only be a snapshot. A recipe that leaves `items_path` empty has its items found: the result itself when it is a list (the protocol's `$`), else its one top-level list. None or several is `no_list`, with the shape's `arrays` naming the top-level lists. The dry run says where it read them (`items_path`), and a saved recipe keeps that path. An item without an `id` field is keyed by a hash of its title, time and sender, marked `weak_dedup`.
 
-A dry run returns up to three items and the first item's leaf paths with examples, for the pages' pickers. These values exist only in that answer. The subscription keeps the result's shape (`json` or `text`, top-level keys, list length), never a value. Saving a recipe runs the same checks, and a recipe that fails is not saved.
+A dry run returns up to three items and the first item's leaf paths with examples, for the pages' pickers. These values exist only in that answer. The subscription keeps the result's shape (`json` or `text`, top-level keys, which of them are lists, list length), never a value. Saving a recipe runs the same checks, and a recipe that fails is not saved.
 
 ### Storage
 

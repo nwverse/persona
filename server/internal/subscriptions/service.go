@@ -498,7 +498,10 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 		label = sub.Label
 	}
 	pl := pull(ctx, c.Conn, sourceID, t.recipe, since, loc, label)
-	dr.Shape = pl.shape
+	dr.Shape, dr.ItemsPath = pl.shape, pl.itemsPath
+	if t.recipe.ItemsPath == "" && t.recipe.Mode != wire.ConnectorSubscriptionModeSnapshot {
+		t.recipe.ItemsPath = pl.itemsPath // saved as found: later runs read the same place
+	}
 	if pl.problem != nil {
 		switch pl.problem.Code {
 		case CodeNoList, CodeTextNeedsSnap:

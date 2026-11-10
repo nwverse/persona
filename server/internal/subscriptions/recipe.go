@@ -226,12 +226,19 @@ func shapeOf(r result, itemsPath string) *Shape {
 	}
 	sh := &Shape{Type: "json"}
 	if m, ok := r.json.(map[string]any); ok {
-		for k := range m {
+		for k, v := range m {
 			sh.Keys = append(sh.Keys, k)
+			if _, isList := v.([]any); isList {
+				sh.Arrays = append(sh.Arrays, k)
+			}
 		}
 		sort.Strings(sh.Keys)
+		sort.Strings(sh.Arrays)
 		if len(sh.Keys) > keysMax {
 			sh.Keys = sh.Keys[:keysMax]
+		}
+		if len(sh.Arrays) > keysMax {
+			sh.Arrays = sh.Arrays[:keysMax]
 		}
 	}
 	if list, ok := at(r.json, cmpOr(itemsPath, "$")); ok {
@@ -241,6 +248,29 @@ func shapeOf(r result, itemsPath string) *Shape {
 		}
 	}
 	return sh
+}
+
+// findItems is where the items are when a recipe leaves items_path empty: the result itself when it is a list, else
+// its one top-level list (a key a path can name). "" when there is no such one place: none, or more than one.
+func findItems(v any) string {
+	if _, ok := v.([]any); ok {
+		return "$"
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	found := ""
+	for k, x := range m {
+		if _, isList := x.([]any); !isList {
+			continue
+		}
+		if found != "" || !keyRE.MatchString(k) {
+			return ""
+		}
+		found = "$." + k
+	}
+	return found
 }
 
 func cmpOr(s, def string) string {

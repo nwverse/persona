@@ -95,6 +95,7 @@ func firstLine(s string) string {
 // pulled is what one call of a recipe gave: its items mapped (items mode) or the one snapshot.
 type pulled struct {
 	args      map[string]any
+	itemsPath string // where the items were read
 	shape     *Shape
 	first     any // the first item, for the field pickers
 	items     []mapped
@@ -126,7 +127,11 @@ func pull(ctx context.Context, c connector.Connector, source string, r Recipe, s
 		return p
 	}
 	res := readResult(out)
-	p.shape = shapeOf(res, r.ItemsPath)
+	p.itemsPath = r.ItemsPath
+	if p.itemsPath == "" && r.Mode != wire.ConnectorSubscriptionModeSnapshot && res.isObj {
+		p.itemsPath = findItems(res.json)
+	}
+	p.shape = shapeOf(res, p.itemsPath)
 	if r.Mode == wire.ConnectorSubscriptionModeSnapshot {
 		content := res.text
 		if res.isObj {
@@ -147,10 +152,14 @@ func pull(ctx context.Context, c connector.Connector, source string, r Recipe, s
 		p.problem = &Problem{CodeTextNeedsSnap, "The tool answers text, which can only be kept as a snapshot."}
 		return p
 	}
-	list, ok := at(res.json, cmpOr(r.ItemsPath, "$"))
+	if p.itemsPath == "" {
+		p.problem = &Problem{CodeNoList, "The result has no single list of items: choose items_path."}
+		return p
+	}
+	list, ok := at(res.json, p.itemsPath)
 	arr, isArr := list.([]any)
 	if !ok || !isArr {
-		p.problem = &Problem{CodeNoList, fmt.Sprintf("%s is not a list in the result.", cmpOr(r.ItemsPath, "$"))}
+		p.problem = &Problem{CodeNoList, fmt.Sprintf("%s is not a list in the result.", p.itemsPath)}
 		return p
 	}
 	titled := false

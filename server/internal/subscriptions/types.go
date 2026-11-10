@@ -136,9 +136,11 @@ const (
 
 // Shape is what a result looked like: never a value.
 type Shape struct {
-	Type  string   `json:"type"` // json or text
-	Keys  []string `json:"keys,omitempty"`
-	Items *int     `json:"items,omitempty"`
+	Type string   `json:"type"` // json or text
+	Keys []string `json:"keys,omitempty"`
+	// Arrays are the top-level keys whose values are lists: where items may be.
+	Arrays []string `json:"arrays,omitempty"`
+	Items  *int     `json:"items,omitempty"`
 }
 
 // Features says which later stages are in: the pages show their parts only then.
@@ -205,11 +207,13 @@ type DryRunRequest struct {
 
 // DryRun is a dry run's answer. Items and Paths hold source values: they are in this answer only, never kept or logged.
 type DryRun struct {
-	OK        bool        `json:"ok"`
-	Checks    []Check     `json:"checks"`
-	Shape     *Shape      `json:"shape"`
-	Count     int         `json:"count"`
-	MaybeMore bool        `json:"maybe_more"`
+	OK        bool    `json:"ok"`
+	Checks    []Check `json:"checks"`
+	Shape     *Shape  `json:"shape"`
+	Count     int     `json:"count"`
+	MaybeMore bool    `json:"maybe_more"`
+	// ItemsPath is where the items were read: the recipe's, or the one found when it left items_path empty.
+	ItemsPath string      `json:"items_path"`
 	WeakDedup bool        `json:"weak_dedup"`
 	Items     []Preview   `json:"items"`
 	Paths     []PathValue `json:"paths"`
