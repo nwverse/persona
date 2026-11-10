@@ -87,6 +87,10 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- **A control meant to "look like the chips" must be the chip** (#2956). #2920 rebuilt the Assistant entries as a new row
+  (44 dp, control radius, its own padding) next to `JChip` (36 dp, chip radius), and they visibly grew. Draw such controls
+  with `JChip` / `JChipTokens`, add an optional parameter for what is missing (`dot`), and assert the rendered height
+  against `JChipTokens.height` in a Robolectric test.
 - A settings sheet must register every settings child, including Assistant configuration (#2589). Otherwise that row closes the sheet and returns to the home instead of Settings. Accepted external links must dismiss shell overlays before navigating, so their destination is actually visible. A drawer's accessibility semantics fence does not block hardware-keyboard focus; prevent focus from entering the obscured main content as well.
 - System-font TextStyle can leave lineHeight unspecified (#2589). Converting it directly through Density throws before the composer renders. Measure the actual font line with TextMeasurer when no Sp line height is provided; retain explicit style line heights where present, and test normal and large system text. Do not invent a global content line-height multiplier merely to satisfy a layout calculation.
 - Same navigation labels do not establish iPhone visual parity (#2589). Pin the iPhone default style, language, appearance, text size and source revision; distinguish custom app chrome from system List, sheet, font and icon behavior. Own the side drawer and settings sheet at shell scope, and distinguish closing Settings from popping a settings child. Keep Android's legal assets and contrast floors; adjust text hues rather than weakening tests to copy a lower-contrast system accent.
