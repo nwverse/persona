@@ -507,8 +507,8 @@ func configCommands(b []byte) []string {
 }
 
 // shellFirstWord is the program a command line written with shellQuote runs: its first word past the VAR=value ones
-// in front (rootAssign). A word is bare, or single-quoted with each embedded quote closed, backslash-escaped and
-// reopened.
+// in front (rootAssign). A word is bare, or single-quoted with each embedded quote or backslash closed,
+// backslash-escaped and reopened.
 func shellFirstWord(cmd string) string {
 	for rest := strings.TrimSpace(cmd); rest != ""; {
 		var w strings.Builder

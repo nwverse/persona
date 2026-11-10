@@ -1,6 +1,6 @@
 # 会话文件与 Git
 
-`:feature:files` 提供 `SessionFilesScreen`，接收已有的 `ChatRoute`、会话目录、`SessionFiles`、返回对话和插入路径回调，可选 `initialPane` 和 `initialPath`（按路径直接打开，参数表最后一个）。文件与 Git 是对话页内的两种视图，不增加返回栈路由。功能说明、假 hub 和截图方法见 `docs/android/android.md`「对话里的文件和 Git」。
+`:feature:files` 提供 `SessionFilesScreen`，接收已有的 `ChatRoute`、会话目录、`SessionFiles`、返回对话和插入路径回调，可选 `initialPane` 和 `initialPath`（按路径直接打开，参数表最后一个）。文件与 Git 是对话页内的两种视图，不增加返回栈路由。功能说明、假 hub 和截图方法见 `docs/android/android.md`「Files and Git in chat」。
 
 - 浏览：按绝对路径走，面包屑 chip，⋯「上一级文件夹」可以走到 `/`；隐藏文件开关存本机；Git 标记、大小和相对时间；读取失败显示 node 的原因。
 - 预览：Markdown 渲染（README 的 HTML 先转换）和源文件切换、代码行号和轻量高亮、图片缩放、PDF 逐页；拷贝路径 / 内容、分享（`FilesShareProvider`，authority `${applicationId}.files.share`）、插入路径。

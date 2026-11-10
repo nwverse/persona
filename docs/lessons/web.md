@@ -1,5 +1,14 @@
 # Lessons: web UI and interactions
 
+## Shared wire projections need one property declaration (#2947)
+
+Two independently merged features can add the same optional field to an interface without a text conflict. Keep one declaration backed by the shared wire type, including its compatibility with unknown values; an older inline union can disagree with the extracted type and break the production TypeScript build. Derived projections such as a brief's acceptance row should reference that shared field type too, rather than maintain another narrower union. Run the normal build on the integrated branch: focused runtime tests alone do not detect duplicate interface properties.
+
+## Stable task rows need lifecycle evidence, not stale progress (#2878)
+
+A completed or accepted task can still retain its last blocked progress report. Completion labels/checkmarks must use the current review or receipt summary, not keep a stale “stuck” subtitle underneath. Reused tasks also retain old plan and card upserts: deduplicate by to-do id, prefer its current durable plan, and scope completion evidence to that run's creation time. Test delayed upserts and owner acceptance changes while a previous `asked_at` request is in flight. The palette guard reads the first `:root` block; add shared geometry tokens there instead of introducing another block that hides the palettes from the guard.
+
+
 ## A collapsed execution default is more than an open-state flag (#2602)
 
 The old Agent work line was called folded, but still previewed five tool/thinking steps and left every intermediate text visible. The assistant-only default-open change then exposed the full trace. Removing just that default does not implement a single replace-in-place text segment: grouping, stream-to-item handoff, preview rendering and manual history loading must agree. Keep a stable text-slot identity, put every tool kind and older text inside the same summary, and do not use text length or Markdown shape to exempt intermediate narration. Retain all plan updates for manual inspection even when the composer selects only the latest plan.
@@ -8,6 +17,10 @@ External jump/search reveals use the expansion-memory API, not the summary butto
 
 A background wake can reopen an exchange before its recap. Find the live exchange from the latest source item rather than the last drawn block; keep continuation calls in the normal summary, not a second drawer. Test actual browser replacement, manual expansion, folded history, recap wakes and reload. A lazy collapse can retain its children during its closing animation; checking raw `textContent` then is not a visibility assertion. Use the latest-text slot and folded header state, or browser-visible locators.
 
+
+## Optional sidebar entries need both setup and list results (#2934)
+
+A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
 
 ## Report evidence is separate from report prose (#2554)
 
@@ -18,6 +31,12 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - `source: installed` does not grant a full-rights web client owner-only management of local or attached installations. Market lifecycle actions follow the manager-owned `origin` and the existing endpoint policy; a manifest field or arbitrary URL cannot grant that capability. Keep unavailable controls visible with a reason rather than inventing an API request.
 - A saved Auto-upgrade preference is not its effective execution state. Show the saved value while separately explaining extension-disabled, removed-market and manager-global pauses. Read global preferences and catalog refreshes with the same explicit manager as the extension; a default-manager read can describe the wrong same-ID copy.
 - Preserve dirty configuration when maintenance reads or lifecycle writes return an entire detail. A catalog with a newer version must not become a misleading “no new version” notice merely because the background upgrade list has not caught up; use the catalog's authoritative `upgradable` result and retain the consent preview.
+
+## Leaving a page is more than its Back button (#2800)
+
+- A guard on the page's own Back covers one way out of several: another row in a list beside it, another category, the sidebar, browser Back and a reload all unmount it without asking. Keep unsaved edits outside the component (in memory, keyed by owner and item, cleared on a new credential) and put them back after the first read is shown, so the existing save bar marks them; mark the list row too, and use `beforeunload` only for a reload or a closed tab, which memory cannot survive.
+- Keep what the user changed, not the whole form: store the draft with the configuration it was made on and, on return (or a newer read), put only the changed fields on the configuration just read. A whole-form snapshot shows another device's change as the old value, and Save quietly puts it back.
+- An item page pushed over its list needs its own Back to go back (`history.back()`), not to replace the entry with the list's URL: a replace leaves the item's entry under it, so the next browser Back reopens the item. An overlay open over the item has its own entry on top; take its marker (`takeOverlayEntry`) and go back past both.
 
 ## Chat states need their way out, and fallbacks need a second trigger (#2450)
 
@@ -156,7 +175,7 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 
 ## A live card inside work the hub folded (2026-11-06, #3434)
 
-- **`fold_work` hides the step a card hangs on**: a chat opened (or reloaded) while a workflow runs gets the turn's work as one `fold` item, the Workflow call inside it, so "the run's card stays in the open" never sees the call. Pulling the step out of the client's groups is not enough: find the folds whose `[ts, fold.until]` holds the run's `started_at` exactly (the node sets it from the call's own line; a tolerance picks the fold that ended just before the call) and fetch them (`foldsHoldingCalls`, `SegmentView`). Remember what was asked per mounted exchange, not per page: `useTranscript` keeps no cache, so another chat and back (or a rewrite) brings the same fold id back, and a page-wide "asked" set left the card buried for good. Check with the mock hub's `fold_work` on, not only with live pushes, which are never folded.
+- **`fold_work` hides the step a card hangs on**: a chat opened (or reloaded) while a workflow runs gets the turn's work as one `fold` item, the Workflow call inside it, so "the run's card stays in the open" never sees the call. Pulling the step out of the client's groups is not enough: find the folds whose `[ts, fold.until]` holds the run's `started_at` exactly (the node sets it from the call's own line; a tolerance picks the fold that ended just before the call) and fetch them (`foldsHoldingCalls`, `SegmentView`; since #2631 the card stays inside the folded summary, so the web fetches the folds when the reader opens it and `foldsHoldingCalls` is gone). Remember what was asked per mounted exchange, not per page: `useTranscript` keeps no cache, so another chat and back (or a rewrite) brings the same fold id back, and a page-wide "asked" set left the card buried for good. Check with the mock hub's `fold_work` on, not only with live pushes, which are never folded.
 - **A card that only stays out of the fold while running vanishes when it ends**: the step becomes an activity, folds into "Worked Xs" and remounts there folded, so its end (the chip turning, the summary, a failed run's error) is never seen where the reader was looking. Keep it out of the fold for as long as it is a card (the hub lists the run), and let it fold itself in place.
 - **The hub's newest-60 cap shifts a block shown from its first rows**: each new agent anywhere in the run drops the oldest listed one, so a block that shows its first 12 loses its top row each time. A block the cap cut into shows its last rows, with what is hidden (and what is not listed) above them.
 - **Progress pushed every ~1.5 s must not reach every exchange**: putting `session.workflows` in the chat context rendered the whole chat on each push. The context carries only which calls have a run and which still run (`workflowCallsKey`), and each card reads its own run from the store.
@@ -410,6 +429,9 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Pending bubbles and transcript echoes (2026-11-03, #950)
 
 - Match sent messages in the transcript with more than exact equality and no time check: an older identical "Continue" among recent entries immediately removes a new bubble (hiding later send failure); one entry can also remove two identical bubbles. Match iOS / Android rules (`lib/echo.ts`: normalization, computer clock at most 2 minutes behind, prefix matching for truncated text, one transcript entry claims only one bubble, recorded in `claimed`).
+- A transcript echo can arrive before the send's HTTP 200 (#2792). Keep accepted messages across reloads until their copy arrives, but mark acceptance only on an entry still in storage: recreating one already removed by the echo revives the pending bubble on reload. Test both response orders, and keep storage writes and echo claims outside React state updaters so StrictMode cannot repeat them. Browser reload checks must also wait for the chat to finish loading, advancing an installed test clock while waiting; `DOMContentLoaded` alone can expose an empty loading shell and mistake it for a lost message. Check readiness independently of the message under test.
+
+- Local storage is shared across tabs (#2792). Restoring accepted messages on every conversation visit is safe, but unconfirmed or failed entries need the original once-per-page, per-conversation guard: an entry written after this page opened may still be sending in another tab. Test both the initial restoration and later transcript updates, and reset the guard only when simulating a fresh page.
 
 ## Composer cleared only after delivery (#1176)
 
@@ -454,7 +476,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Upward scroll position does not necessarily mean user action: composer height remeasurement briefly collapses it, growing the viewport and causing the browser to clamp `scrollTop` upward a few pixels; again, the event arrives late.
   Stop following only when the user is scrolling (upward wheel, touch, scroll keys, scrollbar drag, and within 700ms afterward) and position moves upward (`followsAfterScroll`).
 - When content below the list (composer, task dock, question card) grows, content stays unchanged but viewport shrinks. ResizeObserver must observe the viewport too, or the latest row is covered.
-- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "How to run").
+- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "Running it").
 
 ## Spreadsheet viewer (2026-11-04, #1310)
 
@@ -693,3 +715,11 @@ A successful token check does not prove the subsequent device-token exchange suc
 ## An op receipt keeps the hub's answer and the digest covers the body (#2459)
 
 A write under an op id can be repeated only unchanged: the hub replays the answer it kept for that id (a refusal included) and answers `409 op_id_reused` when the body changed. So a retry after a gap keeps the id and the request as they were, which means a start that may have reached the hub cannot reopen its form; a retry after a refusal needs a new id. Another request of the same flow, such as the Codex start with a prompt, has its own id. A repeat can also come back `202 {"state":"pending"}` or `{"state":"unknown"}`, which `res.ok` reads as success, so a caller that needs the real answer has to look at `state`.
+
+## A control meant to look like the chips must reuse the chip's class (#2999)
+
+#2920 drew the Assistant's Pending / Progress / Agents entries as a new three-column grid of 36 px rounded rectangles with
+14 px type, next to the dock's 32 px "All" / task capsules, and they read as heavy buttons. The capsule was a local
+constant inside `TaskDock`, so nothing pointed the new code at it. Shared look lives in one exported class
+(`DOCK_CAPSULE`) used by every chip that should match; tests assert the classes are shared and the e2e measures the rendered
+height against 2 rem in a real browser.

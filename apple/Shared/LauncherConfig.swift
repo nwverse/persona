@@ -104,7 +104,7 @@ nonisolated struct ProviderModel: Codable, Hashable, Sendable, Identifiable {
     var title: String { name?.isEmpty == false ? name! : id }
 }
 
-/// How one machine's launchers came in when 「设置」 › 「模型供应商」 asked (docs/integrations/launchers.md「同步状态」).
+/// How one machine's launchers came in when 「设置」 › 「模型供应商」 asked (docs/integrations/launchers.md「Sync state」).
 nonisolated struct LauncherSync: Codable, Identifiable, Hashable, Sendable {
     var machine: String
     var name: String?
@@ -283,7 +283,7 @@ nonisolated struct LauncherProbeResult: Decodable, Hashable, Sendable {
     var code: String? = nil
 }
 
-/// POST /api/v1/launchers' answer (docs/protocol/protocol.md「模型供应商与用途配置」): the provider as saved and, when `assign`
+/// POST /api/v1/launchers' answer (docs/protocol/protocol.md「Model providers and per-purpose configuration」): the provider as saved and, when `assign`
 /// was sent, which uses now run on it and which were kept, with why (`customized` / `incompatible` / `failed`).
 /// Older hubs answer `{"ok":true}` or `{"launcher":…}` alone.
 nonisolated struct LauncherAdded: Decodable, Hashable, Sendable {
@@ -360,7 +360,7 @@ nonisolated struct LauncherDefault: Codable, Hashable, Sendable {
     }
 }
 
-/// A model provider the hub offers (GET /api/v1/launchers/presets, docs/extensions/extensions.md「模型供应商」, docs/integrations/launchers.md
+/// A model provider the hub offers (GET /api/v1/launchers/presets, docs/extensions/extensions.md「Model providers」, docs/integrations/launchers.md
 /// 「内置预设」): its built-in ones (`plugin` "builtin") and the plugins'. A launcher added from it takes the address, kind
 /// and models from here; the user fills in only the key (and, on an older hub, the name).
 nonisolated struct LauncherPreset: Decodable, Hashable, Sendable, Identifiable {
@@ -498,7 +498,7 @@ extension APIClient {
     }
 }
 
-/// A launcher's quota at its gateway (GET /api/v1/launchers/{name}/quota, docs/integrations/launchers.md「额度」), as a quota plugin
+/// A launcher's quota at its gateway (GET /api/v1/launchers/{name}/quota, docs/integrations/launchers.md「Quota」), as a quota plugin
 /// read it; `error` when there is nothing to read (`unsupported`, no plugin knows the gateway) or the gateway said no.
 nonisolated struct LauncherQuotaAnswer: Decodable, Hashable, Sendable {
     var machine: String?

@@ -21,17 +21,18 @@ fun interface LarkThreadSource {
     suspend fun reply(request: ReplyRequest): Boolean = error("Thread replies are unavailable")
 }
 
-/** Carry the pairing-bound reader with the message through existing repository wrappers. */
-fun larkThreadSource(data: JsonObject, transport: InboxAssistantTransport, feed: String): LarkThreadSource? {
+/** Carry the pairing-bound reader, and the [manager] the chat is read as, with the message through existing repository wrappers. */
+fun larkThreadSource(data: JsonObject, transport: InboxAssistantTransport, feed: String, manager: String? = null): LarkThreadSource? {
     val reader = transport as? LarkThreadTransport ?: return null
     val root = data.text("id").takeIf { it.isNotBlank() } ?: return null
+    val source = LarkContentSource(transport, manager)
     return object : LarkThreadSource {
         override val canReply = transport is LarkThreadReplyTransport
         override suspend fun reply(request: ReplyRequest): Boolean =
-            (transport as LarkThreadReplyTransport).replyInThread(root, request.text, request.clientId).flag("ok")
+            source.read { (transport as LarkThreadReplyTransport).replyInThread(root, request.text, request.clientId) }.flag("ok")
         override suspend fun page(before: String?): LarkThreadPage {
-            val page = reader.thread(root, before)
-            return LarkThreadPage(page.messages().map { larkMessage(it, transport, feed) },
+            val page = source.read { reader.thread(root, before) }
+            return LarkThreadPage(page.messages().map { larkMessage(it, transport, feed, manager) },
                 page.flag("has_older"), page.cursor("older_cursor"))
         }
     }

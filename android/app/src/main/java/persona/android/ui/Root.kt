@@ -65,8 +65,10 @@ import persona.feature.assistant.assistantEntries
 import persona.feature.chat.*
 import persona.feature.inbox.InboxItemPages
 import persona.feature.inbox.InboxItemExtensionScreen
+import persona.feature.inbox.InboxItemKey
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LocalInboxItemPages
+import persona.feature.inbox.ManagerLinks
 import persona.feature.inbox.InboxTriage
 import persona.feature.inbox.InboxTriageSetup
 import persona.feature.inbox.LocalInboxTriageSetup
@@ -793,24 +795,27 @@ private fun InboxItemUi(route: InboxItemUiRoute, inbox: InboxRepository, slots: 
     val feedback = LocalAppFeedback.current
     val missing = stringResource(R.string.app_inbox_item_missing)
     val record = snapshot.records.firstOrNull { it.item.id == route.itemId }
-    // The extension draws the item again when it changes: new messages joined the event, it was done or reopened.
-    val revision = record?.let { listOf(it.item.version, it.item.updatedAt, it.count, it.item.doneAt) }
-    val body = rememberInboxItemBody(slots, route, revision, onSource = { id ->
-        inboxSourcePage(id, records)?.let(navigator::navigate) ?: feedback?.notice(missing)
-    })
-    val fallback = body.fallback
-    val drawn = fallback == null && !body.loading
-    LaunchedEffect(drawn) { if (drawn) failures.remove(route.itemId) }
-    val own by rememberUpdatedState(record?.let(::inboxItemPage))
-    LaunchedEffect(fallback, own != null) {
-        val page = own ?: return@LaunchedEffect
-        if (fallback is InboxItemFallback.Notice) failures[route.itemId] = fallback.message
-        if (fallback != null) replace(route, page)
-    }
-    when {
-        fallback == null -> InboxItemExtensionScreen(inbox, route, navigator, body.title, body.loading, body.refreshing, body.refresh, body.items)
-        record == null -> UnavailablePage(missing, navigator)
-        else -> Box(Modifier.fillMaxSize())
+    // Its links, the extension's buttons' too, open as the item's manager's (a Feishu document, a Moments post).
+    ManagerLinks(record?.manager) {
+        // The extension draws the item again when it changes: new messages joined the event, it was done or reopened.
+        val revision = record?.let { listOf(it.item.version, it.item.updatedAt, it.count, it.item.doneAt) }
+        val body = rememberInboxItemBody(slots, route, revision, record?.manager, InboxItemKey.hubId(route.itemId), onSource = { id ->
+            inboxSourcePage(id, records)?.let(navigator::navigate) ?: feedback?.notice(missing)
+        })
+        val fallback = body.fallback
+        val drawn = fallback == null && !body.loading
+        LaunchedEffect(drawn) { if (drawn) failures.remove(route.itemId) }
+        val own by rememberUpdatedState(record?.let(::inboxItemPage))
+        LaunchedEffect(fallback, own != null) {
+            val page = own ?: return@LaunchedEffect
+            if (fallback is InboxItemFallback.Notice) failures[route.itemId] = fallback.message
+            if (fallback != null) replace(route, page)
+        }
+        when {
+            fallback == null -> InboxItemExtensionScreen(inbox, route, navigator, body.title, body.loading, body.refreshing, body.refresh, body.items)
+            record == null -> UnavailablePage(missing, navigator)
+            else -> Box(Modifier.fillMaxSize())
+        }
     }
 }
 

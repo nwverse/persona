@@ -671,7 +671,7 @@ describe("弹窗关联目标判定 (resolveLinkCurrentTodoId)", () => {
   });
 });
 
-describe("自动完成 (docs/assistant/todos.md「自动完成」)", () => {
+describe("自动完成 (docs/assistant/todos.md「Automatic completion」)", () => {
   const base = { id: "t", title: "统一连接器 logo 尺寸", created_at: "2026-11-04T06:00:00Z", updated_at: "2026-11-04T08:00:00Z" };
   it("hub 判断做完后关掉的任务标「自动完成」", () => {
     const todo = { ...base, done_at: "2026-11-04T08:00:00Z", done_by: "auto", done_reason: "已合并 PR 并发了 TestFlight" };
@@ -688,7 +688,7 @@ describe("自动完成 (docs/assistant/todos.md「自动完成」)", () => {
   });
 });
 
-describe("交付 (docs/assistant/todos.md「交付」)", () => {
+describe("交付 (docs/assistant/todos.md「Delivery」)", () => {
   const base = { id: "t", title: "修登录", created_at: "2026-11-06T06:00:00Z", updated_at: "2026-11-06T08:00:00Z" };
   it("没做到上线的开着的任务显示卡在哪", () => {
     const todo = { ...base, delivery: { state: "pr", gate: "等用户批准合并", unblock: "user" } };

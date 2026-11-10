@@ -15,10 +15,10 @@ internal fun JsonObject.flag(key: String) = (get(key) as? JsonPrimitive)?.boolea
 internal fun JsonObject.cursor(key: String) = text(key).takeIf { it.isNotBlank() }
 internal fun JsonObject.messages() = (get("messages") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
 
-internal fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, feed: String): LarkMessage {
-    fun image(ref: String, width: Int = 1, height: Int = 1) = LarkPart.Image(
-        AuthenticatedLarkImage("${transport.scope}:$ref") { transport.media(ref) }, width = width, height = height)
-    val source = LarkContentSource(transport)
+/** [manager]: the one the chat is read as (LarkContentSource); its pictures and threads are read and cached as its. */
+internal fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, feed: String, manager: String? = null): LarkMessage {
+    val source = LarkContentSource(transport, manager)
+    fun image(ref: String, width: Int = 1, height: Int = 1) = source.image(ref, width = width, height = height)
     val id = data.text("id")
     val external = "https://applink.feishu.cn/client/chat/open?chatId=${URLEncoder.encode(feed, "UTF-8")}&messageId=${URLEncoder.encode(id, "UTF-8")}"
     val recalled = data.flag("recalled")
@@ -41,16 +41,16 @@ internal fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, f
                     }
                 }
                 "code" -> LarkPart.Code(text, meta.text("languageName").ifBlank { meta.text("language") })
-                "file" -> LarkPart.File(part.text("url"), meta.text("name").ifBlank { text }, meta.text("mimeType").ifBlank { "application/octet-stream" })
+                "file" -> LarkPart.File(part.text("url"), meta.text("name").ifBlank { text }, meta.text("mimeType").ifBlank { "application/octet-stream" }, source)
                 "text", "at" -> LarkPart.Text(text, source)
-                "card", "interactive" -> larkInteractivePart(meta, text, transport, id)
+                "card", "interactive" -> larkInteractivePart(meta, text, transport, id, manager)
                 "link" -> LarkPart.Text(listOf(text, part.text("url")).filter { it.isNotBlank() }.distinct().joinToString("\n"), source)
                 "merge_forward", "forward" -> {
                     val forwardMessages = (meta["messages"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { fm ->
                         LarkForwardedMessage(
                             id = fm.text("id"),
                             senderName = fm.text("senderName").ifBlank { fm.text("sender_name") },
-                            senderAvatar = larkAvatar(fm.cursor("senderAvatarUrl") ?: fm.cursor("sender_avatar"), transport.scope, transport::avatar),
+                            senderAvatar = larkAvatar(fm.cursor("senderAvatarUrl") ?: fm.cursor("sender_avatar"), source.scope, source::avatar),
                             time = fm.text("createdAt").ifBlank { fm.text("created_at") },
                             text = fm.text("textPreview").ifBlank { fm.text("text") },
                             parts = (fm["parts"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { fp ->
@@ -77,7 +77,7 @@ internal fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, f
                             LarkForwardedMessage(
                                 id = fm.text("id"),
                                 senderName = fm.text("senderName").ifBlank { fm.text("sender_name") },
-                                senderAvatar = larkAvatar(fm.cursor("senderAvatarUrl") ?: fm.cursor("sender_avatar"), transport.scope, transport::avatar),
+                                senderAvatar = larkAvatar(fm.cursor("senderAvatarUrl") ?: fm.cursor("sender_avatar"), source.scope, source::avatar),
                                 time = fm.text("createdAt").ifBlank { fm.text("created_at") },
                                 text = fm.text("textPreview").ifBlank { fm.text("text") }
                             )
@@ -105,12 +105,12 @@ internal fun larkMessage(data: JsonObject, transport: InboxAssistantTransport, f
             "sending", "pending" -> LarkDelivery.Sending
             else -> LarkDelivery.Sent
         },
-        avatar = larkAvatar(data.cursor("sender_avatar"), transport.scope, transport::avatar), bot = data.text("sender_type") == "bot",
+        avatar = larkAvatar(data.cursor("sender_avatar"), source.scope, source::avatar), bot = data.text("sender_type") == "bot",
         system = data.text("type") == "SYSTEM" || recalled, edited = data.flag("edited"),
         quote = quote?.let { LarkQuote(it.text("id"), it.text("sender_name"), if (it.flag("recalled")) "" else it.text("text"), it.flag("recalled")) },
         badgeCount = data.number("badge_count"), isRead = data.flag("is_read"),
         replyCount = maxOf(0L, data.number("reply_count") ?: 0L, data.number("thread_reply_count") ?: 0L),
-        thread = larkThreadSource(data, transport, feed),
+        thread = larkThreadSource(data, transport, feed, manager),
         reactions = reactions, recalled = recalled, retained = retained, editHistory = larkEditHistory(data),
         canPin = data.flag("can_pin"), canUnpin = data.flag("can_unpin"))
 }

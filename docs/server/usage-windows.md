@@ -52,7 +52,8 @@ The gateway's `rate_limits.spend_limit` (an amount of money) is not a window and
   - **Each account appears once**: two samples from the same source (Codex / Claude) are the same account if any one window has "the same length and the same reset time (to the second)". The reset time belongs to the account and reads the same on any computer, so no account id is needed and no credentials are touched.
   - For several samples of the same account, each window length takes the window from the **newest sample**, so a computer unused for a long time cannot bring back a 5-hour window that has already rolled over.
   - Samples older than 30 minutes are marked `stale` (sorted last, faded in the UI and labeled "out of date"); windows older than 3 days or past their reset time are dropped.
-  - Accounts with the same name are numbered by id ("Codex Pro", "Codex Pro 2"); the id is a digest of the longest window's length and reset time, stable within a week.
+  - **Every account has its own id** (clients use it as the row key, #1904): a digest of the longest plan window's length and reset time, stable within a week. For an account an account-pool gateway reports, its gateway account id goes into the digest too (two accounts of one gateway are never one, even with the same reset time); for an account whose longest window has no reset time, where it was read does (the computer and its place in that computer's answer, or the gateway account). Neither is sent out, only the digest. Two accounts that still share one (only per-model windows, resetting together) get `-2`, `-3`… in the order of where they were read.
+  - Accounts with the same name are numbered by id ("Codex Pro", "Codex Pro 2"), so the numbering does not depend on which computer answered first.
   - Sorted by the fullest window, highest first.
 
 API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
@@ -60,10 +61,12 @@ API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
 ```json
 {"accounts": [{
   "id": "codex-1a2b3c4d", "provider": "codex", "name": "Codex Pro", "plan": "pro",
-  "sampled_at": "2026-11-05T09:08:06Z", "stale": false,
+  "sampled_at": "2026-11-05T09:08:06Z", "stale": false, "local": true, "machines": ["MacBook"],
   "windows": [{"label": "5h", "window_minutes": 300, "used_percent": 22.0, "resets_at": "2026-11-05T13:08:06Z"}]
 }], "checked_at": "2026-11-05T09:08:20Z"}
 ```
+
+`local` says the numbers were read on one of the computers, `machines` names those computers (their names in hub.json now, #1907), `sources` names the account-pool gateways that reported it (below).
 
 With no data, `accounts` is `[]`; old hubs lack this route (404), and the web treats that as no data.
 
@@ -143,8 +146,13 @@ The manager puts the gateway's accounts together with each computer's samples an
 A few additions:
 
 - Two accounts in the same gateway (different `id`) are **never merged**, even if their reset times happen to match; the same upstream account seen by two gateways (or a gateway and a computer) is merged.
-- A merged account takes the newest sample's numbers and lists its sources: `This computer` (read on a computer) and the gateway's name; the line under the popover title reads "This computer · Relay"; with only one source, just that one.
-- When a gateway **cannot be reached, its last answer is kept and marked out of date** (`problem: "unreachable"`, the popover says "The gateway can't be reached; these are its last numbers"), so accounts do not disappear; dropped after 3 days.
+- A merged account takes the newest sample's numbers and lists its sources: the computers that read it, by name (`machines`), and the gateway's name; the line under the popover title reads "MacBook · Relay"; with only one source, just that one. Never a word like "this computer": the clients run on phones and other computers, where it would point at the wrong device (#1907). Against an older hub that only sends `local`, every client says "Computer" (zh-Hans 电脑, ja コンピューター) instead.
+- When a gateway's **read fails, its last answer is kept and marked out of date**, so accounts do not disappear; dropped after 3 days. `problem` says why, from the source's error code, and the popover words it (the admin page's "Usage sources" gives the exact reason):
+  - `rejected` (`unauthorized`, `forbidden`: the gateway turned the key away): "The gateway turned the key away; update it in Admin → Usage sources. These are its last numbers";
+  - `unreachable` (`unreachable`, `timeout`): "The gateway can't be reached; these are its last numbers";
+  - `failed` (any other code: `not_found`, `server_error`, `bad_response`, `too_large`, `redirect`, `bad_config`): "Couldn't read the gateway; these are its last numbers".
+
+  The source failing replaces a relay's own per-account `error` (it is the newer news). Clients show no text for a value they don't know, but still fade the account.
 - Sorting is unchanged: by the fullest of the account's plan windows, highest first, out-of-date ones last. With no data at all (and no sources), the whole block is not drawn.
 
 ### The gateway's account list (#4576)
@@ -187,6 +195,14 @@ Any account-pool gateway that wants to feed usage into the sidebar implements on
 `id` is optional (a stable identifier for the account in the gateway, used to guarantee that two accounts are never merged); `label` (`5h`, `7d`, `45m`) is used if its length can be read, otherwise `window_minutes`; `used_percent` is 0–100, kept as sent and clamped when out of range;
 `sampled_at` defaults to the time of reading; each source has at most 500 accounts and each account at most 32 windows; accounts with an empty `provider` are dropped.
 
+### Scheduler capacity view
+
+Besides the sidebar, the same in-memory data feeds Agent scheduling: `devices.CapacitySnapshot` builds a `proto.CapacitySnapshot` of one `ProviderCapacity` per upstream provider
+(known account count, schedulable count, earliest recovery, all-stale flag) from the gateway inventory and the merged windows. A gateway account counts once, from the inventory
+(it is authoritative for the accounts it lists; a sidebar account with a gateway source is skipped); accounts only the computers saw fill the rest, an exhausted plan window making
+one unavailable until its reset. It is read-only like everything here — the call performs no gateway or machine read beyond the windows' own short poll cache — and carries no
+credential or gateway-side account id. How the launcher picker consumes it is in `docs/server/launcher-health.md` ("Capacity-aware notes").
+
 
 ## Who owns this (2026-11-05)
 
@@ -207,7 +223,7 @@ User decision: the hub is only a communication center, and computers belong to t
 
 - **Bottom of the sidebar**: one thin bar each for the two fullest accounts (name, percentage of the fullest window), warning color at ≥ 80%; out-of-date ones fade; the hover tooltip shows the source. **With no data the whole block is not drawn**, and the sidebar looks as before.
 - **Opened**: one row per window per account: window length (5h / 7d), percent used, a bar, the reset countdown, a pace hint; the sample time ("12 seconds ago") sits right of the account title.
-  The line under the account title gives the plan and sources ("This computer · Relay"); per-model windows show the model name next to the length; when the gateway cannot read, a one-line explanation (see "Account-pool gateways"). Esc or clicking elsewhere closes it.
+  The line under the account title gives the plan and sources ("MacBook · Relay"); per-model windows show the model name next to the length; when the gateway cannot read, a one-line explanation (see "Account-pool gateways"). Esc or clicking elsewhere closes it.
 - **Reset countdown**: under 1 hour reads `Resets in 45m`; within today, the time `Resets at 13:05`; longer, `Resets in 2d 3h`.
 - **Pace** (`pace` in `lib/usage-windows.ts`): the window length is read from the label (`5h`, `7d`, falling back to `window_minutes`); expected progress = elapsed time / window length.
   More than 5 percentage points above expected is "Ahead of pace", more than 5 below is "Behind pace", nothing in between; a tick on the bar marks the expected position.

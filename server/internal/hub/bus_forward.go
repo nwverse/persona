@@ -127,8 +127,9 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 		res.Body = localizedDeploymentError(h.requestLang(r), res.Body)
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/v1/inbox") || strings.HasPrefix(r.URL.Path, "/api/v1/translate") {
-		localized := i18n.InboxJSON(h.requestLang(r), res.Body)
-		if !bytes.Equal(localized, res.Body) {
+		if raw := inboxListRawOf(r); raw != nil && res.Status < http.StatusMultipleChoices {
+			raw.kept = true // an inbox list: localized item by item as it is merged (inbox_forms.go)
+		} else if localized := i18n.InboxJSON(h.requestLang(r), res.Body); !bytes.Equal(localized, res.Body) {
 			res.Body = localized
 			w.Header().Del("Content-Length")
 		}

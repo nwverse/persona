@@ -387,8 +387,8 @@ func hasFlag(flags []imap.Flag, want imap.Flag) bool {
 	return false
 }
 
-// bodyStructureHasAttachments reports whether any part is a non-inline
-// attachment.
+// bodyStructureHasAttachments reports whether any part is an attachment: marked attachment, marked inline but a named
+// file that is neither text nor an image (as nextPart reads it), or unmarked, named and not text.
 func bodyStructureHasAttachments(bs imap.BodyStructure) bool {
 	if bs == nil {
 		return false
@@ -402,20 +402,36 @@ func bodyStructureHasAttachments(bs imap.BodyStructure) bool {
 		if !ok {
 			return true
 		}
+		mediaType := single.MediaType()
+		named := hasNamedParam(single.Params, "name")
 		if disp := single.Disposition(); disp != nil {
-			if strings.EqualFold(disp.Value, "attachment") {
+			named = named || hasNamedParam(disp.Params, "filename")
+			switch headerToken(disp.Value) {
+			case "attachment":
 				found = true
 				return false
-			}
-			if strings.EqualFold(disp.Value, "inline") {
-				return true
+			case "inline":
+				found = named && !staysInline(mediaType)
+				return !found
 			}
 		}
-		if single.Filename() != "" && !strings.HasPrefix(single.MediaType(), "text/") {
+		if named && !strings.HasPrefix(mediaType, "text/") {
 			found = true
 			return false
 		}
 		return true
 	})
 	return found
+}
+
+// hasNamedParam reports whether BODYSTRUCTURE parameters carry a non-empty key in any form: servers may pass the
+// RFC 2231 key*= and key*0= forms through undecoded.
+func hasNamedParam(params map[string]string, key string) bool {
+	for name, v := range params {
+		name = strings.ToLower(name)
+		if v != "" && (name == key || strings.HasPrefix(name, key+"*")) {
+			return true
+		}
+	}
+	return false
 }

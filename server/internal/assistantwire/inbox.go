@@ -20,6 +20,7 @@ import (
 var InboxRoutes = []string{
 	"GET /api/v1/inbox",
 	"GET /api/v1/inbox/done",
+	"GET /api/v1/inbox/done/days",
 	"GET /api/v1/inbox/{id}",
 	"POST /api/v1/inbox/{id}/done",
 	"POST /api/v1/inbox/{id}/draft",
@@ -173,16 +174,31 @@ type InboxSource struct {
 	ReadError string `json:"read_error,omitempty"`
 }
 
-// Why a source could not be read (InboxSource.ReadError).
+// Why a source could not be read (InboxSource.ReadError, InboxMailFailed.ReadError).
 const (
 	ReadTimeout     = "timeout"
 	ReadRateLimited = "rate_limited"
 	ReadFailed      = "failed"
+	// ReadLoginRefused: a mail account whose server refuses its login (mail settings show the account's error).
+	ReadLoginRefused = "login_refused"
 )
 
 // InboxMailRead is a round's mail: each account's latest inbox page (an account that could not be read is left out).
 type InboxMailRead struct {
 	Accounts []InboxMailAccount `json:"accounts"`
+	// Failed are the accounts this round could not read, with why (#1849). They are still left out of Accounts, so a
+	// manager that does not know this field reads the round as before; one an earlier round read while the manager
+	// was away is in Accounts too, with what that round read (mergeRounds). Absent when the sender does not know it:
+	// no account is said to have failed.
+	Failed []InboxMailFailed `json:"failed,omitempty"`
+}
+
+// InboxMailFailed is a mail account a round could not read: a short code (ReadTimeout, ReadLoginRefused,
+// ReadFailed), never the error's text.
+type InboxMailFailed struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	ReadError string `json:"read_error"`
 }
 
 // InboxMailAccount is one mail account and its latest messages.

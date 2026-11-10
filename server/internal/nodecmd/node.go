@@ -27,7 +27,7 @@ import (
 const NodeUsage = `  personad node --stdio     run the node protocol on stdin/stdout (started by the hub over ssh); with a resident
                            node running on this machine, relay to it instead
   personad node --attach    resident node (launchd, in the login session): serves what --stdio relays, so what it
-                           starts can use the login keychain (docs/server/server.md「常驻 node」); set up for tailcat,
+                           starts can use the login keychain (docs/server/server.md「Persistent node」); set up for tailcat,
                            also reachable by the hub over tailcat
   personad node --attach --supervised
                            the same, run by something other than systemd or launchd that starts it again whenever it
@@ -35,7 +35,7 @@ const NodeUsage = `  personad node --stdio     run the node protocol on stdin/st
                            (docs/operations/link.md "Without systemd"). Not for nohup or cron @reboot: nothing restarts those
   personad node tailcat init --hub <key> [--derp-map-url <url>]
                            let the hub reach this machine over tailcat when it cannot ssh here; prints the address
-                           for hub.json (docs/server/server.md「tailcat 打洞」)
+                           for hub.json (docs/server/server.md「Tailcat hole punching」)
   personad node tailcat addr
                            print this machine's tailcat address again
   personad node doctor [--json] [--fix]
@@ -43,7 +43,7 @@ const NodeUsage = `  personad node --stdio     run the node protocol on stdin/st
                            MCP and plugin files match this binary, the programs they run exist, claude's version, the
                            Mac LaunchAgent's ProcessType, and whether what claude reads at start can be read;
                            --fix rewrites Persona's own generated files, and on a Mac writes ProcessType=Interactive
-                           into the LaunchAgent and reloads it (docs/integrations/claude-integration.md「node doctor」)
+                           into the LaunchAgent and reloads it (docs/integrations/claude-integration.md「Self-check」)
   personad node reset-uid   give this computer a new machine uid (~/.persona/machine-uid): for a virtual machine cloned
                            with another's home directory, which hubs would take for that one (docs/server/mesh.md)`
 

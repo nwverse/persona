@@ -699,7 +699,7 @@ func TestRuntimeSubagentsAndBackground(t *testing.T) {
 }
 
 // A runtime running another version of a package the node carries is offered the node's in the hello reply, and
-// fetches it with runtime.package; one running the same is not (docs/integrations/runtimes.md "Automatic updates").
+// fetches it with runtime.package; one running the same is not (docs/integrations/runtimes.md "Auto-update").
 func TestRuntimePackageUpdate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(runtimepkg.OverrideEnv, dir)

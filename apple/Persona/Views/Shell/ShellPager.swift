@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The shell's two pages side by side, Assistant on the left and Agents on the right like the switch over them
-/// (docs/apple/ios.md「新外壳」): a drag to the left on Assistant brings Agents in under the finger, a drag to the right on Agents
+/// (docs/apple/ios.md「New shell」): a drag to the left on Assistant brings Agents in under the finger, a drag to the right on Agents
 /// brings Assistant back, and the switch's pill follows. The whole strip reads drawer | Assistant | Agents: on Assistant a drag to the
 /// right still opens the drawer (`DrawerPan` decides which one a drag is).
 ///
@@ -213,15 +213,21 @@ struct ShellPageSlide: ViewModifier {
     func body(content: Content) -> some View {
         let pager = shell.pager
         let p = pager.position
-        let shown = pager.moving ? abs(CGFloat(index) - p) < 1 : index == pager.page
+        let delta: CGFloat = CGFloat(index) - p
+        let distance: CGFloat = abs(delta)
+        let shown = pager.moving ? distance < 1 : index == pager.page
         let inReach = !pager.moving && index == pager.page && index == shell.page
+        let offset: CGFloat = pager.moving && railEdge == nil ? delta * pager.width : 0
+        let opacity: CGFloat = railEdge != nil && pager.moving
+            ? max(CGFloat(0), CGFloat(1) - distance)
+            : (shown ? CGFloat(1) : CGFloat(0))
         content
             // The page behind is never taken out of the window, so `onDisappear` does not fire for it: `tabIsActive`
             // tells its polling and read reports to stop (docs/apple/ios.md「只在前台做的事」). The page in front, so a drag
             // that does not settle on the other page does not restart them.
             .environment(\.tabIsActive, index == shell.page)
-            .offset(x: pager.moving && railEdge == nil ? (CGFloat(index) - p) * pager.width : 0)
-            .opacity(railEdge != nil && pager.moving ? max(0, 1 - abs(CGFloat(index) - p)) : (shown ? 1 : 0))
+            .offset(x: offset)
+            .opacity(opacity)
             .allowsHitTesting(inReach)
             .accessibilityHidden(!inReach)
             .zIndex(index == pager.page ? 1 : 0)

@@ -105,5 +105,7 @@
   "git_timeout": "タイムアウトしました",
   "market_warning": "拡張機能マーケットに警告があります",
   "sandbox_unavailable": "サンドボックスを利用できません",
-  "settings_moved": "確認中に設定が変わったため保存していません。もう一度お試しください"
+  "settings_moved": "確認中に設定が変わったため保存していません。もう一度お試しください",
+  "translation_skipped": "{file} は使われません：{err}。マニフェスト自体のテキストを表示します",
+  "entry_translation_skipped": "{id}：インデックスエントリの l10n は使われません：{err}。マニフェスト自体のテキストを表示します"
 }

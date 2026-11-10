@@ -77,7 +77,7 @@ internal val LocalChatWorkflows = compositionLocalOf<ChatWorkflows?> { null }
 
 /**
  * A picture of the conversation for the viewer: its bytes come inline with the page when the hub sent them, else
- * from the repository by item id (pages drop picture bytes, docs/android/android.md "Cache size budget").
+ * from the repository by item id (pages drop picture bytes, docs/android/android.md "Cache size budgets").
  */
 internal fun chatViewerImage(session: SessionKey, item: Item, repository: ChatRepository?, description: String = ""): ViewerImage {
     val image = item.image

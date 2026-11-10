@@ -1,6 +1,6 @@
 import XCTest
 
-/// The Agents list's node menu (#3098, docs/apple/ios.md「节点菜单」): an agent row's long press splits its pane, runs Git in its
+/// The Agents list's node menu (#3098, docs/apple/ios.md「Information architecture」): an agent row's long press splits its pane, runs Git in its
 /// folder and closes its tab after asking; a space's ⋯ runs an agent in one of its shells.
 ///   MOCK_TERMINAL_PANES=1 PORT=<port> python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/NodeMenuUITests

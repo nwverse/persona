@@ -152,6 +152,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/imessage/chats/{id}/messages
 inbox.read           GET /api/v1/inbox
 inbox.read           GET /api/v1/inbox/done
+inbox.read           GET /api/v1/inbox/done/days
 inbox.read           GET /api/v1/inbox/folders
 inbox.read           GET /api/v1/inbox/mutes
 inbox.read           GET /api/v1/inbox/policies
@@ -301,6 +302,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/feishu/notices/action
 -                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
+-                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
 -                    POST /api/v1/assistant/places

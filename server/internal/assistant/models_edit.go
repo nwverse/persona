@@ -157,7 +157,7 @@ func (s *Service) providerModelUses(ctx context.Context, provider string) ([]str
 
 // triageInUse refuses a change that leaves inbox.triage uncallable while plugins that need it are on: 422
 // triage_model_in_use, naming them (not 409: the apps read a 409 from model-config as an edit conflict and would hide
-// the message; a 422 they show as it is). nil when the change may go (docs/extensions/extensions.md "General inbox rules").
+// the message; a 422 they show as it is). nil when the change may go (docs/extensions/extensions.md "General rules for the Inbox").
 func (s *Service) triageInUse(ctx context.Context, id string, effective ModelBinding) (map[string]any, error) {
 	if id != "inbox.triage" || s.modelUsable(ctx, effective) {
 		return nil, nil

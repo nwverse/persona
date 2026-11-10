@@ -94,7 +94,7 @@ internal fun SourceMessage(item: Item, source: MessageSource, showLabel: Boolean
 private val noTodos = MutableStateFlow(emptyList<Todo>())
 
 /**
- * A message Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md "Messages Persona injects"):
+ * A message Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md "Messages injected by Persona"):
  * one centered line, never its words. A task's notice opens the task (in the assistant's conversations); a scheduled
  * run's line shows what the task asks.
  */
