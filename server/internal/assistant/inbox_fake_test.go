@@ -459,6 +459,29 @@ func (s *inboxMemStore) DoneInboxItems(_ context.Context, q db.InboxDoneQuery) (
 	return out, nil
 }
 
+// DoneInboxDays counts the done rows per day in zone as the database does, through the count memory makes of its own
+// (inboxBook.doneDays).
+func (s *inboxMemStore) DoneInboxDays(_ context.Context, zone string, connectors bool) ([]db.InboxDay, error) {
+	s.imu.Lock()
+	defer s.imu.Unlock()
+	if s.fail != nil {
+		return nil, s.fail
+	}
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		return nil, err
+	}
+	b := newInbox()
+	for id, raw := range s.rows {
+		var it InboxItem
+		if json.Unmarshal(raw, &it) == nil && s.done[id] != nil {
+			it.ID, it.DoneAt = id, s.done[id]
+			b.items[id] = &it
+		}
+	}
+	return b.doneDays(loc, connectors), nil
+}
+
 // writeFails makes every row write fail (on) or succeed again.
 func (s *inboxMemStore) writeFails(on bool) {
 	s.imu.Lock()

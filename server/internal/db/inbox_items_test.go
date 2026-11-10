@@ -189,6 +189,59 @@ func TestDoneInboxItemsPages(t *testing.T) {
 	}
 }
 
+// The done items counted per calendar day in the zone asked for (#2967): Postgres's AT TIME ZONE on the timestamptz
+// column, so a day follows the zone's own offset on each date. New York leaves summer time on 1 Nov 2026 at 06:00 UTC:
+// that day 03:30 UTC is still 31 Oct there and 04:30 is 1 Nov 0:30 (UTC-4); on 2 Nov, 04:30 UTC is 1 Nov 23:30 (UTC-5).
+// Either fixed offset puts one of them on the wrong day. Open items never count, connectors' only when asked for.
+func TestDoneInboxDays(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	put := func(id string, done *time.Time, data string) {
+		t.Helper()
+		if data == "" {
+			data = `{"id":"` + id + `"}`
+		}
+		if err := d.PutInboxItem(ctx, id, []byte(data), time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC), done); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := func(day, hour, min int) *time.Time {
+		t := time.Date(2026, 11, day, hour, min, 0, 0, time.UTC)
+		return &t
+	}
+	put("a", at(1, 3, 30), "")
+	put("b", at(1, 4, 30), "")
+	put("c", at(2, 4, 30), "")
+	put("d", at(2, 16, 0), "")
+	put("open", nil, "")
+	put("github:1", at(2, 17, 0), `{"id":"github:1","source":"github","connector":{"thread":"t"}}`)
+	days := func(zone string, connectors bool) string {
+		t.Helper()
+		got, err := d.DoneInboxDays(ctx, zone, connectors)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, x := range got {
+			out = append(out, fmt.Sprintf("%s:%d", x.Day, x.Count))
+		}
+		return strings.Join(out, ",")
+	}
+	for _, c := range []struct {
+		zone       string
+		connectors bool
+		want       string
+	}{
+		{"UTC", false, "2026-11-02:2,2026-11-01:2"},
+		{"UTC", true, "2026-11-02:3,2026-11-01:2"},
+		{"America/New_York", false, "2026-11-02:1,2026-11-01:2,2026-10-31:1"},
+		{"Asia/Shanghai", true, "2026-11-03:2,2026-11-02:1,2026-11-01:2"},
+	} {
+		if got := days(c.zone, c.connectors); got != c.want {
+			t.Errorf("%s (connectors %v): %s, want %s", c.zone, c.connectors, got, c.want)
+		}
+	}
+}
+
 // The history's pages read inbox_items_open, (done_at, id) since 0471, from the cursor down in the pages' order, with no
 // sort; deleting a source's rows reads inbox_items_source, not every document. No index reads data or updated_at,
 // which every upsert changes, so an upsert of an open item can be HOT.

@@ -474,6 +474,7 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
   A history item memory no longer holds still opens (`GET /api/v1/inbox/{id}` reads its row, read-only) and can be reopened (`/{id}/done` with `done:false`, `/bulk` `reopen`,
   `/done` with `done:false` load its row into memory first); filing it again finds no item (404 / `missing`), as before. Without a database there is nothing to fall back to.
   Deleting a source's data (`inbox.forget`) deletes its history rows too.
+- **Days** (#2967): `GET /api/v1/inbox/done/days?tz=` counts the history per calendar day in the zone the app names (Postgres's `AT TIME ZONE` on `done_at`, so a day follows the zone's offset on its date; a manager without a database counts what it holds). With `sources=all` it reads only `done_at` from `inbox_items_open`. The apps' Done lists every day's count from it and jumps to a day with `GET /api/v1/inbox/done?before=<the day's end>` and no `before_id`, which lists the items done before that moment.
 - **Storage** (#2779, manager migration `0471`): `inbox_items.data` is `json` compressed with lz4, the bytes the manager wrote; every reader unmarshals them in Go,
   so the start read no longer turns jsonb back into text. `source` is a generated column of `data->>'source'` with its own index, which `DeleteInboxSource` reads
   instead of every document. `inbox_items_open` is `(done_at, id)`, so an upsert of an open item changes no indexed column and can be a HOT update.

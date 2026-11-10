@@ -115,6 +115,33 @@ const (
 	ORDER BY done_at DESC, id DESC LIMIT $2`
 )
 
+// InboxDay is how many done items one calendar day has (DoneInboxDays).
+type InboxDay struct {
+	Day   string `json:"day"` // YYYY-MM-DD in the zone asked for
+	Count int    `json:"count"`
+}
+
+// doneInboxDaysSQL counts the done items kept per calendar day in the zone $1, newest day first. done_at is timestamptz,
+// so AT TIME ZONE gives the day's wall-clock time there. With the connectors' items ($2) it reads only done_at, from
+// inbox_items_open; without them, each done row's connector, as the history's pages do.
+const doneInboxDaysSQL = `SELECT to_char(done_at AT TIME ZONE $1, 'YYYY-MM-DD') AS day, count(*) FROM inbox_items
+	WHERE done_at IS NOT NULL AND ($2 OR json_typeof(data->'connector') IS DISTINCT FROM 'object')
+	GROUP BY day ORDER BY day DESC`
+
+// DoneInboxDays counts the done items kept per calendar day in zone (an IANA name the caller has checked), newest
+// day first; days with none are left out.
+func (d *DB) DoneInboxDays(ctx context.Context, zone string, connectors bool) ([]InboxDay, error) {
+	rows, err := d.pool.Query(ctx, doneInboxDaysSQL, zone, connectors)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (InboxDay, error) {
+		var day InboxDay
+		err := row.Scan(&day.Day, &day.Count)
+		return day, err
+	})
+}
+
 // DoneInboxItems returns one page of the done items kept (q), newest done first.
 func (d *DB) DoneInboxItems(ctx context.Context, q InboxDoneQuery) ([]InboxRow, error) {
 	var rows pgx.Rows
