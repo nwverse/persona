@@ -246,6 +246,9 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"peer long", &rpc.Error{Code: "peer_too_long", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_too_long"},
 		{"peer command", &rpc.Error{Code: "peer_command", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_command"},
 		{"peer unconfirmed", &rpc.Error{Code: "peer_unconfirmed", Message: "node's own words", Data: json.RawMessage(`{"delivered":"unknown"}`)}, "rpc-errors.peer_unconfirmed"},
+		// a mode change the node cannot make (#1843): change it on the computer, or resume the session first
+		{"modes outside", &rpc.Error{Code: proto.CodeModesOnComputer, Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.modes_on_computer"},
+		{"modes not running", &rpc.Error{Code: proto.CodeModesNotRunning, Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.modes_not_running"},
 		// queued messages sent now: not a Claude, or a send-now hint the node does not know (#2467)
 		{"send now unsupported", &rpc.Error{Code: "send_now_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unsupported"},
 		{"send now unrecognized", &rpc.Error{Code: "send_now_unrecognized", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unrecognized"},
@@ -332,6 +335,24 @@ func TestDescribeKeepsTheSummaryAndTheCause(t *testing.T) {
 	} {
 		if got := Describe([]byte(c.body)); got != c.want {
 			t.Errorf("Describe(%s) = %q, want %q", c.body, got, c.want)
+		}
+	}
+}
+
+// A start's new tab that stopped on its shell (#2570): the hub words it with the machine (or "this computer") and
+// the shell's line, in every language, as a task's start_error and an HTTP refusal.
+func TestStartTabRefusalsAreWorded(t *testing.T) {
+	for _, code := range []string{proto.CodeShellWaiting, proto.CodeStartLineRejected} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			on := Sentence(lang, code, map[string]any{"machine_name": "Studio", "line": "Update now? [Y/n]"})
+			here := Sentence(lang, code, nil)
+			if !strings.Contains(on, "Studio") || !strings.Contains(on, "Update now? [Y/n]") || here == "" || strings.Contains(here, "{") {
+				t.Errorf("%s %s: %q / %q", code, lang, on, here)
+			}
+			body := LocalizedBody(http.StatusConflict, code, errors.New("node text"), lang)
+			if body["error"] != i18n.T(lang, "rpc-errors."+code) || body["error"] == "" {
+				t.Errorf("%s %s HTTP: %v", code, lang, body)
+			}
 		}
 	}
 }
