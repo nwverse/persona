@@ -364,6 +364,9 @@ func (s *Service) makeDirection(ctx context.Context, id, project, newProject, ti
 	if project != "" {
 		d.Project = project
 	}
+	if t := clip(oneLine(title), directionNameMost); t != "" { // the name the owner accepted or gave (#3679)
+		d.Name, d.NameBy = t, directionByUser
+	}
 	s.saveDirectionsLocked(ctx)
 	view := leaderView{By: d.By, At: d.At}
 	view.ID, view.Project = id, d.Project

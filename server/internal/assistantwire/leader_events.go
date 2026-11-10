@@ -15,8 +15,11 @@ const (
 // show it; Project the slug of the knowledge-base project its direction is filed under ("" while none); Ended true once
 // it is no longer a leader, left out while it is. Each change is told once: a restart or a replay tells nothing again.
 type LeaderChangedEvent struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Name is what the direction is called (#3679): the name the owner or the secretary gave it, else its project's
+	// name, else Title without its "MMDD | kind | " prefix. Always set by this hub; a name change is told like any other.
+	Name    string `json:"name,omitempty"`
 	Project string `json:"project,omitempty"`
 	Ended   bool   `json:"ended,omitempty"`
 }
@@ -26,6 +29,9 @@ const (
 	LeaderReached  = "reached"
 	LeaderDecision = "decision"
 	LeaderStuck    = "stuck"
+	// LeaderProgress: the leader's own summary of its direction (leader_progress, #3679): Reached, Doing, NeedsYou
+	// and Links; Todo "".
+	LeaderProgress = "progress"
 )
 
 // LeaderReportEvent: one of a leader's tasks reached its goal, needs the owner's decision, or is stuck; written by the
@@ -42,6 +48,12 @@ type LeaderReportEvent struct {
 	Text   string    `json:"text"`
 	Link   string    `json:"link,omitempty"`
 	At     time.Time `json:"at"`
+	// A progress report's parts as the leader wrote them (Text puts them together): what was reached, what is being
+	// done and where it is stuck, what the owner has to do; Links its evidence (Link is the first).
+	Reached  string   `json:"reached,omitempty"`
+	Doing    string   `json:"doing,omitempty"`
+	NeedsYou string   `json:"needs_you,omitempty"`
+	Links    []string `json:"links,omitempty"`
 }
 
 // LeaderReportTextMost is how long a report's text may be, in characters.
