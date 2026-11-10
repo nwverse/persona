@@ -24,6 +24,13 @@ retains planning, permission/question and owner-acceptance flows; `Todo.ask` use
 individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
 TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
 
+**Since #3387 there are two entries, Needs you and In progress, each thing in one only**
+([unified-entry.md](../assistant/unified-entry.md#needs-you-and-in-progress-each-thing-once-3387), `assistantEntries` in
+`web/src/lib/assistant-entries.ts`, checked against `spec/fixtures/entries`). Needs you holds what the Pending and To start
+entries held, plus the tasks Progress used to rank first and the hand-opened Agents that ask; In progress holds the other
+open tasks and the hand-opened working Agents, which replaces the Agents entry. Finished tasks fold nowhere: the board has
+them. The rest of this section describes the earlier three entries; the counting rule still holds for In progress.
+
 Progress lists and counts the conversation's open tasks by **the To-dos page's rule** (#3331, `todoBucket` in
 `web/src/lib/todo-triage.ts`, the same `countsAsOpen` as the page's "Not done"): working, waiting for the user, finished but
 unseen and stopped between rounds count; a task shelved (no activity for 48 h, nothing running, not restored on this
