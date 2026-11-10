@@ -155,6 +155,12 @@ credential assignments, bearer tokens, credential-bearing URLs and complete or
 unterminated private-key blocks are redacted. Unknown prose can still be sensitive:
 preview plus explicit sensitivity acknowledgement remains mandatory.
 
+Native reply timestamps and trusted submission receipt times are used only to
+interleave displayed conversation content. They never prove provenance or future
+eligibility and are not public DTO fields. If an adapter omits timestamps, its
+native order is retained and receipt input follows it; clock skew can also affect
+cross-source ordering.
+
 ## Management API
 
 Use an enrolled ordinary device bearer header, explicit `X-Persona-Manager`, JSON

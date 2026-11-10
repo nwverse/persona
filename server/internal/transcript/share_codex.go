@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 )
@@ -49,11 +50,12 @@ func projectCodexShare(ctx context.Context, data []byte, source, incarnation str
 	}
 	seen := map[string]string{}
 	type turn struct {
-		id    string
-		first int64
-		texts []string
-		work  []devicewire.ShareExecution
-		bad   bool
+		id        string
+		first     int64
+		timestamp time.Time
+		texts     []string
+		work      []devicewire.ShareExecution
+		bad       bool
 	}
 	var current *turn
 	finish := func() bool {
@@ -81,7 +83,7 @@ func projectCodexShare(ctx context.Context, data []byte, source, incarnation str
 		} else {
 			f.FirstSeen[identity] = first
 		}
-		out.Messages = append(out.Messages, devicewire.ShareProjectionMessage{Identity: identity, FirstSeen: first, Message: devicewire.PublicShareMessage{Role: "assistant", Text: ShareDisplayText(final), Execution: current.work}})
+		out.Messages = append(out.Messages, devicewire.ShareProjectionMessage{Identity: identity, FirstSeen: first, Timestamp: current.timestamp, Message: devicewire.PublicShareMessage{Role: "assistant", Text: ShareDisplayText(final), Execution: current.work}})
 		return len(out.Messages) <= ShareLogicalLimit
 	}
 	for start := 0; start < boundary; {
@@ -121,7 +123,7 @@ func projectCodexShare(ctx context.Context, data []byte, source, incarnation str
 			if id == "" {
 				id = fmt.Sprintf("offset:%d", offset)
 			}
-			current = &turn{id: id, first: offset}
+			current = &turn{id: id, first: offset, timestamp: l.Timestamp}
 			identity := shareDigest([]byte("turn:" + id))
 			if _, ok := f.FirstSeen[identity]; !ok {
 				f.FirstSeen[identity] = offset

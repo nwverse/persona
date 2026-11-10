@@ -124,16 +124,17 @@ func (d *DB) LiveShareIDs(ctx context.Context) ([]string, error) {
 type ShareSubmissionReceipt struct {
 	ID, Text, State string
 	Sequence        int64
+	Created         time.Time
 }
 
 func (d *DB) ShareSubmissions(ctx context.Context, machine, session, incarnation string) ([]ShareSubmissionReceipt, error) {
-	rows, err := d.pool.Query(ctx, `SELECT submission_id,sanitized_text,delivery_state,sequence FROM share_submission_receipts WHERE machine_id=$1 AND (session_id=$2 OR session_id='') AND incarnation=$3 ORDER BY sequence LIMIT 10001`, machine, session, incarnation)
+	rows, err := d.pool.Query(ctx, `SELECT submission_id,sanitized_text,delivery_state,sequence,created_at FROM share_submission_receipts WHERE machine_id=$1 AND (session_id=$2 OR session_id='') AND incarnation=$3 ORDER BY sequence LIMIT 10001`, machine, session, incarnation)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (ShareSubmissionReceipt, error) {
 		var s ShareSubmissionReceipt
-		err := r.Scan(&s.ID, &s.Text, &s.State, &s.Sequence)
+		err := r.Scan(&s.ID, &s.Text, &s.State, &s.Sequence, &s.Created)
 		return s, err
 	})
 }

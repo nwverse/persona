@@ -1,6 +1,9 @@
 package devicewire
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Caller is installed only by the authenticated hub transport. A display name,
 // native transcript role, or client-supplied header never establishes ownership.
@@ -103,10 +106,13 @@ type ShareProjectionRequest struct {
 	Previous    *ShareFrontier `json:"previous,omitempty"`
 }
 type ShareProjectionMessage struct {
-	Submission bool               `json:"submission,omitempty"`
-	Identity   string             `json:"identity"`
-	FirstSeen  int64              `json:"first_seen"`
-	Message    PublicShareMessage `json:"message"`
+	Submission bool   `json:"submission,omitempty"`
+	Identity   string `json:"identity"`
+	FirstSeen  int64  `json:"first_seen"`
+	// Timestamp orders trusted submitted input alongside native replies; it is
+	// never included in PublicShareMessage and never establishes eligibility.
+	Timestamp time.Time          `json:"timestamp,omitempty"`
+	Message   PublicShareMessage `json:"message"`
 }
 type ShareProjection struct {
 	Complete  bool                     `json:"complete"`

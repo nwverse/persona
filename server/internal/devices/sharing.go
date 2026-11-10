@@ -224,8 +224,18 @@ func (d *Devices) projectShare(ctx context.Context, o db.SessionShareOwnership, 
 	for _, r := range receipts {
 		p.Frontier.SubmissionSequence = max(p.Frontier.SubmissionSequence, r.Sequence)
 		if r.State == "delivered" {
-			p.Messages = append(p.Messages, devicewire.ShareProjectionMessage{Submission: true, Identity: shareHash([]byte("submission:" + r.ID)), FirstSeen: r.Sequence, Message: devicewire.PublicShareMessage{Role: "user", Text: r.Text}})
+			p.Messages = append(p.Messages, devicewire.ShareProjectionMessage{Submission: true, Identity: shareHash([]byte("submission:" + r.ID)), FirstSeen: r.Sequence, Timestamp: r.Created, Message: devicewire.PublicShareMessage{Role: "user", Text: r.Text}})
 		}
+	}
+	// Receipt-backed input must be interleaved with replies, not appended after
+	// the entire conversation. Missing source times retain the adapter's order;
+	// timestamps affect display ordering only, never provenance or future scope.
+	ordered := true
+	for _, m := range p.Messages {
+		ordered = ordered && !m.Timestamp.IsZero()
+	}
+	if ordered {
+		sort.SliceStable(p.Messages, func(i, j int) bool { return p.Messages[i].Timestamp.Before(p.Messages[j].Timestamp) })
 	}
 	if len(p.Messages) > 10000 {
 		return p, shareFail("source_limit")

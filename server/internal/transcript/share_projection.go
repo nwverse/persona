@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 )
@@ -210,7 +211,7 @@ func projectShareBytes(ctx context.Context, data []byte, source, incarnation str
 		}
 		out.Omissions = append(out.Omissions, reason)
 	}
-	add := func(identity string, first int64, message devicewire.PublicShareMessage) bool {
+	add := func(identity string, first int64, timestamp time.Time, message devicewire.PublicShareMessage) bool {
 		identity = shareDigest([]byte(identity))
 		if prior, ok := frontier.FirstSeen[identity]; ok {
 			first = prior
@@ -220,12 +221,13 @@ func projectShareBytes(ctx context.Context, data []byte, source, incarnation str
 		if len(frontier.FirstSeen) > ShareLogicalLimit {
 			return false
 		}
-		out.Messages = append(out.Messages, devicewire.ShareProjectionMessage{Identity: identity, FirstSeen: first, Message: message})
+		out.Messages = append(out.Messages, devicewire.ShareProjectionMessage{Identity: identity, FirstSeen: first, Timestamp: timestamp, Message: message})
 		return len(out.Messages) <= ShareLogicalLimit
 	}
 	type turn struct {
 		id        string
 		first     int64
+		timestamp time.Time
 		texts     []string
 		execution []devicewire.ShareExecution
 		tools     map[string]int
@@ -251,7 +253,7 @@ func projectShareBytes(ctx context.Context, data []byte, source, incarnation str
 		for _, clean := range segments[:len(segments)-1] {
 			current.execution = append(current.execution, devicewire.ShareExecution{Kind: "text", Text: ShareDisplayText(clean)})
 		}
-		return add("turn:"+current.id, current.first, devicewire.PublicShareMessage{Role: "assistant", Text: ShareDisplayText(final), Execution: current.execution})
+		return add("turn:"+current.id, current.first, current.timestamp, devicewire.PublicShareMessage{Role: "assistant", Text: ShareDisplayText(final), Execution: current.execution})
 	}
 	for _, r := range records {
 		if tree.hidden[r.id] || r.entry.IsSidechain {
@@ -269,7 +271,7 @@ func projectShareBytes(ctx context.Context, data []byte, source, incarnation str
 			if err != nil {
 				omission("component_limit")
 			} else if text != "" {
-				if !add("human:"+r.id, r.start, devicewire.PublicShareMessage{Role: "user", Text: ShareDisplayText(text)}) {
+				if !add("human:"+r.id, r.start, e.Timestamp, devicewire.PublicShareMessage{Role: "user", Text: ShareDisplayText(text)}) {
 					return deny("source_limit")
 				}
 			}
@@ -284,7 +286,7 @@ func projectShareBytes(ctx context.Context, data []byte, source, incarnation str
 		}
 		if e.Type == "assistant" && !e.IsMeta && len(e.Origin) == 0 {
 			if current == nil {
-				current = &turn{id: r.id, first: r.start, tools: map[string]int{}}
+				current = &turn{id: r.id, first: r.start, timestamp: e.Timestamp, tools: map[string]int{}}
 			}
 			for _, b := range r.blocks {
 				switch b.Type {
