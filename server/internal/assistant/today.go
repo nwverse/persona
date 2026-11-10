@@ -137,7 +137,7 @@ func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedIte
 			switch taskState(t, s.taskAgents(ctx, t)) {
 			case "needs_you", "interrupted":
 				body.Waiting = append(body.Waiting, todayTask{ID: t.ID, Title: t.Title})
-			case "working":
+			case "working", "waiting": // waiting on its background work or a wake-up is still under way (#3274)
 				body.Working++
 			}
 		}
