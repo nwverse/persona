@@ -40,8 +40,11 @@ final class TasksStore {
     private(set) var busyPlans: Set<String> = []
     /// Send, dismissal and Undo share admission for the exact feed card.
     private(set) var busyMessages: Set<String> = []
+    /// A bounded read stopped before its frozen recovery cursor completed; the next refresh resumes it.
+    private(set) var feedRecoveryPending: Set<String> = []
     var error: String?
 
+    @ObservationIgnored private var feedCursors: [String: String] = [:]
     @ObservationIgnored private var feedAPIs: [String: APIClient] = [:]
     @ObservationIgnored private var messageWrites: [String: UInt] = [:]
     @ObservationIgnored private let showToast: (Toast) -> Void
@@ -78,6 +81,8 @@ final class TasksStore {
         sentMessages = []
         filedMessages = []
         feedAPIs = [:]
+        feedCursors = [:]
+        feedRecoveryPending = []
         messageWrites = [:]
     }
 
@@ -121,10 +126,18 @@ final class TasksStore {
         let task = Task {
             defer { if generation == ticket { loading[conversation] = nil } }
             var since = first
+            var cursor = feedCursors[conversation]
+            var seenCursors: Set<String> = []
             for _ in 0..<FeedPaging.maxPages {
                 let writes = messageWrites
-                guard let res = try? await api.feed(conversation: conversation, since: since),
+                guard let res = try? await api.feed(conversation: conversation, since: since, cursor: cursor),
                       !Task.isCancelled, generation == ticket else { return }
+                // A legacy hub ignores cursor; restart its timestamp request rather than applying that unrelated page.
+                if cursor != nil, res.nextCursor == nil {
+                    cursor = nil
+                    feedCursors[conversation] = nil
+                    continue
+                }
                 // The cards' snapshot comes whole with every page: what an event missed comes back here.
                 viewStore.receive(res.views ?? [:], conversation: conversation, group: api.group)
                 viewStore.receiveActions(res.viewActions ?? [:], conversation: conversation, group: api.group)
@@ -135,12 +148,38 @@ final class TasksStore {
                 for item in items { viewStore.receive(item, group: api.group) }
                 for (id, plan) in res.plans ?? [:] where plan.conversation == conversation && plans[id] != plan { plans[id] = plan }
                 merge(items, into: conversation)
-                guard let next = FeedPaging.next(after: res.items, since: since) else { return }
+                if let next = res.nextCursor {
+                    guard !next.isEmpty else {
+                        feedCursors[conversation] = nil
+                        feedRecoveryPending.remove(conversation)
+                        return
+                    }
+                    feedRecoveryPending.insert(conversation)
+                    guard next != cursor, seenCursors.insert(next).inserted else {
+                        feedCursors[conversation] = nil
+                        incompleteFeed()
+                        return
+                    }
+                    cursor = next
+                    feedCursors[conversation] = next
+                    continue
+                }
+                guard let next = FeedPaging.next(after: res.items, since: since) else {
+                    feedRecoveryPending.remove(conversation)
+                    return
+                }
                 since = next
             }
+            if cursor != nil { incompleteFeed() }
         }
         loading[conversation] = task
         return task
+    }
+
+    private func incompleteFeed() {
+        let message = String(localized: "Task updates aren't fully loaded. Refresh to continue.")
+        error = message
+        showToast(Toast(message, style: .error))
     }
 
     /// The (re)connect: every conversation shown so far, again.

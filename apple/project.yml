@@ -792,6 +792,7 @@ targets:
       - path: PersonaTests/DispatchedTasksTests.swift
       - path: PersonaTests/MessageCardStateTests.swift
       - path: PersonaTests/MessageDraftActionsTests.swift
+      - path: PersonaTests/DraftFeedCursorTests.swift
       - path: PersonaTests/FakeHub.swift
     dependencies:
       - target: PersonaMac
