@@ -54,6 +54,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - A flex child with `overflow-hidden` has a `min-height:auto` of 0, so flex squeezes it below its content when the box above the input is full. The card's footer (the answer buttons) then sits below the fold, and a receipt can be squeezed to a fraction of its content. Give every card in that box `shrink-0`, not only the one that was reported (`Card`, `AnsweredCard`, `DelegatedCard`).
 - An `overflow-hidden` ancestor makes itself the scroll container that `position: sticky` refers to, so a sticky footer inside it never sticks to the outer scroller. Use `overflow-clip`: it clips to the rounded corners the same way but is not a scroll container. The sticky offset also has to cancel the scroller's padding (`-bottom-1` for the dock's `p-1`), or the body shows under the footer.
 - jsdom has no layout; check it in a browser with `scripts/test/web_card_actions_e2e.py`, which asserts the button row's box is inside the viewport and the dock's visible area.
+- The assistant's Pending tray is itself the scroller, so cards inside it must not open a second scroll box (`PendingCards narrow`): the sticky answer row then sticks to the inner box and sits below the tray's fold. The action bar holding the tray also has to `shrink` with the dock (`min-h-0`), or on a short window it stands taller than the dock and the card's answer row ends up under the composer (#3083). Check with `web/e2e/ask-card-dock.mjs`.
 
 ## A native select's arrow ignores the field's padding (#2314)
 

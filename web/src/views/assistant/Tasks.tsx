@@ -1266,7 +1266,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const labels = { pending: t("assistant-tasks.tray_pending"), progress: t("assistant-tasks.tray_progress"), agents: t("assistant-tasks.tray_agents") };
   const counts = { pending: pendingCount, progress: cards.length, agents: agents.length };
   return (
-    <div className="flex min-h-0 shrink-0 flex-col gap-2" data-assistant-actionbar>
+    // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
+    // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
+    <div className="flex min-h-0 shrink flex-col gap-2" data-assistant-actionbar>
       {tray && (
         <section id={trayId} aria-label={labels[tray]} className="assistant-action-tray min-h-0 overflow-y-auto overscroll-contain rounded-card bg-surface shadow-card">
           <div className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
@@ -1289,7 +1291,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       {/* The entries are the dock's old "All" / task capsules (DOCK_CAPSULE), content-wide at the leading edge; the
           open tray is the selected capsule. The scroller pads by the focus ring's width and takes it back, as the
           dock's did, so a large font scrolls sideways instead of clipping the ring. */}
-      <div className="scrollbar-none -my-1 flex min-w-0 items-center gap-2 overflow-x-auto py-1">
+      <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
         {(["pending", "progress", "agents"] as const).map((key) => {
           const open = tray === key;
           // An empty Pending is drawn quiet (grey) but still opens "All caught up".
