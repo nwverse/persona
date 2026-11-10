@@ -61,6 +61,7 @@ struct MeetingAttendeePicker: View {
     var pick: (MeetingAttendees.Candidate) -> Void
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var size
 
     var body: some View {
         let all = MeetingAttendees.candidates(model)
@@ -108,10 +109,10 @@ struct MeetingAttendeePicker: View {
                 .scaledFrame(width: Theme.Size.markS)
                 .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(c.title).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(1)
+                    Text(c.title).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(size.isAccessibilitySize ? 3 : 1)
                         .accessibilityIdentifier("meeting-attendee-title")
                     if !c.detail.isEmpty {
-                        Text(c.detail).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(c.detail).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(size.isAccessibilitySize ? 2 : 1)
                     }
                 }
                 Spacer(minLength: Theme.Space.s)
@@ -121,6 +122,8 @@ struct MeetingAttendeePicker: View {
                 }
             }
         }
+        // The whole row taps (the list's own button), in the page's text colors rather than the list's tint.
+        .tint(Color.primary)
         .accessibilityIdentifier(c.main ? "meeting-attendee-main" : c.persona ? "meeting-attendee-chat" : "meeting-attendee-agent")
     }
 }
@@ -130,6 +133,7 @@ struct MeetingAttendeePicker: View {
 struct MeetingAttendanceSection: View {
     var entry: RecordingEntry
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var size
     @State private var ask = MeetingAsk.shared
     @State private var live = MeetingLive.shared
     @State private var sync = RecordingSync.shared
@@ -201,9 +205,12 @@ struct MeetingAttendanceSection: View {
     /// Taking part, one tap asks about what was just said (answered out loud), and typing is a step away; listening in,
     /// the same two, answered on screen. Side by side, or one above the other when the text is large.
     @ViewBuilder private var askButtons: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: Theme.Space.m) { askButton; typeButton }
-            VStack(alignment: .leading, spacing: Theme.Space.s) { askButton; typeButton }
+        Group {
+            if size.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: Theme.Space.s) { askButton; typeButton }
+            } else {
+                HStack(spacing: Theme.Space.m) { askButton; typeButton }
+            }
         }
         .padding(.vertical, Theme.Space.xs)
         .alert("Ask Persona", isPresented: $typing) {
@@ -253,6 +260,7 @@ struct MeetingAttendanceSection: View {
 struct MeetingExchangeRow: View {
     var exchange: MeetingAsk.Exchange
     var entry: RecordingEntry
+    @Environment(\.dynamicTypeSize) private var size
     @State private var ask = MeetingAsk.shared
     @State private var speaker = MeetingSpeaker.shared
 
@@ -260,7 +268,7 @@ struct MeetingExchangeRow: View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Text(exchange.question ?? String(localized: "What was just said"))
-                    .font(Theme.Font.secondaryMedium).foregroundStyle(.secondary).lineLimit(3)
+                    .font(Theme.Font.secondaryMedium).foregroundStyle(.secondary).lineLimit(size.isAccessibilitySize ? 6 : 3)
                 Spacer(minLength: Theme.Space.s)
                 Text(RecordingFormat.clock(exchange.at)).font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
@@ -272,21 +280,23 @@ struct MeetingExchangeRow: View {
                 }
                 .accessibilityIdentifier("meeting-answer-waiting")
             case .answered(let text):
-                Label {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    ThemedIcon(Theme.Icon.persona).foregroundStyle(Theme.ai).accessibilityHidden(true)
                     Text(text).font(Theme.Font.body).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("meeting-answer")
-                } icon: {
-                    ThemedIcon(Theme.Icon.persona).foregroundStyle(Theme.ai)
                 }
                 if !exchange.sources.isEmpty {
                     Text("From \(ListFormatter.localizedString(byJoining: exchange.sources))")
                         .font(Theme.Font.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("meeting-answer-sources")
                 }
                 if speaker.speaking == exchange.id {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: Theme.Space.m) { speaking; Spacer(minLength: Theme.Space.s); stopSpeaking }
+                    if size.isAccessibilitySize {
                         VStack(alignment: .leading, spacing: Theme.Space.s) { speaking; stopSpeaking }
+                    } else {
+                        HStack(spacing: Theme.Space.m) { speaking; Spacer(minLength: Theme.Space.s); stopSpeaking }
                     }
                 }
             case .failed(let message):

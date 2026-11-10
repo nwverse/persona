@@ -67728,52 +67728,6 @@
         }
       }
     },
-    "Meeting · Persona listening" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Meeting · Persona listening"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "会議 · Persona が聞いています"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "会议 · Persona 旁听中"
-          }
-        }
-      }
-    },
-    "Meeting · Persona taking part" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Meeting · Persona taking part"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "会議 · Persona が参加中"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "会议 · Persona 参会中"
-          }
-        }
-      }
-    },
     "Meetings" : {
       "localizations" : {
         "en" : {
@@ -89392,41 +89346,6 @@
         }
       }
     },
-    "Persona listening · %lld bookmarks" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Persona listening · %1$lld bookmark"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Persona listening · %1$lld bookmarks"
-                }
-              }
-            }
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona が聞いています · ブックマーク%1$lld件"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona 旁听中 · %1$lld 个书签"
-          }
-        }
-      }
-    },
     "Persona needs a working model to answer. Pick one of two ways:" : {
       "localizations" : {
         "en" : {
@@ -89722,41 +89641,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona 参会中"
-          }
-        }
-      }
-    },
-    "Persona taking part · %lld bookmarks" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Persona taking part · %1$lld bookmark"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Persona taking part · %1$lld bookmarks"
-                }
-              }
-            }
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona が参加中 · ブックマーク%1$lld件"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona 参会中 · %1$lld 个书签"
           }
         }
       }

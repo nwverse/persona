@@ -54,13 +54,17 @@ final class MeetingAttendanceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "出声回答")).firstMatch.waitForExistence(timeout: 5),
                       app.debugDescription)
 
+        scrollTo(attendee, in: app)
         attendee.tap()
-        let agent = app.buttons["meeting-attendee-agent"].firstMatch
-        XCTAssertTrue(agent.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(app.buttons["meeting-attendee-main"].exists, "the main chat can attend too")
+        XCTAssertTrue(app.buttons["meeting-attendee-main"].waitForExistence(timeout: 10), "the main chat can attend too")
         try shot(app, "attendee-picker")
+        let agent = app.buttons["meeting-attendee-agent"].firstMatch
+        scrollTo(agent, in: app)
+        XCTAssertTrue(agent.waitForExistence(timeout: 10), app.debugDescription)
         let picked = agent.label.components(separatedBy: ",").first ?? agent.label
         agent.tap()
+        XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 10), app.debugDescription)
+        scrollTo(attendee, in: app)
         XCTAssertTrue(attendee.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(waitFor { attendee.label.contains(picked) }, "\(attendee.label) should name \(picked)")
         XCTAssertTrue(role.buttons["参会"].isSelected, "picking who attends keeps the role picked for this meeting")
@@ -93,7 +97,7 @@ final class MeetingAttendanceUITests: XCTestCase {
                       app.debugDescription)
         field.typeText("Mac 上的录音现在谁在跟？")
         try shot(app, "ask-typed")
-        app.alerts.firstMatch.buttons["提问"].tap()
+        app.alerts.firstMatch.buttons.matching(NSPredicate(format: "label == %@", "提问")).firstMatch.tap()
         let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "还没有定负责人")).firstMatch
         scrollTo(answer, in: app)
         XCTAssertTrue(answer.waitForExistence(timeout: 20), app.debugDescription)
@@ -121,7 +125,9 @@ final class MeetingAttendanceUITests: XCTestCase {
         XCTAssertTrue(answer.waitForExistence(timeout: 25), app.debugDescription)
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "上周定的长录音测试谁负责")).firstMatch.exists,
                       "the question the hub heard replaces “What was just said”: \(app.debugDescription)")
-        XCTAssertTrue(app.descendants(matching: .any)["meeting-answer-sources"].firstMatch.exists, "what the answer drew on")
+        let sources = app.descendants(matching: .any)["meeting-answer-sources"].firstMatch
+        XCTAssertTrue(sources.exists, "what the answer drew on")
+        scrollTo(sources, in: app)
         let asked = try XCTUnwrap(try meeting(hub).asks(live).first)
         XCTAssertEqual(asked["question_source"] as? String, "heard")
         XCTAssertEqual(asked["speak"] as? Bool, true)
@@ -145,11 +151,14 @@ final class MeetingAttendanceUITests: XCTestCase {
         let hub = try mockHub()
         try attendance(hub, on: true, default: "off")
         let app = launch(hub, ["-tab", "settings", "-openMeetingSettings", "YES"])
-        XCTAssertTrue(app.staticTexts["当着别人的面"].waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "不会提私人聊天")).firstMatch.exists)
-        app.buttons["旁听"].firstMatch.tap()
+        let listen = app.buttons["旁听"].firstMatch
+        XCTAssertTrue(listen.waitForExistence(timeout: 15), app.debugDescription)
+        listen.tap()
         XCTAssertTrue(waitFor(10) { (try? self.meeting(hub))?.defaultRole == "listener" }, "the hub's default changed")
         try shot(app, "settings")
+        let limits = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "不会提私人聊天")).firstMatch
+        scrollTo(limits, in: app)
+        XCTAssertTrue(limits.exists, "what Persona may say in front of others")
     }
 
     /// The shared mock goes back to a hub without attending, so the next class sees what it always did.

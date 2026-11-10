@@ -114,13 +114,9 @@ struct RecordingSubtitle: View {
         case .paused: Text("Paused")
         case .recording:
             if let persona = state.persona {
-                // Persona attends (#2981): said first, so whoever sees the phone knows.
-                let listening = persona != "participant"
-                if state.marks > 0 {
-                    Text(listening ? "Persona listening · \(state.marks) bookmarks" : "Persona taking part · \(state.marks) bookmarks")
-                } else {
-                    Text(listening ? "Meeting · Persona listening" : "Meeting · Persona taking part")
-                }
+                // Persona attends (#2981): said in place of what it is, so whoever sees the phone knows (the bookmarks
+                // stay on the recording's page).
+                Text(persona == "participant" ? "Persona taking part" : "Persona listening")
             } else if state.marks > 0 {
                 Text(state.meeting ? "Meeting · \(state.marks) bookmarks" : "Recording · \(state.marks) bookmarks")
             } else {
