@@ -362,7 +362,7 @@ func envList(env map[string]string) []string {
 // perStartEnv: what an assistant start decides (its compact window, the launcher's declared one as
 // assistantCompactionPolicy reads it; its thinking level, switched while it runs) and so never goes into settings env,
 // which would win over the start's own environment.
-var perStartEnv = []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL"}
+var perStartEnv = []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CONFIG_DIR"}
 
 // pinnedEnv is env without perStartEnv: the part pinned over the user's ~/.claude/settings.json (the gateway, its key,
 // the models), as a settings "env".

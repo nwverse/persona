@@ -133,8 +133,8 @@ func TestPlainClaudeStartsInTheConfiguredDir(t *testing.T) {
 	if got := n.launcherCommand("cc_kiro"); got != "cc_kiro" {
 		t.Errorf("a ~/.zshrc launcher keeps its own: %q", got)
 	}
-	if got := n.launcherCommand("jv_strong"); got != "/opt/personad launch jv_strong" {
-		t.Errorf("a managed launcher keeps its own: %q", got)
+	if got := n.launcherCommand("jv_strong"); got != `CLAUDE_CONFIG_DIR="$HOME" /opt/personad launch jv_strong` {
+		t.Errorf("a managed Claude launcher uses the machine's directory too: %q", got)
 	}
 	configureNode(t, n, map[string]any{"botmux": true})
 	if got := n.launcherCommand("claude"); got != `CLAUDE_CONFIG_DIR="$HOME" claude` {

@@ -70,7 +70,8 @@ func (n *Node) claudeAuthStatus(ctx context.Context, name string) (proto.ClaudeA
 	args := ` --settings ` + shellQuote(n.claudeSettings(ctx, name, ours, dir)) + ` auth status --json`
 	cctx, cancel := context.WithTimeout(ctx, claudeAuthTimeout)
 	defer cancel()
-	cmd := loginShell(cctx, "cd "+shellQuote(dir)+" && "+n.launcherCommand(name)+args+" </dev/null")
+	cmd := loginShell(cctx, "unset CLAUDE_CONFIG_DIR && cd "+shellQuote(dir)+" && "+n.launcherCommand(name)+args+" </dev/null")
+	cmd.Env = n.claudeProcessEnv(os.Environ(), n.claudeAgentConfigDir())
 	killGroupOnCancel(cmd)
 	out, _ := cmd.CombinedOutput() // not signed in exits 1, with the same JSON
 	if cctx.Err() != nil {

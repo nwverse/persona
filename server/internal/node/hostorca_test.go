@@ -26,6 +26,12 @@ import (
 // runtime socket (orcarttest) and a fake process table. No test here talks to a real Orca.
 
 func TestMain(m *testing.M) {
+	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
+		if err := Launch(context.Background(), os.Args[2], os.Args[3:]); err != nil {
+			panic(err)
+		}
+		os.Exit(0)
+	}
 	if mode := os.Getenv("NODE_TEST_PLUGIN"); mode != "" { // the test binary as a plugin's program (plugins_test.go)
 		runTestPlugin(mode)
 	}

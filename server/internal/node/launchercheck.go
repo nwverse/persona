@@ -39,14 +39,8 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 			agent = d.Agent
 		}
 	}
-	if agent == "claude" {
-		// The headless probe below answers before Claude Code's first-run setup is finished, while an interactive
-		// start then stops on the first-run screens: fail with the cause instead of marking the launcher healthy
-		// (claudeonboarding.go). Unknown verdicts do not block; the real probe runs.
-		if ready, known := n.claudeOnboardingReady(ctx); known && !ready {
-			return proto.LauncherCheck{Agent: agent, Error: claudeOnboardingNotReadyMsg}
-		}
-	}
+	// This is a headless request, not a terminal-readiness check. Only an
+	// interactive start needs hasCompletedOnboarding (#3345).
 	dir, err := os.MkdirTemp("", launcherCheckDir)
 	if err != nil {
 		return proto.LauncherCheck{Error: err.Error()}
@@ -78,7 +72,8 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
 	defer cancel()
 	run := func(flag string) (string, error) {
-		cmd := loginShell(ctx, "cd "+shellQuote(dir)+" && "+n.launcherCommand(name)+before+flag+after+" </dev/null")
+		cmd := loginShell(ctx, "unset CLAUDE_CONFIG_DIR && cd "+shellQuote(dir)+" && "+n.launcherCommand(name)+before+flag+after+" </dev/null")
+		cmd.Env = n.claudeProcessEnv(os.Environ(), n.claudeAgentConfigDir())
 		killGroupOnCancel(cmd)
 		out, err := cmd.CombinedOutput()
 		return strings.TrimSpace(string(out)), err

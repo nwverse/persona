@@ -23,6 +23,7 @@ import (
 var assistantOnlyEnv = []string{
 	"PERSONA_ASSISTANT", "PERSONA_ASSISTANT_BIN", "PERSONA_SESSION_ID", "PERSONA_SPACE", "PERSONA_GUEST",
 	"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "ENABLE_TOOL_SEARCH",
+	"CLAUDE_CONFIG_DIR",
 	"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
 	"CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_EFFORT",
 	"CLAUDE_PID", "CLAUDE_PLUGIN_DATA",
@@ -50,7 +51,7 @@ func rootAssign(dir string, q func(string) string) string {
 // agentCommand is cmd, a command line quoted with q that starts an Agent in a pane whose shell is shells (the programs
 // in front of it, takesAssign): with this node's directory in front as PERSONA_HOME where the shell takes `VAR=val
 // cmd`, and, in the sh family, after `unset` of assistantOnlyEnvNames, joined with && so that a start whose shell
-// refused the unset does not run. fish has no unset: there the directory alone. Another shell, or a node without a
+// refused the unset does not run. fish has no unset: there the directory and a clean default Claude profile. Another shell, or a node without a
 // directory, gets cmd as it is.
 func (n *Node) agentCommand(cmd string, q func(string) string, shells ...string) string {
 	if n.dir == "" || !takesAssign(shells...) {
@@ -59,7 +60,7 @@ func (n *Node) agentCommand(cmd string, q func(string) string, shells ...string)
 	cmd = rootAssign(n.dir, q) + cmd
 	for _, s := range shells {
 		if strings.TrimPrefix(filepath.Base(s), "-") == "fish" {
-			return cmd
+			return "CLAUDE_CONFIG_DIR='' " + cmd
 		}
 	}
 	return "unset " + strings.Join(assistantOnlyEnvNames(), " ") + " && " + cmd

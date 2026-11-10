@@ -143,7 +143,7 @@ func TestGeneratedConfigNamesTheNodesDirectory(t *testing.T) {
 	}
 }
 
-// What a start types (agentCommand): the directory and the unset in the sh family, the directory alone in fish, the
+// What a start types (agentCommand): the directory and the unset in the sh family, a clean Claude profile in fish, the
 // command as it was in a shell that takes no `VAR=val cmd`, and from a node that has no directory.
 func TestAgentCommandByShell(t *testing.T) {
 	n, home := testNode(t)
@@ -154,7 +154,7 @@ func TestAgentCommandByShell(t *testing.T) {
 			t.Errorf("%s: %q\nwant %q", sh, got, want)
 		}
 	}
-	if got, want := n.agentCommand(cmd, shellQuote, "/opt/homebrew/bin/fish"), "PERSONA_HOME="+shellQuote(n.dir)+" "+cmd; got != want {
+	if got, want := n.agentCommand(cmd, shellQuote, "/opt/homebrew/bin/fish"), "CLAUDE_CONFIG_DIR='' PERSONA_HOME="+shellQuote(n.dir)+" "+cmd; got != want {
 		t.Errorf("fish: %q, want %q", got, want)
 	}
 	if got := n.agentCommand(cmd, shellQuote, "/bin/zsh", "/opt/homebrew/bin/fish"); strings.HasPrefix(got, "unset") {
@@ -172,12 +172,12 @@ func TestAgentCommandByShell(t *testing.T) {
 	// What the incident left in every Agent (#744) is in the list, in both spellings where Persona has two.
 	names := assistantOnlyEnvNames()
 	for _, k := range []string{"PERSONA_ASSISTANT", legacyEnv("PERSONA_ASSISTANT"), "PERSONA_SESSION_ID", legacyEnv("PERSONA_SESSION_ID"),
-		"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "ENABLE_TOOL_SEARCH", "CLAUDE_EFFORT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"} {
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "ENABLE_TOOL_SEARCH", "CLAUDE_CONFIG_DIR", "CLAUDE_EFFORT", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"} {
 		if !slices.Contains(names, k) {
 			t.Errorf("%s is not dropped", k)
 		}
 	}
-	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME"), "PATH", "HOME", "HERDR_AGENT", "CLAUDE_CONFIG_DIR"} {
+	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME"), "PATH", "HOME", "HERDR_AGENT"} {
 		if slices.Contains(names, k) {
 			t.Errorf("%s is dropped", k)
 		}

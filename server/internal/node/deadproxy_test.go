@@ -192,6 +192,8 @@ func TestOnlyAFollowingProviderMergesItsBypassList(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "profile"))
 	writeFile(t, filepath.Join(home, "profile", "settings.json"), `{"env":{"NO_PROXY":".corp.example","HTTPS_PROXY":"http://proxy.example:3128"}}`)
 	n := &Node{home: home}
+	profile := filepath.Join(home, "profile")
+	n.claudeStartDir.Store(&profile)
 	n.setManaged([]proto.ManagedLauncher{follow, {Name: "o", Kind: "api", Proxy: "http://proxy.example:3128", NoProxy: "gw.example.com"}})
 	if got, _ := n.launcherEnv("p")["no_proxy_merge"].(map[string]string); !maps.Equal(got, map[string]string{"NO_PROXY": ".corp.example"}) {
 		t.Errorf("follow: %v", n.launcherEnv("p"))
@@ -261,6 +263,8 @@ func TestManagedSettingsTakeAwayADeadUserProxy(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "profile"))
 		n := &Node{home: home, dir: filepath.Join(home, ".persona"), logger: log.New(io.Discard, "", 0)}
+		profile := filepath.Join(home, "profile")
+		n.claudeStartDir.Store(&profile)
 		writeFile(t, filepath.Join(home, "profile", "settings.json"), `{"env":{"HTTP_PROXY":"`+tc.proxy+`","https_proxy":"`+tc.proxy+`"}}`)
 		n.setManaged([]proto.ManagedLauncher{{Name: "m", Kind: "api", BaseURL: tc.gateway, Model: "m1", NoProxy: "gw.example.com",
 			Env: "HTTPS_PROXY=" + alive}})
@@ -286,6 +290,8 @@ func TestManagedSettingsPinTheBypassList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "profile"))
 	n := &Node{home: home, dir: filepath.Join(home, ".persona"), logger: log.New(io.Discard, "", 0)}
+	profile := filepath.Join(home, "profile")
+	n.claudeStartDir.Store(&profile)
 	n.setManaged([]proto.ManagedLauncher{
 		{Name: "f", Kind: "api", BaseURL: "https://gw.example.com", Model: "m1", NoProxy: "gw.example.com"},
 		{Name: "o", Kind: "api", BaseURL: "https://gw.example.com", Model: "m1", Proxy: "http://proxy.example:3128", NoProxy: "gw.example.com"},

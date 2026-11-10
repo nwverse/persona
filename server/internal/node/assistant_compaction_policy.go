@@ -130,10 +130,7 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 		c.window, c.capacity = smallerCapacity(c.window, window), smallerCapacity(c.capacity, capacity)
 	}
 	isCodex := n.agentOf(launcher) == "codex"
-	configDir, codexHome := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CODEX_HOME")
-	if dir := n.claudeStartDir.Load(); dir != nil && *dir != "" {
-		configDir = proto.ExpandHome(*dir, n.home)
-	}
+	configDir, codexHome := n.assistantConfigDir(launcher, execution.ConfigDir), os.Getenv("CODEX_HOME")
 	if l, managed := n.managedLauncher(launcher); managed {
 		c.pin = true
 		if isCodex {

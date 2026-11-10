@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -184,7 +185,14 @@ func (n *Node) launcherProbe(ctx context.Context, name string, args ...string) (
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := loginShell(ctx, probeScript(name, args...))
+	dir := ""
+	if name == "claude" || n.sessionScope != nil {
+		dir = n.claudeAgentConfigDir()
+	}
+	// Match launcherCommand's per-command assignment after shell startup, while
+	// retaining the stubbed agent and the wrapper's own assignments.
+	cmd := loginShell(ctx, "export CLAUDE_CONFIG_DIR="+shellDirQ(dir, shellQuote)+"\n"+probeScript(name, args...))
+	cmd.Env = n.claudeProcessEnv(os.Environ(), n.claudeAgentConfigDir())
 	killGroupOnCancel(cmd)
 	out, _ := cmd.Output()
 	p, ok := parseProbe(string(out))

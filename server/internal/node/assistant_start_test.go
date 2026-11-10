@@ -28,8 +28,8 @@ func fakeClaudeHome(t *testing.T, script string) {
 		t.Fatal(err)
 	}
 	_ = os.WriteFile(filepath.Join(home, ".zshrc"), nil, 0o600)
-	// The fake claude is meant to work, so mark its first-run setup finished: the launcher check's onboarding gate
-	// (claudeonboarding.go) otherwise stops before it ever runs.
+	// The fake machine has finished interactive setup. Headless checks do not
+	// require this flag (claudeonboarding.go).
 	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"hasCompletedOnboarding":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

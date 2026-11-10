@@ -184,6 +184,9 @@ Observable differences:
 
 ## Process (2026-11-04, #1446)
 
+Claude conversation processes receive their own explicit configuration directory (#3345), for both CLI and Agent SDK runtimes: `config_dir` on `assistant.start` / the node's `assistant.send` or `assistant.warm`, default `<PERSONA_HOME>/profiles/<launcher>` on the target machine (a managed launcher's own profile remains honored). An explicit path is absolute or starts with `~/`; `session.send` retains it after the process exits, and can explicitly replace it. Session-scope isolation still takes precedence.
+This is separate from the terminal Agents' `machines[].claude_start_dir` (default `~/.claude`). A hub or node service's `CLAUDE_CONFIG_DIR` selects neither, and headless conversations do not require the interactive onboarding flag. To keep using a different signed-in profile, pass its directory explicitly; profiles' credentials and history are not copied automatically. The node also discovers the private profiles and saved explicit directories for transcript lookup after a restart.
+
 `personad assistant` is the assistant: it reads hub.json (`~/.persona/hub.json`, same environment as hub: `PERSONA_DATABASE_URL`, `PERSONA_LISTEN`) and its own sections from `~/.persona/managers/assistant/manager.json` (`docs/operations/config.md` ("manager.json")), connects to the same Postgres and hub `/api/v1/bus` with a bus token,
 handshakes, reports a full snapshot, then starts scheduled tasks. On disconnect it reconnects (1 second, doubling to 1 minute), reporting a full snapshot on every connection.
 

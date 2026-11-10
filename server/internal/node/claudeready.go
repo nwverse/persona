@@ -154,7 +154,15 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	}
 	// A start stuck on first-run screens the screen matching does not name: say so from the onboarding flag instead
 	// of leaving only the generic timeout (claudeonboarding.go).
-	if hint := n.onboardingBlockHint(ctx); hint != "" {
+	launcher := ""
+	if probe != nil {
+		launcher = probe.launcher
+	} else {
+		n.mu.Lock()
+		launcher = n.launches[pane].Launcher
+		n.mu.Unlock()
+	}
+	if hint := n.onboardingBlockHint(ctx, launcher); hint != "" {
 		return nil, &claudeStalled{fmt.Errorf("claude did not become ready within %s of starting: %s", readyWait, hint)}
 	}
 	return nil, &claudeStalled{fmt.Errorf("claude did not become ready within %s of starting", readyWait)}

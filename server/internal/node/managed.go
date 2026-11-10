@@ -60,15 +60,24 @@ func (n *Node) launcherCommand(name string) string { return n.launcherCommandQ(n
 
 // launcherCommandQ is launcherCommand quoting with q (herdrresume.go quotes without apostrophes).
 func (n *Node) launcherCommandQ(name string, q func(string) string) string {
+	dir := ""
+	if l, managed := n.managedLauncher(name); name == "claude" || managed && l.AgentType() == "claude" || n.sessionScope != nil && launcherAgentType(name) == "claude" {
+		dir = n.claudeAgentConfigDir()
+	}
+	return n.launcherCommandIn(name, dir, q)
+}
+
+// launcherCommandIn runs a launcher in this start's profile, without consulting
+// the machine setting again (the assistant has a separate profile).
+func (n *Node) launcherCommandIn(name, dir string, q func(string) string) string {
+	cmd := name
 	if _, ok := n.managedLauncher(name); ok {
-		return q(n.bin) + " launch " + name
+		cmd = q(n.bin) + " launch " + name
 	}
-	if name == "claude" {
-		if d := n.claudeStartDir.Load(); d != nil && *d != "" {
-			return "CLAUDE_CONFIG_DIR=" + shellDirQ(*d, q) + " " + name
-		}
+	if dir != "" {
+		cmd = "CLAUDE_CONFIG_DIR=" + shellDirQ(dir, q) + " " + cmd
 	}
-	return name
+	return cmd
 }
 
 // shellDirQ quotes a directory for a shell command with q, keeping a leading ~/ as "$HOME"/ so it is the home of the

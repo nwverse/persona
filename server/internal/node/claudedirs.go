@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -21,13 +22,14 @@ import (
 // directory: $CLAUDE_CONFIG_DIR, else ~/.claude. Launchers for several accounts or profiles set CLAUDE_CONFIG_DIR, so one
 // machine can have many. The node looks in all of them:
 //   - the node's own default ($CLAUDE_CONFIG_DIR of the node, else ~/.claude);
+//   - the machine's Agent directory, private assistant profiles, and explicitly selected assistant directories;
 //   - every running claude process's CLAUDE_CONFIG_DIR (scanned every 30 s; also tells which directory a pid uses);
 //   - the hub's list: hub.json machines[].claude_config_dirs plus directories scanned earlier (node.configure), so a
 //     profile's past sessions stay listed when none of its claudes runs.
 // Directories are compared by their real path: ~/.claude/projects symlinked into a profile is the same directory.
 // Directories the user blocked for this machine (node.configure claude_dirs_blocked, proto.ClaudeDirBlocked) are left
 // out of all of it: not looked in, not reported, their sessions not listed. The node's default directory is never
-// blocked (what Persona starts runs there).
+// blocked. Launch selection is separate from discovery below.
 
 // claudeScanEvery is how often running claude processes are scanned for their config directory.
 const claudeScanEvery = 30 * time.Second
@@ -56,7 +58,7 @@ func newClaudeDirs() *claudeDirs {
 	return &claudeDirs{byPID: map[int]string{}, bySession: map[string]procEnv{}, scan: scanClaudeProcesses}
 }
 
-// defaultClaudeDir is where a claude started without CLAUDE_CONFIG_DIR keeps its files.
+// defaultClaudeDir is the node's inherited directory, for discovery only, never launch selection.
 func (n *Node) defaultClaudeDir() string {
 	if n.sessionScope != nil {
 		return n.sessionScope.claude
@@ -67,6 +69,48 @@ func (n *Node) defaultClaudeDir() string {
 // claudeDirOf is the node's own default Claude Code directory for home: $CLAUDE_CONFIG_DIR, else ~/.claude.
 func claudeDirOf(home string) string { return nodeclient.ClaudeDir(home) }
 
+// claudeAgentConfigDir is the machine's launch directory, not the node service's
+// CLAUDE_CONFIG_DIR. Empty keeps Claude's default (~/.claude, with ~/.claude.json).
+func (n *Node) claudeAgentConfigDir() string {
+	if n.sessionScope != nil {
+		return n.sessionScope.claude
+	}
+	if d := n.claudeStartDir.Load(); d != nil {
+		return *d
+	}
+	return ""
+}
+
+// claudeProcessEnv makes the config directory a property of this launch. In
+// particular, a systemd service's assistant profile must not leak into probes.
+func (n *Node) claudeProcessEnv(base []string, dir string) []string {
+	if n.sessionScope != nil {
+		dir = n.sessionScope.claude
+	}
+	return append(withoutEnv(base, []string{"CLAUDE_CONFIG_DIR"}), "CLAUDE_CONFIG_DIR="+proto.ExpandHome(dir, n.home))
+}
+
+// assistantConfigDir keeps headless conversations separate from terminal Agents.
+// An explicit request wins; a launcher's own profile remains usable as before.
+func (n *Node) assistantConfigDir(launcher, dir string) string {
+	if n.sessionScope != nil {
+		return n.sessionScope.claude
+	}
+	if dir == "" {
+		if l, ok := n.managedLauncher(launcher); ok {
+			dir = providerEnv(l, "", "", true)["CLAUDE_CONFIG_DIR"]
+		}
+	}
+	if dir == "" {
+		root := n.dir
+		if root == "" {
+			root = identity.DataDir(n.home)
+		}
+		dir = filepath.Join(root, "profiles", launcher)
+	}
+	return proto.ExpandHome(dir, n.home)
+}
+
 // claudeConfigDirs lists every config directory in use, the default first, each once (by real path), existing only.
 func (n *Node) claudeConfigDirs() []string {
 	if n.sessionScope != nil {
@@ -75,6 +119,23 @@ func (n *Node) claudeConfigDirs() []string {
 	d := n.cdirs
 	n.refreshClaudeDirs()
 	cands := []string{n.defaultClaudeDir()}
+	// Include private assistant profiles even before a process scan, including
+	// after a node restart when only their transcripts remain.
+	profiles, _ := filepath.Glob(filepath.Join(n.dir, "profiles", "*"))
+	cands = append(cands, profiles...)
+	cands = append(cands, filepath.Join(n.home, ".claude"))
+	if dir := n.claudeAgentConfigDir(); dir != "" {
+		cands = append(cands, dir)
+	}
+	if n.state != nil {
+		n.state.mu.Lock()
+		for _, st := range n.state.Sessions {
+			if st.ConfigDir != "" {
+				cands = append(cands, st.ConfigDir)
+			}
+		}
+		n.state.mu.Unlock()
+	}
 	if d != nil {
 		d.mu.Lock()
 		cands = append(append(cands, d.found...), d.known...)

@@ -204,11 +204,12 @@ func (n *Node) listAgentModels(ctx context.Context, name, agent string) ([]proto
 		if err := os.WriteFile(ours, []byte(`{"disableAllHooks":true}`), 0o600); err != nil {
 			return nil, err
 		}
-		cmd = exec.CommandContext(ctx, shell, "-ic", n.launcherCommand(name)+` "$@"`, "persona",
+		cmd = exec.CommandContext(ctx, shell, "-ic", "unset CLAUDE_CONFIG_DIR && "+n.launcherCommand(name)+` "$@"`, "persona",
 			"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 			"--settings", n.claudeSettings(ctx, name, ours, dir))
 	}
 	cmd.Dir = dir
+	cmd.Env = n.claudeProcessEnv(os.Environ(), n.claudeAgentConfigDir())
 	killGroupOnCancel(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

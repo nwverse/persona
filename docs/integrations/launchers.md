@@ -29,6 +29,12 @@ The node runs the list script and the launchers in an interactive shell (`loginS
 always bash without zsh (Git Bash on Windows). Bash runs as `bash -ic` and reads `~/.bashrc`, not `~/.bash_profile` / `~/.profile`: aliases kept there aren't listed.
 Bash has no zsh `(z)` / `(Q)`, and macOS's bundled bash 3.2 has no `BASH_ALIASES`, so under bash the script prints `alias -p`, and the node splits words and strips quotes by the shell's rules itself (nothing expanded or run, `node/launchers_shell.go`) before handing them to the same parser.
 
+### Claude profiles belong to a launch (#3345)
+
+Terminal Agents and their availability, model-list and auth probes use the machine's `claude_start_dir` (empty: Claude's default `~/.claude` with `~/.claude.json`), not the node service's `CLAUDE_CONFIG_DIR`. A shell wrapper or managed launcher's explicit directory still wins for that launcher.
+Headless assistant conversations instead receive an explicit `config_dir`, defaulting to `<PERSONA_HOME>/profiles/<launcher>` unless the launcher has its own profile; CLI and Agent SDK starts share this rule. The directory is not pinned in `settings.env`, which Claude loads only after choosing its profile.
+Headless probes and conversations do not need the interactive `hasCompletedOnboarding` flag. Only a terminal start's readiness-timeout diagnostic checks it, in that start's actual profile.
+
 ### The terminal's shell is another environment (#1642)
 
 The node **lists** launchers, and runs "Test availability", the launcher health checks, probes and repairs, in its own login shell (`loginShellProgram -ic`). A start **types** the launcher into a new herdr tab, whose shell is whatever herdr opens there. When the two read different startup files, a launcher the list shows does not exist where it runs:

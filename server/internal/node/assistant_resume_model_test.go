@@ -47,7 +47,7 @@ func TestAssistantResumeModel(t *testing.T) {
 			n.dir = t.TempDir()
 			withFakeHub(t, n)
 			cwd := t.TempDir()
-			for dir, s := range map[string]string{n.defaultClaudeDir(): tt.user, filepath.Join(cwd, ".claude"): tt.project} {
+			for dir, s := range map[string]string{n.assistantConfigDir(tt.launcher, ""): tt.user, filepath.Join(cwd, ".claude"): tt.project} {
 				if s == "" {
 					continue
 				}

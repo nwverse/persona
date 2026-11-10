@@ -27,7 +27,7 @@ var claudeModelVars = []string{"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL
 // "default". "" when the launcher names a model itself (its --model, a model variable in its environment, the shell's
 // or a settings env), so Claude Code runs that one anyway, and when how it starts cannot be seen: a managed launcher
 // (it always names its model), a wrapper script, a probe that failed.
-func (n *Node) resumeModel(launcher, cwd, settings string) string {
+func (n *Node) resumeModel(launcher, cwd, settings, configDir string) string {
 	if _, managed := n.managedLauncher(launcher); managed {
 		return ""
 	}
@@ -44,14 +44,8 @@ func (n *Node) resumeModel(launcher, cwd, settings string) string {
 			env[k] = v
 		}
 	}
-	configDir, _ := env["CLAUDE_CONFIG_DIR"].(string)
-	if launcher == "claude" {
-		if d := n.claudeStartDir.Load(); d != nil && *d != "" {
-			configDir = *d // launcherCommand starts it with this one
-		}
-	}
-	if configDir == "" {
-		configDir = n.defaultClaudeDir()
+	if dir := p.Env["CLAUDE_CONFIG_DIR"]; dir != "" {
+		configDir = dir // a shell launcher explicitly selects its own profile
 	}
 	configDir = proto.ExpandHome(configDir, n.home)
 	if settings == "" {

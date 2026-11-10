@@ -19,8 +19,9 @@ type modelExecution struct {
 	Ultracode   *bool `json:"-"` // explicit TUI start request; never a default or execution fingerprint
 	// Runtime: the assistant's runtime, proto.AssistantRuntimeAgentSDK or "" (the CLI; "cli" reads as ""). Omitted
 	// when empty so a fingerprint from before #2455 stays the same.
-	Runtime string `json:",omitempty"`
-	IsMain  bool   `json:",omitempty"`
+	Runtime   string `json:",omitempty"`
+	IsMain    bool   `json:",omitempty"`
+	ConfigDir string `json:",omitempty"` // assistant's explicit profile, retained across process restarts
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is

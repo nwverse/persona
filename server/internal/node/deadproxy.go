@@ -151,10 +151,14 @@ func withoutDeadProxies(env, own []string, base string, warn func(string)) []str
 }
 
 // userSettingsEnv is the env of the user's settings.json, in the Claude config directory the launcher's claude uses
-// (env's CLAUDE_CONFIG_DIR, else the node's): what Claude Code applies over the environment it starts with. nil when
+// (env's CLAUDE_CONFIG_DIR, else the machine's launch directory): what Claude Code applies over the environment it starts with. nil when
 // there is none.
 func (n *Node) userSettingsEnv(env map[string]any) map[string]any {
-	dir := n.defaultClaudeDir()
+	dir := n.claudeAgentConfigDir()
+	if dir == "" {
+		dir = filepath.Join(n.home, ".claude")
+	}
+	dir = proto.ExpandHome(dir, n.home)
 	if d, ok := env["CLAUDE_CONFIG_DIR"].(string); ok && d != "" {
 		dir = proto.ExpandHome(d, n.home)
 	}
@@ -173,8 +177,12 @@ func (n *Node) userSettingsEnv(env map[string]any) map[string]any {
 
 // userNoProxy is the bypass lists the user's settings env sets for l's claude, by spelling (userSettingsEnv): what
 // Claude Code applies over the environment it starts with, so they come before the shell's or the node's (#6238).
-func (n *Node) userNoProxy(l proto.ManagedLauncher) map[string]string {
-	user := n.userSettingsEnv(map[string]any{"CLAUDE_CONFIG_DIR": providerEnv(l, "", "", false)["CLAUDE_CONFIG_DIR"]})
+func (n *Node) userNoProxy(l proto.ManagedLauncher, configDir ...string) map[string]string {
+	dir := providerEnv(l, "", "", false)["CLAUDE_CONFIG_DIR"]
+	if len(configDir) > 0 {
+		dir = configDir[0]
+	}
+	user := n.userSettingsEnv(map[string]any{"CLAUDE_CONFIG_DIR": dir})
 	out := map[string]string{}
 	for _, k := range []string{"NO_PROXY", "no_proxy"} {
 		if v, _ := user[k].(string); v != "" {

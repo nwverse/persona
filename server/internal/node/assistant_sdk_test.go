@@ -275,7 +275,7 @@ func TestSDKStartMergesAFollowingProvidersBypassList(t *testing.T) {
 	})
 	pinned := func(launcher string) (any, any) {
 		t.Helper()
-		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), mcp: map[string]any{}}
+		s := sdkStart{id: "s1", cwd: filepath.Join(n.dir, "assistant"), configDir: profile, mcp: map[string]any{}}
 		_, first, err := n.sdkCommand(b, launcher, s, []string{"PATH=/usr/bin", "no_proxy=localhost"})
 		if err != nil {
 			t.Fatal(err)
