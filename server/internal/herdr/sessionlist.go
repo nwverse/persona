@@ -67,7 +67,7 @@ func (m *listMemo) still(name string) []byte {
 	m.mu.Lock()
 	out, bin, binInfo, dir, names, sockets := m.out, m.bin, m.binInfo, m.dir, m.names, m.sockets
 	m.mu.Unlock()
-	if out == nil {
+	if out == nil || filepath.Join(configDir(), "sessions") != dir {
 		return nil
 	}
 	if p, info := lookBin(name); p != bin || info == nil || !sameFile(info, binInfo) {

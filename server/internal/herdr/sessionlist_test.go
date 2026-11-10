@@ -75,6 +75,11 @@ func TestSessionListRunsHerdrOnlyWhenItMayHaveChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	listN(3, "x")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "elsewhere")) // another config directory: its sessions
+	listN(1, "x")
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	listN(1, "x")
+	listN(2, "")
 	write(answer, list(true)) // a running session: asked every time
 	if err := os.Mkdir(filepath.Join(sessions, "other"), 0o700); err != nil {
 		t.Fatal(err)
