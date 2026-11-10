@@ -77,6 +77,18 @@ final class AgentSync {
         revReads[key, default: .init()].subscribed()
     }
 
+    /// Tests only: forget the revs heard and the catch-ups asked, as a fresh launch does. The sync scenarios replay one
+    /// case after another for the same session in one process (PersonaTests/Sync), and a catch-up of the case before
+    /// would pace the next case's.
+    func forgetChatsForTests() {
+        known = [:]
+        revReads = [:]
+        lastCatchUp = [:]
+        caughtUpFor = [:]
+        stallChecks = [:]
+        catchingUp = []
+    }
+
     /// After a burst of events, look once.
     func schedule() {
         guard !scheduled else { return }
