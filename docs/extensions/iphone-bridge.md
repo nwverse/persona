@@ -105,7 +105,7 @@ argument list, so they never show in the process list. Screenshots written with 
 | `device.address` | string | As `serve --host`; left out for a simulator record. |
 | `device.port` | int, optional | RemotePairing port. Default 49152 (not verified on a real device). |
 | `device.pairing_file` | string | The pairing record on this computer. The bridge only reads it. |
-| `timeout_ms` | int, optional | Deadline for the request (in `call`, connecting included). Default 30000, clamped to 1000–120000. |
+| `timeout_ms` | int, optional | Deadline for the request (in `call`, connecting included). Default 30000, clamped to 1000–120000; `mount_ddi` defaults to 120000, clamped to 1000–300000. |
 | `args` | object, optional | The operation's arguments; omitted means `{}`. |
 
 Unknown fields are ignored, so a newer node can talk to an older bridge within the same `v`. Arguments are checked before anything is
@@ -145,6 +145,10 @@ sent to the phone: an invalid one never leaves half a gesture.
 | `disconnected` | `serve`: the link dropped during this operation; whether an input operation reached the phone is unknown |
 | `timeout` | `timeout_ms` passed |
 | `trust_pending`, `not_found` | `pair` only: tap Trust on the phone and retry; no such phone on USB |
+| `ddi_missing` | `mount_ddi`: no developer disk image in the directory (Xcode brings one; or pass `ddi_dir`) |
+| `ddi_unsupported_device` | `mount_ddi`: the image has no build for this phone's board and chip; a newer Xcode may |
+| `tss_failed` | `mount_ddi`: Apple's signing server could not be reached or gave no ticket |
+| `mount_failed` | `mount_ddi`: the phone refused the image, or accepted it without listing it as mounted |
 | `internal` | Anything else, including a panic in the bridge or a library it uses: every command catches it and fails as above, exit code 1, `message` saying what panicked and where (`the bridge failed unexpectedly: … (idevice-0.1.68/src/…:518)`), never exit code 101 with a backtrace |
 
 ## Coordinates
@@ -261,6 +265,35 @@ Durations are capped at 10 seconds.
 `{ "include_system": true }` → `{ "apps": [ { "bundle_id": "…", "name": "…", "version": "…", "type": "user" } ] }`: `type` `user` |
 `system` (Apple's own).
 
+### `mount_ddi`
+
+`{ "ddi_dir": "<folder>", "force": false }`, both optional. The developer services behind `screenshot`, input and the app operations are
+listed only while the phone has the personalized developer disk image mounted (`device_info`: `ddi_mounted`, and `ddi_not_mounted` in
+`notes`). This mounts it, **only when asked**: no other operation mounts it on its own, and the node offers it only as a command for the
+phone's owner (`personad iphone mount-ddi <udid> [--ddi-dir <dir>] [--force]`, [iphone-pairing.md](iphone-pairing.md)), never to the
+assistant.
+
+1. Already mounted (and not `force`): `{"mounted": true, "already": true}`, nothing else happens.
+2. Developer Mode off: `developer_mode_off`.
+3. The image comes from `ddi_dir`, else `$PERSONA_IPHONE_DDI_DIR`, else Xcode's `/Library/Developer/DeveloperDiskImages/iOS_DDI/Restore`.
+   Nothing is downloaded. From its `BuildManifest.plist` the bridge picks the build for the phone's board and chip, and reads the
+   image and trust cache it names (paths must stay inside the folder). None there: `ddi_missing`; no build for this phone:
+   `ddi_unsupported_device`.
+4. The ticket: the phone's own for this image if it has one, else one from Apple's signing server (TSS). A failure there is
+   `tss_failed`, and nothing is uploaded.
+5. Upload, mount, then check the phone lists it: `{"mounted": true, "already": false, "image": "<file>", "ticket": "phone" | "apple",
+   "services_refreshed": true}`. A refusal is `mount_failed` (or `locked`, `developer_mode_off`).
+6. The service directory is read again so this session sees the developer services. If that fails, the mount still stands and is
+   reported with `"services_refreshed": false`; the next request then answers `disconnected` and the node connects again.
+
+**The signing request**: the library sends it to `http://gs.apple.com/TSS/controller?action=2`, **plain HTTP**: it hard-codes the
+address and keeps the request body to itself, so the bridge cannot send it over HTTPS without changing the library. The request
+carries the phone's board and chip IDs, its **ECID** (unique chip ID), the nonce the phone generated for this image, and the hashes of
+the image and trust cache. The ECID crosses the network **in clear text**. The bridge writes none of this to disk or to its output.
+Unlock the phone and keep it awake while mounting. Takes up to a couple of minutes (the image is about 17 MB through the tunnel).
+
+On the simulator backend, `unsupported`: a simulator has its developer services already.
+
 ## USB and Bonjour: `usb-list`, `pair`, `match`
 
 In `native/iphone-bridge/src/pair.rs` (#3448). Pairing needs the phone on USB and already trusting this computer (the "Trust This
@@ -365,6 +398,7 @@ phone has run against one only where the table says so:
 | `pair` over USB (consent prompt, `altIRK`) | not verified on a real device yet. First try on that iPhone: it already trusted the computer and answered the pairing request with pairing data straight away instead of asking its user, so the library asked the bridge for the PIN, got an empty one and panicked (exit code 101). The bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error |
 | `match` against a real advertisement | not verified on a real device; unit-tested against the library's tag function |
 | `ax_tree` | `unsupported` |
+| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | not verified on a real device; the build for an A14 phone (chip `0x8101`) is in this computer's Xcode image. Unit-tested against a fake phone |
 | Simulator backend: pair, `device_info`, `screenshot`, apps, `ax_tree` (with a system alert), tap, `keys` (ASCII and Chinese), swipe, `button home`, `serve`, runner cleanup after exit and after `kill -9` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
 ## Open questions
@@ -373,4 +407,4 @@ phone has run against one only where the table says so:
 - **Text beyond ASCII**: the key channel cannot type it. The phone's pasteboard service plus a paste shortcut might, at the cost of the
   user's clipboard; not done.
 - **Locked screen**: no service found yet that reports it.
-- **Developer disk image**: mounting it is not in v1 (`ddi_not_mounted`); #3470 tracks it.
+- **Signing request over HTTPS**: needs the library to let the caller choose the address or send the body itself.
