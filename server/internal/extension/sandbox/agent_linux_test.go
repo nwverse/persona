@@ -559,9 +559,6 @@ func TestLinuxAgentSandboxNamespaceBoundariesForReal(t *testing.T) {
 	if _, err := exec.LookPath("umount"); err != nil {
 		t.Skip("umount is not installed")
 	}
-	if out, err := exec.Command("unshare", "-rm", "/bin/true").CombinedOutput(); err != nil {
-		t.Skipf("the host cannot create the nested control namespace: %v: %s", err, strings.TrimSpace(string(out)))
-	}
 	f := newAgentFixture(t)
 	work := filepath.Join(f.home, "work")
 	if err := os.Mkdir(work, 0o700); err != nil {
@@ -585,30 +582,37 @@ func TestLinuxAgentSandboxNamespaceBoundariesForReal(t *testing.T) {
 		return run(args...)
 	}
 
-	procSecret := filepath.Join("/proc", strconv.Itoa(os.Getpid()), "root"+f.dir, "secret.key")
-	if out, err := run("/bin/cat", procSecret); err != nil {
-		t.Fatalf("host /proc-root control: %v %s", err, out)
-	}
-	if out, err := bwrap("cat " + shellQuote(procSecret)); err == nil {
-		t.Errorf("secret was readable through /proc/<pid>/root: %s", out)
-	} else {
-		t.Logf("/proc/<same-UID-pid>/root secret read refused: %s", out)
-	}
+	t.Run("proc_root", func(t *testing.T) {
+		procSecret := filepath.Join("/proc", strconv.Itoa(os.Getpid()), "root"+f.dir, "secret.key")
+		if out, err := run("/bin/cat", procSecret); err != nil {
+			t.Fatalf("host /proc-root control: %v %s", err, out)
+		}
+		if out, err := bwrap("cat " + shellQuote(procSecret)); err == nil {
+			t.Errorf("secret was readable through /proc/<pid>/root: %s", out)
+		} else {
+			t.Logf("/proc/<same-UID-pid>/root secret read refused: %s", out)
+		}
+	})
 
-	nestedScript := `printf 'nested-userns=ready\n'; if umount "$1"; then printf 'umount=success\n'; else printf 'umount=failed\n'; fi; if cat "$1/secret.key"; then printf '\nsecret=readable\n'; exit 0; else printf 'secret=closed\n'; exit 1; fi`
-	nestedArgs := []string{"unshare", "-rm", "/bin/sh", "-c", nestedScript, "probe", f.dir}
-	if out, err := run(nestedArgs...); err != nil || !strings.Contains(out, "secret=readable") {
-		t.Fatalf("nested unshare control: %v %s", err, out)
-	}
-	args := append([]string{prefix[0]}, prefix[1:]...)
-	args = append(args, "--", nestedArgs[0])
-	args = append(args, nestedArgs[1:]...)
-	out, err := run(args...)
-	if err == nil || strings.Contains(out, "secret=readable") {
-		t.Errorf("nested unshare/umount exposed the secret: %v %s", err, out)
-	}
-	if !strings.Contains(out, "nested-userns=ready") || !strings.Contains(out, "secret=closed") {
-		t.Fatalf("nested namespace did not exercise the masked path: %v %s", err, out)
-	}
-	t.Logf("nested unshare/umount left the secret closed: %s", out)
+	t.Run("nested_namespace", func(t *testing.T) {
+		if out, err := exec.Command("unshare", "-rm", "/bin/true").CombinedOutput(); err != nil {
+			t.Skipf("the host cannot create the nested control namespace: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		nestedScript := `printf 'nested-userns=ready\n'; if umount "$1"; then printf 'umount=success\n'; else printf 'umount=failed\n'; fi; if cat "$1/secret.key"; then printf '\nsecret=readable\n'; exit 0; else printf 'secret=closed\n'; exit 1; fi`
+		nestedArgs := []string{"unshare", "-rm", "/bin/sh", "-c", nestedScript, "probe", f.dir}
+		if out, err := run(nestedArgs...); err != nil || !strings.Contains(out, "secret=readable") {
+			t.Fatalf("nested unshare control: %v %s", err, out)
+		}
+		args := append([]string{prefix[0]}, prefix[1:]...)
+		args = append(args, "--", nestedArgs[0])
+		args = append(args, nestedArgs[1:]...)
+		out, err := run(args...)
+		if err == nil || strings.Contains(out, "secret=readable") {
+			t.Errorf("nested unshare/umount exposed the secret: %v %s", err, out)
+		}
+		if !strings.Contains(out, "nested-userns=ready") || !strings.Contains(out, "secret=closed") {
+			t.Fatalf("nested namespace did not exercise the masked path: %v %s", err, out)
+		}
+		t.Logf("nested unshare/umount left the secret closed: %s", out)
+	})
 }
