@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"slices"
 	"sort"
 	"strings"
@@ -361,6 +362,17 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			if _, answer := s.lastTurn(ctx, last.MachineID, last.SessionID); answer != "" {
 				text = answer
 			}
+		}
+		if c, arts, ok := closeout.Parse(text); ok {
+			e.Closeout = &prompts.SuperviseCloseout{Status: c.Status, Waiting: c.Waiting, Merged: c.Merged, Deployed: c.Deployed,
+				Did: c.Did, Verified: c.Verified, Missing: c.Missing}
+			if s.checkCloseout(ctx, &c, arts); c.Checked != nil {
+				e.Closeout.CheckedMerged, e.Closeout.CheckedDeployed = c.Checked.Merged, c.Checked.Deployed
+			}
+			for _, a := range arts {
+				e.Closeout.Artifacts = append(e.Closeout.Artifacts, a.Kind+" "+a.Ref)
+			}
+			text = closeout.Strip(text) // told above, in a form that cannot be cut in the middle
 		}
 		e.Last = clipMiddle(text, 600)
 	} else if g.Machine != "" {

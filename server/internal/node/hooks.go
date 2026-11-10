@@ -331,6 +331,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	if repair := n.assistantViewStop(ctx, req, in); repair != nil {
 		return repair, nil
 	}
+	if hold := n.closeoutStop(ctx, req, in); hold != nil {
+		return hold, nil
+	}
 	stopSig := n.recordHookTurn(req, in, time.Now())
 	if !req.ReportOnly && !req.Resume {
 		n.liveTurnHook(in) // a prompt or a Stop ends the live text of the turn before (livereply.go)

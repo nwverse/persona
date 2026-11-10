@@ -186,6 +186,7 @@ func New(o Options) *Service {
 	s.directionRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()
+	s.directionNameRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()

@@ -248,6 +248,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 			return
 		}
 		by = "model"
+		if w.By != "" {
+			by = w.By // decided from the agent's closeout, without the model
+		}
 	}
 	s.applyApproval(k, w, same)
 	w.TurnAt, w.At, w.By = c.UpdatedAt, time.Now().UTC(), by

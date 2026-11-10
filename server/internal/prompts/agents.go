@@ -209,3 +209,13 @@ type WorkerReport struct {
 }
 
 func RenderWorkerReport(r WorkerReport) string { return render("agents/worker_report", r) }
+
+// AgentCloseoutRequired is what an agent is told when its stop is held for a missing closeout (#3612).
+type AgentCloseoutRequired struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutRequired(c AgentCloseoutRequired) string {
+	return render("agents/closeout_required", c)
+}
