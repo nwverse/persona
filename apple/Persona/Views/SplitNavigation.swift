@@ -17,6 +17,8 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     @Binding var path: NavigationPath
     /// The pages the list opens (`navigationDestination`s), registered in both layouts.
     var destinations: Destinations
+    /// The Assistant | Agents switch over the page column, on a phone's tabs (iPhone Duo open: `pageTabSwitch`, #2623).
+    var pageSwitch = false
     @ViewBuilder var sidebar: Sidebar
     /// The detail column before anything is open.
     @ViewBuilder var empty: Empty
@@ -70,6 +72,9 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
                 NavigationStack(path: $path) {
                     empty.modifier(destinations)
                 }
+                #if os(iOS)
+                .safeAreaInset(edge: .top, spacing: 0) { if pageSwitch { PageTabSwitchRow() } }
+                #endif
             }
             .navigationSplitViewStyle(.balanced)
             .modifier(SidebarTopFill(shown: columns != .detailOnly))
