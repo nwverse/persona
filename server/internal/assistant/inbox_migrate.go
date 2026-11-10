@@ -50,10 +50,21 @@ func appendMigratedThread(b []byte, it *InboxItem) []byte {
 }
 
 // migratedKey is "<source>\x00<migratedThread>", what applyMigrated finds an item's thread by, built as one string: a
-// collection keys every item of the inbox, and openFor keys each item of a thread again as it looks the thread up.
+// collection keys every item of the inbox.
 func migratedKey(it *InboxItem) string {
 	var buf [96]byte
-	return string(appendMigratedThread(append(append(buf[:0], it.Source...), 0), it))
+	return string(appendMigratedKey(buf[:0], it))
+}
+
+func appendMigratedKey(b []byte, it *InboxItem) []byte {
+	return appendMigratedThread(append(append(b, it.Source...), 0), it)
+}
+
+// inMigratedThread says whether an item's migratedKey is key, without making the string: openFor asks it of each item
+// filed under a thread it looks up.
+func inMigratedThread(it *InboxItem, key string) bool {
+	var buf [96]byte
+	return it.Connector == nil && string(appendMigratedKey(buf[:0], it)) == key
 }
 
 // applyMigrated is applyConnector for the things with Extra of a migrated connector, under b.mu.
@@ -65,6 +76,7 @@ func (b *inboxBook) applyMigrated(id string, things []connector.InboxThing, now 
 		}
 		return migratedKey(it), true
 	})
+	index.in = inMigratedThread
 	for _, t := range things {
 		source := id
 		if t.Extra.Source != "" {
