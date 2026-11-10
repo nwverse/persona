@@ -508,13 +508,22 @@ func packExtension(ctx context.Context, dir string, opts map[string]string, stdo
 		pkgs = append(pkgs, pkg{Platforms: group, URL: name, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data))})
 		fmt.Fprintf(stdout, "%s  %s（%d 字节）\n", hex.EncodeToString(sum[:]), path, len(data))
 	}
-	entry, _ := json.MarshalIndent(map[string]any{"packages": pkgs}, "", "  ")
+	fields := map[string]any{"packages": pkgs}
+	// the translations go into the index entry too, so a market shows them before anything is downloaded (#897)
+	translations, warnings := extension.ReadTranslations(p.dir)
+	for _, w := range warnings {
+		fmt.Fprintln(stderr, w)
+	}
+	if len(translations) > 0 {
+		fields["l10n"] = translations
+	}
+	entry, _ := json.MarshalIndent(fields, "", "  ")
 	fmt.Fprintf(stdout, "市场索引里这个扩展的 packages（url 换成包实际放的地方）：\n%s\n", entry)
 	return nil
 }
 
 // tarball packs the manifest, the programs of these platforms and the package's own files (skills, assistant,
-// assets, README, LICENSE) under one top directory; source code and the SDK copy stay out.
+// assets, translations, README, LICENSE) under one top directory; source code and the SDK copy stay out.
 func (p *devProject) tarball(platforms []string) ([]byte, error) {
 	// The manifest goes in under both names, without its tags (extension.PackagedManifest): hubs from before the
 	// rename (#1844) read only persona-plugin.json, and hubs from before tags refuse a manifest with them.
@@ -542,7 +551,7 @@ func (p *devProject) tarball(platforms []string) ([]byte, error) {
 			}
 		}
 	}
-	for _, d := range []string{"skills", "assistant", "assets"} {
+	for _, d := range []string{"skills", "assistant", "assets", extension.L10nDir} {
 		_ = filepath.WalkDir(filepath.Join(p.dir, d), func(path string, e fs.DirEntry, err error) error {
 			if err == nil && !e.IsDir() {
 				rel, _ := filepath.Rel(p.dir, path)

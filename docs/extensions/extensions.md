@@ -204,6 +204,39 @@ Messages follow the request language (Chinese, English or Japanese); the CLI alw
 At or above a `<N` upper bound, the message explains the incompatibility without telling the user to update the hub. Version checks, installation restrictions and the
 `incompatible` status of installed extensions are unchanged; development builds still only produce a warning.
 
+### Translations: `l10n/` (#897)
+
+A manifest has one language. Its text in the hub's other languages (`docs/protocol/i18n.md`) goes in the package next to it, one file each:
+`l10n/en.json`, `l10n/ja.json`, `l10n/zh-Hans.json`. The manifest itself does not change: hubs read manifests strictly, so a new manifest field
+would make the extension uninstallable on older hubs, while files they do not read are harmless. Example `l10n/en.json` for a manifest written in Chinese:
+
+```json
+{"name": "Example Notes",
+ "description": "Syncs Example Notes into the knowledge base.",
+ "configuration": {
+   "base_url": {"title": "Server URL"},
+   "region": {"title": "Region", "choices": {"cn": "China", "intl": "International"}},
+   "proxy": {"title": "Proxy", "properties": {"host": {"title": "Host"}}}
+ },
+ "secrets": {"api_key": {"title": "API key", "description": "Generate one in Example Notes under Settings › Developer"}}}
+```
+
+- Every key is optional and a blank string is no translation. `configuration.<property>`: `title`, `description`, `confirm` (translates `x-confirm`,
+  never adds one), `choices` (labels by value: a string choice by the string, a number as JSON writes it; on an array, its items' choices) and
+  `properties` (an object's own properties, in the same shape). `secrets.<name>`: `title`, `description`. Keys the hub does not know are ignored.
+- **Which text**: string by string, the request's language (`X-Persona-Lang` / `Accept-Language`), then English unless the request is
+  Simplified Chinese, then the manifest's own text.
+- **Where**: the extension list and details (name, description, the settings form, secrets and the "Missing: …" line), dependency names,
+  marketplace catalog items (from the index entry's `l10n`, see "Extension marketplace"; the search also matches every translation's name and
+  description) and install / upgrade previews (the name and description of the preview's `manifest`). What gets approved and installed, the
+  permission digest and the official-provenance check do not change with the language. Contribution titles (pages, navigation entries,
+  shortcuts, themes) and built-in extensions have one language for now.
+- **Checks**: a file is at most 64 KB, `name` 1–40 characters, any other string at most 2000. A file that does not check out (not JSON, a
+  wrong type, too long, a link) is left out with a warning on the preview and on the installed extension; it never blocks an install. Files
+  of languages the hub does not have are not read.
+- `personad extension pack` packs `l10n/` and prints the index entry's `l10n` next to its `packages`; `personad extension dev` reads the files
+  too. Code: `server/internal/extension/l10n.go`.
+
 ### Configuration: the form subset
 
 The root is `{"type": "object", "properties": {…}, "required": [...]}`. Every client can draw it as a form, with fields in the order the properties appear in the file (the hub keeps the order when parsing,
@@ -392,7 +425,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `inbox.read` | Read the Inbox | `GET /api/v1/inbox`, `/inbox/{id}`, `/inbox/mutes`, `/inbox/policies` |
 | `inbox.write` | Handle the Inbox | Mark as handled, draft, reply (text only: replies with `changes` or `/agent` still require full access), document status, mute, set policies, refresh |
 | `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/agents…` (personal Agents), `/workspaces`, `/workspace-board` |
-| `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), `/choose` and `/reanswer`, sending messages to and marking read for personal Agents; the text sent (messages, prompts, notes, titles, answers) not with terminal control characters (see below) |
+| `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), `/choose` and `/reanswer`, sending messages to and marking read for personal Agents; with no terminal control characters in the text it sends (messages, prompts, notes, titles, answers; see below) |
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
@@ -778,7 +811,8 @@ The preview includes `rename_from` and names both IDs; its non-empty `permission
 
 Owner-facing API/CLI requests resolve only historical names of that committed installation. Program authentication uses exact canonical identity and the current runtime generation: an old token cannot acquire new identity or grants through an alias. Rename retires the old process without ordinary uninstall cleanup, waits for its exit, then activates the replacement. Rollback restores the previous public ID, version and origin in the same slot; uncertain database commits block writes and retain recovery material.
 
-Before any renamed node upload/start/sync, the manager probes authenticated `plugin.node.identity` capability. Incompatible or unavailable nodes cannot receive a sync that would mistake the absent old ID for uninstall. Identity-aware nodes persist slot/revision bindings, preserve disabled/offline data and rollback packages, and reject late starts, uploads and events. The assistant's authenticated `extensions.identity` probe similarly guards stable model/knowledge ownership across manager versions. Do not manually move data or secret rows, or use uninstall/reinstall as a migration.
+Before any renamed node upload/start/sync, the manager probes authenticated `plugin.node.identity` capability. Incompatible or unavailable nodes cannot receive a sync that would mistake the absent old ID for uninstall.
+Before the rename commits (`checkRenameNodeCapabilities`), every computer picked in an enabled extension's `node.machines` setting must be online with an identity-aware node. The refusal names the computers: `extension-identity.node_unreachable` for one that is offline or did not answer the probe, `extension-identity.node_outdated` for one whose node is too old. A picked ID that is not one of the hub's computers (removed, or left from before the hub moved) is skipped and logged rather than refused (#2510): the fleet lists offline computers too, so no node with that ID can connect, and one added again under it gets the guarded sync above. The settings form keeps showing it as "(no such machine)" for the owner to remove; removing a computer does not rewrite extensions' settings. Identity-aware nodes persist slot/revision bindings, preserve disabled/offline data and rollback packages, and reject late starts, uploads and events. The assistant's authenticated `extensions.identity` probe similarly guards stable model/knowledge ownership across manager versions. Do not manually move data or secret rows, or use uninstall/reinstall as a migration.
 
 ### Command-line programs (tools)
 
@@ -960,6 +994,7 @@ personad extension dev [<dir>]                       Attach it to this hub to tr
 personad extension test [<dir>]                      Build for this machine and run it through the hub's checks
 personad extension pack [<dir>] [--platforms linux-amd64,…] [--out <dir>] [--split]
                                                      --platforms defaults to the platforms the manifest has programs for (this machine's if the manifest has none), --out defaults to <dir>/dist
+                                                     The package takes l10n/ too; the index entry printed carries its l10n
 ```
 
 ## Extension marketplace
@@ -1006,6 +1041,9 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 
 - `manifest` is the extension's whole `persona-extension.json`: its permissions and contributions can be seen without downloading. The manifest in the downloaded package must match it (id, version, permission summary), otherwise it is not installed.
 - `tags` are the labels shown in the marketplace. The extension repo generates them from the manifest's `tags` and takes them out of `manifest` when writing the index (older hubs do not recognize `tags` in a manifest and would drop the whole entry); when an entry has no `tags`, the hub uses the ones in `manifest`.
+- `l10n` (optional) is the package's translations again, `{"<language>": <its l10n/<language>.json>}` (see "Translations: `l10n/`"), so
+  the catalog can show them before anything is downloaded. Older hubs ignore the key. One that does not check out is left out with a warning,
+  and the entry stays, in its manifest's words.
 - `packages` are searched in order for the first whose `platforms` includes this hub (`GOOS-GOARCH`); one without `platforms` counts as usable anywhere. `url` is a path relative to the index (for GitHub and git marketplaces, a path in the repo; git marketplaces cannot escape the repo through links),
   an HTTPS address, an immutable `oci:<registry>/<repository>@sha256:<64 lowercase hex>` reference, or for GitHub marketplaces `release:<tag>/<asset name>` (downloads the Release asset through the API; private repos work too). `sha256` is required and checked after download; on mismatch it is not installed.
 - Broken entries (invalid manifest, no packages, non-https address, the same id twice) are dropped with a warning and the rest work as usual; a whole index whose `market_version` is not 1 or that has no `name` is rejected.
@@ -1020,10 +1058,10 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 | `DELETE /api/v1/extensions/-/markets/{id}` | Stop reading this marketplace; extensions installed from it stay, but their auto-upgrade pauses with `auto_upgrade_paused: "market_removed"`. Add its original registration address again to restore upgrades under the saved settings |
 | `POST /api/v1/extensions/-/markets/{id}/refresh` | Re-read the index now; on a bad signature returns 400 `market_signature` (the last good index is kept) |
 | `PUT /api/v1/extensions/-/markets/{id}/token` `{token}` | Replace the token (empty string removes it) and re-read |
-| `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
+| `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags and every translation's name and description (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
 | `POST /api/v1/extensions/-/catalog/preview` `{market, extension}` (the old field name `plugin` is also accepted) | Download, verify, return a preview (the same as the "Install" preview, plus `market`); if already installed it is an upgrade preview |
 
-`CatalogItem`: `market`, `market_name`, `id`, `name`, `version`, `description`, `publisher`, `homepage`, `tags`, `contributes` (extension point → id),
+`CatalogItem`: `market`, `market_name`, `id`, `name` and `description` (in the request's language, from the entry's `l10n`), `version`, `publisher`, `homepage`, `tags`, `contributes` (extension point → id),
 `permissions` (a few human-readable lines, same as before install), `problem` (why it cannot be installed: no package for this hub's platform, needs a newer hub, bad marketplace signature), `installed` (installed version),
 `installed_source`, `from_this_market`, `upgradable`.
 
@@ -1127,7 +1165,7 @@ For extensions installed from an extension marketplace (source `market:<marketpl
 - **Where it is stored**: the hub setting `plugin_upgrades` (master switch, extensions switched off, skipped versions, versions already announced, each extension's last result); no new table.
 
 `ExtensionView` has these extra fields for marketplace extensions: `auto_upgrade` (this extension's saved switch), `auto_upgrade_paused` (why that switch does not apply now: `market_removed` when its source marketplace is no longer registered, otherwise `disabled` when the extension is turned off; omitted otherwise),
-`upgrade` (when there is a new version: `{id, name, market, from, to, state, added_permissions?, detail?}`,
+`upgrade` (when there is a new version: `{id, name, market, from, to, state, added_permissions?, detail?, rename_from?, rename_to?}`; `id` is the installed extension, and for a version that changes the ID `rename_to` is the ID its market lists it under, which the apps open and `personad extension upgrades` prints in its `install market:<market>/<id>` hint (#2511),
 where `state` is `available` installs at the next check / `waiting_idle` waiting for idle / `needs_permission` waiting for you to confirm / `off` switch is off, or the extension is disabled / `skipped` was rolled back / `failed` did not install / `incompatible` cannot be installed),
 and `upgrade_note` (`{kind: upgraded | rolled_back | needs_permission | failed, from, to, detail?, at}`).
 
@@ -2592,7 +2630,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   - Without a new version, show the last result: "Auto-updated to 1.0.0 (was 0.9.0) · 3 hours ago", or "1.1.0 failed to start, reverted to 1.0.0".
 
   Marketplace management starts with a master **Auto-Update Extensions** switch (`GET/PUT /api/v1/extensions/-/upgrades`), hidden on old hubs without the endpoint and when there are no marketplaces.
-  Extensions awaiting consent append "· New version needs approval" to their status. Mock hub `MOCK_PLUGIN_UPGRADE` (`needs_permission` (default) / `waiting_idle` / `skipped` / `rolled_back_by_user` / `upgraded`)
+  Extensions awaiting consent append "· New version needs approval" to their status. Mock hub `MOCK_PLUGIN_UPGRADE` (`needs_permission` (default) / `waiting_idle` / `skipped` / `rolled_back_by_user` / `upgraded` / `renamed`: 1.1.0 under the new ID `example-gateway-next`)
   determines `example-gateway`'s state; UI tests `ExtensionMarketTests.testAutoUpgrade`, `testAutoUpgradeForAll`, unit test `ExtensionUpgradeTests`.
 - Screenshots: the `MOCK_EXTENSIONS=1` mock hub (like a new hub: reports `extensions` and `extension_*`, returns new keys on `/api/v1/extensions/…`; add `MOCK_EXTENSIONS_LEGACY=1` for a pre-rename hub) has five sample extensions with different states, plus `example-gateway` pages and a launcher section (and one always returning unsupported),
   two marketplaces and their catalogs; `-tab settings -openExtensions YES` (`-openExtension <id>` opens details directly, add `-openExtensionPage <ui>` for its page and `-openExtensionManager <id>` for another manager's copy; old `-openPlugin…` forms still work),

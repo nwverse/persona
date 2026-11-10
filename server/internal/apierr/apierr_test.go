@@ -246,6 +246,9 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"peer long", &rpc.Error{Code: "peer_too_long", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_too_long"},
 		{"peer command", &rpc.Error{Code: "peer_command", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_command"},
 		{"peer unconfirmed", &rpc.Error{Code: "peer_unconfirmed", Message: "node's own words", Data: json.RawMessage(`{"delivered":"unknown"}`)}, "rpc-errors.peer_unconfirmed"},
+		// queued messages sent now: not a Claude, or a send-now hint the node does not know (#2467)
+		{"send now unsupported", &rpc.Error{Code: "send_now_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unsupported"},
+		{"send now unrecognized", &rpc.Error{Code: "send_now_unrecognized", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unrecognized"},
 		{"untypable directory", &rpc.Error{Code: "directory_untypable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.directory_untypable"},
 	}
 	for _, tc := range cases {

@@ -191,6 +191,8 @@ Don't add a `pending.json` field for it: older edges and watchdogs read the same
 - Probe capabilities before sending identity-changing node messages. An old node can silently ignore extra fields and delete the absent old ID's data. New nodes retain slot/revision tombstones for stale messages, while authenticated fresh reinstall must establish its new binding rather than be permanently rejected.
 - Node identity revisions and installation generations must use Postgres timestamp precision before the first bind. Raw Go nanoseconds are truncated to microseconds on storage; after a reload, a node would reject that lower revision or mistake the installation time for a new generation. Normalize both fields and test before/after database precision, not only whole-second fixtures.
 - Persistent hook ownership must remain recognizable to the rollback binary. Stop and join the old process's heartbeat and cleanup before starting the replacement; a late cleanup can remove the new hook even when the database migration is correct.
+- A guard over the machine IDs a user picked must tell three cases apart (#2510): an ID the fleet no longer has, a computer that is offline, and a node that is too old. One shared "update this computer's node" refusal blocked a real rename on an ID left from before the hub moved, which no update could fix. Skip IDs that are not computers, and name the computers in each refusal.
+- The catalog lists a renamed extension only under its new ID, while the installed extension and its `upgrade.id` keep the old one (#2511). Every entry that goes from an installed extension to its market page (upgrade rows, Check for updates, CLI hints, deep links) must use `rename_to` / `rename_from`, or fall back to `replaces`. The hub accepting the old ID in the preview does not help a client that looks the item up in the catalog itself.
 
 
 ## Private frames cannot carry a manager's resume cursor (#2354)
@@ -1443,6 +1445,33 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A general decoder pays for what a splitter does not need: `ScanSessionList` read the event token by token through `jsontext`, a quarter of a hop. A byte scanner with the same rules (exact unescaped `sessions` once, names given once, the same depth limit, invalid input left to `json.Unmarshal`) replaces it; keep `jsontext` as the oracle and fuzz both (`FuzzScanSessionList`, `TestScanSessionListDepth`).
 - A buffer sized from the first row grows several times for a list of 150: size a whole-list encode from the average length of the rows last sent (`Machine.rowLen`).
 - A catalog per language read as one keeps every language once any text is needed: the first `i18n.T` parsed and kept all three (1.2 MB live). Give each language its own `sync.OnceValue` (`i18n.catalogOf`): a process that speaks en keeps en, plus zh-Hans for a missing key and `Has` (0.38 to 0.76 MB). The reverse templates match every language, so they read the others without keeping them (`readCatalog`). Prove it in a process of its own, as other tests parse every language (`TestCatalogsParsedPerLanguage`).
+
+## Long-lived buffers: a message read whole, a scanner that never shrinks, a link compressed to itself (2026-11-10, #2832)
+
+- A reader that takes each message whole keeps the array it last read: `bus.Conn.Read` used `websocket.Conn.Read` (`io.ReadAll`, growing by doubling) and kept the rest in `c.buf`, `Write` copied every line into `c.wbuf` and kept that array too. One 21 MB request body relayed to the manager kept a 28 MB read array on each side until a larger one came, and in a churn soak these reads were 27% of the slot's allocation. Stream a message from `websocket.Conn.Reader` into the caller's buffer and send complete lines straight from the caller's bytes; keep a partial-line buffer only while it is small. Two edges a whole read handled on its own: past the read limit the library fails the read with its error and 1009 close and hands on nothing, so stop at the limit and look one byte further before handing on the last bytes (`atLimit`, compared with a whole read in `TestConnReadLimitIsTheLibrarys`); and a message that fails part-way has handed on its start, so end it with a byte no JSON has there, or the rpc reader takes a valid start (`{"event":"x"}` followed by spaces) for a whole line (`TestConnEndsMidMessage`).
+- `bufio.Scanner` keeps the buffer its longest line grew for the life of the reader: 512 KiB per computer after one session list, 32 MiB after one large body. `rpc.lineReader` reads the same lines with the same errors and goes back to its first buffer once a long line is through. It also drops the line it handed out as the next `Scan` starts, as a Scanner does: kept while the reader waits for input, the line kept the grown buffer with it (32 MB in the manager until the next message, which a measurement 30 s after the body showed and one 60 s after hid). A reimplementation of a standard reader is only safe with the standard one as its oracle: fuzz both over random read sizes, buffer sizes, limits and errors (`FuzzLineReaderIsAScanner`).
+- `json.Marshal` of a `json.RawMessage` checks, compacts and copies it, and the envelope's `Marshal` does it again; the line was then copied once more to add its newline. Put a non-empty raw value straight into the envelope (the same bytes and errors, `TestNotifyRawIsTheSameLine` with HTML characters, U+2028, whitespace and invalid JSON) and encode the envelope and its newline into one buffer. An allocation ceiling that reads `TotalAlloc` must keep the GC off for its loop: a GC empties the encoder's `sync.Pool` and adds a whole buffer to one run.
+- permessage-deflate with context takeover costs each end about 0.85 MB of flate state while idle and, on the writing end, a frame buffer the size of the largest message; on loopback it saves nothing. The hub compresses only when the client offers it, so the hub's own manager (its child, or the built-in manager's service dialing the hub's local address) dials without it (`bus.Client.Uncompressed`) and every other client still offers it. A manager made in the app also runs with deploy `service`: decide by the identity and the address too, not by the deploy alone.
+## Hot paths: a node list copied three times, a list marshalled only to be compared (2026-11-10, #2826)
+
+- A `proto.Session` is 1,520 bytes, so every copy of a node's list is a megabyte-scale allocation and slices grown by
+  `append` from nil cost about twice that again. `sessionList` copied the runtimes' rows into a slice of their own,
+  appended every row to a list grown from nil, then copied each kept row into a second one: 4.8 MB and 2.7 ms for 300
+  rows, 63% of a node's allocation under churn. Size one slice from the last list, have the sources append into it
+  (`runtimeRegistry.appendSessions`, `appendOffline`), and filter in place with a write index behind the read index
+  (`out[j] = *s`, `clear` the tail). Run anything that reads the whole list, such as `resolveCodexHierarchy`, before
+  the filter drops rows: a subagent finds its project through a parent the keep pass may drop. A presized slice is
+  never nil, but a list that kept no row was: return nil then, or the wire says `[]` for `null`, and the manager takes
+  `[]` from a `sessions.list` as its list emptied (`TestSessionListOfNoneSendsNull`).
+- A stable sort of large structs moves each one many times (`sort.SliceStable` and `slices.SortStableFunc` both do
+  insertion and rotation passes): 250 us of a 300-row list. Sort the positions with the same comparator, then follow
+  each cycle of the permutation once (`sortNewestFirst`, 50 us); ties keep their order because the positions sort
+  stably.
+- Bytes kept to skip a resend need not be built through `json.Marshal(map[string]any{...})`: `sendSessions` built
+  67 KB per 80 rows only to find them equal to the last list. Write them with `proto.AppendSession` into a buffer kept
+  under the same mutex, swap it with `last` when the list goes, and fall back to `json.Marshal` of the whole value for
+  any row the appender leaves to encoding/json, so the bytes and the errors stay its. Compare against `json.Marshal`
+  for nil, empty, HTML characters, U+2028 and invalid UTF-8 (`TestSessionsChangedBytesAreJSONMarshal`).
 
 ## Transport source is not pane origin (#994)
 

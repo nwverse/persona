@@ -83,12 +83,17 @@ nonisolated struct ExtensionCatalogItem: Codable, Hashable, Sendable, Identifiab
     var installedSource: String?
     var fromThisMarket: Bool?
     var upgradable: Bool?
+    /// The ID this one takes over in its market (a rename, docs/extensions/extensions.md "Declared identity changes").
+    var replaces: String?
+    /// The installed extension this one upgrades under a new ID, once the hub checked it came from this market.
+    var renameFrom: String?
 
     var id: String { market + "/" + pluginID }
 
     enum CodingKeys: String, CodingKey {
-        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable
+        case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable, replaces
         case pluginID = "id", marketName = "market_name", installedSource = "installed_source", fromThisMarket = "from_this_market"
+        case renameFrom = "rename_from"
     }
 }
 
@@ -148,8 +153,12 @@ nonisolated struct ExtensionPreview: Decodable, Hashable, Sendable, Identifiable
     var depends: [ExtensionDependencyStatus]?
     var bundle: [ExtensionPreview]?
     var unresolved: [String]?
+    /// The installed extension this upgrades under the manifest's new ID (its `warnings` say so).
+    var renameFrom: String?
 
     var canConfirm: Bool { confirmationProblem(at: .now) == nil }
+    /// Whether this previews installed extension `id`'s new version, under the same ID or a new one (#2511).
+    func upgrades(_ id: String) -> Bool { manifest.id == id || renameFrom == id }
     var expirationBoundary: Date? { ([self] + (bundle ?? [])).compactMap(\.expiresAt).min() }
 
     func confirmationProblem(at now: Date) -> String? {
@@ -176,7 +185,7 @@ nonisolated struct ExtensionPreview: Decodable, Hashable, Sendable, Identifiable
     enum CodingKeys: String, CodingKey {
         case manifest, permissions, warnings, upgrade, from, market, depends, bundle, unresolved
         case previewID = "preview_id", permissionsDigest = "permissions_digest", expiresAt = "expires_at"
-        case morePermissions = "more_permissions", addedPermissions = "added_permissions"
+        case morePermissions = "more_permissions", addedPermissions = "added_permissions", renameFrom = "rename_from"
     }
 }
 
@@ -454,7 +463,8 @@ enum ExtensionMarketText {
         defer { loading = false }
         do {
             let c = try await api().pluginCatalog(market: market)
-            guard let it = c.plugins.first(where: { $0.pluginID == pluginID }) else {
+            // A link from before a rename names the old ID; the market lists the extension under its new one (#2511).
+            guard let it = c.plugins.first(where: { $0.pluginID == pluginID }) ?? c.plugins.first(where: { $0.replaces == pluginID }) else {
                 throw APIError(status: 404, message: String(localized: "This market no longer has this extension"))
             }
             item = it

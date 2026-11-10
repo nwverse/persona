@@ -130,6 +130,26 @@ describe("host-owned extension settings", () => {
     act(() => upgrade.click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", BASE.id);
   });
 
+  it("finds a renamed extension under its new ID and upgrades it there (#2511)", async () => {
+    catalog = { markets: [{ id: "official" }], extensions: [{ id: "example-successor", market: "official", version: "1.1.0", installed: "1.0.0", upgradable: true,
+      replaces: BASE.id, rename_from: BASE.id }] };
+    const callbacks = render(); await flush();
+    await act(async () => button("检查更新").click()); await flush();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.textContent).toContain("1.1.0");
+    // never "upgrades automatically later": a new ID waits for the owner's confirmation
+    expect(host.textContent).toContain(`将 ${BASE.id} 更名为 example-successor 并升级`);
+    expect(host.textContent).not.toContain("稍后自动升级");
+    act(() => button("去确认").click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", "example-successor");
+  });
+
+  it("opens a waiting rename under the ID its market lists it under", async () => {
+    const detail = "此次更新会将扩展 ID 从 example-extension 更改为 example-successor，需要明确确认。";
+    const callbacks = render({ ...BASE, upgrade: { id: BASE.id, market: "official", from: "1.0.0", to: "1.1.0", state: "needs_permission", rename_to: "example-successor", detail } }); await flush();
+    expect(host.textContent).toContain(detail); // the hub's words for the ID change, not "permissions changed"
+    act(() => button("去确认").click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", "example-successor");
+  });
+
   it("reports market failures without claiming the installed version is current", async () => {
     catalog = { markets: [{ id: "official", error: "read failed" }], extensions: [] };
     const callbacks = render(); await flush();

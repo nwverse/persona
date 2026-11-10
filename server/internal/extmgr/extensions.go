@@ -317,8 +317,8 @@ func (ps *extensions) list() []ExtensionView {
 func (ps *extensions) view(ctx context.Context, p *extension.Extension) ExtensionView {
 	m := p.Full
 	l := ps.h.contextLang(ctx)
-	v := ExtensionView{ID: p.Record.ID, Name: m.Name, Kind: m.Kind(), Version: p.Record.Version, Source: p.Record.Source,
-		Enabled: p.Record.Enabled, Description: m.Description, Contributes: m.Contributions(), Warnings: p.WarningTexts(l)}
+	v := ExtensionView{ID: p.Record.ID, Name: p.L10n.Name(l, m.Name), Kind: m.Kind(), Version: p.Record.Version, Source: p.Record.Source,
+		Enabled: p.Record.Enabled, Description: p.L10n.Description(l, m.Description), Contributes: m.Contributions(), Warnings: p.WarningTexts(l)}
 	if c, ok := p.Legacy.(ExtensionConfig); ok {
 		v.Kind, v.Version = c.Kind, ""
 	}

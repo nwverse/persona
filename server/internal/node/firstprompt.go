@@ -33,6 +33,7 @@ const firstPromptTries = 3
 // a budget of its own), and messages sent to the session meanwhile wait for the check (the typing lock), so a
 // message typed again cannot mix with them. An error: the host refused the first message (nothing went in).
 func (n *Node) firstPrompt(ctx context.Context, pane, id, prompt string, a *host.Agent) error {
+	prompt = inertControls(prompt) // as hostPrompt pastes it: the box is matched against it
 	since := time.Now()
 	if a != nil && a.AgentStatus == proto.StatusBlocked {
 		n.lostFirst.set(id, lostDialog, since) // a dialog of Claude's own has the keyboard: the message would answer it
