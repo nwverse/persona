@@ -24,6 +24,8 @@ func TestNarrationIsAPassingLine(t *testing.T) {
 		{"## 结论", false},
 		{"1. 先做这个", false},
 		{"| a | b |", false},
+		{"**结论**：可以上线。", false},
+		{"（1）先合并 A。", false},
 		{"第一段。\n\n第二段。", false},
 		{strings.Repeat("长", narrationMost+1), false},
 		{"  ", false},
@@ -79,6 +81,12 @@ func TestTurnAnswerLongTextToolShortText(t *testing.T) {
 	ParseLine(8, []byte(`{"type":"assistant","uuid":"a4","parentUuid":"u4","message":{"role":"assistant","content":[{"type":"text","text":"收到。"}]}}`), meta)
 	if got := meta.TurnAnswer(); got != "收到。" {
 		t.Fatalf("next turn's answer = %q", got)
+	}
+	// A photo with no caption starts a turn too.
+	ParseLine(9, []byte(`{"type":"user","uuid":"u5","parentUuid":"a4","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}}`), meta)
+	ParseLine(10, []byte(`{"type":"assistant","uuid":"a5","parentUuid":"u5","message":{"role":"assistant","content":[{"type":"text","text":"是一只猫。"}]}}`), meta)
+	if got := meta.TurnAnswer(); got != "是一只猫。" {
+		t.Fatalf("answer after a photo = %q", got)
 	}
 }
 

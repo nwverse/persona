@@ -55,9 +55,10 @@ func Narration(text string) bool {
 	return sentences(t) <= narrationSentences
 }
 
-// structured: a Markdown line that is more than a sentence (heading, list item, table row, quote, code fence).
+// structured: a Markdown line that is more than a sentence (heading, list item, table row, quote, code fence, a bold
+// lead-in, a "(1)" item).
 func structured(line string) bool {
-	for _, p := range []string{"#", "- ", "* ", "+ ", "> ", "|", "```", "~~~"} {
+	for _, p := range []string{"#", "- ", "* ", "+ ", "> ", "|", "```", "~~~", "**", "__", "（", "("} {
 		if strings.HasPrefix(line, p) {
 			return true
 		}

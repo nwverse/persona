@@ -353,6 +353,11 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		meta.trackActivity(it)
 		meta.trackPlan(it)
+		if it.Wake || it.Role == "user" && !it.Queued && (it.Kind == proto.KindText || it.Kind == proto.KindImage) {
+			// A new turn's words start afresh (TurnAnswer): a photo with no caption and a command that runs the model
+			// start one too, though they do not reach ClaudeTurnStarted.
+			meta.turnParts = nil
+		}
 		switch {
 		case it.Wake:
 			meta.LastTurnWake = true
