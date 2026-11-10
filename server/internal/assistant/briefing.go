@@ -70,6 +70,8 @@ type briefFacts struct {
 	// Asks are the asks of the tasks to verify (by task id): their verdict line and a decision's recommended option, the
 	// same as their cards say (conclusion.go).
 	Asks map[string]acceptAsk
+	// Leaders: one line per current leader (direction_progress.go briefLeaders), for the model only.
+	Leaders []prompts.BriefLeader
 }
 
 // briefFactsAt works out the facts for a run that starts at now. self is the routine that is running: its own earlier
@@ -115,6 +117,7 @@ func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) 
 	}
 	f.FailedTotal = total
 	f.Progress, f.ProgressTotal = s.briefProgress(ctx, waiting)
+	f.Leaders = s.briefLeaders(ctx, now)
 	return f
 }
 
@@ -350,7 +353,7 @@ func (f *briefFacts) modelText() string {
 	for _, x := range f.Failed {
 		b.Failed = append(b.Failed, prompts.BriefFailed{Title: clip(oneLine(x.Title), 60), Why: x.Why, Run: x.Kind == "routine", Skipped: x.Skipped})
 	}
-	b.ProgressTotal = f.ProgressTotal
+	b.ProgressTotal, b.Leaders = f.ProgressTotal, f.Leaders
 	for _, p := range f.Progress {
 		b.Progress = append(b.Progress, prompts.BriefProgress{Title: clip(oneLine(p.Title), 60), Stage: p.Stage})
 	}

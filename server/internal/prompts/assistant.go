@@ -320,7 +320,14 @@ type AssistantContext struct {
 	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
 	Owner    string
 	Snapshot string
+	// Directions: for the main conversation, the current leaders it hands work to (task_plan supervisor, #3609);
+	// LeaderName: for a leader, its direction's name.
+	Directions []ContextDirection
+	LeaderName string
 }
+
+// ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
+type ContextDirection struct{ ID, Name string }
 
 func RenderAssistantContext(c AssistantContext) string { return render("assistant/context", c) }
 
@@ -358,6 +365,15 @@ type BriefFacts struct {
 	Failed                                                           []BriefFailed
 	Accept                                                           []BriefAccept
 	Progress                                                         []BriefProgress
+	Leaders                                                          []BriefLeader // one per direction (#3609)
+}
+
+// BriefLeader is one direction in the briefing's facts: its name, its open tasks, those waiting for the owner, those
+// stuck over a day, and its leader's latest summary of the day (empty parts: none).
+type BriefLeader struct {
+	Name                     string
+	Open, Waiting, Stuck     int
+	Reached, Doing, NeedsYou string
 }
 
 // BriefFailed is one thing that did not go through: a task whose agent did not start, a scheduled run that failed
@@ -456,6 +472,8 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
+	LeaderStuck bool
 	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
 	// they wait here before going up a rung.
 	Asked      bool
