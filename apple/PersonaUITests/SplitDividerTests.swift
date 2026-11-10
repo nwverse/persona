@@ -9,7 +9,9 @@ final class SplitDividerTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        XCUIDevice.shared.orientation = .portrait // another test may have left the iPad on its side
+        // Upright: another test may have left the iPad on its side. TEST_RUNNER_PERSONA_ORIENTATION=landscape: on its side
+        // (the iPhone Duo open, whose synthetic drags miss upright).
+        XCUIDevice.shared.orientation = ProcessInfo.processInfo.environment["PERSONA_ORIENTATION"] == "landscape" ? .landscapeLeft : .portrait
         guard let h = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)") }
         hub = h
     }
