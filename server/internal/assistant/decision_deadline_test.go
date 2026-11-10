@@ -228,23 +228,18 @@ func (e *askTodoEnv) expireWith(args string) (proto.Interaction, string) {
 		done <- text
 	}()
 	var ix proto.Interaction
-	got := false
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && !got {
+	waitFor(e.t, "the question card", func() bool {
 		select {
 		case text := <-done: // refused before any card
-			return ix, text
+			e.t.Fatalf("ask_user returned before a card: %s", text)
 		default:
 		}
 		if qs := e.s.pendingQuestions(); len(qs) == 1 {
-			ix, got = qs[0], true
-			break
+			ix = qs[0]
+			return true
 		}
-		time.Sleep(time.Millisecond)
-	}
-	if !got {
-		e.t.Fatal("no card")
-	}
+		return false
+	})
 	if _, err := e.s.Action(ctx, Action{Op: "answer", InteractionID: ix.ID,
 		Answer: json.RawMessage(`{"dismiss":true,"reason":"` + proto.DismissedExpired + `"}`)}); err != nil {
 		e.t.Fatal(err)
@@ -279,7 +274,6 @@ func TestAskUserTakesTheDefaultAtItsDeadline(t *testing.T) {
 	if todo.DoneAt == nil {
 		t.Fatal("its to-do is still open")
 	}
-	time.Sleep(50 * time.Millisecond)
 	if got := e.told("c1x1x1"); len(got) != 0 {
 		t.Fatalf("the conversation was told besides the tool result: %q", got)
 	}
@@ -317,7 +311,6 @@ func TestAskTodoTakesTheDefaultAtALaterDeadline(t *testing.T) {
 		t.Fatalf("told %q", got)
 	}
 	e.s.sweepDecisionDeadlines(time.Now().Add(8 * time.Hour))
-	time.Sleep(50 * time.Millisecond)
 	if got := e.told("c1x1x1"); len(got) != 1 {
 		t.Fatalf("told twice: %q", got)
 	}
@@ -364,7 +357,6 @@ func TestIrreversibleAskUserIsOnlyReminded(t *testing.T) {
 		t.Fatalf("%d reminders, want 1", n)
 	}
 	e.s.sweepDecisionDeadlines(time.Now().Add(48 * time.Hour))
-	time.Sleep(50 * time.Millisecond)
 	if n := pushes() - before; n != 1 {
 		t.Fatalf("%d reminders after the sweep, want 1", n)
 	}
@@ -399,7 +391,6 @@ func TestAskTodoWithoutDeadlineWaits(t *testing.T) {
 	e.expire()
 	todo := e.onlyAskTodo()
 	e.s.sweepDecisionDeadlines(time.Now().Add(29 * 24 * time.Hour))
-	time.Sleep(50 * time.Millisecond)
 	if cur := e.get(todo.ID); cur == nil || cur.DoneAt != nil {
 		t.Fatal("closed")
 	}

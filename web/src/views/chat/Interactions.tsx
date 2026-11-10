@@ -1122,13 +1122,15 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
       {/* the box clips what is in it: its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
       <div data-chat-cards data-scroll-box className={cx("-m-1 flex min-h-0 shrink flex-col overflow-y-auto overscroll-contain p-1", !done.length && !full && "hidden")}>
         {done.length > 0 && <div className="flex flex-col gap-2">{done}</div>}
+        {/* unclipped once open (#3112): a clipping fold is the box a card's sticky footer sticks in, so a card taller than
+            data-chat-cards (a long command) left its buttons below the fold, out of sight, with no way to bring them up */}
         {count > 0 && (
-          <Collapse open={full >= 1}>
+          <Collapse open={full >= 1} unclipped>
             <div className={cx(done.length > 0 && "pt-2")}>{cards[0]}</div>
           </Collapse>
         )}
         {count > 1 && (
-          <Collapse open={full > 1}>
+          <Collapse open={full > 1} unclipped>
             <div className="flex flex-col gap-2 pt-2">{cards.slice(1)}</div>
           </Collapse>
         )}

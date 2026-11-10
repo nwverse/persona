@@ -208,6 +208,24 @@ describe("PendingCards", () => {
   it("is nothing without cards", () => {
     expect(cards({ narrow: true, interactions: [] })).toBe("");
   });
+
+  // #3112: on a phone and in a side panel the open cards sit in folds; a fold that still clipped once open was the box
+  // a card's sticky buttons stuck in, so a card taller than the cards' box (a long command) had its Allow / Deny below
+  // the fold, out of sight. The layout itself is checked in a browser (scripts/test/web_card_scroll_e2e.py).
+  it("doesn't clip the open cards' folds on a narrow screen, so a tall card's buttons stick in view (#3112)", () => {
+    const long = ix("p", "permission", { tool_input: { command: "python3 -c \"" + "print(1)\n".repeat(80) + "\"" } });
+    const html = renderToStaticMarkup(<PendingCards interactions={[long, three[1]]} answered={[]} narrow keyboard={false} onDismissKeyboard={() => {}} />);
+    const box = html.slice(html.indexOf("data-chat-cards"));
+    // the first card's fold is open: its clip box is not a scroller (no overflow-hidden), the card's footer sticky
+    const first = box.match(/<div class="grid [^"]*"[^>]*><div class="([^"]*)"/);
+    expect(first?.[1]).toBeDefined();
+    expect(first![1].split(/\s+/)).not.toContain("overflow-hidden");
+    expect(box).toMatch(/data-card-actions="[^"]*" class="sticky -bottom-1 /);
+    // the folded one (2 more) still clips: it is closed
+    const folds = [...box.matchAll(/<div class="grid [^"]*"[^>]*><div class="([^"]*)"/g)].map((m) => m[1]);
+    expect(folds).toHaveLength(2);
+    expect(folds[1]).toContain("overflow-hidden");
+  });
 });
 
 describe("PendingCards, the next card waiting elsewhere (#4091)", () => {
