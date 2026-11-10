@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -86,6 +87,8 @@ type Node struct {
 	engEpoch uint64
 	peer     *rpc.Peer
 	logger   *log.Logger
+	// hubPersonaContracts is connection-local: Attach makes a fresh Node on each reconnect.
+	hubPersonaContracts atomic.Bool
 	// lcu drives amontlabs/lcu for the computer-use plugin when that backend is selected (lcu_mcp.go).
 	lcuMu   sync.Mutex
 	lcuSess *lcuSession
@@ -493,6 +496,10 @@ func (n *Node) fetchState(ctx context.Context) bool {
 // writeClaudeConfig writes the files the sessions Persona starts load (hooks, MCP, skills; generatedFiles).
 func (n *Node) writeClaudeConfig() error { return writeGeneratedConfig(n.dir, n.bin) }
 
+// hubSupportsPersonaContracts snapshots the hub capability for one process start.
+// Until the authenticated hub's configuration arrives, keep the legacy MCP alias.
+func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts.Load() }
+
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
@@ -688,7 +695,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"engine": n.engine(), "hosts": c.Hosts, "default": c.Default}, nil
 	case "node.configure":
 		var c struct {
-			ClaudeDirs []string `json:"claude_dirs"`
+			// HubFeatures comes from the authenticated hub through devices.connected. Partial
+			// configuration updates omit it; a full handover without it means an older hub.
+			HubFeatures *[]string `json:"hub_features"`
+			ClaudeDirs  []string  `json:"claude_dirs"`
 			// ClaudeDirsBlocked: patterns of config directories kept out (claudedirs.go); nil leaves them as they are.
 			ClaudeDirsBlocked *[]string          `json:"claude_dirs_blocked"`
 			Codex             *proto.CodexConfig `json:"codex"`
@@ -722,6 +732,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.HubFeatures != nil || c.MachineID != "" {
+			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 		}
 		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
