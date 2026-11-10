@@ -14,6 +14,12 @@ describe("the Assistant's Needs you and In progress entries (spec/fixtures/entri
       expect(got.needsYou.map((item) => item.key)).toEqual(c.expected.needs_you);
       expect(got.running.map((item) => item.key)).toEqual(c.expected.running);
       expect(got.shelved.map((item) => item.key)).toEqual(c.expected.shelved);
+      const activity = (c.expected as { activity?: Record<string, unknown> }).activity;
+      for (const [key, expected] of Object.entries(activity ?? {})) {
+        const work = got.running.find((row) => row.key === key)?.activity;
+        expect(work ? { tasks: work.tasks, subagents: work.subagents, workflows: work.workflows,
+          ...(work.workflow?.phase ? { phase: work.workflow.phase, progress: `${work.workflow.agents_done}/${work.workflow.agents_started}+` } : {}) } : null).toEqual(expected);
+      }
       // one entry each: nothing is in both, and no agent of a listed task shows on its own
       const keys = [...got.needsYou, ...got.running, ...got.shelved].map((item) => item.key);
       expect(new Set(keys).size).toBe(keys.length);
