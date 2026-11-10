@@ -95,14 +95,28 @@ internal class AgentsViewModel(
     private val groupFilter = MutableStateFlow<GroupFilter?>(null)
     /** The current assistant the list is of (docs/assistant/managers.md "Clients"); null until the page says: every manager's. */
     private val assistant = MutableStateFlow<persona.core.contracts.api.CurrentAssistant?>(null)
-    /** Lists [value]'s agents and computers: the sessions and computers stamped with it, the cards that go with them. */
+    /**
+     * Lists [value]'s agents and computers: the sessions and computers stamped with it, the cards that go with them.
+     * Another assistant lets go of a computer filter on one that is not its own (else the list would be empty, with
+     * no chip picked) and of the rows kept open; the search and the quick filter stay.
+     */
     fun show(value: persona.core.contracts.api.CurrentAssistant) {
         val before = assistant.value
         if (before == value) return
         // Another assistant is another list; the same one's roster changing (a count, a name) keeps the rows in place.
         if (before?.id != value.id) previous = null
         assistant.value = value
+        if (before?.id != value.id) settings.update { current ->
+            // An unknown computer (the list not read yet, on a cold start) keeps the filter it was restored with.
+            val machine = repository.machines.value.firstOrNull { it.id == current.machineFilter }
+            val foreign = machine != null && !value.ownsOn(machine.id, machine.manager)
+            current.copy(machineFilter = if (foreign) "" else current.machineFilter, kept = emptySet())
+        }
     }
+
+    /** Every manager's sessions and computers as the hub lists them: a card opened from a notification may be another assistant's. */
+    val everySession: StateFlow<List<Session>> get() = repository.sessions
+    val everyMachine: StateFlow<List<Machine>> get() = repository.machines
     /** The hub group the list shows; null is every group (AgentGroups.kt). */
     val group = groupFilter.asStateFlow()
     // Written while building [page] (on listContext) and reset from the main thread.

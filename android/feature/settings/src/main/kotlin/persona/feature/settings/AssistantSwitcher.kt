@@ -142,7 +142,8 @@ internal fun AssistantSwitcherContent(
     var width by remember { mutableStateOf(Dp.Unspecified) }
     Box(modifier.fillMaxWidth().onSizeChanged { width = with(density) { it.width.toDp() } }) {
         JAssistantSwitcherHeader(current.shownName, switcherLine(res, current, now), expanded, onToggle, headModifier,
-            avatar = { JManagerAvatar(current, current.id == default, presence = true, alert = others && !expanded) }, trailing = trailing)
+            avatar = { JManagerAvatar(current, current.id == default, presence = true, alert = others && !expanded) }, trailing = trailing,
+            othersWaiting = others && !expanded)
         JMenu(expanded, onDismiss, listOf(
             JAction(stringResource(R.string.settings_managers_new), PhIcons.Plus, onClick = onNew),
             JAction(stringResource(R.string.settings_switcher_manage), PhIcons.Gear, onClick = onManage),

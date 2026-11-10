@@ -46,7 +46,6 @@ import persona.android.data.Hub
 import persona.android.navigation.*
 import persona.core.contracts.*
 import persona.core.contracts.api.ConnectionState
-import persona.core.contracts.api.waiting
 import dev.chrisbanes.haze.HazeState
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -268,7 +267,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
     // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.
     val currentAssistant = persona.core.designsystem.currentAssistant()
-    val uncompletedTodosCount = remember(todos, currentAssistant) { todos.count { !it.isDone && !it.quiet && currentAssistant.owns(it.manager) } }
+    val counts = remember(currentAssistant, sessions, preferences.mutes) { ShellCounts(currentAssistant, sessions, preferences.mutes) }
+    val uncompletedTodosCount = remember(todos, counts) { counts.todos(todos) }
     fun kind(key: SessionKey): ConversationKind? = when {
         key == assistant.mainSession || assistant.conversations.any { it.key == key } -> ConversationKind.Assistant
         else -> sessions.firstOrNull { it.key == key }?.let { if (it.assistant) ConversationKind.Assistant else ConversationKind.Agent }
@@ -419,37 +419,21 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val decorators = AppTab.entries.associateWith { tab -> key(tab) {
         listOf(rememberSaveableStateHolderNavEntryDecorator<NavKey>(), rememberViewModelStoreNavEntryDecorator<NavKey>())
     } }
-    val sessionsByKey = remember(sessions) { sessions.associateBy { it.key } }
-    // A card is its own manager's, else its session's (an older hub stamps neither: the default's).
-    fun owned(request: persona.core.contracts.Interaction) =
-        currentAssistant.ownsOn(request.machineId, request.manager ?: sessionsByKey[request.sessionKey]?.manager)
-    // A quiet task's request (#1731) is told in the main conversation, not counted; nor is a muted one.
-    fun counted(request: persona.core.contracts.Interaction): Boolean {
-        val key = SessionKey(request.machineId, request.sessionId)
-        val session = sessionsByKey[key]
-        val space = session?.spaceName?.let { "${key.machineId}/$it" }
-        return session?.quiet != true && !preferences.mutes.mutes(key.path, space)
-    }
-    val shownPending = pending.filter(::owned)
+    // The current assistant's cards (ShellCounts): the tab badges and "Needs you now" count them.
+    val shownPending = pending.filter(counts::owned)
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
-    val agentNeeds = agentRequests.count(::counted)
-    // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents' cards
-    // and sessions in Needs you, counted here, and its inbox's "Needs you" from the roster.
+    val agentNeeds = agentRequests.count(counts::countsCard)
+    // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
+    // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current
-    val waiting = remember(managerRoster, pending, sessions, preferences.mutes, currentAssistant.group) {
-        managerRoster?.waiting(pending, sessions, currentAssistant.group, ::counted) { session ->
-            !session.quiet && !preferences.mutes.mutes(session.key.path, session.spaceName?.let { "${session.machineId}/$it" })
-        }.orEmpty()
-    }
+    val waiting = remember(managerRoster, pending, counts) { counts.waiting(managerRoster, pending) }
     val othersWaiting = currentAssistant.othersWaiting(waiting)
     // Only when what the count reads changed: the shell recomposes on every push, and the whole list is built to count
     // one group. Of the sessions it reads only which space each is in (for mutes), not their state or activity.
     val inboxSpaces = inbox.sessions.map { it.id to it.spacePreferenceKey }
-    val shownRecords = remember(inbox.records, currentAssistant) { inbox.records.filter { currentAssistant.owns(it.manager) } }
-    val shownInteractions = remember(inbox.interactions, currentAssistant) {
-        inbox.interactions.filter { currentAssistant.ownsOn(it.machineId, it.manager) }
-    }
+    val shownRecords = remember(inbox.records, currentAssistant) { ShellCounts.records(currentAssistant, inbox.records) }
+    val shownInteractions = remember(inbox.interactions, currentAssistant) { ShellCounts.interactions(currentAssistant, inbox.interactions) }
     val inboxNeeds = remember(shownRecords, shownInteractions, inboxSpaces, inbox.mutes) {
         // Rows the AI twin is on are Persona's: the same count as the inbox page's "Needs you" (#4848).
         needsYouCount(
@@ -604,7 +588,13 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
                             onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
                                 Box {
-                                    JPersonaButton(sidebar.personaState, stringResource(R.string.app_sidebar), {
+                                    // The dot is spoken too: that something waits at another assistant.
+                                    val sidebarLabel = stringResource(R.string.app_sidebar).let { label ->
+                                        if (!currentOthersWaiting.value) label
+                                        else stringResource(persona.core.designsystem.R.string.designsystem_manager_spoken, label,
+                                            stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
+                                    }
+                                    JPersonaButton(sidebar.personaState, sidebarLabel, {
                                         if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
                                         else sidebar.opened.value = true
                                     })

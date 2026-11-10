@@ -227,11 +227,12 @@ data class HubManager(
 }
 
 /**
- * What waits for the user at each manager, for the switcher's badges: the cards its agents and conversations wait on
- * ([requests]), its sessions in Needs you that have no card here (stuck on the computer's own prompt), and its inbox's
- * "Needs you" as the roster counts it ([HubManager.inboxNeedsYou]). [counts] and [sessionCounts] leave out what the
- * tabs leave out too (muted, quiet). A card or session without a stamp is the default manager's; a card goes by its
- * session's manager when it names none.
+ * What waits for the user at each manager, for the switcher's badges (docs/assistant/managers.md "Clients", the same
+ * rule on every client): its agents waiting for the user, each session once however many cards it has, plus its inbox's
+ * "Needs you" as the roster counts it ([HubManager.inboxNeedsYou]; absent: none). An agent waits when it has a pending
+ * card ([requests]) or is in Needs you; [sessionCounts] leaves out the sessions the tabs leave out too (quiet, muted),
+ * and [counts] the cards. A card on no listed session counts once by itself. A card or session without a stamp is
+ * the default manager's; a card goes by its session's manager when it names none.
  */
 fun ManagerRoster.waiting(
     requests: List<persona.core.contracts.Interaction>,
@@ -243,15 +244,23 @@ fun ManagerRoster.waiting(
 ): Map<String, Int> {
     fun here(machineId: String) = persona.core.contracts.GroupKeys.namespaceOf(machineId) == group
     val bySession = sessions.associateBy { it.key }
-    val cards = requests.distinctBy { it.id }.filter { here(it.machineId) && counts(it) }
-    // Any card of a session speaks for it, counted or not: a muted card's session is not counted a second way.
-    val asked = requests.mapTo(HashSet()) { it.sessionKey }
     val tally = HashMap<String, Int>()
-    cards.forEach { card -> tally.merge(shownUnder(card.manager ?: bySession[card.sessionKey]?.manager), 1, Int::plus) }
+    // Each waiting agent once, under its manager: (manager, session).
+    val agents = HashSet<Pair<String, persona.core.contracts.SessionKey>>()
+    requests.distinctBy { it.id to it.sessionKey }.filter { here(it.machineId) }.forEach { card ->
+        val session = bySession[card.sessionKey]
+        when {
+            session == null -> if (counts(card)) tally.merge(shownUnder(card.manager), 1, Int::plus)
+            sessionCounts(session) && counts(card) -> agents += shownUnder(card.manager ?: session.manager) to session.key
+        }
+    }
+    // A session in Needs you with no card here (stuck on the computer's own prompt); one with a card is its cards'.
+    val asked = requests.mapTo(HashSet()) { it.sessionKey }
     sessions.forEach { session ->
         if (session.agentState == persona.core.contracts.AgentState.NeedsYou && session.key !in asked && here(session.machineId) &&
-            sessionCounts(session)) tally.merge(shownUnder(session.manager), 1, Int::plus)
+            sessionCounts(session)) agents += shownUnder(session.manager) to session.key
     }
+    agents.forEach { (manager, _) -> tally.merge(manager, 1, Int::plus) }
     managers.forEach { manager -> manager.inboxNeedsYou?.takeIf { it > 0 }?.let { tally.merge(manager.id, it, Int::plus) } }
     return tally
 }

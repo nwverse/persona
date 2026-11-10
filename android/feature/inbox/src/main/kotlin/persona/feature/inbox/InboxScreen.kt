@@ -80,6 +80,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         { it.toList() }, { it.toSet() })) { mutableStateOf(emptySet<String>()) }
     fun endSelection() { selecting = false; picked = emptySet() }
     androidx.activity.compose.BackHandler(selecting) { endSelection() }
+    // Picked rows are the assistant's whose inbox showed them: another assistant ends the selection, so nothing it no
+    // longer shows is acted on.
+    var selectionOf by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(assistant.id) }
+    LaunchedEffect(assistant.id) { if (selectionOf != assistant.id) { selectionOf = assistant.id; endSelection() } }
     // Named on the history's requests and in the keys of what it read; "" (one manager, or a hub without a roster)
     // names none, as before.
     val historyManager = assistant.id.takeIf { assistant.roster?.isMulti == true }.orEmpty()
@@ -247,7 +251,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     // Done's history: the first page when Done opens, then "Show older".
     val historyManagers = listOf(historyManager.ifEmpty { null })
     val doneOpen = groups.any { it.id == "done" && !it.folded }
-    LaunchedEffect(doneOpen) { if (doneOpen && !history.started) history.start(historyManagers, zone) }
+    // Another assistant is another history (a new [history]): read it too when Done is already open.
+    LaunchedEffect(doneOpen, history) { if (doneOpen && !history.started) history.start(historyManagers, zone) }
     // Done's total with the hub's counts (#3016): what its groups add up to, folded or not, for the Done chip and Done's
     // title alike; with a filter or search on, or no counts, what is loaded.
     fun doneTotal(done: InboxGroup, manager: String): Int {

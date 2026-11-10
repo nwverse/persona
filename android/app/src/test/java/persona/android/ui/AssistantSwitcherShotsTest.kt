@@ -141,9 +141,9 @@ class AssistantSwitcherShotsTest {
         File(out(), "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    // 工作 has one agent waiting on a card: its badge is that and its inbox's two.
+    // 工作 has one agent waiting, on two cards: its badge is that agent once and its inbox's two.
     private val sessions = listOf(Session(machineId = "mac", sessionId = "s1", manager = "m-3fa21c"))
-    private val cards = listOf(Interaction("c1", "mac", "s1"))
+    private val cards = listOf(Interaction("c1", "mac", "s1"), Interaction("c2", "mac", "s1"))
 
     /** The sidebar as the shell's column draws it (its own surface, the compact rows in Glass), its head the switcher. */
     @Composable
@@ -208,6 +208,8 @@ class AssistantSwitcherShotsTest {
         // Closed: the current assistant with where it runs; the roster is not there.
         rule.onNodeWithText("在线 · server").assertExists()
         rule.onAllNodesWithText("新建助手").assertCountEquals(0)
+        // Spoken as one: the name, the state and the dot's news (another assistant has something waiting).
+        rule.onNodeWithContentDescription("助手，在线 · server，别的助手有事等你处理").assertExists()
         each("closed")
         // Open: every assistant, the default marked, the others' badges, the one installing with its code's time.
         tap("在线 · server")
@@ -217,8 +219,10 @@ class AssistantSwitcherShotsTest {
         rule.onNodeWithText("在线 · MacBook").assertExists()
         rule.onNodeWithText("离线 · 最后同步于 3 小时前").assertExists()
         rule.onNodeWithText("安装中 · 码 7 分钟后过期").assertExists()
-        rule.onNodeWithText("3").assertExists() // 工作: a card and two in its inbox
-        rule.onNodeWithContentDescription("当前").assertExists()
+        rule.onNodeWithText("3").assertExists() // 工作: one agent (its card) and two in its inbox
+        // Each row spoken as one, the badge as what it counts, the current one as current.
+        rule.onNodeWithContentDescription("助手，默认，在线 · server，当前").assertExists()
+        rule.onNodeWithContentDescription("工作，在线 · MacBook，3 件等你处理").assertExists()
         each("open")
         // One still installing opens its install commands (a new code is asked for), and stays out of the choice.
         tap("测试")

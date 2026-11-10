@@ -212,19 +212,23 @@ private fun AssistantLine(text: String) =
 /**
  * The sidebar's head: the current assistant ([avatar], its [name] with a caret, its [status] line under it); a tap
  * opens and closes the roster's menu under it ([expanded]). [trailing] is the bar's other button (the sidebar's search).
+ * Spoken as one: "name, status", and that something waits at another assistant ([othersWaiting], the avatar's dot).
  */
 @Composable
 fun JAssistantSwitcherHeader(
     name: String, status: String, expanded: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier,
-    avatar: @Composable () -> Unit, trailing: (@Composable () -> Unit)? = null,
+    avatar: @Composable () -> Unit, trailing: (@Composable () -> Unit)? = null, othersWaiting: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val label = stringResource(R.string.designsystem_manager_switcher)
     val stateText = stringResource(if (expanded) R.string.designsystem_expanded else R.string.designsystem_collapsed)
+    val named = stringResource(R.string.designsystem_manager_spoken, name, status)
+    val spoken = if (othersWaiting) stringResource(R.string.designsystem_manager_spoken, named, stringResource(R.string.designsystem_manager_others_waiting))
+        else named
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.android).clip(PersonaTheme.shapes.controlShape)
             .clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = label, onClick = onClick)
-            .semantics(mergeDescendants = true) { stateDescription = stateText }
+            .semantics(mergeDescendants = true) { contentDescription = spoken; stateDescription = stateText }
             .padding(vertical = Tokens.Space.xs),
             verticalAlignment = Alignment.CenterVertically) {
             avatar()
@@ -256,10 +260,15 @@ fun JAssistantSwitcherRow(
 ) {
     val palette = PersonaTheme.palette
     val faded = !manager.online && !manager.isInstalling
-    JRow(modifier.stableAlpha(if (faded) HomeTokens.assistantOfflineAlpha else 1f), onClick = onClick, chevron = false,
+    // Spoken as one: "name, Default, status", then "Current" or how many wait for the user, not a bare number.
+    val spoken = listOfNotNull(manager.shownName, defaultTag, status,
+        if (current) stringResource(R.string.designsystem_manager_current)
+        else badge.takeIf { it > 0 }?.let { androidx.compose.ui.res.pluralStringResource(R.plurals.designsystem_manager_waiting, it, it) },
+    ).reduce { spokenSoFar, part -> stringResource(R.string.designsystem_manager_spoken, spokenSoFar, part) }
+    JRow(modifier.stableAlpha(if (faded) HomeTokens.assistantOfflineAlpha else 1f).semantics { contentDescription = spoken },
+        onClick = onClick, chevron = false,
         selected = current, trailing = if (current || badge > 0) ({
-        if (current) JIcon(persona.core.designsystem.icons.PhIcons.Check, stringResource(R.string.designsystem_manager_current),
-            size = Tokens.Space.xl, tint = palette.accent)
+        if (current) JIcon(persona.core.designsystem.icons.PhIcons.Check, null, size = Tokens.Space.xl, tint = palette.accent, decorative = true)
         else JBadge(badge)
     }) else null) {
         JManagerAvatar(manager, isDefault, size = HomeTokens.assistantAvatarSmall, presence = true)

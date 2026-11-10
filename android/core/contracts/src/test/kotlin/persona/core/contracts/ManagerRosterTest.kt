@@ -134,6 +134,31 @@ class ManagerRosterTest {
         assertFalse(current.othersWaiting(mapOf("m-2" to 3, "assistant" to 0)))
     }
 
+    /** Each agent once (#3374's rule, the same on every client): two cards are one agent; quiet and muted ones none. */
+    @Test fun waitingCountsEachAgentOnce() {
+        val sessions = listOf(
+            Session(machineId = "mac", sessionId = "two", manager = "m-3", state = "working"),
+            Session(machineId = "mac", sessionId = "quiet", manager = "m-3", state = "needs_you", quiet = true),
+            Session(machineId = "mac", sessionId = "muted", manager = "m-3", state = "needs_you"),
+            Session(machineId = "mac", sessionId = "card-and-needs-you", manager = "m-3", state = "needs_you"),
+        )
+        val cards = listOf(
+            Interaction("c1", "mac", "two", manager = "m-3"),
+            Interaction("c2", "mac", "two", manager = "m-3"), // a second card of the same agent
+            Interaction("c3", "mac", "quiet"), // a quiet task's card
+            Interaction("c4", "mac", "muted"), // a muted session's card
+            Interaction("c5", "mac", "card-and-needs-you"), // a card and Needs you: still one agent
+            Interaction("c6", "mac", "no-such-session", manager = "m-3"), // on no listed session: once by itself
+            Interaction("c7", "mac", "no-such-session-either", manager = "m-3"),
+        )
+        val muted = setOf(SessionKey("mac", "muted"))
+        val waiting = roster.waiting(cards, sessions, sessionCounts = { !it.quiet && it.key !in muted })
+        assertEquals(mapOf("m-3" to 1 + 1 + 2), waiting)
+        // A quiet session's cards and a muted one's are never counted, whichever filter says so.
+        assertEquals(mapOf("m-3" to 2), roster.waiting(cards.filter { it.sessionId in setOf("quiet", "muted", "no-such-session", "no-such-session-either") },
+            sessions.filter { it.sessionId in setOf("quiet", "muted") }, sessionCounts = { !it.quiet && it.key !in muted }))
+    }
+
     @Test fun theRosterReadsTheInboxCount() {
         val read = JsonCodec.decodeFromString(ManagerRoster.serializer(),
             """{"default":"assistant","managers":[{"id":"assistant","online":true,"inbox_needs_you":3},{"id":"m-2","online":false}]}""")
