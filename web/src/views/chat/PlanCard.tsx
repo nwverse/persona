@@ -41,8 +41,10 @@ export function usePlanOutOfView(scroller: RefObject<HTMLDivElement | null>, id?
 /** The browser says when the card enters or leaves the view, so a scroll or a growing chat queries nothing and reads no
  *  layout (reading the rect of a card in an exchange that content-visibility skips lays that exchange out once the chat's
  *  width changed, #2485). Edge-adjacent counts as intersecting, the same rule as the measuring fallback. The card is
- *  looked for again only once the one watched left the DOM (the body's ResizeObserver, or its own last report when it was
- *  redrawn at the same size), or while none is drawn. */
+ *  looked for again only once the one watched left the DOM, or while none is drawn: the body's ResizeObserver sees a card
+ *  that came or went; a card redrawn at the same size in view sends its last report as it leaves; one redrawn at the same
+ *  size out of view sends none (it was not intersecting and still is not), so a scroll checks that the watched card is
+ *  still in the DOM, which reads no layout, and looks for the new one at most once. */
 function watchByIntersection(sc: Element, body: Element, id: string, find: () => Element | null, setOut: (out: boolean) => void): () => void {
   let el: Element | null = null;
   const current = () => el?.isConnected && el.getAttribute("data-plan-id") === id;
@@ -50,7 +52,7 @@ function watchByIntersection(sc: Element, body: Element, id: string, find: () =>
     if (current()) return;
     if (el) io.unobserve(el);
     el = find();
-    // not drawn (the hub folded it away with the work around it): the pill is where it shows (#5602)
+    // not drawn (the hub folded it away with the work around it): the pill is where it shows
     if (!el) return setOut(true);
     io.observe(el);
   };
@@ -61,10 +63,16 @@ function watchByIntersection(sc: Element, body: Element, id: string, find: () =>
     if (current()) setOut(!last.isIntersecting);
     else refind();
   }, { root: sc });
+  // while none is drawn, a scroll looks for nothing: a card that comes back changes the body's size
+  const onScroll = () => {
+    if (el && !current()) refind();
+  };
   refind();
+  sc.addEventListener("scroll", onScroll, { passive: true });
   const ro = new ResizeObserver(refind);
   ro.observe(body);
   return () => {
+    sc.removeEventListener("scroll", onScroll);
     ro.disconnect();
     io.disconnect();
   };
