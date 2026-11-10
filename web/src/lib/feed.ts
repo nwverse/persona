@@ -5,7 +5,7 @@ import { useSyncExternalStore } from "react";
 import { api, ApiError, enc } from "./api";
 import { formatDate, t } from "../i18n";
 import { parseAPIError } from "./api-errors";
-import { getState, onHubEvent, putTodo, refreshTodos } from "./store";
+import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
@@ -352,7 +352,7 @@ function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
   }
   for (const [c, group] of byConversation) feeds[c] = mergeInto(feeds[c] ?? [], [...group.values()]);
   set({ feeds, plans: plans ? { ...st.plans, ...plans } : st.plans });
-  if (items.some((i) => i.kind === "task" || i.kind === "receipt")) void refreshTodos();
+  if (items.some((i) => i.kind === "task" || i.kind === "receipt")) todosPushed();
 }
 
 const loading = new Set<string>();
