@@ -41,7 +41,7 @@ import Testing
         #expect(stopped.waitLine == nil && running.waitLine == nil)
     }
 
-    @Test func waitingIsUnderWayNotStopped() {
+    @MainActor @Test func waitingIsUnderWayNotStopped() {
         #expect(TaskState.waiting.label == "等待中" && TaskState.waiting.label != TaskState.followup.label)
         #expect(TaskState.waiting.priority == TaskState.working.priority)
         #expect(!TaskState.waiting.isSettled && !TaskState.waiting.isRemovable)

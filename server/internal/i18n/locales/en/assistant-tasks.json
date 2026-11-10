@@ -26,6 +26,7 @@
   "outcome_question": "Outcome",
   "outcome_pitfall": "Pitfall",
   "adopt_notes": "Taken under supervision: {agent} · {machine} · {cwd}",
+  "dispatch_notes": "Handed out by {from} on {from_machine} (dispatch_start): {machine} · {cwd}",
   "adopt_failed": "Could not take it under supervision: {reason}",
   "interrupt_summary": "Stop {agent} · {machine}",
   "start_remedy_notice": "Didn’t start: “{title}”. {reason}"
