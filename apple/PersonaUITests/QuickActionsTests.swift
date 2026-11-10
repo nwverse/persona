@@ -33,7 +33,8 @@ final class QuickActionsTests: XCTestCase {
         let icon = springboard.icons["Persona"].firstMatch
         XCTAssertTrue(icon.waitForExistence(timeout: 10), "no Persona icon on the home screen")
         icon.press(forDuration: 1.5)
-        let item = springboard.buttons[title].firstMatch
+        // a recent conversation's item reads "<title>, <computer> · <folder>": its title starts it
+        let item = springboard.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5), "no \(title) in the icon's menu")
         if let absent { XCTAssertFalse(springboard.buttons[absent].exists, "\(absent) is still in the icon's menu") }
         let shot = XCTAttachment(screenshot: springboard.screenshot())
