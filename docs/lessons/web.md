@@ -95,6 +95,10 @@ The web's `turns=2` initial page and two-turn cache deliberately preserve a smal
 
 A Profiler counts every commit beneath it, including status clocks and deferred mount work unrelated to the store update under test. Drain mount timers before taking the baseline, keep time fixed during the measured push sequence, and explicitly flush the real store's batched notifications inside `act`. Freezing timers without delivering those notifications can make a zero-redraw test pass vacuously: retain all negative assertions and add a positive control proving a current-conversation update still redraws and changes the DOM. Clear timers and restore real time after unmounting each test.
 
+## A scroll handler sets state only when its answer changes (#2998)
+
+A handler that runs on every scroll event (each frame of snap scrolling or a smooth `scrollBy`) and every `ResizeObserver` report must not call `setState` with a new object each time: `Object.is` never matches, so the component and all its children render on every frame (an extension carousel rendered its tiles once per scroll event). Returning the previous state from an updater is not enough either: React skips that render only while the component has no pending work, so a same-state resize report still rendered once and the next real change rendered twice. Keep what is shown in a ref and skip `setState` when nothing changed (`Carousel` in `web/src/views/extensions/ViewBody6.tsx`). Count `<Profiler>` commits for unchanged scrolls, unchanged resize reports and one real change (`web/src/views/extensions/ViewBody6.renders.test.tsx`).
+
 ## Streamed stat grids need the same text bounds as snapshots (#1703)
 
 Fixed grid columns do not constrain a value's painted text. Give each cell `min-w-0` and its value `truncate`, retaining the full DOM text and title. The legacy renderer can already have these guards while a separate native stream renderer omits them. A six-column grid exposed overlapping values that looked fine with two columns. Regress the native snapshot/delta DOM contract, then check real wide/narrow light/dark browser geometry; jsdom cannot prove clipping.
