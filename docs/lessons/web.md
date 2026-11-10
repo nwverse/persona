@@ -10,6 +10,10 @@ A feed read started before the write must not roll it back, and a late write res
 pushes. Capture a live card's manager on arrival and name even the default explicitly: API auto-routing otherwise
 substitutes a later assistant selection on card-id-only routes.
 Check a reload and a new same-reference draft in the actual tray, not only the historical card renderer.
+Keep the draft editor and its toast handlers behind a local lazy boundary; the collapsed startup tray does not need
+that UI. Pass existing task helpers into the editor instead of importing the whole Tasks module back into its lazy
+chunk. Static-render tests exercise the extracted editor directly; mounted tray tests wait for the lazy card and still
+exercise its actions. Leave Send/Dismiss admission, owner capture and revision fences in the synchronous feed layer.
 
 ## Same-state list updates can change background progress (#3588)
 

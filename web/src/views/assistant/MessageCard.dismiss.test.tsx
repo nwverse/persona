@@ -56,7 +56,14 @@ afterEach(() => {
 describe("dismiss a task-progress reply draft", () => {
   it("offers one primary Send and secondary Later / Don't handle, with Undo", async () => {
     api.mockResolvedValueOnce({ item: dismissed, dismissal_id: "demo-receipt" });
-    act(() => root.render(<Pending />));
+    await act(async () => {
+      root.render(<Pending />);
+      await import("./MessageDraft");
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(button("发送")).toBeDefined();
+    });
     expect(button("发送").className).toContain("bg-accent");
     expect(button("稍后").className).not.toContain("bg-accent");
     expect(button("不处理").className).not.toContain("bg-accent");
@@ -102,7 +109,10 @@ describe("dismiss a task-progress reply draft", () => {
 
   it("keeps the card on failure and permits retry without modifying the task", async () => {
     api.mockRejectedValueOnce(new ApiError(409, "Synthetic stale draft", {}));
-    act(() => root.render(<Pending />));
+    await act(async () => {
+      root.render(<Pending />);
+      await import("./MessageDraft");
+    });
     await act(async () => button("不处理").click());
     expect(needs()).toHaveLength(1);
     expect(button("不处理").disabled).toBe(false);
@@ -142,8 +152,8 @@ describe("dismiss a task-progress reply draft", () => {
     expect(api).not.toHaveBeenCalled();
   });
 
-  it("renders a persisted dismissal as not sent, without an editor or actions", () => {
-    act(() => root.render(<FeedLineView item={dismissed} />));
+  it("renders a persisted dismissal as not sent, without an editor or actions", async () => {
+    await act(async () => root.render(<FeedLineView item={dismissed} />));
     expect(host.textContent).toContain("已选择不处理，草稿没有发送");
     expect(host.querySelector("textarea")).toBeNull();
     expect(host.querySelector("button")).toBeNull();
