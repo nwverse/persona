@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
@@ -154,6 +155,97 @@ func TestInboxListEncodesOnlyChangedItems(t *testing.T) {
 		t.Fatalf("a replaced or dropped item is listed from old bytes: %s", body)
 	}
 	get(0)
+}
+
+// A change the item's save does not follow at once (a call elsewhere comes first, or nothing saves it) is listed
+// meanwhile, as memory holds it: a reply kept open by a move that came in while it was out (saved by nothing), an
+// event a group append moved (saved after the batch's other appends), an Agent a handed-off conversation started
+// (saved after the start returns), an event's conversation being started (saved after the node answers).
+func TestInboxChangesAreListedBeforeTheirSave(t *testing.T) {
+	chained := func(kind, session string) func(InboxItem) bool {
+		return func(x InboxItem) bool {
+			for _, e := range x.Chain {
+				if e.Kind == kind && (session == "" || e.Link != nil && e.Link.SessionID == session) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		// change lists the item once its bytes are kept, changes it, and gives the listing to check.
+		change func(t *testing.T, h *inboxHub, c *replyRacingConnector, it *InboxItem, listed func() InboxItem) InboxItem
+		want   func(InboxItem) bool
+	}{
+		{"reply kept open", func(t *testing.T, h *inboxHub, c *replyRacingConnector, it *InboxItem, listed func() InboxItem) InboxItem {
+			c.during = func() { // a move comes in while the reply is out; the round saves it and the app lists it
+				c.things = []connector.InboxThing{thing("b", time.Now())}
+				h.collectInbox(context.Background(), roundPoll)
+				listed()
+			}
+			out, err := h.replyInboxAs(context.Background(), it.ID, "looked", "")
+			if err != nil || out.DoneAt != nil || !chained(ChainSent, "")(out) {
+				t.Fatalf("the reply: %v, %+v", err, out)
+			}
+			return listed()
+		}, chained(ChainSent, "")},
+		{"event moved by a group append", func(t *testing.T, h *inboxHub, c *replyRacingConnector, it *InboxItem, listed func() InboxItem) InboxItem {
+			listed()
+			moved := thing("b", time.Now())
+			moved.ID, moved.Title = it.ID, "Moved"
+			h.putEvent(assistantwire.InboxSource{ID: it.Source, Name: "Example"}, moved.Thread, plannedEvent{messages: []string{"b"}}, moved, false)
+			return listed()
+		}, func(x InboxItem) bool { return x.Title == "Moved" }},
+		{"Agent a handed-off conversation started", func(t *testing.T, h *inboxHub, c *replyRacingConnector, it *InboxItem, listed func() InboxItem) InboxItem {
+			listed()
+			h.handoffAgentStarted(&handoffStart{item: it.ID}, "m1", "sess-handed", "look into it")
+			return listed()
+		}, chained(ChainAgent, "sess-handed")},
+		{"event's conversation being started", func(t *testing.T, h *inboxHub, c *replyRacingConnector, it *InboxItem, listed func() InboxItem) InboxItem {
+			h.setConfig(func(c *assistantwire.InboxConfig) { c.Agent.Enabled = true })
+			h.inbox.mu.Lock()
+			it.Agent = &InboxAgent{State: AgentQueued, Task: "look"}
+			h.inbox.mu.Unlock()
+			h.saveInbox(context.Background(), []*InboxItem{it})
+			listed()
+			var during InboxItem
+			hook := func(*fakeHub, map[string]any) {
+				if during.ID == "" {
+					during = listed()
+				}
+			}
+			h.f.mu.Lock()
+			h.f.onStart, h.f.onAssistantSend = hook, hook
+			h.f.mu.Unlock()
+			h.startInboxAgents(context.Background(), InboxAgentConfig{Enabled: true})
+			h.f.mu.Lock()
+			h.f.onStart, h.f.onAssistantSend = nil, nil
+			h.f.mu.Unlock()
+			return during
+		}, func(x InboxItem) bool { return x.Agent != nil && x.Agent.State == AgentRunning }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newInboxHub(t)
+			c := &replyRacingConnector{inboxConnector: inboxConnector{things: []connector.InboxThing{thing("a", time.Now().Add(-time.Minute))}}}
+			h.addConnector(c, false)
+			h.collectInbox(context.Background(), roundPoll)
+			it := openItem(t, h)
+			listed := func() InboxItem { // the item as GET /api/v1/inbox?sources=all writes it
+				raws, _, _ := h.inboxListRaw(true)
+				for _, raw := range raws {
+					var x InboxItem
+					if json.Unmarshal(raw, &x) == nil && x.ID == it.ID {
+						return x
+					}
+				}
+				return InboxItem{}
+			}
+			if got := tc.change(t, h, c, it, listed); !tc.want(got) {
+				t.Fatalf("listed from the bytes before the change: %+v", got)
+			}
+		})
+	}
 }
 
 // discardWriter keeps no body, so an allocation count is the handler's own.

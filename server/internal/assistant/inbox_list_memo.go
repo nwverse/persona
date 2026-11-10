@@ -20,15 +20,19 @@ import (
 // listed depends on the item alone (no clock, no request, no setting), so an item's bytes stay right until the item
 // changes. A change the rollback bookkeeping stamps (touched: settle, a filing, a parent link) forgets the item's
 // bytes at once; every change is saved through saveInboxPrepared, which forgets them as it starts (before it waits for
-// another save), as it takes the rows and after its finish (a failed row's undo). An item replaced under its id
-// (loadInbox, admission, the history, grouping) is told apart by its pointer, a dropped one by drop and the sweep
-// below. Tests check every kept item against a fresh encoding on every list (inboxMemoVerify).
+// another save), as it takes the rows and after its finish (a failed row's undo). Saved is not soon enough for a
+// change that makes a call before its save (a reply, a hand-off's Agent, a group append, an event's conversation
+// being started) or is never saved itself (a reply kept open by a move meanwhile): those forget as they change the
+// item, in chainAdd (every chain entry), putEvent and startInboxAgents. An item replaced under its id (loadInbox,
+// admission, the history, grouping) is told apart by its pointer, a dropped one by drop and the sweep below. Tests
+// check every kept item against a fresh encoding on every list (inboxMemoVerify).
 
 // inboxListMemoOn: off, GET /api/v1/inbox encodes every item again, as before the memo.
 const inboxListMemoOn = true
 
 // inboxMemoVerify is set by the package's tests (TestMain): every list also encodes each kept item again and notes a
-// difference (inboxMemoStale), so a change of an item that forgets nothing (touched, saveInboxPrepared) fails the run.
+// difference (inboxMemoStale), so a change of an item that forgets nothing (touched, chainAdd, saveInboxPrepared)
+// fails the run.
 var inboxMemoVerify bool
 
 // inboxListMemo is the items' kept bytes, under inboxBook.mu.

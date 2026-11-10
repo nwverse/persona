@@ -12,7 +12,7 @@ import (
 // The tests that need Postgres run on a database of their own (dbtest, #583); without PERSONA_TEST_DATABASE_URL they
 // skip. Run with a throw-away HOME (testhome): nothing in the package may write the default ~/.persona. Every inbox
 // list checks the item bytes GET /api/v1/inbox kept against a fresh encoding (inboxMemoVerify): a change of an item
-// that forgets nothing (touched, saveInboxPrepared) fails the run.
+// that forgets nothing (touched, chainAdd, saveInboxPrepared) fails the run.
 func TestMain(m *testing.M) {
 	inboxMemoVerify = true
 	os.Exit(testhome.Main(func() int { return staleListedCheck(dbtest.Main(m)) }))
