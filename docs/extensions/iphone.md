@@ -118,6 +118,11 @@ card, so the owner sees what is sent, and so is in the card's history and its pu
 model's own call, in the assistant's transcript, holds what it wrote; it can only type a password it already has in the
 conversation.
 
+The core's refusals (`rpc.Error` codes, all with `sent: no`): `bad_args` (it could not read the arguments or steps: the
+model is told to fix its call), `not_pending` (a resume of an approval it no longer holds: said as it is, not tried
+again), `busy` (a resume while another call runs on the phone: the approval is still pending, so the manager tries the
+same id again after 1, 2 and 3 seconds without asking the owner again, then tells the model to try again later).
+
 Once allowed, the manager resumes the do with `approved: <approval_id>` and no arguments. The core answers a resume it
 no longer holds (the id used before, the do replaced by a newer one, older than 15 minutes, the node restarted) with
 "nothing was sent"; the model gets that as it is, told the approved step was not done and not to try it again without
