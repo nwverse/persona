@@ -2,7 +2,7 @@
 import AppKit
 import SwiftUI
 
-/// Screenshots without the screen (docs/apple/mac.md「截图」): this Mac is often locked, and `screencapture` then only gets
+/// Screenshots without the screen (docs/apple/mac.md「Build, run, screenshot」): this Mac is often locked, and `screencapture` then only gets
 /// the lock screen. `-macSnapshot <png>` renders the main window's own views into a PNG after a while
 /// (`-macSnapshotDelay <s>`, default 4), then quits with `-macSnapshotQuit YES`. `-macWindowSize 1280x820` sizes the
 /// window first; `-macAppearance dark|light` picks the appearance (`-AppleInterfaceStyle Dark` also works);
@@ -186,7 +186,7 @@ import SwiftUI
     /// The window drawn into a bitmap at the screen's scale, title bar and toolbar included, through `cacheDisplay`:
     /// views draw themselves and nothing needs the window server's picture of the screen, so a locked Mac works.
     ///
-    /// What that misses, found by trying (2026-10-31, docs/apple/mac.md「截图」): the rows of AppKit-backed lists
+    /// What that misses, found by trying (2026-10-31, docs/apple/mac.md「Build, run, screenshot」): the rows of AppKit-backed lists
     /// (SwiftUI `List` is an NSTableView) come out empty when drawn as part of the window, so every row is drawn again
     /// on its own and laid over its place; a selected row's material draws black off screen, so it is painted in the
     /// inactive selection color. Glass and other materials draw no blur: the window background shows through.

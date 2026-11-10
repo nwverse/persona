@@ -2,7 +2,7 @@ import AppKit
 import Testing
 @testable import Persona
 
-/// The pointer on a terminal the Mac drives (docs/integrations/terminal.md「第二十五节」): the same routing, buttons and bits as the
+/// The pointer on a terminal the Mac drives (docs/integrations/terminal.md「Mouse: click, drag, buttons and modifiers」): the same routing, buttons and bits as the
 /// web's `lib/terminal-mouse.ts`.
 struct MacTerminalMouseTests {
     @Test func buttonsAreHerdrs() {

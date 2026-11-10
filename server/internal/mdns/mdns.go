@@ -34,7 +34,6 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -114,6 +113,8 @@ type runner struct {
 	br   *browser // nil: not browsing
 	logf func(string, ...any)
 
+	readAddrs func(*net.Interface) []netip.Addr // ifaceAddrs; tests count the reads
+
 	c4, c6 net.PacketConn
 	p4     *ipv4.PacketConn
 	p6     *ipv6.PacketConn
@@ -123,9 +124,9 @@ type runner struct {
 	wg   sync.WaitGroup
 
 	// Owned by the loop goroutine.
-	links    map[int]*link        // by interface index
-	logged   map[string]string    // last error logged per key, so a persistent one is logged once
-	recent   map[string]time.Time // last multicast answer per interface / family / answer set
+	links    map[int]*link           // by interface index
+	logged   map[string]string       // last error logged per key, so a persistent one is logged once
+	recent   map[recentKey]time.Time // last multicast answer per interface / family / asked set
 	lastSend time.Time
 }
 
@@ -133,6 +134,13 @@ type runner struct {
 type link struct {
 	ifi      net.Interface
 	on4, on6 bool
+}
+
+// recentKey names a multicast answer for the once-a-second limit.
+type recentKey struct {
+	ifindex int
+	v6      bool
+	want    asked
 }
 
 type packet struct {
@@ -144,13 +152,14 @@ type packet struct {
 
 func newRunner(o Options) (*runner, error) {
 	r := &runner{
-		o:      o,
-		logf:   o.Logf,
-		pkts:   make(chan packet, 64),
-		done:   make(chan struct{}),
-		links:  map[int]*link{},
-		logged: map[string]string{},
-		recent: map[string]time.Time{},
+		o:         o,
+		logf:      o.Logf,
+		readAddrs: ifaceAddrs,
+		pkts:      make(chan packet, 64),
+		done:      make(chan struct{}),
+		links:     map[int]*link{},
+		logged:    map[string]string{},
+		recent:    map[recentKey]time.Time{},
 	}
 	if r.logf == nil {
 		r.logf = func(string, ...any) {}
@@ -385,7 +394,18 @@ func (r *runner) handle(p packet, now time.Time) {
 }
 
 func (r *runner) answer(l *link, p packet, m *message, now time.Time) {
-	ans, add := r.svc.answer(m.questions, ifaceAddrs(&l.ifi), recordTTL)
+	want := r.svc.match(m.questions)
+	if want == (asked{}) {
+		return
+	}
+	if p.src.Port == mdnsPort && r.answeredRecently(recentKey{l.ifi.Index, p.v6, want}, now) {
+		return
+	}
+	var addrs []netip.Addr
+	if want.needsAddrs() {
+		addrs = r.readAddrs(&l.ifi)
+	}
+	ans, add := r.svc.build(want, addrs, recordTTL)
 	if len(ans) == 0 {
 		return
 	}
@@ -415,9 +435,19 @@ func (r *runner) answer(l *link, p packet, m *message, now time.Time) {
 		r.note("unicast reply", err)
 		return
 	}
-	key := strconv.Itoa(l.ifi.Index) + family(p.v6) + answerKey(ans)
-	if t, ok := r.recent[key]; ok && now.Sub(t) < time.Second {
+	b, err := packMessage(&message{flags: flagResponse | flagAA, answers: ans, additionals: add})
+	if err != nil {
+		r.note("pack answer", err)
 		return
+	}
+	r.send(l, p.v6, b)
+}
+
+// answeredRecently reports whether the multicast answer key went out less than a second ago, and otherwise counts it
+// as sent now (§6). It runs before the interface's addresses are read, so a burst of the same query costs one read.
+func (r *runner) answeredRecently(key recentKey, now time.Time) bool {
+	if t, ok := r.recent[key]; ok && now.Sub(t) < time.Second {
+		return true
 	}
 	if len(r.recent) > 64 {
 		for k, t := range r.recent {
@@ -427,23 +457,7 @@ func (r *runner) answer(l *link, p packet, m *message, now time.Time) {
 		}
 	}
 	r.recent[key] = now
-	b, err := packMessage(&message{flags: flagResponse | flagAA, answers: ans, additionals: add})
-	if err != nil {
-		r.note("pack answer", err)
-		return
-	}
-	r.send(l, p.v6, b)
-}
-
-func answerKey(rs []record) string {
-	var b strings.Builder
-	for _, r := range rs {
-		b.WriteString(strconv.Itoa(int(r.typ)))
-		b.WriteByte(' ')
-		b.WriteString(asciiLower(r.name.String()))
-		b.WriteByte(' ')
-	}
-	return b.String()
+	return false
 }
 
 func (r *runner) report(es []Entry) {
@@ -458,7 +472,7 @@ func (r *runner) report(es []Entry) {
 // announce multicasts the service on links, each with its own addresses (ttl 0: goodbye).
 func (r *runner) announce(links []*link, ttl uint32) {
 	r.sendLinks(links, func(l *link) []byte {
-		b, err := r.svc.response(ifaceAddrs(&l.ifi), ttl)
+		b, err := r.svc.response(r.readAddrs(&l.ifi), ttl)
 		r.note("pack announcement", err)
 		return b
 	})
@@ -546,7 +560,7 @@ func (r *runner) refreshLinks() (fresh []*link) {
 		}
 		l.ifi = ifi
 		has4, has6 := false, false
-		for _, a := range ifaceAddrs(&ifi) {
+		for _, a := range r.readAddrs(&ifi) {
 			if a.Is4() {
 				has4 = true
 			} else {

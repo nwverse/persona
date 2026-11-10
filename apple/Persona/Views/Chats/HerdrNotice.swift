@@ -1,6 +1,6 @@
 import SwiftUI
 
-// "herdr isn't running on MacBook" with Start, at the top of the Agents list (#1916, docs/integrations/engines.md「herdr 没在运行时」): told
+// "herdr isn't running on MacBook" with Start, at the top of the Agents list (#1916, docs/integrations/engines.md「When herdr is not running」): told
 // before a message to an agent there fails, not after. Only classic herdr (engines herdr and herdr-both): Herdr App's
 // herdr-core has no server for the node to start.
 

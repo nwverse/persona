@@ -300,7 +300,7 @@ private final class Counter: @unchecked Sendable {
     func bump() { lock.withLock { n += 1 } }
 }
 
-/// The pairing must not get lost (docs/protocol/multi-hub.md「存储」): a keychain that cannot be read now is unknown, not empty,
+/// The pairing must not get lost (docs/protocol/multi-hub.md「Storage」): a keychain that cannot be read now is unknown, not empty,
 /// and nothing is written over it; the old single pairing goes only once the registry is written and reads back.
 struct HubStoreTests {
     private static func defaults() -> UserDefaults {

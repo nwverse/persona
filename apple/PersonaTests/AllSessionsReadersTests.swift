@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// Only lists of agents read `AppModel.allSessions` (docs/apple/ios-state.md「第 5 步」): a view that reads it is drawn
+/// Only lists of agents read `AppModel.allSessions` (docs/apple/ios-state.md「Step 5」): a view that reads it is drawn
 /// again by every push about any agent on any machine, which is what steps 1–3 took out of the chat pages, the tab
 /// badges and the top bars. A view about one session reads its cell (`model.session(_:)`); an action that needs every
 /// agent when it is tapped (the @ menu, the next agent) reads `model.sessionsNow`, which nothing watches. Reads the

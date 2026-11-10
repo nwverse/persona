@@ -21,7 +21,7 @@ import (
 
 // The schemas (schema/extension, copied here by the generator) are the one truth of what a view, a manifest or a
 // handshake may hold: Validate holds a value to one of their definitions. It knows the subset the generator does
-// (schema/extension/README.md "Subset"), the same as scripts/test/test_extension_schema.py's validator, and nothing more.
+// (schema/extension/README.md "The subset"), the same as scripts/test/test_extension_schema.py's validator, and nothing more.
 
 //go:embed schema/*.json
 var schemaFS embed.FS

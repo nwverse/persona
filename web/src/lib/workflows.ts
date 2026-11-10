@@ -1,4 +1,4 @@
-// Background workflows (#2935, docs/protocol/agent-states.md "Background workflows, Monitor"): a Claude Code agent whose turn ended to
+// Background workflows (#2935, docs/protocol/agent-states.md "Background workflows and Monitor"): a Claude Code agent whose turn ended to
 // wait for its Workflow run is still at work. What the rows, the chat's header, the task cards and the run's own card
 // (#3434: one block per phase, a progress bar in parts) say about them.
 // Newer hubs send Session.workflows; an older one only lists the run in background (kind "workflow"). Fields a hub may

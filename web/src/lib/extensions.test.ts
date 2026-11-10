@@ -234,7 +234,7 @@ describe("an extension's machine switches", () => {
   });
 });
 
-describe("auto-upgrade (docs/extensions/extensions.md「自动升级」)", () => {
+describe("auto-upgrade (docs/extensions/extensions.md「Auto-upgrade」)", () => {
   const up = (state: string, extra: Partial<ExtensionUpgrade> = {}): ExtensionUpgrade => ({ id: "p", market: "m1", from: "1.0.0", to: "1.1.0", state, ...extra });
 
   it("says what happens to a newer version, and what the user does about it", () => {

@@ -39,4 +39,5 @@ Issue and PR numbers in lines written up to 2026-11-07 (check `git blame`) refer
   this documentation tree retains only the README assets. Interactive design prototypes are text, live beside their
   module guide (or in its archive), and do not depend on stored verification images.
 - Run `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py`, and
-  `python3 scripts/test/test_readme_languages.py` after changing document or asset paths.
+  `python3 scripts/test/test_readme_languages.py` after changing document or asset paths, and
+  `python3 scripts/test/test_doc_sections.py` after renaming a heading: names quoted after a doc path must still match one.

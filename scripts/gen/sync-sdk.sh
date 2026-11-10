@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copies the extension SDK of this checkout into an extension repository (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"):
+# Copies the extension SDK of this checkout into an extension repository (docs/extensions/extensions.md "Writing extensions: SDK, templates and command line"):
 # <repo>/sdk/go (the Go SDK: wire, ext, exttest, and a go.mod) and <repo>/sdk/ts (the TypeScript SDK), and records
 # which commit it came from in <repo>/sdk/VERSION. Extension repositories keep this copy instead of fetching the
 # private main repository; their go.mod replaces github.com/nwverse/persona/sdk/go with ./sdk/go.
