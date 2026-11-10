@@ -293,6 +293,9 @@ export function ModeChips({ session, effortOnly, assistant, withInfo }: { sessio
       return false;
     }
   };
+  const speedTitle = (id: string, name: string) => id === "default" ? t("chat-sessiondialogs.speed_standard") : id === "priority" ? t("chat-sessiondialogs.speed_fast") : name;
+  const speedChoices = session.service_tiers ?? [];
+  const currentSpeed = speedChoices.find((tier) => tier.id === session.service_tier);
   const mode = session.permission_mode;
   const danger = mode === BYPASS_MODE;
   return (
@@ -306,7 +309,7 @@ export function ModeChips({ session, effortOnly, assistant, withInfo }: { sessio
       {!effortOnly && <Chip label={mode ? modeTitle(mode) : t("chat-sessiondialogs.permission_default")} narrow={{ icon: "shield", label: modeShort(mode) }} danger={danger} onClick={modeMenu.open} active={Boolean(modeMenu.anchor)} title={danger ? BYPASS_WARNING : t("chat-sessiondialogs.permission_mode")} />}
       <Chip
         buttonRef={effortChip}
-        label={session.effort ? t("chat-sessiondialogs.effort_chip", { effort: effortTitle(session.effort) }) : t("chat-sessiondialogs.effort_default")}
+        label={effortOnly && !session.efforts?.length ? t("chat-sessiondialogs.speed") : session.effort ? t("chat-sessiondialogs.effort_chip", { effort: effortTitle(session.effort) }) : t("chat-sessiondialogs.effort_default")}
         narrow={{ icon: "gauge", label: session.effort ? effortTitle(session.effort) : t("chat-sessiondialogs.short_default") }}
         onClick={withModel ? (e) => setPopover((a) => (a ? null : e.currentTarget)) : effortMenu.open}
         active={Boolean(withModel ? popover : effortMenu.anchor)}
@@ -339,7 +342,16 @@ export function ModeChips({ session, effortOnly, assistant, withInfo }: { sessio
           side="top"
           width={280}
           header={t("chat-sessiondialogs.effort")}
-          items={effortOptions(session).map((m) => ({ key: m.id, label: m.title, detail: m.detail, radio: true, checked: session.effort === m.id, onSelect: () => void set({ effort: m.id }) }))}
+          items={[
+            ...(effortOnly && !session.efforts?.length ? [] : effortOptions(session).map((m) => ({ key: m.id, label: m.title, detail: m.detail, radio: true, checked: session.effort === m.id, onSelect: () => void set({ effort: m.id }) }))),
+            ...(speedChoices.length ? [{
+              key: "speed", label: t("chat-sessiondialogs.speed"),
+              hint: currentSpeed ? speedTitle(currentSpeed.id, currentSpeed.name) : t("chat-sessiondialogs.speed_unknown"),
+              divider: true, onSelect: () => {},
+              // Speed controls load on intent, alongside the existing model popover.
+              children: () => import("./CodexSpeed").then((module) => module.codexSpeedOptions(latest.current)),
+            }] : []),
+          ]}
         />
       )}
       {popover && withModel && <ModelEffortPopover session={session} anchor={popover} onClose={() => setPopover(null)} apply={set} />}
@@ -545,7 +557,8 @@ export function CloseAgentDialog({ open, onClose, onClosed, session, machineName
   }, [open]);
   const go = async () => {
     // the agent went away while the dialog was open: nothing left to close, so don't leave a button that does nothing
-    if (!sessionCan(getSession(session.machine_id, session.session_id), "terminal")) {
+    const current = getSession(session.machine_id, session.session_id);
+    if (!current || current.status === "offline" || !sessionCan(current, "close")) {
       onClose();
       return;
     }
@@ -580,7 +593,7 @@ export function CloseAgentDialog({ open, onClose, onClosed, session, machineName
       }
     >
       <p className="text-[13px] leading-relaxed text-ink-2">
-        {t("chat-chatview.close_agent_detail", { machine: machineName, where: [session.space_name, tabLabel(session)].filter(Boolean).join(" › ") || sessionTitle(session) })}
+        {t(session.source_kind === "runtime" ? "chat-chatview.close_runtime_detail" : "chat-chatview.close_agent_detail", { machine: machineName, title: sessionTitle(session), where: [session.space_name, tabLabel(session)].filter(Boolean).join(" › ") || sessionTitle(session) })}
       </p>
       {wt && <WorktreeCleanup st={wt} value={cleanup} onChange={setCleanup} />}
     </Dialog>

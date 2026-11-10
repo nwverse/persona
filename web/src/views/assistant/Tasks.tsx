@@ -2,7 +2,7 @@
 // task cards that follow their agents, the hub's lines (answered, receipt, routed), the "Today" card, message cards about
 // a task, quick results, the dock above the composer, the tasks' questions, the route chip, and a task's detail in the
 // side panel.
-import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
 import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
@@ -17,6 +17,9 @@ import {
   feedNotice,
   getFeedState,
   receiptState,
+  interruptLook,
+  type InterruptBatch,
+  type InterruptResolution,
   isToday,
   sentByPersona,
   later,
@@ -37,8 +40,9 @@ import {
   type TaskPlan,
   type TodayBody,
 } from "../../lib/feed";
-import { runningWorkflows, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
+import { runningWorkflows, workflowCounts, workflowLine } from "../../lib/workflows";
+import { askOptions, dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -57,6 +61,9 @@ import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
 import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { AcceptRow, BriefCard } from "./Brief";
+
+// A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
+const DecisionRow = lazy(() => import("./DecisionRow").then((m) => ({ default: m.DecisionRow })));
 import { SentLine, TaskSentList } from "./Sent";
 import { latestReview, progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
@@ -249,7 +256,7 @@ export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: 
   return (lead && interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)) ?? interactions.find(mine);
 }
 
-/** What a waiting task needs, in a line (#3301): "Asking you: which framework?", "Needs permission: swift test", "Plan to approve", the words
+/** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Needs your permission: swift test", "Plan awaiting approval", the words
  *  the to-dos page's agent rows use; undefined without a card. */
 export function taskAsk(ix: Interaction | undefined): string | undefined {
   if (!ix) return undefined;
@@ -464,6 +471,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
   const workflow = status === "working" || status === "waiting" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
   // what its agent last told Persona (report_to_supervisor): while the task is open
   const reported = status !== "done" && status !== "failed" ? progressLine(todo.supervision) : undefined;
+  // nobody is working on it (#3618): the hub's finding and why, ahead of what its agent last reported
+  const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
   // its agent's own task list (#5302), unless a report to Persona came after it: the report says more
   const plan = status !== "done" && status !== "failed" && planShown(lead, todo.supervision) ? planLine(lead) : "";
   return (
@@ -505,6 +514,12 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
             <span data-plan-line title={planLabel(lead)} aria-label={planLabel(lead)} className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
               <Icon name="list" size={11} stroke={2.2} className="shrink-0" />
               <span className="truncate tabular-nums">{plan}</span>
+            </span>
+          )}
+          {orphan && (
+            <span data-orphaned-line className="flex min-w-0 items-center gap-1 text-[12px] text-orange">
+              <Icon name="warning" size={11} stroke={2.2} className="shrink-0" />
+              <span className="truncate"><span className="font-medium">{orphan.lead}</span>{orphan.reason && <span className="text-ink-3"> · {orphan.reason}</span>}</span>
             </span>
           )}
           {reported && (
@@ -634,8 +649,11 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
   const known = useStore((s) => s.todos.some((t) => t.id === item.ref));
   const planned = useFeed((s) => item.kind === "task" && Object.values(s.plans).some((p) => p.conversation === item.conversation && p.tasks.some((task) => task.todo_id === item.ref)));
   if (simplified) {
-    if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint conversation={item.conversation} count={plan.tasks.length} /> : null;
-    if (item.kind === "task") return planned ? null : <DispatchHint conversation={item.conversation} count={1} />;
+    // the dispatched tasks themselves, each opening its own task (its Agent's chat), never the whole In progress tray (#3700)
+    if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint tasks={plan.tasks.map((task) => ({ todo: task.todo_id, title: task.title }))} /> : null;
+    if (item.kind === "task") return planned ? null : <DispatchHint tasks={[{ todo: item.ref, title }]} />;
+    // an interrupted receipt the hub worked out stays as its record (#3834): one card for a batch, a grey line once handled
+    if (item.kind === "receipt" && interruptLook(item)) return <ReceiptCard item={item} />;
     if (item.kind === "review" || item.kind === "receipt" || item.kind === "report") return null;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
   }
@@ -734,8 +752,88 @@ export function AnsweredLine({ item, title, onOpenTask }: { item: FeedItem; titl
 
 function ReceiptCard({ item }: { item: FeedItem }) {
   const state = receiptState(item);
+  const look = interruptLook(item);
+  if (look?.kind === "hidden") return null;
+  if (look?.kind === "batch") return <InterruptBatchCard batch={look.batch} />;
+  if (look?.kind === "resolved") return <InterruptHandledLine todoId={item.ref} title={field(item, "title") ?? t("assistant-tasks.task_fallback")} resolution={look.resolution} />;
   if (state === "interrupted") return <InterruptedReceipt item={item} />;
   return <OutcomeReceipt item={item} failed={state === "failed"} />;
+}
+
+/** The words for how an interrupted task was dealt with, as the hub said (#3834). */
+function resolutionLabel(r: InterruptResolution): string {
+  return t(`assistant-tasks.interrupt_resolution_${r}`);
+}
+
+/** The words for what cut a batch off (the hub's `cause`; one it doesn't know reads as a model service error). */
+function causeLabel(cause: string): string {
+  const known = ["model_error", "rate_limited", "auth", "model_route", "no_output"];
+  return t(`assistant-tasks.interrupt_cause_${known.includes(cause) ? cause : "model_error"}`);
+}
+
+/** An interrupted task that was dealt with since (#3834): a grey line, its result in words; it opens the task. */
+function InterruptHandledLine({ todoId, title, resolution }: { todoId?: string; title: string; resolution: Exclude<InterruptResolution, "pending"> }) {
+  const known = useStore((s) => s.todos.some((x) => x.id === todoId));
+  const text = t("assistant-tasks.interrupt_handled", { title, result: resolutionLabel(resolution) });
+  const body = (
+    <>
+      <Icon name="info" size={13} className="shrink-0" />
+      <span className="min-w-0 truncate">{text}</span>
+    </>
+  );
+  return known && todoId ? (
+    <button type="button" data-interrupt="handled" onClick={() => openTask(todoId)} className="flex max-w-full items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
+      {body}
+    </button>
+  ) : (
+    <div data-interrupt="handled" className="flex max-w-full items-center gap-1.5 self-start text-[13px] text-ink-2">{body}</div>
+  );
+}
+
+/** Several tasks one outage cut off (#3834): one card, its cause, how many are handled and how many still pending; it
+ *  opens to each task and its result. Red only while one is pending. */
+export function InterruptBatchCard({ batch }: { batch: InterruptBatch }) {
+  const [open, setOpen] = useState(false);
+  const todos = useStore((s) => s.todos);
+  const pending = batch.pending > 0;
+  const cause = causeLabel(batch.cause);
+  const title = batch.machine
+    ? t("assistant-tasks.interrupt_batch_title_on", { machine: batch.machine, cause, count: batch.total })
+    : t("assistant-tasks.interrupt_batch_title", { cause, count: batch.total });
+  const counts = pending ? t("assistant-tasks.interrupt_batch_counts", { resolved: batch.resolved, pending: batch.pending }) : t("assistant-tasks.interrupt_batch_all");
+  return (
+    <div data-interrupt="batch" data-pending={pending || undefined} className={cx("flex flex-col rounded-card", pending ? "bg-red-tint" : "bg-field")}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex items-start gap-3 p-4 text-left">
+        <Icon name="info" size={18} stroke={2.4} className={cx("shrink-0", pending ? "text-red" : "text-ink-3")} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className={cx("text-[14.5px] font-semibold", !pending && "text-ink-2")}>{title}</div>
+          <div className="text-[13px] text-ink-2">{counts}</div>
+        </div>
+        <Icon name="chevronRight" size={14} stroke={2.2} className="mt-1 shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : "none" }} />
+      </button>
+      <Collapse open={open} lazy>
+        <div className="flex flex-col gap-0.5 px-3 pb-3" data-testid="interrupt-batch-tasks">
+          {batch.tasks.map((task) => {
+            const known = todos.find((x) => x.id === task.todo_id);
+            const waiting = task.resolution === "pending";
+            return (
+              <button
+                key={task.receipt}
+                type="button"
+                disabled={!known}
+                onClick={() => known && openTask(known.id)}
+                className="flex min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left text-[13px] enabled:hover:bg-hover"
+              >
+                <span className="min-w-0 flex-1 truncate">{known?.title || task.title}</span>
+                <span className={cx("shrink-0 whitespace-nowrap", waiting ? "font-medium text-red" : "text-ink-2")}>{resolutionLabel(task.resolution)}</span>
+                {known && <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" />}
+              </button>
+            );
+          })}
+        </div>
+      </Collapse>
+    </div>
+  );
 }
 
 /** A task the model service cut off (#1516): red, why in words, "Continue" while it is still cut off; once its agent went on,
@@ -931,7 +1029,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
 // ── Today ──
 
 /** The "Today" card's "Needs you" row's lines under its title (#4478), one per task, each truncated on its own: what its task
- *  waits on ("Asking you: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
+ *  waits on ("Has a question: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
  *  has no card) and "N more" past them. A card just answered here is not one it waits on (answeredLookup). */
 const TODAY_WAITING_MAX = 3;
 function todayWaitingLines(s: State, waiting: { id: string; title: string }[]): string[] {
@@ -1175,17 +1273,52 @@ const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
-function DispatchHint({ conversation, count }: { conversation: string; count: number }) {
+/** What a reply dispatched, under it (#3700): one task reads "Dispatched: <title> · Open", several list their titles; each
+ *  opens that task's detail beside the conversation, its Agent's chat or, before the Agent starts, the task card (openTask).
+ *  A task the hub could not start has no to-do yet and is shown without a link (its plan card says why). */
+function DispatchHint({ tasks }: { tasks: { todo?: string; title: string }[] }) {
+  if (tasks.length === 1) {
+    const [task] = tasks;
+    return (
+      <DispatchedTask todo={task!.todo} title={task!.title} hint className="max-w-full">
+        {(title) => (
+          <>
+            <span className="truncate">{t("assistant-tasks.dispatch_single", { title })}</span>
+            {task!.todo && <span className="shrink-0 font-semibold text-accent">· {t("assistant-tasks.dispatch_open")}</span>}
+          </>
+        )}
+      </DispatchedTask>
+    );
+  }
   return (
-    <button type="button" data-dispatch-hint onClick={() => window.dispatchEvent(new CustomEvent("persona:task-progress", { detail: conversation }))} className="inline-flex max-w-full items-center gap-2 self-start rounded-full bg-field px-3 py-1.5 text-sm text-ink-2 hover:bg-hover">
-      <span className="truncate">{t("assistant-tasks.dispatch_hint", { count })}</span>
+    <div data-dispatch-hint={tasks.length} className="flex max-w-full flex-col items-start gap-1.5 self-start">
+      <span className="px-1 text-[12px] text-ink-2">{t("assistant-tasks.dispatch_many", { count: tasks.length })}</span>
+      <div className="flex max-w-full flex-wrap gap-1.5">
+        {tasks.map((task, i) => (
+          <DispatchedTask key={task.todo ?? `unstarted-${i}`} todo={task.todo} title={task.title} className="max-w-[280px]">
+            {(title) => <span className="truncate">{title}</span>}
+          </DispatchedTask>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** One dispatched task's link: the to-do's current title (the plan's until the to-do arrives). */
+function DispatchedTask({ todo, title, hint, className, children }: { todo?: string; title: string; hint?: boolean; className: string; children: (title: string) => ReactNode }) {
+  const current = useStore((s) => (todo ? s.todos.find((x) => x.id === todo)?.title : undefined)) ?? title;
+  const pill = cx("inline-flex min-w-0 items-center gap-2 self-start rounded-full bg-field px-3 py-1.5 text-sm text-ink-2", className);
+  if (!todo) return <span data-dispatch-hint={hint ? 1 : undefined} data-dispatched-task="" className={pill}>{children(current)}</span>;
+  return (
+    <button type="button" data-dispatch-hint={hint ? 1 : undefined} data-dispatched-task={todo} title={current} onClick={() => openTask(todo)} className={cx(pill, "hover:bg-hover")}>
+      {children(current)}
       <Icon name="chevronRight" className="shrink-0" />
     </button>
   );
 }
 
 /** One slot, one row: live task/session state wins over historical feed metadata. */
-function ProgressTaskRow({ card, conversation }: { card: TaskCardMetadata; conversation: string }) {
+function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork }) {
   const todo = useTodo(card.todo_id);
   const task = useTaskNow(todo);
   const plans = useFeed((s) => s.plans);
@@ -1205,26 +1338,47 @@ function ProgressTaskRow({ card, conversation }: { card: TaskCardMetadata; conve
   const pr = todo?.pr_url ?? (receipt && field(receipt, "pr"));
   const prNumber = pr ? /\/(\d+)\/?$/.exec(pr)?.[1] : undefined;
   const toStart = !todo && !!card.plan_id && plans[card.plan_id]?.state === "open";
-  const statusLabel = accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
+  const liveWork = !finished && state !== "cancelled" ? activity : undefined;
+  const liveLine = backgroundWorkLine(liveWork);
+  const statusLabel = liveWork ? stateName("working") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
   // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
-  const mark: TodoStatus = accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
+  const mark: TodoStatus = liveWork ? "working" : accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
   // what a waiting task waits for (#3274): its agent's own line for it
   const waits = useStore((s) => (todo && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
+  // stopped and not done: the hub's completion check says why (#3180); an agent's open question or waiting line says more
+  const why = ask || waits ? undefined : stoppedReason(todo, state);
+  const stopped = why === undefined ? undefined : why ? t("assistant-tasks.progress_stopped_reason", { reason: why }) : t("assistant-tasks.progress_stopped");
+  // nobody is working on it (#3618): said ahead of why it stopped and of its agent's last report
+  const orphan = todo && !ask ? orphanedLine(todo) : undefined;
+  const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : waits ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : liveLine ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold" title={title}>{title}</span><span className={cx("shrink-0 text-xs", toStart || state === "needs_you" ? "text-attention" : "text-ink-2")}>{statusLabel}</span></div>
-        <div className="truncate text-xs text-ink-2" title={detail}>{[detail, prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined].filter(Boolean).join(" · ")}</div>
+        <BackgroundWorkDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} />
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
       {finished ? <Icon name="check" className="shrink-0 text-green" /> : blocked ? <Icon name="info" className="shrink-0 text-orange" /> : <Icon name="chevronRight" className="shrink-0 text-ink-3" />}
     </button>
   );
+}
+
+/** Workflow counts never disappear behind an ellipsized phase, even on a narrow tray or with large text. */
+function BackgroundWorkDetail({ activity, detail, pr }: { activity?: BackgroundWork; detail?: string; pr?: string }) {
+  if (!activity?.workflow || !activity.workflows) return <div className="truncate text-xs text-ink-2" title={detail}>{[detail, pr].filter(Boolean).join(" · ")}</div>;
+  const other = activity.tasks || activity.subagents ? backgroundWorkLine({ ...activity, workflows: 0, workflow: undefined }) : undefined;
+  return <>
+    <div className="flex min-w-0 items-center gap-1 text-xs text-ink-2" title={detail}>
+      <span className="min-w-0 truncate">{activity.workflow.phase || t("chat-runningstatusbar.background_workflow")}</span>
+      <span className="shrink-0 whitespace-nowrap tabular-nums"> · {workflowCounts(activity.workflow)}{activity.workflows > 1 ? ` · ${t("chat-runningstatusbar.more_workflows", { count: activity.workflows - 1 })}` : ""}</span>
+    </div>
+    {(activity.tasks || activity.subagents || pr) ? <div className="truncate text-xs text-ink-2" title={other}>{[activity.tasks || activity.subagents ? other : undefined, pr].filter(Boolean).join(" · ")}</div> : null}
+  </>;
 }
 
 /** An honest count meter with a readable value and a larger hover target on its task row. */
@@ -1261,18 +1415,27 @@ function NeedsYouRow({ item }: { item: NeedsYouItem }) {
   const { todo, asks, status } = item;
   if (asks.length) return <div data-needs-row={item.key}><button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   const ask = openAsk(todo);
-  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), ...ask }} /></div>;
+  // a decision with its options is answered on the row (#3804); any other ask keeps its one button
+  if (ask && askOptions(ask).length)
+    return (
+      // until its code is here: the row's surface with the task's title, so the tray does not jump
+      <Suspense fallback={<div data-needs-row={item.key} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
+        <DecisionRow key={todo.id + ask.asked_at} rowKey={item.key} todo={todo} ask={ask} />
+      </Suspense>
+    );
+  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
   return <button type="button" data-needs-row={item.key} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
 }
 
 /** An Agent that belongs to no task, working: one row of In progress that opens its chat. */
-function RunningAgentRow({ session }: { session: Session }) {
+function RunningAgentRow({ session, activity }: { session: Session; activity?: BackgroundWork }) {
+  const detail = backgroundWorkLine(activity) ?? session.activity?.trim();
   return (
     <button type="button" data-running-agent={`${session.machine_id}/${session.session_id}`} onClick={() => openPanel({ kind: "agent", mid: session.machine_id, sid: session.session_id })} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover">
       <span className="flex w-4 shrink-0 justify-center"><StatusMark state="working" /></span>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("working")}</span></div>
-        {session.activity?.trim() && <div className="truncate text-xs text-ink-2">{session.activity.trim()}</div>}
+        {detail && <BackgroundWorkDetail activity={activity} detail={detail} />}
       </div>
       <Icon name="chevronRight" className="shrink-0 text-ink-3" />
     </button>
@@ -1291,7 +1454,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const metadata = useFeed((s) => s.taskCards[conversation] ?? EMPTY_CARDS);
   const deferred = useFeed((s) => s.later);
   const todos = useStore((s) => s.todos);
-  const sessionsByMachine = useStore((s) => s.sessions);
+  const sessionRows = useStoreRows<Session>((s) => s.features.includes("sessions_list") ? s.sessionSummaries : Object.values(s.sessions).flat());
   const interactions = useStore((s) => s.interactions);
   const answered = useStore((s) => s.answered);
   const main = useStore((s) => s.assistant?.main);
@@ -1304,21 +1467,18 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     return () => window.clearInterval(id);
   }, []);
   const entries = useMemo(
-    () => assistantEntries({ conversation, main, todos, sessions: answeredSessions(Object.values(sessionsByMachine).flat(), interactions, answered), interactions, plans, feed, cards: metadata, deferred, lookup, restored, now: Date.now() }),
+    () => assistantEntries({ conversation, main, todos, sessions: answeredSessions(sessionRows, interactions, answered), interactions, plans, feed, cards: metadata, deferred, lookup, restored, now: Date.now() }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick: re-read the clock once a minute
-    [conversation, main, todos, sessionsByMachine, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick],
+    [conversation, main, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick],
   );
   const asking = entries.needsYou.filter((item) => (item.kind === "task" || item.kind === "agent") && item.asks.length > 0);
   const rest = entries.needsYou.filter((item) => !asking.includes(item));
   const counts: Record<AssistantTray, number> = { needs: ownCount + entries.needsYou.length, running: entries.running.length };
   useEffect(() => {
-    const running = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("running"); };
     const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
-    window.addEventListener("persona:task-progress", running);
     window.addEventListener("persona:task-pending", needs);
     window.addEventListener("persona:task-start", needs);
     return () => {
-      window.removeEventListener("persona:task-progress", running);
       window.removeEventListener("persona:task-pending", needs);
       window.removeEventListener("persona:task-start", needs);
     };
@@ -1333,7 +1493,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
         <section id={trayId} aria-label={labels[tray]} className="assistant-action-tray min-h-0 overflow-y-auto overscroll-contain rounded-card bg-surface shadow-card">
           <div className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
           {tray === "running" && <div className="divide-y divide-line">
-            {entries.running.map((item) => item.kind === "task" ? <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} /> : <RunningAgentRow key={item.key} session={item.session} />)}
+            {entries.running.map((item) => item.kind === "task" ? <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} /> : <RunningAgentRow key={item.key} session={item.session} activity={item.activity} />)}
             {!entries.running.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_progress")}</p>}
             {entries.shelved.length > 0 && (
               <button type="button" data-progress-shelved aria-expanded={showShelved} onClick={() => setShowShelved((v) => !v)} title={t("assistant-tasks.tray_shelved_hint")} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-hover">
@@ -1341,7 +1501,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
                 <span className="whitespace-nowrap">{t("assistant-tasks.tray_shelved", { count: entries.shelved.length })}</span>
               </button>
             )}
-            {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} />)}
+            {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} activity={item.activity} />)}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">
             {asking.map((item) => <NeedsYouRow key={item.key} item={item} />)}

@@ -1,4 +1,8 @@
 {
+  "closeout_not_deployed": "デプロイ済みと報告されましたが、稼働中のバージョンには含まれていません",
+  "closeout_not_finished": "未完了",
+  "closeout_not_finished_text": "未完了：{text}",
+  "closeout_not_merged": "マージ済みと報告されましたが、プルリクエストは未マージです",
   "done": "完了しました",
   "waiting_for_you": "あなたを待っています"
 }

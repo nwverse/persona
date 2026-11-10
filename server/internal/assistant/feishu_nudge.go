@@ -233,7 +233,7 @@ func (s *Service) nudgeText(ctx context.Context, ix proto.Interaction) string {
 	switch ix.Kind {
 	case proto.IxPermission:
 		if ix.ToolName != "" {
-			return i18n.T(l, "assistant-feishu_cards.nudge_permission", i18n.Args{"tool": toolDisplayName(ix.ToolName)})
+			return i18n.T(l, "assistant-feishu_cards.nudge_permission", i18n.Args{"tool": ixToolName(ix)})
 		}
 	case proto.IxQuestion:
 		what = firstQuestion(ix)

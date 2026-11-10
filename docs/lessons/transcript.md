@@ -149,6 +149,18 @@ A subagent that waits on its own background work gets an interim notification ("
 The apps find a task's card by `tool_use_id`, else by the id in the launch receipt, and the 2.1.319 receipt's first sentence says "including the agentId below": their pattern took "below" for the id. So the report stayed off the card, which kept the interim text as its result.
 The node now gives such a notification the call an earlier notification of the task named (`noteCall`), drops the interim text, and seeds both, with the reports handed back, into windows read from a file's end (`window.go`), so a cold open of a big file gives the same notices.
 
+## Apple subagent results (#3377)
+
+A background Agent launch receipt is not a completion result. Keep its progress card until authoritative terminal
+state arrives, then use the ordinary collapsed tool-result row. Keep report deliveries separately from lifecycle
+state: an empty completion pointer must not erase earlier report bodies, and `running`, `waiting` or unknown
+statuses must not stop the progress bar. Preserve exact tool-use IDs; a shared subagent type
+or title cannot safely identify a report's call. Legacy notice detail and notice text are separate payloads: do not
+reuse a notice's text-truncation metadata for its report detail. When the hub changes peer input into tool results,
+bump the Apple chat cache so old peer cards are not retained. Retain referenced launch exchanges when trimming
+cached tails, and treat `wake` as turn evidence without drawing another message card. Run the shared result tests
+in both Apple app targets.
+
 ## Work opened in the App folded again by the same page (2026-11-07, #6038)
 
 As a chat opens, the latest page can arrive twice: once over HTTP (`loadInitial`, when the socket is not up yet) and once in the socket's subscribe backlog, both with `fold_work`. With "open all work" on, the first fold row fetched its steps (`AppModel.unfold`) before the second page came; that page carried the same fold, `dropFolded` took the steps out again and the fold came back under the same row id.
@@ -209,3 +221,12 @@ A view that fetches once per id cannot recover when the store puts the same id b
   A Write that creates a file records no hunks; its lines are the content's.
 - One machine's transcripts (2026-11-10): 76k records, 4.4k of them strings and 554 arrays, none with a field of an
   unexpected type; parsing them before and after the change gave the same items in all 2,023 files.
+
+## A rollout line is told by its own top-level type (#3159)
+
+- `ParseLine` switches a file to the Codex parser for good on the first rollout line. A substring test for
+  `"type":"event_msg"` and `"payload"` also matched a Claude line whose tool input had that shape (an MCP call is
+  enough), and every later line of the session then parsed to nothing. `isCodexLine` keeps the substring test as a cheap
+  filter and then reads only the line's top-level keys (`rolloutHead`), without decoding the line.
+- Checked on one machine's transcripts (2026-11-10): 10,597 files and 1.9M lines gave the same answer before and after
+  for every line, rollout lines included.

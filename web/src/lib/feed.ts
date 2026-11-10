@@ -5,7 +5,7 @@ import { useSyncExternalStore } from "react";
 import { api, ApiError, enc } from "./api";
 import { formatDate, t } from "../i18n";
 import { parseAPIError } from "./api-errors";
-import { getState, onHubEvent, putTodo, refreshTodos } from "./store";
+import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
@@ -252,6 +252,50 @@ export function receiptState(it: FeedItem): "done" | "failed" | "interrupted" {
   return parseAPIError(field(it, "summary")) ? "interrupted" : "done";
 }
 
+/** How an interrupted receipt's task was dealt with, as the hub worked it out (#3834): pending until it was. */
+export type InterruptResolution = "pending" | "cancelled" | "rerouted" | "resumed" | "accepted" | "done";
+
+/** One task of a batch of interruptions (`batch.tasks`). */
+export interface InterruptBatchTask {
+  receipt: string;
+  todo_id: string;
+  title: string;
+  resolution: InterruptResolution;
+  at: string;
+}
+
+/** What a batch's head says of the batch: interruptions with the same cause in one chat within ten minutes. */
+export interface InterruptBatch {
+  cause: string;
+  machine?: string;
+  total: number;
+  pending: number;
+  resolved: number;
+  tasks: InterruptBatchTask[];
+}
+
+/** How the chat draws an interrupted receipt, from what the hub sent (#3834): `hidden` inside its batch's head, `batch`
+ *  the head of several, `resolved` one dealt with (a grey line), `pending` still to deal with. undefined: a hub from before
+ *  it (no `resolution`), drawn as ever. */
+export type InterruptLook =
+  | { kind: "hidden" }
+  | { kind: "batch"; batch: InterruptBatch }
+  | { kind: "resolved"; resolution: Exclude<InterruptResolution, "pending"> }
+  | { kind: "pending" };
+
+const RESOLUTIONS: ReadonlySet<string> = new Set(["pending", "cancelled", "rerouted", "resumed", "accepted", "done"]);
+
+export function interruptLook(it: FeedItem): InterruptLook | undefined {
+  if (it.kind !== "receipt" || field(it, "state") !== "interrupted") return undefined;
+  const resolution = field(it, "resolution");
+  if (!resolution || !RESOLUTIONS.has(resolution)) return undefined;
+  const group = field(it, "group");
+  if (group && group !== it.id) return { kind: "hidden" };
+  const batch = it.body?.batch as InterruptBatch | undefined;
+  if (batch && Array.isArray(batch.tasks) && batch.tasks.length > 1) return { kind: "batch", batch };
+  return resolution === "pending" ? { kind: "pending" } : { kind: "resolved", resolution: resolution as Exclude<InterruptResolution, "pending"> };
+}
+
 /** One question of an answered card and what the user answered. */
 export interface AnsweredItem {
   question: string;
@@ -352,10 +396,12 @@ function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
   }
   for (const [c, group] of byConversation) feeds[c] = mergeInto(feeds[c] ?? [], [...group.values()]);
   set({ feeds, plans: plans ? { ...st.plans, ...plans } : st.plans });
-  if (items.some((i) => i.kind === "task" || i.kind === "receipt")) void refreshTodos();
+  if (items.some((i) => i.kind === "task" || i.kind === "receipt")) todosPushed();
 }
 
 const loading = new Set<string>();
+/** Conversations asked for again while their read was out: that read's answer may predate what was asked for. */
+const again = new Set<string>();
 const todayAsked = new Map<string, string>();
 
 /** The most items the hub answers at once (docs/protocol/protocol.md: oldest first, at most 500): a full page has more after it. */
@@ -363,31 +409,44 @@ const FEED_PAGE = 500;
 /** Pages read in one load at most. */
 const FEED_PAGES = 40;
 
-/** A conversation's feed: what came since the newest item it has. */
+/** A conversation's feed: what came since the newest item it has. A read asked for while one is out runs once more
+ *  after it (a reconnect's hello during the first read on open was dropped, and what was pushed meanwhile stayed missing). */
 export async function loadFeed(conversation: string) {
-  if (loading.has(conversation)) return;
+  if (loading.has(conversation)) {
+    again.add(conversation);
+    return;
+  }
   loading.add(conversation);
   try {
-    let last = st.feeds[conversation]?.at(-1)?.at;
-    for (let n = 0; n < FEED_PAGES; n++) {
-      const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
-        `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
-      );
-      if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
-      const items = res.items ?? [];
-      received(items, res.plans ?? undefined);
-      if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
-      // the cards' snapshot comes whole with every page: what an event missed comes back here
-      applySnapshot(conversation, res);
-      const newest = items.at(-1)?.at;
-      // the next page starts after this one's newest; one that did not move on would come back the same
-      if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
-      last = newest;
-    }
+    do {
+      again.delete(conversation);
+      await readFeedPages(conversation);
+    } while (again.has(conversation));
   } catch {
     // an older hub has no feed: the conversation shows as before
   } finally {
+    again.delete(conversation);
     loading.delete(conversation);
+  }
+}
+
+/** One pass of loadFeed: the pages since the newest item the feed has now. */
+async function readFeedPages(conversation: string) {
+  let last = st.feeds[conversation]?.at(-1)?.at;
+  for (let n = 0; n < FEED_PAGES; n++) {
+    const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
+      `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
+    );
+    if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
+    const items = res.items ?? [];
+    received(items, res.plans ?? undefined);
+    if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
+    // the cards' snapshot comes whole with every page: what an event missed comes back here
+    applySnapshot(conversation, res);
+    const newest = items.at(-1)?.at;
+    // the next page starts after this one's newest; one that did not move on would come back the same
+    if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
+    last = newest;
   }
 }
 
@@ -537,11 +596,16 @@ export async function retryTask(todo: Todo) {
   }
 }
 
+/** How a decision is answered other than by taking its recommendation (#3804): one of its options by its label, or one
+ *  of the fixed responses that say the owner cannot answer it as asked. */
+export type AskAnswer = { option: string } | { response: string };
+
 /** The Accept button of a `brief` item's task to verify: "accepted", or "handled" when the hub says that round is over
- *  (asked again since, or already verified). Any other failure throws. */
-export async function acceptBrief(todoId: string, askedAt: string): Promise<"accepted" | "handled"> {
+ *  (asked again since, or already verified). Any other failure throws. `answer`: a decision's option or fixed response
+ *  instead of its recommendation. */
+export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "handled"> {
   try {
-    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt } });
+    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) return "handled";
     throw e;

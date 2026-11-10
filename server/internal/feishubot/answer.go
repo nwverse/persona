@@ -401,6 +401,20 @@ func answerTables(lines []string, budget int) []answerBlock {
 			break
 		}
 		cells := tableCells(l)
+		if len(cells) > len(head) { // a "|" the row did not escape (inside a code span too) splits its cell, so the row is
+			// wider than the header; those words are still the row's, so keep them in the last column rather than drop them
+			last := cells[len(head)-1]
+			for _, extra := range cells[len(head):] {
+				switch {
+				case extra == "":
+				case last == "":
+					last = extra
+				default:
+					last += " | " + extra
+				}
+			}
+			cells = append(cells[:len(head)-1], last)
+		}
 		row := map[string]any{}
 		rs := 0
 		for i := range head {

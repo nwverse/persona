@@ -225,6 +225,8 @@ func (d *Devices) Run(ctx context.Context) error {
 		}()
 	}
 	go d.usageLoop(mctx)
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
@@ -641,8 +643,15 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
+	var receipt string
+	var prepareErr error
+	params, receipt, prepareErr = d.prepareShareCall(ctx, p, params)
+	if prepareErr != nil {
+		return nil, wireError(prepareErr)
+	}
 	var out json.RawMessage
 	err := m.call(ctx, p.Method, params, &out)
+	d.finishShareCall(ctx, p, receipt, out, err)
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
 		return nil, wireError(err)

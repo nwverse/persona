@@ -68,5 +68,11 @@
   "archive_close_title": "エージェントをアーカイブして閉じる",
   "archive_close_detail": "Persona は「{title}」をアーカイブし、{machine} 上のタブとプロセスを閉じます。会話の記録はコンピューターに残ります。「アーカイブしたエージェント」から復元でき、メッセージを送ると会話を再開します。",
   "archive_close": "アーカイブして閉じる",
-  "bypass_confirm": "すべて許可に切り替える"
+  "bypass_confirm": "すべて許可に切り替える",
+  "speed": "速度",
+  "speed_standard": "標準",
+  "speed_fast": "Fast",
+  "speed_unknown": "不明",
+  "speed_standard_detail": "通常の速度と使用量で実行。",
+  "speed_paid_detail": "応答を高速化。使用量や料金が増えます。"
 }

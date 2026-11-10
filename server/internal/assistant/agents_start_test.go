@@ -131,3 +131,26 @@ func TestAutonameTabs(t *testing.T) {
 		t.Fatalf("renamed %d: %s", f.sent(), w.Body)
 	}
 }
+
+// A start in plan mode records the mode that follows its plan (#3784); any other start is left as it is.
+func TestSetPlanThen(t *testing.T) {
+	s := newTestService(t, newFakeHub())
+	ctx := context.Background()
+	plan := map[string]any{"permission_mode": "plan"}
+	s.setPlanThen(ctx, "box", plan)
+	if then, _ := plan["plan_then"].(string); then != s.taskPermission(ctx, "box", nil) || then == "" || then == "plan" {
+		t.Fatalf("plan_then = %q, want the writable default %q", then, s.taskPermission(ctx, "box", nil))
+	}
+	own := map[string]any{"permission_mode": "plan", "plan_then": "acceptEdits"}
+	s.setPlanThen(ctx, "box", own)
+	if own["plan_then"] != "acceptEdits" {
+		t.Fatalf("a start's own plan_then was replaced: %v", own["plan_then"])
+	}
+	for _, mode := range []string{"", "default", "bypassPermissions"} {
+		p := map[string]any{"permission_mode": mode}
+		s.setPlanThen(ctx, "box", p)
+		if _, set := p["plan_then"]; set {
+			t.Fatalf("mode %q got a plan_then", mode)
+		}
+	}
+}

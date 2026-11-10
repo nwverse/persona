@@ -597,7 +597,7 @@ private struct KnowledgeItemPicker: View {
                                message: String(localized: "Once the knowledge base has stored something from one, you can give it a setting of its own here."))
             }
         }
-        .searchable(text: $query, prompt: Text(String(localized: "Name")))
+        .pageSearchable(text: $query, prompt: String(localized: "Name"))
         .navigationTitle(kind == .chat ? String(localized: "Add Chat") : String(localized: "Add Document"))
         .navigationBarTitleDisplayMode(.inline)
         .sheetCancel(unsaved: false) { dismiss() }

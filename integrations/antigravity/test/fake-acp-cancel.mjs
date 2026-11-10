@@ -10,6 +10,8 @@
 import { appendFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
+if (process.argv.includes('models')) { console.log('test-model\tTest Model'); process.exit(0) }
+
 const SESSION = '0c7d2c4e-5b1a-4f3e-9a6d-2f8b1c3d4e5f'
 const recordFile = process.argv[process.argv.indexOf('--record') + 1]
 const record = (o) => appendFileSync(recordFile, `${JSON.stringify(o)}\n`)
@@ -40,6 +42,7 @@ function endIfDone(sessionId) {
   const turn = turns.get(sessionId)
   if (!turn || !turn.cancelled || turn.open.size > 0) return
   turns.delete(sessionId)
+  record({ ended: sessionId })
   send({ jsonrpc: '2.0', id: turn.id, result: { stopReason: 'cancelled' } })
 }
 
@@ -55,8 +58,9 @@ function onRequest(msg) {
     case 'session/set_model':
     case 'session/set_mode':
     case 'session/set_config_option':
-    case 'session/close':
       return answer({})
+    case 'session/close':
+      return send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found: session/close' } })
     case 'session/prompt': {
       const sessionId = params.sessionId
       const mode = params.prompt?.find((b) => b.type === 'text')?.text?.trim() || ''

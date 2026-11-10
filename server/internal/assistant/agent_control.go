@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -156,6 +157,13 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 // made, that todo is closed (no empty task stays).
 func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update bool) (Todo, bool, error) {
+	return s.adoptAgentAs(ctx, self, am, c, title, prompt, notes, doneWhen, expect, update, false)
+}
+
+// adoptAgentAs is adoptAgent; with quiet the todo it makes is quiet whatever self's own tasks are (an agent that became
+// a task by itself, agent_tasks.go).
+func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
+	expect int, update, quiet bool) (Todo, bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
@@ -170,16 +178,8 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 		if !update {
 			return t, false, nil
 		}
-		v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			v.Supervisor = self
-			if len(doneWhen) > 0 {
-				v.DoneWhen = doneWhen
-			}
-			if expect > 0 {
-				v.ExpectMinutes = expect
-			}
-			return true
-		})
+		// Its criteria change only through the brief's log (task_brief_scope.go): the same rules as task_scope.
+		v, err := s.rescope(ctx, t, self, "agent_supervise", doneWhen, expect)
 		if err != nil {
 			return Todo{}, false, err
 		}
@@ -188,7 +188,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 		return t, false, nil
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
-	todo, err := s.createTodo(ctx, title, notes, self, "")
+	todo, err := s.newTodo(ctx, title, notes, self, "", quiet || s.quietTask(ctx, self))
 	if err != nil {
 		return Todo{}, false, err
 	}
@@ -205,6 +205,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 	}
 	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
 	todo.Supervision = &v
+	s.briefFor(ctx, s.callerOrigin(ctx, self), todo, doneWhen, expect) // before its agent is linked (task_brief.go)
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("link the agent: %w", err)
@@ -233,6 +234,29 @@ type sendTask struct {
 	Title         string   `json:"title"`
 	DoneWhen      []string `json:"done_when"`
 	ExpectMinutes int      `json:"expect_minutes"`
+}
+
+// givenTask is agent_send's task as sent, nil for a reply (#3386): left out, null, or an object of only title,
+// done_when and expect_minutes that says nothing (sendTask.none), which runtimes that fill in every field of a tool's
+// schema send for a reply. Anything else stays a task, as before: another type, a field of the wrong type or a key the
+// task has not (a misspelled title) must not turn a hand-off into an untracked reply.
+func givenTask(raw json.RawMessage) *sendTask {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var t sendTask
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&t); err == nil && t.none() {
+		return nil
+	}
+	return &t
+}
+
+// none: task has only blank fields (no title, no non-blank done_when, no expect_minutes above 0); any real value in one
+// of them makes it a hand-off.
+func (t sendTask) none() bool {
+	return strings.TrimSpace(t.Title) == "" && len(cleanDoneWhen(t.DoneWhen)) == 0 && t.ExpectMinutes <= 0
 }
 
 // handedTask is the task agent_send with a task put the agent on: made now, or self's own that it worked for already
@@ -315,22 +339,16 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	if h == nil {
 		return ""
 	}
+	refused := ""
 	if h.made {
 		s.taskCard(ctx, h.self, h.todo.ID)
 	} else {
 		doneWhen, expect := cleanDoneWhen(h.task.DoneWhen), max(0, min(h.task.ExpectMinutes, 24*60))
-		v, _, err := s.updateSupervision(ctx, h.todo.ID, func(v *Supervision) bool {
-			v.Supervisor = h.self
-			if len(doneWhen) > 0 {
-				v.DoneWhen = doneWhen
-			}
-			if expect > 0 {
-				v.ExpectMinutes = expect
-			}
-			return true
-		})
+		s.releaseHold(ctx, h.todo.ID)                                            // the supervisor sent its agent on: follow-ups go again (decision.go)
+		v, err := s.rescope(ctx, h.todo, h.self, "agent_send", doneWhen, expect) // through the brief's log, as task_scope
 		if err != nil {
 			s.logf("task %s: supervision: %v", h.todo.ID, err)
+			refused = " Its done_when was NOT changed: " + err.Error()
 		} else {
 			h.todo.Supervision = &v
 		}
@@ -340,7 +358,7 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	}
 	if !h.made {
 		return fmt.Sprintf(" It already works for your task %s (%q): no new task was made, done_when %s.", h.todo.ID, h.todo.Title,
-			criteriaWords(nil, h.todo.Supervision))
+			criteriaWords(nil, h.todo.Supervision)) + refused
 	}
 	return fmt.Sprintf(" It is now your task %s (%q, its card is in the conversation): you get a supervision message (📋) when it needs you, "+
 		"and close it with task_review. done_when %s.", h.todo.ID, h.todo.Title, criteriaWords(nil, h.todo.Supervision))
@@ -399,7 +417,7 @@ func criteriaWords(list []string, v *Supervision) string {
 		list = v.DoneWhen
 	}
 	if len(list) == 0 {
-		return "not set (judge by what the task is for; set it with agent_supervise)"
+		return "not set (judge by what the task is for; set it with task_scope)"
 	}
 	return strconv.Quote(strings.Join(list, "; "))
 }
@@ -547,7 +565,22 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	}
 	t, ok := s.taskOf(ctx, machine, session)
 	if !ok || t.Supervision == nil || t.Supervision.Supervisor == "" {
+		// Any open todo's agent has a receiver while agent tasks are on (#3617, agent_tasks.go).
+		t, ok = s.superviseOpenTodoOf(ctx, machine, session)
+	}
+	if !ok {
 		return "Nobody receives this: your work is not a task Persona supervises. Ask the user what you need the usual way.", errNoSupervisor
+	}
+	if s.agentSupervised(t) {
+		// A leader whose task closed leaves the worker to the conversation above it: rehome it now, so this report is
+		// told to that conversation instead of being lost until the next watch (task_leader.go). With nobody above, the
+		// worker is cancelled and says so.
+		if lead, _, _ := s.leaderAbove(t); lead.ID == "" || !s.leaderOpen(lead) {
+			var cancelled bool
+			if t, cancelled = s.rehomeWorker(ctx, t); cancelled {
+				return "Your task leader is gone and nobody is above it, so this task was cancelled. Stop here; the user is not asked.", errNoSupervisor
+			}
+		}
 	}
 	if !s.upReports.allow(machine, session, now) {
 		return "", fmt.Errorf("too many reports: at most %d in %d minutes; put what is left into one report later", reportLimit, int(reportWindow.Minutes()))
@@ -563,7 +596,8 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if steps > 0 {
 		step = min(step, steps)
 	}
-	notUrgent := a.Urgent != nil && !*a.Urgent
+	// A task leader's worker has no owner briefing to wait for: its report goes to the leader at once, urgent or not.
+	notUrgent := a.Urgent != nil && !*a.Urgent && !s.agentSupervised(t)
 	if notUrgent && a.Kind == upReportQuestion {
 		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, now)
 		if queued {
@@ -608,7 +642,13 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
-	s.noteProgress(ctx, t.ID, TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()})
+	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
+	if text != progress.Text {
+		progress.Detail = text
+	}
+	if s.noteProgress(ctx, t.ID, progress) {
+		s.goReportLine(t, progress.At, kind, text) // off the tool call: it answers right away
+	}
 	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
 	// the handoff; progress reports only update the card (the stream stays quiet).

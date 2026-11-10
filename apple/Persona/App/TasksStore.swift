@@ -16,7 +16,11 @@ final class TasksStore {
     /// Conversation id → the task the next message goes straight to (Message “xx”), set by @ or Message.
     var routes: [String: String] = [:]
     /// The task whose detail sheet is open, and whether the board is.
-    var detailTask: String?
+    var detailTask: String? {
+        didSet { detailTaskAgent = nil }
+    }
+    /// A dispatch's resolved Agent, carried into its task detail. Ordinary task opens clear this selection.
+    private(set) var detailTaskAgent: SessionKey?
     /// The agent (not a task's, #1113) whose page the detail sheet shows instead.
     var detailAgent: SessionKey?
     /// The agent whose page the assistant page pushes full screen (the sheet's Full Screen): the page takes it and clears it.
@@ -70,6 +74,19 @@ final class TasksStore {
         detailTask = nil
         detailAgent = nil
         fullAgent = key
+    }
+
+    /// A dispatch link opens only its task. On iPhone its Agent is pushed on the Assistant stack; elsewhere, or
+    /// before an Agent is available, the task's own detail hosts the chat/starting state. Never open In Progress.
+    func openDispatchedTask(_ id: String, agent: SessionKey?, pushAgent: Bool) {
+        if pushAgent, let agent {
+            expand(agent)
+        } else {
+            fullAgent = nil
+            detailAgent = nil
+            detailTask = id
+            detailTaskAgent = agent
+        }
     }
 
     // MARK: Loading
@@ -130,9 +147,18 @@ final class TasksStore {
             return
         }
         var list = feeds[conversation] ?? []
-        let have = Set(list.map(\.id))
-        let new = items.filter { !have.contains($0.id) }
-        guard !new.isEmpty else { return }
+        let have = Dictionary(list.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // One it has whose body changed (an interrupted receipt the hub resolved, #3834) takes the new body, as on the
+        // web and Android.
+        var changed = false
+        for item in items {
+            if let i = have[item.id], list[i].body != item.body {
+                list[i] = item
+                changed = true
+            }
+        }
+        let new = items.filter { have[$0.id] == nil }
+        guard !new.isEmpty || changed else { return }
         list += new
         list.sort { ($0.at, $0.id) < ($1.at, $1.id) }
         feeds[conversation] = list
@@ -148,7 +174,7 @@ final class TasksStore {
             .sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
     }
 
-    /// The agents going on that the conversation's dock and board show after its tasks (#1113): in the main
+    /// The agents going on that the conversation's action bar and board show besides its tasks (#1113): in the main
     /// conversation the ones no task stands for (opened by hand on the Agents page); in the others none.
     func agents(of conversation: String) -> [DockAgent] {
         let model = AppModel.shared
@@ -212,17 +238,6 @@ final class TasksStore {
     func interactions(_ todo: TodoItem) -> [Interaction] {
         let keys = Set(sessions(todo).map(\.key))
         return AppModel.shared.pendingInteractions.filter { keys.contains($0.sessionKey) }
-    }
-
-    /// The dock: the conversation's tasks still going on, or finished and not looked at; what waits first.
-    func dock(_ conversation: String) -> [TodoItem] {
-        let rows: [(todo: TodoItem, state: TaskState)] = tasks(of: conversation).map { ($0, state($0)) }
-        let going = rows.filter { $0.state != .done && $0.state != .followup && $0.state != .failed }
-        let sorted = going.sorted { a, b in
-            if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
-            return (a.todo.createdAt ?? .distantPast) > (b.todo.createdAt ?? .distantPast)
-        }
-        return sorted.map(\.todo)
     }
 
     /// The main conversation's Today card, once a day: the hub makes it on the first ask and answers it after that.
