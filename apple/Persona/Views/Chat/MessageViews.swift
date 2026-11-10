@@ -20,35 +20,39 @@ extension MarkdownUI.Theme {
             .text { FontSize(Theme.Level.body.size * Theme.Font.scale) }
             .code {
                 FontFamilyVariant(.monospaced)
-                FontSize(.em(0.88))
+                FontSize(.em(ReplyMetrics.inlineCode))
                 BackgroundColor(Theme.codeBackground)
             }
             .strong { FontWeight(.semibold) }
             .link { ForegroundColor(Theme.accent) }
             .heading1 { config in
-                config.label.markdownMargin(top: 16, bottom: 8).markdownTextStyle { FontWeight(.bold); FontSize(.em(1.3)) }
+                config.label.markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
+                    .markdownTextStyle { FontWeight(.bold); FontSize(.em(ReplyMetrics.heading1.size)) }
             }
             .heading2 { config in
-                config.label.markdownMargin(top: 14, bottom: 6).markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
+                config.label.markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
+                    .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .heading3 { config in
-                config.label.markdownMargin(top: 12, bottom: 4).markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
+                config.label.markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
+                    .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .paragraph { config in
-                config.label.fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(0.26)).markdownMargin(top: 0, bottom: 10)
+                config.label.fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
+                    .markdownMargin(top: 0, bottom: ReplyMetrics.paragraphBottom)
             }
-            .listItem { config in config.label.markdownMargin(top: .em(0.2)) }
+            .listItem { config in config.label.markdownMargin(top: .em(ReplyMetrics.itemTop)) }
             .codeBlock { config in
                 // A card the assistant drew (persona-view, or the older persona-card, #886), drawn with the extensions'
                 // components (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」); one the app cannot read stays a code block.
                 if AssistantCardBlock.handles(config.language), let view = AssistantCardBlock.parse(language: config.language, config.content) {
-                    AssistantViewCard(view: view).markdownMargin(top: 4, bottom: 12)
+                    AssistantViewCard(view: view).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
                 } else if let kind = RenderedFence.kind(config.language) {
                     // A formula or a diagram (docs/apple/ios.md「Math and diagrams」); the code block when it cannot be drawn.
                     RenderedBlock(kind: kind, source: config.content.trimmingCharacters(in: .whitespacesAndNewlines)) { plainCodeBlock(config) }
-                        .markdownMargin(top: 4, bottom: 12)
+                        .markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
                 } else {
-                    plainCodeBlock(config).markdownMargin(top: 4, bottom: 12)
+                    plainCodeBlock(config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
                 }
             }
             .blockquote { config in
@@ -67,7 +71,7 @@ extension MarkdownUI.Theme {
     @MainActor static func plainCodeBlock(_ config: CodeBlockConfiguration) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             config.label
-                .relativeLineSpacing(.em(0.2))
+                .relativeLineSpacing(.em(ReplyMetrics.codeLineSpacing))
                 .markdownTextStyle { FontFamilyVariant(.monospaced); FontSize(.em(Theme.Level.code.size / Theme.Level.body.size)) }
                 .padding(Theme.Space.m)
         }
@@ -277,6 +281,7 @@ struct PeerMessage: View {
         Markdown(d.markdown)
             .markdownSoftBreakMode(.lineBreak)
             .markdownTheme(.persona)
+            .selectableInLift(item.text ?? "", as: .reply(quiet: false)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
             #if os(macOS)
             .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
@@ -502,6 +507,7 @@ struct AssistantText: View, Equatable {
             // Inside the theme (applied first), or the theme's text style wins (docs/lessons/ios.md).
             .modifier(QuietMarkdown(on: quiet))
             .markdownTheme(.persona)
+            .selectableInLift(item.text ?? "", as: .reply(quiet: quiet)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
             .chatBoxed(Theme.ChatBox.persona, on: boxed)
     }
