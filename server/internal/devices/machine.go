@@ -732,8 +732,10 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 
 // nodeStoreWait bounds a store call a node's event makes on its connection's read loop (state.put, claude.dirs):
 // while Postgres does not answer, the loop would read nothing else of the node, replies to the manager's calls
-// included. A write given up is mended by the node, which keeps its own copy and puts the session's state again when
-// it next changes. Each machine copies it (Machine.storeWait), so a test shortens it on its own machine.
+// included. A write given up stays lost until the node sends it again, which it does not do on reconnect: a session's
+// state when it next changes (a node restarted before that loads the hub's rows without it), its config dirs when it
+// sees one it had not seen since it started or one is unblocked. Each machine copies it (Machine.storeWait), so a test
+// shortens it on its own machine.
 const nodeStoreWait = 10 * time.Second
 
 // storeCtx is the context of a store call a node event makes: not the machine's (the last put of a machine being let
