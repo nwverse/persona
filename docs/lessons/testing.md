@@ -603,6 +603,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
   or first apply `.accessibilityElement(children: .contain)` to the container.
   Again in an extension's machine list (#2446): the field row's `plugin-field-…` replaced each Mac's `extension-machine-setup-<id>`; the row now leaves the identifier to the list's title and switches.
 - **A `lineLimit`-cut `Text` still reads in full to XCUITest**: its label is the whole string, so "the last line is not there" never proves folding (#1666, `NewChatLayoutTests`). Assert the fold's control (Expand) and look at the screenshot.
+- **A floating action bar can cover a control XCUITest still reports as hittable** (#2732): after typing in New Agent, the photo's remove button can sit inside the Start Chat bar's frame. Move it clear with the test's slow drag, assert the frames do not intersect before tapping, then wait for Start to become enabled. A tap that happened to work once is not proof of visibility; inspect the before / after screenshots.
 - **First taps just after sheet dismissal can be swallowed** (keyboard focus is still settling). Immediately tapping a list button after form Add does nothing, with no confirmation dialog.
   Wait for sheet-field `waitForNonExistence`, tap a harmless button (Refresh) first, then the target button.
 - Icon-sized `Menu` (20 pt) often does not expand under XCUITest. Put row actions in a row of `.borderless` text buttons, clearer on both phone and Mac.
