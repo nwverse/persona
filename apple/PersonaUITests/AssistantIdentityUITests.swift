@@ -32,6 +32,7 @@ final class AssistantIdentityUITests: XCTestCase {
     }
 
     @MainActor private func shot(_ app: XCUIApplication, name: String) throws {
+        acceptIconAlert(timeout: 3)
         let screenshot = app.screenshot()
         let attachment = XCTAttachment(screenshot: screenshot)
         attachment.name = name
@@ -40,11 +41,35 @@ final class AssistantIdentityUITests: XCTestCase {
         if let folder = env["PERSONA_SHOTS"] {
             try screenshot.pngRepresentation.write(to: URL(fileURLWithPath: folder).appending(path: name + ".png"))
         }
+        if let folder = env["PERSONA_SIMCTL_HANDOFF"] {
+            let root = URL(fileURLWithPath: folder)
+            let ack = root.appending(path: name + ".ack")
+            if FileManager.default.fileExists(atPath: ack.path) { try FileManager.default.removeItem(at: ack) }
+            let ready = try JSONSerialization.data(withJSONObject: ["file": name + ".png"])
+            try ready.write(to: root.appending(path: "ready.json"), options: .atomic)
+            let expected = XCTNSPredicateExpectation(predicate: NSPredicate { @Sendable _, _ in
+                FileManager.default.fileExists(atPath: ack.path)
+            }, object: nil)
+            let result = XCTWaiter.wait(for: [expected], timeout: 30)
+            XCTAssertEqual(result, .completed, "The host must capture this exact page with simctl before continuing")
+            if result != .completed { throw NSError(domain: "PersonaScreenshotHandoff", code: 1) }
+        }
     }
 
     @MainActor func testVoiceAttributionAndCaptionsFollowRosterSize() throws {
         for (count, hubKey) in [("single", "PERSONA_IDENTITY_SINGLE_HUB"), ("multiple", "PERSONA_IDENTITY_MULTIPLE_HUB")] {
             for look in ["light", "dark"] {
+                let chat = try launch(hubKey, extra: ["-ui.scheme", look])
+                let body = chat.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "早上好")).firstMatch
+                XCTAssertTrue(body.waitForExistence(timeout: 20), chat.debugDescription)
+                let switcher = chat.descendants(matching: .any).matching(identifier: "manager-switcher").firstMatch
+                if count == "multiple" { XCTAssertTrue(switcher.waitForExistence(timeout: 20)) } else { XCTAssertFalse(switcher.exists) }
+                try shot(chat, name: "iphone-\(count)-chat-\(look)")
+                chat.buttons["assistant-sidebar-button"].tap()
+                XCTAssertTrue(chat.drawerSettingsButton.waitForExistence(timeout: 10), chat.debugDescription)
+                if count == "single" { XCTAssertFalse(identityHeading(chat).exists) } else { XCTAssertTrue(identityHeading(chat).exists) }
+                try shot(chat, name: "iphone-\(count)-sidebar-\(look)")
+                chat.terminate()
                 let app = try launch(hubKey, extra: ["-ui.scheme", look, "-showVoiceSample", "speaking"])
                 let tail = app.descendants(matching: .any).matching(identifier: "voice-tail").firstMatch
                 XCTAssertTrue(tail.waitForExistence(timeout: 20), app.debugDescription)
