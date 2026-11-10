@@ -9623,10 +9623,61 @@ def all_sessions():
     return [decorated_session(s) for s in (SESSIONS + ASSISTANT)]
 
 
+LIST_JOURNAL = {}  # revision -> {identity: row} of the unfiltered list as it was (a bounded delta journal, #3759)
+LIST_JOURNAL_SIZE = 128  # the hub keeps at most 128 revisions too (docs/protocol/protocol.md "Incremental recovery")
+LIST_TUPLE = lambda s: json.dumps([s["machine_id"], s["session_id"]], separators=(",", ":"))
+
+
+def list_revision(rows):
+    """The paged list's checkpoint for rows, journaled so a later `since` can answer what changed after it."""
+    revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
+    if revision not in LIST_JOURNAL:
+        LIST_JOURNAL[revision] = {LIST_TUPLE(s): json.loads(json.dumps(s)) for s in rows}
+        while len(LIST_JOURNAL) > LIST_JOURNAL_SIZE: del LIST_JOURNAL[next(iter(LIST_JOURNAL))]
+    return revision
+
+
+def current_list_revision():
+    """What a `sessions_list` hint carries: the list's revision now, as the hub's hints do."""
+    return list_revision(out_by_machine(all_sessions()))
+
+
+# GET /api/v1/sessions as the hub's traffic counters would see it, split by what the query asked for (#3759):
+# /mock/sessions_reads, ?reset=1 starts counting again. `full` is the no-query complete list; `baseline` a page without
+# `since` (summary=0 is a complete row); `since` a delta page; `counts` / `lookup` the small reads.
+SESSIONS_READS = {"reads": {}, "hints": 0, "started": time.monotonic()}
+SESSIONS_READS_LOCK = threading.Lock()
+
+
+def sessions_read(handler, size, status):
+    q = parse_qs(urlparse(handler.path).query)
+    mode = ("lookup" if "session_id" in q else "counts" if q.get("counts", [""])[0] == "1" else "since" if "since" in q
+            else "full" if not (set(q) - {"manager", "machine_id"}) else "baseline")
+    if status >= 400: mode += "_%d" % status
+    client = (handler.headers.get("X-Persona-Client") or "").split("/")[0] or "unknown"
+    with SESSIONS_READS_LOCK:
+        row = SESSIONS_READS["reads"].setdefault(client, {}).setdefault(mode, {"count": 0, "bytes": 0})
+        row["count"] += 1
+        row["bytes"] += size
+
+
+def sessions_reads_hint():
+    with SESSIONS_READS_LOCK: SESSIONS_READS["hints"] += 1
+
+
+def sessions_reads(reset):
+    with SESSIONS_READS_LOCK:
+        out = {"reads": copy.deepcopy(SESSIONS_READS["reads"]), "hints": SESSIONS_READS["hints"],
+               "seconds": round(time.monotonic() - SESSIONS_READS["started"], 1)}
+        if reset: SESSIONS_READS.update(reads={}, hints=0, started=time.monotonic())
+    return out
+
+
 def paged_sessions(query):
     """Small screenshot fixture for paging hubs; unqueried reads retain the legacy full list.
 
-    Changed fixtures expire cursors/revisions instead of retaining a delta journal.
+    `since` answers from a bounded journal of earlier revisions (rows that changed, entered or left the filter);
+    an unknown or evicted one is 409 revision_expired, as after a hub restart. Cursors stay frozen to their revision.
     """
     rows = out_by_machine(all_sessions())
     # ?manager=<id> (feature sessions_manager): that manager's computers' sessions only, in the whole list, the pages
@@ -9640,16 +9691,20 @@ def paged_sessions(query):
         rows = [s for s in rows if s.get("manager") == named]
     if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
-    revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
+    revision = list_revision(rows)
     fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
-    rows = [s for s in rows if all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
-                                  for k, v in fields.items())
-            and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
-            and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
-    rows.sort(key=lambda s: json.dumps([s["machine_id"], s["session_id"]], separators=(",", ":")))
-    rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+
+    def matching(rows):
+        rows = [s for s in rows if all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
+                                      for k, v in fields.items())
+                and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
+                and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
+        rows.sort(key=LIST_TUPLE)
+        rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+        return rows
+    rows = matching(rows)
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
@@ -9659,8 +9714,15 @@ def paged_sessions(query):
                 counts[key][value] = counts[key].get(value, 0) + 1
         return counts, 200
     since = query.get("since", [None])[0]
-    if since and since != revision:
-        return {"error": "Fixture changed; reload the list", "code": "revision_expired"}, 409
+    removed = []
+    if since:
+        if since not in LIST_JOURNAL:
+            return {"error": "Fixture changed; reload the list", "code": "revision_expired"}, 409
+        before = {LIST_TUPLE(s): s for s in matching(list(LIST_JOURNAL[since].values()))}
+        now = {LIST_TUPLE(s) for s in rows}
+        removed = sorted(k for k in before if k not in now)
+        total = len(rows)
+        rows = [s for s in rows if json.dumps(before.get(LIST_TUPLE(s)), sort_keys=True) != json.dumps(s, sort_keys=True)]
     cursor = query.get("cursor", [revision + ":0"])[0]
     try:
         frozen, offset = cursor.rsplit(":", 1)
@@ -9669,11 +9731,16 @@ def paged_sessions(query):
             raise ValueError()
     except ValueError:
         return {"error": "Fixture cursor expired", "code": "cursor_expired"}, 409
-    selected = [] if since else rows[offset:offset + limit]
+    # A delta page spends one slot per removal, like an upsert: removals first, then changed rows.
+    changes = [("remove", k) for k in removed] + [("row", s) for s in rows]
+    page = changes[offset:offset + limit]
+    selected = [s for kind, s in page if kind == "row"]
     if query.get("summary", [""])[0] == "1":
         selected = [{**s, "waiting": bool(s.get("background_waiting"))} for s in selected]
-    more = not since and offset + limit < len(rows)
-    result = {"sessions": selected, "remove": [], "has_more": more, "revision": revision, "total": len(rows)}
+    more = offset + limit < len(changes)
+    if not since: total = len(rows)
+    result = {"sessions": selected, "remove": [k for kind, k in page if kind == "remove"], "has_more": more,
+              "revision": revision, "total": total}
     if more:
         result["next_cursor"] = revision + ":" + str(offset + limit)
     return result, 200
@@ -11871,6 +11938,7 @@ def net_control(path, q):
 # machine list (a new last_seen), and `steps` new steps in the turn of each conversation a connection has open. GET
 # /mock/churned tells how many rounds have gone out. &final=1: then the turn ends (a last reply, the working agents
 # done; counted as one more round). For checking that what the user is doing survives the updates.
+# &rows=<k>: only k working agents change a round, taking turns, as on a real hub (a row or two a second; #3759).
 # &inbox=1: each round also changes an inbox item (a new Feishu message: the inbox's "Needs you" count changes every other
 # round) and pushes `inbox`, and pushes the pending interactions again; &waiting=1: one more interaction comes and goes
 # (the waiting count changes every round, its card shows and goes on the Agents list). The real hub does both all day;
@@ -12240,7 +12308,9 @@ def calculator_png(w=230, h=408):
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=False):
+def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=False, rows=0):
+    """`rows` > 0: only that many working agents change a round, taking turns (a real hub changes a row or two a
+    second, #3759); 0: every working agent every round."""
     import time
     flips = [s for s in SESSIONS if s["state"] == "working"][-1:] if real else []
     for k in range(rounds):
@@ -12256,12 +12326,13 @@ def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=Fal
                 if k % 3 == 1: s.update(state="unread", status="done", state_since=now)
                 elif k % 3 == 2: s.update(state="working", status="working", state_since=now)
         working = [s for s in SESSIONS if s["state"] == "working"]
-        for s in working:
+        changing = [working[(k * rows + j) % len(working)] for j in range(min(rows, len(working)))] if rows else working
+        for s in changing:
             text = "第 %d 轮更新：还在跑，刚看完一处。" % (k + 1)
             if real and k % 2:  # a longer last line: the row grows to its two lines, then shrinks back
                 text += "接下来把剩下的几个模块的测试都跑一遍，看看还有没有别的地方用到了这个旧接口，顺手把文档也改了。"
             s.update(updated_at=now, last_text=text)
-        if len(working) >= 2 and k % 2 == 1:  # the busiest space is now a different one
+        if len(working) >= 2 and k % 2 == 1 and not rows:  # the busiest space is now a different one
             working[0]["updated_at"] = ago(minutes=30)
         for m in MACHINES:
             m["last_seen"] = now
@@ -14923,6 +14994,8 @@ class H(BaseHTTPRequestHandler):
                                     405: "method_not_allowed", 409: "conflict", 502: "upstream_error",
                                     503: "node_offline"}.get(status, "internal"))
         body = json.dumps(obj, ensure_ascii=False).encode()
+        if self.command == "GET" and urlparse(self.path).path == "/api/v1/sessions":
+            sessions_read(self, len(body), status)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -15044,9 +15117,10 @@ class H(BaseHTTPRequestHandler):
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
                                                  int(q.get("steps", ["1"])[0]), q.get("final", ["0"])[0] == "1",
                                                  q.get("inbox", ["0"])[0] == "1", q.get("waiting", ["0"])[0] == "1",
-                                                 q.get("real", ["0"])[0] == "1"), daemon=True).start()
+                                                 q.get("real", ["0"])[0] == "1", int(q.get("rows", ["0"])[0] or 0)), daemon=True).start()
             return self.send_json({"ok": True})
         if p == "/mock/churned": return self.send_json(CHURN)
+        if p == "/mock/sessions_reads": return self.send_json(sessions_reads(q.get("reset", ["0"])[0] == "1"))
         if p == "/mock/send-fail":
             SEND_FAIL["on"] = q.get("on", ["1"])[0] == "1"
             return self.send_json(SEND_FAIL)
@@ -17391,9 +17465,16 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Sec-WebSocket-Accept", accept); self.end_headers(); self.wfile.flush()
         lock = threading.Lock()
 
+        hinted = [None]  # the last revision this connection was told: the hub hints again only when the list changed
+
         def send(obj):
             if paged and obj.get("type") == "sessions":
-                obj = {"type": "sessions_list", "revision": "mock-sessions"}
+                revision = current_list_revision()
+                with lock:
+                    if revision == hinted[0]: return
+                    hinted[0] = revision
+                obj = {"type": "sessions_list", "revision": revision}
+                sessions_reads_hint()
             if obj.get("error") and "code" not in obj:
                 obj = {**obj, "code": "terminal_busy" if obj.get("state") == "busy" else "internal"}
             with lock:

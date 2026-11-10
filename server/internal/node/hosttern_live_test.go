@@ -66,12 +66,10 @@ func TestTernLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	var screen string
-	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if screen, err = h.Read(ctx, pane, host.ReadOpts{Source: "visible", ANSI: true}); err == nil &&
-			strings.Contains(screen, "PERSONA-LIVE\x1b[") {
-			break
-		}
-	}
+	waitWithin(t, 15*time.Second, "the command's colored output", func() bool {
+		screen, err = h.Read(ctx, pane, host.ReadOpts{Source: "visible", ANSI: true})
+		return err == nil && strings.Contains(screen, "PERSONA-LIVE\x1b[")
+	})
 	if !strings.Contains(screen, "PERSONA-LIVE") || !strings.Contains(screen, "\x1b[") || !strings.HasSuffix(screen, "\r\n") {
 		t.Fatalf("colored read: %q", screen)
 	}
@@ -119,11 +117,8 @@ func TestTernLive(t *testing.T) {
 	if labels[cr.SpaceID] != "persona-ternlive-2" || labels[cr.SlotID] != "first" || labels[second.SlotID] != "second" {
 		t.Errorf("labels: space %q, tabs %q / %q", labels[cr.SpaceID], labels[cr.SlotID], labels[second.SlotID])
 	}
-	for deadline := time.Now().Add(5 * time.Second); events.Load() < 2 && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-	}
-	if events.Load() < 2 { // live, then at least one change
-		t.Errorf("events: %d callbacks", events.Load())
-	}
+	// Live, then at least one change.
+	waitWithin(t, 5*time.Second, "the live event and a change", func() bool { return events.Load() >= 2 })
 
 	// Closing one of two tabs keeps the session; closing the last block ends it (no window shows it).
 	if err := h.Close(ctx, second.Pane, cr.SpaceID, second.SlotID); err != nil {
