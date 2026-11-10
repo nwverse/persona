@@ -28,6 +28,8 @@ import (
 // dest=dir&dir=<folder>[&cwd=][&conflict=replace|keep] (the app's file browser, docs/protocol/protocol.md "Changing files"): the file
 // keeps its name in that folder, which must be in the home; a taken name is 409 exists unless conflict says what
 // to do, up to proto.MaxDirUploadBytes.
+// dest=inbox (a file sent to the computer to keep, docs/protocol/file-transfer.md): it keeps its name in the machine's
+// receive folder (hub.json machines[].inbox_dir), a taken name gets " 2"; up to proto.MaxInboxUploadBytes.
 func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
 	size := r.ContentLength
@@ -36,6 +38,8 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	case "", proto.UploadDestHealth:
 	case proto.UploadDestTerminal:
 		limit = proto.MaxTerminalUploadBytes
+	case proto.UploadDestInbox:
+		limit = proto.MaxInboxUploadBytes
 	case proto.UploadDestDir:
 		limit = proto.MaxDirUploadBytes
 		if strings.TrimSpace(r.URL.Query().Get("dir")) == "" {
@@ -90,9 +94,12 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 		q := r.URL.Query()
 		beginParams["dir"], beginParams["cwd"], beginParams["conflict"] = q.Get("dir"), q.Get("cwd"), q.Get("conflict")
 	}
+	if dest == proto.UploadDestInbox {
+		beginParams["dir"] = m.cfg.InboxDir // "": the node's default
+	}
 	if err := step("file.upload.begin", beginParams, &begin); err != nil {
 		var re *rpc.Error
-		// A node from before file.upload.*, or before dest=dir: "unknown upload destination".
+		// A node from before file.upload.*, or before dest=dir / inbox: "unknown upload destination".
 		if errors.As(err, &re) && re.Code == "" && (strings.HasPrefix(re.Message, "unknown method") || strings.HasPrefix(re.Message, "unknown upload destination")) {
 			writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.name()}), nil)
 			return
@@ -103,7 +110,7 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	outdated := func() {
 		writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-upload.outdated", i18n.Args{"name": m.name()}), nil)
 	}
-	if dest == proto.UploadDestDir && begin.Dest != dest || begin.HealthDir != space { // an old node ignored dest (or health_dir) and opened it elsewhere
+	if (dest == proto.UploadDestDir || dest == proto.UploadDestInbox) && begin.Dest != dest || begin.HealthDir != space { // an old node ignored dest (or health_dir) and opened it elsewhere
 		c, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_ = m.call(c, "file.upload.abort", map[string]any{"upload_id": begin.UploadID}, nil)
 		cancel()
