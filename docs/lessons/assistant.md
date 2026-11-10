@@ -159,5 +159,6 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   of a tool's schema send `agent_send`'s `task` as `{"title":"","done_when":[],"expect_minutes":0}` instead of leaving it
   out, and the server took any `task` as a hand-off: a reply to another conversation's agent was refused, and one to an
   agent on no task made a supervised task. A handler that branches on whether an optional object is there treats one
-  with nothing in it as absent (`givenTask`), keeps one that does not decode as it was (a wrongly typed field must not
-  turn a hand-off into an untracked reply), and its schema allows null.
+  with nothing in it as absent (`givenTask`), keeps anything else as it was (another type, a wrongly typed field or an
+  unknown key such as a misspelled `title` must not turn a hand-off into an untracked reply), and its schema allows null
+  and requires none of the object's fields the handler does not.

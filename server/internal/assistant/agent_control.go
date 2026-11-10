@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -233,15 +234,18 @@ type sendTask struct {
 	ExpectMinutes int      `json:"expect_minutes"`
 }
 
-// givenTask is agent_send's task as sent, nil for a reply (#3386): left out, null, or one that says nothing
-// (sendTask.none), which runtimes that fill in every field of a tool's schema send for a reply. One that does not
-// decode stays a task, as before: a field of the wrong type must not turn a hand-off into an untracked reply.
+// givenTask is agent_send's task as sent, nil for a reply (#3386): left out, null, or an object of only title,
+// done_when and expect_minutes that says nothing (sendTask.none), which runtimes that fill in every field of a tool's
+// schema send for a reply. Anything else stays a task, as before: another type, a field of the wrong type or a key the
+// task has not (a misspelled title) must not turn a hand-off into an untracked reply.
 func givenTask(raw json.RawMessage) *sendTask {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
 	var t sendTask
-	if err := json.Unmarshal(raw, &t); err == nil && t.none() {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&t); err == nil && t.none() {
 		return nil
 	}
 	return &t
