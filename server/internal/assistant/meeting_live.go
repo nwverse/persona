@@ -53,7 +53,7 @@ func (s *Service) meetingRoutes() {
 			return
 		}
 		id := r.PathValue("id")
-		_, _, ok := meetingRecording(w, e, id) // 410 and 404 before the body is read as live lines
+		_, _, ok = meetingRecording(w, e, id) // 410 and 404 before the body is read as live lines
 		if !ok {
 			return
 		}
