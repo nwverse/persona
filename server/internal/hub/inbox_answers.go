@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/url"
@@ -37,6 +39,12 @@ import (
 // they went (mergeList). What is kept is the status, the merge's own headers and its bytes, none of what the
 // middleware set (X-Request-Id, Cache-Control), and the bytes gzipped once for the first request that takes gzip:
 // those go out with the headers gzipResponses would have set, and it passes them as they are (gzip.go).
+//
+// A request that sends If-None-Match gets the answer's tag (ETag W/"i1-<hash>") when every manager answered with a
+// 2xx, and 304 when the tag it sent is that one: a refetch after a push that changed nothing this client sees costs
+// a few hundred bytes instead of the whole list. The tag hashes the bytes the request gets but for the value of the
+// top-level as_of, which is the moment of each listing. A request without it gets no tag and the same answer as
+// before (docs/protocol/protocol.md "Inbox validator").
 //
 // inboxAnswerTTL 0 turns it off: every request fetches its own, as before.
 const inboxAnswerTTL = 2 * time.Second
@@ -88,6 +96,9 @@ type inboxAnswer struct {
 
 	gzOnce sync.Once
 	gz     []byte // body gzipped (shared answers, once a request took gzip)
+
+	tagOnce sync.Once
+	tag     string // its ETag (shared answers, once a request sent If-None-Match)
 
 	kept    bool // in inboxAnswers.kept (under inboxAnswers.mu)
 	counted int  // its bytes inboxAnswers.size counts: body, and gz once made (under inboxAnswers.mu)
@@ -287,14 +298,28 @@ func (h *Hub) mergedAnswer(r *http.Request, key string, ids []string, ask func(w
 
 // write sends a to w for r as writeMerged would have sent it: its headers over what w has, its status, its bytes.
 // Each request gets its own copy of the headers (the layers outside add to them). A shared answer goes gzipped, from
-// its gzipped copy, to a request that gzipResponses would have compressed it for.
+// its gzipped copy, to a request that gzipResponses would have compressed it for; to one that sent If-None-Match it
+// goes with its tag, or as a 304 when that is the tag sent (with the headers the 200 would have had, no body).
 func (c *inboxAnswers) write(w http.ResponseWriter, r *http.Request, a *inboxAnswer) {
 	hd := w.Header()
 	for k, v := range a.header {
 		hd[k] = slices.Clone(v)
 	}
+	gz := a.shared && gzipWanted(r) && gzipsAs(a.status, hd, a.body)
+	if inm := r.Header.Values("If-None-Match"); len(inm) > 0 && a.shared && a.status == http.StatusOK {
+		tag := a.etag()
+		hd.Set("ETag", tag)
+		if tagMatches(inm, tag) {
+			hd.Del("Content-Length")
+			if gz {
+				hd.Add("Vary", "Accept-Encoding")
+			}
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
 	body := a.body
-	if a.shared && gzipWanted(r) && gzipsAs(a.status, hd, a.body) {
+	if gz {
 		body = c.gzipped(a)
 		hd.Del("Content-Length")
 		hd.Set("Content-Encoding", "gzip")
@@ -302,6 +327,57 @@ func (c *inboxAnswers) write(w http.ResponseWriter, r *http.Request, a *inboxAns
 	}
 	w.WriteHeader(a.status)
 	_, _ = w.Write(body)
+}
+
+// etag is a's tag: W/"i1-" and the first 128 bits of the SHA-256 of its bytes, but for the value of its top-level
+// as_of, in hex. Made once.
+func (a *inboxAnswer) etag() string {
+	a.tagOnce.Do(func() {
+		sum := sha256.New()
+		if from, to, ok := topLevelValue(a.body, "as_of"); ok {
+			sum.Write(a.body[:from])
+			sum.Write(a.body[to:])
+		} else {
+			sum.Write(a.body)
+		}
+		a.tag = `W/"i1-` + hex.EncodeToString(sum.Sum(nil)[:16]) + `"`
+	})
+	return a.tag
+}
+
+// topLevelValue is where the value of key is in the JSON object b, a merge's own bytes (valid JSON by construction):
+// b[from:to]. Not ok when b is no object or has no such member.
+func topLevelValue(b []byte, key string) (from, to int, ok bool) {
+	i := jsonWS(b, 0)
+	if i >= len(b) || b[i] != '{' {
+		return 0, 0, false
+	}
+	for i = jsonWS(b, i+1); i < len(b) && b[i] == '"'; {
+		ke, _, _ := jsonString(b, i)
+		v := jsonWS(b, jsonWS(b, ke)+1) // after ':'
+		ve, _ := jsonValue(b, v)
+		if string(b[i+1:ke-1]) == key {
+			return v, ve, true
+		}
+		if i = jsonWS(b, ve); i < len(b) && b[i] == ',' {
+			i = jsonWS(b, i+1)
+		}
+	}
+	return 0, 0, false
+}
+
+// tagMatches: an If-None-Match (its values, each a list) names tag by weak comparison, or is "*".
+func tagMatches(values []string, tag string) bool {
+	opaque := strings.TrimPrefix(tag, "W/")
+	for _, v := range values {
+		for _, t := range strings.Split(v, ",") {
+			t = strings.TrimSpace(t)
+			if t == "*" || strings.TrimPrefix(t, "W/") == opaque {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // gzipsAs: gzipWriter would compress a whole body written at once with status and headers h

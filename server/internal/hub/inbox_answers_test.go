@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -10,7 +11,9 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -420,5 +423,102 @@ func TestInboxAnswersBounds(t *testing.T) {
 	c.drop(last)
 	if c.size != (inboxAnswersMax-1)*2 {
 		t.Fatalf("%d bytes counted after dropping it", c.size)
+	}
+}
+
+// The validator: a request with If-None-Match gets the tag, and a 304 while the list it names is still the one; the
+// moment of the listing (as_of) alone is no change. Without one, no tag (TestMergedInboxSameAnswer: the same bytes).
+func TestMergedInboxValidator(t *testing.T) {
+	h := newTestHub(t)
+	m := newCountingInbox(t, h, 30)
+	first := m.body
+	routes := h.routes()
+	get := func(lang i18n.Lang, gz bool, inm string) *httptest.ResponseRecorder {
+		return getInbox(t.Context(), h, routes, "/api/v1/inbox?sources=all", lang, gz, "If-None-Match", inm)
+	}
+	full := get(i18n.En, true, `W/"i1-"`)
+	tag := full.Header().Get("ETag")
+	if full.Code != 200 || !regexp.MustCompile(`^W/"i1-[0-9a-f]{32}"$`).MatchString(tag) || full.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("%d, ETag %q, %v", full.Code, tag, full.Header())
+	}
+	for _, tc := range []struct {
+		name   string
+		change func()
+		lang   i18n.Lang
+		inm    string
+		full   bool // a 200 (with a tag); else 304
+		newTag bool // and another tag
+	}{
+		{name: "the same list", inm: tag},
+		{name: "named among others, strong", inm: `"x", ` + strings.TrimPrefix(tag, "W/")},
+		{name: "any", inm: "*"},
+		{name: "another moment, the same items", inm: tag, change: func() {
+			m.set(func(c *countingInbox) {
+				c.body = bytes.Replace(first, []byte(`"as_of":"2026-11-09T12:00:00Z"`), []byte(`"as_of":"2026-11-09T12:00:05Z"`), 1)
+			})
+		}},
+		{name: "another tag", inm: `W/"i1-0123"`, full: true},
+		{name: "another language", inm: tag, lang: i18n.ZhHans, full: true, newTag: true},
+		{name: "an item more", inm: tag, full: true, newTag: true, change: func() { m.set(func(c *countingInbox) { c.body = inboxBody(t, 31) }) }},
+	} {
+		if tc.change != nil {
+			tc.change()
+			h.inboxAnswers.changedAll()
+		}
+		for _, gz := range []bool{false, true} {
+			rec := get(cmp.Or(tc.lang, i18n.En), gz, tc.inm)
+			got := rec.Header()
+			switch {
+			case tc.full && (rec.Code != 200 || (got.Get("ETag") != tag) != tc.newTag || got.Get("ETag") == "" || rec.Body.Len() == 0):
+				t.Fatalf("%s, gzip %v: %d, ETag %q", tc.name, gz, rec.Code, got.Get("ETag"))
+			case !tc.full && (rec.Code != http.StatusNotModified || rec.Body.Len() != 0 || got.Get("ETag") != tag ||
+				got.Get("Content-Encoding") != "" || got.Get("Cache-Control") != "no-store" ||
+				got.Get("Content-Type") != full.Header().Get("Content-Type")):
+				t.Fatalf("%s, gzip %v: %d %v, %d bytes", tc.name, gz, rec.Code, got, rec.Body.Len())
+			}
+		}
+	}
+
+	// A list some manager did not answer with a 2xx has no tag.
+	m.set(func(c *countingInbox) {
+		c.status, c.body = 503, json.RawMessage(`{"error":"inbox not ready","code":"inbox_unavailable"}`)
+	})
+	h.inboxAnswers.changedAll()
+	if rec := get(i18n.En, false, "*"); rec.Code != 503 || rec.Header().Get("ETag") != "" {
+		t.Fatalf("%d, ETag %q", rec.Code, rec.Header().Get("ETag"))
+	}
+}
+
+// The tag leaves out the top-level as_of's value, wherever it is; If-None-Match compares weakly, in lists.
+func TestInboxAnswerTag(t *testing.T) {
+	tagOf := func(body string) string { return (&inboxAnswer{body: []byte(body)}).etag() }
+	for _, tc := range []struct {
+		a, b string
+		same bool
+	}{
+		{`{"as_of":"1","items":[1]}`, `{"as_of":"2","items":[1]}`, true},
+		{`{"items":[{"as_of":"1"}], "as_of" : "1"}`, `{"items":[{"as_of":"1"}], "as_of" : "2"}`, true},
+		{`{"items":[{"as_of":"1"}],"as_of":"1"}`, `{"items":[{"as_of":"2"}],"as_of":"1"}`, false},
+		{`{"as_of":"1","items":[1]}`, `{"as_of":"1","items":[2]}`, false},
+		{`[1]`, `[2]`, false},
+	} {
+		if (tagOf(tc.a) == tagOf(tc.b)) != tc.same {
+			t.Errorf("%s and %s: tags %s and %s", tc.a, tc.b, tagOf(tc.a), tagOf(tc.b))
+		}
+	}
+	for _, tc := range []struct {
+		inm  []string
+		want bool
+	}{
+		{[]string{`W/"i1-ab"`}, true},
+		{[]string{`"i1-ab"`}, true},
+		{[]string{`"x"`, ` W/"y" , W/"i1-ab"`}, true},
+		{[]string{`*`}, true},
+		{[]string{`W/"i1-"`}, false},
+		{[]string{`W/"i1-abc"`, `i1-ab`}, false},
+	} {
+		if got := tagMatches(tc.inm, `W/"i1-ab"`); got != tc.want {
+			t.Errorf("%q: %v", tc.inm, got)
+		}
 	}
 }
