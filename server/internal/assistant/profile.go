@@ -274,8 +274,13 @@ var meetingRoles = []string{kb.AttendanceOff, kb.AttendanceListener, kb.Attendan
 
 // meetingAttendanceDefault is the role a meeting recording pre-selects (meeting_attendance_default, off by default).
 func (s *Service) meetingAttendanceDefault(ctx context.Context) string {
-	if v := s.settings(ctx).MeetingAttendanceDefault; v != nil && slices.Contains(meetingRoles, *v) {
-		return *v
+	return meetingAttendanceOf(s.settings(ctx))
+}
+
+// meetingAttendanceOf is meetingAttendanceDefault of settings already read (the view reads them once).
+func meetingAttendanceOf(v Settings) string {
+	if r := v.MeetingAttendanceDefault; r != nil && slices.Contains(meetingRoles, *r) {
+		return *r
 	}
 	return kb.AttendanceOff
 }
@@ -454,7 +459,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
-		MeetingAttendanceDefault: s.meetingAttendanceDefault(ctx), KBTopics: quietOn(v.KBTopics),
+		MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
