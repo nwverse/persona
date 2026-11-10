@@ -257,6 +257,23 @@ nonisolated enum Theme {
     }
     #endif
 
+    #if !os(watchOS)
+    /// The crop of a new avatar (`AvatarCropView`): drawn over the photo itself, so the same in light and dark.
+    enum Crop {
+        /// Outside the circle the avatar keeps: dimmed, so the circle reads as what is kept.
+        static let outside = Color.black.opacity(0.5)
+        /// The circle's edge.
+        static let edge = Color.white.opacity(0.9)
+    }
+
+    /// A card that adds one more to a grid of cards (Settings › Appearance › Avatar › New from Photo): an empty well
+    /// with a dashed accent edge, so it reads as a place for something new rather than one of the choices.
+    enum AddCard {
+        static var edge: Color { Theme.accent.opacity(0.45) }
+        static let dash: [CGFloat] = [Theme.Space.xs, Theme.Space.xs]
+    }
+    #endif
+
     /// The image viewer's backdrop (`ImageViewer`), as Photos has it: the page's own color while its bars show (white
     /// in light mode, black in dark), black once a tap hides them.
     enum Viewer {
@@ -402,6 +419,12 @@ nonisolated enum Theme {
         var extraLeading: CGFloat { max(0, lineHeight - 1.19) * size }
     }
 
+    /// How faint something is drawn that can't be acted on for now: rows that can't be picked while selecting (the
+    /// inbox's Select, #2059; the web uses the same 45%).
+    enum Fade {
+        static let unavailable: Double = 0.45
+    }
+
     /// How much of a rich card must intersect the scroll viewport before its isolated content runs.
     enum Visibility {
         static let richCardThreshold: Double = 0.01
@@ -524,6 +547,9 @@ nonisolated enum Theme {
         // Wide screens (iPad).
         /// A page meant to be read, not a list (the welcome page): no wider than this, centered.
         static let readable: CGFloat = 560
+        /// The square a new avatar is cropped in (Settings › Appearance › Avatar › New from Photo): no wider than this,
+        /// narrower when the sheet is.
+        static let avatarCrop: CGFloat = 320
         /// The widest the Agents chat header's title gets on a wide page (iPad, Mac): on an iPhone it takes all the room
         /// between the round buttons; past this a line is too long to read at a glance.
         static let headerTitle: CGFloat = 480
