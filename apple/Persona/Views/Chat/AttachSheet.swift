@@ -831,20 +831,69 @@ private enum AttachTop {
     }
 }
 
-/// A row of the panel's More tab (the menu's other items); it closes the panel, then acts.
+/// A row of what + offers besides photos and files (#3225): in the panel's More tab it closes the panel, then acts; in
+/// the menu (`AttachMenuItems`) it acts.
 struct AttachMoreRow: Identifiable {
     let id: String
     let title: String
     let symbol: String
+    /// The "/" word a quick command's title ends with (「压缩上下文 /compact」): the menu draws it as the row's second
+    /// line, so the title stays on one.
+    var word: String? = nil
     var destructive = false
     var disabled = false
     let action: () -> Void
+
+    /// The title without its trailing `word`, and the word; nil when the title does not end with it.
+    var split: (title: String, word: String)? {
+        guard let word, title.hasSuffix(" " + word) else { return nil }
+        return (String(title.dropLast(word.count + 1)), word)
+    }
 }
 
 struct AttachMoreSection: Identifiable {
     let id: String
     let title: String?
     let rows: [AttachMoreRow]
+    /// The menu folds the section into a submenu with this icon and the section's title; the More tab keeps it a section.
+    var symbol: String? = nil
+}
+
+/// What + offers besides photos and files as menu items, in their order (the menu puts the first nearest the finger):
+/// the iPhone's touch and hold on + and the iPad's + menu, from the same list as the panel's More tab (#3225).
+struct AttachMenuItems: View {
+    let sections: [AttachMoreSection]
+
+    var body: some View {
+        ForEach(sections) { section in
+            Section {
+                if let symbol = section.symbol, let title = section.title {
+                    Menu { rows(section) } label: { Label { Text(title).lineLimit(1) } icon: { Theme.Icon.image(symbol) } }
+                        .accessibilityIdentifier("attach-menu-\(section.id)")
+                } else {
+                    rows(section)
+                }
+            }
+        }
+    }
+
+    private func rows(_ section: AttachMoreSection) -> some View {
+        ForEach(section.rows) { row in
+            // A menu draws a second line only from a second Text right in the label (docs/lessons/ios.md, #1307).
+            if let split = row.split {
+                item(row) { Text(split.title); Text(split.word); Theme.Icon.image(row.symbol) }
+            } else {
+                item(row) { Text(row.title); Theme.Icon.image(row.symbol) }
+            }
+        }
+    }
+
+    private func item(_ row: AttachMoreRow, @ViewBuilder label: () -> some View) -> some View {
+        Button(role: row.destructive ? .destructive : nil, action: row.action, label: label)
+            .disabled(row.disabled)
+            .accessibilityLabel(row.title)
+            .accessibilityIdentifier(row.id)
+    }
 }
 
 struct AttachMoreRows: View {

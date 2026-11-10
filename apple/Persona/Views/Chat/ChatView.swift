@@ -4399,6 +4399,17 @@ struct Composer: View, Equatable {
                                  openAttach: attachOpener,
                                  glows: glowsWhileReplying,
                                  send: { if let gate { gate.action() } else { Task { await sendText(text) } } }) {
+                    #if os(iOS)
+                    // The iPhone's tap opens the panel, its touch and hold this menu; the iPad's + is the menu, with
+                    // Photos and Files first. The rest is the panel's More tab (#3225).
+                    if attachOpener == nil {
+                        Section {
+                            Button { showPhotos = true } label: { Label("Photos", systemImage: Theme.Icon.photos) }
+                            Button { showFiles = true } label: { Label("Files", systemImage: Theme.Icon.file) }
+                        }
+                    }
+                    AttachMenuItems(sections: attachMoreSections)
+                    #else
                     Button { showPhotos = true } label: { Label("Photos", systemImage: Theme.Icon.photos) }
                     if CameraPicker.isAvailable {
                         Button { showCamera = true } label: { Label("Take Photo [Chat View 6e3a10]", systemImage: Theme.Icon.camera) }
@@ -4411,6 +4422,7 @@ struct Composer: View, Equatable {
                     voiceMenuItem
                     extensionPrompts
                     if !shellChat { quickCommands } // an agent's, as its composer offered them before the shell's
+                    #endif
                 } modes: {
                     SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
                                      setsEffortOnly: setsEffortOnly, otherModel: canPickModel ? { typingModel = true } : nil)
@@ -4698,17 +4710,39 @@ struct Composer: View, Equatable {
                         finish: attachFinished)
     }
 
-    /// The panel's More tab: what the menu offered besides photos and files.
+    /// What + offers besides photos and files (#3225), one list for three places: the panel's More tab, the iPhone's touch
+    /// and hold on +, and the iPad's + menu under Photos and Files. The most used first (the menu puts it nearest the
+    /// finger): calls and the camera, Mention, an Agent's Quick Commands, then extension prompts. Rows a chat or device
+    /// can never use are left out; /clear while the Agent works is dimmed.
     private var attachMoreSections: [AttachMoreSection] {
         var sections: [AttachMoreSection] = []
         var capture: [AttachMoreRow] = []
-        if MetaGlasses.isBuiltIn {
-            capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses) { showGlasses = true })
-        }
         if VoicePlatform.current == .phone {
             capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel) { startVoice() })
         }
+        if CameraPicker.isAvailable {
+            capture.append(AttachMoreRow(id: "composer-menu-camera", title: String(localized: "Take Photo [Chat View 6e3a10]"), symbol: Theme.Icon.camera) { showCamera = true })
+        }
+        if MetaGlasses.isBuiltIn {
+            capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses) { showGlasses = true })
+        }
         if !capture.isEmpty { sections.append(AttachMoreSection(id: "capture", title: nil, rows: capture)) }
+        sections.append(AttachMoreSection(id: "mention", title: nil, rows: [
+            AttachMoreRow(id: "composer-menu-mention", title: String(localized: "Mention a File or Session"), symbol: Theme.Icon.mention) { typeMention() },
+        ]))
+        if !shellChat {
+            var rows = SlashCommand.commands(loop: canLoop).map { cmd in
+                AttachMoreRow(id: "attach-command-\(cmd.title)", title: cmd.title, symbol: cmd.symbol, word: cmd.word) {
+                    if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
+                }
+            }
+            if canClear {
+                rows.append(AttachMoreRow(id: "attach-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
+                                          word: "/clear", destructive: true, disabled: status.isActive || clearing) { confirmClear = true })
+            }
+            sections.append(AttachMoreSection(id: "commands", title: String(localized: "Quick Commands [Chat View c813e6]"), rows: rows,
+                                              symbol: Theme.Icon.quickCommands))
+        }
         if !declarations.prompts.isEmpty {
             sections.append(AttachMoreSection(id: "prompts", title: String(localized: "Extension Prompts"), rows: declarations.prompts.map { prompt in
                 AttachMoreRow(id: "extension-prompt-\(prompt.id)", title: prompt.title, symbol: Theme.Icon.insert) {
@@ -4716,19 +4750,7 @@ struct Composer: View, Equatable {
                     selection = TextSelection(insertionPoint: text.endIndex)
                     focused = true
                 }
-            }))
-        }
-        if !shellChat {
-            var rows = SlashCommand.commands(loop: canLoop).map { cmd in
-                AttachMoreRow(id: "attach-command-\(cmd.title)", title: cmd.title, symbol: cmd.symbol) {
-                    if cmd.drafts { startDraft(cmd.text) } else { Task { await sendText(cmd.text) } }
-                }
-            }
-            if canClear {
-                rows.append(AttachMoreRow(id: "attach-clear", title: String(localized: "Clear Context /clear"), symbol: Theme.Icon.clearContext,
-                                          destructive: true, disabled: status.isActive || clearing) { confirmClear = true })
-            }
-            sections.append(AttachMoreSection(id: "commands", title: String(localized: "Quick Commands [Chat View c813e6]"), rows: rows))
+            }, symbol: Theme.Icon.plugins))
         }
         return sections
     }
@@ -5165,7 +5187,11 @@ struct CameraPicker: UIViewControllerRepresentable {
         #if os(visionOS)
         false
         #else
-        UIImagePickerController.isSourceTypeAvailable(.camera)
+        #if DEBUG
+        // Simulator screenshots: `-showCameraRows YES` lists Take Photo as a phone does (the simulator has no camera to open).
+        if UserDefaults.standard.bool(forKey: "showCameraRows") { return true }
+        #endif
+        return UIImagePickerController.isSourceTypeAvailable(.camera)
         #endif
     }
 
