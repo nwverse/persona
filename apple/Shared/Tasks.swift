@@ -516,8 +516,10 @@ nonisolated struct AssistantTrayActivity: Hashable, Sendable {
     var subagents = 0
     var workflows: [Workflow] = []
     var workflowCount = 0
+    /// An older complete response may say background work runs without listing its kind.
+    var reportedBackgroundWork = false
 
-    var isActive: Bool { backgroundTasks > 0 || subagents > 0 || workflowCount > 0 }
+    var isActive: Bool { backgroundTasks > 0 || subagents > 0 || workflowCount > 0 || reportedBackgroundWork }
 
     init() {}
 
@@ -537,6 +539,7 @@ nonisolated struct AssistantTrayActivity: Hashable, Sendable {
                 }
                 continue
             }
+            reportedBackgroundWork = reportedBackgroundWork || (session.backgroundWorking && !session.backgroundWaiting)
             let runs = session.runningWorkflows
             let workflowMarkers = background.filter { task in
                 task.isWorkflow && !(session.workflows ?? []).contains { run in

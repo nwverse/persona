@@ -18958,9 +18958,10 @@ def features():
 MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 agent_session_archives 和 agent_session_archive_close（archive：只有归档，像旧管理器）；"
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 
-# MOCK_TASK_TRAY_ACTIVITY=1: four deterministic tray rows for Apple UI verification.
+# MOCK_TASK_TRAY_ACTIVITY=1|summary: four deterministic tray rows for Apple UI verification.
 # Parent turns have ended: a command, a workflow, a subagent, and a wake-up with no background work.
-if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") == "1":
+# summary uses the compact #3588 projection, without chat-only background/subagent/workflow arrays.
+if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") in ("1", "summary"):
     activity_rows = [
         ("tray-command", WIDGET, "Background build verification"),
         ("tray-workflow", ORDERS, "Workflow review verification"),
@@ -18990,6 +18991,18 @@ if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") == "1":
                                      "description": "Verify changes", "background": True}]
         else:
             session.update(background_working=False, background_waiting=True)
+        if os.environ.get("MOCK_TASK_TRAY_ACTIVITY") == "summary":
+            session["waiting"] = True
+            session["background_tasks_count"] = 2 if sid == WIDGET else 0
+            if sid == ORDERS:
+                progress = dict(session["workflows"][0], phase_count=2)
+                progress.pop("phases", None)
+                progress.pop("run_id", None)
+                session.update(running_workflows=1, workflow_progress=progress)
+            if sid == REVIEW:
+                session["running_subagents"] = 1
+            for field in ("background", "subagents", "workflows"):
+                session.pop(field, None)
         ORIG_STATE[sid] = ("working", "working")
         todo = _task_todo(tid, title, "", session["machine_id"], sid, "/demo", index + 1, "")
         TODOS_INIT.append(todo)

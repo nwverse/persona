@@ -138,6 +138,19 @@ struct AssistantTrayActivityTests {
         #expect(activity.workflows.isEmpty)
     }
 
+    @Test func olderFullResponseCanReportWorkWithoutGuessingItsKind() throws {
+        let agent = try session(["background_working": true])
+        let activity = AssistantTrayActivity(sessions: [agent])
+        #expect(activity.isActive)
+        #expect(activity.backgroundTasks == 0 && activity.subagents == 0 && activity.workflowCount == 0)
+        #expect(activity.subtitle == String(localized: "Working (Background)"))
+    }
+
+    @Test func summaryZerosOverrideEvenTheOldBackgroundWorkingFlag() throws {
+        let agent = try session(["waiting": false, "background_tasks_count": 0, "background_working": true])
+        #expect(!AssistantTrayActivity(sessions: [agent]).isActive)
+    }
+
     @Test func taskShowsTheNewestWorkflowAcrossItsAgents() throws {
         var earlier = workflow, newer = workflow
         earlier["started_at"] = "2026-11-10T08:00:00Z"

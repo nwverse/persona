@@ -592,6 +592,7 @@ extension AssistantTrayActivity {
         var parts: [String] = []
         if backgroundTasks > 0 { parts.append(String(localized: "\(backgroundTasks) background tasks running")) }
         if subagents > 0 { parts.append(String(localized: "\(subagents) subagents running")) }
+        if parts.isEmpty, workflowCount == 0, reportedBackgroundWork { return String(localized: "Working (Background)") }
         return parts.joined(separator: " · ")
     }
 }
