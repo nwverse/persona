@@ -323,6 +323,35 @@ Android's take on plan section 4 ("session keys must tell groups apart"), decide
 - The mock hub's linking fields are being added to `scripts/mock/mock_hub.py` by the iOS lane; until then a wrapper that doesn't modify it is used: like `android.sh shots`, it execs its source, replaces `identity()` (used by both health and hello), and adds a fixed `hub_id`, `hub_name` and `mesh`.
   Two groups: two mock hubs (one port each, no mesh), one paired with `debug.mockAddress`, the other with `--es debug.addMockAddress http://<loopback address>:<port>` (debug builds only, equivalent to **Add hub** in Settings). Two hubs in one group: two mock hubs whose mesh lists each other, only one paired; stop it and the connection switches to the other.
 
+## SSH tunnel and local proxy (iOS parity)
+
+A paired hub whose addresses don't answer can be reached through an SSH server or another app's local SOCKS5 proxy, as on
+iOS ([network.md](../operations/network.md) "Connecting to hub through SSH" and "Connecting to hub through a local SOCKS5
+proxy", where the Android notes are). The in-app tunnel is not ported: its core is a private library linked only into the
+iOS app.
+
+- **Settings › Hubs**: under each paired hub, an **SSH tunnel** and a **Local proxy** row ("· name" added when a group has
+  several paired hubs), valued Not set / In use / Always / Fallback like iOS `HubsView`. Their pages
+  (`android/feature/settings/src/main/kotlin/persona/feature/settings/HubTunnelScreens.kt`, models in `HubTunnelState.kt`)
+  follow iOS `SSHTunnelView` and `LocalProxyView`: status and last failure, this device's public key with Copy public key /
+  Copy authorized_keys line, the server, the tunnel target, the pinned fingerprint, Always, **Test connection and save**
+  (a new or changed fingerprint is asked about first) and Delete. Switching Always alone on a saved tunnel saves at once.
+  Diagnostics name tunnel candidates "SSH tunnel" and "Local proxy".
+- **Connection**: one `HubWays` (`android/core/hub/src/main/kotlin/persona/core/hub/tunnel/HubWays.kt`) in
+  `ConnectionRuntime` runs at most one tunnel of each kind per hub for every group connection. `OkHttpHubConnection`
+  picks the way with `HubWay.next` (pure, the order iOS uses) and publishes the tunnel it goes through (`tunnel`), which
+  `GroupRuntime` hands to Settings. A group's tunnels follow the registry: new settings reach the open connection
+  (`GroupRuntime.updateTunnels`), an unpaired hub's tunnels close (`HubWays.retain`). Saving a tunnel's page clears a
+  failure that waited for the user (`HubWays.unblock`) and redials a connection that is not online.
+- **Tests**: `Socks5HandshakeTest`, `HubWayTest`, `LocalProxyForwardTest` (a SOCKS5 proxy on loopback),
+  `SshTunnelTest` (a real SSH server, Apache MINA SSHD, test-only), `HubTunnelConnectionTest` (a group connection through
+  each tunnel, Always, moving back once the address answers, a changed host key that is not redialled, a refused key
+  dialled again after saving) in `core:hub`;
+  `HubTunnelStateTest` and `HubTunnelShotsTest` (Hubs and both pages, empty, saved and failing, three styles × light /
+  dark in Chinese plus English and Japanese, written to `build/tunnel-shots/`) in `feature:settings`.
+- **Release**: R8 would remove every algorithm JSch makes by name (it did, before the rules), so `proguard-rules.pro`
+  keeps them and `scripts/release/check_android_shrink.py` checks one of each kind ("Release shrinking" below).
+
 ## Build and install
 
 ```sh
@@ -406,9 +435,10 @@ shrinking stays off (below), and debug builds are not shrunk.
 - **Reached by name**: R8 keeps what code references, the libraries' own rules (AndroidX, WorkManager, Room, Hilt,
   kotlinx.serialization) and the default `@JavascriptInterface` rule. What the app itself reaches only by name needs a
   rule in `proguard-rules.pro`; today that is `HubFailure.getStatus` / `getCode`, which the tasks store looks up on a
-  failed call. `scripts/release/check_android_shrink.py` checks a release APK for manifest components and App Startup
+  failed call, and the SSH tunnel's algorithms, which JSch makes from class names in its config (its JCE and core
+  classes, and Tink's X25519 and Ed25519 that `SshAlgorithms` names there). `scripts/release/check_android_shrink.py` checks a release APK for manifest components and App Startup
   initializers with their no-argument constructors, workers' `(Context, WorkerParameters)` constructors, Room's
-  generated `_Impl` classes, the Markdown bridge's `done` / `fail`, those getters, the InnerClass annotations that give
+  generated `_Impl` classes, the Markdown bridge's `done` / `fail`, those getters, one SSH algorithm of each kind, the InnerClass annotations that give
   persona exceptions and routes their simple names, an empty `missing_rules.txt`, every class R8's `seeds.txt` lists
   either in the dex or removed in `usage.txt`, never merged, and every Throwable in the dex among those seeds (the
   `-keepnames` rule matches them all). The release worker runs it before signing ([release.md](../operations/release.md) "Android publisher
