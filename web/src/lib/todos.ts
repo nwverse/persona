@@ -78,6 +78,9 @@ export interface Todo {
   pr_url?: string;
   /** How far its finished work went out; short of live, where it is held and who can unhold it (docs/assistant/todos.md "Delivery"). */
   delivery?: TodoDelivery;
+  /** The hub's latest automatic completion check of its work, while still current (#3180, docs/assistant/todos.md
+   *  "Automatic completion"); unset before one, after a reopen or a new turn, and from hubs without it. */
+  check?: TodoCheck;
   /** The chat thread the todo is bound to (#5279, docs/assistant/todos.md "Chat thread"); unset while it has none. */
   thread?: TodoThread;
   /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
@@ -133,6 +136,27 @@ export interface TodoDelivery {
   gate?: string;
   unblock?: "user" | "agent" | "other" | string;
   at?: string;
+}
+
+/** A completion check: `verdict` is `done`, `not_done`, `waiting`, `needs_user`, `undelivered` or `unsure` (others may
+ *  come); `reason` is the judge's line in the user's language; `work_since` the start of the work it judged. */
+export interface TodoCheck {
+  verdict: string;
+  reason?: string;
+  at: string;
+  work_since?: string;
+}
+
+/** Why a stopped task is still open, from its completion check (#3180): the reason ("" when the judge gave none) while
+ *  the task is neither working nor done and its check, newer than its latest reopen, found it not done; else undefined
+ *  (no check, or one that says done or unsure). `state` is the row's task state. */
+export function stoppedReason(todo: Pick<Todo, "check" | "done_at" | "reopened_at"> | undefined, state: string | undefined): string | undefined {
+  const check = todo?.check;
+  if (!todo || !check?.verdict || todo.done_at) return undefined;
+  if (state === "working" || state === "done" || state === "accepted" || state === "cancelled") return undefined;
+  if (check.verdict === "done" || check.verdict === "unsure") return undefined;
+  if (todo.reopened_at && !(Date.parse(check.at) >= Date.parse(todo.reopened_at))) return undefined;
+  return check.reason?.trim() ?? "";
 }
 
 /** An open task whose work is finished but held short of live (stopped at a PR, merged, off by default); else null. */

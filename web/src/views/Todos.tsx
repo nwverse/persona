@@ -63,10 +63,11 @@ import { useFolded } from "../lib/use-folded";
 import { stateName } from "../lib/state-labels";
 import { answeredLookup } from "./assistant/answered-lookup";
 import { Empty, Segmented } from "./assistant/parts";
+import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
 import type { Route } from "../lib/router";
-import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
+import { LatestReport, ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
 import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
@@ -128,6 +129,9 @@ export function TodosView({
   }, [everyTodo, ownTodos, selectedId]);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosError = useStore((s) => s.todosError);
+  // the current assistant offline (several assistants): the hub's merged list leaves it out, so none here means it
+  // couldn't answer; the page says so instead of the empty one
+  const offline = useShownOffline();
   const machines = useStore((s) => s.machines);
   const interactions = useStore((s) => s.interactions);
   const allSessions = useAgentSessions();
@@ -376,7 +380,11 @@ export function TodosView({
         </div>
       </header>
 
-      {calendarOn ? (
+      {calendarOn && offline && todosLoaded && todos.length === 0 ? (
+        <div className="flex min-h-0 flex-1 items-start justify-center bg-page">
+          <OfflineState offline={offline} className="py-14" />
+        </div>
+      ) : calendarOn ? (
         <div className="flex min-h-0 flex-1">
           <div className={cx("flex min-h-0 min-w-0 flex-1 flex-col bg-page", selectedTodo && "max-md:hidden")}>
             <TodoCalendar
@@ -479,7 +487,9 @@ export function TodosView({
                 {todosError}
               </Empty>
             ) : filteredUncompleted.length === 0 && filteredCompleted.length === 0 ? (
-              search.trim() ? (
+              offline && todos.length === 0 ? (
+                <OfflineState offline={offline} ring="ring-surface" className="py-14" />
+              ) : search.trim() ? (
                 <Empty icon="search" title={t("todos.no_match_title")}>
                   {t("todos.no_match_body")}
                 </Empty>
@@ -1417,6 +1427,7 @@ function TodoDetail({
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
       <ReviewChecklist todo={todo} />
+      <LatestReport todo={todo} />
 
       {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
       <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />

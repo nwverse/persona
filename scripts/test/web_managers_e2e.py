@@ -14,14 +14,16 @@ It moves the NAS to 工作 and back to 家里, so every round (390 / 1200, light
 
 Checks the sidebar's assistant switcher (the current assistant in the sidebar's head; its list with New assistant and
 Manage assistants…; the pick names the assistant's requests and survives a reload; an offline one greyed with the
-composer off; an installing one opens its install code), that the machines and inbox pages list only the current
-assistant's (no manager headings), another assistant's inbox item opened by its address (its requests name its manager,
-the Trail's too, and the current assistant stays), the Muted dialog, and Settings › Assistants' Notifications switch.
-Each round also checks Settings' three groups ("<name>'s settings" with Switch, This device, Hub), that Switch opens
-the sidebar's list, and that the first group then follows the new assistant (its pages' requests name it, Connectors and
-Extensions list its copies only); with --single, the title and Switch with one assistant. Once after the rounds: the
-count beside 工作 (its agents waiting plus the roster's inbox_needs_you) moving without a reload when the hub pushes
-`managers`, and every row of the list reachable and clickable at 200% zoom and at the largest text size. --outdated its Needs update badge; --single checks the switcher is there with one assistant, that nothing is filtered
+composer off, its inbox and to-dos saying it is offline rather than empty; an installing one opens its install code),
+that the machines and inbox pages list only the current assistant's (no manager headings), another assistant's inbox
+item opened by its address (its requests name its manager, the Trail's too, and the current assistant stays, also after
+Hand to AI on it), the Muted dialog, and Settings › Assistants' Notifications switch. Each round also checks Settings'
+three groups ("<name>'s settings" with Switch, This device, Hub), that Switch opens the sidebar's list, and that the
+first group then follows the new assistant (its pages' requests name it, Connectors and Extensions list its copies
+only); with --single, the title and Switch with one assistant. Once after the rounds: the count beside 工作 (its agents
+waiting plus the roster's inbox_needs_you) moving without a reload when the hub pushes `managers`, and every row of the
+list reachable and clickable at 200% zoom and at the largest text size. --outdated its Needs update badge; --single
+checks the switcher is there with one assistant, that nothing is filtered
 and that no request names a manager (no X-Persona-Manager header, no manager= in the address). Screenshots (390 and
 1200 wide, light and dark) contain only mock data.
 """
@@ -238,6 +240,23 @@ def check(browser, base, width, theme, shots, single, outdated):
         if shots:
             page.wait_for_timeout(600)
             page.screenshot(path=name("machines-offline"))
+        # its inbox and to-dos: the hub's merged lists leave it out, so they say it is offline, not empty
+        page.goto(base + "/inbox")
+        offline = main.locator('[data-assistant-offline="m-8b04d2"]')
+        expect(offline).to_contain_text("家里 离线")
+        expect(offline).to_contain_text("最后同步于")
+        expect(offline).to_contain_text("它上线后这里会更新。")
+        expect(main.locator("[data-inbox-no-sources]")).to_have_count(0)
+        expect(main.get_by_text("都处理完了", exact=True)).to_have_count(0)
+        if shots:
+            page.wait_for_timeout(600)
+            page.screenshot(path=name("inbox-offline"))
+        page.goto(base + "/todos")
+        expect(main.locator('[data-assistant-offline="m-8b04d2"]')).to_contain_text("家里 离线")
+        expect(main.get_by_text("没有待办", exact=True)).to_have_count(0)
+        if shots:
+            page.wait_for_timeout(600)
+            page.screenshot(path=name("todos-offline"))
 
         # back on the default: nothing is named again, and the pick is forgotten
         go(page, base + "/")
@@ -250,6 +269,22 @@ def check(browser, base, width, theme, shots, single, outdated):
         if width >= 1024:
             expect(head).to_have_attribute("data-assistant-switcher", "assistant")
         assert page.evaluate(KEPT) == {}, page.evaluate(KEPT)
+        # Hand to AI on it: handed off through 工作, its conversation opens, and the current assistant is still the default
+        before = len(api_requests)
+        main.get_by_role("button", name="交给 AI", exact=True).first.click()
+        dialog = page.get_by_role("dialog").filter(has_text="交给 AI")
+        expect(dialog).to_be_visible()
+        dialog.get_by_role("button", name="发送", exact=True).click()
+        expect(dialog).to_have_count(0)
+        page.wait_for_url(re.compile(r"/persona/[^/?]+$"))
+        handed = [r for r in api_requests[before:] if r[0] == "POST" and re.search(r"(:|%3A)f3(:|%3A)300/handoff", r[1])]
+        assert handed and handed[0][2] == "m-3fa21c", api_requests[before:]
+        expect(head).to_have_attribute("data-assistant-switcher", "assistant")
+        expect(page.get_by_text("已切换到", exact=False)).to_have_count(0)
+        assert page.evaluate(KEPT) == {}, page.evaluate(KEPT)
+        page.wait_for_timeout(500)
+        if width >= 1024:
+            expect(head).to_contain_text("助手")
 
         # Settings › Extensions is the current assistant's (the default's here): its copies only, no assistant's name over them
         page.goto(base + "/settings?tab=extensions")

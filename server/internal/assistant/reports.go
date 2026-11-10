@@ -229,6 +229,7 @@ type todoStage struct {
 	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
 	Deploy   *deployWatch  `json:"deploy,omitempty"`   // deploy_check.go: held until the running hub has the work
 	Verified bool          `json:"verified,omitempty"` // explicit acceptance outranks delivery and reply keywords
+	Check    *TodoCheck    `json:"check,omitempty"`    // task_check.go
 }
 
 const reportStagesKey = "assistant.todo_stages"

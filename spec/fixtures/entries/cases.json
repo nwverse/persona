@@ -965,6 +965,278 @@
           "task:t-stale"
         ]
       }
+    },
+    {
+      "name": "manual_task_question_has_one_task_row",
+      "description": "A hand-made task carries its current agent question once, without a second Agent row.",
+      "source": [
+        "web/src/lib/assistant-entries.ts assistantEntries",
+        "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
+        "issue #3443"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-10T09:00:00Z",
+        "todos": [
+          {
+            "id": "t-ask",
+            "title": "Set up the demo server",
+            "created_at": "2026-11-10T08:00:00Z",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "agents": [
+              {
+                "machine_id": "mac",
+                "session_id": "w-ask",
+                "linked_at": "2026-11-10T08:00:00Z"
+              }
+            ]
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac",
+            "session_id": "w-ask",
+            "title": "w-ask",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "status": "blocked",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z",
+            "pending_interactions": 1,
+            "todo": {
+              "id": "t-ask",
+              "title": "Set up the demo server"
+            }
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-ask",
+            "machine_id": "mac",
+            "session_id": "w-ask",
+            "kind": "question",
+            "created_at": "2026-11-10T08:00:00Z",
+            "questions": [
+              {
+                "question": "Which port should the demo use?",
+                "options": [
+                  {
+                    "label": "8080"
+                  },
+                  {
+                    "label": "9090"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "plans": {},
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [
+          "task:t-ask"
+        ],
+        "running": [],
+        "shelved": []
+      }
+    },
+    {
+      "name": "manual_running_task_folds_current_agent",
+      "description": "A hand-made task whose agent works has one In progress row, regardless of its missing origin.",
+      "source": [
+        "web/src/lib/assistant-entries.ts assistantEntries",
+        "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
+        "issue #3443"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-10T09:00:00Z",
+        "todos": [
+          {
+            "id": "t-run",
+            "title": "Add the export button",
+            "created_at": "2026-11-10T08:00:00Z",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "agents": [
+              {
+                "machine_id": "mac",
+                "session_id": "w-run",
+                "linked_at": "2026-11-10T08:00:00Z"
+              }
+            ]
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac",
+            "session_id": "w-run",
+            "title": "w-run",
+            "cwd": "/home/user/project",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z",
+            "todo": {
+              "id": "t-run",
+              "title": "Add the export button"
+            }
+          }
+        ],
+        "interactions": [],
+        "plans": {},
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [],
+        "running": [
+          "task:t-run"
+        ],
+        "shelved": []
+      }
+    },
+    {
+      "name": "done_manual_task_releases_running_agent",
+      "description": "A done hand-made task is no longer a row; its still-working agent is an independent In progress row.",
+      "source": [
+        "web/src/lib/assistant-entries.ts assistantEntries",
+        "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
+        "issue #3443"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-10T09:00:00Z",
+        "todos": [
+          {
+            "id": "t-done",
+            "title": "Shipped the fix",
+            "created_at": "2026-11-10T08:00:00Z",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "agents": [
+              {
+                "machine_id": "mac",
+                "session_id": "w-done",
+                "linked_at": "2026-11-10T08:00:00Z"
+              }
+            ],
+            "done_at": "2026-11-10T08:00:00Z"
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac",
+            "session_id": "w-done",
+            "title": "w-done",
+            "cwd": "/home/user/project",
+            "state": "working",
+            "status": "working",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z",
+            "todo": {
+              "id": "t-done",
+              "title": "Shipped the fix"
+            }
+          }
+        ],
+        "interactions": [],
+        "plans": {},
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [],
+        "running": [
+          "agent:mac/w-done"
+        ],
+        "shelved": []
+      }
+    },
+    {
+      "name": "released_manual_link_does_not_hide_agent",
+      "description": "A released historical link does not fold an independently asking Agent into the remaining hand-made task row.",
+      "source": [
+        "web/src/lib/assistant-entries.ts assistantEntries",
+        "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt assistantEntries",
+        "issue #3443"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-10T09:00:00Z",
+        "todos": [
+          {
+            "id": "t-ask",
+            "title": "Set up the demo server",
+            "created_at": "2026-11-10T08:00:00Z",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "agents": [
+              {
+                "machine_id": "mac",
+                "session_id": "w-ask",
+                "linked_at": "2026-11-10T08:00:00Z",
+                "released_at": "2026-11-10T08:30:00Z"
+              }
+            ]
+          }
+        ],
+        "sessions": [
+          {
+            "machine_id": "mac",
+            "session_id": "w-ask",
+            "title": "w-ask",
+            "cwd": "/home/user/project",
+            "state": "needs_you",
+            "status": "blocked",
+            "updated_at": "2026-11-10T08:00:00Z",
+            "state_since": "2026-11-10T08:00:00Z",
+            "pending_interactions": 1,
+            "todo": {
+              "id": "t-ask",
+              "title": "Set up the demo server"
+            }
+          }
+        ],
+        "interactions": [
+          {
+            "id": "ix-ask",
+            "machine_id": "mac",
+            "session_id": "w-ask",
+            "kind": "question",
+            "created_at": "2026-11-10T08:00:00Z",
+            "questions": [
+              {
+                "question": "Which port should the demo use?",
+                "options": [
+                  {
+                    "label": "8080"
+                  },
+                  {
+                    "label": "9090"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "plans": {},
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [
+          "agent:mac/w-ask"
+        ],
+        "running": [
+          "task:t-ask"
+        ],
+        "shelved": []
+      }
     }
   ]
 }

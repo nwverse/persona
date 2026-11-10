@@ -148,7 +148,7 @@ final class TasksStore {
             .sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
     }
 
-    /// The agents going on that the conversation's dock and board show after its tasks (#1113): in the main
+    /// The agents going on that the conversation's action bar and board show besides its tasks (#1113): in the main
     /// conversation the ones no task stands for (opened by hand on the Agents page); in the others none.
     func agents(of conversation: String) -> [DockAgent] {
         let model = AppModel.shared
@@ -212,17 +212,6 @@ final class TasksStore {
     func interactions(_ todo: TodoItem) -> [Interaction] {
         let keys = Set(sessions(todo).map(\.key))
         return AppModel.shared.pendingInteractions.filter { keys.contains($0.sessionKey) }
-    }
-
-    /// The dock: the conversation's tasks still going on, or finished and not looked at; what waits first.
-    func dock(_ conversation: String) -> [TodoItem] {
-        let rows: [(todo: TodoItem, state: TaskState)] = tasks(of: conversation).map { ($0, state($0)) }
-        let going = rows.filter { $0.state != .done && $0.state != .followup && $0.state != .failed }
-        let sorted = going.sorted { a, b in
-            if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
-            return (a.todo.createdAt ?? .distantPast) > (b.todo.createdAt ?? .distantPast)
-        }
-        return sorted.map(\.todo)
     }
 
     /// The main conversation's Today card, once a day: the hub makes it on the first ask and answers it after that.
