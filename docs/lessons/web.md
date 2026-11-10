@@ -1,5 +1,55 @@
 # Lessons: web UI and interactions
 
+## Dismiss a draft, not its source item (#3743)
+
+A task-progress reply card has its own feed id; its Inbox reference can be shared by later progress drafts. Persist
+Don't handle on the card, not by marking the Inbox item done or hiding every card with that reference. Send and
+Dismiss need one synchronous admission guard, and only a successful send may show a sent receipt. Undo sends the
+dismissal receipt back to the same manager and applies the full returned body so omitted dismissal fields really clear.
+A feed read started before the write must not roll it back, and a late write response must not erase newer sent/filed
+pushes. Capture a live card's manager on arrival and name even the default explicitly: API auto-routing otherwise
+substitutes a later assistant selection on card-id-only routes.
+Check a reload and a new same-reference draft in the actual tray, not only the historical card renderer.
+Keep the draft editor and its toast handlers behind a local lazy boundary; the collapsed startup tray does not need
+that UI. Pass existing task helpers into the editor instead of importing the whole Tasks module back into its lazy
+chunk. Static-render tests exercise the extracted editor directly; mounted tray tests wait for the lazy card and still
+exercise its actions. Leave Send/Dismiss admission, owner capture and revision fences in the synchronous feed layer.
+
+## Gate identity chrome by installed assistants, not by roster availability (#3967)
+
+A roster with one assistant does not need assistant identity or switching UI. Reuse the installed-assistant cardinality
+rule used by conversation titles and list grouping; offline installed assistants count and pending installs do not.
+Restore the earlier product header and its existing controls rather than hiding the whole header, which would also
+remove appearance, Settings and Disconnect. Keep product branding and the user's chosen Persona look separate from
+roster name/monogram attribution. Regress one → two → one on a mounted view, along with one installed plus a pending
+install, and assert the rendered labels, avatars and menu rows rather than only the count helper. A phone's menu and
+drawer own separate history entries: wait for each closing entry to pop before the next full-page navigation, or a
+late Back can replace the requested Inbox page with the previous main conversation. Prefer the built web preview for
+broad E2E runs on a busy machine; thousands of Vite development modules can exhaust Chromium's renderer resources.
+
+## Retention mode changes must not save an intermediate window (#3780, #3862)
+
+Switching from forever to finite retention only exposes a local draft: saving a default such as 365 days first can
+irreversibly delete older minutes before the user commits a longer window. Submit only the number committed on Enter
+or blur. Regress the absence of a PUT on mode change, cancellation, and restoring the saved mode after a refusal.
+
+## Same-state list updates can change background progress (#3588)
+
+The task tray often has only list summaries, whereas the chat header has complete Session detail. A comparison of
+state, pending cards and hub work alone cannot detect a workflow's phase/count updates or background completion.
+Keep a compact activity projection on the list, prefer its fresh revision for task rows, and treat absent run metadata
+and omitted zero counts as clears rather than partial merges. When complete detail replaces a summary hint, remove
+all summary-only fields so they cannot override the detail arrays. Sum distinct active task bindings, not just the lead.
+Test running commands → workflow progress → subagents → real external wait on the same mounted row.
+
+## A panel's entry point is not its displayed conversation (#3562)
+
+A task panel embeds its selected Agent's `ChatView`, but its header menu used the task's route for **Open in new window**. Build that destination from the same selected machine/session pair passed to the chat, including after switching Agents and before the session roster arrives. Only a task panel without an Agent opens the task page; the chat's separate linked-task action retains its own destination. Regress the real side panel, chat header and menu together, not only a route helper.
+
+## Fixture display labels can match a deployment's private values (#3552)
+
+Generic fixture IDs are not enough: a display name can still match a configured machine identifier and block the mandatory prebuild privacy scan on another machine. Use neutral test labels, and update their expected summaries and click targets together without changing IDs or assertions. Keep privacy checks enabled; do not exempt a configured value just to make a fixture pass.
+
 ## Ancestor package metadata can break Vite config loading (#3301)
 
 When Vite/esbuild reports invalid `package.json` content outside the checkout, inspect the exact reported ancestor: the web package can be valid while package-scope resolution reads a broken parent file. A successful Go build does not prove that the bundled web build or deployment succeeded. Do not change application code or overwrite another worker's shared file just to silence this error.

@@ -56,7 +56,11 @@ func TestLeaderEventsReachOnlyAuthorizedExtensions(t *testing.T) {
 			report, _ := json.Marshal(assistantwire.LeaderReportEvent{ID: "rep_example_1", Leader: "conv_leader_1", Kind: assistantwire.LeaderReached,
 				Todo: "todo_example_1", Text: "Accepted: Android sidebar groups", Link: "https://example.com/pull/1",
 				At: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)})
-			if !h.AssistantSaid(assistantwire.EventLeaderChanged, changed) || !h.AssistantSaid(assistantwire.EventLeaderReport, report) {
+			progress, _ := json.Marshal(assistantwire.LeaderReportEvent{ID: "rep_example_2", Leader: "conv_leader_1", Kind: assistantwire.LeaderProgress,
+				Text: "Reached: sidebar groups", Reached: "sidebar groups", Doing: "tablet layout", Links: []string{"https://example.com/pull/2"},
+				Link: "https://example.com/pull/2", At: time.Date(2026, 11, 10, 13, 0, 0, 0, time.UTC)})
+			if !h.AssistantSaid(assistantwire.EventLeaderChanged, changed) || !h.AssistantSaid(assistantwire.EventLeaderReport, report) ||
+				!h.AssistantSaid(assistantwire.EventLeaderReport, progress) {
 				t.Fatal("the leader events are not the extensions'")
 			}
 			view := func() string {
@@ -75,10 +79,11 @@ func TestLeaderEventsReachOnlyAuthorizedExtensions(t *testing.T) {
 				return
 			}
 			h.extensions.emit("agent.finished", map[string]any{})
-			waitLong(t, "leader events delivered", func() bool { return strings.Contains(view(), "value:3") })
+			waitLong(t, "leader events delivered", func() bool { return strings.Contains(view(), "value:4") })
 			v := view()
 			for _, w := range []string{`<leader.changed `, `"id":"conv_leader_1"`, `"project":"android-parity"`, `<leader.report `,
-				`"kind":"reached"`, `"todo":"todo_example_1"`, `"leader":"conv_leader_1"`, `"link":"https://example.com/pull/1"`} {
+				`"kind":"reached"`, `"todo":"todo_example_1"`, `"leader":"conv_leader_1"`, `"link":"https://example.com/pull/1"`,
+				`"kind":"progress"`, `"doing":"tablet layout"`, `"links":["https://example.com/pull/2"]`} {
 				if !strings.Contains(v, w) {
 					t.Fatalf("the leader events lack %s: %s", w, v)
 				}
@@ -94,7 +99,7 @@ func TestLeaderEventsRejectInvalidPayloads(t *testing.T) {
 	for _, raw := range []string{`{}`, `[]`, `null`, `{"title":"x"}`} {
 		h.AssistantSaid(assistantwire.EventLeaderChanged, json.RawMessage(raw))
 	}
-	for _, raw := range []string{`{}`, `{"id":"r","leader":"l","todo":"t","kind":"progress"}`, `{"id":"r","kind":"stuck","todo":"t"}`,
+	for _, raw := range []string{`{}`, `{"id":"r","leader":"l","todo":"t","kind":"bogus"}`, `{"id":"r","leader":"l","kind":"decision"}`, `{"id":"r","kind":"stuck","todo":"t"}`,
 		`{"leader":"l","kind":"stuck","todo":"t"}`, `{"id":"r","leader":"l","kind":"stuck"}`} {
 		h.AssistantSaid(assistantwire.EventLeaderReport, json.RawMessage(raw))
 	}
@@ -103,5 +108,25 @@ func TestLeaderEventsRejectInvalidPayloads(t *testing.T) {
 	defer q.mu.Unlock()
 	if q.running || len(q.pending) > 0 {
 		t.Fatalf("an invalid event was queued: %+v", q.pending)
+	}
+}
+
+// A decision about a plan and the leader's own progress have no to-do and still go to the extensions (#3608, #3679).
+func TestLeaderReportsWithoutATodo(t *testing.T) {
+	for _, c := range []struct {
+		p  assistantwire.LeaderReportEvent
+		ok bool
+	}{
+		{assistantwire.LeaderReportEvent{ID: "r", Leader: "l", Kind: assistantwire.LeaderDecision, Plan: "plan_1"}, true},
+		{assistantwire.LeaderReportEvent{ID: "r", Leader: "l", Kind: assistantwire.LeaderProgress, Reached: "x"}, true},
+		{assistantwire.LeaderReportEvent{ID: "r", Leader: "l", Kind: assistantwire.LeaderDecision, Todo: "t"}, true},
+		{assistantwire.LeaderReportEvent{ID: "r", Leader: "l", Kind: assistantwire.LeaderDecision}, false},
+		{assistantwire.LeaderReportEvent{ID: "r", Leader: "l", Kind: assistantwire.LeaderReached}, false},
+		{assistantwire.LeaderReportEvent{ID: "r", Leader: "l", Kind: assistantwire.LeaderStuck, Plan: "plan_1"}, false},
+		{assistantwire.LeaderReportEvent{ID: "r", Kind: assistantwire.LeaderProgress}, false},
+	} {
+		if got := validLeaderReport(c.p); got != c.ok {
+			t.Errorf("%+v: %v, want %v", c.p, got, c.ok)
+		}
 	}
 }

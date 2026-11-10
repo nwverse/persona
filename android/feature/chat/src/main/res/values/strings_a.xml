@@ -22,6 +22,7 @@
     <string name="chat_delivery_dialog_open">Deal with the dialog on the computer first</string>
     <string name="chat_delivery_op_id_reused">This message\'s send ID was already used</string>
     <string name="chat_delivery_invalid">The message isn\'t valid</string>
+    <string name="chat_delivery_out_of_scope">This model provider isn\'t set to run on this computer. Change where it runs in Settings › Model providers.</string>
     <string name="chat_delivery_refused">The computer didn\'t accept this message</string>
     <string name="chat_delivery_delivered_waiting">Delivered, waiting for the chat history</string>
     <string name="chat_delivery_cancel">Cancel send</string>
@@ -96,6 +97,7 @@
         <item quantity="other">%1$d more need you · Next: %2$s · %3$s</item>
     </plurals>
     <string name="chat_next_waiting_open">Open the next one</string>
+    <string name="chat_next_waiting_agent">Agent</string>
     <string name="chat_answered_by_assistant">Answered by the assistant</string>
     <string name="chat_answered_unanswered">(No answer)</string>
     <string name="chat_answered_approved">Approved</string>
@@ -327,6 +329,22 @@
     <string name="chat_tasks_finished_line">“%1$s” is done</string>
     <string name="chat_tasks_resumed_line">“%1$s” continued after the interruption</string>
     <string name="chat_tasks_interrupted_title">%1$s was interrupted</string>
+    <string name="chat_tasks_interrupt_pending">Pending</string>
+    <string name="chat_tasks_interrupt_cancelled">Cancelled</string>
+    <string name="chat_tasks_interrupt_rerouted">Dispatched again</string>
+    <string name="chat_tasks_interrupt_resumed">Resumed</string>
+    <string name="chat_tasks_interrupt_accepted">Accepted</string>
+    <string name="chat_tasks_interrupt_done">Done</string>
+    <string name="chat_tasks_interrupt_handled">“%1$s” was interrupted · %2$s</string>
+    <string name="chat_tasks_interrupt_cause_model_error">Model service error</string>
+    <string name="chat_tasks_interrupt_cause_rate_limited">Model service rate limit</string>
+    <string name="chat_tasks_interrupt_cause_auth">Sign-in or key refused</string>
+    <string name="chat_tasks_interrupt_cause_model_route">Unknown model</string>
+    <string name="chat_tasks_interrupt_cause_no_output">Turns with no output</string>
+    <string name="chat_tasks_interrupt_batch">%1$s: %2$d tasks interrupted</string>
+    <string name="chat_tasks_interrupt_batch_on">%1$s on %2$s: %3$d tasks interrupted</string>
+    <string name="chat_tasks_interrupt_counts">→ %1$d handled / %2$d pending</string>
+    <string name="chat_tasks_interrupt_all_handled">→ all handled</string>
     <string name="chat_tasks_quick_reminder">Reminder added</string>
     <string name="chat_tasks_quick_calendar">Added to calendar</string>
     <string name="chat_tasks_quick_on_iphone">On iPhone</string>
@@ -439,6 +457,9 @@
     <string name="chat_work_thought">Thought</string>
     <string name="chat_content_copy">Copy</string>
     <string name="chat_content_show_all">Show all</string>
+    <string name="chat_content_copied">Copied</string>
+    <string name="chat_content_quote_more">Show all</string>
+    <string name="chat_content_quote_less">Show less</string>
     <string name="chat_content_full_text">Full text</string>
     <string name="chat_content_image">Chat image</string>
     <plurals name="chat_content_collapse_steps">

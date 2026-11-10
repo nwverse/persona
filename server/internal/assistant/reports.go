@@ -229,13 +229,14 @@ type todoStage struct {
 	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
 	Deploy   *deployWatch  `json:"deploy,omitempty"`   // deploy_check.go: held until the running hub has the work
 	Verified bool          `json:"verified,omitempty"` // explicit acceptance outranks delivery and reply keywords
+	Check    *TodoCheck    `json:"check,omitempty"`    // task_check.go
 }
 
 const reportStagesKey = "assistant.todo_stages"
 
 // taskReport notes a change of task t for the next card. ix: what it asks (needs).
 func (s *Service) taskReport(t Todo, state, machine string, session [2]string, text string, ix *proto.Interaction) {
-	if t.Origin == "" {
+	if t.Origin == "" || s.isLeaderRef(t.Origin) { // a task leader's worker is no task of the owner's chat (task_leader.go)
 		return
 	}
 	b := &s.reports

@@ -373,6 +373,7 @@ data class ExtensionContributes(
     val voice: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
@@ -403,6 +404,7 @@ private data class ExtensionContributesKnown(
     val voice: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
@@ -427,7 +429,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -440,6 +442,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             voice = fields.voice,
             computer = fields.computer,
             browser = fields.browser,
+            iphone = fields.iphone,
             quota = fields.quota,
             providers = fields.providers,
             api = fields.api,
@@ -471,6 +474,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             voice = value.voice,
             computer = value.computer,
             browser = value.browser,
+            iphone = value.iphone,
             quota = value.quota,
             providers = value.providers,
             api = value.api,
@@ -759,7 +763,8 @@ data class ExtensionErrorReportsItem(
 
 /**
  * A tunnel the apps can reach this hub through when its own addresses do not answer (docs "In-app tunnels"): an
- * in-app tunnel core built into the app, going to the configuration's target_host and target_port.
+ * in-app tunnel core built into the app, going to the configuration's target_host and target_port; an optional
+ * integer ssh_port is the hub machine's SSH port, for an SSH tunnel the app dials through this tunnel.
  */
 @Serializable
 data class ExtensionTunnelItem(
@@ -1947,6 +1952,7 @@ object ExtensionNavIcon {
     const val PAUSE = "pause"
     const val STOP = "stop"
     const val SPEAKER = "speaker"
+    const val MUSIC = "music"
     const val TV = "tv"
     const val PLUG = "plug"
     const val BATTERY = "battery"
@@ -1975,7 +1981,7 @@ object ExtensionNavIcon {
     const val REFRESH = "refresh"
     const val SHARE = "share"
     const val INFO = "info"
-    val ALL = listOf("plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info")
+    val ALL = listOf("plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info")
 }
 
 @Serializable

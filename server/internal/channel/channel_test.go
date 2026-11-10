@@ -118,8 +118,10 @@ func TestRunCheck(t *testing.T) {
 	if s := r.Check(Look{Now: t0.Add(5 * time.Hour), Exists: true}); s.Do != Finish || !strings.Contains(s.Note, "先不等了") {
 		t.Fatalf("too long: %+v", s)
 	}
+	// A held run ends with a word as well: its progress card went back with its message, so an ending without a note
+	// would be a quiet one and nothing would be said anywhere.
 	held := &Run{Started: t0, Held: true}
-	if s := held.Check(Look{Now: t0.Add(3 * time.Hour), Exists: true}); s.Do != Finish || s.Note != "" || s.End != EndGaveUp {
+	if s := held.Check(Look{Now: t0.Add(3 * time.Hour), Exists: true}); s.Do != Finish || !strings.Contains(s.Note, "先不等了") || s.End != EndGaveUp {
 		t.Fatalf("held too long: %+v", s)
 	}
 }
@@ -190,11 +192,32 @@ func TestAnswerIsTheLastWords(t *testing.T) {
 		{Role: "assistant", Kind: proto.KindText, Text: "结论一"},
 		{Role: "assistant", Kind: proto.KindText, Text: "结论二"},
 	}
+	// "先看看" is a passing line before a tool call: left out.
 	if got := Answer(items); len(got) != 2 || got[0].Text != "结论一" {
 		t.Fatalf("%+v", got)
 	}
 	if got := Answer(items[:3]); len(got) != 1 || got[0].Text != "先看看" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// A long report, a tool call, a short closing line: the answer is both, from the report on, in order (not only the
+// words after the last call).
+func TestAnswerKeepsAReportBeforeAToolCall(t *testing.T) {
+	report := "今天的进展：\n\n" + strings.Repeat("第一项已经合并，第二项在等 CI，第三项需要你决定。", 4)
+	items := []proto.Item{
+		{Role: "user", Kind: proto.KindText, Text: "汇报一下"},
+		{Role: "assistant", Kind: proto.KindText, Text: "我先查一下。"},
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash"},
+		{Role: "user", Kind: proto.KindToolResult},
+		{Role: "assistant", Kind: proto.KindText, Text: report},
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "mcp__persona__agent_send"},
+		{Role: "user", Kind: proto.KindToolResult},
+		{Role: "assistant", Kind: proto.KindText, Text: "已经发给它了。"},
+	}
+	got := Answer(items)
+	if len(got) != 2 || got[0].Text != report || got[1].Text != "已经发给它了。" {
+		t.Fatalf("answer %+v, want the report then the closing line", got)
 	}
 }
 

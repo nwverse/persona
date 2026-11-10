@@ -16,7 +16,7 @@ func reuseArgs(readonly bool, todoIDs ...string) json.RawMessage {
 	var tasks []map[string]any
 	for _, id := range todoIDs {
 		task := map[string]any{"title": "发版", "prompt": "把 1.3 版发出去", "machine": "box", "cwd": "/code/app",
-			"readonly": readonly, "why": "这个仓库在 box 上", "done_when": []string{"PR 合并到 master"}}
+			"readonly": readonly, "permission": "bypassPermissions", "why": "这个仓库在 box 上", "done_when": []string{"PR 合并到 master"}}
 		if id != "" {
 			task["todo_id"] = id
 		}

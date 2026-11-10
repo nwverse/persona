@@ -64,7 +64,7 @@ func TestLeaderChangedIsToldOncePerChange(t *testing.T) {
 	e.leaders("conv_lead_a")
 
 	got := e.syncLeaders()
-	if want := []assistantwire.LeaderChangedEvent{{ID: "conv_lead_a", Title: "1110 | 功能 | Android parity"}}; !slices.Equal(got, want) {
+	if want := []assistantwire.LeaderChangedEvent{{ID: "conv_lead_a", Title: "1110 | 功能 | Android parity", Name: "Android parity"}}; !slices.Equal(got, want) {
 		t.Fatalf("made: %+v", got)
 	}
 	if got = e.syncLeaders(); len(got) != 0 {

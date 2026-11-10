@@ -55,7 +55,7 @@ internal fun switcherLine(res: Resources, manager: HubManager, now: Instant): St
 
 /**
  * The switcher in the sidebar. [managers] is the selected hub's roster API (null in demo mode); without it, or before
- * the roster is read, or on a hub without one, [fallback] is the sidebar's head as it was. [waiting] is what waits for
+ * the roster is read, or with fewer than two installed assistants, [fallback] is the sidebar's head as it was. [waiting] is what waits for
  * the user at each assistant ([persona.core.contracts.api.waiting]); [onManage] opens Settings › Assistants.
  */
 @Composable
@@ -73,7 +73,7 @@ fun AssistantSwitcher(
     fallback: @Composable () -> Unit = {},
 ) {
     val reported = LocalManagerRoster.current
-    if (managers == null || reported == null || reported.installed.isEmpty()) { fallback(); return }
+    if (managers == null || reported == null || !reported.isMulti) { fallback(); return }
     // Without the hub nothing is known to be online, as the assistant page reads it.
     val roster = if (hubOnline) reported else reported.copy(managers = reported.managers.map { it.copy(online = false) })
     val choice by AssistantManagerChoice.current.collectAsState()

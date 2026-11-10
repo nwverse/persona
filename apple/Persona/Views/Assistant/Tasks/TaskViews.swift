@@ -346,7 +346,7 @@ struct PlanEditSheet: View {
 
 // MARK: - Task card
 
-/// A task in the conversation, updated in place: its mark, title, time, where it runs, what its agent says now.
+/// A task's full card: its mark, title, time, where it runs, what its agent says now.
 struct TaskCard: View {
     var todoID: String
     var conversation: String
@@ -510,7 +510,7 @@ struct TaskNowLine: View {
     }
 }
 
-/// A task of another day, folded: one line; a tap opens its detail.
+/// A task of another day, folded: one line; a tap opens its detail (its Agent's chat, as the card does).
 struct TaskLine: View {
     var todoID: String
     @State private var removing: TodoItem?
@@ -554,12 +554,12 @@ struct FeedLine: View {
 
     var body: some View {
         switch item.kind {
-        case .plan:
-            if let id = item.ref, let plan = store.plans[id] ?? item.plan { PlanCard(plan: plan) }
-        case .task:
-            if let id = item.ref {
-                // A task card of another day folds into a line: its mark, title and where it got to.
-                if Calendar.current.isDateInToday(item.at) { TaskCard(todoID: id, conversation: item.conversation) } else { TaskLine(todoID: id) }
+        case .plan, .task:
+            if let tasks = DispatchedTasks.entries(for: item, plans: store.plans,
+                                                  titleOf: { store.todos[$0]?.title }, fallback: String(localized: "Tasks")) {
+                DispatchedTaskLinks(tasks: tasks)
+            } else if let id = item.ref, let plan = store.plans[id] ?? item.plan {
+                PlanCard(plan: plan)
             }
         case .today:
             if let body = item.today { TodayCard(item: item, body: body) }
@@ -882,6 +882,16 @@ struct ReceiptCard: View {
     }
 
     var body: some View {
+        switch item.interruptLook {
+        case .hidden: EmptyView() // drawn inside its batch's card (#3834)
+        case .batch(let batch): InterruptBatchCard(batch: batch)
+        case .resolved(let resolution):
+            InterruptHandledLine(todoID: item.ref, title: Self.title(item, todo: item.ref.flatMap { store.todos[$0] }), resolution: resolution)
+        case .pending, nil: card
+        }
+    }
+
+    @ViewBuilder private var card: some View {
         let todo = item.ref.flatMap { store.todos[$0] }
         let outcome = Self.outcome(item, todo: todo)
         let title = Self.title(item, todo: todo)
@@ -957,6 +967,126 @@ struct ReceiptCard: View {
         case .failed: "failed"
         case .interrupted: "interrupted"
         }
+    }
+}
+
+// MARK: - Interruptions after the fact (#3834)
+
+/// The words for how the hub says an interrupted task was dealt with.
+nonisolated enum InterruptWords {
+    static func resolution(_ r: InterruptResolution) -> String {
+        switch r {
+        case .pending: String(localized: "Pending [interrupt resolution]")
+        case .cancelled: String(localized: "Cancelled [interrupt resolution]")
+        case .rerouted: String(localized: "Dispatched again [interrupt resolution]")
+        case .resumed: String(localized: "Resumed [interrupt resolution]")
+        case .accepted: String(localized: "Accepted [interrupt resolution]")
+        case .done: String(localized: "Done [interrupt resolution]")
+        }
+    }
+
+    /// What cut a batch off (the hub's `cause`); one this build doesn't know reads as a model service error.
+    static func cause(_ c: String) -> String {
+        switch c {
+        case "rate_limited": String(localized: "Model service rate limit")
+        case "auth": String(localized: "Sign-in or key refused")
+        case "model_route": String(localized: "Unknown model [interrupt cause]")
+        case "no_output": String(localized: "Turns with no output")
+        default: String(localized: "Model service error")
+        }
+    }
+
+    static func title(_ b: InterruptBatch) -> String {
+        let what = cause(b.cause)
+        if let machine = b.machine, !machine.isEmpty {
+            return String(localized: "\(what) on \(machine): \(b.total) tasks interrupted")
+        }
+        return String(localized: "\(what): \(b.total) tasks interrupted")
+    }
+
+    static func counts(_ b: InterruptBatch) -> String {
+        b.pending > 0 ? String(localized: "→ \(b.resolved) handled / \(b.pending) pending") : String(localized: "→ all handled")
+    }
+}
+
+/// An interrupted task that was dealt with since: a grey line with its result; it opens the task.
+struct InterruptHandledLine: View {
+    var todoID: String?
+    var title: String
+    var resolution: InterruptResolution
+    private var store: TasksStore { .shared }
+
+    var body: some View {
+        let known = todoID.map { store.todos[$0] != nil } ?? false
+        Button { if let todoID { store.detailTask = todoID } } label: {
+            Label(String(localized: "“\(title)” was interrupted · \(InterruptWords.resolution(resolution))"), systemImage: Theme.Icon.infoFilled)
+                .lineLimit(1)
+                .font(Theme.Font.secondary)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(!known)
+        .accessibilityIdentifier("receipt.interrupt.handled")
+    }
+}
+
+/// Several tasks one outage cut off: one card with its cause and how many are handled and still pending, that opens
+/// to each task and its result. Red only while one is pending.
+struct InterruptBatchCard: View {
+    var batch: InterruptBatch
+    @State private var open = false
+    private var store: TasksStore { .shared }
+
+    var body: some View {
+        let pending = batch.pending > 0
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Button { withAnimation(Theme.Motion.reveal) { open.toggle() } } label: {
+                HStack(alignment: .top, spacing: Theme.Space.m) {
+                    ThemedIcon(Theme.Icon.errorFilled)
+                        .font(Theme.Font.heading)
+                        .foregroundStyle(pending ? Theme.danger : .secondary)
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        Text(InterruptWords.title(batch))
+                            .font(Theme.Font.bodyStrong)
+                            .foregroundStyle(pending ? Color.primary : Color.secondary)
+                        Text(InterruptWords.counts(batch))
+                            .font(Theme.Font.secondary)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    ThemedIcon(open ? Theme.Icon.expand : Theme.Icon.disclosure)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            if open {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    ForEach(batch.tasks, id: \.receipt) { task in
+                        let todo = store.todos[task.todoID]
+                        Button { store.detailTask = task.todoID } label: {
+                            HStack(spacing: Theme.Space.s) {
+                                Text(todo?.title ?? task.title).lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text(InterruptWords.resolution(task.resolved)).lineLimit(1)
+                                    .foregroundStyle(task.resolved == .pending ? Theme.danger : .secondary)
+                            }
+                            .font(Theme.Font.secondary)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(todo == nil)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(Theme.Space.l)
+        .background(pending ? Theme.danger.opacity(0.12) : Theme.Fill.well,
+                    in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+        .accessibilityIdentifier(pending ? "receipt.interrupt.batch.pending" : "receipt.interrupt.batch.handled")
     }
 }
 

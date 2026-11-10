@@ -99,8 +99,10 @@ class ClaudeSettingsModelTest {
         val writes = mutableListOf<Triple<String, String, JsonElement>>()
         val failing = mutableSetOf<String>()
         var reads = 0
+        var readFails = false
         override suspend fun claudeSettings(machineId: String): List<ClaudeSetting> {
             reads++
+            if (readFails) throw HubFailure(HubError.Server, "hub is unreachable", 503)
             return listOf(ClaudeSetting("language", "回复语言", value = JsonPrimitive("中文")))
         }
         override suspend fun setClaudeSetting(machineId: String, key: String, value: JsonElement): List<ClaudeSetting> {
@@ -184,6 +186,19 @@ class ClaudeSettingsModelTest {
         // Nothing online: nothing shown.
         model.follow(emptyList())
         assertEquals("", model.state.value.machineId)
+    }
+
+    @Test fun aFailedSaveThatCannotBeReadBackGoesBackAndSaysItWasNotSaved() = runBlocking {
+        val api = Api()
+        val model = ClaudeSettingsModel(api, Choices())
+        model.follow(listOf(hub))
+        model.load()
+        api.failing += "hub"
+        api.readFails = true
+        assertNull(model.set("language", JsonPrimitive("English"), listOf(hub)))
+        // The control is back on what the machine still has, and the page says the change did not go through.
+        assertEquals("中文", model.state.value.settings.single().stringValue)
+        assertEquals("没有全部保存：\n服务器：machine is offline", model.state.value.error?.resolve(res))
     }
 }
 

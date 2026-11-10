@@ -46,12 +46,12 @@ sealed interface RunningEntry {
     val key: String
 
     /** A dispatched task not finished and not waiting on the user. */
-    data class Task(val todo: Todo, val status: TriageStatus) : RunningEntry {
+    data class Task(val todo: Todo, val status: TriageStatus, val activity: BackgroundWork? = null, val waiting: Boolean = false) : RunningEntry {
         override val key get() = "task:${todo.id}"
     }
 
     /** A working Agent that belongs to no task. */
-    data class Agent(val session: Session) : RunningEntry {
+    data class Agent(val session: Session, val activity: BackgroundWork? = session.backgroundWork()) : RunningEntry {
         override val key get() = "agent:${session.machineId}/${session.sessionId}"
     }
 }
@@ -97,10 +97,12 @@ fun assistantEntries(
     val deciding = mutableListOf<Pair<NeedsYouEntry.Task, Int>>()
     val open = mutableListOf<Pair<RunningEntry.Task, Int>>()
     val shelved = mutableListOf<RunningEntry.Task>()
+    val folded = mutableSetOf<SessionKey>()
     // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched
     for (todo in todos.filter { isMain || it.origin == conversation }) {
         val status = todo.triageStatus(lookup)
-        val asks = if (todo.isDone) emptyList() else todo.activeAgents.flatMap { asksOf[GroupKeys.rawKey(it.key)].orEmpty() }
+        val active = if (todo.isDone) emptyList() else todo.activeAgents
+        val asks = active.flatMap { asksOf[GroupKeys.rawKey(it.key)].orEmpty() }
         val bucket = todo.bucket(lookup, now, restored[todo.id] ?: 0L)
         // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
         val waits = if (status == TriageStatus.Failed) bucket == TodoBucket.Open
@@ -108,16 +110,22 @@ fun assistantEntries(
         when {
             asks.isNotEmpty() -> asking += NeedsYouEntry.Task(todo, status, asks)
             waits || todo.awaitsDecision() -> deciding += NeedsYouEntry.Task(todo, status, asks) to todo.entryRank(status)
-            bucket == TodoBucket.Open -> open += RunningEntry.Task(todo, status) to todo.entryRank(status)
+            bucket == TodoBucket.Open -> {
+                val activity = todo.backgroundWork(lookup)
+                val waiting = activity == null && todo.activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() }
+                open += RunningEntry.Task(todo, status, activity, waiting) to todo.entryRank(status)
+            }
             bucket == TodoBucket.Shelved -> shelved += RunningEntry.Task(todo, status)
-            else -> Unit
+            else -> continue
         }
+        folded += active.map { it.key }
     }
 
     // Agents that belong to no task, the main conversation's only: asking ones wait on the user, working ones run.
     val agentsAsking = mutableListOf<NeedsYouEntry>()
     val agentsRunning = mutableListOf<RunningEntry>()
     for (session in dockAgents(conversation, main, sessions, todos)) {
+        if (session.key in folded) continue
         if (session.agentState == AgentState.NeedsYou) agentsAsking += NeedsYouEntry.Agent(session, asksOf[GroupKeys.rawKey(session.key)].orEmpty())
         else agentsRunning += RunningEntry.Agent(session)
     }

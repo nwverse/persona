@@ -34,6 +34,15 @@ final class AssistantEntriesFixtureTests: XCTestCase {
         var needs_you: [String]
         var running: [String]
         var shelved: [String]
+        var activity: [String: Activity?]?
+    }
+
+    private struct Activity: Decodable {
+        var tasks: Int
+        var subagents: Int
+        var workflows: Int
+        var phase: String?
+        var progress: String?
     }
 
     func testEveryCaseSplitsAsTheWebAndAndroid() throws {
@@ -55,6 +64,31 @@ final class AssistantEntriesFixtureTests: XCTestCase {
             let content = ActionTrayContent(got)
             XCTAssertEqual(content.count(.needsYou), c.expected.needs_you.count, c.name)
             XCTAssertEqual(content.count(.running), c.expected.running.count, c.name)
+            if let expected = c.expected.activity {
+                for row in got.running where expected.keys.contains(row.id) {
+                    let sessions: [Session]
+                    switch row {
+                    case .task(let id, _, _):
+                        let bindings = i.todos.first { $0.id == id }?.activeAgents ?? []
+                        sessions = bindings.compactMap { binding in
+                            i.sessions.first { $0.machineID == binding.machineID && $0.sessionID == binding.sessionID }
+                        }
+                    case .agent(let agent):
+                        sessions = i.sessions.filter { $0.key == agent.key }
+                    default: sessions = []
+                    }
+                    let activity = AssistantTrayActivity(sessions: sessions)
+                    guard let value = expected[row.id] ?? nil else {
+                        XCTAssertFalse(activity.isActive, "\(c.name): \(row.id) is a real wait")
+                        continue
+                    }
+                    XCTAssertEqual(activity.backgroundTasks, value.tasks, c.name)
+                    XCTAssertEqual(activity.subagents, value.subagents, c.name)
+                    XCTAssertEqual(activity.workflowCount, value.workflows, c.name)
+                    if let phase = value.phase { XCTAssertTrue(activity.workflows.first?.phase?.hasPrefix(phase) == true, c.name) }
+                    if let progress = value.progress { XCTAssertEqual(activity.workflows.first?.counts, progress, c.name) }
+                }
+            }
         }
     }
 }

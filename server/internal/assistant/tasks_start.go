@@ -48,6 +48,15 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
 			return nil, planInvalid{err}
 		}
+		// A plan saved before the rule, or edited on the card, is held to it too (task_plan checks it as it makes a plan).
+		p.Tasks[i].Permission = strings.TrimSpace(p.Tasks[i].Permission)
+		if err := p.Tasks[i].checkWritablePermission(); err != nil {
+			return nil, planInvalid{fmt.Errorf("task %d: %w. Nothing was started", i+1, err)}
+		}
+		if m, ok := s.machineByName(ctx, p.Tasks[i].Machine); ok && p.Tasks[i].Role == roleLeader && s.isWorkMachine(m.ID) {
+			return nil, planInvalid{fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only "+
+				"the reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)}
+		}
 		if !s.placeTask(ctx, &p.Tasks[i]) {
 			return nil, i18n.Err("assistant-tasks.task_no_machine", i18n.Args{"task": p.Tasks[i].Title, "machine": strconv.Quote(p.Tasks[i].Machine)})
 		}
@@ -90,9 +99,22 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		}
 		t.TodoID = todo.ID
+		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
 		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
-		if s.supervises(ctx, p.Conversation) { // the main conversation or a leader follows up what it hands out (supervise.go)
+		// The main conversation or a leader follows up what it hands out (supervise.go); a task the main conversation
+		// handed to a leader is that leader's, while it still is one (else the main conversation's again).
+		if sup := p.Conversation; s.supervises(ctx, sup) {
+			if t.Supervisor != "" && s.isLeader(ctx, t.Supervisor) {
+				sup = t.Supervisor
+				if t.ReuseTodo == "" {
+					s.taskCard(ctx, sup, todo.ID) // the leader sees its task's card too; the plan's stays where it was made
+				}
+			}
+			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+		}
+		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
 			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+			continue
 		}
 		if t.ReuseTodo != "" {
 			continue
@@ -218,8 +240,21 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
 	placed, placedWhy := t.Machine, t.Why
-	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
-	if err != nil && ctx.Err() == nil && !startStalled(err) {
+	if t.Role == roleLeader { // its tools are listed once it is linked: a list asked for meanwhile waits (task_leader.go)
+		s.leaderStarts.Add(1)
+		defer s.leaderStarts.Add(-1)
+	}
+	// The permission rule holds on every start of a plan task, a retry, a remedy or a recovered start included, whatever a
+	// saved plan says: nothing is started and the failure says why (task_plan, startPlan and retryTask also refuse earlier).
+	t.Permission = strings.TrimSpace(t.Permission)
+	var mid, sid string
+	var err error
+	if perr := t.checkWritablePermission(); perr != nil {
+		err = perr
+	} else {
+		mid, sid, err = s.startTaskAgent(ctx, &t, retry)
+	}
+	if err != nil && ctx.Err() == nil && !startStalled(err) && !errors.Is(err, errPermissionRule) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
 		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		shouldRetry := transientStartErr(err)
@@ -239,11 +274,11 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
-		err = s.linkTodoAgent(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, "")
+		err = s.linkPlanAgent(ctx, t, mid, sid, false)
 		if errors.Is(err, db.ErrTodoCompleted) {
 			// The user tapped "Done" while the agent was starting (a busy machine takes minutes, #1396). The task stays
 			// done and its agent stays in it: nothing reads failed, and the close loop still finds the agent to retire.
-			err = s.linkTodoAgentOfDoneTask(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, "")
+			err = s.linkPlanAgent(ctx, t, mid, sid, true)
 			if err != nil {
 				s.logf("task %s: link to the finished task: %v", t.TodoID, err)
 			}
@@ -372,9 +407,18 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	}
 	p.Tasks[i].normalizeReadonlyPermission()
 	t := p.Tasks[i]
+	// A plan saved before task_plan required bypassPermissions of a writable task, or edited since, is held to it here too,
+	// before anything is reopened or started.
+	t.Permission = strings.TrimSpace(t.Permission)
+	if err := t.checkWritablePermission(); err != nil {
+		return nil, fmt.Errorf("%w; nothing was started", err)
+	}
 	m, ok := s.machineByName(ctx, t.Machine)
 	if !ok {
 		return nil, i18n.Err("assistant-tasks.no_machine", i18n.Args{"machine": strconv.Quote(t.Machine)})
+	}
+	if err := s.leaderOnWorkMachine(&t, m); err != nil { // a retry of a leader plan saved on a computer that is work-trust now
+		return nil, fmt.Errorf("%w; nothing was started", err)
 	}
 	if !m.Reachable {
 		return nil, machineOffline(m.Name)
