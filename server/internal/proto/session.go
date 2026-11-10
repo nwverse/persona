@@ -340,6 +340,10 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeDirectoryUntypable: the start's directory has a control character in its name, which a shell's line editor
+	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
+	// the request, not the launcher's fault.
+	CodeDirectoryUntypable = "directory_untypable"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).

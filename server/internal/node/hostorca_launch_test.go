@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func TestOrcaCreateTerminalInRegisteredWorktree(t *testing.T) {
@@ -222,10 +223,10 @@ func TestOrcaRefusesADirectoryItCannotType(t *testing.T) {
 	h := newOrcaHost(&orcart.Client{MetaPath: fake.MetaPath})
 	for _, name := range []string{"a\tb", "a\nb", "a\x1bb", "a\x7fb"} {
 		dir := mkdir(t, filepath.Join(root, name))
-		if created, err := h.CreateSpace(context.Background(), dir, "tab1"); created != nil || !errors.Is(err, host.ErrNotDelivered) || refusalCode(err) != directoryUntypable {
+		if created, err := h.CreateSpace(context.Background(), dir, "tab1"); created != nil || !errors.Is(err, host.ErrNotDelivered) || refusalCode(err) != proto.CodeDirectoryUntypable {
 			t.Errorf("CreateSpace(%q) = %v, %v", name, created, err)
 		}
-		if created, err := h.CreateSlot(context.Background(), "wt-1", dir, "tab1"); created != nil || !errors.Is(err, host.ErrNotDelivered) || refusalCode(err) != directoryUntypable {
+		if created, err := h.CreateSlot(context.Background(), "wt-1", dir, "tab1"); created != nil || !errors.Is(err, host.ErrNotDelivered) || refusalCode(err) != proto.CodeDirectoryUntypable {
 			t.Errorf("CreateSlot(%q) = %v, %v", name, created, err)
 		}
 	}

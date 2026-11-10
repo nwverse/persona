@@ -1636,7 +1636,8 @@ func shellQuote(s string) string {
 }
 
 // shellQuoteEscapes closes shellQuote's quotes around each quote and backslash in the text (one pass, so the
-// replacements are not escaped again).
+// replacements are not escaped again): anyShellQuote's scheme (devices/deploy.go) for the sh family and fish, with
+// csh's `!` left as it is.
 var shellQuoteEscapes = strings.NewReplacer(`'`, `'\''`, `\`, `'\\'`)
 
 // herdrVersion is the herdr host's version ("" without one): node.info's herdr_version.

@@ -25,7 +25,7 @@ func (w langWriter) Lang() i18n.Lang { return w.lang }
 
 // A start the node refused on its request, with nothing to name: a launcher that cannot be read-only, a directory whose
 // name cannot be typed into a terminal. The hub words both, for a session's start_error and an HTTP answer.
-func TestReadonlyStartRefusalLocalization(t *testing.T) {
+func TestPlainStartRefusalLocalization(t *testing.T) {
 	for _, code := range []string{"readonly_unsupported", "directory_untypable"} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			want := i18n.T(lang, "rpc-errors."+code)

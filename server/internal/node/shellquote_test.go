@@ -1,12 +1,14 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // shellQuoteTexts are the texts the shellQuote tests read back: a backslash before a quote, at the end, doubled, quotes,
@@ -58,7 +60,7 @@ func TestShellQuoteReadsBackInRealShells(t *testing.T) {
 			}
 			dir := t.TempDir()
 			for _, s := range shellQuoteTexts {
-				out, err := realShell(bin, dir, "printf '<%s>' "+shellQuote(s)).Output()
+				out, err := realShell(t, bin, dir, "printf '<%s>' "+shellQuote(s)).Output()
 				if err != nil || string(out) != "<"+s+">" {
 					t.Errorf("%s read %q back as %q (%v)", name, s, out, shellErr(err))
 				}
@@ -85,7 +87,7 @@ func TestOtherAgentStartFileInFish(t *testing.T) {
 		}
 		_ = os.Remove(filepath.Join(home, "args"))
 		script := `function wrapper; printf '%s\n' (count $argv) $argv >"$HOME/args"; end; ` + startLine(file, startID, bin)
-		if out, err := realShell(bin, home, script).CombinedOutput(); err != nil {
+		if out, err := realShell(t, bin, home, script).CombinedOutput(); err != nil {
 			t.Fatalf("%q: %v: %s", prompt, err, out)
 		}
 		if got, _ := os.ReadFile(filepath.Join(home, "args")); string(got) != "1\n"+prompt+"\n" {
@@ -98,12 +100,15 @@ func TestOtherAgentStartFileInFish(t *testing.T) {
 }
 
 // realShell runs script with the shell bin in dir, which is also its home: no user configuration (fish's --no-config).
-func realShell(bin, dir, script string) *exec.Cmd {
+// The deadline is only a guard against a hang.
+func realShell(t *testing.T, bin, dir, script string) *exec.Cmd {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
 	args := []string{"-c", script}
 	if filepath.Base(bin) == "fish" {
 		args = append([]string{"--no-config"}, args...)
 	}
-	cmd := exec.Command(bin, args...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
 	cmd.Env = []string{"HOME=" + dir, "XDG_CONFIG_HOME=" + dir, "XDG_DATA_HOME=" + dir, "PATH=/usr/bin:/bin"}
 	return cmd
