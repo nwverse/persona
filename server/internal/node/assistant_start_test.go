@@ -143,3 +143,53 @@ func TestSockGoneTellsADeadReplacementFromALiveOne(t *testing.T) {
 		t.Fatalf("a removed socket: %q", why)
 	}
 }
+
+// A conversation's process read its directory's CLAUDE.md when it started: once the hub writes a new one (new prompts
+// after an upgrade), the next message resumes it in a fresh process; while it is unchanged the process is kept.
+func TestAssistantSendRestartsForNewInstructions(t *testing.T) {
+	fakeClaudeHome(t, "echo '{\"type\":\"system\",\"subtype\":\"init\"}'\nwhile read line; do echo '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}'; done\n")
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	cwd := t.TempDir()
+	md := filepath.Join(cwd, "CLAUDE.md")
+	if err := os.WriteFile(md, []byte("stacked_bar"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	id, err := n.assistantSend(ctx, "", cwd, "claude", "hello", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { n.stopAssistant(id) }()
+	proc := func() *assistantProc {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return n.procs[id]
+	}
+	idle := func(p *assistantProc) {
+		t.Helper()
+		waitFor(t, "the turn to end", func() bool {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			return !p.busy
+		})
+	}
+	first := proc()
+	idle(first)
+	if _, err := n.assistantSend(ctx, id, "", "", "again", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if proc() != first {
+		t.Fatal("restarted with the same CLAUDE.md")
+	}
+	idle(first)
+	if err := os.WriteFile(md, []byte("ring"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.assistantSend(ctx, id, "", "", "today's calories", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if p := proc(); p == first || p == nil || p.instructions != instructionsDigest(cwd) {
+		t.Fatal("kept the process that read the old CLAUDE.md")
+	}
+}

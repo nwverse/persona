@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -20,6 +21,9 @@ const (
 	featureSessionsList       = "sessions_list"
 	featureSessionsLookup     = "sessions_lookup"
 	featureSessionsPaneSource = "sessions_pane_source"
+	// featureSessionsManager: GET /api/v1/sessions takes ?manager=<id> (sessionsManager). An older hub ignores the
+	// key and answers with every manager's sessions, so an app sends it only to a hub that says this.
+	featureSessionsManager = "sessions_manager"
 )
 
 // runtimeList is a transport cache of the manager's already-decorated rows. It
@@ -109,7 +113,13 @@ func (h *Hub) indexStampedLocked(mid string, list []proto.Session, stamp bool, m
 	for k, i := range rows {
 		items[k] = indexedRow(mid, ids[k], &list[i], stamp, manager, full[list[i].SessionID], items[k])
 	}
-	h.listCache.index.Replace(mid, items)
+	// The machine's manager goes with its batch (?manager=<id>, sessionsManager): the one a kept list is stamped with,
+	// else the one its rows came stamped with (stamped: every row of a machine carries its manager).
+	// Premise: all rows of one machine's list share one manager (a machine has one owner), so the first row names it.
+	if !stamp && len(list) > 0 {
+		manager = list[0].Manager
+	}
+	h.listCache.index.ReplaceOwned(mid, manager, items)
 	h.listCache.machines[mid] = true
 }
 
@@ -338,12 +348,40 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 	return row
 }
 
-func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request) {
+// sessionsManager is the manager GET /api/v1/sessions is asked for with ?manager=<id> (featureSessionsManager): only
+// the sessions on that manager's computers are listed and counted. "" when the request has no such key: every
+// manager's, as before. Only the query names it here, not the X-Persona-Manager header an app may send with every
+// request: this list was never routed by it. False once it answered: the key given twice or empty (400
+// invalid_query), a manager the roster does not have (404 no_manager), an extension's token naming another manager
+// than its own (403 other_manager).
+func (h *Hub) sessionsManager(w http.ResponseWriter, r *http.Request) (string, bool) {
+	values, asked := r.URL.Query()[ManagerQuery]
+	if !asked {
+		return "", true
+	}
+	if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+		sessionListErr(w, errors.New("manager must have exactly one nonempty value"))
+		return "", false
+	}
+	named := strings.TrimSpace(values[0])
+	if em := extensionManager(r); em != "" && named != em {
+		writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
+		return "", false
+	}
+	if !h.knownManager(r.Context(), named) {
+		writeErrCode(w, http.StatusNotFound, "no_manager", fmt.Errorf("%w: %q", errUnknownManager, clip(named, 64)))
+		return "", false
+	}
+	return named, true
+}
+
+func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager string) {
 	opts, err := sessionlist.Parse(r.URL.Query())
 	if err != nil {
 		sessionListErr(w, err)
 		return
 	}
+	opts.Manager = manager
 	if values, lookup := r.URL.Query()["session_id"]; lookup {
 		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))
@@ -460,7 +498,7 @@ func ownPage(index *sessionlist.Index, opts sessionlist.Options, own []string, p
 		return json.Unmarshal([]byte(id), &k) != nil || !keep(k[0])
 	})
 	counts, err := ownCounts(index, sessionlist.Options{Since: opts.Since, State: opts.State, Project: opts.Project, Group: opts.Group,
-		Source: opts.Source, Provider: opts.Provider, Q: opts.Q}, own)
+		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager}, own)
 	if err != nil {
 		return sessionlist.Page{}, err
 	}

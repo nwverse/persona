@@ -15,14 +15,23 @@ final class RecordingCapture {
     private(set) var state: State = .idle
     private(set) var elapsed: Double = 0
     private(set) var recordingID: UUID?
+    private(set) var rolling = false
     var error: String?
     /// Non-blocking hint, e.g. the Bluetooth microphone was not found and the phone mic is used.
     private(set) var notice: String?
     var onSaved: ((UUID) -> Void)?
+    /// Paused by the system (a phone call, Siri, an alarm), not by the user: it picks up again when the system ends the
+    /// interruption, or when the app comes back to the front (`resumeAfterInterruption`).
+    private(set) var interrupted = false
+    /// The system ended an interruption but the microphone could not be opened again (the app was in the background): the
+    /// phone tells the user to come back (a notification), since nothing else will resume it.
+    @ObservationIgnored var onInterruptionNotResumed: (() -> Void)?
+    /// The recorded time now, read without observing it (`elapsed` changes four times a second).
+    var timeline: Double { writer?.elapsed ?? sampleElapsed }
+    @ObservationIgnored private var sampleElapsed: Double = 0
     @ObservationIgnored private var input: RecordingInput = .phone
     @ObservationIgnored private var writer: RecordingSegmentWriter?
     @ObservationIgnored private var ticker: Task<Void, Never>?
-    @ObservationIgnored private var interrupted = false
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var activeMicOwner: UUID?
@@ -35,16 +44,25 @@ final class RecordingCapture {
             let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init)
             MainActor.assumeIsolated { self?.interruption(type) }
         })
-        observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { @Sendable [weak self] _ in
+        observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { @Sendable [weak self] note in
+            let engine = note.object.map { ObjectIdentifier($0 as AnyObject) }
             MainActor.assumeIsolated {
-                guard let self, self.state == .recording else { return }
+                // Every engine posts it (dictation's, a voice call's): only this recording's own engine matters.
+                guard let self, self.state == .recording, self.writer?.owns(engine) == true else { return }
                 do { try self.writer?.restartAfterConfigurationChange() }
-                catch { self.error = String(localized: "The microphone changed, so recording paused"); self.writer?.pause(); self.state = .paused }
+                catch {
+                    // Often the route switching to a call before its interruption arrives: paused as by one, so the call's
+                    // end (or coming back to the app) picks it up again, and what came before is kept.
+                    self.error = String(localized: "The microphone changed, so recording paused")
+                    self.writer?.pause(); self.state = .paused; self.interrupted = true
+                    if let id = self.recordingID, let segment = self.writer?.cut() { self.save(segment, id: id) }
+                }
             }
         })
         observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { @Sendable [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.state == .recording else { return }
+                // Paused too (during a call): the engine it would resume is gone with the reset.
+                guard let self, self.state == .recording || self.state == .paused else { return }
                 self.stop(); self.error = String(localized: "The system audio service reset. What was finished is saved; start recording again.")
             }
         })
@@ -120,10 +138,11 @@ final class RecordingCapture {
         }
     }
 
-    func start(locale: String = "zh-CN", input: RecordingInput = .phone) async {
+    /// `title` / `meeting`: what the recording is called and, for a meeting recording, its meeting (docs/apple/recording.md).
+    func start(locale: String = "zh-CN", input: RecordingInput = .phone, title: String = "", meeting: RecordingMeeting? = nil, rolling: Bool = false) async {
         guard state == .idle else { return }
         generation = UUID(); let token = generation
-        state = .starting; error = nil; notice = nil
+        state = .starting; error = nil; notice = nil; self.rolling = rolling
         self.input = input
         let allowed = await Self.permission()
         guard generation == token, state == .starting else { return }
@@ -138,7 +157,7 @@ final class RecordingCapture {
             try await configureSession(token: token)
             // Cancelled while Bluetooth discovery was running: cancelStarting() already released the session and mic.
             guard generation == token else { return }
-            let entry = try RecordingLibrary.shared.create(source: Self.source, locale: locale)
+            let entry = try RecordingLibrary.shared.create(source: Self.source, locale: locale, title: title, meeting: meeting, kind: rolling ? .rolling : .clip)
             recordingID = entry.id
             let writer = RecordingSegmentWriter(directory: RecordingLibrary.shared.folder(entry.id))
             writer.segmentLength = Self.segmentLength
@@ -154,7 +173,7 @@ final class RecordingCapture {
         } catch {
             guard generation == token else { return }
             if let id = recordingID { RecordingLibrary.shared.change(id) { $0.active = false; $0.expectedSegments = 0 } }
-            recordingID = nil; state = .idle
+            recordingID = nil; state = .idle; self.rolling = false
             releaseAudioSession()
             self.error = String(localized: "Can't open the microphone. Try again later.")
         }
@@ -162,29 +181,44 @@ final class RecordingCapture {
 
     func cancelStarting() {
         guard state == .starting else { return }
-        generation = UUID(); state = .idle; notice = nil
+        generation = UUID(); state = .idle; notice = nil; rolling = false
         releaseAudioSession()
     }
 
     func togglePause() {
         guard let writer else { return }
-        interrupted = false
         if state == .recording {
+            interrupted = false
             resumeTask?.cancel(); resumeTask = nil
             writer.pause(); state = .paused
-        } else if state == .paused, resumeTask == nil {
-            let token = generation
-            resumeTask = Task { @MainActor [weak self] in
-                defer { self?.resumeTask = nil }
-                guard let self else { return }
-                do {
-                    try await self.configureSession(token: token)
-                    guard self.generation == token, self.writer === writer, self.state == .paused else { return }
-                    try writer.resume(); self.state = .recording
-                } catch {
-                    guard self.generation == token else { return }
-                    self.error = String(localized: "Can't open the microphone; the recording is still saved")
-                }
+        } else if state == .paused {
+            resume(writer)
+        }
+    }
+
+    /// After a phone call, or when the app comes back to the front while one left the recording paused: carries on.
+    /// Nothing when the user paused it.
+    func resumeAfterInterruption() {
+        guard interrupted, state == .paused, let writer else { return }
+        resume(writer)
+    }
+
+    private func resume(_ writer: RecordingSegmentWriter) {
+        guard resumeTask == nil else { return }
+        let token = generation
+        resumeTask = Task { @MainActor [weak self] in
+            defer { self?.resumeTask = nil }
+            guard let self else { return }
+            do {
+                try await self.configureSession(token: token)
+                guard self.generation == token, self.writer === writer, self.state == .paused else { return }
+                try writer.resume()
+                self.state = .recording; self.interrupted = false; self.error = nil
+            } catch {
+                guard self.generation == token else { return }
+                self.error = String(localized: "Can't open the microphone; the recording is still saved")
+                // Still `interrupted`: coming back to the app tries again.
+                if self.interrupted { self.onInterruptionNotResumed?() }
             }
         }
     }
@@ -198,6 +232,13 @@ final class RecordingCapture {
         }
     }
 
+    /// Erases the last few minutes of a rolling recording everywhere; the segment being written is dropped when it finalizes.
+    func eraseRecent() {
+        guard rolling, let id = recordingID else { return }
+        let now = Date.now
+        RecordingLibrary.shared.erase(id, from: now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: now)
+    }
+
     @discardableResult func stop() -> UUID? {
         if state == .starting { cancelStarting(); return nil }
         guard let writer, let id = recordingID else { return nil }
@@ -209,9 +250,10 @@ final class RecordingCapture {
         for segment in writer.finishedSegments { save(segment, id: id) }
         RecordingLibrary.shared.change(id) { entry in
             entry.active = false
-            entry.expectedSegments = (entry.segments.map(\.index).max() ?? -1) + 1
+            entry.expectedSegments = entry.nextIndex
+            entry.endedAt = .now
         }
-        self.writer = nil; recordingID = nil; state = .idle; interrupted = false; notice = nil
+        self.writer = nil; recordingID = nil; state = .idle; interrupted = false; notice = nil; rolling = false
         releaseAudioSession()
         onSaved?(id)
         return id
@@ -229,7 +271,8 @@ final class RecordingCapture {
     }
 
     private func save(_ segment: RecordingSegmentWriter.Segment, id: UUID) {
-        RecordingLibrary.shared.addSegment(id, RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration))
+        RecordingLibrary.shared.addSegment(id, RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration,
+                                                                startedAt: segment.startedAt))
         onSaved?(id)
     }
 
@@ -249,9 +292,34 @@ final class RecordingCapture {
     }
 
     private func interruption(_ type: AVAudioSession.InterruptionType?) {
-        if type == .began, state == .recording { interrupted = true; writer?.pause(); state = .paused }
-        else if type == .ended, interrupted, state == .paused { togglePause() }
+        if type == .began, state == .recording, let writer, let id = recordingID {
+            interrupted = true
+            resumeTask?.cancel(); resumeTask = nil
+            writer.pause(); state = .paused
+            // A long call: what was said before it is kept even if the app is stopped before the call ends (a segment
+            // still open would be deleted by `recover`). The next segment starts when the recording resumes.
+            if let segment = writer.cut() { save(segment, id: id) }
+            if rolling {
+                error = String(localized: "Rolling recording paused — tap Continue to resume")
+                #if os(watchOS)
+                WKInterfaceDevice.current().play(.notification)
+                #endif
+            }
+        } else if type == .ended {
+            // The system says whether to resume (`shouldResume`); a recording resumes either way: the meeting goes on.
+            resumeAfterInterruption()
+        }
     }
+
+    #if DEBUG
+    /// Screenshots (`-showMeetingSample`): `id` shows as being recorded `elapsed` seconds in, paused or paused by a call,
+    /// with no microphone (Stop does nothing).
+    func showSample(_ id: UUID, elapsed: Double, paused: Bool = false, interrupted: Bool = false) {
+        recordingID = id; self.elapsed = elapsed; sampleElapsed = elapsed
+        self.interrupted = interrupted
+        state = paused || interrupted ? .paused : .recording
+    }
+    #endif
 
     private static var segmentLength: Double {
         #if os(iOS) || os(visionOS)

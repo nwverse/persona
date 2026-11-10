@@ -1117,6 +1117,11 @@ func weekdayText(ds []int) string {
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
+	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
+	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
+		s.logf("recover interrupted task starts: %v", err)
+	}
+	cancel()
 	go s.taskCloseLoop(ctx)    // the agents of finished tasks (tasks_close.go)
 	go s.superviseLoop(ctx)    // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
@@ -1130,6 +1135,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.viewActionLoop(ctx)   // durable card reply outbox
 	go s.acceptLoop(ctx)       // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
+	go s.instructionsLoop(ctx) // the CLAUDE.md on the assistant's machine (start.go)
 	s.scheduleLoop(ctx)
 }
 

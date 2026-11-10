@@ -135,7 +135,7 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
-	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureMachineRename)
+	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureMachineRename)
 	out = append(out, h.agentSessionArchiveFeatures()...)
 	// The assistant's card interfaces that answer now (docs/assistant/assistant-views.md): assistant_views is declarative actions
 	// (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions with both switches
@@ -379,6 +379,11 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 		rec = &keptRecorder{ResponseWriter: w, status: http.StatusOK}
 		w = rec
 	}
+	// What may change the manager's inbox, as in relayHTTP: before it goes, and when it is answered (inbox_answers.go).
+	changes := r.Method != http.MethodGet && r.Method != http.MethodHead
+	if changes {
+		h.inboxAnswers.changed(id)
+	}
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme, pr.Out.URL.Host = "http", "manager"
@@ -407,6 +412,9 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 			pr.Out.Header["X-Forwarded-For"] = nil
 		},
 		ModifyResponse: func(res *http.Response) error {
+			if changes {
+				h.inboxAnswers.changed(id)
+			}
 			if apps, _ := computerAppsRoute(r); apps {
 				res.Header.Del(computerAppsOwnerHeader)
 				if guardedApps && res.StatusCode >= 200 && res.StatusCode < 300 {
@@ -420,6 +428,9 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 		}, DisableKeepAlives: true, ResponseHeaderTimeout: 5 * time.Minute},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if changes {
+				h.inboxAnswers.changed(id)
+			}
 			if errors.Is(err, errBusOffline) || h.busConnOf(id) == nil {
 				writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
 				return

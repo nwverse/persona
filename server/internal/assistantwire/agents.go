@@ -21,11 +21,34 @@ import (
 type AgentsConfig struct {
 	Triage   TriageConfig   `json:"triage,omitzero"`
 	Delegate DelegateConfig `json:"delegate,omitzero"`
+	// Dispatch is manager.json agents.dispatch: an agent handing a subtask to another connected computer
+	// (docs/plans/plan-agent-dispatch.md).
+	Dispatch DispatchConfig `json:"dispatch,omitzero"`
 	// LauncherHealth is manager.json agents.launcher_health: checking each machine's launchers (docs/server/launcher-health.md).
 	LauncherHealth LauncherHealthConfig `json:"launcher_health,omitzero"`
 	// Review is manager.json agents.review: the independent reviewer of a supervised task's finished change (#2173,
 	// docs/assistant/unified-entry.md "Independent review").
 	Review ReviewConfig `json:"review,omitzero"`
+}
+
+// DispatchConfig is manager.json agents.dispatch: the agents' dispatch_start / dispatch_read tools. Off unless Enabled
+// is true: a dispatched task runs an agent on another computer on its model, started by an agent and not by the user.
+type DispatchConfig struct {
+	// Enabled: off unless true.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxActive: how many dispatched tasks of one agent may be working at a time. Default 3.
+	MaxActive int `json:"max_active,omitempty"`
+}
+
+// On: the switch, off unless set true.
+func (c DispatchConfig) On() bool { return c.Enabled != nil && *c.Enabled }
+
+// Limit is MaxActive, 3 when unset.
+func (c DispatchConfig) Limit() int {
+	if c.MaxActive <= 0 {
+		return 3
+	}
+	return c.MaxActive
 }
 
 // ReviewConfig is manager.json agents.review: when a supervised task's agent is judged done, a reviewer agent started
@@ -106,15 +129,21 @@ func (c DelegateConfig) Timeout() time.Duration {
 }
 
 // TriageConfig is manager.json agents.triage: the limits, and the switches a hub whose user never saved them starts with
-// (unset: off).
+// (unset: off, but for transient_retry).
 type TriageConfig struct {
 	Enabled      *bool `json:"enabled,omitempty"`
 	AutoContinue *bool `json:"auto_continue,omitempty"`
 	Wake         *bool `json:"wake,omitempty"`
 	Decide       *bool `json:"decide,omitempty"`
 	ToolLoop     *bool `json:"tool_loop,omitempty"`
-	// MaxRetries: "Continue" sent for one run of transient errors before asking the user. Default 3.
+	// TransientRetry: the initial value of the transient_retry switch (unset: on): "Continue" after a transient model
+	// error, as a rule, whether or not the triage itself is on.
+	TransientRetry *bool `json:"transient_retry,omitempty"`
+	// MaxRetries: "Continue" sent for one run of transient errors before leaving it to the user. Default 5.
 	MaxRetries int `json:"max_retries,omitempty"`
+	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
+	// the one before (a rate limit four times as long). Default 15.
+	RetryBaseSeconds int `json:"retry_base_seconds,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
 	MaxWakes int `json:"max_wakes,omitempty"`
 	// SettleSeconds: how long a stopped session stays stopped before its turn is triaged. Default 15.

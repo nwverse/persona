@@ -2,11 +2,14 @@
 import Foundation
 import HealthKit
 import Observation
+import os
 
 /// Consent and the HealthKit cursor are committed together. Failed uploads leave the cursor in place for retry.
+/// A report the hub rejects as invalid is dropped instead: the same data gets the same answer.
 @Observable
 final class WorkoutReports {
     static let shared = WorkoutReports()
+    private static let log = Logger(subsystem: "persona", category: "workout-reports")
     private let health = HKHealthStore()
     private let file: URL
     private var state: State
@@ -80,7 +83,7 @@ final class WorkoutReports {
         defer { busy = false }
         do {
             // Upload a previous batch first: a network outage cannot grow an unbounded outbox.
-            try await upload(api: hub.api)
+            var skipped = try await upload(api: hub.api)
             let anchor = try state.anchor.map {
                 try NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0)
             } ?? nil
@@ -98,8 +101,9 @@ final class WorkoutReports {
             }
             next.anchor = try nextAnchor.map { try NSKeyedArchiver.archivedData(withRootObject: $0, requiringSecureCoding: true) }
             try save(next)
-            try await upload(api: hub.api)
-            error = nil
+            skipped += try await upload(api: hub.api)
+            error = skipped == 0 ? nil
+                : String(localized: "Some workouts were skipped because the hub couldn't accept their data. Later workouts are still reported.")
         } catch { self.error = error.localizedDescription }
     }
 
@@ -117,13 +121,23 @@ final class WorkoutReports {
         }
     }
 
-    private func upload(api: APIClient) async throws {
+    /// Sends the outbox in order and returns how many reports the hub rejected. A rejected report is dropped: kept at
+    /// the head, it would hold back every later workout. Anything else (offline, 401 / 403 / 404, 5xx) stops the batch
+    /// with the report still queued, for the next foreground visit.
+    func upload(api: APIClient) async throws -> Int {
+        var skipped = 0
         while let report = state.pending.first {
-            let _: Data = try await api.post("/api/v1/assistant/health/workouts", body: report)
+            do {
+                let _: Data = try await api.post("/api/v1/assistant/health/workouts", body: report)
+            } catch let error as APIError where [400, 413, 422].contains(error.status) {
+                Self.log.error("hub rejected a workout report (HTTP \(error.status)): \(error.message, privacy: .public)")
+                skipped += 1
+            }
             var next = state
             next.pending.removeFirst()
             try save(next)
         }
+        return skipped
     }
 
     private func read(since: Date, anchor: HKQueryAnchor?) async throws -> ([HKWorkout], HKQueryAnchor?) {

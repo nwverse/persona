@@ -34,6 +34,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, Telegram's attachment menu) from where the button is,
     /// in the window; nil: the menu of `attach`.
     var openAttach: ((CGRect) -> Void)? = nil
+    /// Glow While Replying (`ComposerGlow`): the band around the bar while the assistant's reply is being written. Drawn
+    /// inside the bar's animations so it follows the surface when the line grows into the card.
+    var glows = false
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
@@ -61,7 +64,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     @State private var pageFocusRequest = 0
 
     private var offersEnlarge: Bool {
-        !text.isEmpty && ComposerGrowth.offersExpansion(textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
+        ComposerGrowth.showsExpandButton(text: text, focused: focused.wrappedValue, textHeight: textHeight, lineHeight: lineHeight, maximumLines: maximumLines)
     }
 
     /// Count a trailing newline as the empty line it starts.
@@ -192,6 +195,9 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             if expanded {
                 HStack(spacing: Theme.Space.xs) {
                     plus
+                    #if os(iOS)
+                    if focused.wrappedValue { dismissKeyboardButton }
+                    #endif
                     Spacer(minLength: Theme.Space.s)
                     if let modesTitle {
                         Menu { modes() } label: { modesLabel(modesTitle) }
@@ -236,6 +242,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         .overlay { ComposerHoldOverlay(hold: hold) }
         .coordinateSpace(.named(ComposerHold.space))
         #endif
+        .composerGlow(glows)
         .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
         .onTapGesture { focused.wrappedValue = true }
         .shellScaled()
@@ -324,6 +331,28 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         sentFromPage = true
         enlarged = false
         send()
+    }
+
+    private var dismissKeyboardButton: some View {
+        Button(action: dismissKeyboard) {
+            ThemedIcon(Theme.Icon.dismissKeyboard)
+                .font(Theme.Font.heading)
+                .fontWeight(.medium)
+                .foregroundStyle(ink)
+                .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Hide Keyboard")
+        .accessibilityIdentifier("shell-composer-dismiss-keyboard")
+        .transition(.opacity)
+    }
+
+    private func dismissKeyboard() {
+        Haptics.tap()
+        if focused.wrappedValue { TypedText.commitFocused(into: $text) }
+        focused.wrappedValue = false
+        Keyboard.dismiss()
     }
     #endif
 
@@ -556,7 +585,14 @@ private struct ComposerPageEditor: View {
             .themedPage()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if focused {
+                        Button(action: dismissPageKeyboard) {
+                            ThemedIcon(Theme.Icon.dismissKeyboard)
+                        }
+                        .accessibilityLabel("Hide Keyboard")
+                        .accessibilityIdentifier("composer-page-dismiss-keyboard")
+                    }
                     Button {
                         commitTyped()
                         collapse()
@@ -600,6 +636,13 @@ private struct ComposerPageEditor: View {
     /// keyboard, never another text field's text.
     private func commitTyped() {
         if focused { TypedText.commitFocused(into: $text) }
+    }
+
+    private func dismissPageKeyboard() {
+        Haptics.tap()
+        commitTyped()
+        focused = false
+        Keyboard.dismiss()
     }
 }
 #endif

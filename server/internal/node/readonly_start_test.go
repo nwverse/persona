@@ -295,3 +295,35 @@ func TestReadOnlyRuntimeStartRefusesUnverifiedRuntimes(t *testing.T) {
 		})
 	}
 }
+
+// A runtime that promises read-only starts (caps.readonly, as the Paseo bridge does) gets them: the plan mode reaches
+// it as is, for a new session and a takeover alike; whether it can honor them is its to refuse (#3238).
+func TestReadOnlyRuntimeStartReachesReadonlyRuntime(t *testing.T) {
+	n, _ := runtimeNode(t)
+	if err := n.useEngine(context.Background(), proto.EnginePaseo); err != nil {
+		t.Fatal(err)
+	}
+	hello := paseoEngineHello()
+	hello["caps"].(map[string]any)["readonly"] = true
+	host := dialRuntime(t, n, hello)
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		return map[string]any{"session": map[string]any{"session_id": "paseo-readonly", "status": "idle", "cwd": "/w/app"}}, nil
+	}
+	for _, launcher := range []string{"paseo-claude", "claude", ""} {
+		if _, err := nodeCall(t, n, "session.start", map[string]any{
+			"cwd": "/w/app", "launcher": launcher, "permission_mode": "plan", "prompt": "Inspect the project",
+		}); err != nil {
+			t.Fatalf("%q: %v", launcher, err)
+		}
+	}
+	got := host.got("session.start")
+	if len(got) != 3 {
+		t.Fatalf("starts: %v", got)
+	}
+	for _, raw := range got {
+		var start map[string]any
+		if err := json.Unmarshal(raw, &start); err != nil || start["permission_mode"] != "plan" {
+			t.Fatalf("start lost the plan mode: %s (%v)", raw, err)
+		}
+	}
+}

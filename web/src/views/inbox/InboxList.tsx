@@ -1,13 +1,13 @@
 // The inbox list (docs/assistant/inbox.md"App"): filters by source and kind, search, then Needs you (agents waiting on you first),
 // FYI, Collapsed and Done, each a section that opens / closes from its title.
-import { Fragment, memo, useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   agentDraft, agentWorking, conversationRoute, fromLine, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
   itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
   BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
-  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone,
+  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup,
 } from "../../lib/inbox";
-import { doneGroups, groupBySource, groupByTime, openAtFirst, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
+import { dayGroupCounts, doneGroups, groupBySource, groupByTime, openAtFirst, sortTimeKeys, timeRange, timeTitle, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
 import { useMailAccounts } from "../../lib/mail";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
@@ -26,6 +26,7 @@ import type { MenuAt } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { openPolicyDialog, RulesDialog } from "./PolicyDialog";
 import { isNoHover } from "../../ui/media-query";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
@@ -88,6 +89,9 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const historyMore = useInbox((st) => st.historyMore);
   const historyLoading = useInbox((st) => st.historyLoading);
   const historyError = useInbox((st) => st.historyError);
+  const doneDays = useInbox((st) => st.doneDays);
+  const groupLoading = useInbox((st) => st.groupLoading);
+  const groupComplete = useInbox((st) => st.groupComplete);
   const [storedFolder, setFolder] = useStored("inbox.folder");
   const [query, setQuery] = useState("");
   const foldersShown = useFoldersShown(items);
@@ -159,6 +163,30 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const order = ["lark", ...chips.map((a) => `mail:${a.id}`), ...connectors.map((c) => `c:${c.id}`)];
   const mailName = (account: string) => chips.find((a) => a.id === account)?.email ?? account;
   const groupOpen = (group: string, section: string, key: string) => folds[`${group}|${section}|${key}`] ?? openAtFirst(section, key);
+  const filtered = Boolean(source || kind || query || folder);
+  // Done's groups (#2969). With the hub's day counts (#2967) every group they name is listed with its count, loaded or not,
+  // and loads its own items when it opens; filtered or searched, the counts are of what is loaded ("n+" until the group
+  // is complete). Without them, as before: what the history has loaded, "n+" on the last group while there is more.
+  const doneGroupsOf = (group: string, done: InboxItem[]): { groups: DoneGroup[]; next?: DoneGroup } => {
+    const loaded = doneGroups(done, now);
+    const days = doneDays[group];
+    if (!days) return { groups: loaded.map((g, i) => ({ ...g, count: g.items.length, plus: i === loaded.length - 1 && historyMore.includes(group), more: false, range: timeRange(g.key, now) })) };
+    const counts = dayGroupCounts(days, now, filtered ? 0 : loaded.find((g) => g.key === "just")?.items.length ?? 0);
+    const byKey = new Map(loaded.map((g) => [g.key, g.items]));
+    // complete: a page of its own reached its start, or the list holds it (the done items of its last days, the hub's
+    // inboxKeepDone), or (unfiltered) as many are loaded as the hub counts
+    const complete = (key: string, loadedCount: number) => groupComplete.includes(`${group}|${key}`) || timeRange(key, now).start >= now - LIST_DONE_MS
+      || (!filtered && loadedCount >= (counts.get(key) ?? 0));
+    const groupOf = (key: string): DoneGroup => {
+      const items = byKey.get(key) ?? [];
+      const done = complete(key, items.length);
+      return { key, title: timeTitle(key), items, count: filtered ? items.length : Math.max(items.length, counts.get(key) ?? 0), plus: filtered && !done, more: !done, range: timeRange(key, now) };
+    };
+    // filtered, only the groups with items that match show; "Show older" under Done loads the newest one the hub counts
+    // that hasn't all come
+    const pending = filtered ? sortTimeKeys(counts.keys(), now).find((key) => !complete(key, 0)) : undefined;
+    return { groups: sortTimeKeys(filtered ? byKey.keys() : [...byKey.keys(), ...counts.keys()], now).map(groupOf), next: pending ? groupOf(pending) : undefined };
+  };
   const layout = (byManager ?? [{ manager: null, sec: s, ags: agents }]).map(({ manager, sec, ags }) => {
     const tiers = TIERS.map((tier) => {
       const list = sec.tiers[tier.key];
@@ -167,7 +195,9 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
       return { tier, list, waiting, groups, titled: tier.key !== "working" && (groups.length > 1 || (waiting.length > 0 && list.length > 0)) };
     });
     const done = doneWithHistory(sec.done, manager && roster ? history.filter((it) => ownerIn(roster, it.manager) === manager.id) : history, { source, kind, query, folder });
-    return { manager, group: manager?.id ?? "", tiers, done, doneGroups: doneGroups(done, now) };
+    const group = manager?.id ?? "";
+    const { groups: dg, next } = doneGroupsOf(group, done);
+    return { manager, group, tiers, done, doneGroups: dg, doneNext: next };
   });
   // the open items in sight: in sections and groups shown open (In progress is always open)
   const shownOpen = kind === "agent" ? [] : layout.flatMap(({ group, tiers }) => tiers.filter(({ tier }) => tier.key === "working" || isOpen(group, tier.key))
@@ -187,16 +217,34 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     return n;
   });
   const historyManagers = byManager ? byManager.map((g) => g.manager.id) : [undefined];
-  // Done's history from the hub (the list holds only the last few days): a first page once the list is in, so Done's
-  // groups and counts are there before it opens; more on "Show older"
+  // Done's history from the hub (the list holds only the last few days): each manager's day counts once the list is in
+  // (#2967), so Done lists every day's group and count before it opens; a manager without them gets a first page of its
+  // history instead, and more on "Show older", as before
   useEffect(() => {
-    if (ready && !history.length && historyMore.length) void loadOlderDone(historyManagers);
+    if (!ready) return;
+    void loadDoneDays(historyManagers).then((without) => {
+      if (without.length && !history.length) void loadOlderDone(without);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
+  // A Done group shown open whose items haven't all come loads its first page by itself, once while the list is up;
+  // the next pages come on its "Show older", so opening 1+ month doesn't stream in every item of it
+  const autoLoaded = useRef(new Set<string>());
+  useEffect(() => {
+    for (const { manager, group, doneGroups: dg } of layout) {
+      if (!doneDays[group] || !isOpen(group, "done")) continue;
+      for (const g of dg) {
+        const id = `${group}|${g.key}`;
+        if (!g.more || !groupOpen(group, "done", g.key) || autoLoaded.current.has(id)) continue;
+        autoLoaded.current.add(id);
+        void loadDoneGroup(manager?.id, g.key, g.range);
+      }
+    }
+  });
   const jumpTo = (group: string, key: string) => {
     if (!isOpen(group, "done")) toggle(group, "done");
     putFold(`${group}|done|${key}`, true);
-    requestAnimationFrame(() => document.querySelector(`[data-group="${CSS.escape(`${group}|done|${key}`)}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    requestAnimationFrame(() => scrollListTo(document.querySelector(`[data-group="${CSS.escape(`${group}|done|${key}`)}"]`)));
   };
   const allChosen = shownOpen.length > 0 && shownOpen.every((it) => picked?.has(itemKey(it)));
   const pick = useCallback((it: InboxItem) => onPicked?.((p) => {
@@ -238,7 +286,10 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-    <div className="min-h-0 flex-1 overflow-y-auto" data-picking={picking || undefined}>
+    {/* `overflow-y-auto` alone makes this a scroll container on both axes, so a row or a long chip (a connector's name)
+        wider than the 380px column let the whole list scroll sideways and cut off every card (#3262); `overflow-x-clip`
+        clips that overflow instead, and is not a scroll container, so `scrollIntoView` above cannot shift it either. */}
+    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-clip" data-picking={picking || undefined}>
       <div className="mx-auto max-w-[760px] px-3 pt-3 pb-16 sm:px-4">
         <label className="flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
@@ -343,8 +394,10 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           </div>
         )}
 
-        {layout.map(({ manager, group, tiers, done, doneGroups: dg }) => {
-          const more = historyMore.includes(group);
+        {layout.map(({ manager, group, tiers, done, doneGroups: dg, doneNext: nextGroup }) => {
+          const exact = Boolean(doneDays[group]);
+          const more = exact ? Boolean(nextGroup) || dg.some((g) => g.plus) : historyMore.includes(group);
+          const doneCount = exact ? dg.reduce((n, g) => n + g.count, 0) : done.length;
           const moreError = historyError[group] ?? "";
           const isSelected = (it: InboxItem) => !!selected && sameItem(it, selected);
           const row = (it: InboxItem, off = false) => (
@@ -384,20 +437,24 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                   </Section>
                 );
               })}
-              {ready && done.length > 0 && (
-                <Section k="done" title={t("inbox-inboxlist.done")} count={more ? { text: `${done.length}+`, label: `${done.length}+` } : sectionCount(done.length, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}
+              {ready && doneCount > 0 && (
+                <Section k="done" title={t("inbox-inboxlist.done")} count={more ? { text: `${doneCount}+`, label: `${doneCount}+` } : sectionCount(doneCount, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}
                   menu={dg.length > 1 ? [
-                    ...dg.map((g, i) => ({ key: `jump:${g.key}`, label: g.title, hint: i === dg.length - 1 && more ? `${g.items.length}+` : String(g.items.length), onSelect: () => jumpTo(group, g.key) })),
+                    ...dg.map((g) => ({ key: `jump:${g.key}`, label: g.title, hint: g.plus ? `${g.count}+` : String(g.count), onSelect: () => jumpTo(group, g.key) })),
                     { key: "fold-all", label: t("inbox-inboxlist.fold_all"), divider: true, onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, false)) },
                     { key: "unfold-all", label: t("inbox-inboxlist.unfold_all"), onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, true)) },
                   ] : undefined}>
-                  {dg.length > 1 ? dg.map((g, i) => groupOf("done", g, g.items.map((it) => row(it, true)), { more: i === dg.length - 1 && more })) : done.map((it) => row(it, true))}
-                  {more && history.length > 0 && (
-                    <div className="flex items-center gap-2 px-1 pt-1">
-                      <Button tone="quiet" busy={historyLoading} onClick={() => void loadOlderDone(historyManagers)}>{historyLoading ? t("inbox-inboxlist.loading_older") : t("inbox-inboxlist.load_older")}</Button>
-                      {moreError && <span className="min-w-0 truncate text-[11.5px] text-red" title={moreError}>{t("inbox-inboxlist.older_failed", { error: moreError })}</span>}
-                    </div>
-                  )}
+                  {dg.length > 1 ? dg.map((g) => {
+                    const id = `${group}|${g.key}`;
+                    return groupOf("done", g, (
+                      <>
+                        {g.items.map((it) => row(it, true))}
+                        {exact && g.more && !filtered && <OlderButton busy={groupLoading.includes(id)} error={moreError} run={() => void loadDoneGroup(manager?.id, g.key, g.range)} />}
+                      </>
+                    ), { more: g.plus, count: g.count });
+                  }) : done.map((it) => row(it, true))}
+                  {!exact && more && history.length > 0 && <OlderButton busy={historyLoading} error={moreError} run={() => void loadOlderDone(historyManagers)} />}
+                  {nextGroup && <OlderButton busy={groupLoading.includes(`${group}|${nextGroup.key}`)} error={moreError} run={() => void loadDoneGroup(manager?.id, nextGroup.key, nextGroup.range)} />}
                 </Section>
               )}
             </Fragment>
@@ -475,6 +532,35 @@ function Section({ k, title, count, open, onToggle, action, menu, children }: { 
   );
 }
 
+/**
+ * Scrolls the list's own scroller (the nearest box that scrolls) so `el` is at its top. Not scrollIntoView: that scrolls
+ * every box above it too, the app shell included, which hides its overflow but still scrolls from code; Jump To then
+ * lifted the whole app and left a blank band under it (#2969).
+ */
+function scrollListTo(el: Element | null) {
+  let box = el?.parentElement;
+  while (box && !/auto|scroll/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+  if (!el || !box) return;
+  box.scrollTo?.({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: scrollBehavior() });
+}
+
+/** How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page. */
+const LIST_DONE_MS = 3 * 86_400_000;
+
+/** A group of Done (#2969): its items loaded so far, its count (the hub's when it has day counts), whether the count
+ *  reads "n+" (plus), whether more of its items can load (more) and its time range (where its pages start). */
+type DoneGroup = InboxGroup & { count: number; plus: boolean; more: boolean; range: { start: number; end: number } };
+
+/** "Show older" under Done or in one of its groups: one more page, with why the last one failed. */
+function OlderButton({ busy, error, run }: { busy: boolean; error: string; run: () => void }) {
+  return (
+    <div className="flex items-center gap-2 px-1 pt-1">
+      <Button tone="quiet" busy={busy} onClick={run}>{busy ? t("inbox-inboxlist.loading_older") : t("inbox-inboxlist.load_older")}</Button>
+      {error && <span className="min-w-0 truncate text-[11.5px] text-red" title={error}>{t("inbox-inboxlist.older_failed", { error })}</span>}
+    </div>
+  );
+}
+
 /** A group's tick while selecting: none, some ("–") or all of it picked. */
 function GroupTick({ state }: { state: "none" | "some" | "all" }) {
   return (
@@ -498,12 +584,13 @@ function Group({ id, title, count, more, open, onToggle, pick, children }: { id:
             <GroupTick state={pick.state} />
           </button>
         )}
-        <button type="button" onClick={() => onToggle(!open)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11.5px] text-ink-2">
+        {/* under the section's title (12px, medium), not as big (#2969) */}
+        <button type="button" onClick={() => onToggle(!open)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] text-ink-2">
           <Icon name="chevronRight" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />
-          <span className="truncate font-medium">{title}</span>
+          <span className="truncate">{title}</span>
           <span className="shrink-0 text-ink-3 tabular-nums">{more ? `${count}+` : count}</span>
         </button>
-        {pick && pick.picked > 0 && <span className="shrink-0 text-[11.5px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
+        {pick && pick.picked > 0 && <span className="shrink-0 text-[11px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
       </div>
       {/* the same 2px of room as the section's (#2703), so a selected card's ring isn't cut inside a group; the header's
           bottom padding gives up those 2px to keep its 4px */}
@@ -561,11 +648,11 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
             <span className="min-w-0 flex-1">
               {it.summary ? (
                 <>
-                  <span className={cx("line-clamp-2 text-[12.5px] leading-[1.5]", done ? "text-ink-2" : "text-ink")}><Spark />{it.summary}</span>
+                  <span className={cx("line-clamp-2 text-[12.5px] leading-[1.5] break-words", done ? "text-ink-2" : "text-ink")}><Spark />{it.summary}</span>
                   <span className="mt-0.5 block truncate text-[11.5px] text-ink-2">{from}</span>
                 </>
               ) : (
-                <span className="line-clamp-2 text-[12.5px] leading-[1.5] text-ink-2">{from}</span>
+                <span className="line-clamp-2 text-[12.5px] leading-[1.5] break-words text-ink-2">{from}</span>
               )}
               {showAccount && !isLark(it) && !it.connector && <span className="mt-0.5 block truncate text-[11px] text-ink-3">{it.account_name}</span>}
               {folder !== undefined && <FolderLine it={it} folder={folder} />}
