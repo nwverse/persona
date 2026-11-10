@@ -108,6 +108,23 @@ func TestMigratedThreadKeys(t *testing.T) {
 	}
 }
 
+// A Feishu collection that changes nothing (BenchmarkInboxApply/feishu) allocated 17,167 times when blocksDiffer
+// encoded both sides' blocks and each item's thread key took fmt and several strings; now 5,615.
+func TestInboxApplyAllocations(t *testing.T) {
+	if raceEnabled || !isolated(t) {
+		return
+	}
+	now := time.Now()
+	ib := benchInbox(2000, now)
+	chats, _ := benchCollection(now)
+	if changed := ib.applyMigrated("lark", chats, now); len(changed) != 0 {
+		t.Fatalf("the collection changed %d items, want none", len(changed))
+	}
+	if n := testing.AllocsPerRun(20, func() { ib.applyMigrated("lark", chats, now) }); n > 5785 {
+		t.Errorf("a Feishu collection of 300 chats allocated %v times, want at most 5785", n)
+	}
+}
+
 // blockFill sets every field of a block (by reflection) to a value, but changes the leaf numbered at, the edit-th of
 // four ways. Lists hold one element; a list or a pointer is a leaf too (nil, empty, longer).
 type blockFill struct{ n, at, edit int }
