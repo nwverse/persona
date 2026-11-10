@@ -245,7 +245,9 @@ The main API's shared error handling keeps the `error` text and adds a stable `c
 | `conflict` | 409 | A conflict with no more specific code |
 | `input_draft` / `dialog_open` / `prompt_changed` | 409 | The send or answer was explicitly refused; `retryable: false`, `delivered: none`, see below |
 | `op_id_reused` | 409 | The operation ID was already used for a different device, target or parameters; don't blindly retry with a new ID |
-| `agent_start_stalled` | 409 | The agent opened but its session was not identified before the start deadline. Launcher health is unchanged; no automatic task retry or detour. Uses the existing RPC error `code` and message, also carried in `start_error_code` and task `error_code`. New hubs retain generic failure handling for uncoded errors from older nodes; older hubs can show the new node's message but may still count it as a launcher failure |
+| `agent_start_stalled` | 409 | The agent opened but its session was not identified before the start deadline (Codex), or Claude ran but never showed its input box (since #2570: `data.screen` holds the tab's last lines, and `pane` / `kept_until` say where the tab is kept open, as for `shell_waiting`). Launcher health is unchanged; no automatic task retry or detour. Uses the existing RPC error `code` and message, also carried in `start_error_code` and task `error_code`. New hubs retain generic failure handling for uncoded errors from older nodes; older hubs can show the new node's message but may still count it as a launcher failure |
+| `shell_waiting` | 409 | A start's new terminal tab stopped on a question from its shell's startup files (an update prompt, `[Y/n]`, "Press Enter") before the start command was typed (#2570). Nothing ran; `delivered: none`. `data`: `line` (the question), `screen` (the tab's last 12 lines), `pane` and `kept_until` (the tab stays open until then, then closes unless an agent came up in it). Launcher health is unchanged |
+| `start_line_rejected` | 409 | A start's new terminal tab did not take the typed start line twice: something before the shell's line editor ate its first characters, and the shell answered for the rest (`permission denied` for the start file, `command not found` for a cut word, a parse error, an open quote). The node types the line once more before giving up. Nothing ran; `delivered: none`; the tab is closed. `data`: `line` (the shell's answer) and `screen`. Launcher health is unchanged |
 | `node_outdated` | 409 | The node doesn't support the requested feature, e.g. file upload |
 | `too_large` | 413, or 409 mapped from node RPC | Request / file over the limit |
 | `timeout` | 408 / 504, often 502 for node calls | Timed out; the outcome can't be judged from this code alone |
@@ -597,6 +599,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "tool_use_id":"toolu_…",                             // shared by tool_use and tool_result; the App merges them into one card by it
  "tool_name":"Bash", "tool_input":{...},              // tool_use only
  "is_error":false,                                    // tool_result only
+ "outcome":{"status":"failed","exit_code":2,"tail":"…"}, // tool_result only, optional: what the call came to (status, exit code, duration, the output's end, patch, files, git, read range, answers), see "Tool outcomes"
  "full_size":4874,                                    // text was truncated (in pages and pushes, tool output is at most 4 KB, other text 24 KB): the byte size of the full text;
                                                       // truncated text ends in a note line: for tool output "…（已截断，点开看全文，共 N 字节）" ("truncated, tap to see the full text, N bytes"; the App has a "view full text" button),
                                                       // for other text "…（已截断，共 N 字节）" ("truncated, N bytes"); old Apps still understand it
@@ -1861,6 +1864,53 @@ Only explicitly recorded non-negative integer milliseconds with a valid associat
 
 Android uses the associated message to locate a user turn or background wake-up segment in loaded history, and the work row shows "Took N seconds" (milliseconds rounded down). It stays hidden if the associated message isn't loaded or the association crosses a new user turn / wake-up / recap boundary; association is retried after paging fills the gap. When a new turn has no record of its own, the status row stays blank rather than reusing the previous turn's duration. A missing field / item means no usable actual record, not zero duration; old nodes or caches may also lack this information. Folded work preserves duration metadata items; expanding folds, reconnect resends and cache restoration use the same association rules.
 
+### Tool outcomes
+
+A `tool_result` item can carry `outcome` (`proto.ToolOutcome`): what the call came to, read by the node while it parses
+the transcript, so clients need not guess from `text` and `is_error` (#2912). The node reads it from the runtime's own
+record of the call (Claude Code's `toolUseResult` and the line's `toolDenialKind`; a Codex command's `exit_code`,
+`duration` and `status`) and from the fixed words a Claude result opens with. It is additive: every field is optional,
+absent means the record did not say, old nodes send none, and clients that do not read it ignore the key. It travels in
+pages, pushes and `/items/{iid}/full` like the rest of the item; folds carry no outcomes.
+
+```json
+{"id":"r1#0","seq":42,"ts":"2026-01-01T10:00:00Z","role":"user","kind":"tool_result","tool_use_id":"toolu_1","is_error":true,
+ "text":"Exit code 1\n…","full_size":9120,
+ "outcome":{"status":"failed","exit_code":1,"tail":"--- FAIL: TestX (0.01s)\nFAIL\tpkg/x\t0.012s"}}
+```
+
+| Field | Meaning | Where it comes from |
+| --- | --- | --- |
+| `status` | One of the statuses below; set on every result the node parses | See below |
+| `exit_code` | The command's exit code | Codex `exit_code` (0 included); a failed Claude Bash result's opening `Exit code N` |
+| `duration_ms` | How long the call ran, when recorded | Codex `duration` (`{secs, nanos}`); Claude WebFetch `durationMs`. Never derived from timestamps |
+| `tail` | The output's last lines, only when the page cut `text` (it keeps the first 4 KB) | At most 30 lines and 2 KB, never repeating the page's text: it picks up where that stops when it fits (so a short overflow loses no line), else from a whole line; not for a Read's file content |
+| `persisted` | `{path, size?}`: Claude Code saved an output too big for the model to a file on the agent's machine; `text` has only its preview | `persistedOutputPath` / `persistedOutputSize`, or the path in the `<persisted-output>` preview |
+| `patch`, `patch_cut` | An Edit's or Write's change as unified diff hunks (`@@ -12,7 +12,8 @@`, the file's real line numbers) for `files[0]`, at most 8 KB of whole lines; `patch_cut` when lines were left out (each hunk header counts the lines kept) | Claude Code's `structuredPatch` |
+| `files` | `[{path, adds?, dels?, created?}]`: lines added and deleted over the whole change; `created` for a new file (its lines are the adds) | `structuredPatch`; Write `type: create` and its content's line count (the content itself is not copied) |
+| `git` | `commit {sha, branch?, kind?}` (committed, amended, cherry-picked), `push {branch?}`, `pr {number?, url?, action?}` (created, edited, closed…), `branch {ref?, action?}` (merged, rebased), as recorded | Claude Code's `gitOperation` |
+| `read` | `{start?, lines?, total?, unchanged?}`: the part of the file a Read returned, or `unchanged` when it returned nothing because the file had not changed since the last Read | Read's `file.{startLine, numLines, totalLines}`, `type: file_unchanged`, or the result's "Wasted call — file unchanged since your last Read" |
+| `answers` | AskUserQuestion's answers, question → answer (at most 16, each cut to 1 KB) | `answers` |
+
+| `status` | Claude Code | Codex |
+| --- | --- | --- |
+| `ok` | Anything below does not apply | `completed` with exit code 0 |
+| `failed` | `is_error` (with `exit_code` when the result opens with `Exit code N`) | `failed` or a nonzero exit code |
+| `no_match` | `returnCodeInterpretation: "No matches found"` (a search that found nothing; not an error) | — |
+| `denied` | `toolDenialKind` `user-rejected`, `permission-rule` (a rule, the permission mode or a hook) or `automode-*`; older lines: an error opening with Claude Code's rejection or permission words, or a `PreToolUse:` hook error | `declined` |
+| `blocked` | An error opening with `<tool_use_error>` (input that failed validation, a guard) or the worktree isolation refusal: the call did not run | — |
+| `interrupted` | `toolDenialKind` `interrupted` / `cancelled`, `interrupted: true`, or `[Request interrupted by user for tool use]` | — |
+| `timed_out` | `timedOutAfterMs`: the command outran its timeout and Claude Code moved it to the background | — |
+| `background` | `backgroundTaskId`: the command goes on in the background; its task notice reports the end | — |
+
+Decoding rules: `toolUseResult` is read through a narrow struct that takes any value (a failed call records a string, an
+MCP call its content blocks); a value or field of an unexpected type leaves that part unread and never drops the line.
+Its large fields (`originalFile`, `stdout`, a Read's `content`, a Write's `content`) are never copied. `toolDenialKind`
+takes any value too: anything but a string is no kind, and the status comes from the words. A line holding
+several `tool_result` blocks takes no record (Claude Code writes one result per line with its record). A tool writes its
+own result text, so statuses read from words (any line without `toolDenialKind`) are for display only. A client that
+starts drawing outcomes must bump its item cache version: items cached from older pages have none.
+
 ### Folded work
 
 The tool calls and thinking of a turn are normally folded into one line in the chat ("Tools 502 · Thinking 81"). But in one long Codex session, the page for the last two turns had 1412 items and 1.08 MB,
@@ -3104,7 +3154,7 @@ With sources, `GET /api/v1/agents` has one entry per source: `{"sources":[{"sour
 the Lark plugin picks its own source id; keeping the same id across upgrades keeps session ids unchanged.
 `setup` explains why the source is reachable but has nothing to list yet; clients turn it into a notice when the session list is empty:
 `missing` (the backend doesn't support personal Agents, such as a gateway without agent-bridge), `disabled` (supported but not enabled, such as agent-bridge being off on the gateway),
-`no_accounts` (enabled but no accounts connected yet); these states mean the source has no sessions. Other failures (such as unreachable) go in `error`, and the session endpoint still reports errors normally (when multiple sources exist and no `source` is specified, the failing source is skipped).
+`no_accounts` (enabled but no accounts connected yet); these states mean the source has no sessions. Other failures (such as unreachable, or an extension still waiting for its own settings) go in `error`, from `agentsrc.status` or from the last failed `agentsrc.sessions`, and clients show them when the session list is empty. Without `source`, listing, paging, counting and searching skip a failing source when other sources exist or when it has not listed since it was registered, and answer 200; a lone source that has listed before returns its error, so clients keep the rows they have. With `source`, the source's error is returned.
 
 ## Personal Agent list preferences
 
