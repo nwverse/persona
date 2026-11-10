@@ -326,10 +326,22 @@ func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref stri
 	}
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
+		if kind == feedMessage && s.duplicateDismissedDraft(it) {
+			s.tasks.mu.Unlock()
+			return FeedItem{}, nil
+		}
 		s.tasks.feed[conversation] = append(s.tasks.feed[conversation], it)
 		s.tasks.mu.Unlock()
-	} else if err := st.AppendFeed(ctx, db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}); err != nil {
-		return FeedItem{}, err
+	} else {
+		row := db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}
+		if ds, ok := st.(draftFeedStore); kind == feedMessage && ok {
+			inserted, err := ds.AppendDraftFeed(ctx, row)
+			if err != nil || !inserted {
+				return FeedItem{}, err
+			}
+		} else if err := st.AppendFeed(ctx, row); err != nil {
+			return FeedItem{}, err
+		}
 	}
 	s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": conversation, "item": it})
 	if kind == feedReceipt {
@@ -358,7 +370,8 @@ func (s *Service) rawFeed(ctx context.Context, conversation string, since time.T
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
 		for _, it := range s.tasks.feed[conversation] {
-			if at := cardSentAt(it); it.At.After(since) || it.Kind == feedMessage && at != nil && at.After(since) {
+			at, changed := cardSentAt(it), cardChangedAt(it)
+			if it.At.After(since) || it.Kind == feedMessage && (at != nil && at.After(since) || changed != nil && changed.After(since)) {
 				items = append(items, it)
 			}
 		}
@@ -503,6 +516,7 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 // ---- HTTP ----
 
 func (s *Service) taskRoutes() {
+	s.draftDecisionRoutes()
 	s.doneCheckRoute()
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
@@ -573,11 +587,29 @@ func (s *Service) taskRoutes() {
 			}
 			since = t
 		}
-		items, plans, err := s.feed(r.Context(), r.PathValue("id"), since)
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
+		query := r.URL.Query()
+		paginated := query.Get("paginate") == "1" || query.Has("cursor")
+		if query.Has("cursor") && (query.Get("cursor") == "" || query.Has("since")) {
+			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		var items []FeedItem
+		var nextCursor string
+		var err error
+		if paginated {
+			items, nextCursor, err = s.pagedFeed(r.Context(), r.PathValue("id"), since, query.Get("cursor"))
+		} else {
+			items, err = s.feedItems(r.Context(), r.PathValue("id"), since)
+		}
+		if err != nil {
+			status := http.StatusServiceUnavailable
+			if errors.Is(err, errFeedCursor) {
+				status = http.StatusBadRequest
+			}
+			apierr.Write(w, status, err)
+			return
+		}
+		plans := s.feedPlans(r.Context(), items)
 		if items == nil {
 			items = []FeedItem{}
 		}
@@ -600,7 +632,11 @@ func (s *Service) taskRoutes() {
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
+		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
+		if paginated {
+			out["next_cursor"] = nextCursor
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
