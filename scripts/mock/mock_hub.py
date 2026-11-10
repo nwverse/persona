@@ -10734,9 +10734,12 @@ GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # back. Off: none, as on a hub without the Lark extension. =unconfigured (#2613): no conversations, and the only source
 # reports why, as an extension still waiting for its settings does. GET /mock/personal-agents?state=partial (#3216): the
 # conversations still listed, plus a second source that fails; =partial_setup: the second one isn't set up instead.
+# Preferences are kept in memory too; ?prefs_fail=500 makes their PUT fail (#1880), and ?reset=1 restores both fixtures.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
 PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" else "configured" if PERSONAL_AGENTS else "none", "delay": 0.0}
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
+PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
+PERSONAL_PREF_FAIL = {"status": 0}
 
 def personal_sources():
     state = PERSONAL_STATE["state"]
@@ -15008,17 +15011,24 @@ class H(BaseHTTPRequestHandler):
             if q.get("reset"):
                 PERSONAL_HIDDEN.clear()
                 PERSONAL_STATE.update(state="configured" if PERSONAL_AGENTS else "none", delay=0.0)
+                PERSONAL_PREFS.clear()
+                PERSONAL_PREFS.update(pins=[], view={}, sections=[], assign={})
+                PERSONAL_PREF_FAIL["status"] = 0
             state = q.get("state", [PERSONAL_STATE["state"]])[0]
             if state not in ("configured", "partial", "partial_setup", "empty", "missing", "disabled", "no_accounts", "none"):
                 return self.send_json({"error": "invalid personal agent fixture state"}, 400)
+            if "prefs_fail" in q:
+                status = int(q["prefs_fail"][0])
+                if status and not 400 <= status <= 599: return self.send_json({"error": "invalid preference failure status"}, 400)
+                PERSONAL_PREF_FAIL["status"] = status
             PERSONAL_STATE.update(state=state, delay=min(10.0, max(0.0, float(q.get("delay", [PERSONAL_STATE["delay"]])[0]))))
             for client in list(CLIENTS.values()):
                 try: client["send"]({"type": "agents", "session_ids": []})
                 except Exception: pass
-            return self.send_json(dict(PERSONAL_STATE, hidden=sorted(PERSONAL_HIDDEN)))
+            return self.send_json(dict(PERSONAL_STATE, hidden=sorted(PERSONAL_HIDDEN), prefs=PERSONAL_PREFS, prefs_fail=PERSONAL_PREF_FAIL["status"]))
         if p == "/api/v1/agents/prefs":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
-            return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
+            return self.send_json(PERSONAL_PREFS)
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
@@ -15481,6 +15491,13 @@ class H(BaseHTTPRequestHandler):
                 try: c["send"]({"type": "agents"})
                 except Exception: pass
             return self.send_json({"ok": True, "hidden": op == "hide"})
+        if p == "/api/v1/agents/prefs" and self.command == "PUT":
+            if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
+            if PERSONAL_PREF_FAIL["status"]:
+                return self.send_json({"error": "mock preference save failed"}, PERSONAL_PREF_FAIL["status"])
+            PERSONAL_PREFS.clear()
+            PERSONAL_PREFS.update(json.loads(self.last_body or b"{}"))
+            return self.send_json(PERSONAL_PREFS)
         if p.startswith("/api/v1/assistant/conversations/" + ASK1 + "/always/") and self.command == "DELETE":
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]

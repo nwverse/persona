@@ -180,17 +180,21 @@ final class PersonalAgentPrefsStore {
 
     func load(_ api: APIClient?) async {
         guard let api else { return }
+        let mine = seq
         do {
             let p = try await api.personalAgentPrefs()
+            guard mine == seq else { return } // a read that began before an edit must not erase it
             hubBacked = true
             cache(p)
         } catch let e as APIError where e.status == 404 || e.status == 405 {
+            guard mine == seq else { return }
             hubBacked = false
         } catch {}
     }
 
-    func update(_ api: APIClient?, _ change: (inout PersonalAgentPrefs) -> Void) {
-        var p = prefs
+    func update(_ api: APIClient?, _ change: (inout PersonalAgentPrefs) -> Void, onFailure: @escaping (String) -> Void = { _ in }) {
+        let before = prefs
+        var p = before
         change(&p)
         cache(p)
         guard hubBacked, let api else { return }
@@ -202,7 +206,12 @@ final class PersonalAgentPrefsStore {
                 if mine == seq { cache(saved) }
             } catch let e as APIError where e.status == 404 || e.status == 405 {
                 hubBacked = false
-            } catch {}
+            } catch {
+                guard mine == seq else { return } // an older failure must not roll back a newer edit
+                cache(before)
+                onFailure(error.localizedDescription)
+                await load(api) // clear any earlier unsaved edit that the latest rollback still contains
+            }
         }
     }
 }
