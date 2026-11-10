@@ -58,6 +58,33 @@ func TestFullOfUnknownIDLoadsNothing(t *testing.T) {
 	}
 }
 
+// A Claude line can hold a tool input shaped like a Codex rollout line; it is still a Claude line whose uuid names its
+// items, so a stale "line5#0" loads nothing there either.
+func TestFullOfStaleIDOfLineWithCodexShapedInputLoadsNothing(t *testing.T) {
+	defer func(w int64) { windowBytes = w }(windowBytes)
+	f, _ := windowedClaude(t, 0)
+	data, err := os.ReadFile(f.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+	lines[4] = `{"type":"assistant","uuid":"a4","parentUuid":"a3","timestamp":"2026-11-10T10:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__x__y","input":{"type":"event_msg","payload":{}}}]}}`
+	if err := os.WriteFile(f.Path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := NewFile(f.Path)
+	if _, err := g.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	base, items := g.base, len(g.items)
+	if _, err := g.Full("line5#0"); err == nil || err.Error() != "no item line5#0" {
+		t.Fatalf("Full(line5#0): %v", err)
+	}
+	if g.base != base || len(g.items) != items {
+		t.Fatalf("Full(line5#0) parsed back: base %d -> %d, items %d -> %d", base, g.base, items, len(g.items))
+	}
+}
+
 // The search must not miss what is there: the first line's item (named again by the line after it) comes back
 // whole, and an item in the middle loads only the lines from it on.
 func TestFullOfOldItemStillFound(t *testing.T) {
