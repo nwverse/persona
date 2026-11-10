@@ -9,11 +9,19 @@ import type { FeishuBotStatus } from "../../lib/feishu-bot";
 
 type Call = { resolve: (s: FeishuBotStatus) => void };
 const calls = vi.hoisted(() => ({ status: [] as Call[], update: [] as (Call & { body: unknown })[] }));
+const connectorList = vi.hoisted(() => ({ value: [] as HubConnector[], calls: 0 }));
 vi.mock("../../lib/feishu-bot", async (original) => ({
   ...(await original<typeof import("../../lib/feishu-bot")>()),
   botStatus: () => new Promise<FeishuBotStatus>((resolve) => calls.status.push({ resolve })),
   updateBot: (body: unknown) => new Promise<FeishuBotStatus>((resolve) => calls.update.push({ resolve, body })),
   pairBot: () => new Promise<FeishuBotStatus>(() => {}),
+}));
+vi.mock("../../lib/connectors", async (original) => ({
+  ...(await original<typeof import("../../lib/connectors")>()),
+  listConnectors: () => {
+    connectorList.calls++;
+    return Promise.resolve(connectorList.value);
+  },
 }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: () => {} }));
 import { t } from "../../i18n";
@@ -61,6 +69,8 @@ async function open(status: FeishuBotStatus) {
 beforeEach(() => {
   calls.status.length = 0;
   calls.update.length = 0;
+  connectorList.value = [];
+  connectorList.calls = 0;
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   host = document.createElement("div");
@@ -98,6 +108,61 @@ describe("Feishu bot dialog", () => {
     expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_row"));
     expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_footer"));
     expect(host.querySelectorAll("button")).toHaveLength(1);
+  });
+
+  it("shows lark-cli in the bot dialog and opens its connector page", async () => {
+    const onOpen = vi.fn();
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    act(() => root.render(<FeishuBot larkcli={larkcli} onOpen={onOpen} />));
+    await act(async () => calls.status[0].resolve(saved()));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const rows = () => [...document.body.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.textContent?.includes(t("settings-feishubot.larkcli_row")));
+    expect(rows()).toHaveLength(2);
+    const dialogRow = rows()[1];
+    expect(dialogRow.textContent).toContain("me");
+    expect([...dialogRow.querySelectorAll<HTMLElement>("*")].some((element) => element.classList.contains("bg-green"))).toBe(true);
+    expect(dialogRow.querySelector("img")?.getAttribute("alt")).toBe("");
+    await act(async () => dialogRow.click());
+
+    expect(onOpen).toHaveBeenCalledWith("larkcli");
+    expect(rows()).toHaveLength(1);
+  });
+
+  it("loads lark-cli for a URL-opened dialog when the page has not passed it yet", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+    connectorList.value = [larkcli];
+    act(() => root.render(<FeishuBot />));
+    await act(async () => calls.status[0].resolve(saved()));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => {});
+
+    const row = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.larkcli_row")));
+    expect(row).toBeDefined();
+    expect(connectorList.calls).toBe(1);
+  });
+
+  it("leaves the bot dialog unchanged when lark-cli is absent", async () => {
+    act(() => root.render(<FeishuBot larkcli={null} />));
+    await act(async () => calls.status[0].resolve(saved()));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    expect(host.textContent).toContain(t("settings-feishubot.footer"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_row"));
+    expect(host.textContent).not.toContain(t("settings-feishubot.larkcli_dialog_footer"));
+  });
+
+  it("fills the saved App ID into a dialog opened by URL before the status arrived", async () => {
+    const before = location.href;
+    history.replaceState(null, "", "?tab=connectors&connector=feishu-bot");
+    try {
+      act(() => root.render(<FeishuBot larkcli={null} />));
+      expect(input("App ID").value).toBe("");
+      await act(async () => calls.status[0].resolve(saved()));
+      expect(input("App ID").value).toBe("cli_saved");
+    } finally {
+      history.replaceState(null, "", before);
+    }
   });
 
   it("keeps a typed App ID when a feature switch is flipped", async () => {
