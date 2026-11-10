@@ -142,3 +142,42 @@ func TestAssistantLauncherSwitchUsesDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestAssistantLauncherUnchangedKeepsModel(t *testing.T) {
+	s := assistantLauncherFixture(t)
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.fast", Model: "chosen", Effort: "high"})
+	before := modelRecordOf(t, s, "assistant")
+	change, err := s.setLauncher(context.Background(), json.RawMessage(`"fast"`))
+	if err != nil || change == nil || change.apply != nil {
+		t.Fatalf("unchanged launcher: change=%+v err=%v", change, err)
+	}
+	if after := modelRecordOf(t, s, "assistant"); after != before {
+		t.Fatalf("unchanged launcher reset the model: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestAssistantLauncherPickerUsesTargetMachine(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.sessions["other"] = nil
+	f.zshrc = map[string][]proto.Launcher{
+		"server": {{Name: "local-only", Source: "zshrc"}},
+		"other":  {{Name: "remote-only", Source: "zshrc"}},
+	}
+	r := request(s, http.MethodGet, "/api/v1/machines/other/launchers?purpose=assistant", "")
+	if r.Code != http.StatusOK {
+		t.Fatalf("target machine picker: %d %s", r.Code, r.Body.String())
+	}
+	var out struct {
+		Launchers []ConfiguredLauncher `json:"launchers"`
+	}
+	if err := json.Unmarshal(r.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, l := range out.Launchers {
+		names = append(names, l.Name)
+	}
+	if !slices.Equal(names, []string{"remote-only"}) {
+		t.Fatalf("picker used the current assistant's machine instead of the target: %v", names)
+	}
+}
