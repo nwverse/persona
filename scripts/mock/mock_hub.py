@@ -10185,7 +10185,17 @@ GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
 # back. Off: none, as on a hub without the Lark extension.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
+PERSONAL_STATE = {"state": "configured" if PERSONAL_AGENTS else "none", "delay": 0.0}
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
+
+def personal_sources():
+    state = PERSONAL_STATE["state"]
+    if state == "none": return []
+    source = {"source": "lark-bridge", "enabled": state not in ("missing", "disabled"),
+              "accounts": [{"accountId": "example", "provider": "muse"}] if state in ("configured", "empty") else []}
+    if state in ("missing", "disabled", "no_accounts"): source["setup"] = state
+    return [source]
+
 # #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
 # (POST /api/v1/assistant/conversations) answer 502 with that code (default assistant_in_doubt, delivered unknown), and
 # every start, failed or not, first takes `delay` seconds (to see a retry spin). n=0&delay=0 puts it back.
@@ -10194,11 +10204,12 @@ def personal_rows():
     now = int(time.time() * 1000)
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
             ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
+    if os.environ.get("MOCK_PERSONAL_UPGRADE"): rows[0] = ("muse", "Upgrade preference fixture", 0.1, 2)
     return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
              "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
             for i, (prov, title, hours, unread) in enumerate(rows)]
 def personal_listed(hidden):
-    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] == "configured" else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
 # /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files;
 # git_stash_conflicted also leaves them unmerged in the status, as a stash apply that stopped on conflicts does);
@@ -14276,19 +14287,33 @@ class H(BaseHTTPRequestHandler):
             f = file_read(q.get("path", [""])[0], q.get("cwd", [""])[0], int(q.get("offset", ["0"])[0] or 0), q.get("stream", [""])[0] == "1")
             if not f: return self.send_json({"error": "stat %s: no such file or directory" % q.get("path", [""])[0]}, 404)
             return self.send_json(file_streamed(f, q))
-        # The Lark extension's personal agents (hub agents.go): none here, as on a hub without the Lark extension; the web's sidebar hid
-        # the section only after these answered, and showed "Failed to load personal agents" on the 404 instead.
-        if p == "/api/v1/agents": return self.send_json({"sources": []})
-        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
+        # Personal Agent entry fixtures expose setup and sessions consistently, with live availability changes.
+        if p == "/api/v1/agents":
+            time.sleep(PERSONAL_STATE["delay"])
+            return self.send_json({"sources": personal_sources()})
+        if p == "/api/v1/agents/sessions":
+            time.sleep(PERSONAL_STATE["delay"])
+            return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
         if p == "/mock/start-fail":
             START_FAIL.update(n=int(q.get("n", ["1"])[0]), code=q.get("code", ["assistant_in_doubt"])[0],
                               delay=float(q.get("delay", ["0"])[0]))
             return self.send_json(START_FAIL)
         if p == "/mock/personal-agents":
-            if q.get("reset"): PERSONAL_HIDDEN.clear()
-            return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
-        if p == "/api/v1/agents/prefs": return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
+            if q.get("reset"):
+                PERSONAL_HIDDEN.clear()
+                PERSONAL_STATE.update(state="configured" if PERSONAL_AGENTS else "none", delay=0.0)
+            state = q.get("state", [PERSONAL_STATE["state"]])[0]
+            if state not in ("configured", "empty", "missing", "disabled", "no_accounts", "none"):
+                return self.send_json({"error": "invalid personal agent fixture state"}, 400)
+            PERSONAL_STATE.update(state=state, delay=min(10.0, max(0.0, float(q.get("delay", [PERSONAL_STATE["delay"]])[0]))))
+            for client in list(CLIENTS.values()):
+                try: client["send"]({"type": "agents", "session_ids": []})
+                except Exception: pass
+            return self.send_json(dict(PERSONAL_STATE, hidden=sorted(PERSONAL_HIDDEN)))
+        if p == "/api/v1/agents/prefs":
+            if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
+            return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
