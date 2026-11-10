@@ -596,11 +596,16 @@ export async function retryTask(todo: Todo) {
   }
 }
 
+/** How a decision is answered other than by taking its recommendation (#3804): one of its options by its label, or one
+ *  of the fixed responses that say the owner cannot answer it as asked. */
+export type AskAnswer = { option: string } | { response: string };
+
 /** The Accept button of a `brief` item's task to verify: "accepted", or "handled" when the hub says that round is over
- *  (asked again since, or already verified). Any other failure throws. */
-export async function acceptBrief(todoId: string, askedAt: string): Promise<"accepted" | "handled"> {
+ *  (asked again since, or already verified). Any other failure throws. `answer`: a decision's option or fixed response
+ *  instead of its recommendation. */
+export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "handled"> {
   try {
-    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt } });
+    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) return "handled";
     throw e;

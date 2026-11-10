@@ -324,6 +324,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 | `.surface(in:)` | floating panels: composer, strips, toasts, notices | `apple/Persona/DesignSystem/Styling.swift:8` |
 | `.card()` | grouped-row card, padding default 14 | `apple/Persona/DesignSystem/Components.swift:429` |
 | `NoticeBanner` | persistent in-page notice, neutral, caution or danger, one action | `apple/Persona/DesignSystem/Notice.swift:7` |
+| `TaskOpenButton` | compact task-title + Open navigation row, one line with a 44 pt minimum hit area | `apple/Persona/DesignSystem/TaskOpenButton.swift` |
 | `ReadinessCard` | what the main conversation still needs | `apple/Persona/DesignSystem/ReadinessCard.swift:8` |
 
 `.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
@@ -453,6 +454,13 @@ Drawn as Telegram draws them (#2984), with one look on every platform: the web a
 ### 4.1 Navigation hierarchy (super rule 3)
 
 `docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+
+A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
+ tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
+ own tasks in order. On iPhone it pushes the existing Agent page by `SessionKey` on the Assistant stack, preserving
+ Back to the conversation; on Mac it opens the task's detail. Before an Agent is available it opens that task's
+ starting/failure detail. This targeted navigation correction reuses existing pages; no new visual style or setting.
+ Details and wire contract: `docs/assistant/unified-entry.md`, "What a dispatch opens".
 
 ### 4.2 Gestures
 
