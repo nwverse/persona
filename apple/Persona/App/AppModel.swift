@@ -1754,8 +1754,9 @@ final class AppModel {
         case .todos:
             if isHub { TodoStore.shared.reload() }
         case .personas:
-            // The new tier's package is downloaded whole before the face changes (PersonaStore.load).
-            if isHub { Task { await personas.refresh(api) } }
+            // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
+            // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
+            if isHub { Task { await personas.reload(api) } }
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
