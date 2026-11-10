@@ -98,8 +98,10 @@ def run(args):
                         assert card_buttons.evaluate_all("es=>es.every(e=>{const b=e.getBoundingClientRect();return b.right<=innerWidth&&b.x>=0;})"), "Buttons overflow"
                     page.screenshot(path=str(shots / f"{language}-{width}-{theme}-{name}.png"))
 
+                card.get_by_role("button", name=labels[0], exact=True).scroll_into_view_if_needed()
                 capture("three-actions")
                 page.evaluate("document.documentElement.style.setProperty('--text-scale', '2')")
+                card.get_by_role("button", name=labels[0], exact=True).scroll_into_view_if_needed()
                 capture("three-actions-accessibility")
                 page.evaluate("document.documentElement.style.removeProperty('--text-scale')")
                 original_task = copy.deepcopy(task)
