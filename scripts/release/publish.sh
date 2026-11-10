@@ -178,17 +178,19 @@ left="$(find "$WEBDIST/assets" -type f -size +1023c \( -name '*.js' -o -name '*.
 LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$PERSONA_PUBLISH_URL/dl"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 (cd server && go generate ./internal/runtimepkg)
-# -tags public changes no code (no file builds differently with it, TestOneBuild): it marks the binary for
-# check_bundle_privacy.py, which then knows the dependency constants it may skip.
+# The tags are server/build-tags.txt (server/internal/buildtags). Its public marker changes no code (no file builds
+# differently with it, TestOneBuild): it marks the binary for check_bundle_privacy.py, which then knows the dependency
+# constants it may skip. Its ts_omit_ tags leave out the tailscale.com features persona never uses.
+TAGS="$(cat server/build-tags.txt)"
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/personad-${t%/*}-${t#*/}" ./cmd/personad)
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-link-${t%/*}-${t#*/}" ./cmd/persona-link)
   # The device's own program (cmd/persona-node): install.sh --node puts it at ~/.persona/bin/persona-node. It is in
   # SHA256SUMS, and in latest.json under nodes (a hub's own update still swaps personad alone; its manager fetches
   # persona-node from dl/<version>/ for a device that runs it, docs/operations/node-update.md "Node packages").
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-node-${t%/*}-${t#*/}" ./cmd/persona-node)
 done
 # The programs released with personad (update.ProgramNames): built the same way, on the same platforms; a hub swaps
@@ -196,13 +198,13 @@ done
 # an extension now, released from the extension market: #1704.)
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   for p in wechat; do
-    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
       -o "../$OUT/bin/personad-$p-${t%/*}-${t#*/}" "./cmd/personad-$p")
   done
   # The hub's and the manager's own programs (docs/server/server.md "Programs"): the same code as personad's hub and
   # manager commands, each without the other's.
   for p in persona-hub persona-manager; do
-    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
       -o "../$OUT/bin/$p-${t%/*}-${t#*/}" "./cmd/$p")
   done
 done
