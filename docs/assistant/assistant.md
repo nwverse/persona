@@ -662,12 +662,18 @@ Requested: "Generate titles after starting new chats; standardize as ‘MMDD | T
   second valid type with long topic truncates to 14 characters; otherwise fallback `MMDD | Exploration | First 14 characters of first message` (tags / Markdown stripped). Same fallback without model config.
   Each way an answer goes wrong gets its own one more call within the naming's time: no answer (timed out, connection failed, gateway 5xx: `ai.Transient`), a reply stopped at `max_tokens` (half a title even when it parses: twice the room; `ai.Reply.Truncated`) and the broken format above.
   When the naming ends for want of an answer (or the first exchange couldn't be read) the fallback is only a stand-in (`tries` in the record): the next turn's end names the chat again from its first turn (`after_seq: 0`, not the newest), three namings at most; a user or assistant rename meanwhile stays. A model that isn't set up or turns the request down (4xx, refusal) answers the same next time: that fallback is final.
-- **Storage**: assistant store (hub settings `assistant.titles`: session id → title, author, start time, `tries` for a stand-in), snapshot to hub, replaces App session-list `title` (`decorated`).
+- **Storage**: assistant store (hub settings `assistant.titles`: session id → title, author, start time, `tries` for a stand-in, an extension's `hint`), snapshot to hub, replaces App session-list `title` (`decorated`).
   No transcript writes; same for Claude / Codex, no node changes.
 - **Once only, user wins**: App Rename (drawer long-press chat › Rename…, `POST /api/v1/sessions/{mid}/{sid}/rename`) records user-authored titles, never overwritten;
   even before the first turn ends. Codex renames are stored only in hub (node would write Claude custom-title lines into Codex rollout).
   A Claude rename goes to the node first and is stored once it succeeds. Before Claude has written the transcript (the Feishu /agent renames its conversation
   right after starting it), the node keeps the title and writes the custom-title line when the transcript appears (#5866).
+- **An extension's rename is a hint** (#3758): when the rename comes with an extension's token (the hub's auth says so and passes the extension on as
+  `assistant.rename`'s `extension`; a client's own word never counts), the node is renamed as usual, so the chat shows that title until it is named, but the
+  record keeps it as `hint`, not as the user's. A chat the hub started is still named after its first turn, and the model reads the hint with the first
+  exchange (`prompts/tools/session_title_input.md`); the stand-in topic falls back on it when there is no first message. A chat already named keeps its name.
+  A chat the hub never noted shows the hint (`by: extension`) until someone renames it. An older hub sends no `extension`, and an older manager takes the
+  rename as the user's, as before. Extensions that call the hub with the full token (`hub_api`) are the user as far as the hub can tell: their renames are the user's.
 - No backfill for old chats lacking pending-title records, except old AI twin chats gain `MMDD | Inbox | …` while backfilling origins ("Chat origins" below).
 - **Main chat has no title** (#1313): App session-list `title` is always "Persona" (`mainTitle`, settings `assistant.main`),
   not node's first-message title (headless transcripts lack Claude ai-title), no `MMDD | Type | Topic` (discard pending-title on first-turn completion without model call),

@@ -793,7 +793,8 @@ func (s *Service) isTaskConversation(ctx context.Context, machine, sid string) b
 
 // Rename is assistant.rename: the user renames conversation p.SessionID in the app ({title?, tab_name?}). The main
 // conversation has no title to change; a Codex one keeps the assistant's title (its tab is still renamed). The node
-// renames; a new title is the user's from now on.
+// renames; a new title is the user's from now on. An extension's (p.Extension, as the hub's auth found it) is only a
+// hint (titleHinted): the hub still names a conversation it started, as it names the others.
 func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, error) {
 	params := p.Params
 	if params == nil {
@@ -815,7 +816,11 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 			return nil, err
 		}
 	}
-	if strings.TrimSpace(title) != "" {
+	switch {
+	case strings.TrimSpace(title) == "":
+	case p.Extension != "":
+		s.titleHinted(p.MachineID, p.SessionID, title)
+	default:
 		s.titleSet(p.MachineID, p.SessionID, title, titleByUser)
 	}
 	return out, nil
