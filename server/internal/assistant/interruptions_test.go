@@ -221,6 +221,36 @@ func TestInterruptedReceiptsBatch(t *testing.T) {
 	}
 }
 
+// One task cut off twice in the window counts once in a batch; alone, it is no batch, and both receipts are drawn.
+func TestInterruptedReceiptsBatchCountsTasks(t *testing.T) {
+	s, _ := newTaskService(t)
+	ctx := context.Background()
+	a := cutTask(t, s, "任务一", "mlx", gatewayDown)
+	s.appendInterrupted(ctx, a, receiptBody{Title: "任务一", State: "interrupted", Machine: "mlx", Error: gatewayDown}, false)
+	items, _, _ := s.feed(ctx, "conv1", time.Time{})
+	var bodies []receiptBody
+	for _, it := range items {
+		if rb, ok := interruptedBody(it); ok {
+			bodies = append(bodies, rb)
+		}
+	}
+	if len(bodies) != 2 || bodies[0].Batch != nil || bodies[1].Group != "" || bodies[0].Resolution != resolutionResumed ||
+		bodies[1].Resolution != resolutionPending {
+		t.Fatalf("one task twice: %+v", bodies)
+	}
+	cutTask(t, s, "任务二", "mlx", gatewayDown)
+	items, _, _ = s.feed(ctx, "conv1", time.Time{})
+	for _, it := range items {
+		if rb, ok := interruptedBody(it); ok && rb.Batch != nil {
+			if rb.Batch.Total != 2 || len(rb.Batch.Tasks) != 2 || rb.Batch.Pending != 2 {
+				t.Fatalf("two tasks, one cut off twice: %+v", rb.Batch)
+			}
+			return
+		}
+	}
+	t.Fatal("no batch for two tasks")
+}
+
 func TestInterruptCause(t *testing.T) {
 	for _, c := range []struct {
 		text   string

@@ -90,24 +90,27 @@ type interruptBook struct {
 	appendMu sync.Mutex
 	// convs: conversation → the earliest interrupted receipt still followed there.
 	convs map[string]time.Time
-	sent  map[string]string // receipt id → the body last sent
+	sent  map[string]map[string]string // conversation → receipt id → the body last sent (let go with the conversation)
 	armed bool
 }
 
 func (b *interruptBook) init() {
 	if b.convs == nil {
 		b.convs = map[string]time.Time{}
-		b.sent = map[string]string{}
+		b.sent = map[string]map[string]string{}
 	}
 }
 
-// remember records body as what the apps last got of receipt id, and returns what they had before ("" for nothing).
-func (b *interruptBook) remember(id, body string) string {
+// remember records body as what the apps last got of receipt id in conv, and returns what they had before ("" for nothing).
+func (b *interruptBook) remember(conv, id, body string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.init()
-	last := b.sent[id]
-	b.sent[id] = body
+	if b.sent[conv] == nil {
+		b.sent[conv] = map[string]string{}
+	}
+	last := b.sent[conv][id]
+	b.sent[conv][id] = body
 	return last
 }
 
@@ -229,7 +232,7 @@ func (s *Service) resolveInterruptions(ctx context.Context, conversation string,
 	// Everything from the earliest head on, not only this page (one read with since): a batch's other receipts and the
 	// receipts that came after its tasks were cut off.
 	around := items
-	if all, err := s.rawFeed(ctx, conversation, from.Add(-time.Microsecond)); err == nil {
+	if all, err := s.feedFrom(ctx, conversation, from); err == nil {
 		around = mergeFeedByID(items, all)
 	}
 	derived := s.deriveInterruptions(around)
@@ -246,6 +249,28 @@ func (s *Service) resolveInterruptions(ctx context.Context, conversation string,
 	})
 	s.interrupts.follow(conversation, from)
 	return items
+}
+
+// interruptReadPages caps how many feed pages feedFrom reads after an interruption.
+const interruptReadPages = 20
+
+// feedFrom is conversation conv's feed from at on, page after page (one page is feedPage items): the receipts that
+// show a task went on after it was cut off can come long after it in a busy chat. At most interruptReadPages pages.
+func (s *Service) feedFrom(ctx context.Context, conv string, at time.Time) ([]FeedItem, error) {
+	var out []FeedItem
+	since := at.Add(-time.Microsecond)
+	for range interruptReadPages {
+		page, err := s.rawFeed(ctx, conv, since)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, page...)
+		if len(page) < feedPage {
+			break
+		}
+		since = page[len(page)-1].At
+	}
+	return out, nil
 }
 
 // mergeFeedByID is a with b's items it lacks, by id.
@@ -309,7 +334,10 @@ func (s *Service) deriveInterruptions(items []FeedItem) map[string]json.RawMessa
 			raw["cause"], _ = json.Marshal(interruptCause(c.body.Error, false))
 		}
 		delete(raw, "batch")
-		if group := members[c.item.ID]; c.body.Group == "" && len(group) > 1 {
+		if c.body.Group != "" && distinctTasks(members[c.body.Group]) < 2 {
+			delete(raw, "group") // its "batch" is one task cut off twice: no card to be drawn in, so it stands on its own
+		}
+		if group := members[c.item.ID]; c.body.Group == "" && len(group) > 1 && distinctTasks(group) > 1 {
 			raw["batch"], _ = json.Marshal(batchOf(group))
 		}
 		out[c.item.ID], _ = json.Marshal(raw)
@@ -324,11 +352,32 @@ type cut struct {
 	res  string
 }
 
+// distinctTasks is how many tasks group's receipts are of.
+func distinctTasks(group []*cut) int {
+	seen := map[string]bool{}
+	for _, c := range group {
+		seen[c.item.Ref] = true
+	}
+	return len(seen)
+}
+
 // batchOf is the batch of group (its receipts in the order they were cut off, the head first).
-func batchOf(group []*cut) receiptBatch {
-	cause := group[0].body.Cause
+func batchOf(all []*cut) receiptBatch {
+	// One entry per task: a task cut off twice within the window (Continue, then cut off again) counts once, as its
+	// latest receipt says; the earlier one reads resumed anyway (a later receipt exists).
+	latest := map[string]int{}
+	for i, c := range all {
+		latest[c.item.Ref] = i
+	}
+	group := make([]*cut, 0, len(all))
+	for i, c := range all {
+		if latest[c.item.Ref] == i {
+			group = append(group, c)
+		}
+	}
+	cause := all[0].body.Cause
 	if cause == "" {
-		cause = interruptCause(group[0].body.Error, false)
+		cause = interruptCause(all[0].body.Error, false) // a receipt from before causes were written: read off its error
 	}
 	b := receiptBatch{Cause: cause, Total: len(group), Tasks: make([]batchEntry, 0, len(group))}
 	same := true
@@ -441,13 +490,14 @@ func (s *Service) refreshInterruptions(ctx context.Context) {
 	for c, at := range b.convs {
 		if time.Since(at) > interruptTrackFor {
 			delete(b.convs, c)
+			delete(b.sent, c)
 			continue
 		}
 		convs[c] = at
 	}
 	b.mu.Unlock()
 	for conv, from := range convs {
-		items, err := s.rawFeed(ctx, conv, from.Add(-time.Microsecond))
+		items, err := s.feedFrom(ctx, conv, from)
 		if err != nil {
 			continue
 		}
@@ -457,7 +507,7 @@ func (s *Service) refreshInterruptions(ctx context.Context) {
 			if !ok {
 				continue
 			}
-			last := b.remember(it.ID, string(body))
+			last := b.remember(conv, it.ID, string(body))
 			if last == string(body) || last == "" && string(body) == normalJSON(it.Body) {
 				continue // the apps have it: sent before, or as stored
 			}
