@@ -84,7 +84,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - Avatars: `look_uploads` (`POST /api/v1/looks/uploads` and `DELETE /api/v1/looks/uploads/{id}` in the REST table, #2404; the apps offer making an avatar from an image only when the hub lists it).
   - Extensions ([extensions.md](../extensions/extensions.md)): `extensions` (`GET /api/v1/extensions` and the relay under `/api/v1/extensions/{id}/`), `extension_manager` (an extension's detail, form, settings, secrets and switch under `/api/v1/extensions/{id}/-/`), `extension_ui_slots` ("UI slots", `extension_ui` events), `extension_auto_upgrade` ("Auto-upgrade", `extension_upgrade` events), `extension_market_spec` (`PUT /api/v1/extensions/-/markets/{id}` with `spec`: a market moves and keeps its id), `extension_operations` (install, upgrade, uninstall in steps with progress, see "Extension install, upgrade and uninstall progress" below), `extension_auth` (extension sign-in `/api/v1/extensions/{id}/-/auth…`, `extension_auth` events, the install step `tools`, "Sign-in (auth)"), `extension_ui_v3` ("UI version 3"), `extension_widgets`, `extension_shortcuts` and `extension_notify_actions` (widgets, Shortcuts and notification buttons, "System-level placements"). `plugins`, `plugin_manager`, `plugin_ui_slots` and `plugin_auto_upgrade` are the same under the old names (`/api/v1/plugins/…`, `plugin_ui` and `plugin_upgrade` events), kept for the apps out there until at least 2027-05-05 ("Naming and compatibility").
 - Added by the hub:
-  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_pane_source` (see "Pane/host origins"), `machine_rename` (see "Renaming a computer").
+  - Always: `sessions_list` (see "Bounded Agents lists"), `sessions_lookup` (see "Exact runtime-session detail"), `sessions_pane_source` (see "Pane/host origins"), `sessions_manager` (see "One manager's sessions"), `machine_rename` (see "Renaming a computer").
   - `agent_session_archives` only while every manager (the default one, each connected one and each computer's owner) is connected and names it in its `manager.hello` capabilities, and `agent_session_archive_close` only while every manager names that one too (see "Agent session archives" above).
   - Depending on hub.json: `assistant_views` (`assistant.persona_view` on: declarative actions carry `expected_version`, live cards, and the APIs registered by in-body cards are available), `assistant_html_bridge` (additionally `assistant.html_views` not turned off: `…/html-actions` is available; whether a client runs HTML still depends on its own security sign-off, and it does not run JS based on this flag). See the card APIs in the REST table and [assistant-views.md](../assistant/assistant-views.md).
 - Reported by the manager for the extensions (its `extensions.report`, [extensions.md](../extensions/extensions.md) "Who owns what"): `extension_ui_stream_v1` (whenever the manager runs extensions: extension pages streamed on the app WebSocket once a client negotiates `context.stream`, [extensions.md](../extensions/extensions.md) "Source runtime"), `messaging` (while an extension has a message source, [extension-messaging.md](../extensions/extension-messaging.md)), `error_reports` (while an extension takes error reports, see "Error reports"), and the `features` that the `api` contributions of enabled, running extensions declare ([extensions.md](../extensions/extensions.md) "App endpoints"). The report cannot add `agent_session_archives` or `agent_session_archive_close`: only the managers' hellos decide those.
@@ -1453,6 +1453,7 @@ Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `c
 | `group` | Runtime `space_id`, falling back to `workspace_id`; personal-agent `accountId`. Machine-local space ids can overlap: use `machine_id` with `group` when expanding a particular computer's group. This does not represent personal-agent custom preference sections or to-do group ids. |
 | `source` | Runtime `source_kind` or personal-agent contribution id; unchanged transport/source semantics, never a pane origin. |
 | `pane_source` | Runtime only: exactly `terminal`, `feishu`, `desktop`, or `unknown`. Requires the independently advertised `sessions_pane_source` capability. See pane/host origins below. |
+| `manager` | Runtime only: a manager's id; only the sessions on its computers. Requires the independently advertised `sessions_manager` capability, and does not opt into the bounded API by itself. See "One manager's sessions" below. |
 | `provider` | Runtime `agent` or personal-agent `provider`. Empty values on older runtime nodes stay empty; no agent name is guessed. |
 | `q` | Case-insensitive substring, at most 256 Unicode characters. Runtime title, cwd, repository, space/slot/agent names and last preview; personal-agent title/provider/account id. With an opt-in parameter this is **row search**, never remote transcript/message search. |
 | `counts` | `1`/`true` returns aggregates instead of rows. `0`/`false` selects a normal page. The same filters apply. |
@@ -1508,6 +1509,25 @@ Empty, repeated, comma-separated or unrecognized origin values return **400 `inv
 These counts describe the hub's complete shown runtime-session collection after the explicit filters, including any assistant/other rows that the legacy collection contains. They do **not** establish preference-defined Agents membership, pins/mutes/to-do sections, retained client windows, personal-agent aggregation or new sorting rules. Machine/session identity remains the composite `(machine_id, session_id)`.
 
 Old hubs ignore unknown query keys, so clients **must retain the old full-list/classifier fallback unless `sessions_pane_source` is advertised**. `sessions_list` alone is insufficient. No current client query, visual default or ordering changes here. Without opt-in, legacy full-list rows and behavior are unchanged; bounded requests without an origin filter retain their membership and ordering.
+
+#### One manager's sessions (`sessions_manager`)
+
+`hello.features` advertises **`sessions_manager`** independently of `sessions_list`. Only when it is advertised may clients send `manager` on the runtime collection:
+
+```http
+GET /api/v1/sessions?manager=m-abcdef&summary=1&limit=50
+GET /api/v1/sessions?manager=m-abcdef&counts=1
+GET /api/v1/sessions?manager=m-abcdef
+```
+
+- `manager=<id>` selects the sessions on the computers that manager owns (each row's `manager`, `docs/assistant/managers.md` ("Ownership")): in a page, in `total`, in the counts (every map covers that manager's sessions only), in an exact lookup and in a `since` delta. It combines with the other filters. Without the key every manager's sessions are listed, as before.
+- It does not opt into the bounded API by itself: `GET /api/v1/sessions?manager=<id>` alone answers the legacy whole list, of that manager's sessions.
+- Only the query names the manager here. The `X-Persona-Manager` header is not read on this route (the hub answers it itself and never routed it), so a client that sends the header with every request gets every manager's sessions unless it adds the key.
+- The filter is part of cache keys and frozen cursor bindings: repeat it with a cursor, and a cursor of another manager's list returns 400. Keep it with `since`: a computer moved to another manager leaves the old manager's list as removals in its next delta and enters the new manager's as upserts, with the rows' new `manager`.
+- `manager` given twice or empty returns **400 `invalid_query`**; a manager the roster does not have (one still being installed included) **404 `no_manager`**; an extension's token naming another manager than its own **403 `other_manager`**, and naming its own changes nothing.
+- A manager that is offline keeps its list: its sessions are listed in state `unknown`, as without the key.
+
+Old hubs ignore unknown query keys and would answer with every manager's sessions, so clients **must filter by each row's `manager` themselves unless `sessions_manager` is advertised**. Personal-agent `/api/v1/agents/sessions` is routed per manager as before and does not take this key as a filter.
 
 #### Exact runtime-session detail (`sessions_lookup`, #6054)
 

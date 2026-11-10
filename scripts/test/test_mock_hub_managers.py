@@ -125,6 +125,20 @@ class MockHubManagersTests(unittest.TestCase):
         for s in theirs:
             self.assertEqual((s.get("machine_id"), s.get("state")), ("nas", "unknown"), s)
 
+    def test_sessions_of_one_manager(self):
+        _, everyone = self.call("GET", "/api/v1/sessions")
+        owners = {s["manager"] for s in everyone["sessions"]}
+        self.assertGreater(len(owners), 1, "the mock has sessions of several managers")
+        for mid in sorted(owners):
+            _, answer = self.call("GET", "/api/v1/sessions?manager=" + mid)
+            self.assertEqual([(s["machine_id"], s["session_id"]) for s in answer["sessions"]],
+                             [(s["machine_id"], s["session_id"]) for s in everyone["sessions"] if s["manager"] == mid], mid)
+        status, answer = self.call("GET", "/api/v1/sessions?manager=m-ffffff")
+        self.assertEqual((status, answer.get("code")), (404, "no_manager"))
+        # the header alone filters nothing: this list was never routed by it
+        _, answer = self.call("GET", "/api/v1/sessions", manager="m-3fa21c")
+        self.assertEqual(len(answer["sessions"]), len(everyone["sessions"]))
+
     def test_each_managers_mutes_and_rules(self):
         _, listed = self.call("GET", "/api/v1/inbox?sources=all")
         theirs = next(x for x in listed["items"] if x["manager"] == "m-3fa21c" and x.get("mutes"))

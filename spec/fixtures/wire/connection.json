@@ -91,6 +91,7 @@
         "sessions_list",
         "sessions_lookup",
         "sessions_pane_source",
+        "sessions_manager",
         "machine_rename"
       ],
       "fp": "",
@@ -195,6 +196,7 @@
           "sessions_list",
           "sessions_lookup",
           "sessions_pane_source",
+          "sessions_manager",
           "machine_rename"
         ],
         "/type": "hello"
@@ -290,6 +292,7 @@
         "sessions_list",
         "sessions_lookup",
         "sessions_pane_source",
+        "sessions_manager",
         "machine_rename"
       ],
       "fp": "",
@@ -384,6 +387,7 @@
           "sessions_list",
           "sessions_lookup",
           "sessions_pane_source",
+          "sessions_manager",
           "machine_rename"
         ],
         "/ok": true,
