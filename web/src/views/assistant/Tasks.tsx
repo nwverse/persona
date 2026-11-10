@@ -634,8 +634,9 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
   const known = useStore((s) => s.todos.some((t) => t.id === item.ref));
   const planned = useFeed((s) => item.kind === "task" && Object.values(s.plans).some((p) => p.conversation === item.conversation && p.tasks.some((task) => task.todo_id === item.ref)));
   if (simplified) {
-    if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint conversation={item.conversation} count={plan.tasks.length} /> : null;
-    if (item.kind === "task") return planned ? null : <DispatchHint conversation={item.conversation} count={1} />;
+    // the dispatched tasks themselves, each opening its own task (its Agent's chat), never the whole In progress tray (#3700)
+    if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint tasks={plan.tasks.map((task) => ({ todo: task.todo_id, title: task.title }))} /> : null;
+    if (item.kind === "task") return planned ? null : <DispatchHint tasks={[{ todo: item.ref, title }]} />;
     if (item.kind === "review" || item.kind === "receipt" || item.kind === "report") return null;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
   }
@@ -1175,10 +1176,45 @@ const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
-function DispatchHint({ conversation, count }: { conversation: string; count: number }) {
+/** What a reply dispatched, under it (#3700): one task reads "Dispatched: <title> · Open", several list their titles; each
+ *  opens that task's detail beside the conversation, its Agent's chat or, before the Agent starts, the task card (openTask).
+ *  A task the hub could not start has no to-do yet and is shown without a link (its plan card says why). */
+function DispatchHint({ tasks }: { tasks: { todo?: string; title: string }[] }) {
+  if (tasks.length === 1) {
+    const [task] = tasks;
+    return (
+      <DispatchedTask todo={task!.todo} title={task!.title} hint className="max-w-full">
+        {(title) => (
+          <>
+            <span className="truncate">{t("assistant-tasks.dispatch_single", { title })}</span>
+            {task!.todo && <span className="shrink-0 font-semibold text-accent">· {t("assistant-tasks.dispatch_open")}</span>}
+          </>
+        )}
+      </DispatchedTask>
+    );
+  }
   return (
-    <button type="button" data-dispatch-hint onClick={() => window.dispatchEvent(new CustomEvent("persona:task-progress", { detail: conversation }))} className="inline-flex max-w-full items-center gap-2 self-start rounded-full bg-field px-3 py-1.5 text-sm text-ink-2 hover:bg-hover">
-      <span className="truncate">{t("assistant-tasks.dispatch_hint", { count })}</span>
+    <div data-dispatch-hint={tasks.length} className="flex max-w-full flex-col items-start gap-1.5 self-start">
+      <span className="px-1 text-[12px] text-ink-2">{t("assistant-tasks.dispatch_many", { count: tasks.length })}</span>
+      <div className="flex max-w-full flex-wrap gap-1.5">
+        {tasks.map((task, i) => (
+          <DispatchedTask key={task.todo ?? `unstarted-${i}`} todo={task.todo} title={task.title} className="max-w-[280px]">
+            {(title) => <span className="truncate">{title}</span>}
+          </DispatchedTask>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** One dispatched task's link: the to-do's current title (the plan's until the to-do arrives). */
+function DispatchedTask({ todo, title, hint, className, children }: { todo?: string; title: string; hint?: boolean; className: string; children: (title: string) => ReactNode }) {
+  const current = useStore((s) => (todo ? s.todos.find((x) => x.id === todo)?.title : undefined)) ?? title;
+  const pill = cx("inline-flex min-w-0 items-center gap-2 self-start rounded-full bg-field px-3 py-1.5 text-sm text-ink-2", className);
+  if (!todo) return <span data-dispatch-hint={hint ? 1 : undefined} data-dispatched-task="" className={pill}>{children(current)}</span>;
+  return (
+    <button type="button" data-dispatch-hint={hint ? 1 : undefined} data-dispatched-task={todo} title={current} onClick={() => openTask(todo)} className={cx(pill, "hover:bg-hover")}>
+      {children(current)}
       <Icon name="chevronRight" className="shrink-0" />
     </button>
   );
@@ -1315,13 +1351,10 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const rest = entries.needsYou.filter((item) => !asking.includes(item));
   const counts: Record<AssistantTray, number> = { needs: ownCount + entries.needsYou.length, running: entries.running.length };
   useEffect(() => {
-    const running = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("running"); };
     const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
-    window.addEventListener("persona:task-progress", running);
     window.addEventListener("persona:task-pending", needs);
     window.addEventListener("persona:task-start", needs);
     return () => {
-      window.removeEventListener("persona:task-progress", running);
       window.removeEventListener("persona:task-pending", needs);
       window.removeEventListener("persona:task-start", needs);
     };

@@ -86,7 +86,8 @@ sideways when a large font no longer fits them. The open tray is the chip's sele
   not an Agent-based message filter; this change does not invent a new conversation filter.
 
 Task plan/task/receipt/review/report cards, including historical ones, are no longer rendered in the conversation. A
-small **Dispatched N tasks · See Progress** entry opens Progress instead; the task row there is the only card. Tools and
+small dispatched line names each dispatched task (**Dispatched: <title> · Open**, or every title when there are several) and
+opens that task's detail sheet, never the whole tray (#3700); the task row in Progress is the only card. Tools and
 intermediate narration remain under a default-collapsed **Checked N places** summary, which can be opened manually.
 Housekeeping notices (compaction, restarts, schedule setup) are hidden while dates remain. Explicit message-source
 metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.

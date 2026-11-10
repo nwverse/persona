@@ -16,7 +16,8 @@ keeps the token equal to the icon and `--ink-3`.
 
 An Assistant task's only card is its **Progress** tray row. Plan, execution, blocked progress, PR and acceptance update
 that stable row; tapping opens existing task details. The conversation, including historical task events, shows only a
-small **Dispatched N · View in Progress** entry instead of plan/task/receipt/review/report cards. The hint opens Progress.
+small dispatched line instead of plan/task/receipt/review/report cards: **Dispatched: <title> · Open**, or every title when
+there are several, each opening that task in the side panel (its Agent's chat, or the task card before it starts) (#3700).
 
 The dock groups actions as **Pending / Progress / Agents**, with one bounded, scrollable tray open at a time. Pending
 retains planning, permission/question and owner-acceptance flows; `Todo.ask` uses the existing Accept action and the captured
@@ -59,6 +60,8 @@ This change aligns task-row placement; existing web tool folding and turn-source
 `python3 web/e2e/assistant-task-trays.py <preview URL> --shots <output directory>` runs the production-built client against
 synthetic HTTP/WebSocket data in wide and phone widths, light/dark, including the entries' measured capsule height and
 selected state, keyboard toggling, live same-row completion, owner decisions and proof that no draft was sent by approval. Its captures are browser screenshots, not a deployed-hub check.
+`python3 web/e2e/dispatched-line.py <preview URL> --shots <output directory>` checks the dispatched line the same way (#3700): one
+task and a plan of three, light/dark, each opening its own task in the side panel while In progress stays closed.
 
 ## Color hierarchy and quiet surfaces
 

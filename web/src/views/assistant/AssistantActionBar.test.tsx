@@ -75,7 +75,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.querySelector("section")).toBeNull();
     expect(host.querySelectorAll("[data-dispatch-hint]")).toHaveLength(1);
     expect(host.textContent).not.toContain("Demo result");
-    act(() => (host.querySelector("[data-dispatch-hint]") as HTMLButtonElement).click());
+    act(() => entry("running").click());
     expect(entry("running").getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelectorAll("[data-task-slot]")).toHaveLength(1);
     expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("2");
@@ -83,6 +83,42 @@ describe("Assistant Needs you / In progress trays", () => {
     // the task's agent is in its row, not a row of its own
     expect(host.querySelector("[data-running-agent]")).toBeNull();
     expect(host.textContent).not.toContain("Demo agent");
+  });
+
+  it("names the one dispatched task and opens its Agent in the side panel, not the In progress tray (#3700)", () => {
+    const hint = host.querySelector<HTMLButtonElement>("[data-dispatch-hint]")!;
+    expect(hint.tagName).toBe("BUTTON");
+    expect(hint.textContent).toBe(`${t("assistant-tasks.dispatch_single", { title: "Demo task" })}· ${t("assistant-tasks.dispatch_open")}`);
+    act(() => hint.click());
+    // the task's own panel, which shows its Agent's chat (TaskPanel), and no tray opened
+    expect(getPanel()).toMatchObject({ kind: "task", todo: "tray-task" });
+    expect(host.querySelector("section")).toBeNull();
+    expect(entry("running").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("lists each of several dispatched tasks, each opening its own task, and leaves an unstarted one without a link", async () => {
+    const many: TaskPlan = { id: "tray-plan-many", conversation, state: "started", created_at: at, tasks: [
+      { title: "First task", prompt: "a", cwd: "/demo", machine: "demo", todo_id: "tray-task" },
+      { title: "Second task", prompt: "b", cwd: "/demo", machine: "demo", todo_id: "second-task" },
+      { title: "Failed task", prompt: "c", cwd: "/demo", machine: "demo", error: "machine offline" },
+    ] };
+    getFeedState().plans[many.id] = many;
+    try {
+      act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} /><FeedLineView item={{ id: "many-event", conversation, at, kind: "plan", ref: many.id }} simplified /></StrictMode>));
+      const hint = host.querySelector("[data-dispatch-hint]")!;
+      expect(hint.getAttribute("data-dispatch-hint")).toBe("3");
+      expect(hint.textContent).toContain(t("assistant-tasks.dispatch_many", { count: 3 }));
+      const links = [...hint.querySelectorAll<HTMLElement>("[data-dispatched-task]")];
+      // the to-do's current title wins over the plan's; a task that did not start is shown but cannot be opened
+      expect(links.map((el) => [el.tagName, el.textContent])).toEqual([["BUTTON", "Demo task"], ["BUTTON", "Second task"], ["SPAN", "Failed task"]]);
+      act(() => links[1]!.click());
+      expect(getPanel()).toMatchObject({ kind: "task", todo: "second-task" });
+      act(() => links[0]!.click());
+      expect(getPanel()).toMatchObject({ kind: "task", todo: "tray-task" });
+      expect(host.querySelector("section")).toBeNull();
+    } finally {
+      delete getFeedState().plans[many.id];
+    }
   });
 
   it("updates the same row while it runs, opens the task, and drops it once it is accepted", () => {
